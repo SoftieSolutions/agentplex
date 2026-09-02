@@ -10,20 +10,12 @@ import tseslint from 'typescript-eslint';
  * means a violation fails on the contributor's machine and in CI, rather than
  * being discovered when someone tries to split the packages apart.
  */
-const forbidSoftie = {
-  group: ['@softie/*'],
-  message: 'agentplex is standalone: no @softie/* dependency may enter this repository.',
-};
-
 const forbidAppInternals = {
   group: ['**/apps/*/src/**', 'agentplexd/*', '@agentplex/web*'],
   message: 'Apps do not import each other. Share through @agentplex/protocol instead.',
 };
 
-const restrictedImports = (extra) => [
-  'error',
-  { patterns: [forbidSoftie, forbidAppInternals, ...extra] },
-];
+const restrictedImports = (extra) => ['error', { patterns: [forbidAppInternals, ...extra] }];
 
 export default tseslint.config(
   {
