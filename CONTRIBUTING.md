@@ -6,12 +6,14 @@ Docker is the primary path; Node 24 and pnpm 11 are the alternative.
 
 ```sh
 pnpm install
-pnpm check          # lint, typecheck, test — the same set CI runs
+pnpm check          # build, lint, typecheck, test — the same set CI runs
 pnpm docker:check   # the same, in a container, with a real Postgres
 ```
 
-`pnpm check` runs the whole set. Run it before opening a pull request; CI runs
-exactly the same tasks, so a green local run should mean a green CI run.
+`pnpm check` runs the whole set, starting with the build, because typecheck and
+tests both resolve `@agentplex/protocol` through its built declarations. Run it
+before opening a pull request; CI runs exactly the same tasks, so a green local
+run should mean a green CI run.
 
 ## The shape of the codebase
 

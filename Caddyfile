@@ -1,0 +1,15 @@
+# Caddy is here for one reason: web push is HTTPS-only, so the hub needs a
+# certificate that issues and renews itself. It terminates TLS and hands
+# everything to the hub over the compose network.
+#
+# If TLS already exists in front of this machine - Tailscale HTTPS, or a
+# reverse proxy already running here - this file and the caddy service both go
+# away. docs/install.md says what to change.
+
+{$AGENTPLEX_DOMAIN} {
+	encode zstd gzip
+
+	# reverse_proxy upgrades websockets by itself, which both the client
+	# socket and the hub's outbound socket to a paired server rely on.
+	reverse_proxy hub:8080
+}

@@ -31,6 +31,11 @@ architecture: its decisions are requirements, and each records why.
 ## COMMANDS
 
 - `pnpm check` — build, lint, typecheck, test. The set CI runs.
+- `pnpm docker:check` — the same in a container, against a real Postgres. This
+  is the only path where the migration integration tests actually run; without
+  `AGENTPLEX_TEST_DATABASE_URL` they skip themselves rather than failing, so a
+  green run that never started a database has not tested them.
+- `pnpm docker:up` / `pnpm docker:down` — the hub, Postgres and Caddy.
 - Docker is the primary path for testing and for running the stack.
 
 ## DEPENDENCIES DIRECTIVES

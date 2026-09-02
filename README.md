@@ -47,15 +47,34 @@ import the other. That boundary is enforced by lint, not by convention.
 
 ## Running it
 
-Requires Node 24 and pnpm 11.
+Docker is the primary path. Requires only Docker with the Compose plugin.
+
+```sh
+cp .env.example .env   # set POSTGRES_PASSWORD
+docker compose up -d   # Postgres, the hub, and Caddy in front of it
+curl -k https://localhost/health
+```
+
+One image serves both roles; the role is a runtime choice, by environment
+variable or flag. Caddy is there only to terminate TLS with a certificate that
+renews itself, because web push is HTTPS-only — if TLS is already handled,
+`docker compose up -d hub` starts Postgres and the hub and nothing else.
+
+Running the server role bare metal — `node` on a mac mini or a laptop, no
+container — is equally supported, and often the better arrangement: the role
+spawns sessions against the machine's real filesystem and credentials.
+
+[docs/install.md](docs/install.md) covers all of it: every setting, the two
+ways to drop Caddy, the bare-metal role, and upgrading.
+
+For working on the code, Node 24 and pnpm 11:
 
 ```sh
 pnpm install
-pnpm check        # lint, typecheck, test
+pnpm build
+pnpm check          # lint, typecheck, test
+pnpm docker:check   # the same, in a container, against a real Postgres
 ```
-
-Docker images and a compose file for the hub, Postgres and TLS arrive with
-AGX-13, and will be the primary path for running and testing.
 
 ## Configuration
 
@@ -68,6 +87,10 @@ Every setting has one flag and one environment variable; the flag wins.
 | `--server-port`  | `AGENTPLEX_SERVER_PORT`  | `8081`         | Port the hub dials                      |
 | `--database-url` | `AGENTPLEX_DATABASE_URL` | none           | Postgres; required for `hub` and `both` |
 | `--log-level`    | `AGENTPLEX_LOG_LEVEL`    | `info`         | `debug`, `info`, `warn`, `error`        |
+
+`AGENTPLEX_HOST` is the exception, environment only: an interface to bind is a
+deployment fact rather than a choice. [docs/install.md](docs/install.md) has it
+and the settings the compose file reads.
 
 ## Contributing
 

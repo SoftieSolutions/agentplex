@@ -1,0 +1,74 @@
+# The hub, its Postgres, and Caddy in front of them.
+#
+# Copy .env.example to .env, then `docker compose up -d`.
+#
+# Caddy is optional and dropping it is a supported path, not a hypothetical:
+# `docker compose up -d hub` starts Postgres and the hub and nothing else, and
+# the hub's own port is published on the host either way. See docs/install.md.
+
+name: agentplex
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentplex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-agentplex}
+    volumes:
+      # Named, so `docker compose down` is not the same act as deleting the
+      # database. `down -v` is.
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # $$ so the shell inside the container expands these, not compose.
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  hub:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        # The hub migrates before it listens, so it needs a database that is
+        # accepting connections rather than one whose container has started.
+        condition: service_healthy
+    environment:
+      AGENTPLEX_ROLE: hub
+      AGENTPLEX_HUB_PORT: 8080
+      AGENTPLEX_DATABASE_URL: postgres://${POSTGRES_USER:-agentplex}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-agentplex}
+      AGENTPLEX_LOG_LEVEL: ${AGENTPLEX_LOG_LEVEL:-info}
+    ports:
+      # Loopback by default: with Caddy in front, nothing outside this machine
+      # should reach the hub's plain HTTP port. AGENTPLEX_HUB_BIND is what you
+      # change when something else, or nothing, terminates TLS.
+      - '${AGENTPLEX_HUB_BIND:-127.0.0.1}:8080:8080'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - hub
+    environment:
+      AGENTPLEX_DOMAIN: ${AGENTPLEX_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Issued certificates and the ACME account key live here. Losing this
+      # volume means asking a certificate authority for everything again,
+      # which is how a deployment meets a rate limit.
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
