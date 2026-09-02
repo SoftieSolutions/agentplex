@@ -1,5 +1,8 @@
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { loadConfig, usage } from './config/config.js';
+import { createPostgresDatabase } from './hub/db/postgres.js';
+import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { startRuntime } from './runtime.js';
 import { systemClock } from './shared/clock.js';
 import { randomIdGenerator } from './shared/ids.js';
@@ -13,8 +16,14 @@ import { createLogger, jsonLineSink } from './shared/logger.js';
 
 /** Configuration was wrong. Restarting will not help; the operator must act. */
 const EXIT_BAD_CONFIGURATION = 2;
-/** Startup failed for a reason that may pass, such as a port not yet released. */
+/** Startup failed for a reason that may pass, such as a database not up yet. */
 const EXIT_STARTUP_FAILED = 1;
+
+/**
+ * `migrations/` sits beside `src/` and `dist/`, so this resolves the same way
+ * whether the process was started from source or from a build.
+ */
+const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../migrations', import.meta.url));
 
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
@@ -35,6 +44,9 @@ async function main(): Promise<void> {
     runtime = await startRuntime(config, {
       logger,
       ids: randomIdGenerator,
+      openDatabase: (url) => createPostgresDatabase(url),
+      migrationsDirectory: MIGRATIONS_DIRECTORY,
+      migrationFileSystem: nodeMigrationFileSystem,
       // Containers reach the process from outside their own loopback.
       host: process.env['AGENTPLEX_HOST'] ?? '0.0.0.0',
     });
