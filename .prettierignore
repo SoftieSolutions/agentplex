@@ -1,5 +1,9 @@
 dist
 coverage
+# Agent worktrees are whole checkouts of this repository living inside it.
+# Without this, prettier formats the tree once per worktree and reports another
+# branch's files as failures of this one.
+.claude
 pnpm-lock.yaml
 LICENSE
 # Design documents are prose, and reformatting an approved one produces a diff
