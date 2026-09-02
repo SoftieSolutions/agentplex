@@ -1,0 +1,93 @@
+import type { Config } from './config/config.js';
+import { startHub, type Hub } from './hub/hub.js';
+import { startSessionServer, type SessionServer } from './server/server.js';
+import type { IdGenerator } from './shared/ids.js';
+import type { Logger } from './shared/logger.js';
+
+/**
+ * Composition of the roles a configuration asks for.
+ *
+ * Everything the process supplies — the logger, the id source, the interface to
+ * bind — arrives as a dependency, so the whole runtime can be started in a test
+ * against fakes and shut back down.
+ */
+export interface RuntimeDependencies {
+  readonly logger: Logger;
+  readonly ids: IdGenerator;
+  /** The interface to bind. Containers need 0.0.0.0; a laptop may prefer loopback. */
+  readonly host: string;
+}
+
+export interface Runtime {
+  readonly hub: Hub | null;
+  readonly server: SessionServer | null;
+  stop(): Promise<void>;
+}
+
+export async function startRuntime(
+  config: Config,
+  dependencies: RuntimeDependencies,
+): Promise<Runtime> {
+  const { logger, ids, host } = dependencies;
+
+  // Started one at a time, and torn back down on failure: a half-started
+  // process that keeps a port open is harder to diagnose than one that exited.
+  let hub: Hub | null = null;
+  let server: SessionServer | null = null;
+
+  try {
+    if ('hub' in config) {
+      hub = await startHub({ logger, ids, host, port: config.hub.port });
+    }
+    if ('server' in config) {
+      server = await startSessionServer({ logger, host, port: config.server.port });
+    }
+  } catch (error) {
+    await shutDown(hub, server, logger);
+    throw error;
+  }
+
+  logger.info('agentplexd started', { role: config.role });
+
+  let stopped = false;
+  return {
+    hub,
+    server,
+    async stop() {
+      if (stopped) return;
+      stopped = true;
+      await shutDown(hub, server, logger);
+      logger.info('agentplexd stopped');
+    },
+  };
+}
+
+/**
+ * Shuts every part down and reports the first failure at the end.
+ *
+ * One half failing to close must not leave the other half running: a listener
+ * that outlives the shutdown holds the port against the next start.
+ */
+async function shutDown(
+  hub: Hub | null,
+  server: SessionServer | null,
+  logger: Logger,
+): Promise<void> {
+  const failures: unknown[] = [];
+
+  for (const [what, close] of [
+    ['server', () => server?.stop()],
+    ['hub', () => hub?.stop()],
+  ] as const) {
+    try {
+      await close();
+    } catch (error) {
+      failures.push(error);
+      logger.error('shutdown step failed', { what, error: String(error) });
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'agentplexd did not shut down cleanly');
+  }
+}

@@ -28,6 +28,13 @@ importers:
         version: 8.69.0(eslint@9.39.5(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
 
   apps/agentplexd:
+    dependencies:
+      '@agentplex/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      zod:
+        specifier: ^4.1.13
+        version: 4.5.4
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
