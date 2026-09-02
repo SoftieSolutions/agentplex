@@ -1,4 +1,6 @@
 import type { Config } from './config/config.js';
+import type { Database } from './hub/db/database.js';
+import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { IdGenerator } from './shared/ids.js';
@@ -7,13 +9,17 @@ import type { Logger } from './shared/logger.js';
 /**
  * Composition of the roles a configuration asks for.
  *
- * Everything the process supplies — the logger, the id source, the interface to
- * bind — arrives as a dependency, so the whole runtime can be started in a test
- * against fakes and shut back down.
+ * Everything the process supplies — the database driver, the disk, the logger,
+ * the id source — arrives as a dependency, so the whole runtime can be started
+ * in a test against fakes and shut back down.
  */
 export interface RuntimeDependencies {
   readonly logger: Logger;
   readonly ids: IdGenerator;
+  /** Named rather than imported, so no test path reaches a real Postgres by accident. */
+  readonly openDatabase: (url: string) => Database;
+  readonly migrationsDirectory: string;
+  readonly migrationFileSystem: MigrationFileSystem;
   /** The interface to bind. Containers need 0.0.0.0; a laptop may prefer loopback. */
   readonly host: string;
 }
@@ -28,7 +34,10 @@ export async function startRuntime(
   config: Config,
   dependencies: RuntimeDependencies,
 ): Promise<Runtime> {
-  const { logger, ids, host } = dependencies;
+  const { logger, ids, openDatabase, migrationsDirectory, migrationFileSystem, host } =
+    dependencies;
+
+  const database = 'hub' in config ? openDatabase(config.hub.databaseUrl) : null;
 
   // Started one at a time, and torn back down on failure: a half-started
   // process that keeps a port open is harder to diagnose than one that exited.
@@ -36,14 +45,22 @@ export async function startRuntime(
   let server: SessionServer | null = null;
 
   try {
-    if ('hub' in config) {
-      hub = await startHub({ logger, ids, host, port: config.hub.port });
+    if ('hub' in config && database !== null) {
+      hub = await startHub({
+        database,
+        logger,
+        ids,
+        migrationsDirectory,
+        migrationFileSystem,
+        host,
+        port: config.hub.port,
+      });
     }
     if ('server' in config) {
       server = await startSessionServer({ logger, host, port: config.server.port });
     }
   } catch (error) {
-    await shutDown(hub, server, logger);
+    await shutDown(hub, server, database, logger);
     throw error;
   }
 
@@ -56,7 +73,7 @@ export async function startRuntime(
     async stop() {
       if (stopped) return;
       stopped = true;
-      await shutDown(hub, server, logger);
+      await shutDown(hub, server, database, logger);
       logger.info('agentplexd stopped');
     },
   };
@@ -71,6 +88,7 @@ export async function startRuntime(
 async function shutDown(
   hub: Hub | null,
   server: SessionServer | null,
+  database: Database | null,
   logger: Logger,
 ): Promise<void> {
   const failures: unknown[] = [];
@@ -78,6 +96,7 @@ async function shutDown(
   for (const [what, close] of [
     ['server', () => server?.stop()],
     ['hub', () => hub?.stop()],
+    ['database', () => database?.close()],
   ] as const) {
     try {
       await close();
