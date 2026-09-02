@@ -34,16 +34,23 @@ jobs:
       # answer.
       COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      # The runner's default Node is older than the one this workspace
+      # declares, and .npmrc sets engine-strict, so pnpm has grounds to refuse
+      # before it ever reaches Docker.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - uses: docker/setup-buildx-action@v4
 
       # A cache-only build: nothing is loaded or pushed, and the layers it
       # leaves in the builder are the point. The check below builds the same
       # target on the same builder and reuses every one of them, so a run that
       # changes no dependency restores `pnpm install` instead of re-running it.
       - name: Warm the build cache
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: build
