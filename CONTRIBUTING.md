@@ -15,6 +15,17 @@ tests both resolve `@agentplex/protocol` through its built declarations. Run it
 before opening a pull request; CI runs exactly the same tasks, so a green local
 run should mean a green CI run.
 
+CI runs them as four separate jobs — `build`, then `lint`, `typecheck` and
+`test` in parallel — so a red pull request names the check that failed instead
+of just the run. Each has a container-backed counterpart you can run on its
+own, which is what to reach for when one job is red and the others are green:
+
+```sh
+pnpm docker:lint
+pnpm docker:typecheck
+pnpm docker:test    # the only one that starts Postgres
+```
+
 ## The shape of the codebase
 
 A few rules carry most of the weight. They are not style preferences; each one

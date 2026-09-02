@@ -1,7 +1,13 @@
 # Checks, in a container, against a real Postgres.
 #
-#   pnpm docker:check   lint, typecheck and test
-#   pnpm docker:test    tests only
+#   pnpm docker:check       build, lint, typecheck and test, in that order
+#   pnpm docker:lint        lint only
+#   pnpm docker:typecheck   typecheck only
+#   pnpm docker:test        tests only
+#
+# One service per check, because CI runs them as separate jobs and a
+# contributor reproducing a red check should be able to run that check alone
+# rather than waiting on the three that were already green.
 #
 # The database is the reason this file exists. Without
 # AGENTPLEX_TEST_DATABASE_URL the migration suite skips itself rather than
@@ -9,11 +15,18 @@
 
 name: agentplex-test
 
+# The full workspace: every dependency, every source file, already built. The
+# build stage runs `pnpm build`, so every service below starts from a tree that
+# compiled — which is also why there is no `build` service here. A failing
+# build fails the image, and no check gets as far as running.
 x-checks: &checks
   build:
     context: .
-    # The full workspace: every dependency, every source file, already built.
     target: build
+
+# Only the suites that talk to a database pay for one. Lint and typecheck read
+# source and nothing else, so making them wait on a healthcheck buys nothing.
+x-database: &database
   depends_on:
     postgres:
       condition: service_healthy
@@ -39,10 +52,21 @@ services:
       retries: 15
       start_period: 5s
 
+  # The whole set in one container, still. CI no longer runs this, but it is
+  # what a contributor runs before opening a pull request, and it is the one
+  # command that answers "would CI be green" without reading four job results.
   check:
-    <<: *checks
+    <<: [*checks, *database]
     command: ['pnpm', 'check']
 
-  test:
+  lint:
     <<: *checks
+    command: ['pnpm', 'lint']
+
+  typecheck:
+    <<: *checks
+    command: ['pnpm', 'typecheck']
+
+  test:
+    <<: [*checks, *database]
     command: ['pnpm', 'test']

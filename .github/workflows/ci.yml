@@ -1,11 +1,13 @@
-# The check set, run the way a contributor runs it.
+# The check set, one job per check.
 #
-# The job is one `pnpm docker:check` on purpose. CI assembling its own version
-# of the checks is how CI and CONTRIBUTING drift apart, and the container is
-# also the only place the migration suite has a Postgres to talk to: without
-# AGENTPLEX_TEST_DATABASE_URL that suite skips itself rather than failing, so a
-# workflow built out of Actions service containers can report green over four
-# tests that never ran.
+# Each job still runs a `pnpm docker:*` command that a contributor can run
+# identically on a laptop. CI assembling its own version of the checks — its
+# own eslint invocation, its own vitest flags — is how a workflow and
+# CONTRIBUTING drift apart, and splitting the set into jobs is not a reason to
+# start. The container is also the only place the migration suite has a
+# Postgres to talk to: without AGENTPLEX_TEST_DATABASE_URL that suite skips
+# itself rather than failing, so a `test` job built out of Actions service
+# containers can report green over four tests that never ran.
 
 name: CI
 
@@ -20,15 +22,48 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# The job reads the tree and writes nothing back to the repository.
+# The jobs read the tree and write nothing back to the repository.
 permissions:
   contents: read
 
 jobs:
-  check:
-    name: build, lint, typecheck, test
+  # The build is a check in its own right, not a setup step: the `build` stage
+  # ends in `pnpm build`, so a workspace that does not compile fails here under
+  # its own name instead of turning three unrelated checks red.
+  #
+  # It is also the only job that writes the layer cache. The three below read
+  # it, so the workspace is installed and compiled once per run rather than
+  # four times.
+  build:
+    name: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the workspace
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: build
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  checks:
+    # Renders as `lint`, `typecheck` and `test` rather than `checks (lint)`.
+    name: ${{ matrix.check }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # The point of splitting the set: a lint failure must not cancel the
+      # typecheck and test jobs. Three separate answers, or this is the old
+      # single job wearing three names.
+      fail-fast: false
+      matrix:
+        check: [lint, typecheck, test]
     env:
       # corepack stops to ask before fetching pnpm, and a runner has nobody to
       # answer.
@@ -45,22 +80,25 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      # A cache-only build: nothing is loaded or pushed, and the layers it
-      # leaves in the builder are the point. The check below builds the same
-      # target on the same builder and reuses every one of them, so a run that
-      # changes no dependency restores `pnpm install` instead of re-running it.
-      - name: Warm the build cache
+      # Nothing is loaded or pushed here; the layers this leaves in the job's
+      # builder are the point. `build` already wrote them to the cache this
+      # reads, so a job that changes no dependency restores `pnpm install` and
+      # `pnpm build` instead of re-running them. The compose build below
+      # resolves the same target on the same builder and reuses every one.
+      - name: Restore the build cache
         uses: docker/build-push-action@v7
         with:
           context: .
           target: build
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       # corepack reads the pinned pnpm out of packageManager, the same way the
       # image does, so the runner cannot end up on a different one.
       - name: Install pnpm
         run: corepack enable && corepack install
 
+      # Only `test` brings up Postgres, and it does so because
+      # docker-compose.test.yml says its service depends on one. The workflow
+      # does not need to know which checks need a database.
       - name: Check
-        run: pnpm docker:check
+        run: pnpm docker:${{ matrix.check }}
