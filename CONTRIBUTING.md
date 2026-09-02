@@ -6,6 +6,7 @@ Docker is the primary path; Node 24 and pnpm 11 are the alternative.
 
 ```sh
 pnpm install
+pnpm build          # typecheck and tests resolve @agentplex/protocol as built
 pnpm check          # lint, typecheck, test — the same set CI runs
 pnpm docker:check   # the same, in a container, with a real Postgres
 ```

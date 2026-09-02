@@ -20,7 +20,11 @@
     "test": "pnpm -r test",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "check": "pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "docker:check": "docker compose -f docker-compose.test.yml run --rm --build check",
+    "docker:test": "docker compose -f docker-compose.test.yml run --rm --build test",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

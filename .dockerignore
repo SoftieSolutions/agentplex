@@ -4,4 +4,7 @@
 .git
 .env
 .env.local
-docs
+
+# docs/ is deliberately not excluded. The check container runs prettier over
+# the same tree a laptop does, and a file kept out of the context is a file
+# prettier never sees.

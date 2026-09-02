@@ -1,0 +1,48 @@
+# Checks, in a container, against a real Postgres.
+#
+#   pnpm docker:check   lint, typecheck and test
+#   pnpm docker:test    tests only
+#
+# The database is the reason this file exists. Without
+# AGENTPLEX_TEST_DATABASE_URL the migration suite skips itself rather than
+# passing quietly, and a skipped suite is not a green one.
+
+name: agentplex-test
+
+x-checks: &checks
+  build:
+    context: .
+    # The full workspace: every dependency, every source file, already built.
+    target: build
+  depends_on:
+    postgres:
+      condition: service_healthy
+  environment:
+    # Matches the credentials below. It is a throwaway database that lives for
+    # the length of one run, so the password is in the open on purpose.
+    AGENTPLEX_TEST_DATABASE_URL: postgres://agentplex:agentplex@postgres:5432/agentplex_test
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: agentplex
+      POSTGRES_PASSWORD: agentplex
+      POSTGRES_DB: agentplex_test
+    tmpfs:
+      # Nothing here is meant to outlive the run, so it never reaches a disk.
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U agentplex -d agentplex_test']
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  check:
+    <<: *checks
+    command: ['pnpm', 'check']
+
+  test:
+    <<: *checks
+    command: ['pnpm', 'test']
