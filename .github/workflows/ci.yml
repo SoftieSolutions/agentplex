@@ -1,0 +1,59 @@
+# The check set, run the way a contributor runs it.
+#
+# The job is one `pnpm docker:check` on purpose. CI assembling its own version
+# of the checks is how CI and CONTRIBUTING drift apart, and the container is
+# also the only place the migration suite has a Postgres to talk to: without
+# AGENTPLEX_TEST_DATABASE_URL that suite skips itself rather than failing, so a
+# workflow built out of Actions service containers can report green over four
+# tests that never ran.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# A force-push abandons the run it superseded. A push to master is left to
+# finish, because its result is the record of what that commit did.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The job reads the tree and writes nothing back to the repository.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: build, lint, typecheck, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # corepack stops to ask before fetching pnpm, and a runner has nobody to
+      # answer.
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # A cache-only build: nothing is loaded or pushed, and the layers it
+      # leaves in the builder are the point. The check below builds the same
+      # target on the same builder and reuses every one of them, so a run that
+      # changes no dependency restores `pnpm install` instead of re-running it.
+      - name: Warm the build cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: build
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # corepack reads the pinned pnpm out of packageManager, the same way the
+      # image does, so the runner cannot end up on a different one.
+      - name: Install pnpm
+        run: corepack enable && corepack install
+
+      - name: Check
+        run: pnpm docker:check

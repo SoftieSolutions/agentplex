@@ -5,3 +5,6 @@ coverage/
 .env
 .env.local
 .DS_Store
+
+# Agent tooling checks this repository out inside itself here.
+.claude/worktrees/
