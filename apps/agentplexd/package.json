@@ -12,10 +12,12 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "start": "node dist/main.js",
-    "dev": "node --watch --experimental-strip-types src/main.ts",
-    "migrate": "node dist/hub/db/migrate-cli.js"
+    "dev": "node --watch --experimental-strip-types src/main.ts"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@agentplex/protocol": "workspace:*",
+    "zod": "^4.1.13"
+  },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "typescript": "^5.9.3",
