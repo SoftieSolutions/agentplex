@@ -214,6 +214,9 @@ Design-minimum deliverables, not an afterthought:
   exists only to terminate TLS with automatic certificate issue/renewal (web
   push requires HTTPS); it is optional — anyone with TLS already handled
   (Tailscale HTTPS, an existing reverse proxy) drops it from the compose file.
+  Ship with Caddy for now; a later spike evaluates dropping it (Node-native TLS
+  with ACME, or documenting reverse-proxy-only) once the hub's HTTP surface is
+  stable.
 - The server role's container mounts the store volume and needs a PTY-capable
   image with provider CLIs installed. Running the server role directly on the
   OS with no container ("bare metal": `node` on a mac mini or laptop) is the
