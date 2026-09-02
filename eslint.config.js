@@ -45,6 +45,20 @@ export default tseslint.config(
     files: ['packages/protocol/**/*.ts'],
     languageOptions: { globals: {} },
     rules: {
+      // Node globals, not just Node imports. `types: []` in this package's
+      // tsconfig does not keep them out: vite's declarations reach the program
+      // through vitest and carry a `/// <reference types="node" />`, which
+      // re-injects @types/node whatever the types array says. So a bare
+      // `process.env` typechecks cleanly here, and lint is what catches it.
+      'no-restricted-globals': [
+        'error',
+        ...['process', 'Buffer', '__dirname', '__filename', 'global', 'setImmediate'].map(
+          (name) => ({
+            name,
+            message: `packages/protocol is bundled into a browser: ${name} does not exist there.`,
+          }),
+        ),
+      ],
       '@typescript-eslint/no-restricted-imports': restrictedImports([
         {
           group: ['node:*', '@agentplex/*'],
