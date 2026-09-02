@@ -21,7 +21,9 @@ MCP agent ──┘                 │                  SERVER (role) ───
 ```
 
 - **`agentplexd`** — one deployable Node service that runs with `--role=hub`,
-  `--role=server`, or both (the homelab common case is both in one process).
+  `--role=server`, or both (the homelab common case is both in one process). The
+  trailing `d` is the Unix daemon convention (`sshd`): this is the long-running
+  background process, as opposed to the web client.
 - **`web`** — one React PWA served by the hub, used from laptop and phone alike.
 
 ## Vocabulary
@@ -208,23 +210,33 @@ consuming this same contract; v2 ships the surface.
 Design-minimum deliverables, not an afterthought:
 
 - One image for `agentplexd`; role chosen by env/flag.
-- `docker-compose.yml` standing up hub + Postgres + Caddy (TLS) in one command.
+- `docker-compose.yml` standing up hub + Postgres + Caddy in one command. Caddy
+  exists only to terminate TLS with automatic certificate issue/renewal (web
+  push requires HTTPS); it is optional — anyone with TLS already handled
+  (Tailscale HTTPS, an existing reverse proxy) drops it from the compose file.
 - The server role's container mounts the store volume and needs a PTY-capable
-  image with provider CLIs installed. Running the server role on bare metal (mac
-  mini, laptop) is the equally supported path and is documented — sessions on a
-  personal machine won't be containerized.
+  image with provider CLIs installed. Running the server role directly on the
+  OS with no container ("bare metal": `node` on a mac mini or laptop) is the
+  equally supported path and is documented — the server role spawns PTYs
+  against the machine's real filesystem and credentials, which on a personal
+  machine is more natural outside a container.
 
 ## Repository layout
 
 pnpm workspace, standalone repo, `master` branch:
 
 ```
-apps/agentplexd/     # the service; src/hub/, src/server/, src/shared/
+apps/agentplexd/     # the service; src/hub/, src/server/ (incl. providers/), src/shared/
 apps/web/            # the PWA
 packages/protocol/   # frame types, shared by service and web (types-only import)
-packages/providers/  # provider adapter interface + claude adapter
 docs/specs/          # this document and successors
 ```
+
+`packages/protocol` must be a package: it is shared by two apps, and a shared
+type cannot live inside either without one app importing the other's internals.
+Provider adapters are NOT a package — only `agentplexd` consumes them, so they
+live at `apps/agentplexd/src/server/providers/` and move out only if a real
+second consumer appears (e.g., community adapters once open source).
 
 Rules imported from v1 because they were paid for:
 
@@ -248,10 +260,30 @@ semantic tone; the app names no hues outside one tokens file. Dark-first.
 `useEffect` requires explicit justification; prefer `useSyncExternalStore`, ref
 callbacks, render-time guards.
 
+## Feature arc — where future features land
+
+The placement rule: **a new feature lands in the hub and its database, exposed
+through the protocol and the MCP surface. The server role stays a dumb,
+stateless session runner forever.** That keeps the distributed part of the
+system small while the product grows.
+
+- **Agent integration** (milestone 8): the built-in orchestrator agent,
+  consuming the MCP surface from milestone 6 — same contract any external agent
+  gets, no privileged backdoor.
+- **Multi-agents / graph of agents**: hub-side orchestration state. A graph is
+  nodes (sessions/agents) and edges (routing rules) in Postgres; the hub
+  already owns starting, watching, and feeding sessions by milestone 3, so a
+  graph is coordination data over existing capabilities.
+- **Routines**: scheduled or recurring runs — a hub scheduler table triggering
+  the existing session-start operation. A trigger, not a new capability.
+- **Search**: Postgres full-text over the transcript-derived columns the hub
+  already caches.
+- **Vector search**: pgvector over the same rows (part of why Postgres over an
+  embedded DB was the right call).
+
 ## Out of scope for v2
 
 - codex/opencode adapters (the seam ships; the adapters don't).
-- The built-in orchestrator agent UI (the MCP surface is the v2 contract).
 - Server-to-server coordination of any kind.
 - Electron or any native shell.
 - Multi-hub, multi-user, tenants, cloud anything.
@@ -277,3 +309,4 @@ callbacks, render-time guards.
 5. Attention + web push end-to-end over TLS.
 6. MCP endpoint.
 7. LAN beacon discovery; scheduling default (least-loaded).
+8. Agent integration: the built-in orchestrator agent over the MCP surface.
