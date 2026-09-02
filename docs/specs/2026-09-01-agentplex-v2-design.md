@@ -8,8 +8,8 @@ Status: approved pending review
 agentplex v2 turns the single-machine session multiplexer into a small distributed
 system for watching and driving coding-agent sessions across machines. It is a new
 standalone repository (this one), planned to be open source, and it eventually
-replaces `universe/apps/agentplex` (v1). Nothing here depends on the `universe`
-monorepo or any `@softie/*` package.
+replaces v1, which lived inside a private monorepo. Nothing here depends on
+that monorepo or on any package published to a private registry.
 
 Three ideas, two artifacts:
 
@@ -257,7 +257,7 @@ Rules imported from v1 because they were paid for:
 - No emojis in code or UI copy.
 
 UI stack: React + Vite PWA, Mantine taken directly (with a thin local
-pass-through module, since `@softie/design-system` cannot be a dependency),
+pass-through module, since v1's private design system cannot be a dependency),
 `@tanstack/react-table` for tabular surfaces, xterm for terminals. Status is a
 semantic tone; the app names no hues outside one tokens file. Dark-first.
 `useEffect` requires explicit justification; prefer `useSyncExternalStore`, ref
