@@ -1,0 +1,7 @@
+dist
+coverage
+pnpm-lock.yaml
+LICENSE
+# Design documents are prose, and reformatting an approved one produces a diff
+# that says nothing about the design.
+docs/specs

@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Postinstall scripts run only for dependencies listed here. Adding one is a
+# deliberate act: it grants that package arbitrary code execution at install.
+allowBuilds:
+  esbuild: true
