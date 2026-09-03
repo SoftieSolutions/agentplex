@@ -1,4 +1,17 @@
-import type { HubId, ServerId, ServerRegistrationId, StoreId } from '@agentplex/protocol';
+import {
+  parseServerToHubFrame,
+  parseTextFrame,
+  type FrameId,
+  type HubId,
+  type HubToServerFrame,
+  type RefusalCode,
+  type ServerId,
+  type ServerRegistrationId,
+  type ServerToHubFrame,
+  type SessionDescriptor,
+  type SessionHold,
+  type StoreId,
+} from '@agentplex/protocol';
 import type { Clock } from '../../shared/clock.js';
 import type { Logger } from '../../shared/logger.js';
 import {
@@ -108,6 +121,63 @@ export interface ServerConnectionReport {
   readonly staleReason: StaleReason | null;
 }
 
+/**
+ * What the hub asks a connected server to do.
+ *
+ * The instruction frames themselves, minus the id: a frame id is unique within
+ * one connection and the connection is the only thing that can mint one, so a
+ * caller that supplied its own would be numbering frames on a socket it does
+ * not own. Derived from the wire union rather than restated, so that a field
+ * added to an instruction is a field this carries, without an edit.
+ */
+type WithoutFrameId<Frame> = Frame extends { id: FrameId } ? Omit<Frame, 'id'> : never;
+
+export type SessionInstruction = WithoutFrameId<
+  Extract<HubToServerFrame, { type: 'session-start' | 'session-stop' }>
+>;
+
+/** What a server answers an instruction with when it did it. */
+export type SessionAnswer = Extract<
+  ServerToHubFrame,
+  { type: 'session-started' | 'session-stopped' }
+>;
+
+/**
+ * What came back, as a value.
+ *
+ * A refusal is not an exception: a server saying "that session is already
+ * running here" is the system working, and the answer has to reach the client
+ * that asked rather than unwinding a stack. `hold` names the live process when
+ * that was the reason, exactly as the server sent it.
+ */
+export type InstructionOutcome =
+  | { readonly ok: true; readonly answer: SessionAnswer }
+  | {
+      readonly ok: false;
+      readonly code: RefusalCode;
+      readonly problem: string;
+      readonly hold: SessionHold | null;
+    };
+
+/** One server's whole view of one store, as it arrived off the wire. */
+export interface ServerStoreReport {
+  readonly registrationId: ServerRegistrationId;
+  readonly storeId: StoreId;
+  readonly sessions: readonly SessionDescriptor[];
+  readonly holding: readonly SessionHold[];
+}
+
+/**
+ * How long an instruction may go unanswered.
+ *
+ * Longer than the handshake deadline, because a start is not a round trip on a
+ * socket: the server scans a store and forks a process behind it. Short enough
+ * that a client is not left with a spinner nothing will ever resolve -- a
+ * deadline missed here is reported as a refusal the user can act on, and the
+ * heartbeat is what decides whether the machine itself is still there.
+ */
+export const DEFAULT_INSTRUCTION_TIMEOUT_MS = 30_000;
+
 export interface ServerConnectionDependencies {
   readonly database: Database;
   readonly dialer: SocketDialer;
@@ -140,6 +210,15 @@ export interface ServerConnectionDependencies {
    * builds a snapshot has to see the states in the order they happened.
    */
   readonly onChange?: (report: ServerConnectionReport) => void;
+  /**
+   * Called with every store report this server sends, unsolicited.
+   *
+   * The reducer's other seam. Reports arrive whole and on the server's own
+   * schedule -- after a handshake, and after anything it did changes what it is
+   * running -- so there is nothing here to request and nothing to correlate.
+   */
+  readonly onReport?: (report: ServerStoreReport) => void;
+  readonly instructionTimeoutMs?: number;
 }
 
 const DEFAULT_REFUSED_RETRY_MS = 60_000;
@@ -154,6 +233,17 @@ const NEEDS_A_PERSON: ReadonlySet<StaleReason> = new Set<StaleReason>([
 export interface ServerConnection {
   /** What this connection is, right now. */
   readonly report: ServerConnectionReport;
+  /**
+   * Puts one instruction to this server and waits for its answer.
+   *
+   * Refuses rather than throwing when there is no connection to put it on: a
+   * machine that is asleep is the ordinary state of a laptop, and the caller
+   * has a client waiting for a sentence either way. Queueing it until the
+   * server comes back was the alternative and is worse -- a start that lands
+   * ten minutes later, on a session the user has since opened somewhere else,
+   * is an instruction nobody would still authorise.
+   */
+  ask(instruction: SessionInstruction): Promise<InstructionOutcome>;
   /**
    * Stops dialling and closes whatever is held. Resolves when the loop has
    * actually finished, so a hub shutdown cannot leave a dial in flight.
@@ -171,6 +261,7 @@ export function startServerConnection(
     server: registration.label,
   });
   const refusedRetryMs = dependencies.refusedRetryMs ?? DEFAULT_REFUSED_RETRY_MS;
+  const instructionTimeoutMs = dependencies.instructionTimeoutMs ?? DEFAULT_INSTRUCTION_TIMEOUT_MS;
   const target: DialTarget = { address: registration.address, token: registration.token };
 
   let phase: ServerConnectionPhase = 'connecting';
@@ -185,6 +276,14 @@ export function startServerConnection(
 
   let stopped = false;
   let held: MessageSocket | null = null;
+  /**
+   * How to speak on the connection now held, or `null` when there is none.
+   *
+   * Set when a handshake settles and cleared when the socket ends, so that "is
+   * there a connection to put this on" has one answer rather than a phase and a
+   * socket that can disagree.
+   */
+  let speak: ((instruction: SessionInstruction) => Promise<InstructionOutcome>) | null = null;
 
   // Resolved by `stop`. Everything the loop waits on races against it, so a
   // shutdown does not have to wait out a backoff or a handshake deadline.
@@ -255,13 +354,161 @@ export function startServerConnection(
     cancel();
   };
 
+  /**
+   * The instructions this connection is waiting on answers to.
+   *
+   * Keyed by the frame id each was sent with, which is what a reply names. A
+   * connection that ends settles every one of them as a refusal: an instruction
+   * whose answer can no longer arrive is not a promise to leave pending, and
+   * the client waiting on it is owed a sentence.
+   */
+  const outstanding = new Map<FrameId, (outcome: InstructionOutcome) => void>();
+
+  const settleAll = (problem: string): void => {
+    const waiting = [...outstanding.values()];
+    outstanding.clear();
+    for (const settle of waiting) settle({ ok: false, code: 'internal', problem, hold: null });
+  };
+
+  /**
+   * Reports that arrived before the hub had recorded the connection.
+   *
+   * A server sends its stores the moment it accepts a handshake, and the hub
+   * has a database write to finish before it can say the connection exists.
+   * That gap is real on a wire and not an artefact of any test: the reports
+   * are held here and delivered once there is somewhere to put them, rather
+   * than being dropped and waited out until the server next has a reason to
+   * speak. `null` once the connection is established and reports go straight
+   * through.
+   */
+  let pendingReports: ServerStoreReport[] | null = null;
+
+  const deliverReport = (report: ServerStoreReport): void => {
+    if (pendingReports !== null) {
+      pendingReports.push(report);
+      return;
+    }
+    dependencies.onReport?.(report);
+  };
+
+  /**
+   * Routes what a server says on an established connection.
+   *
+   * One parser for the direction, and the discriminated union it returns is
+   * switched on rather than re-checked: an answer goes to whoever asked, a
+   * report goes to the reducer, and the handshake frames belong to a handshake
+   * that is already over. `pong` is the heartbeat's, which reads this socket
+   * itself.
+   */
+  const receive = (frame: ServerToHubFrame): void => {
+    switch (frame.type) {
+      case 'session-started':
+      case 'session-stopped': {
+        outstanding.get(frame.replyTo)?.({ ok: true, answer: frame });
+        outstanding.delete(frame.replyTo);
+        return;
+      }
+      case 'session-refused': {
+        outstanding.get(frame.replyTo)?.({
+          ok: false,
+          code: frame.code,
+          problem: frame.message,
+          hold: frame.hold,
+        });
+        outstanding.delete(frame.replyTo);
+        return;
+      }
+      case 'store-report': {
+        deliverReport({
+          registrationId: registration.id,
+          storeId: frame.storeId,
+          sessions: frame.sessions,
+          holding: frame.holding,
+        });
+        return;
+      }
+      case 'handshake-accepted':
+      case 'handshake-rejected':
+      case 'pong':
+      case 'protocol-error':
+        return;
+    }
+  };
+
+  /**
+   * Starts reading a socket the handshake just settled, before anything is
+   * awaited on it.
+   *
+   * Subscribed here rather than in `hold` because there is a database write
+   * between the two, and a listener attached after it would miss whatever the
+   * server said in the meantime -- which is exactly when a server says the most,
+   * since accepting a handshake is what makes it report its stores.
+   */
+  let frameIds: () => number = () => 0;
+
+  const listen = (socket: MessageSocket, nextFrameId: () => number): void => {
+    pendingReports = [];
+    // The handshake's counter, continued: a frame id is unique within one
+    // connection and the handshake already spent the first one. Both the
+    // heartbeat and the instructions below draw from this same one.
+    frameIds = nextFrameId;
+
+    socket.onMessage((text) => {
+      const parsed = parseTextFrame(parseServerToHubFrame, text);
+      // Unreadable text is not this listener's to complain about, and it is not
+      // silently ignored either: the handshake's parser owns the connection's
+      // protocol errors, and a server that has started talking nonsense fails
+      // the heartbeat that is asking it questions on the same socket.
+      if (parsed.ok) receive(parsed.value);
+    });
+
+    speak = (instruction: SessionInstruction): Promise<InstructionOutcome> =>
+      new Promise<InstructionOutcome>((resolve) => {
+        const id = nextFrameId();
+        let cancelDeadline: () => void = () => {};
+
+        const settle = (outcome: InstructionOutcome): void => {
+          cancelDeadline();
+          resolve(outcome);
+        };
+
+        outstanding.set(id, settle);
+        cancelDeadline = timers.schedule(instructionTimeoutMs, () => {
+          if (!outstanding.delete(id)) return;
+          // The connection is left alone. A server that is slow to answer one
+          // instruction is not a server that has gone away, and that judgement
+          // belongs to the heartbeat, which is asking its own question on the
+          // same socket and closes when it goes unanswered.
+          logger.warn('the server did not answer an instruction', {
+            instruction: instruction.type,
+            afterMs: instructionTimeoutMs,
+          });
+          resolve({
+            ok: false,
+            code: 'internal',
+            problem: `the server did not answer within ${instructionTimeoutMs}ms`,
+            hold: null,
+          });
+        });
+
+        send(socket, { ...instruction, id });
+      });
+  };
+
+  /** Lets through what arrived while the hub was recording the connection. */
+  const deliverPendingReports = (): void => {
+    const waiting = pendingReports ?? [];
+    pendingReports = null;
+    for (const report of waiting) dependencies.onReport?.(report);
+  };
+
   /** Holds an established connection until it ends or the hub stops. */
-  const hold = async (socket: MessageSocket, nextFrameId: () => number): Promise<void> => {
+  const hold = async (socket: MessageSocket): Promise<void> => {
     held = socket;
     const heartbeat = startHeartbeat(socket, {
       timers,
       logger,
-      nextFrameId,
+      nextFrameId: frameIds,
       ...(dependencies.heartbeatIntervalMs === undefined
         ? {}
         : { intervalMs: dependencies.heartbeatIntervalMs }),
@@ -277,6 +524,9 @@ export function startServerConnection(
 
     heartbeat.stop();
     held = null;
+    speak = null;
+    pendingReports = null;
+    settleAll('the connection to the server ended before it answered');
     if (stopped) socket.close(closure(CLOSE_NORMAL, 'the hub is stopping'));
   };
 
@@ -317,6 +567,12 @@ export function startServerConnection(
           continue;
         }
 
+        // Before the database write below, so that nothing the server says in
+        // the meantime is lost. Reports are buffered until the connection is
+        // recorded; instructions cannot be put yet, because nothing above knows
+        // this server is connected.
+        listen(outcome.socket, outcome.nextFrameId);
+
         const recorded = await recordHandshake(database, clock, registration.id, {
           serverId: outcome.serverId,
           stores: outcome.stores,
@@ -352,7 +608,11 @@ export function startServerConnection(
           outcome.serverId,
           recorded.stores.map((store) => store.storeId),
         );
-        await hold(outcome.socket, outcome.nextFrameId);
+        // After the state says this server is connected, because the reducer
+        // refuses sessions from a server it has no connection for -- correctly,
+        // and this is the ordering that keeps that from being a lie.
+        deliverPendingReports();
+        await hold(outcome.socket);
         if (stopped) break;
 
         goStale('dropped', 'the connection to the server ended');
@@ -381,6 +641,18 @@ export function startServerConnection(
     get report(): ServerConnectionReport {
       return report();
     },
+    ask(instruction: SessionInstruction): Promise<InstructionOutcome> {
+      const speaking = speak;
+      if (speaking === null) {
+        return Promise.resolve({
+          ok: false,
+          code: 'refused',
+          problem: `the hub is not connected to ${registration.label}`,
+          hold: null,
+        });
+      }
+      return speaking(instruction);
+    },
     stop(): Promise<void> {
       stopped = true;
       beginStopping();
@@ -388,4 +660,14 @@ export function startServerConnection(
       return finished;
     },
   };
+}
+
+/**
+ * The one place an instruction becomes characters.
+ *
+ * Typed on the way out, so that a change to a frame's shape is a compile error
+ * here rather than something the server's parser discovers.
+ */
+function send(socket: MessageSocket, frame: HubToServerFrame): void {
+  socket.send(JSON.stringify(frame));
 }

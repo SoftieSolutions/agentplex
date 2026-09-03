@@ -21,6 +21,7 @@ import { openMigratedSchema, type MigratedSchema } from '../pairing/test-migrate
 import { attentionEligibleStores } from './attention.js';
 import { createExponentialBackoff } from './backoff.js';
 import { startConnectionSupervisor, type ConnectionSupervisor } from './connection-supervisor.js';
+import { createFakeSessionController } from '../../server/fake-session-controller.js';
 
 /**
  * The fleet: which servers are dialled, and what one being down costs the
@@ -73,6 +74,7 @@ const dialer: SocketDialer = {
 
     const { hubEnd, serverEnd } = createSocketPair();
     serveHubConnection(serverEnd, {
+      sessions: createFakeSessionController(),
       identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
       stores: machine.stores,
       logger,

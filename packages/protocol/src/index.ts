@@ -39,6 +39,7 @@ export {
   machineStateSchema,
   serverPhaseSchema,
   serverViewSchema,
+  sessionHolderSchema,
   sessionRowSchema,
   staleReasonSchema,
   storeViewSchema,
@@ -47,13 +48,14 @@ export type {
   MachineState,
   ServerPhase,
   ServerView,
+  SessionHolder,
   SessionRow,
   StaleReason,
   StoreView,
 } from './machine-state.js';
 
-export { sessionDescriptorSchema, sessionStatusSchema } from './session.js';
-export type { SessionDescriptor, SessionStatus } from './session.js';
+export { sessionDescriptorSchema, sessionHoldSchema, sessionStatusSchema } from './session.js';
+export type { SessionDescriptor, SessionHold, SessionStatus } from './session.js';
 
 export { clientFrameSchema, hubFrameSchema, parseClientFrame, parseHubFrame } from './client.js';
 export type { ClientFrame, HubFrame } from './client.js';

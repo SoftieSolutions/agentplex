@@ -35,6 +35,7 @@ const A_SESSION_ROW = {
   reportedBy: ['registration-1'],
   reportedAt: 1_000,
   reachable: true,
+  holder: null,
 };
 
 describe('serverViewSchema', () => {
@@ -94,6 +95,36 @@ describe('sessionRowSchema', () => {
 
   it('rejects a row nobody reported: a session with no source is not a reading', () => {
     expect(sessionRowSchema.safeParse({ ...A_SESSION_ROW, reportedBy: [] }).success).toBe(false);
+  });
+
+  it('accepts a row held by a server, with whether it may be stopped', () => {
+    const parsed = sessionRowSchema.safeParse({
+      ...A_SESSION_ROW,
+      holder: { server: 'registration-1', stoppable: false },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('rejects a holder that inlines a server object where an id belongs', () => {
+    const parsed = sessionRowSchema.safeParse({
+      ...A_SESSION_ROW,
+      holder: { server: A_SERVER, stoppable: true },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects a holder with no answer about stopping, rather than assuming one', () => {
+    const parsed = sessionRowSchema.safeParse({
+      ...A_SESSION_ROW,
+      holder: { server: 'registration-1' },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects a row with no holder field: a missing holder is not the same as none', () => {
+    const { holder, ...withoutHolder } = A_SESSION_ROW;
+    expect(holder).toBeNull();
+    expect(sessionRowSchema.safeParse(withoutHolder).success).toBe(false);
   });
 });
 

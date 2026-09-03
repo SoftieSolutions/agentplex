@@ -29,6 +29,10 @@ import type {
 import { serverAddressSchema } from '../pairing/server-address.js';
 import { createReducer, type Reducer } from '../state/reducer.js';
 import { startClientBroadcast, type ClientBroadcast } from './client-broadcast.js';
+import {
+  createFakeSessionControl,
+  type FakeSessionControl,
+} from '../sessions/fake-session-control.js';
 
 /**
  * The pipeline, with the real reducer above it and fake sockets below.
@@ -98,6 +102,8 @@ interface Harness {
   readonly state: Reducer;
   readonly timers: FakeTimers;
   readonly broadcast: ClientBroadcast;
+  /** The session control this broadcast was built on, for tests that drive it. */
+  readonly sessions: FakeSessionControl;
 }
 
 /**
@@ -107,11 +113,21 @@ interface Harness {
  * where the answer goes and what happens when the read fails, so the seam is
  * filled with a value or a throw rather than a database.
  */
-function harness(readLayout: () => Promise<Layout> = async () => []): Harness {
+function harness(
+  readLayout: () => Promise<Layout> = async () => [],
+  sessions: FakeSessionControl = createFakeSessionControl(),
+): Harness {
   const state = createReducer({ logger });
   const timers = createFakeTimers();
-  const broadcast = startClientBroadcast({ hubId: HUB_ID, state, timers, logger, readLayout });
-  return { state, timers, broadcast };
+  const broadcast = startClientBroadcast({
+    hubId: HUB_ID,
+    state,
+    timers,
+    logger,
+    readLayout,
+    sessions,
+  });
+  return { state, timers, broadcast, sessions };
 }
 
 /**
@@ -182,6 +198,7 @@ describe('a client that has just said hello', () => {
     const { state, broadcast, timers } = harness();
     state.applyConnection(connection('workshop', 'connected', ['store-work']));
     state.applySessions({
+      holding: [],
       registrationId: `registration-workshop` as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -225,6 +242,7 @@ describe('two clients', () => {
     state.applyConnection(connection('laptop', 'stale', ['store-work']));
     timers.fireAll();
     state.applySessions({
+      holding: [],
       registrationId: `registration-workshop` as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1'), session('session-2')],
@@ -253,6 +271,7 @@ describe('two clients', () => {
     await late.hello();
 
     state.applySessions({
+      holding: [],
       registrationId: `registration-workshop` as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -290,6 +309,7 @@ describe('a burst of changes', () => {
     state.applyConnection(connection('workshop', 'connected', ['store-work']));
     state.applyConnection(connection('laptop', 'connected', ['store-home']));
     state.applySessions({
+      holding: [],
       registrationId: `registration-workshop` as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -315,6 +335,7 @@ describe('a burst of changes', () => {
       registrationId: `registration-workshop` as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
+      holding: [],
       reportedAt: START,
     };
     state.applySessions(report);
@@ -387,6 +408,7 @@ describe('the stored layout', () => {
       replyTo: 2,
       code: 'internal',
       message: 'the hub could not read its layout',
+      holder: null,
     });
     expect(client.socket.closure).toBeNull();
   });
@@ -416,6 +438,7 @@ describe('a refusal', () => {
         replyTo: 1,
         code: 'protocol-version',
         message: `this hub speaks protocol ${PROTOCOL_VERSION}, not ${PROTOCOL_VERSION + 1}`,
+        holder: null,
       },
     ]);
     expect(client.socket.closure?.code).toBe(1008);
@@ -433,6 +456,7 @@ describe('a refusal', () => {
         replyTo: 1,
         code: 'bad-request',
         message: 'the first frame on a connection is a hello',
+        holder: null,
       },
     ]);
     expect(client.states).toEqual([]);
@@ -447,6 +471,133 @@ describe('a refusal', () => {
 
     expect(client.received.map((frame) => frame.type)).toEqual(['protocol-error']);
     expect(client.socket.closure?.code).toBe(1008);
+  });
+});
+
+describe('starting and stopping a session', () => {
+  const STORE = 'store-work';
+  const SESSION = 'session-1';
+
+  it('answers the client that asked, and names where the session landed', async () => {
+    const sessions = createFakeSessionControl({
+      outcome: {
+        ok: true,
+        storeId: store(STORE),
+        sessionId: sessionIdSchema.parse(SESSION),
+        server: 'registration-workshop' as ServerRegistrationId,
+      },
+    });
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+    });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'session-started',
+      replyTo: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      server: 'registration-workshop',
+    });
+    // The frame reaches the control as a request, with the override it carried.
+    expect(sessions.starts).toEqual([
+      {
+        storeId: STORE,
+        sessionId: SESSION,
+        provider: 'claude',
+        prompt: null,
+        server: null,
+      },
+    ]);
+  });
+
+  it('passes a refusal back to that client alone, with the holder on it', async () => {
+    const sessions = createFakeSessionControl({
+      outcome: {
+        ok: false,
+        code: 'refused',
+        problem: 'that session is already running on workshop',
+        holder: { server: 'registration-workshop' as ServerRegistrationId, stoppable: false },
+      },
+    });
+    const { broadcast } = harness(async () => [], sessions);
+    const asking = attach(broadcast);
+    const watching = attach(broadcast);
+    await asking.hello();
+    await watching.hello();
+
+    await asking.say({
+      type: 'session-start',
+      id: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+    });
+
+    expect(asking.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+      message: 'that session is already running on workshop',
+      holder: { server: 'registration-workshop', stoppable: false },
+    });
+    // Nobody else is told that somebody was refused: their view of the world
+    // has not changed, and a refusal is a reply.
+    expect(watching.received.map((frame) => frame.type)).toEqual(['welcome', 'machine-state']);
+  });
+
+  it('takes a stop that names a session and nothing else', async () => {
+    const sessions = createFakeSessionControl({
+      outcome: {
+        ok: true,
+        storeId: store(STORE),
+        sessionId: sessionIdSchema.parse(SESSION),
+        server: 'registration-workshop' as ServerRegistrationId,
+      },
+    });
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'session-stop', id: 2, storeId: STORE, sessionId: SESSION });
+
+    expect(sessions.stops).toEqual([{ storeId: STORE, sessionId: SESSION }]);
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'session-stopped',
+      replyTo: 2,
+      server: 'registration-workshop',
+    });
+  });
+
+  it('refuses a start that arrives before hello, and starts nothing', async () => {
+    const sessions = createFakeSessionControl();
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+
+    await client.say({
+      type: 'session-start',
+      id: 1,
+      storeId: STORE,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+    });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+    expect(sessions.starts).toEqual([]);
+    expect(client.socket.closure).not.toBeNull();
   });
 });
 

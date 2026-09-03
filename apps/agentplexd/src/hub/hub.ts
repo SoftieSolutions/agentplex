@@ -20,6 +20,8 @@ import {
   startConnectionSupervisor,
   type ConnectionSupervisor,
 } from './connections/connection-supervisor.js';
+import type { InstructionOutcome, SessionInstruction } from './connections/server-connection.js';
+import { createSessionControl } from './sessions/session-control.js';
 import type { Database } from './db/database.js';
 import { loadMigrations, type MigrationFileSystem } from './db/migration-files.js';
 import { migrate } from './db/migrations.js';
@@ -155,15 +157,38 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // memory beside the reducer's state. It is durable and the state is not:
   // where the user put things survives a restart, and which sessions are
   // reachable this second does not.
+  // The supervisor does not exist yet and the broadcast must be built before it
+  // does, so what the session control is given is a way to reach whichever
+  // supervisor this hub ends up with rather than the supervisor itself. Nothing
+  // can ask through it before the assignment below: an instruction comes from
+  // an attached client, and no port is open until both exist.
+  let connections: ConnectionSupervisor | null = null;
+  const sessions = createSessionControl({
+    state,
+    connections: {
+      ask: (registrationId, instruction: SessionInstruction): Promise<InstructionOutcome> =>
+        connections === null
+          ? Promise.resolve({
+              ok: false,
+              code: 'internal',
+              problem: 'the hub is still starting',
+              hold: null,
+            })
+          : connections.ask(registrationId, instruction),
+    },
+    logger,
+  });
+
   const clients = startClientBroadcast({
     hubId,
     state,
     timers,
     logger,
     readLayout: () => readLayout(database),
+    sessions,
   });
 
-  const connections = await startConnectionSupervisor({
+  connections = await startConnectionSupervisor({
     database,
     dialer,
     hubId,
@@ -171,6 +196,17 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     clock,
     logger,
     onChange: (report) => state.applyConnection(report),
+    // Stamped with the hub's clock and not the server's. Two machines' clocks
+    // disagree, and a hub comparing readings dated by the machines that made
+    // them is comparing two different times.
+    onReport: (report) =>
+      void state.applySessions({
+        registrationId: report.registrationId,
+        storeId: report.storeId,
+        sessions: report.sessions,
+        holding: report.holding,
+        reportedAt: clock.now(),
+      }),
   });
 
   // The short-lived half of client auth. Nothing durable: a ticket outliving a
@@ -228,16 +264,18 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     sockets.onUpgrade,
   );
 
+  const supervisor = connections;
+
   logger.info('hub listening', {
     port: listener.port,
     hubId,
-    servers: connections.snapshot().length,
+    servers: supervisor.snapshot().length,
   });
 
   return {
     hubId,
     port: listener.port,
-    connections,
+    connections: supervisor,
     state,
     clients,
     async stop() {
@@ -253,7 +291,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       sockets.close();
       // Then outbound. The dials are what hold sockets open and what would
       // otherwise still be retrying while the listener is closing.
-      await connections.stop();
+      await supervisor.stop();
       await listener.close();
       logger.info('hub stopped');
     },

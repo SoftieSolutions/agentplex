@@ -92,6 +92,27 @@ export const serverViewSchema = z.object({
 export type ServerView = z.infer<typeof serverViewSchema>;
 
 /**
+ * Which server is running a session, as everything client-facing names it.
+ *
+ * The server is named by `registrationId` and described nowhere here, which is
+ * the same rule that keeps a store from inlining its servers: a machine is
+ * described once, in `servers`, and everything else points at that row. A
+ * holder carrying a label or a phase of its own would be a second copy of a
+ * server's state inside one frame, free to contradict the first.
+ *
+ * `stoppable` rides along because it is not a property of the server: it is
+ * this session's, on this machine, right now, and it is what a client reads to
+ * decide whether to offer a stop. A busy holder is a holder with
+ * `stoppable: false`, and that is the whole of what "a busy holder gets no
+ * button" is on the wire. The hub publishes the fact; nothing here draws it.
+ */
+export const sessionHolderSchema = z.object({
+  server: serverRegistrationIdSchema,
+  stoppable: z.boolean(),
+});
+export type SessionHolder = z.infer<typeof sessionHolderSchema>;
+
+/**
  * One session, as the hub shows it.
  *
  * The descriptor is exactly what one server sent, whole. It is never assembled
@@ -116,6 +137,17 @@ export const sessionRowSchema = z.object({
    * no badge.
    */
   reachable: z.boolean(),
+  /**
+   * The server running this session right now, or `null` when nobody is.
+   *
+   * Not the same fact as `status`, and the difference is what a client draws.
+   * A status is derived from a transcript and describes the session; this is a
+   * live process somewhere, and it is what says a start would be refused and
+   * what a stop is aimed at. A session can be `idle` and held — an agent at its
+   * own prompt with nobody typing — and it can be `working` and unheld, which
+   * is a session somebody started outside agentplex.
+   */
+  holder: sessionHolderSchema.nullable(),
 });
 export type SessionRow = z.infer<typeof sessionRowSchema>;
 

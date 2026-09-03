@@ -1,8 +1,14 @@
 import { z } from 'zod';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
-import { hubIdSchema } from './identity.js';
+import {
+  hubIdSchema,
+  providerSchema,
+  serverRegistrationIdSchema,
+  sessionIdSchema,
+  storeIdSchema,
+} from './identity.js';
 import { layoutSchema } from './layout.js';
-import { machineStateSchema } from './machine-state.js';
+import { machineStateSchema, sessionHolderSchema } from './machine-state.js';
 import { frameParser } from './parse.js';
 
 /**
@@ -47,6 +53,58 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('layout-request'),
     id: frameIdSchema,
+  }),
+  /**
+   * Asks the hub to run a session, in a store.
+   *
+   * A start names a store and never a machine. Which server runs it is the
+   * hub's to decide -- it is the only thing that can see every server attached
+   * to a volume -- and `server` is the user overriding that decision, not the
+   * ordinary way to ask. `null` means "you choose", which is what a client
+   * sends unless somebody picked a machine off a menu.
+   *
+   * What this frame cannot say is the whole point of it. There is no operation
+   * name, no argv element, no environment variable and no working directory
+   * here, and there is nowhere to put one. The server owns the spawn: it turns
+   * a store id into a directory it resolved from its own configuration, and a
+   * provider name into the adapter that builds the argv, `shell: false`. A
+   * generic `{ command }` frame is exactly the failure this shape exists to
+   * make unrepresentable.
+   *
+   * `prompt` is the exception that proves it, and it is user content rather
+   * than an option: the adapter places it as one argv element and no shell ever
+   * sees it. `null` leaves the provider at its own prompt.
+   */
+  z.object({
+    type: z.literal('session-start'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    /**
+     * The session to resume, or `null` to start a new one.
+     *
+     * A new session has no id to name: the provider mints its own and writes
+     * it, and agentplex naming it up front would mean `--session-id`, the flag
+     * family that splits a history in two. The id arrives from the next scan.
+     */
+    sessionId: sessionIdSchema.nullable(),
+    provider: providerSchema,
+    prompt: z.string().min(1).nullable(),
+    /** The user's choice of machine, or `null` to let the hub schedule it. */
+    server: serverRegistrationIdSchema.nullable(),
+  }),
+  /**
+   * Asks the hub to stop a session.
+   *
+   * It addresses `{ storeId, sessionId }` and nothing else. The hub resolves
+   * which server holds it and that server resolves its own terminal, so no pid
+   * and no terminal handle ever crosses a wire -- a client that could name a
+   * process would be a client that could name any process.
+   */
+  z.object({
+    type: z.literal('session-stop'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
   }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
@@ -100,6 +158,34 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     nodes: layoutSchema,
   }),
   /**
+   * A session is running, and here is where it landed.
+   *
+   * `server` is the answer to the scheduling question the client did not ask:
+   * a start names a store, and the client is owed the name of the machine the
+   * hub picked, whether or not it overrode the choice.
+   *
+   * `sessionId` is `null` for a session that has just been spawned, and that is
+   * honest rather than incomplete: the provider mints its own id and writes it,
+   * and the hub learns it from the next report rather than inventing one to
+   * fill the field. A resume answers with the id it was given.
+   */
+  z.object({
+    type: z.literal('session-started'),
+    replyTo: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema.nullable(),
+    server: serverRegistrationIdSchema,
+  }),
+  /** A session's process has been killed. Its transcript is untouched. */
+  z.object({
+    type: z.literal('session-stopped'),
+    replyTo: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    /** Which server it was resolved to, hub-side. The client never named it. */
+    server: serverRegistrationIdSchema,
+  }),
+  /**
    * A refusal is a reply to the client that asked, never a broadcast: the other
    * clients did not ask and their view of the world has not changed. Which is
    * why it cannot carry a frame that failed to parse — see `protocol-error`.
@@ -109,6 +195,20 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     replyTo: frameIdSchema,
     code: refusalCodeSchema,
     message: z.string(),
+    /**
+     * The server already running the session, when that is why the answer was
+     * no, and `null` for every other refusal.
+     *
+     * Named rather than merely refused, because "it is running over here" is a
+     * different answer from "no" and leads somewhere: the way out is stopping
+     * the holder, and a client cannot offer that without knowing which machine
+     * to aim at. `stoppable` on the holder is what decides whether it offers
+     * the button at all.
+     *
+     * `null` rather than an absent property, so that every refusal has one
+     * shape and no reader has to remember which kinds carry a holder.
+     */
+    holder: sessionHolderSchema.nullable(),
   }),
   protocolErrorFrameSchema,
 ]);

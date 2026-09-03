@@ -12,6 +12,7 @@ import { createLogger } from '../shared/logger.js';
 import { CLOSE_POLICY } from '../shared/message-socket.js';
 import { serveHubConnection } from './hub-connection.js';
 import type { ServerIdentity } from './server-identity.js';
+import { createFakeSessionController } from './fake-session-controller.js';
 
 const logger = createLogger('error', () => {});
 
@@ -38,7 +39,12 @@ function handshake(overrides: Record<string, unknown> = {}): string {
 
 function connect() {
   const socket = createFakeMessageSocket();
-  const connection = serveHubConnection(socket, { identity, stores, logger });
+  const connection = serveHubConnection(socket, {
+    identity,
+    stores,
+    sessions: createFakeSessionController(),
+    logger,
+  });
   return { socket, connection };
 }
 
@@ -76,7 +82,12 @@ describe('serveHubConnection', () => {
 
   it('reports the stores it actually has, and an empty list when it has none', async () => {
     const socket = createFakeMessageSocket();
-    serveHubConnection(socket, { identity, stores: [], logger });
+    serveHubConnection(socket, {
+      identity,
+      stores: [],
+      sessions: createFakeSessionController(),
+      logger,
+    });
 
     socket.receive(handshake());
     await settle();

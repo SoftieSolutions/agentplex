@@ -28,6 +28,7 @@ import { listStores } from '../pairing/store-records.js';
 import { openMigratedSchema, type MigratedSchema } from '../pairing/test-migrated-schema.js';
 import { createExponentialBackoff } from './backoff.js';
 import { startServerConnection, type ServerConnection } from './server-connection.js';
+import { createFakeSessionController } from '../../server/fake-session-controller.js';
 
 /**
  * The connection supervisor for one server, driven end to end.
@@ -118,6 +119,7 @@ function fakeMachine(options: {
         // The real server half, so the handshake this test drives is the one
         // the product runs.
         serveHubConnection(serverEnd, {
+          sessions: createFakeSessionController(),
           identity: { serverId: machine.serverId, token: machine.token },
           stores: machine.stores,
           logger,
@@ -546,6 +548,7 @@ describe('startServerConnection', () => {
     const registration = await register('laptop');
     const { hubEnd, serverEnd } = createSocketPair();
     serveHubConnection(serverEnd, {
+      sessions: createFakeSessionController(),
       identity: { serverId: serverIdSchema.parse('server-laptop'), token: 'tok-laptop' },
       stores: [store('store-a', '/volumes/claude')],
       logger,

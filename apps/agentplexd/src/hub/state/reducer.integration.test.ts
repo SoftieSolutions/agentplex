@@ -27,6 +27,7 @@ import {
 } from '../pairing/server-registrations.js';
 import { openMigratedSchema, type MigratedSchema } from '../pairing/test-migrated-schema.js';
 import { createReducer, type Reducer, type StoreView } from './reducer.js';
+import { createFakeSessionController } from '../../server/fake-session-controller.js';
 
 /**
  * The reducer against the real supervisor, over real handshakes.
@@ -82,6 +83,7 @@ const dialer: SocketDialer = {
 
     const { hubEnd, serverEnd } = createSocketPair();
     serveHubConnection(serverEnd, {
+      sessions: createFakeSessionController(),
       identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
       stores: machine.stores,
       logger,
@@ -214,12 +216,14 @@ describe('the reducer over a live supervisor', () => {
     // Both machines read the same volume. The laptop is the one running the
     // session, so it is the only one that can see a process.
     reducer.applySessions({
+      holding: [],
       registrationId: laptop,
       storeId: shared,
       sessions: [session('session-1', shared, 'working'), session('session-2', shared, 'idle')],
       reportedAt: START,
     });
     reducer.applySessions({
+      holding: [],
       registrationId: box,
       storeId: shared,
       sessions: [session('session-1', shared, 'idle'), session('session-2', shared, 'idle')],
@@ -249,6 +253,7 @@ describe('the reducer over a live supervisor', () => {
     expect(view('store-shared').unreachableSince).toBeNull();
     expect(
       reducer.applySessions({
+        holding: [],
         registrationId: laptop,
         storeId: storeIdSchema.parse('store-shared'),
         sessions: [],
@@ -264,6 +269,7 @@ describe('the reducer over a live supervisor', () => {
 
     const shared = storeIdSchema.parse('store-shared');
     reducer.applySessions({
+      holding: [],
       registrationId: box,
       storeId: shared,
       sessions: [session('session-1', shared, 'idle')],
@@ -289,6 +295,7 @@ describe('the reducer over a live supervisor', () => {
 
     const shared = storeIdSchema.parse('store-shared');
     reducer.applySessions({
+      holding: [],
       registrationId: box,
       storeId: shared,
       sessions: [session('session-1', shared, 'idle')],

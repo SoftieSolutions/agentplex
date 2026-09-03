@@ -3,14 +3,18 @@ import {
   parseHubToServerFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type FrameId,
   type HubToServerFrame,
   type ServerToHubFrame,
+  type SessionId,
   type StoreDescriptor,
+  type StoreId,
 } from '@agentplex/protocol';
 import { closure, CLOSE_POLICY, type MessageSocket } from '../shared/message-socket.js';
 import type { Logger } from '../shared/logger.js';
 import { tokenMatches } from '../shared/tokens.js';
 import type { ServerIdentity } from './server-identity.js';
+import type { SessionController } from './session-control.js';
 
 /**
  * The server's half of the handshake.
@@ -37,6 +41,15 @@ export interface HubConnectionDependencies {
    * a question about a volume.
    */
   readonly stores: readonly StoreDescriptor[];
+  /**
+   * The one thing on this connection that starts and stops sessions.
+   *
+   * Injected rather than built here, because it holds the terminals: a
+   * connection is a socket that comes and goes, and the agents this server is
+   * running outlive every one of them. A hub reconnecting must find the
+   * sessions it left behind, not a fresh empty manager.
+   */
+  readonly sessions: SessionController;
   readonly logger: Logger;
 }
 
@@ -58,7 +71,7 @@ export interface HubConnection {
  */
 export function serveHubConnection(
   socket: MessageSocket,
-  { identity, stores, logger }: HubConnectionDependencies,
+  { identity, stores, sessions, logger }: HubConnectionDependencies,
 ): HubConnection {
   let state: HubConnectionState = 'awaiting-handshake';
 
@@ -149,20 +162,46 @@ export function serveHubConnection(
           serverId: identity.serverId,
           stores: stores.length,
         });
+        // Every mounted store, straight away and unasked. A hub that has just
+        // connected knows what this machine has mounted and nothing about what
+        // is in it, and waiting for it to ask would be a second protocol for a
+        // fact this server already has.
+        void reportEverything();
         return;
       }
 
       case 'ping': {
         if (state !== 'established') {
-          send({
-            type: 'protocol-error',
-            code: 'bad-request',
-            message: 'the first frame on a connection is a handshake',
-          });
-          refuse('handshake first');
+          handshakeFirst();
           return;
         }
         send({ type: 'pong', replyTo: frame.id });
+        return;
+      }
+
+      case 'session-start': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        // Not awaited: a start scans a store and forks a process, and awaiting
+        // it inside `onMessage` would stall every later frame on this socket
+        // behind one launch.
+        void runStart(frame.id, {
+          storeId: frame.storeId,
+          sessionId: frame.sessionId,
+          provider: frame.provider,
+          prompt: frame.prompt,
+        });
+        return;
+      }
+
+      case 'session-stop': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        void runStop(frame.id, { storeId: frame.storeId, sessionId: frame.sessionId });
         return;
       }
 
@@ -175,6 +214,138 @@ export function serveHubConnection(
         return;
       }
     }
+  }
+
+  /** Everything but a handshake needs a handshake first, and says so the same way. */
+  function handshakeFirst(): void {
+    send({
+      type: 'protocol-error',
+      code: 'bad-request',
+      message: 'the first frame on a connection is a handshake',
+    });
+    refuse('handshake first');
+  }
+
+  /**
+   * Starts a session and answers the hub that asked.
+   *
+   * The report goes first and the answer second, on purpose. Both travel the
+   * same socket in order, so a hub that has read the answer has already read
+   * the report -- which means the client waiting on the start sees the session
+   * in the state it is sent, rather than an answer about a session that has not
+   * appeared yet.
+   */
+  async function runStart(
+    replyTo: FrameId,
+    request: {
+      readonly storeId: StoreId;
+      readonly sessionId: SessionId | null;
+      readonly provider: 'claude' | 'codex' | 'opencode';
+      readonly prompt: string | null;
+    },
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = await sessions.start(request);
+    } catch (error) {
+      logger.error('could not start a session', { problem: String(error) });
+      answerFailure(replyTo, 'this server could not start that session');
+      return;
+    }
+
+    await reportStore(request.storeId);
+    if (state !== 'established') return;
+
+    if (!outcome.ok) {
+      send({
+        type: 'session-refused',
+        replyTo,
+        code: outcome.code,
+        message: outcome.problem,
+        hold: outcome.hold,
+      });
+      return;
+    }
+
+    send({
+      type: 'session-started',
+      replyTo,
+      storeId: outcome.storeId,
+      sessionId: outcome.sessionId,
+    });
+  }
+
+  /** Stops a session and answers the hub that asked. */
+  async function runStop(
+    replyTo: FrameId,
+    session: { readonly storeId: StoreId; readonly sessionId: SessionId },
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = sessions.stop(session);
+    } catch (error) {
+      logger.error('could not stop a session', { problem: String(error) });
+      answerFailure(replyTo, 'this server could not stop that session');
+      return;
+    }
+
+    await reportStore(session.storeId);
+    if (state !== 'established') return;
+
+    if (!outcome.ok) {
+      send({
+        type: 'session-refused',
+        replyTo,
+        code: outcome.code,
+        message: outcome.problem,
+        hold: outcome.hold,
+      });
+      return;
+    }
+
+    send({
+      type: 'session-stopped',
+      replyTo,
+      storeId: session.storeId,
+      sessionId: session.sessionId,
+    });
+  }
+
+  function answerFailure(replyTo: FrameId, message: string): void {
+    if (state !== 'established') return;
+    // `internal` rather than `refused`: this server broke on its own side, and
+    // retrying may work. A refusal would say it understood and declined.
+    send({ type: 'session-refused', replyTo, code: 'internal', message, hold: null });
+  }
+
+  /**
+   * Sends one store's whole view, if this connection is still up.
+   *
+   * Reports are sent when this server connects and after anything it does that
+   * could change what is running. A store that changes because somebody worked
+   * in it outside agentplex is the store watcher's to notice, and it reports
+   * through this same path when it lands.
+   */
+  async function reportStore(storeId: StoreId): Promise<void> {
+    try {
+      const report = await sessions.report(storeId);
+      if (report === null || state !== 'established') return;
+      send({
+        type: 'store-report',
+        storeId: report.storeId,
+        sessions: [...report.sessions],
+        holding: [...report.holding],
+      });
+    } catch (error) {
+      // A scan that failed costs the report and nothing else. The hub keeps
+      // the last one it had, labelled with its age, which is the honest state
+      // of a store this server could not read just now.
+      logger.warn('could not report a store', { storeId, problem: String(error) });
+    }
+  }
+
+  async function reportEverything(): Promise<void> {
+    for (const store of stores) await reportStore(store.storeId);
   }
 
   return {
