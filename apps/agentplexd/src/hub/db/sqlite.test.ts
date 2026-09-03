@@ -10,8 +10,8 @@ import { createSqliteDatabase, type SqliteDatabase } from './sqlite.js';
  * There is no skip condition and no container here, which is the point of the
  * database being a file: the suite that proves WAL is on and that a rollback
  * rolls back runs on a laptop, in CI, and in the image, always. The schema is
- * this file's own — the application migrations are still Postgres dialect and
- * are rewritten separately — so nothing here breaks when they change.
+ * this file's own, not the application migrations, so nothing here breaks when
+ * they change.
  */
 const directory = await mkdtemp(join(tmpdir(), 'agentplex-sqlite-'));
 const open: SqliteDatabase[] = [];

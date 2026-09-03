@@ -3,9 +3,9 @@
  *
  * Everything above this line talks to `Database`; exactly one module below it
  * (`sqlite.ts`) names the driver `main` opens. A test supplies its own
- * implementation, and swapping drivers touches one file — which is what is
- * happening now: `postgres.ts` is the driver being replaced, no longer reached
- * by anything but its own suite, and it goes in its own ticket.
+ * implementation, and swapping drivers touches one file — which is what this
+ * seam was for, and it has now been spent: the Postgres driver that used to sit
+ * beside `sqlite.ts` is gone, and there is one driver again.
  */
 export interface QueryResult<Row> {
   readonly rows: readonly Row[];
