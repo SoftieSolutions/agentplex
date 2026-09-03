@@ -57,24 +57,38 @@ Every setting the process reads has one flag and one environment variable, and
 the flag wins, because a flag is typed by a person at the moment they mean it
 and an environment variable is inherited.
 
-| Flag              | Environment               | Default        | Meaning                                           |
-| ----------------- | ------------------------- | -------------- | ------------------------------------------------- |
-| `--role`          | `AGENTPLEX_ROLE`          | none, required | `hub`, `server` or `both`                         |
-| `--host`          | `AGENTPLEX_HOST`          | `0.0.0.0`      | Interface to bind                                 |
-| `--hub-port`      | `AGENTPLEX_HUB_PORT`      | `8080`         | Port the hub serves on                            |
-| `--server-port`   | `AGENTPLEX_SERVER_PORT`   | `8081`         | Port the hub dials                                |
-| `--database-file` | `AGENTPLEX_DATABASE_FILE` | none           | SQLite file, absolute; required for `hub`, `both` |
-| `--store-path`    | `AGENTPLEX_STORE_PATH`    | none           | A store root, absolute; repeat the flag per store |
-| `--log-level`     | `AGENTPLEX_LOG_LEVEL`     | `info`         | `debug`, `info`, `warn`, `error`                  |
+| Flag              | Environment               | Default        | Meaning                                                                           |
+| ----------------- | ------------------------- | -------------- | --------------------------------------------------------------------------------- |
+| `--role`          | `AGENTPLEX_ROLE`          | none, required | `hub`, `server` or `both`                                                         |
+| `--host`          | `AGENTPLEX_HOST`          | `0.0.0.0`      | Interface to bind                                                                 |
+| `--hub-port`      | `AGENTPLEX_HUB_PORT`      | `8080`         | Port the hub serves on                                                            |
+| `--server-port`   | `AGENTPLEX_SERVER_PORT`   | `8081`         | Port the hub dials                                                                |
+| `--database-file` | `AGENTPLEX_DATABASE_FILE` | none           | SQLite file, absolute; required for `hub`, `both`                                 |
+| `--store-path`    | `AGENTPLEX_STORE_PATH`    | none           | A store root, absolute; repeat the flag per store                                 |
+| `--bin-path`      | `AGENTPLEX_BIN_PATH`      | none           | A directory to resolve agent binaries in, absolute; repeat the flag per directory |
+| `--log-level`     | `AGENTPLEX_LOG_LEVEL`     | `info`         | `debug`, `info`, `warn`, `error`                                                  |
 
 A container is reached from outside its own loopback, so `0.0.0.0` is the
 default that suits one; on a laptop, `--host=127.0.0.1` is often what you want.
 
-`--store-path` is the one repeatable setting, because a server may have more
-than one volume mounted. On the environment side that list is separated the way
+`--store-path` and `--bin-path` are the two repeatable settings, because a
+server may have more than one volume mounted and may find its agents in more
+than one directory. On the environment side each list is separated the way
 `PATH` is (`/volumes/one:/volumes/two`), since a container is configured with
 environment and nothing else. A relative path is refused rather than resolved
 against whatever directory the process was left in.
+
+`--bin-path` decides where a spawned coding agent is looked for. With it set,
+the child's `PATH` is those directories and nothing else; left unset, the child
+inherits whatever `PATH` agentplexd was started with, which is what it always
+did. It takes directories rather than binaries, so the agent is still spawned
+by its bare name and a path can never appear where a program name belongs.
+
+Set it when agentplexd runs as a service. A systemd unit gets a minimal `PATH`
+with no homebrew, no `~/.local/bin` and no version-manager shims, so a `claude`
+that resolves in your shell does not resolve in the unit, and the session fails
+at spawn time with nothing pointing at the cause. `command -v claude` in the
+shell you installed it from names the directory to list here.
 
 The first time a server mounts a store it writes `agentplex-store.json` at that
 root, containing the id every session in that store is scoped by. The file is

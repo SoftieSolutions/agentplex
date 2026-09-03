@@ -1,5 +1,7 @@
 import process from 'node:process';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+import { childEnvironment } from '../../config/child-environment.js';
+import { createProbeProgram } from '../probe-program.js';
 import { createNodeProcessRunner } from './node-process-runner.js';
 
 /**
@@ -123,5 +125,65 @@ describe('createNodeProcessRunner', () => {
 
     expect(outcome).toMatchObject({ kind: 'failed' });
     if (outcome.kind === 'failed') expect(outcome.problem).toContain('250ms');
+  });
+});
+
+/**
+ * The claim `binPath` exists to make: what resolves a bare program name is the
+ * list of directories the deployment recorded, and nothing else.
+ *
+ * The inherited environment here has an empty PATH, which is the worst case of
+ * what systemd hands a unit — worse than real, deliberately, because a test
+ * that leaves the developer's own PATH in place cannot tell a program found in
+ * `binPath` from one found in `/opt/homebrew/bin`.
+ */
+describe('createNodeProcessRunner with a configured binPath', () => {
+  const probe = createProbeProgram();
+  afterAll(() => probe.remove());
+
+  const inherited = { PATH: '' };
+
+  it('resolves a bare program name from a configured directory', async () => {
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({ inherited, binPath: [probe.directory] }),
+    });
+
+    const outcome = await runner.run({
+      file: probe.name,
+      args: ['-e', 'process.stdout.write("resolved")'],
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    expect(outcome).toMatchObject({ kind: 'exited', exitCode: 0, stdout: 'resolved' });
+  });
+
+  it('finds nothing without it, which is what makes the test above about binPath', async () => {
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({ inherited, binPath: [] }),
+    });
+
+    const outcome = await runner.run({ file: probe.name, args: [], timeoutMs: TIMEOUT_MS });
+
+    expect(outcome).toMatchObject({ kind: 'failed' });
+  });
+
+  it('gives the child exactly the configured directories as its PATH', async () => {
+    // Read out of the child's own environment rather than out of the record
+    // built for it: the whole failure this fixes is a PATH that was one thing
+    // where the operator looked and another where the child ran.
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({
+        inherited: { PATH: '/usr/sbin' },
+        binPath: [probe.directory],
+      }),
+    });
+
+    const outcome = await runner.run({
+      file: probe.name,
+      args: ['-e', 'process.stdout.write(process.env.PATH ?? "unset")'],
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    expect(outcome).toMatchObject({ kind: 'exited', stdout: probe.directory });
   });
 });

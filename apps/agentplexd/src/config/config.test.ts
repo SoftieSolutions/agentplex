@@ -211,6 +211,75 @@ describe('loadConfig store paths', () => {
   });
 });
 
+describe('loadConfig bin path', () => {
+  function binPath(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok && 'server' in result.config ? result.config.server.binPath : undefined;
+  }
+
+  it('is empty by default, which leaves the child inheriting exactly what it did before', () => {
+    expect(binPath(['--role=server'])).toEqual([]);
+  });
+
+  it('reads a directory from a flag', () => {
+    expect(binPath(['--role=server', '--bin-path=/opt/homebrew/bin'])).toEqual([
+      '/opt/homebrew/bin',
+    ]);
+  });
+
+  it('takes one directory per repeated flag, in the order they were given', () => {
+    // The order is the setting: two directories both holding a `claude` is the
+    // case the operator is deciding between when they write this list down.
+    expect(
+      binPath([
+        '--role=server',
+        '--bin-path=/opt/homebrew/bin',
+        '--bin-path',
+        '/home/a/.local/bin',
+      ]),
+    ).toEqual(['/opt/homebrew/bin', '/home/a/.local/bin']);
+  });
+
+  it('splits the environment variable on the path delimiter, as a unit file sets it', () => {
+    const value = ['/opt/homebrew/bin', '/usr/bin'].join(delimiter);
+    expect(binPath(['--role=server'], { AGENTPLEX_BIN_PATH: value })).toEqual([
+      '/opt/homebrew/bin',
+      '/usr/bin',
+    ]);
+  });
+
+  it('lets flags replace the environment rather than adding to it', () => {
+    expect(
+      binPath(['--role=server', '--bin-path=/from/flag'], { AGENTPLEX_BIN_PATH: '/from/env' }),
+    ).toEqual(['/from/flag']);
+  });
+
+  it('refuses a relative directory, which resolves against wherever a unit left the process', () => {
+    const problems = expectProblems(load(['--role=server', '--bin-path=bin']));
+    expect(problems[0]).toContain('absolute');
+  });
+
+  it('normalizes so the same directory named twice is searched once', () => {
+    expect(
+      binPath(['--role=server', '--bin-path=/opt/bin/', '--bin-path=/opt/other/../bin']),
+    ).toEqual(['/opt/bin']);
+  });
+
+  it('gives the both role its directories on the server half', () => {
+    const result = load(['--role=both', `--database-url=${DATABASE_URL}`, '--bin-path=/opt/bin']);
+    expect(result).toMatchObject({
+      ok: true,
+      config: { role: 'both', server: { binPath: ['/opt/bin'] } },
+    });
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(usage()).toContain('--bin-path');
+    expect(usage()).toContain('AGENTPLEX_BIN_PATH');
+  });
+});
+
 describe('loadConfig terminal cap', () => {
   function terminalCap(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);
