@@ -4,6 +4,7 @@ import { loadConfig, usage } from './config/config.js';
 import { createPostgresDatabase } from './hub/db/postgres.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { startRuntime } from './runtime.js';
+import { nodeStoreFileSystem } from './server/node-store-files.js';
 import { systemClock } from './shared/clock.js';
 import { randomIdGenerator } from './shared/ids.js';
 import { createLogger, jsonLineSink } from './shared/logger.js';
@@ -47,6 +48,7 @@ async function main(): Promise<void> {
       openDatabase: (url) => createPostgresDatabase(url),
       migrationsDirectory: MIGRATIONS_DIRECTORY,
       migrationFileSystem: nodeMigrationFileSystem,
+      storeFileSystem: nodeStoreFileSystem,
     });
   } catch (error) {
     logger.error('agentplexd failed to start', { error: String(error) });

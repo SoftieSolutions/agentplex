@@ -1,3 +1,4 @@
+import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig, usage, type ConfigResult } from './config.js';
 
@@ -108,6 +109,74 @@ describe('loadConfig failure reporting', () => {
   it('treats an empty environment variable as absent, not as an empty value', () => {
     const problems = expectProblems(load([], { AGENTPLEX_ROLE: '   ' }));
     expect(problems[0]).toContain('no role');
+  });
+});
+
+describe('loadConfig store paths', () => {
+  function storePaths(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok && 'server' in result.config ? result.config.server.storePaths : undefined;
+  }
+
+  it('starts a server with no stores rather than demanding a volume that may be mounted later', () => {
+    expect(storePaths(['--role=server'])).toEqual([]);
+  });
+
+  it('reads a store path from a flag', () => {
+    expect(storePaths(['--role=server', '--store-path=/volumes/claude'])).toEqual([
+      '/volumes/claude',
+    ]);
+  });
+
+  it('takes one store per repeated flag, in the order they were given', () => {
+    expect(
+      storePaths(['--role=server', '--store-path=/volumes/a', '--store-path', '/volumes/b']),
+    ).toEqual(['/volumes/a', '/volumes/b']);
+  });
+
+  it('splits the environment variable on the path delimiter, as a container sets it', () => {
+    const value = ['/volumes/a', '/volumes/b'].join(delimiter);
+    expect(storePaths(['--role=server'], { AGENTPLEX_STORE_PATH: value })).toEqual([
+      '/volumes/a',
+      '/volumes/b',
+    ]);
+  });
+
+  it('ignores an empty segment, which is what a trailing delimiter is', () => {
+    const value = `/volumes/a${delimiter}${delimiter}`;
+    expect(storePaths(['--role=server'], { AGENTPLEX_STORE_PATH: value })).toEqual(['/volumes/a']);
+  });
+
+  it('lets flags replace the environment rather than adding to it', () => {
+    const result = storePaths(['--role=server', '--store-path=/volumes/flag'], {
+      AGENTPLEX_STORE_PATH: '/volumes/env',
+    });
+    expect(result).toEqual(['/volumes/flag']);
+  });
+
+  it('refuses a relative path, which means nothing to a service started from anywhere', () => {
+    const problems = expectProblems(load(['--role=server', '--store-path=volumes/claude']));
+    expect(problems[0]).toContain('absolute');
+  });
+
+  it('normalizes so the same volume named twice is one store, not two', () => {
+    expect(
+      storePaths([
+        '--role=server',
+        '--store-path=/volumes/claude/',
+        '--store-path=/volumes/claude',
+        '--store-path=/volumes/other/../claude',
+      ]),
+    ).toEqual(['/volumes/claude']);
+  });
+
+  it('gives the both role its stores on the server half', () => {
+    const result = load(['--role=both', `--database-url=${DATABASE_URL}`, '--store-path=/store']);
+    expect(result).toMatchObject({
+      ok: true,
+      config: { role: 'both', server: { storePaths: ['/store'] } },
+    });
   });
 });
 

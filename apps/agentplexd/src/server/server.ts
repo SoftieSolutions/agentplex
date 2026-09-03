@@ -1,32 +1,57 @@
-import { PROTOCOL_VERSION } from '@agentplex/protocol';
+import { PROTOCOL_VERSION, type StoreDescriptor } from '@agentplex/protocol';
 import { sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
+import type { IdGenerator } from '../shared/ids.js';
 import type { Logger } from '../shared/logger.js';
+import { ensureStores, type StoreFileSystem } from './store-identity.js';
 
 /**
  * The server role.
  *
  * A session runner and nothing else: it holds no database, and it dials out to
- * nothing. The hub dials it. Milestone 1 opens the port the hub will dial and
- * answers a health check; store identity, the provider adapters and the PTY
- * supervisor arrive in milestone 2.
+ * nothing. The hub dials it. Milestone 2 gives it the one durable fact it
+ * owns — the identity of each store it has mounted — which is what every
+ * session id it later reports is scoped by. The provider adapters and the PTY
+ * supervisor follow.
  */
 
 export interface SessionServerDependencies {
   readonly logger: Logger;
+  readonly ids: IdGenerator;
   readonly host: string;
   readonly port: number;
+  /** Store roots from configuration, already absolute and deduplicated. */
+  readonly storePaths: readonly string[];
+  readonly storeFileSystem: StoreFileSystem;
 }
 
 export interface SessionServer {
   readonly port: number;
+  /** The stores this server can speak for. A store it could not read is not in here. */
+  readonly stores: readonly StoreDescriptor[];
   stop(): Promise<void>;
 }
 
 export async function startSessionServer(
   dependencies: SessionServerDependencies,
 ): Promise<SessionServer> {
-  const { host, port } = dependencies;
+  const { host, port, ids, storePaths, storeFileSystem } = dependencies;
   const logger = dependencies.logger.child({ role: 'server' });
+
+  // A store that cannot be read costs itself and nothing else: the server
+  // comes up, reports the stores it does have, and says out loud which one it
+  // dropped and why. Refusing to start would take every healthy store offline
+  // over one bad mount, and minting a fresh id over the bad one would quietly
+  // orphan every session already filed under the old identity.
+  const resolved = await ensureStores(storePaths, { files: storeFileSystem, ids });
+  const stores: StoreDescriptor[] = [];
+  for (const result of resolved) {
+    if (result.ok) {
+      stores.push(result.store);
+      logger.info('store mounted', { ...result.store, minted: result.minted });
+    } else {
+      logger.error('store unavailable', { path: result.path, problem: result.problem });
+    }
+  }
 
   const listener: HttpListener = await startHttpServer(port, host, (request, response) => {
     if (request.url === '/health') {
@@ -36,10 +61,11 @@ export async function startSessionServer(
     sendJson(response, 404, { error: 'not found' });
   });
 
-  logger.info('server listening', { port: listener.port });
+  logger.info('server listening', { port: listener.port, stores: stores.length });
 
   return {
     port: listener.port,
+    stores,
     async stop() {
       await listener.close();
       logger.info('server stopped');

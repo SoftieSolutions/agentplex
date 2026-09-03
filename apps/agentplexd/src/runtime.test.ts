@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { startRuntime, type Runtime } from './runtime.js';
 import { createFakeDatabase } from './hub/db/fake-database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
+import { createFakeStoreFiles } from './server/fake-store-files.js';
 import { createLogger } from './shared/logger.js';
 import type { Config } from './config/config.js';
 
@@ -23,19 +24,25 @@ function fakeHubDatabase(options: Parameters<typeof createFakeDatabase>[0] = {})
   return createFakeDatabase({ ...options, respondWith: [hubIdentityRow] });
 }
 
-function dependencies(database = fakeHubDatabase()) {
+function dependencies(database = fakeHubDatabase(), storeFileSystem = createFakeStoreFiles()) {
   return {
     logger,
     ids,
     openDatabase: () => database,
     migrationsDirectory: '/migrations',
     migrationFileSystem,
+    storeFileSystem,
   };
 }
 
 const HOST = '127.0.0.1';
 
-const serverOnly: Config = { role: 'server', logLevel: 'error', host: HOST, server: { port: 0 } };
+const serverOnly: Config = {
+  role: 'server',
+  logLevel: 'error',
+  host: HOST,
+  server: { port: 0, storePaths: [] },
+};
 const hubOnly: Config = {
   role: 'hub',
   logLevel: 'error',
@@ -47,7 +54,7 @@ const both: Config = {
   logLevel: 'error',
   host: HOST,
   hub: { port: 0, databaseUrl: 'postgres://unused' },
-  server: { port: 0 },
+  server: { port: 0, storePaths: [] },
 };
 
 let runtime: Runtime | undefined;
@@ -100,6 +107,33 @@ describe('startRuntime', () => {
     const response = await fetch(`http://127.0.0.1:${port}/health`);
 
     await expect(response.json()).resolves.toMatchObject({ status: 'ok', role: 'server' });
+  });
+
+  it('mints the identity of each configured store and reports it', async () => {
+    const files = createFakeStoreFiles();
+    const withStore: Config = {
+      ...serverOnly,
+      server: { port: 0, storePaths: ['/volumes/claude'] },
+    };
+
+    runtime = await startRuntime(withStore, dependencies(fakeHubDatabase(), files));
+
+    expect(runtime.server?.stores).toEqual([
+      { storeId: 'hub-under-test', path: '/volumes/claude' },
+    ]);
+    expect([...files.contents.keys()]).toEqual(['/volumes/claude/agentplex-store.json']);
+  });
+
+  it('comes up without the store it could not read, rather than not coming up', async () => {
+    const files = createFakeStoreFiles({ unreadable: ['/volumes/broken/agentplex-store.json'] });
+    const withStores: Config = {
+      ...serverOnly,
+      server: { port: 0, storePaths: ['/volumes/broken', '/volumes/claude'] },
+    };
+
+    runtime = await startRuntime(withStores, dependencies(fakeHubDatabase(), files));
+
+    expect(runtime.server?.stores.map((store) => store.path)).toEqual(['/volumes/claude']);
   });
 
   it('closes the database when it stops, so a restart is not blocked by a pool', async () => {

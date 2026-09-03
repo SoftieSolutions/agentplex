@@ -3,6 +3,7 @@ import type { Database } from './hub/db/database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
+import type { StoreFileSystem } from './server/store-identity.js';
 import type { IdGenerator } from './shared/ids.js';
 import type { Logger } from './shared/logger.js';
 
@@ -20,6 +21,8 @@ export interface RuntimeDependencies {
   readonly openDatabase: (url: string) => Database;
   readonly migrationsDirectory: string;
   readonly migrationFileSystem: MigrationFileSystem;
+  /** The store volumes, injected for the same reason the migrations directory is. */
+  readonly storeFileSystem: StoreFileSystem;
 }
 
 export interface Runtime {
@@ -32,7 +35,8 @@ export async function startRuntime(
   config: Config,
   dependencies: RuntimeDependencies,
 ): Promise<Runtime> {
-  const { logger, ids, openDatabase, migrationsDirectory, migrationFileSystem } = dependencies;
+  const { logger, ids, openDatabase, migrationsDirectory, migrationFileSystem, storeFileSystem } =
+    dependencies;
   // The interface to bind is a setting like any other, so it arrives with the
   // rest of them rather than as a dependency the process reads for itself.
   const host = config.host;
@@ -57,7 +61,14 @@ export async function startRuntime(
       });
     }
     if ('server' in config) {
-      server = await startSessionServer({ logger, host, port: config.server.port });
+      server = await startSessionServer({
+        logger,
+        ids,
+        host,
+        port: config.server.port,
+        storePaths: config.server.storePaths,
+        storeFileSystem,
+      });
     }
   } catch (error) {
     await shutDown(hub, server, database, logger);
