@@ -53,16 +53,14 @@ and an environment variable is inherited.
 | Flag             | Environment              | Default        | Meaning                                             |
 | ---------------- | ------------------------ | -------------- | --------------------------------------------------- |
 | `--role`         | `AGENTPLEX_ROLE`         | none, required | `hub`, `server` or `both`                           |
+| `--host`         | `AGENTPLEX_HOST`         | `0.0.0.0`      | Interface to bind                                   |
 | `--hub-port`     | `AGENTPLEX_HUB_PORT`     | `8080`         | Port the hub serves on                              |
 | `--server-port`  | `AGENTPLEX_SERVER_PORT`  | `8081`         | Port the hub dials                                  |
 | `--database-url` | `AGENTPLEX_DATABASE_URL` | none           | Postgres connection URL; required for `hub`, `both` |
 | `--log-level`    | `AGENTPLEX_LOG_LEVEL`    | `info`         | `debug`, `info`, `warn`, `error`                    |
 
-One setting has no flag, because it is a deployment fact rather than a choice:
-
-| Environment      | Default   | Meaning                                                                                                                                             |
-| ---------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENTPLEX_HOST` | `0.0.0.0` | Interface to bind. A container is reached from outside its own loopback, so the default suits one; on a laptop, `127.0.0.1` is often what you want. |
+A container is reached from outside its own loopback, so `0.0.0.0` is the
+default that suits one; on a laptop, `--host=127.0.0.1` is often what you want.
 
 An unknown flag stops the process rather than being ignored: starting with the
 wrong database because `--databse-url` was silently dropped is worse than not
