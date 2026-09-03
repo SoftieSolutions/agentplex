@@ -9,6 +9,8 @@ export type { FrameId, ProtocolErrorFrame, RefusalCode } from './frames.js';
 
 export {
   hubIdSchema,
+  nodeIdSchema,
+  nodeKindSchema,
   providerSchema,
   serverIdSchema,
   serverRegistrationIdSchema,
@@ -19,6 +21,8 @@ export {
 } from './identity.js';
 export type {
   HubId,
+  NodeId,
+  NodeKind,
   Provider,
   ServerId,
   ServerRegistrationId,
@@ -27,6 +31,9 @@ export type {
   StoreDescriptor,
   StoreId,
 } from './identity.js';
+
+export { layoutNodeSchema, layoutSchema } from './layout.js';
+export type { Layout, LayoutNode } from './layout.js';
 
 export {
   machineStateSchema,

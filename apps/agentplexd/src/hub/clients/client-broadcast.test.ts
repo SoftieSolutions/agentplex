@@ -4,9 +4,13 @@ import {
   parseTextFrame,
   PROTOCOL_VERSION,
   hubIdSchema,
+  nodeIdSchema,
+  nodeKindSchema,
   sessionIdSchema,
   storeIdSchema,
   type HubFrame,
+  type Layout,
+  type LayoutNode,
   type MachineState,
   type ServerRegistrationId,
   type SessionDescriptor,
@@ -79,16 +83,34 @@ function session(id: string): SessionDescriptor {
   };
 }
 
+/** One node, so an answered layout is distinguishable from an empty one. */
+const folderNode: LayoutNode = {
+  id: nodeIdSchema.parse('node-1'),
+  parentId: null,
+  kind: nodeKindSchema.parse('folder'),
+  position: 0,
+  name: 'this week',
+  named: true,
+  anchor: null,
+};
+
 interface Harness {
   readonly state: Reducer;
   readonly timers: FakeTimers;
   readonly broadcast: ClientBroadcast;
 }
 
-function harness(): Harness {
+/**
+ * The stored layout, as a function the harness can be given.
+ *
+ * The tree itself is the node-tree suites' subject; what this file is about is
+ * where the answer goes and what happens when the read fails, so the seam is
+ * filled with a value or a throw rather than a database.
+ */
+function harness(readLayout: () => Promise<Layout> = async () => []): Harness {
   const state = createReducer({ logger });
   const timers = createFakeTimers();
-  const broadcast = startClientBroadcast({ hubId: HUB_ID, state, timers, logger });
+  const broadcast = startClientBroadcast({ hubId: HUB_ID, state, timers, logger, readLayout });
   return { state, timers, broadcast };
 }
 
@@ -312,9 +334,15 @@ describe('a burst of changes', () => {
   });
 });
 
-describe('a refusal', () => {
+describe('the stored layout', () => {
+  /**
+   * The whole reason a layout is a reply and not a broadcast. Two people with
+   * the same hub open have one machine state between them and one tree each;
+   * pushing one person's arrangement to every socket would rearrange the other
+   * person's screen the moment either of them asked.
+   */
   it('reaches the client that asked and no other', async () => {
-    const { broadcast } = harness();
+    const { broadcast } = harness(async () => [folderNode]);
     const asker = attach(broadcast);
     const bystander = attach(broadcast);
     await asker.hello();
@@ -323,20 +351,48 @@ describe('a refusal', () => {
 
     await asker.say({ type: 'layout-request', id: 2 });
 
-    const refusals = asker.received.filter((frame) => frame.type === 'refusal');
-    expect(refusals).toEqual([
-      {
-        type: 'refusal',
-        replyTo: 2,
-        code: 'refused',
-        message: 'this hub does not store a layout yet',
-      },
+    expect(asker.received.filter((frame) => frame.type === 'layout')).toEqual([
+      { type: 'layout', replyTo: 2, nodes: [folderNode] },
     ]);
-    // Nothing at all reached the other client: not the refusal, and not a state
-    // frame either, because being told no changed nothing about the world.
+    // Nothing at all reached the other client: not the layout, and not a state
+    // frame either, because one client asking changed nothing about the world.
     expect(bystander.received.length).toBe(bystanderSaw);
   });
 
+  it('answers an empty tree as an answer rather than as a refusal', async () => {
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'layout-request', id: 2 });
+
+    expect(client.received.at(-1)).toEqual({ type: 'layout', replyTo: 2, nodes: [] });
+  });
+
+  /**
+   * A database that would not answer is the hub's failure, not the client's
+   * request being wrong, so it is `internal` -- which is the code that says
+   * retrying may work. What went wrong inside the hub's database is logged and
+   * not sent.
+   */
+  it('refuses as internal when the tree cannot be read, and stays open', async () => {
+    const { broadcast } = harness(() => Promise.reject(new Error('database is locked')));
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'layout-request', id: 2 });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'internal',
+      message: 'the hub could not read its layout',
+    });
+    expect(client.socket.closure).toBeNull();
+  });
+});
+
+describe('a refusal', () => {
   it('leaves the connection open, because being told no is an answer', async () => {
     const { broadcast } = harness();
     const client = attach(broadcast);

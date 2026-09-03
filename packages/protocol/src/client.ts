@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import { hubIdSchema } from './identity.js';
+import { layoutSchema } from './layout.js';
 import { machineStateSchema } from './machine-state.js';
 import { frameParser } from './parse.js';
 
@@ -39,11 +40,9 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
    * else -- a layout is one person's arrangement of their own screen, and
    * broadcasting it would rearrange everybody's.
    *
-   * The hub refuses this today, because nothing stores a layout yet: the node
-   * tree the layout is a view of is AGX-28's, and inventing a payload shape
-   * here would commit the wire to a schema written by something that has not
-   * been designed. The request exists now so that the routing it needs is built
-   * and tested rather than asserted; AGX-28 adds the answer frame beside it.
+   * The answer is a `layout` frame. It was a refusal until the node tree
+   * existed to read one out of; the routing was built and tested first, and the
+   * answer replaced the refusal on exactly that path.
    */
   z.object({
     type: z.literal('layout-request'),
@@ -81,6 +80,24 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('machine-state'),
     state: machineStateSchema,
+  }),
+  /**
+   * The stored layout, answered to the client that asked for it and to nobody
+   * else.
+   *
+   * A reply and never a broadcast, which is the whole difference between this
+   * and `machine-state`. The machine state is one shared fact about the world
+   * and every client gets the same bytes; a layout is one person's arrangement
+   * of their own screen, and pushing it unasked would rearrange every other tab
+   * the moment one of them looked.
+   *
+   * Whole, for the reason nothing here is ever a delta: a client holding a
+   * subset of edits to a tree has a tree nobody can vouch for.
+   */
+  z.object({
+    type: z.literal('layout'),
+    replyTo: frameIdSchema,
+    nodes: layoutSchema,
   }),
   /**
    * A refusal is a reply to the client that asked, never a broadcast: the other
