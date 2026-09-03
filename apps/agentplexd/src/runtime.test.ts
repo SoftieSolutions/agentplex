@@ -76,13 +76,13 @@ const hubOnly: Config = {
   role: 'hub',
   logLevel: 'error',
   host: HOST,
-  hub: { port: 0, databaseUrl: 'postgres://unused' },
+  hub: { port: 0, databaseFile: '/unused/agentplex.db' },
 };
 const both: Config = {
   role: 'both',
   logLevel: 'error',
   host: HOST,
-  hub: { port: 0, databaseUrl: 'postgres://unused' },
+  hub: { port: 0, databaseFile: '/unused/agentplex.db' },
   server: { port: 0, storePaths: [], terminalCap: 8 },
 };
 

@@ -50,15 +50,15 @@ Every setting the process reads has one flag and one environment variable, and
 the flag wins, because a flag is typed by a person at the moment they mean it
 and an environment variable is inherited.
 
-| Flag             | Environment              | Default        | Meaning                                             |
-| ---------------- | ------------------------ | -------------- | --------------------------------------------------- |
-| `--role`         | `AGENTPLEX_ROLE`         | none, required | `hub`, `server` or `both`                           |
-| `--host`         | `AGENTPLEX_HOST`         | `0.0.0.0`      | Interface to bind                                   |
-| `--hub-port`     | `AGENTPLEX_HUB_PORT`     | `8080`         | Port the hub serves on                              |
-| `--server-port`  | `AGENTPLEX_SERVER_PORT`  | `8081`         | Port the hub dials                                  |
-| `--database-url` | `AGENTPLEX_DATABASE_URL` | none           | Postgres connection URL; required for `hub`, `both` |
-| `--store-path`   | `AGENTPLEX_STORE_PATH`   | none           | A store root, absolute; repeat the flag per store   |
-| `--log-level`    | `AGENTPLEX_LOG_LEVEL`    | `info`         | `debug`, `info`, `warn`, `error`                    |
+| Flag              | Environment               | Default        | Meaning                                           |
+| ----------------- | ------------------------- | -------------- | ------------------------------------------------- |
+| `--role`          | `AGENTPLEX_ROLE`          | none, required | `hub`, `server` or `both`                         |
+| `--host`          | `AGENTPLEX_HOST`          | `0.0.0.0`      | Interface to bind                                 |
+| `--hub-port`      | `AGENTPLEX_HUB_PORT`      | `8080`         | Port the hub serves on                            |
+| `--server-port`   | `AGENTPLEX_SERVER_PORT`   | `8081`         | Port the hub dials                                |
+| `--database-file` | `AGENTPLEX_DATABASE_FILE` | none           | SQLite file, absolute; required for `hub`, `both` |
+| `--store-path`    | `AGENTPLEX_STORE_PATH`    | none           | A store root, absolute; repeat the flag per store |
+| `--log-level`     | `AGENTPLEX_LOG_LEVEL`     | `info`         | `debug`, `info`, `warn`, `error`                  |
 
 A container is reached from outside its own loopback, so `0.0.0.0` is the
 default that suits one; on a laptop, `--host=127.0.0.1` is often what you want.
@@ -78,7 +78,7 @@ and still serves the stores it can read, and it never mints a second identity
 over a file it did not understand.
 
 An unknown flag stops the process rather than being ignored: starting with the
-wrong database because `--databse-url` was silently dropped is worse than not
+wrong database because `--databse-file` was silently dropped is worse than not
 starting.
 
 The compose file reads a few more of its own from `.env`, none of which the
@@ -192,7 +192,7 @@ uses: `launchd` on macOS, a systemd user unit on Linux. Both stop a service
 with `SIGTERM`, which is the signal the process already shuts down cleanly on.
 
 The same applies to the hub if you would rather not run Docker at all: point
-`--database-url` at any reachable Postgres and run `--role=hub`, or
+`--database-file` at a file on a disk you back up and run `--role=hub`, or
 `--role=both` to have one process do both jobs on one machine, which is the
 ordinary single-machine case.
 
