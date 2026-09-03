@@ -17,7 +17,7 @@ you which ones are waiting on you, and lets you answer from wherever you are.
 phone PWA  ─┐
 laptop PWA ─┼─ wss/https ─> HUB ── wss ─> SERVER ── pty/fs ─> sessions + store
 MCP agent  ─┘                │             SERVER ─────────>  same or another store
-                          Postgres
+                        SQLite file
 ```
 
 - **hub** — owns the database, serves the web app, merges what every paired
@@ -47,18 +47,23 @@ import the other. That boundary is enforced by lint, not by convention.
 
 ## Running it
 
-Docker is the primary path. Requires only Docker with the Compose plugin.
+Docker is the right way to run a hosted hub, and requires only Docker with the
+Compose plugin. Nothing in `.env` has to be set to try it on `localhost`.
 
 ```sh
-cp .env.example .env   # set POSTGRES_PASSWORD
-docker compose up -d   # Postgres, the hub, and Caddy in front of it
+cp .env.example .env
+docker compose up -d   # the hub, and Caddy in front of it
 curl -k https://localhost/health
 ```
 
 One image serves both roles; the role is a runtime choice, by environment
 variable or flag. Caddy is there only to terminate TLS with a certificate that
 renews itself, because web push is HTTPS-only — if TLS is already handled,
-`docker compose up -d hub` starts Postgres and the hub and nothing else.
+`docker compose up -d hub` starts the hub and nothing else.
+
+The hub's database is a SQLite file, so a container is packaging rather than a
+dependency you could not otherwise satisfy: one machine can run `--role=both`
+natively and never build an image.
 
 Running the server role bare metal — `node` on a mac mini or a laptop, no
 container — is equally supported, and often the better arrangement: the role
@@ -73,7 +78,7 @@ For working on the code, Node 24 and pnpm 11:
 pnpm install
 pnpm build
 pnpm check          # lint, typecheck, test
-pnpm docker:check   # the same, in a container, against a real Postgres
+pnpm docker:check   # the same, in a container
 ```
 
 ## Configuration

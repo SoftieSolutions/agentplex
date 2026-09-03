@@ -5,8 +5,12 @@ is the only thing clients talk to; the **server** runs sessions on its own
 machine. They are the same binary started with `--role=hub`, `--role=server` or
 `--role=both`.
 
-The hub belongs in a container: it is a network service with one dependency and
-no business touching the host. The server role is the opposite case and is
+Docker is one way to run this and no longer the only one. The hub's database is
+a SQLite file, so a container is packaging and process supervision rather than a
+dependency you could not otherwise satisfy: it stays the primary path for the
+checks and the right way to run a hosted hub, and it has stopped being the price
+of entry for a single machine. One box can run `--role=both` natively, over one
+file. The server role in particular is better off outside a container, and is
 covered under [The server role, bare metal](#the-server-role-bare-metal).
 
 > Status: milestone 1. The hub migrates its database, mints its identity and
@@ -21,13 +25,16 @@ Requires Docker with the Compose plugin. Nothing else — not Node, not pnpm.
 git clone https://github.com/SoftieSolutions/agentplex.git
 cd agentplex
 cp .env.example .env
-$EDITOR .env          # at minimum, set POSTGRES_PASSWORD
 docker compose up -d
 ```
 
-That builds one `agentplexd` image and starts three containers: Postgres, the
-hub, and Caddy in front of it. Postgres comes up first and the hub waits for it
-to accept connections, because the hub migrates the schema before it listens.
+Nothing in `.env` has to be edited to reach a hub on `localhost`: every setting
+in it has a default that works there.
+
+That builds one `agentplexd` image and starts two containers: the hub, and Caddy
+in front of it. The hub creates and migrates its database — one SQLite file in
+the `hub-data` volume — before it listens, so there is no second service to come
+up first and nothing to wait for.
 
 ```sh
 curl -k https://localhost/health
@@ -87,9 +94,6 @@ process itself sees:
 | Variable             | Default     | Meaning                                                      |
 | -------------------- | ----------- | ------------------------------------------------------------ |
 | `AGENTPLEX_DOMAIN`   | `localhost` | The hostname Caddy answers on and requests a certificate for |
-| `POSTGRES_USER`      | `agentplex` | Database role, used by the container and the hub's URL       |
-| `POSTGRES_PASSWORD`  | none        | Required. Interpolated into a URL, so keep it alphanumeric   |
-| `POSTGRES_DB`        | `agentplex` | Database name                                                |
 | `AGENTPLEX_HUB_BIND` | `127.0.0.1` | Host address the hub's plain HTTP port is published on       |
 
 `AGENTPLEX_HUB_BIND` is the one to think about. Loopback is right whenever
@@ -130,11 +134,11 @@ edited, though deleting the `caddy` service and the `Caddyfile` is a reasonable
 thing to do once you know you will not want them back.
 
 ```sh
-docker compose up -d hub     # Postgres and the hub. Caddy is never started.
+docker compose up -d hub     # The hub alone. Caddy is never started.
 ```
 
 Compose starts a named service and the services it depends on, and nothing
-else, so that one command is the whole of it.
+else. The hub depends on nothing, so that one command is the whole of it.
 
 ### Tailscale HTTPS
 
@@ -215,19 +219,16 @@ again, which is how a deployment meets a rate limit.
 
 ## Checks
 
-The compose file at `docker-compose.test.yml` runs the checks in a container
-against a real Postgres:
+The compose file at `docker-compose.test.yml` runs the checks in a container:
 
 ```sh
 pnpm docker:check   # lint, typecheck and test
 pnpm docker:test    # tests only
 ```
 
-The database is why that file exists. The migration suite runs its SQL against
-a real server, and the test compose file supplies one through
-`AGENTPLEX_TEST_DATABASE_URL`. Without that variable the suite starts a
-throwaway Postgres container of its own through testcontainers, so `pnpm test`
-on a laptop with a Docker daemon runs the same tests; with no daemon either, it
-skips itself and says so on stderr rather than passing quietly. When you are
-done, `docker compose -f docker-compose.test.yml down -v` removes the
-throwaway database, which is otherwise left running for the next run to reuse.
+There is no database service in it, and no check needs one: the migration suite
+opens a SQLite file in a temporary directory, so it runs the same way there, in
+CI, and under a plain `pnpm test` on a laptop with no Docker at all. What that
+file is still for is sameness — every check runs against the same built tree in
+the same image, so a green run there is the evidence CI produces rather than an
+approximation of it.
