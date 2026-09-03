@@ -4,15 +4,7 @@ packages:
 
 # Postinstall scripts run only for dependencies listed here. Adding one is a
 # deliberate act: it grants that package arbitrary code execution at install.
-#
-# The three `false` entries arrive under testcontainers, which reaches Docker
-# through dockerode and ssh2. Their build steps are optional — `cpu-features` is
-# an ssh2 speedup, `protobufjs` regenerates code it already ships — and denying
-# them was verified to leave testcontainers able to start Postgres. Listing them
-# rather than leaving them unanswered is the point: pnpm then installs without
-# asking, and the next person reads a decision instead of a prompt.
 allowBuilds:
-  cpu-features: false
   esbuild: true
   # node-pty compiles a native addon and a `spawn-helper` binary beside it, so
   # with its scripts blocked the package installs as source that cannot load.
@@ -21,5 +13,3 @@ allowBuilds:
   # re-checks it, because when the bit is missing the only symptom is an opaque
   # posix_spawnp failure at the first spawn.
   node-pty: true
-  protobufjs: false
-  ssh2: false
