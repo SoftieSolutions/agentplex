@@ -3,6 +3,7 @@ import type { Clock } from '../shared/clock.js';
 import { sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { Logger } from '../shared/logger.js';
+import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProviderRegistry } from './providers/provider-registry.js';
 import { discoverStoreSessions } from './providers/store-discovery.js';
 import type { TerminalManager } from './terminal-manager.js';
@@ -44,6 +45,22 @@ export interface SessionServerDependencies {
    * on working.
    */
   readonly terminals: TerminalManager;
+  /**
+   * The one thing on this server that starts anything else.
+   *
+   * Every non-PTY child comes from here: a name, a parsed request, an argv this
+   * process built, `shell: false`. The division with the terminals above is by
+   * shape of process rather than by trust — an interactive session is a pty
+   * that lives for hours and is written to, a one-shot operation is a program
+   * that answers a question and exits — and neither of them takes an argv
+   * element off the wire. What a launch plan is to the PTY path, an operation
+   * is to this one.
+   *
+   * It is a dependency rather than something the server builds, because the
+   * runner underneath it decides what environment children inherit, and only
+   * `main` may read this process's environment.
+   */
+  readonly operations: OperationRegistry;
 }
 
 export interface SessionServer {
@@ -56,9 +73,17 @@ export interface SessionServer {
 export async function startSessionServer(
   dependencies: SessionServerDependencies,
 ): Promise<SessionServer> {
-  const { host, port, ids, storePaths, storeFileSystem, providers, clock, terminals } =
+  const { host, port, ids, storePaths, storeFileSystem, providers, clock, terminals, operations } =
     dependencies;
   const logger = dependencies.logger.child({ role: 'server' });
+
+  // What this build can run, said out loud at boot. The registry is closed, so
+  // this line is the complete answer to "what can this server start", and an
+  // operator reading it against a machine that has no `git` learns why an
+  // operation refuses before anybody asks.
+  logger.info('operations registered', {
+    operations: operations.operations.map(({ name }) => name),
+  });
 
   // A store that cannot be read costs itself and nothing else: the server
   // comes up, reports the stores it does have, and says out loud which one it

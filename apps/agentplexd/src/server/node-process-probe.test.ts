@@ -1,5 +1,7 @@
+import process from 'node:process';
 import { describe, expect, it } from 'vitest';
-import { nodeProcessProbe } from './node-process-probe.js';
+import { createNodeProcessProbe } from './node-process-probe.js';
+import { createNodeProcessRunner } from './operations/node-process-runner.js';
 
 /**
  * These run against this very process, on whatever platform is running them.
@@ -10,7 +12,14 @@ import { nodeProcessProbe } from './node-process-probe.js';
  * really do date a process on the machine agentplexd runs on. This suite runs
  * on macOS locally and on Linux in the container, which is exactly the two
  * implementations below the seam.
+ *
+ * The real runner, not a fake, for the same reason: on macOS this is the path
+ * through the operation registry to a real `ps`, and a fake would stub out the
+ * only part that has ever been platform-specific.
  */
+const nodeProcessProbe = createNodeProcessProbe({
+  runner: createNodeProcessRunner({ environment: process.env }),
+});
 
 /**
  * Beyond any pid a kernel will hand out — Linux caps `pid_max` at 2^22 and

@@ -9,6 +9,8 @@ import { createFakePtyFactory } from './server/fake-pty.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createTerminalManager } from './server/terminal-manager.js';
 import { createFakeProcessProbe } from './server/fake-process-probe.js';
+import { createFakeProcessRunner } from './server/operations/fake-process-runner.js';
+import { createOperationRegistry } from './server/operations/operation-registry.js';
 import { createFakeStoreFiles } from './server/fake-store-files.js';
 import { createLogger, type LogRecord } from './shared/logger.js';
 import type { Config } from './config/config.js';
@@ -54,6 +56,10 @@ function dependencies(database = fakeHubDatabase(), storeFileSystem = createFake
       }),
       clock: { now: () => 1_756_000_000_000 },
     }),
+    // The real registry over a runner that starts nothing: this file is about
+    // which halves come up and go down, and the operations are closed anyway —
+    // there is no fake registry to build, only a fake machine for it to run on.
+    operations: createOperationRegistry(createFakeProcessRunner()),
     clock: { now: () => 1_756_000_000_000 },
   };
 }

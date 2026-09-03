@@ -2,6 +2,7 @@ import type { Config } from './config/config.js';
 import type { Database } from './hub/db/database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
+import type { OperationRegistry } from './server/operations/operation-registry.js';
 import type { ProviderRegistry } from './server/providers/provider-registry.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { TerminalManager } from './server/terminal-manager.js';
@@ -43,6 +44,15 @@ export interface RuntimeDependencies {
    * because its cap is configuration, and only `main` has read the config.
    */
   readonly terminals: TerminalManager;
+  /**
+   * The server role's operation registry: every child that is not a pty.
+   *
+   * Injected for the same reason the terminals are. The runner underneath it
+   * fixes the environment children inherit, and `main` is the only place
+   * allowed to read this process's environment; a registry built here would
+   * have to reach for `process.env` two layers below the entrypoint.
+   */
+  readonly operations: OperationRegistry;
   readonly clock: Clock;
 }
 
@@ -65,6 +75,7 @@ export async function startRuntime(
     storeFileSystem,
     providers,
     terminals,
+    operations,
     clock,
   } = dependencies;
   // The interface to bind is a setting like any other, so it arrives with the
@@ -100,6 +111,7 @@ export async function startRuntime(
         storeFileSystem,
         providers,
         terminals,
+        operations,
         clock,
       });
     }

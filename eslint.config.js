@@ -72,6 +72,28 @@ export default tseslint.config(
   {
     files: ['apps/agentplexd/**/*.ts'],
     languageOptions: { globals: globals.node },
+    rules: {
+      // Every spawn goes through the operation registry (AGX-21), and a rule
+      // that only lives in a document is a rule that gets forgotten under
+      // deadline. The registry's guarantees — a typed parser, a built argv, no
+      // shell, no cwd, no env off the wire — are worth exactly as much as the
+      // number of places that can start a child without it, so that number is
+      // one, and it is this rule that keeps it one.
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['node:child_process', 'child_process'],
+          message:
+            'Starting a child directly bypasses the operation registry. Add an operation in src/server/operations/ and run it through the injected ProcessRunner.',
+        },
+      ]),
+    },
+  },
+  {
+    // The one exception, and the reason the rule can be absolute everywhere
+    // else: this file *is* the seam. It is where `shell: false` is baked in and
+    // where the inherited environment is decided, and it does nothing else.
+    files: ['apps/agentplexd/src/server/operations/node-process-runner.ts'],
+    rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
     files: ['apps/web/**/*.{ts,tsx}'],

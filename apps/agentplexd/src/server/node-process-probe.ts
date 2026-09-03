@@ -1,9 +1,8 @@
-import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { promisify } from 'node:util';
+import { runOperation } from './operations/operation.js';
+import { processStartTimeOperation } from './operations/process-start-time.js';
+import type { ProcessRunner } from './operations/process-runner.js';
 import type { ProcessProbe } from './process-probe.js';
-
-const run = promisify(execFile);
 
 /**
  * The real process table, per platform, with no native dependency.
@@ -26,29 +25,45 @@ const run = promisify(execFile);
  *
  * Anything else answers `null`, and `null` is honest: a caller that cannot date
  * a pid must not treat it as proof of anything.
+ *
+ * The `ps` half runs through the operation registry rather than reaching for
+ * `child_process` here (AGX-21). It used to do exactly that, which is how a rule
+ * about every spawn quietly acquires its first exception: the call was small,
+ * the argv was obviously safe, and nothing about it looked like the generic
+ * `{ command }` frame the registry exists to prevent. One exception is enough to
+ * make the rule unenforceable, so `node-process-runner.ts` is now the only file
+ * in agentplexd that may import `node:child_process`, and lint says so.
  */
-export const nodeProcessProbe: ProcessProbe = {
-  async isAlive(pid: number): Promise<boolean> {
-    if (!isPid(pid)) return false;
-    try {
-      // Signal 0 checks for the process without delivering anything to it.
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      // Alive, but owned by another user. "Not mine" is not "not there", and
-      // reading it as absence would drop every session a server watches
-      // without having spawned it.
-      return errorCode(error) === 'EPERM';
-    }
-  },
+export interface NodeProcessProbeDependencies {
+  /** The registry's spawn seam. The probe starts children only through it. */
+  readonly runner: ProcessRunner;
+}
 
-  async startedAt(pid: number): Promise<number | null> {
-    if (!isPid(pid)) return null;
-    if (process.platform === 'linux') return procStartedAt(pid);
-    if (process.platform === 'darwin') return psStartedAt(pid);
-    return null;
-  },
-};
+export function createNodeProcessProbe({ runner }: NodeProcessProbeDependencies): ProcessProbe {
+  return {
+    async isAlive(pid: number): Promise<boolean> {
+      if (!isPid(pid)) return false;
+      try {
+        // Signal 0 checks for the process without delivering anything to it.
+        // No child, no argv, nothing to route: a syscall against a number.
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        // Alive, but owned by another user. "Not mine" is not "not there", and
+        // reading it as absence would drop every session a server watches
+        // without having spawned it.
+        return errorCode(error) === 'EPERM';
+      }
+    },
+
+    async startedAt(pid: number): Promise<number | null> {
+      if (!isPid(pid)) return null;
+      if (process.platform === 'linux') return procStartedAt(pid);
+      if (process.platform === 'darwin') return psStartedAt(pid, runner);
+      return null;
+    },
+  };
+}
 
 /**
  * The `/proc` route: boot time plus the process's own offset from it.
@@ -100,24 +115,18 @@ async function bootedAt(): Promise<number | null> {
 }
 
 /**
- * The macOS route: `ps` prints the start moment in the local zone.
+ * The macOS route: the `process.start-time` operation, which runs `ps`.
  *
- * Local, and therefore parseable — unlike the `procStart` string Claude Code
- * writes into its own registry, which is the same format rendered in UTC with
- * no zone marker and silently lands hours off when read as local time. That is
- * why nothing here reads that field and everything dates a process itself.
+ * How `ps` output is parsed, and why it is read as local time, now lives with
+ * the operation. What is left here is the mapping this seam owes its callers:
+ * every refusal — no such pid, no `ps` on this machine, a date in a format
+ * nobody expected — becomes `null`. That is the same collapse the interface
+ * documents, and it collapses in the safe direction: a pid that cannot be dated
+ * is not evidence of anything, which is exactly how a caller must treat it.
  */
-async function psStartedAt(pid: number): Promise<number | null> {
-  try {
-    // argv, never a shell string, and `pid` is a verified integer besides.
-    const { stdout } = await run('ps', ['-p', String(pid), '-o', 'lstart='], { timeout: 2_000 });
-    const started = Date.parse(stdout.trim());
-    return Number.isNaN(started) ? null : started;
-  } catch {
-    // A pid `ps` will not report is a pid we cannot date, which is the same
-    // answer as a platform that cannot date anything.
-    return null;
-  }
+async function psStartedAt(pid: number, runner: ProcessRunner): Promise<number | null> {
+  const outcome = await runOperation(processStartTimeOperation, { pid }, runner);
+  return outcome.ok ? outcome.result.startedAt : null;
 }
 
 async function readTextFile(path: string): Promise<string | null> {
