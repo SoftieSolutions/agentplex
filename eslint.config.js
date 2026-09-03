@@ -1,5 +1,6 @@
 import js from '@eslint/js';
 import globals from 'globals';
+import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
 /**
@@ -75,9 +76,20 @@ export default tseslint.config(
   {
     files: ['apps/web/**/*.{ts,tsx}'],
     languageOptions: { globals: globals.browser },
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      // The REACT DIRECTIVES in AGENTS.md were enforced by nothing until this.
+      // Two rules, not the plugin's recommended set: the rest of what it ships
+      // is React Compiler analysis, which is a decision of its own and not one
+      // this ticket is making.
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'error',
+    },
   },
   {
-    files: ['**/*.test.ts', '**/*.test.tsx', 'scripts/**/*.js'],
+    // Tests and the support modules they import. `test-*.ts` is the same set
+    // `tsconfig.build.json` excludes, so nothing matched here reaches `dist/`.
+    files: ['**/*.test.ts', '**/*.test.tsx', '**/test-*.ts', 'scripts/**/*.js'],
     languageOptions: { globals: globals.node },
     rules: { 'no-console': 'off' },
   },

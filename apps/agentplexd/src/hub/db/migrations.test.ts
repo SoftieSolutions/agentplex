@@ -101,8 +101,73 @@ describe('migrate', () => {
 
     await migrate(database, [migration(1, 'first')], logger);
 
-    expect(database.statements[0]).toContain('pg_advisory_lock');
+    expect(database.statements[0]).toContain('pg_try_advisory_lock');
     expect(database.statements.at(-1)).toContain('pg_advisory_unlock');
+  });
+
+  it('locks and unlocks on one connection, because a lock belongs to a backend', async () => {
+    const database = createFakeDatabase();
+    const { logger } = silentLogger();
+
+    await migrate(database, [migration(1, 'first'), migration(2, 'second')], logger);
+
+    // Not just lock and unlock: every statement in between, including each
+    // migration's own transaction, has to be on the connection holding the lock
+    // or the lock is guarding a connection that is doing nothing.
+    const connections = new Set(database.issued.map((statement) => statement.connection));
+    expect(connections.size).toBe(1);
+  });
+
+  it('gives up on a lock it cannot get rather than waiting forever', async () => {
+    const database = createFakeDatabase({
+      respondWith: [{ match: /pg_try_advisory_lock/, rows: [{ locked: false }] }],
+    });
+    const { logger } = silentLogger();
+    const waits: number[] = [];
+
+    await expect(
+      migrate(database, [migration(1, 'first')], logger, {
+        attempts: 3,
+        retryDelayMs: 25,
+        wait: async (ms) => void waits.push(ms),
+      }),
+    ).rejects.toMatchObject({ code: 'lock-timeout' });
+
+    // Three attempts, two waits between them, and nothing applied.
+    expect(waits).toEqual([25, 25]);
+    expect(database.appliedVersions).toEqual([]);
+  });
+
+  it('unlocks nothing when it never got the lock', async () => {
+    const database = createFakeDatabase({
+      respondWith: [{ match: /pg_try_advisory_lock/, rows: [{ locked: false }] }],
+    });
+    const { logger } = silentLogger();
+
+    await expect(
+      migrate(database, [migration(1, 'first')], logger, { attempts: 1 }),
+    ).rejects.toThrow();
+
+    expect(database.statements.some((text) => text.includes('pg_advisory_unlock'))).toBe(false);
+  });
+
+  it('says it is waiting, so a slow start is not a silent one', async () => {
+    const database = createFakeDatabase({
+      respondWith: [{ match: /pg_try_advisory_lock/, rows: [{ locked: false }] }],
+    });
+    const { logger, records } = silentLogger();
+
+    await expect(
+      migrate(database, [migration(1, 'first')], logger, {
+        attempts: 2,
+        retryDelayMs: 1,
+        wait: async () => {},
+      }),
+    ).rejects.toThrow();
+
+    expect(records.map((record) => record.message)).toContainEqual(
+      expect.stringContaining('waiting for the lock'),
+    );
   });
 
   it('releases the advisory lock even when a migration fails', async () => {

@@ -4,10 +4,10 @@
 # identically on a laptop. CI assembling its own version of the checks — its
 # own eslint invocation, its own vitest flags — is how a workflow and
 # CONTRIBUTING drift apart, and splitting the set into jobs is not a reason to
-# start. The container is also the only place the migration suite has a
-# Postgres to talk to: without AGENTPLEX_TEST_DATABASE_URL that suite skips
-# itself rather than failing, so a `test` job built out of Actions service
-# containers can report green over four tests that never ran.
+# start. The container is also what hands the migration suite a Postgres, over
+# AGENTPLEX_TEST_DATABASE_URL. That suite falls back to a testcontainer and,
+# failing that, skips itself, so a `test` job assembled out of Actions service
+# containers can report green over tests that never reached a database.
 
 name: CI
 

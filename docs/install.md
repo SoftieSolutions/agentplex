@@ -31,7 +31,7 @@ to accept connections, because the hub migrates the schema before it listens.
 
 ```sh
 curl -k https://localhost/health
-# {"status":"ok","role":"hub","protocolVersion":1}
+# {"status":"ok","role":"hub","protocolVersion":2}
 ```
 
 `docker compose logs -f hub` follows the hub. `docker compose down` stops
@@ -53,16 +53,14 @@ and an environment variable is inherited.
 | Flag             | Environment              | Default        | Meaning                                             |
 | ---------------- | ------------------------ | -------------- | --------------------------------------------------- |
 | `--role`         | `AGENTPLEX_ROLE`         | none, required | `hub`, `server` or `both`                           |
+| `--host`         | `AGENTPLEX_HOST`         | `0.0.0.0`      | Interface to bind                                   |
 | `--hub-port`     | `AGENTPLEX_HUB_PORT`     | `8080`         | Port the hub serves on                              |
 | `--server-port`  | `AGENTPLEX_SERVER_PORT`  | `8081`         | Port the hub dials                                  |
 | `--database-url` | `AGENTPLEX_DATABASE_URL` | none           | Postgres connection URL; required for `hub`, `both` |
 | `--log-level`    | `AGENTPLEX_LOG_LEVEL`    | `info`         | `debug`, `info`, `warn`, `error`                    |
 
-One setting has no flag, because it is a deployment fact rather than a choice:
-
-| Environment      | Default   | Meaning                                                                                                                                             |
-| ---------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENTPLEX_HOST` | `0.0.0.0` | Interface to bind. A container is reached from outside its own loopback, so the default suits one; on a laptop, `127.0.0.1` is often what you want. |
+A container is reached from outside its own loopback, so `0.0.0.0` is the
+default that suits one; on a laptop, `--host=127.0.0.1` is often what you want.
 
 An unknown flag stops the process rather than being ignored: starting with the
 wrong database because `--databse-url` was silently dropped is worse than not
@@ -211,7 +209,10 @@ pnpm docker:test    # tests only
 ```
 
 The database is why that file exists. The migration suite runs its SQL against
-a real server when `AGENTPLEX_TEST_DATABASE_URL` is set and skips itself when
-it is not, rather than passing quietly; the test compose file sets it. When you
-are done, `docker compose -f docker-compose.test.yml down -v` removes the
+a real server, and the test compose file supplies one through
+`AGENTPLEX_TEST_DATABASE_URL`. Without that variable the suite starts a
+throwaway Postgres container of its own through testcontainers, so `pnpm test`
+on a laptop with a Docker daemon runs the same tests; with no daemon either, it
+skips itself and says so on stderr rather than passing quietly. When you are
+done, `docker compose -f docker-compose.test.yml down -v` removes the
 throwaway database, which is otherwise left running for the next run to reuse.

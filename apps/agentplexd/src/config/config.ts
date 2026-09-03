@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { LOG_LEVELS, type LogLevel } from '../shared/logger.js';
 
 /**
@@ -11,7 +12,8 @@ import { LOG_LEVELS, type LogLevel } from '../shared/logger.js';
  * session runner in one process, which is a wiring choice and not a third kind
  * of program.
  */
-export type Role = 'hub' | 'server' | 'both';
+const ROLES = ['hub', 'server', 'both'] as const;
+export type Role = (typeof ROLES)[number];
 
 export interface HubConfig {
   readonly port: number;
@@ -27,13 +29,27 @@ export interface ServerConfig {
 /**
  * A union rather than a record with optional halves: in `--role=server` there
  * is no database url to read, and the type should be what makes that true.
+ *
+ * `host` sits outside the halves because one process binds one interface, and
+ * a hub and a server sharing a process share it.
  */
 export type Config =
-  | { readonly role: 'hub'; readonly logLevel: LogLevel; readonly hub: HubConfig }
-  | { readonly role: 'server'; readonly logLevel: LogLevel; readonly server: ServerConfig }
+  | {
+      readonly role: 'hub';
+      readonly logLevel: LogLevel;
+      readonly host: string;
+      readonly hub: HubConfig;
+    }
+  | {
+      readonly role: 'server';
+      readonly logLevel: LogLevel;
+      readonly host: string;
+      readonly server: ServerConfig;
+    }
   | {
       readonly role: 'both';
       readonly logLevel: LogLevel;
+      readonly host: string;
       readonly hub: HubConfig;
       readonly server: ServerConfig;
     };
@@ -52,8 +68,8 @@ export interface ConfigSources {
 const DEFAULT_HUB_PORT = 8080;
 const DEFAULT_SERVER_PORT = 8081;
 const DEFAULT_LOG_LEVEL: LogLevel = 'info';
-
-const ROLES: readonly Role[] = ['hub', 'server', 'both'];
+/** Containers reach the process from outside their own loopback. */
+const DEFAULT_HOST = '0.0.0.0';
 
 const MISSING_DATABASE_URL =
   'the hub role needs a database: set AGENTPLEX_DATABASE_URL or pass --database-url';
@@ -61,14 +77,33 @@ const MISSING_DATABASE_URL =
 /**
  * Each setting has one flag and one env var. Flags win, because a flag is
  * typed by a person at the moment they mean it and an env var is inherited.
+ *
+ * Every setting is in here, including the interface to bind. One read
+ * elsewhere — `process.env['AGENTPLEX_HOST']`, straight out of `main` — is one
+ * setting with no flag, missing from `usage()`, and rejected by `readFlags` if
+ * anyone tried to type it.
  */
 const SETTINGS = {
   role: { flag: '--role', env: 'AGENTPLEX_ROLE' },
   logLevel: { flag: '--log-level', env: 'AGENTPLEX_LOG_LEVEL' },
+  host: { flag: '--host', env: 'AGENTPLEX_HOST' },
   hubPort: { flag: '--hub-port', env: 'AGENTPLEX_HUB_PORT' },
   serverPort: { flag: '--server-port', env: 'AGENTPLEX_SERVER_PORT' },
   databaseUrl: { flag: '--database-url', env: 'AGENTPLEX_DATABASE_URL' },
 } as const;
+
+/**
+ * The value rules, as schemas rather than as hand-written checks.
+ *
+ * zod collects issues rather than throwing at the first one, which is the same
+ * shape `ConfigResult` is built around. It reports them per setting: a port
+ * that is both unparseable and out of range is still one thing to go and fix,
+ * and a line per zod issue would read as more problems than there are.
+ */
+const roleSchema = z.enum(ROLES);
+const logLevelSchema = z.enum(LOG_LEVELS);
+const portSchema = z.coerce.number().int().min(1).max(65535);
+const hostSchema = z.string().min(1);
 
 export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
   const flags = readFlags(argv);
@@ -79,9 +114,18 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
     flags.values.get(setting.flag) ?? nonEmpty(env[setting.env]);
 
   const role = readRole(read(SETTINGS.role), problems);
-  const logLevel = readLogLevel(read(SETTINGS.logLevel), problems);
 
-  const needsHub = role !== 'server';
+  const logLevel = readSetting(logLevelSchema, read(SETTINGS.logLevel), DEFAULT_LOG_LEVEL, (raw) =>
+    problems.push(
+      `unknown log level ${JSON.stringify(raw)}: expected one of ${LOG_LEVELS.join(', ')}`,
+    ),
+  );
+
+  const host = readSetting(hostSchema, read(SETTINGS.host), DEFAULT_HOST, (raw) =>
+    problems.push(
+      `${SETTINGS.host.flag} must be an address or hostname to bind, not ${JSON.stringify(raw)}`,
+    ),
+  );
 
   const hubPort = readPort(
     read(SETTINGS.hubPort),
@@ -97,19 +141,19 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
   );
 
   const databaseUrl = read(SETTINGS.databaseUrl);
-  if (needsHub && databaseUrl === undefined) problems.push(MISSING_DATABASE_URL);
+  if (role !== 'server' && databaseUrl === undefined) problems.push(MISSING_DATABASE_URL);
 
   if (role === undefined || problems.length > 0) return { ok: false, problems };
 
   const server: ServerConfig = { port: serverPort };
-  if (role === 'server') return { ok: true, config: { role, logLevel, server } };
+  if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
 
   if (databaseUrl === undefined) return { ok: false, problems: [MISSING_DATABASE_URL] };
   const hub: HubConfig = { port: hubPort, databaseUrl };
 
   return role === 'hub'
-    ? { ok: true, config: { role, logLevel, hub } }
-    : { ok: true, config: { role, logLevel, hub, server } };
+    ? { ok: true, config: { role, logLevel, host, hub } }
+    : { ok: true, config: { role, logLevel, host, hub, server } };
 }
 
 /** The flags this build understands, for a usage message. */
@@ -127,6 +171,11 @@ type FlagsResult =
  *
  * An unknown flag is a failure rather than a shrug: silently ignoring
  * `--databse-url` would start the process with the wrong database.
+ *
+ * `node:util.parseArgs` handles both forms and rejects unknown options, and it
+ * was tried here. Under `strict: true` it throws on the first unknown option,
+ * which is the one thing this function must not do: the whole point of
+ * `ConfigResult` is that a bad invocation reports every problem at once.
  */
 function readFlags(argv: readonly string[]): FlagsResult {
   const known = new Set<string>(Object.values(SETTINGS).map((setting) => setting.flag));
@@ -160,6 +209,20 @@ function readFlags(argv: readonly string[]): FlagsResult {
   return problems.length > 0 ? { ok: false, problems } : { ok: true, values };
 }
 
+/** An absent setting takes its default; a present one has to parse. */
+function readSetting<S extends z.ZodType>(
+  schema: S,
+  raw: string | undefined,
+  fallback: z.infer<S>,
+  report: (raw: string) => void,
+): z.infer<S> {
+  if (raw === undefined) return fallback;
+  const result = schema.safeParse(raw);
+  if (result.success) return result.data;
+  report(raw);
+  return fallback;
+}
+
 function readRole(raw: string | undefined, problems: string[]): Role | undefined {
   if (raw === undefined) {
     problems.push(
@@ -167,23 +230,12 @@ function readRole(raw: string | undefined, problems: string[]): Role | undefined
     );
     return undefined;
   }
-  const role = ROLES.find((candidate) => candidate === raw);
-  if (role === undefined) {
+  const result = roleSchema.safeParse(raw);
+  if (!result.success) {
     problems.push(`unknown role ${JSON.stringify(raw)}: expected one of ${ROLES.join(', ')}`);
+    return undefined;
   }
-  return role;
-}
-
-function readLogLevel(raw: string | undefined, problems: string[]): LogLevel {
-  if (raw === undefined) return DEFAULT_LOG_LEVEL;
-  const level = LOG_LEVELS.find((candidate) => candidate === raw);
-  if (level === undefined) {
-    problems.push(
-      `unknown log level ${JSON.stringify(raw)}: expected one of ${LOG_LEVELS.join(', ')}`,
-    );
-    return DEFAULT_LOG_LEVEL;
-  }
-  return level;
+  return result.data;
 }
 
 function readPort(
@@ -192,13 +244,11 @@ function readPort(
   fallback: number,
   problems: string[],
 ): number {
-  if (raw === undefined) return fallback;
-  const port = Number(raw);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    problems.push(`${flag} must be a port number between 1 and 65535, not ${JSON.stringify(raw)}`);
-    return fallback;
-  }
-  return port;
+  return readSetting(portSchema, raw, fallback, (offending) =>
+    problems.push(
+      `${flag} must be a port number between 1 and 65535, not ${JSON.stringify(offending)}`,
+    ),
+  );
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

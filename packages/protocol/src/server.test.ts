@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from './version.js';
-import { parseHubToServerFrame, parseServerToHubFrame } from './server.js';
+import {
+  parseHubToServerFrame,
+  parseServerToHubFrame,
+  type HubToServerFrame,
+  type ServerToHubFrame,
+} from './server.js';
+import { hubIdSchema, serverIdSchema, storeIdSchema } from './identity.js';
+import { parseTextFrame } from './parse.js';
+
+const HUB_ID = hubIdSchema.parse('hub-1');
 
 describe('parseHubToServerFrame', () => {
   it('accepts a handshake carrying a token', () => {
@@ -8,9 +17,20 @@ describe('parseHubToServerFrame', () => {
       type: 'handshake',
       id: 1,
       protocolVersion: PROTOCOL_VERSION,
+      hubId: HUB_ID,
       token: 'a-server-token',
     });
     expect(result.ok).toBe(true);
+  });
+
+  it('refuses a handshake that does not say which hub is dialling', () => {
+    const result = parseHubToServerFrame({
+      type: 'handshake',
+      id: 1,
+      protocolVersion: PROTOCOL_VERSION,
+      token: 'a-server-token',
+    });
+    expect(result.ok).toBe(false);
   });
 
   it('rejects a handshake with an empty token instead of treating it as absent', () => {
@@ -18,6 +38,7 @@ describe('parseHubToServerFrame', () => {
       type: 'handshake',
       id: 1,
       protocolVersion: PROTOCOL_VERSION,
+      hubId: HUB_ID,
       token: '',
     });
     expect(result.ok).toBe(false);
@@ -28,6 +49,7 @@ describe('parseHubToServerFrame', () => {
       type: 'handshake',
       id: 1,
       protocolVersion: PROTOCOL_VERSION,
+      hubId: HUB_ID,
       token: 't',
       command: 'ls',
     });
@@ -73,5 +95,47 @@ describe('parseServerToHubFrame', () => {
         reason: 'token was 3 characters short',
       }).ok,
     ).toBe(false);
+  });
+});
+
+/** The same check as the client half: what one side builds, the other parses. */
+describe('hub and server round trips', () => {
+  const hubToServer: readonly HubToServerFrame[] = [
+    {
+      type: 'handshake',
+      id: 1,
+      protocolVersion: PROTOCOL_VERSION,
+      hubId: HUB_ID,
+      token: 'a-server-token',
+    },
+    { type: 'ping', id: 2 },
+    { type: 'protocol-error', code: 'bad-request', message: 'type: invalid input' },
+  ];
+
+  const serverToHub: readonly ServerToHubFrame[] = [
+    {
+      type: 'handshake-accepted',
+      replyTo: 1,
+      protocolVersion: PROTOCOL_VERSION,
+      serverId: serverIdSchema.parse('server-1'),
+      stores: [{ storeId: storeIdSchema.parse('store-1'), path: '/data/store' }],
+    },
+    { type: 'handshake-rejected', replyTo: 1, reason: 'unauthorized' },
+    { type: 'pong', replyTo: 2 },
+    { type: 'protocol-error', code: 'protocol-version', message: 'this server speaks version 2' },
+  ];
+
+  it.each(hubToServer)('a server reads back the $type the hub sends', (frame) => {
+    expect(parseTextFrame(parseHubToServerFrame, JSON.stringify(frame))).toEqual({
+      ok: true,
+      value: frame,
+    });
+  });
+
+  it.each(serverToHub)('the hub reads back the $type a server sends', (frame) => {
+    expect(parseTextFrame(parseServerToHubFrame, JSON.stringify(frame))).toEqual({
+      ok: true,
+      value: frame,
+    });
   });
 });

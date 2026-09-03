@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfig, type ConfigResult } from './config.js';
+import { loadConfig, usage, type ConfigResult } from './config.js';
 
 const DATABASE_URL = 'postgres://agentplex@localhost:5432/agentplex';
 
@@ -124,5 +124,31 @@ describe('loadConfig log level', () => {
   it('names the accepted levels when given an unknown one', () => {
     const problems = expectProblems(load(['--role=server', '--log-level=loud']));
     expect(problems[0]).toContain('debug, info, warn, error');
+  });
+});
+
+describe('loadConfig host', () => {
+  it('defaults to every interface, because a container is reached from outside its loopback', () => {
+    expect(load(['--role=server'])).toMatchObject({ ok: true, config: { host: '0.0.0.0' } });
+  });
+
+  it('reads a host from the environment', () => {
+    const result = load(['--role=server'], { AGENTPLEX_HOST: '127.0.0.1' });
+    expect(result).toMatchObject({ ok: true, config: { host: '127.0.0.1' } });
+  });
+
+  it('takes a flag, which the setting did not have while main read the env directly', () => {
+    const result = load(['--role=server', '--host=::1'], { AGENTPLEX_HOST: '0.0.0.0' });
+    expect(result).toMatchObject({ ok: true, config: { host: '::1' } });
+  });
+
+  it('refuses an empty host rather than binding somewhere unstated', () => {
+    const problems = expectProblems(load(['--role=server', '--host=']));
+    expect(problems[0]).toContain('--host');
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(usage()).toContain('--host');
+    expect(usage()).toContain('AGENTPLEX_HOST');
   });
 });

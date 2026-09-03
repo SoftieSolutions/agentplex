@@ -30,19 +30,22 @@ function dependencies(database = fakeHubDatabase()) {
     openDatabase: () => database,
     migrationsDirectory: '/migrations',
     migrationFileSystem,
-    host: '127.0.0.1',
   };
 }
 
-const serverOnly: Config = { role: 'server', logLevel: 'error', server: { port: 0 } };
+const HOST = '127.0.0.1';
+
+const serverOnly: Config = { role: 'server', logLevel: 'error', host: HOST, server: { port: 0 } };
 const hubOnly: Config = {
   role: 'hub',
   logLevel: 'error',
+  host: HOST,
   hub: { port: 0, databaseUrl: 'postgres://unused' },
 };
 const both: Config = {
   role: 'both',
   logLevel: 'error',
+  host: HOST,
   hub: { port: 0, databaseUrl: 'postgres://unused' },
   server: { port: 0 },
 };

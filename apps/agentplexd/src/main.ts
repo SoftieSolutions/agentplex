@@ -47,8 +47,6 @@ async function main(): Promise<void> {
       openDatabase: (url) => createPostgresDatabase(url),
       migrationsDirectory: MIGRATIONS_DIRECTORY,
       migrationFileSystem: nodeMigrationFileSystem,
-      // Containers reach the process from outside their own loopback.
-      host: process.env['AGENTPLEX_HOST'] ?? '0.0.0.0',
     });
   } catch (error) {
     logger.error('agentplexd failed to start', { error: String(error) });

@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { Database, Queryable, QueryResult } from './database.js';
+import type { Database, DatabaseSession, Queryable, QueryResult } from './database.js';
 
 /**
  * The one module that names the Postgres driver.
@@ -33,13 +33,11 @@ export function createPostgresDatabase(url: string, options: PostgresOptions = {
       return { rows: result.rows as Row[], rowCount: result.rowCount ?? 0 };
     };
 
-  return {
-    query: queryOn(pool),
-
-    async transaction<T>(body: (tx: Queryable) => Promise<T>): Promise<T> {
-      const client = await pool.connect();
+  const transactionOn =
+    (client: pg.PoolClient) =>
+    async <T>(body: (tx: Queryable) => Promise<T>): Promise<T> => {
+      await client.query('BEGIN');
       try {
-        await client.query('BEGIN');
         const value = await body({ query: queryOn(client) });
         await client.query('COMMIT');
         return value;
@@ -48,10 +46,27 @@ export function createPostgresDatabase(url: string, options: PostgresOptions = {
         // is the one worth reporting; discarding the client cleans up the rest.
         await client.query('ROLLBACK').catch(() => {});
         throw error;
-      } finally {
-        client.release();
       }
-    },
+    };
+
+  const session = async <T>(body: (handle: DatabaseSession) => Promise<T>): Promise<T> => {
+    const client = await pool.connect();
+    try {
+      return await body({ query: queryOn(client), transaction: transactionOn(client) });
+    } finally {
+      client.release();
+    }
+  };
+
+  return {
+    query: queryOn(pool),
+
+    // A transaction is a session that runs one statement group: both need a
+    // connection held across several statements, so expressing one in terms of
+    // the other leaves a single place where a client is checked out and freed.
+    transaction: (body) => session((handle) => handle.transaction(body)),
+
+    session,
 
     async close(): Promise<void> {
       await pool.end();

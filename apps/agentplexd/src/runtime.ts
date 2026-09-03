@@ -20,8 +20,6 @@ export interface RuntimeDependencies {
   readonly openDatabase: (url: string) => Database;
   readonly migrationsDirectory: string;
   readonly migrationFileSystem: MigrationFileSystem;
-  /** The interface to bind. Containers need 0.0.0.0; a laptop may prefer loopback. */
-  readonly host: string;
 }
 
 export interface Runtime {
@@ -34,8 +32,10 @@ export async function startRuntime(
   config: Config,
   dependencies: RuntimeDependencies,
 ): Promise<Runtime> {
-  const { logger, ids, openDatabase, migrationsDirectory, migrationFileSystem, host } =
-    dependencies;
+  const { logger, ids, openDatabase, migrationsDirectory, migrationFileSystem } = dependencies;
+  // The interface to bind is a setting like any other, so it arrives with the
+  // rest of them rather than as a dependency the process reads for itself.
+  const host = config.host;
 
   const database = 'hub' in config ? openDatabase(config.hub.databaseUrl) : null;
 

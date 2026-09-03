@@ -83,14 +83,14 @@ Every setting has one flag and one environment variable; the flag wins.
 | Flag             | Environment              | Default        | Meaning                                 |
 | ---------------- | ------------------------ | -------------- | --------------------------------------- |
 | `--role`         | `AGENTPLEX_ROLE`         | none, required | `hub`, `server` or `both`               |
+| `--host`         | `AGENTPLEX_HOST`         | `0.0.0.0`      | Interface to bind                       |
 | `--hub-port`     | `AGENTPLEX_HUB_PORT`     | `8080`         | Port the hub serves on                  |
 | `--server-port`  | `AGENTPLEX_SERVER_PORT`  | `8081`         | Port the hub dials                      |
 | `--database-url` | `AGENTPLEX_DATABASE_URL` | none           | Postgres; required for `hub` and `both` |
 | `--log-level`    | `AGENTPLEX_LOG_LEVEL`    | `info`         | `debug`, `info`, `warn`, `error`        |
 
-`AGENTPLEX_HOST` is the exception, environment only: an interface to bind is a
-deployment fact rather than a choice. [docs/install.md](docs/install.md) has it
-and the settings the compose file reads.
+[docs/install.md](docs/install.md) has these in full, along with the settings
+the compose file reads.
 
 ## Contributing
 
