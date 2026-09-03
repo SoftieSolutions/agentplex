@@ -21,16 +21,43 @@ describe('childEnvironment', () => {
     expect(environment['PATH']).toBe(['/opt/homebrew/bin', '/home/a/.local/bin'].join(delimiter));
   });
 
-  it('replaces the inherited PATH rather than extending it', () => {
-    // The point of the setting: systemd's minimal PATH stops deciding which
-    // binary resolves, so a directory the operator did not record cannot
-    // supply one.
+  it('puts the configured directories in front of the inherited PATH, not after it', () => {
+    // Prepended rather than appended: the recorded directories are the ones
+    // setup probed, so they are the ones that decide, and systemd's minimal
+    // PATH stops being what resolves a provider.
+    const inheritedPath = ['/usr/local/sbin', '/usr/sbin'].join(delimiter);
     const environment = childEnvironment({
-      inherited: { PATH: '/usr/local/sbin:/usr/sbin' },
+      inherited: { PATH: inheritedPath },
       binPath: ['/opt/bin'],
     });
 
-    expect(environment['PATH']).toBe('/opt/bin');
+    expect(environment['PATH']).toBe(['/opt/bin', inheritedPath].join(delimiter));
+  });
+
+  it('keeps the inherited PATH reachable, which is where the machine tools are', () => {
+    // The regression this guards: `git.status` spawns `git` and
+    // `process.start-time` spawns `ps`, both resolved from this PATH, and a
+    // coding agent shells out to whatever the operator's project needs. None
+    // of those live in a provider directory, and a PATH holding only the
+    // recorded ones would take every one of them away.
+    const environment = childEnvironment({
+      inherited: { PATH: '/usr/bin' },
+      binPath: ['/opt/bin'],
+    });
+
+    expect(environment['PATH']?.split(delimiter)).toContain('/usr/bin');
+  });
+
+  it('leaves no empty entry behind, because an empty entry means the working directory', () => {
+    // A machine with no PATH at all, and one with a trailing delimiter: both
+    // would otherwise end as a list with an empty segment in it, which is how
+    // a child silently gets its own cwd on the search path.
+    expect(childEnvironment({ inherited: {}, binPath: ['/opt/bin'] })['PATH']).toBe('/opt/bin');
+    expect(
+      childEnvironment({ inherited: { PATH: `/usr/bin${delimiter}` }, binPath: ['/opt/bin'] })[
+        'PATH'
+      ],
+    ).toBe(['/opt/bin', '/usr/bin'].join(delimiter));
   });
 
   it('leaves every other inherited variable alone', () => {
@@ -51,12 +78,14 @@ describe('childEnvironment', () => {
     // so copying one into the other is where a second, stale PATH would
     // appear — and which of the two wins is the platform's decision, not ours.
     const environment = childEnvironment({
-      inherited: { Path: 'C:\\stale', HOME: '/home/a' },
+      inherited: { Path: '/inherited/bin', HOME: '/home/a' },
       binPath: ['/opt/bin'],
     });
 
     const names = Object.keys(environment).filter((name) => name.toUpperCase() === 'PATH');
     expect(names).toEqual(['PATH']);
-    expect(environment['PATH']).toBe('/opt/bin');
+    // Carried over rather than dropped: whatever it was spelled like, it was
+    // the PATH this machine had, and the tools on it still have to resolve.
+    expect(environment['PATH']).toBe(['/opt/bin', '/inherited/bin'].join(delimiter));
   });
 });

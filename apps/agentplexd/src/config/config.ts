@@ -43,9 +43,10 @@ export interface ServerConfig {
    * order, and deduplicated.
    *
    * Empty is legal and means what it always meant: the child inherits this
-   * process's PATH. A machine that has recorded directories resolves against
-   * exactly those instead, which is what makes a bare program name behave the
-   * same under systemd as it does in the operator's shell.
+   * process's PATH. Recorded directories are searched ahead of it, which is
+   * what makes a bare program name resolve the same under systemd as in the
+   * operator's shell — while leaving the machine's own tools reachable, since
+   * `git`, `ps` and everything a session shells out to come from there.
    *
    * Directories, never binaries. `CLAUDE_COMMAND` stays the bare name
    * `claude`, so the operation registry's rule that a program name is a name

@@ -1,3 +1,4 @@
+import { delimiter } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { childEnvironment } from '../config/child-environment.js';
 import { systemClock } from '../shared/clock.js';
@@ -187,19 +188,28 @@ describe('nodePtyFactory', () => {
  *
  * This is the one that matters for `CLAUDE_COMMAND`: it stays the bare name
  * `claude`, and what turns that name into a binary is the recorded directory
- * list rather than the PATH systemd happened to hand the unit. The inherited
- * PATH is empty here, so a child that starts at all can only have resolved
- * through `binPath`.
+ * list rather than the PATH systemd happened to hand the unit. Where a test
+ * needs to prove nothing else could have supplied the program, the inherited
+ * PATH is empty, so a child that starts at all resolved through `binPath`.
+ *
+ * And the other half, which is what a session actually depends on: the tools
+ * the agent itself runs are still on the far side of those directories.
  */
 describe('nodePtyFactory with a configured binPath', () => {
   const probe = createProbeProgram();
-  afterAll(() => probe.remove());
+  // What the machine already had: on this seam it stands for `git`, `rg` and
+  // everything else a coding agent shells out to during a session.
+  const tool = createProbeProgram('agentplex-tool');
+  afterAll(() => {
+    probe.remove();
+    tool.remove();
+  });
 
-  function launchProbe(): Launch {
+  function launchNamed(command: string): Launch {
     return {
       ok: true,
       plan: {
-        command: probe.name,
+        command,
         args: ['-e', 'process.stdout.write(`PATH=${process.env.PATH}\\n`)'],
         cwd: process.cwd(),
         env: {},
@@ -208,12 +218,16 @@ describe('nodePtyFactory with a configured binPath', () => {
     };
   }
 
-  function supervisorFor(binPath: readonly string[]): PtySupervisor {
+  function launchProbe(): Launch {
+    return launchNamed(probe.name);
+  }
+
+  function supervisorFor(binPath: readonly string[], inheritedPath = ''): PtySupervisor {
     return createPtySupervisor({
       pty: nodePtyFactory,
       clock: systemClock,
       ids: randomIdGenerator,
-      environment: childEnvironment({ inherited: { PATH: '' }, binPath }),
+      environment: childEnvironment({ inherited: { PATH: inheritedPath }, binPath }),
     });
   }
 
@@ -226,6 +240,29 @@ describe('nodePtyFactory with a configured binPath', () => {
       if (!started.ok) return;
       // And the child's own PATH is the configured list, read from inside it.
       expect(await output(started.run)).toContain(`PATH=${probe.directory}`);
+    },
+    CHILD_TIMEOUT_MS,
+  );
+
+  it(
+    'still starts a program that exists only on the inherited PATH',
+    async () => {
+      // A session is not just the agent binary. Claude Code shells out to
+      // `git`, `rg`, `node` and whatever the operator's project needs, all
+      // resolved from this same PATH, and none of them is in a provider
+      // directory. With PATH replaced rather than prepended this child would
+      // not start — and, per the test below, would not report why either.
+      const started = supervisorFor([probe.directory], tool.directory).launch(
+        launchNamed(tool.name),
+      );
+
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+
+      const printed = await output(started.run);
+
+      expect(printed).toContain(`PATH=${[probe.directory, tool.directory].join(delimiter)}`);
+      expect(started.run.exit).toEqual({ exitCode: 0, signal: null });
     },
     CHILD_TIMEOUT_MS,
   );

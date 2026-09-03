@@ -267,7 +267,7 @@ describe('loadConfig bin path', () => {
   });
 
   it('gives the both role its directories on the server half', () => {
-    const result = load(['--role=both', `--database-url=${DATABASE_URL}`, '--bin-path=/opt/bin']);
+    const result = load(['--role=both', `--database-file=${DATABASE_FILE}`, '--bin-path=/opt/bin']);
     expect(result).toMatchObject({
       ok: true,
       config: { role: 'both', server: { binPath: ['/opt/bin'] } },

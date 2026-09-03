@@ -79,10 +79,18 @@ environment and nothing else. A relative path is refused rather than resolved
 against whatever directory the process was left in.
 
 `--bin-path` decides where a spawned coding agent is looked for. With it set,
-the child's `PATH` is those directories and nothing else; left unset, the child
-inherits whatever `PATH` agentplexd was started with, which is what it always
-did. It takes directories rather than binaries, so the agent is still spawned
-by its bare name and a path can never appear where a program name belongs.
+those directories go in front of the `PATH` agentplexd inherited, so they are
+searched first and the rest of the machine stays reachable behind them; left
+unset, the child inherits that `PATH` unchanged, which is what it always did.
+It takes directories rather than binaries, so the agent is still spawned by its
+bare name and a path can never appear where a program name belongs.
+
+In front of rather than instead of, deliberately. The directories you record
+are the ones that decide which `claude` runs, which is the point. But a session
+is not only the agent: it shells out to `git`, `rg` and whatever else your
+project needs, and agentplexd itself spawns `git` and `ps` for the status it
+reports. A `PATH` holding only the agent's own directory would take all of that
+away.
 
 Set it when agentplexd runs as a service. A systemd unit gets a minimal `PATH`
 with no homebrew, no `~/.local/bin` and no version-manager shims, so a `claude`

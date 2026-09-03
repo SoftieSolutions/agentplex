@@ -51,7 +51,7 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logLevel, jsonLineSink(write, systemClock));
 
   // What every child of this process gets, composed once: what agentplexd
-  // inherited, with its PATH replaced by the configured directories. Both spawn
+  // inherited, with the configured directories ahead of its PATH. Both spawn
   // seams below take it at construction, so nothing downstream has an
   // environment to read or a variable to add — and a hub-only process, which
   // has no server half to configure, keeps inheriting exactly as before.
