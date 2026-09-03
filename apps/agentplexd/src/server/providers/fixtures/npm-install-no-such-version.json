@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "ETARGET",
+    "summary": "No matching version found for @anthropic-ai/claude-code@0.0.0-does-not-exist.",
+    "detail": "In most cases you or one of your dependencies are requesting a package version that doesn't exist."
+  }
+}

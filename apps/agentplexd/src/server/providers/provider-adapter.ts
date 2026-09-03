@@ -5,6 +5,9 @@ import type {
   SessionStatus,
   StoreDescriptor,
 } from '@agentplex/protocol';
+import type { Argv } from '../operations/operation.js';
+import type { CompletedProcess } from '../operations/process-runner.js';
+import type { FileRead } from '../store-identity.js';
 
 /**
  * The provider seam.
@@ -67,6 +70,16 @@ export interface ProviderAdapter {
    * whether it runs on the server or, later, anywhere else.
    */
   status(observation: StatusObservation): SessionStatus;
+
+  /**
+   * How this provider gets onto a machine, and how to tell what is already on
+   * one.
+   *
+   * A property rather than four more methods, because provisioning is answered
+   * once per adapter and never per store or per session: it is a constant of
+   * the provider, and grouping it says so.
+   */
+  readonly provisioning: ProviderProvisioning;
 }
 
 export interface ProviderDiscovery {
@@ -223,4 +236,196 @@ export interface LaunchPlan {
    * environment and stays a pure function of its arguments.
    */
   readonly scrubEnvPrefixes: readonly string[];
+}
+
+/**
+ * Getting a provider onto a machine, and finding out what is already on one.
+ *
+ * Installation, version probing, authentication state and login are as
+ * provider-specific as a transcript format is, so they live where everything
+ * provider-specific lives. `npm install --global` is Claude Code's answer and
+ * nobody else's; a provider that ships a tarball or a distribution package
+ * becomes a different implementation of this interface rather than a branch in
+ * an installer nobody tests.
+ *
+ * Every method here returns a plan and runs nothing, exactly as `spawn` and
+ * `resume` do. That is what keeps the whole surface pure functions a test calls
+ * with a value and compares against a value, and it is what leaves the running
+ * to the setup registry, so that the one place a child is started stays the one
+ * place a child is started.
+ *
+ * Note what a plan cannot express, and that nothing had to be loosened to fit
+ * it: an install is a bare argv with no working directory and no environment,
+ * because `npm install --global --prefix <dir>` carries the prefix as an
+ * argument the program parses rather than as state the kernel applies. The
+ * process seam has nowhere to put a cwd or an env var, deliberately, and an
+ * installer is exactly the operation that would otherwise have been the excuse
+ * to add one.
+ */
+export interface ProviderProvisioning {
+  /**
+   * How to put this provider into a prefix agentplex owns.
+   *
+   * A refusal rather than a plan when the prefix is not a directory anything
+   * can be installed into. The prefix reaches an adapter from a setup plan that
+   * a person or a cloud-init file wrote, so it is a claim like any other, and
+   * it is checked at the point where it becomes an argv element.
+   */
+  install(request: InstallRequest): InstallPlan;
+
+  /**
+   * How to ask the provider what version it is, and how to read the answer.
+   *
+   * Never refused, because the argv is a constant. This is the probe setup runs
+   * against a binary it adopted off the operator's PATH, and it is the moment a
+   * version-manager shim that cannot run outside its own environment gets
+   * found: while a person is present, rather than at the first spawn of the
+   * first session.
+   */
+  version(): VersionProbe;
+
+  /**
+   * How to tell whether this provider is logged in, by reading its own state.
+   *
+   * Reading, and never writing. agentplex writing into a provider's state
+   * directory is the v1 mistake this seam was drawn to prevent, and setup
+   * planting a credentials file would reintroduce it on day one: a format the
+   * provider owns, written by something that does not own it, with no way
+   * afterwards to tell a stale plant from a real login. So this says what to
+   * read and how to read it, and the caller supplies the store.
+   *
+   * A read of one file rather than a spawn, on purpose. A provider's own `auth
+   * status` subcommand would answer better, but answering "am I logged in" with
+   * a child process means an exit code to interpret, an absent program to tell
+   * from a refusing one, and a right to start children that the setup registry
+   * would have to be given for a question that a file already answers.
+   */
+  authState(): AuthProbe;
+
+  /**
+   * How to run this provider's own login, in a terminal.
+   *
+   * A `Launch`, because a login is a TUI: these are browser OAuth flows, and on
+   * a headless machine that means a URL opened somewhere else and a code pasted
+   * back. Driving it through the same pty seam the product already has is not a
+   * shortcut — it is the product's own mechanism, so the setup path exercises
+   * the seam every session depends on.
+   *
+   * It takes a store because the credentials have to land in the store the
+   * sessions will run against. A login that writes into whichever home
+   * directory agentplexd happens to run as leaves that store exactly as logged
+   * out as it was, and nothing says so.
+   */
+  login(request: LoginRequest): Launch;
+}
+
+export interface InstallRequest {
+  /**
+   * The directory to install into: the prefix agentplex owns, never one the
+   * operator already keeps a binary in.
+   *
+   * Setup adopts an existing installation when it finds one and installs only
+   * when it does not, so a request that reaches here has already established
+   * that nothing working is being shadowed. The adapter's job is the narrow
+   * one: put this version in this directory, and say no when the directory is
+   * not something a path can be built from.
+   */
+  readonly prefix: string;
+  /**
+   * The version to pin, or `null` for whatever the provider calls current.
+   *
+   * A pin is what a plan should carry — the point of a replayable artifact is
+   * that replaying it in a month produces the machine it described — but `null`
+   * has to stay expressible, because the first install on a new machine has no
+   * version to name yet.
+   */
+  readonly version: string | null;
+}
+
+/**
+ * A one-shot install, or the reason there is not one.
+ *
+ * Shaped like `Launch` rather than simply returning a plan, for the same
+ * reason: "this cannot be installed there" is an answer setup has to show the
+ * operator, not an exception to unwind past the code that knows what it means.
+ */
+export type InstallPlan =
+  | { readonly ok: true; readonly plan: OneShotPlan<InstalledProvider> }
+  | { readonly ok: false; readonly problem: string };
+
+export interface InstalledProvider {
+  /** What the installer says it put there, in the installer's own spelling. */
+  readonly package: string;
+  /** The version that is on disk now, as the installer reported it. */
+  readonly version: string;
+}
+
+/**
+ * The version a provider reports about itself, verbatim once parsed out.
+ *
+ * A string and not a parsed semver: nothing here compares versions, and a
+ * provider is free to print something a semver parser would reject. What an
+ * operator is shown has to be what the program actually said.
+ */
+export type VersionProbe = OneShotPlan<string>;
+
+/**
+ * A program to run once, and how to read what it printed.
+ *
+ * The two halves stay separate for the reason the operation registry keeps them
+ * separate: an argv is a value a test writes down, and reading output is where
+ * an exit code gets a meaning that differs per program and per question.
+ *
+ * The timeout is here rather than at the caller because "how long may this
+ * take" is provider knowledge — a version probe is milliseconds and an install
+ * pulls a package across a network — and a caller picking one per provider is a
+ * caller guessing on the provider's behalf.
+ */
+export interface OneShotPlan<Result> {
+  readonly argv: Argv;
+  readonly timeoutMs: number;
+  readonly read: (completed: CompletedProcess) => OneShotRead<Result>;
+}
+
+export type OneShotRead<Result> =
+  { readonly ok: true; readonly result: Result } | { readonly ok: false; readonly problem: string };
+
+/**
+ * Which file says whether this provider is logged in, and what it says.
+ *
+ * The path is relative to the store, exactly as `discover` treats its own
+ * directories: the adapter knows the layout inside a store, the caller knows
+ * where the store is, and no caller ever builds a path into a provider's
+ * private directories itself.
+ */
+export interface AuthProbe {
+  /** Relative to the store root. One file: this is a question, not a search. */
+  readonly file: string;
+  readonly read: (read: FileRead) => AuthState;
+}
+
+/**
+ * Logged in, logged out, or a file that could not be read.
+ *
+ * The third case is not the second. A credentials file that is there and cannot
+ * be read is a permissions problem an operator fixes in a second once somebody
+ * names it, and calling that "logged out" sends them through a login that will
+ * fail the same way for the same unnamed reason.
+ */
+export type AuthState =
+  | { readonly kind: 'authenticated' }
+  | { readonly kind: 'unauthenticated' }
+  | { readonly kind: 'unknown'; readonly problem: string };
+
+export interface LoginRequest {
+  readonly store: StoreDescriptor;
+  /**
+   * Where to run the login, resolved by the caller from its own configuration,
+   * for the same reason a spawn's is: no directory arrives from outside.
+   *
+   * A login neither reads nor writes it — it talks to a browser and to the
+   * provider's own state directory — but a pty has to open somewhere, and a
+   * directory nobody checked is a directory nobody checked.
+   */
+  readonly cwd: string;
 }

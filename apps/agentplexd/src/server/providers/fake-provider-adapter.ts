@@ -7,14 +7,20 @@ import {
 import { z } from 'zod';
 import { createFakeProviderFiles } from './fake-provider-files.js';
 import type {
+  AuthProbe,
   DiscoveredSession,
   DiscoveryProblem,
+  InstallPlan,
+  InstallRequest,
   Launch,
+  LoginRequest,
   ProviderAdapter,
   ProviderDiscovery,
+  ProviderProvisioning,
   ResumeRequest,
   SpawnRequest,
   StatusObservation,
+  VersionProbe,
 } from './provider-adapter.js';
 import type { ProviderFiles } from './provider-files.js';
 
@@ -113,8 +119,73 @@ export function createFakeProviderAdapter(
       return options.status?.(observation) ?? fakeStatus(observation);
     },
 
+    provisioning: fakeProvisioning(provider),
+
     get observations() {
       return observations;
+    },
+  };
+}
+
+/**
+ * Provisioning for a provider that does not exist, installed by a package
+ * manager that does not exist either.
+ *
+ * Deliberately nothing like Claude Code's. What the seam has to keep expressible
+ * is a provider whose installer is not npm, whose version flag is not
+ * `--version`, and whose credentials are not a JSON file at the store root —
+ * and the way to check that is an implementation that shares none of those
+ * answers with the only real one.
+ */
+function fakeProvisioning(provider: Provider): ProviderProvisioning {
+  return {
+    install(request: InstallRequest): InstallPlan {
+      if (!request.prefix.startsWith('/')) {
+        return { ok: false, problem: 'an install prefix must be an absolute path' };
+      }
+      return {
+        ok: true,
+        plan: {
+          argv: { file: 'fakepkg', args: ['add', '--into', request.prefix, provider] },
+          timeoutMs: 30_000,
+          read: (completed) =>
+            completed.exitCode === 0
+              ? { ok: true, result: { package: provider, version: completed.stdout.trim() } }
+              : { ok: false, problem: `fakepkg exited ${completed.exitCode}` },
+        },
+      };
+    },
+
+    version(): VersionProbe {
+      return {
+        argv: { file: provider, args: ['version'] },
+        timeoutMs: 5_000,
+        read: (completed) =>
+          completed.exitCode === 0
+            ? { ok: true, result: completed.stdout.trim() }
+            : { ok: false, problem: `${provider} exited ${completed.exitCode}` },
+      };
+    },
+
+    authState(): AuthProbe {
+      return {
+        file: 'auth/token',
+        read: (read) =>
+          read.kind === 'read' ? { kind: 'authenticated' } : { kind: 'unauthenticated' },
+      };
+    },
+
+    login(request: LoginRequest): Launch {
+      return {
+        ok: true,
+        plan: {
+          command: provider,
+          args: ['login'],
+          cwd: request.cwd,
+          env: {},
+          scrubEnvPrefixes: [],
+        },
+      };
     },
   };
 }
