@@ -4,8 +4,8 @@ export type { ProtocolVersionMismatch } from './version.js';
 export { frameParser, parseTextFrame } from './parse.js';
 export type { ParseFailure, ParseResult } from './parse.js';
 
-export { frameIdSchema, refusalCodeSchema } from './frames.js';
-export type { FrameId, RefusalCode } from './frames.js';
+export { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
+export type { FrameId, ProtocolErrorFrame, RefusalCode } from './frames.js';
 
 export {
   hubIdSchema,

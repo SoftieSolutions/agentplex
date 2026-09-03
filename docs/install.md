@@ -31,7 +31,7 @@ to accept connections, because the hub migrates the schema before it listens.
 
 ```sh
 curl -k https://localhost/health
-# {"status":"ok","role":"hub","protocolVersion":1}
+# {"status":"ok","role":"hub","protocolVersion":2}
 ```
 
 `docker compose logs -f hub` follows the hub. `docker compose down` stops

@@ -1,14 +1,14 @@
 import { z } from 'zod';
-import { frameIdSchema, refusalCodeSchema } from './frames.js';
+import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import { hubIdSchema } from './identity.js';
 import { frameParser } from './parse.js';
 
 /**
  * The client-facing half of the protocol: browser (or MCP caller) to hub.
  *
- * v0 carries only what milestone 1 can honestly demonstrate — a versioned
- * greeting and a liveness check. Session, layout and terminal frames arrive
- * with the milestones that implement them.
+ * Milestone 1 carries only what it can honestly demonstrate — a versioned
+ * greeting, a liveness check, and the two ways of saying no. Session, layout
+ * and terminal frames arrive with the milestones that implement them.
  */
 
 export const clientFrameSchema = z.discriminatedUnion('type', [
@@ -21,6 +21,8 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('ping'),
     id: frameIdSchema,
   }),
+  /** A client reads hub frames too, and can meet one it cannot parse. */
+  protocolErrorFrameSchema,
 ]);
 export type ClientFrame = z.infer<typeof clientFrameSchema>;
 
@@ -37,7 +39,8 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
   }),
   /**
    * A refusal is a reply to the client that asked, never a broadcast: the other
-   * clients did not ask and their view of the world has not changed.
+   * clients did not ask and their view of the world has not changed. Which is
+   * why it cannot carry a frame that failed to parse — see `protocol-error`.
    */
   z.object({
     type: z.literal('refusal'),
@@ -45,6 +48,7 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     code: refusalCodeSchema,
     message: z.string(),
   }),
+  protocolErrorFrameSchema,
 ]);
 export type HubFrame = z.infer<typeof hubFrameSchema>;
 

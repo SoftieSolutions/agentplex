@@ -1,14 +1,14 @@
 import { z } from 'zod';
-import { frameIdSchema } from './frames.js';
-import { serverIdSchema, storeDescriptorSchema } from './identity.js';
+import { frameIdSchema, protocolErrorFrameSchema } from './frames.js';
+import { hubIdSchema, serverIdSchema, storeDescriptorSchema } from './identity.js';
 import { frameParser } from './parse.js';
 
 /**
  * The server-facing half of the protocol: hub to paired server.
  *
  * The hub dials; a server dials out to nothing. So the handshake is the hub
- * presenting that server's token, and the server answering with who it is,
- * which protocol it speaks, and what it has mounted.
+ * saying which hub it is and presenting that server's token, and the server
+ * answering with who it is, which protocol it speaks, and what it has mounted.
  */
 
 export const hubToServerFrameSchema = z.discriminatedUnion('type', [
@@ -16,6 +16,13 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('handshake'),
     id: frameIdSchema,
     protocolVersion: z.int(),
+    /**
+     * Which hub is dialling. `identity.ts` says a hub id distinguishes two hubs
+     * to one paired server, and a server can only tell them apart if the
+     * handshake says so: it dials out to nothing, so this frame is all it gets.
+     * A server mounted by two hubs sees two of these on two connections.
+     */
+    hubId: hubIdSchema,
     /** The token the user typed into the hub for this server, and only this one. */
     token: z.string().min(1),
   }),
@@ -23,6 +30,7 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('ping'),
     id: frameIdSchema,
   }),
+  protocolErrorFrameSchema,
 ]);
 export type HubToServerFrame = z.infer<typeof hubToServerFrameSchema>;
 
@@ -47,6 +55,7 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('pong'),
     replyTo: frameIdSchema,
   }),
+  protocolErrorFrameSchema,
 ]);
 export type ServerToHubFrame = z.infer<typeof serverToHubFrameSchema>;
 
