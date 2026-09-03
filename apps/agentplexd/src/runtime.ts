@@ -95,6 +95,7 @@ export async function startRuntime(
         database,
         logger,
         ids,
+        clock,
         migrationsDirectory,
         migrationFileSystem,
         host,

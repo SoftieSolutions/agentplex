@@ -1,6 +1,6 @@
-import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import type { Database, DatabaseSession, Queryable } from './database.js';
+import type { Clock } from '../../shared/clock.js';
 import type { Logger } from '../../shared/logger.js';
 
 /**
@@ -26,12 +26,7 @@ export interface Migration {
 }
 
 export type MigrationErrorCode =
-  | 'database-ahead'
-  | 'history-edited'
-  | 'duplicate-version'
-  | 'bad-filename'
-  | 'apply-failed'
-  | 'lock-timeout';
+  'database-ahead' | 'history-edited' | 'duplicate-version' | 'bad-filename' | 'apply-failed';
 
 export class MigrationError extends Error {
   constructor(
@@ -45,38 +40,19 @@ export class MigrationError extends Error {
 }
 
 /**
- * Guards this database against two hub processes migrating at once.
+ * `applied_at` is epoch milliseconds and carries no default.
  *
- * Exported so the integration suite can hold the same lock from a second
- * connection rather than repeating the number and testing a different one.
+ * SQLite has no `now()` that means what `timestamptz DEFAULT now()` meant, and
+ * the substitutes it does have — `unixepoch()`, `CURRENT_TIMESTAMP` — would be
+ * the one clock in this codebase that a test cannot set. Everything above the
+ * database already takes its time from an injected clock, so this row does too:
+ * the caller passes the millisecond it means, and the schema states the unit.
  */
-export const ADVISORY_LOCK_KEY = 8_675_309;
-
-/**
- * How long to wait for another process to finish migrating before giving up.
- *
- * `pg_advisory_lock` waits forever and says nothing while it does. Because
- * migrating happens before the hub listens, that turns a stuck lock into a
- * container that never goes healthy, with no log line naming the reason. A
- * bounded number of `pg_try_advisory_lock` attempts turns the same situation
- * into an error an operator can read.
- */
-const LOCK_ATTEMPTS = 60;
-const LOCK_RETRY_DELAY_MS = 500;
-
-export interface MigrationLockOptions {
-  /** Tries this many times before giving up. At least one. */
-  readonly attempts?: number;
-  readonly retryDelayMs?: number;
-  /** The delay seam: a test waits for nothing rather than for real seconds. */
-  readonly wait?: (ms: number) => Promise<void>;
-}
-
 const BOOKKEEPING_TABLE = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
-    version    integer     PRIMARY KEY,
-    name       text        NOT NULL,
-    applied_at timestamptz NOT NULL DEFAULT now()
+    version    integer PRIMARY KEY,
+    name       text    NOT NULL,
+    applied_at integer NOT NULL
   )
 `;
 
@@ -85,50 +61,58 @@ const appliedRowSchema = z.object({
   name: z.string(),
 });
 
-/** `pg_try_advisory_lock` answers whether it got the lock; it never waits. */
-const lockAttemptRowSchema = z.object({ locked: z.boolean() });
-
 export interface MigrationOutcome {
   readonly applied: readonly Migration[];
   readonly alreadyApplied: number;
 }
 
 /**
- * The whole run happens inside one `session`, and that is the point.
+ * The whole run is one transaction, and that is what serializes it.
  *
- * An advisory lock belongs to the backend that took it. Run through a pool, the
- * lock and the unlock can land on different connections: the unlock returns
- * false, the lock stays held by an idle client, and the next process to migrate
- * waits on a lock nobody is using. Pinning the connection is what makes the
- * unlock reach the backend that holds it.
+ * There is no advisory lock to take: a single-file database has no second
+ * process to take one from, and SQLite already has the primitive this needs.
+ * `BEGIN IMMEDIATE` — which is what the driver opens a transaction with — takes
+ * the database's write lock at the first statement rather than at the first
+ * write, so a second hub process starting against the same file waits on the
+ * driver's busy timeout and then fails, instead of interleaving its DDL with
+ * this one's.
+ *
+ * One transaction for the run rather than one per migration is a change of
+ * shape that SQLite makes and Postgres did not force. It keeps the property
+ * that mattered — a migration is never recorded as applied unless every one of
+ * its statements ran — and strengthens it: a run that fails halfway leaves the
+ * schema exactly where it started, so the next start applies the same list
+ * again rather than resuming into a state nobody wrote down. Holding the write
+ * lock across the whole run is affordable because migrating happens before the
+ * hub listens, so nothing else is asking for it yet.
+ *
+ * It still runs inside a `session`, so every statement — the bookkeeping table,
+ * the reconciliation read, each migration — lands on one connection.
  */
 export async function migrate(
   database: Database,
   migrations: readonly Migration[],
   logger: Logger,
-  lock: MigrationLockOptions = {},
+  clock: Clock,
 ): Promise<MigrationOutcome> {
   const ordered = orderMigrations(migrations);
 
-  return database.session(async (session) => {
-    await takeAdvisoryLock(session, logger, lock);
-    try {
-      await session.query(BOOKKEEPING_TABLE);
-      const applied = await readApplied(session);
+  return database.session((session: DatabaseSession) =>
+    session.transaction(async (tx: Queryable) => {
+      await tx.query(BOOKKEEPING_TABLE);
+      const applied = await readApplied(tx);
 
       reconcile(ordered, applied);
 
       const pending = ordered.filter((migration) => !applied.has(migration.version));
       for (const migration of pending) {
-        await apply(session, migration);
+        await apply(tx, migration, clock);
         logger.info('migration applied', { version: migration.version, name: migration.name });
       }
 
       return { applied: pending, alreadyApplied: applied.size };
-    } finally {
-      await session.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_KEY]);
-    }
-  });
+    }),
+  );
 }
 
 /** Sorts by version and refuses a set that has the same version twice. */
@@ -145,40 +129,6 @@ export function orderMigrations(migrations: readonly Migration[]): readonly Migr
     }
   }
   return ordered;
-}
-
-async function takeAdvisoryLock(
-  session: DatabaseSession,
-  logger: Logger,
-  options: MigrationLockOptions,
-): Promise<void> {
-  const attempts = Math.max(1, options.attempts ?? LOCK_ATTEMPTS);
-  const retryDelayMs = options.retryDelayMs ?? LOCK_RETRY_DELAY_MS;
-  const wait = options.wait ?? ((ms: number) => delay(ms));
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const result = await session.query('SELECT pg_try_advisory_lock($1) AS locked', [
-      ADVISORY_LOCK_KEY,
-    ]);
-    // The answer is a row read back off a connection, so it is parsed like any
-    // other claim rather than trusted to be a boolean.
-    if (lockAttemptRowSchema.parse(result.rows[0]).locked) return;
-
-    if (attempt === 1) {
-      logger.warn('another process is migrating this database; waiting for the lock', {
-        attempts,
-        retryDelayMs,
-      });
-    }
-    if (attempt < attempts) await wait(retryDelayMs);
-  }
-
-  throw new MigrationError(
-    'lock-timeout',
-    `another process still holds the migration lock after ${attempts} attempts ` +
-      `${retryDelayMs}ms apart. Either a migration is genuinely still running, or a ` +
-      'connection died holding the lock and its backend has not been reaped yet.',
-  );
 }
 
 async function readApplied(session: Queryable): Promise<ReadonlyMap<number, string>> {
@@ -215,22 +165,20 @@ function reconcile(ordered: readonly Migration[], applied: ReadonlyMap<number, s
 }
 
 /**
- * One migration, one transaction, including its bookkeeping row: a migration
- * that half-ran and was recorded is worse than one that did not run at all.
+ * One migration and its bookkeeping row, on the transaction the run holds.
  *
- * The transaction is opened on the session that holds the lock, so committing
- * it does not hand the lock back: an advisory lock outlives the transactions
- * taken on its connection.
+ * The failure is wrapped here rather than at the call site so the message names
+ * the migration that failed; the rollback that follows is the run's, and it
+ * takes every migration this run had applied with it.
  */
-async function apply(session: DatabaseSession, migration: Migration): Promise<void> {
+async function apply(tx: Queryable, migration: Migration, clock: Clock): Promise<void> {
   try {
-    await session.transaction(async (tx: Queryable) => {
-      await tx.query(migration.sql);
-      await tx.query('INSERT INTO schema_migrations (version, name) VALUES ($1, $2)', [
-        migration.version,
-        migration.name,
-      ]);
-    });
+    await tx.query(migration.sql);
+    await tx.query('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', [
+      migration.version,
+      migration.name,
+      clock.now(),
+    ]);
   } catch (error) {
     throw new MigrationError(
       'apply-failed',

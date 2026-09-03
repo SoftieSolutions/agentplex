@@ -1,17 +1,17 @@
 import type { Database, DatabaseSession, Queryable, QueryResult } from './database.js';
 
 /**
- * An in-memory stand-in for Postgres, understanding only the statements the
+ * An in-memory stand-in for the database, understanding only the statements the
  * migration runner issues.
  *
- * It exists so the runner's control flow — locking, reconciling, one
- * transaction per migration, rolling back a failure — is testable without a
- * database. The SQL itself is not exercised here; `migrations.integration.test`
- * runs that against a real Postgres.
+ * It exists so the runner's control flow — reconciling, applying what is
+ * missing, rolling the run back when one migration fails — is testable without
+ * a database. The SQL itself is not exercised here; `migrations.integration.test`
+ * runs that against a real SQLite file.
  *
- * It models connections as well as statements, because the thing worth
- * asserting about an advisory lock is not that it was taken but that it was
- * released on the connection that took it.
+ * It models connections as well as statements, because a run that reconciles on
+ * one connection and writes on another has read a schema it is not the one
+ * changing.
  */
 export interface FakeDatabaseOptions {
   /** Migrations already recorded as applied, as `version -> name`. */
@@ -60,11 +60,6 @@ export function createFakeDatabase(options: FakeDatabaseOptions = {}): FakeDatab
       const scripted = options.respondWith?.find((response) => response.match.test(text));
       if (scripted !== undefined) {
         return { rows: scripted.rows as Row[], rowCount: scripted.rows.length };
-      }
-
-      if (text.includes('pg_try_advisory_lock')) {
-        const rows = [{ locked: true }];
-        return { rows: rows as Row[], rowCount: 1 };
       }
 
       if (text.includes('SELECT version, name FROM schema_migrations')) {

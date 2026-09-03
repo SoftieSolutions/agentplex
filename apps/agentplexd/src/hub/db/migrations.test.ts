@@ -8,9 +8,11 @@ function silentLogger(): { logger: ReturnType<typeof createLogger>; records: Log
   return { logger: createLogger('debug', (record) => records.push(record)), records };
 }
 
-function migration(version: number, name: string, sql = `CREATE TABLE t${version} ()`): Migration {
-  return { version, name, sql };
+function migration(version: number, name: string, sql = `CREATE TABLE t${version} (x integer)`) {
+  return { version, name, sql } satisfies Migration;
 }
+
+const clock = { now: () => 1_756_000_000_000 };
 
 describe('orderMigrations', () => {
   it('orders by version number, not by filename text', () => {
@@ -32,6 +34,7 @@ describe('migrate', () => {
       database,
       [migration(2, 'second'), migration(1, 'first')],
       logger,
+      clock,
     );
 
     expect(outcome.applied.map((each) => each.version)).toEqual([1, 2]);
@@ -42,7 +45,7 @@ describe('migrate', () => {
     const database = createFakeDatabase({ applied: new Map([[1, 'first']]) });
     const { logger } = silentLogger();
 
-    const outcome = await migrate(database, [migration(1, 'first')], logger);
+    const outcome = await migrate(database, [migration(1, 'first')], logger, clock);
 
     expect(outcome.applied).toEqual([]);
     expect(outcome.alreadyApplied).toBe(1);
@@ -56,6 +59,7 @@ describe('migrate', () => {
       database,
       [migration(1, 'first'), migration(2, 'second')],
       logger,
+      clock,
     );
 
     expect(outcome.applied.map((each) => each.name)).toEqual(['second']);
@@ -70,7 +74,7 @@ describe('migrate', () => {
     });
     const { logger } = silentLogger();
 
-    await expect(migrate(database, [migration(1, 'first')], logger)).rejects.toMatchObject({
+    await expect(migrate(database, [migration(1, 'first')], logger, clock)).rejects.toMatchObject({
       code: 'database-ahead',
     });
   });
@@ -79,111 +83,45 @@ describe('migrate', () => {
     const database = createFakeDatabase({ applied: new Map([[1, 'first']]) });
     const { logger } = silentLogger();
 
-    await expect(migrate(database, [migration(1, 'first_renamed')], logger)).rejects.toMatchObject({
-      code: 'history-edited',
-    });
+    await expect(
+      migrate(database, [migration(1, 'first_renamed')], logger, clock),
+    ).rejects.toMatchObject({ code: 'history-edited' });
   });
 
-  it('records nothing for a migration whose statements failed', async () => {
+  it('rolls the whole run back when one migration fails, rather than half a schema', async () => {
     const database = createFakeDatabase({ failOn: /CREATE TABLE t2/ });
     const { logger } = silentLogger();
 
     await expect(
-      migrate(database, [migration(1, 'first'), migration(2, 'second')], logger),
+      migrate(database, [migration(1, 'first'), migration(2, 'second')], logger, clock),
     ).rejects.toMatchObject({ code: 'apply-failed' });
 
-    expect(database.appliedVersions).toEqual([1]);
-  });
-
-  it('takes the advisory lock before touching the schema and releases it after', async () => {
-    const database = createFakeDatabase();
-    const { logger } = silentLogger();
-
-    await migrate(database, [migration(1, 'first')], logger);
-
-    expect(database.statements[0]).toContain('pg_try_advisory_lock');
-    expect(database.statements.at(-1)).toContain('pg_advisory_unlock');
-  });
-
-  it('locks and unlocks on one connection, because a lock belongs to a backend', async () => {
-    const database = createFakeDatabase();
-    const { logger } = silentLogger();
-
-    await migrate(database, [migration(1, 'first'), migration(2, 'second')], logger);
-
-    // Not just lock and unlock: every statement in between, including each
-    // migration's own transaction, has to be on the connection holding the lock
-    // or the lock is guarding a connection that is doing nothing.
-    const connections = new Set(database.issued.map((statement) => statement.connection));
-    expect(connections.size).toBe(1);
-  });
-
-  it('gives up on a lock it cannot get rather than waiting forever', async () => {
-    const database = createFakeDatabase({
-      respondWith: [{ match: /pg_try_advisory_lock/, rows: [{ locked: false }] }],
-    });
-    const { logger } = silentLogger();
-    const waits: number[] = [];
-
-    await expect(
-      migrate(database, [migration(1, 'first')], logger, {
-        attempts: 3,
-        retryDelayMs: 25,
-        wait: async (ms) => void waits.push(ms),
-      }),
-    ).rejects.toMatchObject({ code: 'lock-timeout' });
-
-    // Three attempts, two waits between them, and nothing applied.
-    expect(waits).toEqual([25, 25]);
+    // One transaction for the run means the migration that did apply goes back
+    // too. The next start applies the same list again, which is a state that
+    // was written down, unlike a run that stopped halfway.
     expect(database.appliedVersions).toEqual([]);
   });
 
-  it('unlocks nothing when it never got the lock', async () => {
-    const database = createFakeDatabase({
-      respondWith: [{ match: /pg_try_advisory_lock/, rows: [{ locked: false }] }],
-    });
+  it('runs the whole migration inside one transaction on one connection', async () => {
+    const database = createFakeDatabase();
     const { logger } = silentLogger();
 
-    await expect(
-      migrate(database, [migration(1, 'first')], logger, { attempts: 1 }),
-    ).rejects.toThrow();
+    await migrate(database, [migration(1, 'first'), migration(2, 'second')], logger, clock);
 
-    expect(database.statements.some((text) => text.includes('pg_advisory_unlock'))).toBe(false);
-  });
-
-  it('says it is waiting, so a slow start is not a silent one', async () => {
-    const database = createFakeDatabase({
-      respondWith: [{ match: /pg_try_advisory_lock/, rows: [{ locked: false }] }],
-    });
-    const { logger, records } = silentLogger();
-
-    await expect(
-      migrate(database, [migration(1, 'first')], logger, {
-        attempts: 2,
-        retryDelayMs: 1,
-        wait: async () => {},
-      }),
-    ).rejects.toThrow();
-
-    expect(records.map((record) => record.message)).toContainEqual(
-      expect.stringContaining('waiting for the lock'),
-    );
-  });
-
-  it('releases the advisory lock even when a migration fails', async () => {
-    const database = createFakeDatabase({ failOn: /CREATE TABLE t1/ });
-    const { logger } = silentLogger();
-
-    await expect(migrate(database, [migration(1, 'first')], logger)).rejects.toThrow();
-
-    expect(database.statements.at(-1)).toContain('pg_advisory_unlock');
+    // Reconciling on one connection and writing on another would mean reading a
+    // schema this run is not the one changing. There is nothing else to assert
+    // about serialization here: the write lock the run holds belongs to the
+    // driver, and `migrations.integration.test` is where a second connection
+    // meets it.
+    const connections = new Set(database.issued.map((statement) => statement.connection));
+    expect(connections.size).toBe(1);
   });
 
   it('says which migrations it applied, so a deploy log shows the schema change', async () => {
     const database = createFakeDatabase();
     const { logger, records } = silentLogger();
 
-    await migrate(database, [migration(1, 'first')], logger);
+    await migrate(database, [migration(1, 'first')], logger, clock);
 
     expect(records.map((record) => record.fields)).toContainEqual({ version: 1, name: 'first' });
   });
