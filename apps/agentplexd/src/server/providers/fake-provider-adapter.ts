@@ -37,6 +37,12 @@ const FAKE_WORKING_WINDOW_MS = 60_000;
 const fakeTranscriptSchema = z.object({
   signal: z.enum(['awaiting-permission', 'awaiting-input', 'progressing', 'quiet', 'unknown']),
   updatedAt: z.int().nonnegative(),
+  /**
+   * Whether this made-up provider verified a live process of its own. Absent
+   * means it did not, which is what a provider that keeps no registry looks
+   * like — and it keeps these tests exercising the caller's own liveness path.
+   */
+  running: z.boolean().optional(),
   /** This made-up provider records neither, and `null` is what that looks like. */
   cwd: z.string().min(1).nullish(),
   title: z.string().min(1).nullish(),
@@ -160,6 +166,7 @@ function parseTranscript(name: string, contents: string) {
       sessionId: sessionId.data,
       signal: parsed.data.signal,
       updatedAt: parsed.data.updatedAt,
+      running: parsed.data.running ?? false,
       cwd: parsed.data.cwd ?? null,
       title: parsed.data.title ?? null,
     },

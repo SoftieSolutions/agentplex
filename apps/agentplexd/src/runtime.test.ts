@@ -5,6 +5,7 @@ import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { createFakeProviderFiles } from './server/providers/fake-provider-files.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
+import { createFakeProcessProbe } from './server/fake-process-probe.js';
 import { createFakeStoreFiles } from './server/fake-store-files.js';
 import { createLogger, type LogRecord } from './shared/logger.js';
 import type { Config } from './config/config.js';
@@ -146,7 +147,7 @@ describe('startRuntime', () => {
       ...dependencies(),
       logger: createLogger('info', (record) => records.push(record)),
       providers: createProviderRegistry([
-        createClaudeAdapter({ files: createFakeProviderFiles() }),
+        createClaudeAdapter({ files: createFakeProviderFiles(), probe: createFakeProcessProbe() }),
       ]),
     });
 

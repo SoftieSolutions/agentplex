@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sessionRefSchema, storeDescriptorSchema } from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
+import { createFakeProcessProbe } from '../fake-process-probe.js';
 import { CLAUDE_PROJECTS_DIRECTORY, createClaudeAdapter } from './claude-adapter.js';
+import { CLAUDE_SESSIONS_DIRECTORY } from './claude-registry.js';
 import { createFakeProviderFiles } from './fake-provider-files.js';
 
 /** Captured Claude Code output; see the note in `claude-transcript.test.ts`. */
@@ -11,7 +13,9 @@ function fixture(name: string): string {
 }
 
 const COMPLETED_TURN = fixture('claude-completed-turn.jsonl');
+const PENDING_TOOL_USE = fixture('claude-pending-tool-use.jsonl');
 const NO_TURNS = fixture('claude-no-turns.jsonl');
+const REGISTRY_ENTRY = fixture('claude-session-registry.json');
 
 const STORE = storeDescriptorSchema.parse({ storeId: 'store-a', path: '/volumes/claude' });
 const PROJECTS = `${STORE.path}/${CLAUDE_PROJECTS_DIRECTORY}`;
@@ -28,8 +32,20 @@ const PROJECT = `${PROJECTS}/-Users-dev-Code-agentplex`;
 
 const SESSION_ID = '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde';
 
-function adapterOver(files: Parameters<typeof createFakeProviderFiles>[0]) {
-  return createClaudeAdapter({ files: createFakeProviderFiles(files) });
+const SESSIONS = `${STORE.path}/${CLAUDE_SESSIONS_DIRECTORY}`;
+
+/** The pid and dates the captured registry entry carries. */
+const PID = 71_484;
+const PROCESS_STARTED_AT = Date.parse('2026-09-03T03:28:48Z');
+
+function adapterOver(
+  files: Parameters<typeof createFakeProviderFiles>[0],
+  probe: Parameters<typeof createFakeProcessProbe>[0] = {},
+) {
+  return createClaudeAdapter({
+    files: createFakeProviderFiles(files),
+    probe: createFakeProcessProbe(probe),
+  });
 }
 
 describe('createClaudeAdapter.discover', () => {
@@ -46,6 +62,7 @@ describe('createClaudeAdapter.discover', () => {
         sessionId: SESSION_ID,
         signal: 'awaiting-input',
         updatedAt: Date.parse('2026-09-03T02:03:10.027Z'),
+        running: false,
         cwd: '/Users/dev/Code/agentplex',
         title: 'Docker compose without hub',
       },
@@ -178,6 +195,97 @@ describe('createClaudeAdapter.discover', () => {
     expect(discovered.sessions).toEqual([]);
     expect(discovered.problems).toEqual([
       { subject: damaged, problem: expect.stringContaining('JSON') },
+    ]);
+  });
+});
+
+describe('createClaudeAdapter.discover, against the session registry', () => {
+  const TRANSCRIPT = `${PROJECT}/${SESSION_ID}.jsonl`;
+  const ENTRY = `${SESSIONS}/${PID}.json`;
+  const theSameProcess = { processes: { [PID]: PROCESS_STARTED_AT } };
+
+  /** The captured entry with only its status changed; see `claude-registry.test.ts`. */
+  function entrySaying(status: string): string {
+    return JSON.stringify({ ...JSON.parse(REGISTRY_ENTRY), status });
+  }
+
+  /**
+   * The one session these tests are about, and the status the server would send
+   * for it — derived once, from what discovery reported, with `now` supplied.
+   */
+  async function discoverOne(
+    files: Record<string, string>,
+    probe: Parameters<typeof createFakeProcessProbe>[0] = theSameProcess,
+  ) {
+    const adapter = adapterOver({ files }, probe);
+    const [session] = (await adapter.discover(STORE)).sessions;
+    if (session === undefined) throw new Error('the fixture discovered no session');
+
+    return {
+      session,
+      status: adapter.status({
+        signal: session.signal,
+        updatedAt: session.updatedAt,
+        running: session.running,
+        now: session.updatedAt + 1_000,
+      }),
+    };
+  }
+
+  it('turns an unanswered tool call into a permission prompt when the registry says so', async () => {
+    // End to end, and the reason this ticket exists. The transcript alone says
+    // `progressing` — an assistant `tool_use` with no `tool_result` after it —
+    // which is what a permission prompt and a long-running tool both look like
+    // on disk. Only the registry entry separates them.
+    const found = await discoverOne({
+      [TRANSCRIPT]: PENDING_TOOL_USE,
+      [ENTRY]: entrySaying('waiting'),
+    });
+
+    expect(found.session.signal).toBe('awaiting-permission');
+    expect(found.status).toBe('awaiting-permission');
+  });
+
+  it('makes working reachable for a session this server never spawned', async () => {
+    const found = await discoverOne({ [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: REGISTRY_ENTRY });
+
+    expect(found.session.running).toBe(true);
+    expect(found.status).toBe('working');
+  });
+
+  it('keeps the AGX-17 answer when the registry entry outlived its process', async () => {
+    // The entry is still on disk — they always are — and its pid is gone.
+    const found = await discoverOne(
+      { [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: REGISTRY_ENTRY },
+      {},
+    );
+
+    expect(found.session.running).toBe(false);
+    expect(found.session.signal).toBe('progressing');
+    expect(found.status).toBe('idle');
+  });
+
+  it('keeps the AGX-17 answer when the pid is alive but has been recycled', async () => {
+    const found = await discoverOne(
+      { [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: entrySaying('waiting') },
+      { processes: { [PID]: Date.parse('2026-09-04T00:00:00Z') } },
+    );
+
+    expect(found.session.signal).toBe('progressing');
+    expect(found.status).toBe('idle');
+  });
+
+  it('reports a registry it cannot read without dropping a single session', async () => {
+    const adapter = adapterOver(
+      { files: { [TRANSCRIPT]: PENDING_TOOL_USE }, unreadable: [SESSIONS] },
+      {},
+    );
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.sessions.map((session) => session.sessionId)).toEqual([SESSION_ID]);
+    expect(discovered.problems).toEqual([
+      { subject: SESSIONS, problem: expect.stringContaining('EACCES') },
     ]);
   });
 });

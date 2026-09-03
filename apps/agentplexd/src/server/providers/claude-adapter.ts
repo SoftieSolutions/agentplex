@@ -1,5 +1,12 @@
 import { join } from 'node:path';
 import { sessionIdSchema, type SessionStatus, type StoreDescriptor } from '@agentplex/protocol';
+import type { ProcessProbe } from '../process-probe.js';
+import {
+  CLAUDE_SESSIONS_DIRECTORY,
+  readClaudeRegistry,
+  resolveWithRegistry,
+  type ClaudeRegistry,
+} from './claude-registry.js';
 import { parseClaudeTranscript } from './claude-transcript.js';
 import type {
   DiscoveredSession,
@@ -45,14 +52,34 @@ const TRANSCRIPT_SUFFIX = '.jsonl';
 
 export interface ClaudeAdapterDependencies {
   readonly files: ProviderFiles;
+  /**
+   * How this adapter checks that a registry entry names a process that is
+   * really there. Injected because a unit test cannot supply `/proc`, a
+   * `sysctl` or a pid that recycles on cue.
+   */
+  readonly probe: ProcessProbe;
 }
 
-export function createClaudeAdapter({ files }: ClaudeAdapterDependencies): ProviderAdapter {
+export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies): ProviderAdapter {
   return {
     provider: 'claude',
 
-    discover(store: StoreDescriptor): Promise<ProviderDiscovery> {
-      return discoverSessions(join(store.path, CLAUDE_PROJECTS_DIRECTORY), files);
+    async discover(store: StoreDescriptor): Promise<ProviderDiscovery> {
+      // The registry is read first and once, not per session: it is one
+      // directory listing for the whole store, and every session in the store
+      // is resolved against the same snapshot of it.
+      const registry = await readClaudeRegistry(
+        join(store.path, CLAUDE_SESSIONS_DIRECTORY),
+        files,
+        probe,
+      );
+      const found = await discoverSessions(
+        join(store.path, CLAUDE_PROJECTS_DIRECTORY),
+        files,
+        registry,
+      );
+
+      return { sessions: found.sessions, problems: [...registry.problems, ...found.problems] };
     },
 
     spawn(): Launch {
@@ -88,6 +115,7 @@ const NO_WORKING_DIRECTORY =
 async function discoverSessions(
   projects: string,
   files: ProviderFiles,
+  registry: ClaudeRegistry,
 ): Promise<ProviderDiscovery> {
   const listing = await files.listDirectory(projects);
   // Absent is the normal state of a store no Claude Code has touched. Saying
@@ -102,7 +130,7 @@ async function discoverSessions(
 
   for (const entry of listing.entries) {
     if (entry.kind !== 'directory') continue;
-    await readProject(join(projects, entry.name), files, sessions, problems);
+    await readProject(join(projects, entry.name), files, registry, sessions, problems);
   }
 
   return { sessions, problems };
@@ -111,6 +139,7 @@ async function discoverSessions(
 async function readProject(
   project: string,
   files: ProviderFiles,
+  registry: ClaudeRegistry,
   sessions: DiscoveredSession[],
   problems: DiscoveryProblem[],
 ): Promise<void> {
@@ -144,10 +173,19 @@ async function readProject(
 
     const parsed = parseClaudeTranscript(read.contents);
     if (parsed.ok) {
+      // Registry first, transcript as the fallback. The file says what was
+      // written; the verified registry entry says what is happening, and only
+      // it can tell an unanswered tool call that is waiting for a human from
+      // one that is simply still running.
+      const resolved = resolveWithRegistry(
+        parsed.transcript.signal,
+        registry.live.get(sessionId.data),
+      );
       sessions.push({
         sessionId: sessionId.data,
-        signal: parsed.transcript.signal,
+        signal: resolved.signal,
         updatedAt: parsed.transcript.updatedAt,
+        running: resolved.running,
         cwd: parsed.transcript.cwd,
         title: parsed.transcript.title,
       });
@@ -162,15 +200,20 @@ async function readProject(
 }
 
 /**
- * Claude's transcript vocabulary, reduced to the one every provider shares.
+ * Claude's vocabulary, reduced to the one every provider shares.
  *
- * `progressing` deliberately does not become `working` on elapsed time alone.
- * A recent write proves something wrote recently, not that anything is running
- * now, and this server can only verify processes it started itself — so the
- * choice is between under-claiming `idle` and putting a spinner on sessions
- * that died. The rule that turns a recent write into `working` needs the
- * process registry the PTY supervisor brings; until then this stays quiet
- * rather than confident.
+ * `progressing` still does not become `working` on elapsed time alone. A recent
+ * write proves something wrote recently, not that anything is running now, so
+ * the choice would be between under-claiming `idle` and putting a spinner on
+ * sessions that died hours ago. What changed is that `running` is now reachable
+ * without the PTY supervisor: Claude Code's own registry names the process, and
+ * discovery has verified it is alive and is the process the entry meant. A
+ * session with no such entry keeps the quiet answer, which is the honest one.
+ *
+ * Note what is *not* here: no elapsed-time rule reads `now` behind the caller's
+ * back, and the two arguments that could tempt one — `updatedAt` and `now` —
+ * are supplied rather than read. Claude Code needs no such rule, because for
+ * this provider a verified process is a better answer than a stopwatch.
  */
 function claudeStatus({ signal, running }: StatusObservation): SessionStatus {
   if (signal === 'awaiting-permission' || signal === 'awaiting-input') return signal;

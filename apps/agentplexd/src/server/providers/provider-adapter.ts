@@ -92,6 +92,20 @@ export interface DiscoveredSession {
   /** Epoch ms, as the provider dated its own last write. */
   readonly updatedAt: number;
   /**
+   * A live process for this session that the adapter itself verified.
+   *
+   * Providers keep their own process registries, and an adapter is the only
+   * thing that knows where its provider's is and how to read it. Verified means
+   * pid liveness *and* a start time consistent with what the entry recorded: a
+   * registry entry is a claim, and these entries are never cleaned up.
+   *
+   * It is reported here rather than derived in `status` because finding out is
+   * I/O — a directory to list and a kernel to ask — and `status` is pure. The
+   * caller ors this with whatever it knows about processes it started itself,
+   * and neither source has to know about the other.
+   */
+  readonly running: boolean;
+  /**
    * Where the session was working, read out of the provider's own files.
    *
    * This is the adapter's answer and not the caller's, because the only place

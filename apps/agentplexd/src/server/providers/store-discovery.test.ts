@@ -111,6 +111,34 @@ describe('discoverStoreSessions', () => {
     expect(discovered.sessions[0]?.status).toBe('working');
   });
 
+  it('takes a live process from the adapter for a session it never spawned itself', async () => {
+    // Two witnesses to one fact, and the server has only one of them. A session
+    // started in somebody's terminal is invisible to this server's own process
+    // table and is exactly the session a watcher exists to report, so the
+    // adapter's verified answer has to count on its own.
+    const files = createFakeProviderFiles({
+      files: {
+        [`${transcriptsAt('claude')}/session-a.json`]: JSON.stringify({
+          signal: 'progressing',
+          updatedAt: NOW - 1_000,
+          running: true,
+        }),
+      },
+    });
+    const adapter = createFakeProviderAdapter({ files });
+
+    const discovered = await discoverStoreSessions(STORE, {
+      registry: createProviderRegistry([adapter]),
+      clock,
+      liveness: nothingRunning,
+    });
+
+    expect(adapter.observations).toEqual([
+      { signal: 'progressing', updatedAt: NOW - 1_000, running: true, now: NOW },
+    ]);
+    expect(discovered.sessions[0]?.status).toBe('working');
+  });
+
   it('lets a provider with no directory in this store cost itself and not the store', async () => {
     const files = createFakeProviderFiles({
       files: { [`${transcriptsAt('claude')}/session-a.json`]: transcript('quiet') },
