@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   sessionIdSchema,
   storeIdSchema,
+  type ServerRegistrationId,
   type SessionDescriptor,
   type SessionStatus,
 } from '@agentplex/protocol';
-import type { ServerRegistrationId } from '../pairing/server-registrations.js';
 import { chooseReportedSession, type ReportedSession } from './session-selection.js';
 
 /**

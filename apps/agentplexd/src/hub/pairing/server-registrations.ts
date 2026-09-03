@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { serverIdSchema, type ServerId } from '@agentplex/protocol';
+import {
+  serverIdSchema,
+  serverRegistrationIdSchema,
+  type ServerId,
+  type ServerRegistrationId,
+} from '@agentplex/protocol';
 import type { Queryable } from '../db/database.js';
 import type { Clock } from '../../shared/clock.js';
 import type { IdGenerator } from '../../shared/ids.js';
@@ -16,18 +21,6 @@ import { serverAddressSchema } from './server-address.js';
  * built on, and keeping it ignorant of them is what lets it be tested against
  * a database and nothing else.
  */
-
-/**
- * The hub's own name for a pairing. Distinct from `ServerId`, which is what
- * the server calls itself: this one exists from the moment the user submits
- * the form, and the other only after a handshake has confirmed it.
- */
-export const serverRegistrationIdSchema = z
-  .string()
-  .min(1)
-  .max(200)
-  .brand<'ServerRegistrationId'>();
-export type ServerRegistrationId = z.infer<typeof serverRegistrationIdSchema>;
 
 /**
  * The token the server printed and the user pasted.

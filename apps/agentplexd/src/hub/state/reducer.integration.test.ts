@@ -4,6 +4,7 @@ import {
   sessionIdSchema,
   storeIdSchema,
   type HubId,
+  type ServerRegistrationId,
   type SessionDescriptor,
   type StoreDescriptor,
   type StoreId,
@@ -23,7 +24,6 @@ import {
   newServerRegistrationSchema,
   registerServer,
   revokeServer,
-  type ServerRegistrationId,
 } from '../pairing/server-registrations.js';
 import { openMigratedSchema, type MigratedSchema } from '../pairing/test-migrated-schema.js';
 import { createReducer, type Reducer, type StoreView } from './reducer.js';

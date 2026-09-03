@@ -1,8 +1,12 @@
-import type { SessionDescriptor, SessionRef, StoreId } from '@agentplex/protocol';
+import type {
+  ServerRegistrationId,
+  SessionDescriptor,
+  SessionRef,
+  StoreId,
+} from '@agentplex/protocol';
 import type { Logger } from '../../shared/logger.js';
 import { countsTowardAttention } from '../connections/attention.js';
 import type { ServerConnectionReport } from '../connections/server-connection.js';
-import type { ServerRegistrationId } from '../pairing/server-registrations.js';
 import { chooseReportedSession, type ReportedSession } from './session-selection.js';
 
 /**

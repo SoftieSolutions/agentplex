@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from './version.js';
 import { parseClientFrame, parseHubFrame, type ClientFrame, type HubFrame } from './client.js';
-import { hubIdSchema } from './identity.js';
+import {
+  hubIdSchema,
+  serverIdSchema,
+  serverRegistrationIdSchema,
+  sessionIdSchema,
+  storeIdSchema,
+} from './identity.js';
 import { parseTextFrame } from './parse.js';
 
 describe('parseClientFrame', () => {
@@ -79,6 +85,7 @@ describe('client and hub round trips', () => {
   const clientFrames: readonly ClientFrame[] = [
     { type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION },
     { type: 'ping', id: 2 },
+    { type: 'layout-request', id: 3 },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
   ];
 
@@ -91,8 +98,60 @@ describe('client and hub round trips', () => {
     },
     { type: 'pong', replyTo: 2 },
     { type: 'refusal', replyTo: 3, code: 'unauthorized', message: 'token not accepted' },
+    {
+      type: 'machine-state',
+      state: {
+        version: 7,
+        stores: [
+          {
+            storeId: storeIdSchema.parse('store-work'),
+            servers: [serverRegistrationIdSchema.parse('registration-1')],
+            reachable: true,
+            unreachableSince: null,
+            lastReachableAt: 1_000,
+            sessions: [
+              {
+                descriptor: {
+                  storeId: storeIdSchema.parse('store-work'),
+                  sessionId: sessionIdSchema.parse('session-1'),
+                  provider: 'claude',
+                  status: 'awaiting-permission',
+                  updatedAt: 900,
+                  cwd: '/srv/work',
+                  title: 'the ticket',
+                },
+                source: serverRegistrationIdSchema.parse('registration-1'),
+                reportedBy: [serverRegistrationIdSchema.parse('registration-1')],
+                reportedAt: 1_000,
+                reachable: true,
+              },
+            ],
+          },
+        ],
+        servers: [
+          {
+            registrationId: serverRegistrationIdSchema.parse('registration-1'),
+            label: 'workshop',
+            serverId: serverIdSchema.parse('server-1'),
+            phase: 'connected',
+            stores: [storeIdSchema.parse('store-work')],
+            connectedSince: 1_000,
+            staleSince: null,
+            lastConnectedAt: 1_000,
+            staleReason: null,
+            problem: null,
+          },
+        ],
+      },
+    },
     { type: 'protocol-error', code: 'protocol-version', message: 'this hub speaks version 2' },
   ];
+
+  it('sends the state with no replyTo, because nobody asked for it', () => {
+    const broadcast = hubFrames.find((frame) => frame.type === 'machine-state');
+    expect(broadcast).toBeDefined();
+    expect(broadcast).not.toHaveProperty('replyTo');
+  });
 
   it.each(clientFrames)('the hub reads back the $type a client sends', (frame) => {
     expect(parseTextFrame(parseClientFrame, JSON.stringify(frame))).toEqual({

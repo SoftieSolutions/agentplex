@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   sessionIdSchema,
   storeIdSchema,
+  type ServerRegistrationId,
   type SessionDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
 import { createLogger } from '../../shared/logger.js';
 import { serverAddressSchema } from '../pairing/server-address.js';
-import type { ServerRegistrationId } from '../pairing/server-registrations.js';
 import type {
   ServerConnectionPhase,
   ServerConnectionReport,
