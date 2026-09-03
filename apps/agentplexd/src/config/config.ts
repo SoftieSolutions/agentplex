@@ -1,3 +1,4 @@
+import { delimiter, isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
 import { LOG_LEVELS, type LogLevel } from '../shared/logger.js';
 
@@ -24,6 +25,15 @@ export interface HubConfig {
 export interface ServerConfig {
   /** The port the hub dials. A server dials out to nothing. */
   readonly port: number;
+  /**
+   * The store roots this server has mounted, absolute and deduplicated.
+   *
+   * v1 hardwired `~/.claude/projects`; a store is a mounted volume here, so
+   * where it is has to be something the deployment says. Empty is legal: a
+   * server whose volume is not mounted yet reports no stores rather than
+   * refusing to start, and the hub is told the truth either way.
+   */
+  readonly storePaths: readonly string[];
 }
 
 /**
@@ -90,6 +100,8 @@ const SETTINGS = {
   hubPort: { flag: '--hub-port', env: 'AGENTPLEX_HUB_PORT' },
   serverPort: { flag: '--server-port', env: 'AGENTPLEX_SERVER_PORT' },
   databaseUrl: { flag: '--database-url', env: 'AGENTPLEX_DATABASE_URL' },
+  /** The one repeatable setting: a server may mount more than one store. */
+  storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
 } as const;
 
 /**
@@ -111,7 +123,7 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   const problems: string[] = [];
   const read = (setting: { flag: string; env: string }): string | undefined =>
-    flags.values.get(setting.flag) ?? nonEmpty(env[setting.env]);
+    flags.values.get(setting.flag)?.at(-1) ?? nonEmpty(env[setting.env]);
 
   const role = readRole(read(SETTINGS.role), problems);
 
@@ -140,12 +152,18 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
     problems,
   );
 
+  const storePaths = readStorePaths(
+    flags.values.get(SETTINGS.storePath.flag),
+    env[SETTINGS.storePath.env],
+    problems,
+  );
+
   const databaseUrl = read(SETTINGS.databaseUrl);
   if (role !== 'server' && databaseUrl === undefined) problems.push(MISSING_DATABASE_URL);
 
   if (role === undefined || problems.length > 0) return { ok: false, problems };
 
-  const server: ServerConfig = { port: serverPort };
+  const server: ServerConfig = { port: serverPort, storePaths };
   if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
 
   if (databaseUrl === undefined) return { ok: false, problems: [MISSING_DATABASE_URL] };
@@ -163,7 +181,7 @@ export function usage(): string {
 }
 
 type FlagsResult =
-  | { readonly ok: true; readonly values: ReadonlyMap<string, string> }
+  | { readonly ok: true; readonly values: ReadonlyMap<string, readonly string[]> }
   | { readonly ok: false; readonly problems: readonly string[] };
 
 /**
@@ -176,11 +194,21 @@ type FlagsResult =
  * was tried here. Under `strict: true` it throws on the first unknown option,
  * which is the one thing this function must not do: the whole point of
  * `ConfigResult` is that a bad invocation reports every problem at once.
+ *
+ * Every occurrence is kept, because one flag is a list: `--store-path` twice
+ * means two stores. For the settings that are single-valued the last one wins,
+ * which is the shell convention and the one a wrapper script relies on when it
+ * appends an override to a command line it did not write.
  */
 function readFlags(argv: readonly string[]): FlagsResult {
   const known = new Set<string>(Object.values(SETTINGS).map((setting) => setting.flag));
-  const values = new Map<string, string>();
+  const values = new Map<string, string[]>();
   const problems: string[] = [];
+  const add = (flag: string, value: string): void => {
+    const existing = values.get(flag);
+    if (existing === undefined) values.set(flag, [value]);
+    else existing.push(value);
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index] ?? '';
@@ -193,7 +221,7 @@ function readFlags(argv: readonly string[]): FlagsResult {
     }
 
     if (separator !== -1) {
-      values.set(flag, argument.slice(separator + 1));
+      add(flag, argument.slice(separator + 1));
       continue;
     }
 
@@ -202,7 +230,7 @@ function readFlags(argv: readonly string[]): FlagsResult {
       problems.push(`${flag} needs a value`);
       continue;
     }
-    values.set(flag, next);
+    add(flag, next);
     index += 1;
   }
 
@@ -249,6 +277,56 @@ function readPort(
       `${flag} must be a port number between 1 and 65535, not ${JSON.stringify(offending)}`,
     ),
   );
+}
+
+/**
+ * Store roots, from repeated flags or from one delimiter-separated env var.
+ *
+ * Flags replace the environment rather than adding to it, for the same reason
+ * they win everywhere else: a person listing stores on a command line is
+ * saying which stores, not which extra ones. The env var takes a `PATH`-shaped
+ * list because a container is configured with environment and nothing else,
+ * and mounting two volumes must not require rewriting the command.
+ *
+ * A relative path is refused rather than resolved: it would mean whatever
+ * directory the unit file, the shell, or the container image happened to leave
+ * the process in, and a store that moves when the working directory moves is a
+ * store whose identity file is somewhere nobody meant.
+ */
+function readStorePaths(
+  flagValues: readonly string[] | undefined,
+  envValue: string | undefined,
+  problems: string[],
+): readonly string[] {
+  const fromFlags = flagValues !== undefined;
+  const raw = flagValues ?? (envValue ?? '').split(delimiter);
+
+  const paths: string[] = [];
+  for (const candidate of raw) {
+    const trimmed = candidate.trim();
+    if (trimmed.length === 0) {
+      // An empty segment in the env var is a trailing delimiter, which is a
+      // typo with an obvious meaning. `--store-path=` is a person asking for
+      // something that does not exist, and gets told so.
+      if (fromFlags) problems.push(`${SETTINGS.storePath.flag} needs a path`);
+      continue;
+    }
+
+    if (!isAbsolute(trimmed)) {
+      problems.push(
+        `${SETTINGS.storePath.flag} must be an absolute path, not ${JSON.stringify(trimmed)}`,
+      );
+      continue;
+    }
+
+    // `resolve` on an already-absolute path never consults the working
+    // directory; it collapses `..` and a trailing separator so that the same
+    // volume spelled two ways is reported once rather than twice.
+    const normalized = resolve(trimmed);
+    if (!paths.includes(normalized)) paths.push(normalized);
+  }
+
+  return paths;
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

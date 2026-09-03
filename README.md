@@ -87,7 +87,12 @@ Every setting has one flag and one environment variable; the flag wins.
 | `--hub-port`     | `AGENTPLEX_HUB_PORT`     | `8080`         | Port the hub serves on                  |
 | `--server-port`  | `AGENTPLEX_SERVER_PORT`  | `8081`         | Port the hub dials                      |
 | `--database-url` | `AGENTPLEX_DATABASE_URL` | none           | Postgres; required for `hub` and `both` |
+| `--store-path`   | `AGENTPLEX_STORE_PATH`   | none           | Store root; repeatable, absolute        |
 | `--log-level`    | `AGENTPLEX_LOG_LEVEL`    | `info`         | `debug`, `info`, `warn`, `error`        |
+
+A store is identified by an `agentplex-store.json` file at its root, minted the
+first time a server mounts it. Two servers mounting the same volume report the
+same store, and moving the volume takes its sessions with it.
 
 [docs/install.md](docs/install.md) has these in full, along with the settings
 the compose file reads.

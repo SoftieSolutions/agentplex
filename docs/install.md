@@ -57,10 +57,25 @@ and an environment variable is inherited.
 | `--hub-port`     | `AGENTPLEX_HUB_PORT`     | `8080`         | Port the hub serves on                              |
 | `--server-port`  | `AGENTPLEX_SERVER_PORT`  | `8081`         | Port the hub dials                                  |
 | `--database-url` | `AGENTPLEX_DATABASE_URL` | none           | Postgres connection URL; required for `hub`, `both` |
+| `--store-path`   | `AGENTPLEX_STORE_PATH`   | none           | A store root, absolute; repeat the flag per store   |
 | `--log-level`    | `AGENTPLEX_LOG_LEVEL`    | `info`         | `debug`, `info`, `warn`, `error`                    |
 
 A container is reached from outside its own loopback, so `0.0.0.0` is the
 default that suits one; on a laptop, `--host=127.0.0.1` is often what you want.
+
+`--store-path` is the one repeatable setting, because a server may have more
+than one volume mounted. On the environment side that list is separated the way
+`PATH` is (`/volumes/one:/volumes/two`), since a container is configured with
+environment and nothing else. A relative path is refused rather than resolved
+against whatever directory the process was left in.
+
+The first time a server mounts a store it writes `agentplex-store.json` at that
+root, containing the id every session in that store is scoped by. The file is
+the store's identity: two servers mounting the same volume report the same
+store, and a volume that moves keeps its sessions. A store whose file cannot be
+read or parsed is reported as unavailable and skipped — the server still starts
+and still serves the stores it can read, and it never mints a second identity
+over a file it did not understand.
 
 An unknown flag stops the process rather than being ignored: starting with the
 wrong database because `--databse-url` was silently dropped is worse than not
