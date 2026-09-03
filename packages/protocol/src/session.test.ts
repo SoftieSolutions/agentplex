@@ -7,6 +7,8 @@ const descriptor = {
   provider: 'claude',
   status: 'awaiting-permission',
   updatedAt: 1_756_000_000_000,
+  cwd: '/Users/dev/Code/agentplex',
+  title: 'Docker compose without hub',
 };
 
 describe('sessionDescriptorSchema', () => {
@@ -15,6 +17,23 @@ describe('sessionDescriptorSchema', () => {
 
     expect(parsed.success).toBe(true);
     expect(parsed.data).toEqual(descriptor);
+  });
+
+  it('takes null for a label the provider does not record, but not a missing key', () => {
+    // Nullable, not optional. "The adapter looked and the provider says
+    // nothing" and "nobody filled this in" are different facts, and only the
+    // first one is safe to render as an empty cell.
+    expect(
+      sessionDescriptorSchema.safeParse({ ...descriptor, cwd: null, title: null }).success,
+    ).toBe(true);
+
+    const { cwd: _cwd, ...withoutCwd } = descriptor;
+    expect(sessionDescriptorSchema.safeParse(withoutCwd).success).toBe(false);
+  });
+
+  it('refuses an empty cwd or title, so a blank cannot pass for a value', () => {
+    expect(sessionDescriptorSchema.safeParse({ ...descriptor, cwd: '' }).success).toBe(false);
+    expect(sessionDescriptorSchema.safeParse({ ...descriptor, title: '' }).success).toBe(false);
   });
 
   it('refuses a session that names no provider', () => {

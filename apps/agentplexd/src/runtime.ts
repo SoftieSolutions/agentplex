@@ -2,8 +2,10 @@ import type { Config } from './config/config.js';
 import type { Database } from './hub/db/database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
+import type { ProviderRegistry } from './server/providers/provider-registry.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { StoreFileSystem } from './server/store-identity.js';
+import type { Clock } from './shared/clock.js';
 import type { IdGenerator } from './shared/ids.js';
 import type { Logger } from './shared/logger.js';
 
@@ -23,6 +25,16 @@ export interface RuntimeDependencies {
   readonly migrationFileSystem: MigrationFileSystem;
   /** The store volumes, injected for the same reason the migrations directory is. */
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * The provider adapters this process runs with.
+   *
+   * Built in `main` rather than imported here, so that a test can start the
+   * whole runtime against a store of fixtures without a real Claude Code
+   * transcript existing anywhere, and so that "which providers does this build
+   * drive" is one visible line in the entrypoint.
+   */
+  readonly providers: ProviderRegistry;
+  readonly clock: Clock;
 }
 
 export interface Runtime {
@@ -35,8 +47,16 @@ export async function startRuntime(
   config: Config,
   dependencies: RuntimeDependencies,
 ): Promise<Runtime> {
-  const { logger, ids, openDatabase, migrationsDirectory, migrationFileSystem, storeFileSystem } =
-    dependencies;
+  const {
+    logger,
+    ids,
+    openDatabase,
+    migrationsDirectory,
+    migrationFileSystem,
+    storeFileSystem,
+    providers,
+    clock,
+  } = dependencies;
   // The interface to bind is a setting like any other, so it arrives with the
   // rest of them rather than as a dependency the process reads for itself.
   const host = config.host;
@@ -68,6 +88,8 @@ export async function startRuntime(
         port: config.server.port,
         storePaths: config.server.storePaths,
         storeFileSystem,
+        providers,
+        clock,
       });
     }
   } catch (error) {

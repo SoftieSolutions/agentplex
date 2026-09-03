@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { startRuntime, type Runtime } from './runtime.js';
 import { createFakeDatabase } from './hub/db/fake-database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
+import { createClaudeAdapter } from './server/providers/claude-adapter.js';
+import { createFakeProviderFiles } from './server/providers/fake-provider-files.js';
+import { createProviderRegistry } from './server/providers/provider-registry.js';
 import { createFakeStoreFiles } from './server/fake-store-files.js';
-import { createLogger } from './shared/logger.js';
+import { createLogger, type LogRecord } from './shared/logger.js';
 import type { Config } from './config/config.js';
 
 const logger = createLogger('error', () => {});
@@ -32,6 +35,11 @@ function dependencies(database = fakeHubDatabase(), storeFileSystem = createFake
     migrationsDirectory: '/migrations',
     migrationFileSystem,
     storeFileSystem,
+    // No adapters: this file is about which halves start and stop, and a
+    // registry with a real one in it would put a provider's disk layout into
+    // every test here.
+    providers: createProviderRegistry([]),
+    clock: { now: () => 1_756_000_000_000 },
   };
 }
 
@@ -122,6 +130,31 @@ describe('startRuntime', () => {
       { storeId: 'hub-under-test', path: '/volumes/claude' },
     ]);
     expect([...files.contents.keys()]).toEqual(['/volumes/claude/agentplex-store.json']);
+  });
+
+  it('scans every store it mounted with the adapters it was given', async () => {
+    // The wiring, asserted where the wiring is. A misconfigured store path
+    // that only surfaces the first time somebody opens the client is a support
+    // ticket; one that surfaces in the boot log is a fixed typo.
+    const records: LogRecord[] = [];
+    const withStore: Config = {
+      ...serverOnly,
+      server: { port: 0, storePaths: ['/volumes/claude'] },
+    };
+
+    runtime = await startRuntime(withStore, {
+      ...dependencies(),
+      logger: createLogger('info', (record) => records.push(record)),
+      providers: createProviderRegistry([
+        createClaudeAdapter({ files: createFakeProviderFiles() }),
+      ]),
+    });
+
+    expect(records.filter((record) => record.message === 'store scanned')).toEqual([
+      expect.objectContaining({
+        fields: expect.objectContaining({ sessions: 0, providers: ['claude'] }),
+      }),
+    ]);
   });
 
   it('comes up without the store it could not read, rather than not coming up', async () => {

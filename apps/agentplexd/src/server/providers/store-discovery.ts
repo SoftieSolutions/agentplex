@@ -96,6 +96,11 @@ async function discoverWithAdapter(
         now,
       }),
       updatedAt: session.updatedAt,
+      // Carried, not re-derived. Only the adapter can read these out of a
+      // provider's own format, and anything above it that tried to guess a cwd
+      // from a directory name would be guessing at a lossy encoding.
+      cwd: session.cwd,
+      title: session.title,
     };
   });
 

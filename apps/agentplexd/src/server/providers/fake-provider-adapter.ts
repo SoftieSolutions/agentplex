@@ -37,6 +37,9 @@ const FAKE_WORKING_WINDOW_MS = 60_000;
 const fakeTranscriptSchema = z.object({
   signal: z.enum(['awaiting-permission', 'awaiting-input', 'progressing', 'quiet', 'unknown']),
   updatedAt: z.int().nonnegative(),
+  /** This made-up provider records neither, and `null` is what that looks like. */
+  cwd: z.string().min(1).nullish(),
+  title: z.string().min(1).nullish(),
 });
 
 export interface FakeProviderAdapterOptions {
@@ -157,6 +160,8 @@ function parseTranscript(name: string, contents: string) {
       sessionId: sessionId.data,
       signal: parsed.data.signal,
       updatedAt: parsed.data.updatedAt,
+      cwd: parsed.data.cwd ?? null,
+      title: parsed.data.title ?? null,
     },
   };
 }
