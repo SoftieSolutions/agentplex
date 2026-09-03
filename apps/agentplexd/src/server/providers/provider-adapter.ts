@@ -7,7 +7,6 @@ import type {
 } from '@agentplex/protocol';
 import type { Argv } from '../operations/operation.js';
 import type { CompletedProcess } from '../operations/process-runner.js';
-import type { FileRead } from '../store-identity.js';
 
 /**
  * The provider seam.
@@ -285,20 +284,21 @@ export interface ProviderProvisioning {
   version(): VersionProbe;
 
   /**
-   * How to tell whether this provider is logged in, by reading its own state.
+   * How to ask the provider whether it is logged in.
    *
-   * Reading, and never writing. agentplex writing into a provider's state
-   * directory is the v1 mistake this seam was drawn to prevent, and setup
-   * planting a credentials file would reintroduce it on day one: a format the
-   * provider owns, written by something that does not own it, with no way
-   * afterwards to tell a stale plant from a real login. So this says what to
-   * read and how to read it, and the caller supplies the store.
+   * Asked, and never inferred from the provider's files. A credentials file is
+   * an undocumented format inside a directory the provider owns, and it can be
+   * renamed, restructured or moved into an OS keychain in any release — at
+   * which point an adapter reading it reports "not logged in" for a provider
+   * that is perfectly logged in, silently, and in the direction that invents a
+   * problem. A supported `auth status` subcommand is the provider's own answer
+   * to exactly this question and survives its own format changes. This is the
+   * same rule that keeps agentplex from *writing* into a state directory,
+   * applied one step earlier.
    *
-   * A read of one file rather than a spawn, on purpose. A provider's own `auth
-   * status` subcommand would answer better, but answering "am I logged in" with
-   * a child process means an exit code to interpret, an absent program to tell
-   * from a refusing one, and a right to start children that the setup registry
-   * would have to be given for a question that a file already answers.
+   * Nothing in this file writes anything anywhere, so the v1 guarantee is
+   * unchanged: setup cannot plant a credentials file because there is no shape
+   * here in which it could.
    */
   authState(): AuthProbe;
 
@@ -391,31 +391,27 @@ export type OneShotRead<Result> =
   { readonly ok: true; readonly result: Result } | { readonly ok: false; readonly problem: string };
 
 /**
- * Which file says whether this provider is logged in, and what it says.
+ * What to run to find out whether this provider is logged in, and how to read
+ * the answer.
  *
- * The path is relative to the store, exactly as `discover` treats its own
- * directories: the adapter knows the layout inside a store, the caller knows
- * where the store is, and no caller ever builds a path into a provider's
- * private directories itself.
+ * The same shape as `VersionProbe`, which is the point: both are one-shot
+ * questions put to the provider about itself, and there is no reason for the
+ * one that could have been answered by snooping a file to have a different
+ * shape from the one that never could.
  */
-export interface AuthProbe {
-  /** Relative to the store root. One file: this is a question, not a search. */
-  readonly file: string;
-  readonly read: (read: FileRead) => AuthState;
-}
+export type AuthProbe = OneShotPlan<AuthState>;
 
 /**
- * Logged in, logged out, or a file that could not be read.
+ * Logged in, or logged out.
  *
- * The third case is not the second. A credentials file that is there and cannot
- * be read is a permissions problem an operator fixes in a second once somebody
- * names it, and calling that "logged out" sends them through a login that will
- * fail the same way for the same unnamed reason.
+ * There is no third member for "could not tell", because `OneShotRead` already
+ * has one: a probe that could not be run, or whose output did not answer the
+ * question, is `{ ok: false }` with a problem that names why. A provider that
+ * is not installed and a provider that is logged out are different facts, and
+ * flattening them into one enum is how an operator ends up sent through a login
+ * for a binary that is not there.
  */
-export type AuthState =
-  | { readonly kind: 'authenticated' }
-  | { readonly kind: 'unauthenticated' }
-  | { readonly kind: 'unknown'; readonly problem: string };
+export type AuthState = 'authenticated' | 'unauthenticated';
 
 export interface LoginRequest {
   readonly store: StoreDescriptor;

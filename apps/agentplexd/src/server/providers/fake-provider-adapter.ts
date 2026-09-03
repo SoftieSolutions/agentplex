@@ -133,9 +133,9 @@ export function createFakeProviderAdapter(
  *
  * Deliberately nothing like Claude Code's. What the seam has to keep expressible
  * is a provider whose installer is not npm, whose version flag is not
- * `--version`, and whose credentials are not a JSON file at the store root —
- * and the way to check that is an implementation that shares none of those
- * answers with the only real one.
+ * `--version`, and which answers "am I logged in" with a different subcommand
+ * and a bare exit code rather than JSON — and the way to check that is an
+ * implementation that shares none of those answers with the only real one.
  */
 function fakeProvisioning(provider: Provider): ProviderProvisioning {
   return {
@@ -169,9 +169,12 @@ function fakeProvisioning(provider: Provider): ProviderProvisioning {
 
     authState(): AuthProbe {
       return {
-        file: 'auth/token',
-        read: (read) =>
-          read.kind === 'read' ? { kind: 'authenticated' } : { kind: 'unauthenticated' },
+        argv: { file: provider, args: ['whoami'] },
+        timeoutMs: 5_000,
+        read: (completed) =>
+          completed.exitCode === 0
+            ? { ok: true, result: 'authenticated' }
+            : { ok: true, result: 'unauthenticated' },
       };
     },
 

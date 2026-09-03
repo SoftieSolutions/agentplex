@@ -1,7 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { CompletedProcess } from '../operations/process-runner.js';
-import type { FileRead } from '../store-identity.js';
 import { planClaudeLaunch, CLAUDE_COMMAND } from './claude-launch.js';
 import type {
   AuthProbe,
@@ -22,10 +21,10 @@ import type {
  *
  * Every fact in this file is a fact about Claude Code specifically and about no
  * other provider — the npm package it ships as, the flag that prints its
- * version, the file it writes its credentials into, the subcommand that signs
- * in. That is the whole argument for putting provisioning on the seam: a second
- * provider is this file again with different answers, rather than four branches
- * added to an installer.
+ * version, the subcommand that reports authentication, the subcommand that
+ * signs in. That is the whole argument for putting provisioning on the seam: a
+ * second provider is this file again with different answers, rather than four
+ * branches added to an installer.
  *
  * Nothing here runs anything. Each method hands back a plan, and the setup
  * registry is what turns one into a child process.
@@ -48,14 +47,22 @@ export const NPM_COMMAND = 'npm';
 const NPM_LATEST_TAG = 'latest';
 
 /**
- * Where Claude Code writes its credentials inside its config directory.
+ * `claude auth status --json`, the provider's own answer to "am I logged in".
  *
- * Captured from the CLI rather than remembered: 2.1.259 resolves the path as
- * `join(configDir, ".credentials.json")`, where `configDir` is
- * `CLAUDE_CONFIG_DIR` or `~/.claude` — and the store agentplex points a session
- * at is that directory, so the file sits at the store root.
+ * `--json` is passed even though 2.1.259's own help says it is the default, for
+ * the reason `shell: false` is written down in the process runner rather than
+ * relied on: a default is a thing that changes, and spelling it out makes a
+ * change to it a visible edit here rather than a silent change in what this
+ * parser is handed.
+ *
+ * Deliberately not `<store>/.credentials.json`, which 2.1.259 does write and
+ * which this could have read. That file is an undocumented format inside a
+ * directory the provider owns, it is absent entirely on a host where the
+ * credentials went into an OS keychain, and an adapter that reads it starts
+ * reporting a logged-in provider as logged out the release its shape changes.
+ * The subcommand is supported and survives that.
  */
-export const CLAUDE_CREDENTIALS_FILE = '.credentials.json';
+const CLAUDE_AUTH_STATUS_ARGS: readonly string[] = ['auth', 'status', '--json'];
 
 /** `claude auth login`, the provider's own sign-in, driven in a terminal. */
 const CLAUDE_LOGIN_ARGS: readonly string[] = ['auth', 'login'];
@@ -82,6 +89,13 @@ const INSTALL_TIMEOUT_MS = 300_000;
  */
 const VERSION_TIMEOUT_MS = 10_000;
 
+/**
+ * Ten seconds for the authentication probe, for the same reason as the version
+ * one: it starts the same binary, through whatever has to happen before that
+ * binary runs.
+ */
+const AUTH_TIMEOUT_MS = 10_000;
+
 export function createClaudeProvisioning(): ProviderProvisioning {
   return {
     install(request: InstallRequest): InstallPlan {
@@ -99,6 +113,16 @@ export function createClaudeProvisioning(): ProviderProvisioning {
           // lets the result be read rather than scraped. The package spec goes
           // last, as one element, so a version that arrived from a plan file
           // cannot become anything but a version.
+          //
+          // npm and not `claude install <version>`, which 2.1.259 also offers
+          // ("Install Claude Code native build"). The vendor installer is real
+          // and was considered: it is rejected because it is one install
+          // mechanism per vendor, where npm is one mechanism for every provider
+          // that ships to npm, and because it takes no prefix — so the
+          // directory agentplex installs into would stop being an argv element
+          // and start being wherever that installer decides, which is the
+          // property this whole seam is built on. It is also a chicken-and-egg
+          // path: it can only be run by a `claude` that is already installed.
           argv: {
             file: NPM_COMMAND,
             args: ['install', '--global', '--prefix', prefix.prefix, '--json', spec],
@@ -118,7 +142,11 @@ export function createClaudeProvisioning(): ProviderProvisioning {
     },
 
     authState(): AuthProbe {
-      return { file: CLAUDE_CREDENTIALS_FILE, read: readClaudeCredentials };
+      return {
+        argv: { file: CLAUDE_COMMAND, args: CLAUDE_AUTH_STATUS_ARGS },
+        timeoutMs: AUTH_TIMEOUT_MS,
+        read: readClaudeAuthStatus,
+      };
     },
 
     login(request: LoginRequest): Launch {
@@ -257,48 +285,46 @@ function readClaudeVersion(completed: CompletedProcess): OneShotRead<string> {
 }
 
 /**
- * The credentials file, read for whether it holds a credential and never for
- * what the credential is.
+ * One field out of the nine `claude auth status --json` prints.
  *
- * The `claudeAiOauth` object is the shape 2.1.259 writes, and the presence of
- * an access token in it is the whole question. Expiry is deliberately not
- * consulted: the same object carries a refresh token and Claude Code renews
- * itself, so an expired access token means a session that refreshes, not one
- * that needs a human. Reading expiry would also mean reading a clock, and this
- * has to stay a function of its argument.
- *
- * A missing file reads as logged out, and on a host where Claude Code keeps its
- * credentials in an OS keychain instead — macOS does — that answer is wrong in
- * the safe direction. It costs a login prompt to somebody who did not need one.
- * The other direction costs a session that will not start, reported as a spawn
- * failure with nothing pointing at the cause.
+ * The rest — the account's email, its organisation, its subscription tier, the
+ * projects directory — is deliberately not read. It is a format the provider
+ * owns and extends, so a parser that insisted on the whole shape would start
+ * refusing real output the next release, and none of those values is the
+ * question that was asked. `loggedIn` is.
  */
-function readClaudeCredentials(read: FileRead): AuthState {
-  if (read.kind === 'missing') return { kind: 'unauthenticated' };
-  if (read.kind === 'failed') {
-    return { kind: 'unknown', problem: `cannot read credentials: ${read.reason}` };
+const claudeAuthStatusSchema = z.object({ loggedIn: z.boolean() });
+
+/**
+ * Whether the provider says it is logged in.
+ *
+ * The exit code is read *after* the JSON and not before it, which is the whole
+ * subtlety here. Captured at the origin: 2.1.259 exits 1 while printing
+ * `{"loggedIn": false, "authMethod": "none", ...}` — logged out is an answer it
+ * gives and a status it reports as failure at the same time. A reader that
+ * refused on a nonzero exit, which is the obvious way to write this, would turn
+ * every logged-out provider into "the probe could not run" and lose the one
+ * fact setup exists to act on. `git status` exiting 128 on a directory that is
+ * simply not a repository is the same lesson from AGX-21.
+ *
+ * So: JSON that answers the question wins over the exit code, and the exit code
+ * only decides what to say when there is no answer in the output.
+ */
+function readClaudeAuthStatus(completed: CompletedProcess): OneShotRead<AuthState> {
+  const parsed = claudeAuthStatusSchema.safeParse(parseJson(completed.stdout));
+  if (parsed.success) {
+    return { ok: true, result: parsed.data.loggedIn ? 'authenticated' : 'unauthenticated' };
   }
 
-  const json = parseJson(read.contents);
-  if (json === undefined) {
-    return { kind: 'unknown', problem: 'the credentials file is not JSON' };
-  }
-
-  const parsed = claudeCredentialsSchema.safeParse(json);
-  // JSON that is not this shape is a format that changed under us, which is a
-  // thing to report rather than a logout to act on: a login driven against a
-  // provider that is already logged in is a needless prompt, and this is the
-  // case where nobody can tell which it would be.
-  if (!parsed.success) {
-    return { kind: 'unknown', problem: 'the credentials file holds no recognisable credential' };
-  }
-
-  return { kind: 'authenticated' };
+  // Nothing that answers the question. Not a logout: a `claude` that is not
+  // there, a wrapper in front of it, or a release that stopped printing this
+  // are all different facts, and reporting them as "logged out" would send an
+  // operator through a login that fails for the reason nobody named.
+  return {
+    ok: false,
+    problem: `${CLAUDE_COMMAND} did not report its authentication state: ${firstLine(completed.stderr) || firstLine(completed.stdout) || `it exited ${completed.exitCode}`}`,
+  };
 }
-
-const claudeCredentialsSchema = z.object({
-  claudeAiOauth: z.object({ accessToken: z.string().min(1) }),
-});
 
 function parseJson(text: string): unknown {
   try {
