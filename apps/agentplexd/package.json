@@ -13,10 +13,12 @@
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
     "start": "node dist/main.js",
+    "postinstall": "node scripts/fix-node-pty-permissions.js",
     "dev": "node --watch --experimental-strip-types src/main.ts"
   },
   "dependencies": {
     "@agentplex/protocol": "workspace:*",
+    "node-pty": "1.1.0",
     "pg": "^8.16.3",
     "ws": "^8.21.3",
     "zod": "^4.1.13"

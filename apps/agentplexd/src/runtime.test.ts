@@ -5,6 +5,8 @@ import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { createFakeProviderFiles } from './server/providers/fake-provider-files.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
+import { createFakePtyFactory } from './server/fake-pty.js';
+import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createFakeProcessProbe } from './server/fake-process-probe.js';
 import { createFakeStoreFiles } from './server/fake-store-files.js';
 import { createLogger, type LogRecord } from './shared/logger.js';
@@ -40,6 +42,14 @@ function dependencies(database = fakeHubDatabase(), storeFileSystem = createFake
     // registry with a real one in it would put a provider's disk layout into
     // every test here.
     providers: createProviderRegistry([]),
+    // A supervisor over a pty nothing ever opens: this file is about which
+    // halves start and stop, and a real one would fork a process per test.
+    sessions: createPtySupervisor({
+      pty: createFakePtyFactory(),
+      clock: { now: () => 1_756_000_000_000 },
+      ids,
+      environment: {},
+    }),
     clock: { now: () => 1_756_000_000_000 },
   };
 }

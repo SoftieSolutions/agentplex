@@ -3,6 +3,7 @@ import type { Database } from './hub/db/database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import type { ProviderRegistry } from './server/providers/provider-registry.js';
+import type { PtySupervisor } from './server/pty-supervisor.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { StoreFileSystem } from './server/store-identity.js';
 import type { Clock } from './shared/clock.js';
@@ -34,6 +35,12 @@ export interface RuntimeDependencies {
    * drive" is one visible line in the entrypoint.
    */
   readonly providers: ProviderRegistry;
+  /**
+   * The supervisor the server role starts sessions on. Injected for the same
+   * reason the providers are: a test starts the whole runtime without forking
+   * anything, and the one place a real pty is opened stays visible in `main`.
+   */
+  readonly sessions: PtySupervisor;
   readonly clock: Clock;
 }
 
@@ -55,6 +62,7 @@ export async function startRuntime(
     migrationFileSystem,
     storeFileSystem,
     providers,
+    sessions,
     clock,
   } = dependencies;
   // The interface to bind is a setting like any other, so it arrives with the
@@ -89,6 +97,7 @@ export async function startRuntime(
         storePaths: config.server.storePaths,
         storeFileSystem,
         providers,
+        sessions,
         clock,
       });
     }

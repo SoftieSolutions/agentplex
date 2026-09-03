@@ -14,9 +14,12 @@ import type {
   Launch,
   ProviderAdapter,
   ProviderDiscovery,
+  ResumeRequest,
+  SpawnRequest,
   StatusObservation,
 } from './provider-adapter.js';
 import type { ProviderFiles } from './provider-files.js';
+import { parseWorkingDirectory } from './working-directory.js';
 
 /**
  * The Claude Code adapter.
@@ -82,12 +85,19 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
       return { sessions: found.sessions, problems: [...registry.problems, ...found.problems] };
     },
 
-    spawn(): Launch {
-      return { ok: false, problem: NO_WORKING_DIRECTORY };
+    spawn(request: SpawnRequest): Launch {
+      // No session id anywhere in here. Claude Code mints its own and writes
+      // it to disk; discovery finds it moments later. Naming it up front would
+      // mean `--session-id`, and agentplex would be deciding an identity the
+      // provider is the authority on.
+      return planFor(request.store, request.cwd, request.prompt === null ? [] : [request.prompt]);
     },
 
-    resume(): Launch {
-      return { ok: false, problem: NO_WORKING_DIRECTORY };
+    resume(request: ResumeRequest): Launch {
+      // `--resume <id>`, and nothing else. Not `--fork-session`, which gives
+      // the resumed session a new id: the client goes on watching the
+      // transcript it knows while the work continues in a file nobody reads.
+      return planFor(request.store, request.cwd, ['--resume', request.session.sessionId]);
     },
 
     status(observation: StatusObservation): SessionStatus {
@@ -96,21 +106,64 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
   };
 }
 
+/** The executable, looked up on PATH by the supervisor. Never a shell string. */
+const CLAUDE_COMMAND = 'claude';
+
 /**
- * Why there is no launch plan yet, said once.
+ * The variables that must not reach a Claude Code child.
  *
- * Claude Code inherits its working directory from the process that starts it,
- * and neither `SpawnRequest` nor `ResumeRequest` carries one. The store path is
- * not a substitute: for this provider the store is the config directory that
- * v1 hardwired as `~/.claude`, and starting an agent with that as its cwd
- * would point it at the provider's own state directory — the one place the
- * spec forbids agentplex to write into. A refusal that names the gap is a
- * better answer than argv invented to fill it, and `Launch` exists to carry
- * exactly this.
+ * `CLAUDE` catches `CLAUDECODE` and the `CLAUDE_CODE_*` family, which is the
+ * set an agentplexd started *from inside* a Claude Code session inherits. A
+ * child that sees them concludes it is a nested run and stops writing a
+ * transcript — and a transcript is the only thing discovery reads, so the
+ * session runs perfectly and agentplex never sees it again. Nothing errors,
+ * which is what makes it worth a named constant and a test.
+ *
+ * `AI_AGENT` is the same class of marker from the other direction: tools set it
+ * to say "an agent is driving", and a child that inherits one changes its own
+ * behaviour on a fact about its grandparent.
+ *
+ * They live here rather than in the supervisor because they are provider
+ * knowledge: `CLAUDE_` means nothing to codex, and a supervisor with a
+ * hardcoded list would need editing for every adapter that lands.
  */
-const NO_WORKING_DIRECTORY =
-  'the Claude adapter cannot build a launch plan yet: a request carries no working directory ' +
-  'for the session, and a store path is a config directory rather than a place to run an agent';
+const CLAUDE_SCRUB_PREFIXES: readonly string[] = ['CLAUDE', 'AI_AGENT'];
+
+/**
+ * Where Claude Code keeps the state this adapter reads.
+ *
+ * The store *is* the config directory — `<store>/projects` and
+ * `<store>/sessions` are exactly the layout of a `~/.claude` — so a child that
+ * is not told about it writes its transcript into whichever home directory
+ * agentplexd is running as, and the store the session was started in never
+ * hears about it. Set after the scrub, deliberately: `CLAUDE_CONFIG_DIR` is
+ * inside a scrubbed prefix, and the supervisor applying a plan's variables
+ * last is what makes an adapter able to state one on purpose.
+ */
+const CLAUDE_CONFIG_DIR = 'CLAUDE_CONFIG_DIR';
+
+/**
+ * One place both launches are built, because the difference between them is
+ * argv and nothing else. Everything a launch can be refused for — a directory
+ * that is not absolute, one inside the store, a session the provider never
+ * recorded a directory for — is the working directory, and it is parsed rather
+ * than trusted whether it came from a caller or out of a transcript.
+ */
+function planFor(store: StoreDescriptor, cwd: string | null, args: readonly string[]): Launch {
+  const workingDirectory = parseWorkingDirectory(cwd, store);
+  if (!workingDirectory.ok) return { ok: false, problem: workingDirectory.problem };
+
+  return {
+    ok: true,
+    plan: {
+      command: CLAUDE_COMMAND,
+      args,
+      cwd: workingDirectory.cwd,
+      env: { [CLAUDE_CONFIG_DIR]: store.path },
+      scrubEnvPrefixes: CLAUDE_SCRUB_PREFIXES,
+    },
+  };
+}
 
 async function discoverSessions(
   projects: string,

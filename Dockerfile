@@ -19,8 +19,21 @@ RUN corepack enable && corepack install
 # Manifests before sources: the install layer is then reused across every edit
 # that does not touch a dependency.
 FROM base AS manifests
+# node-pty is a native addon and ships prebuilt binaries for macOS and Windows
+# only, so on Linux it is compiled at install time and node-gyp needs a
+# toolchain. This image has none: without these, `pnpm install` fails on a
+# missing python3 in a stage that has nothing to do with node-pty. They stay in
+# this stage and never reach the runtime image, which copies the compiled
+# result rather than building anything.
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/agentplexd/package.json ./apps/agentplexd/
+# The install runs agentplexd's postinstall, which repairs the executable bit
+# on node-pty's spawn helper, so the script has to be here before the install
+# and not arrive later with the sources.
+COPY apps/agentplexd/scripts ./apps/agentplexd/scripts
 COPY apps/web/package.json ./apps/web/
 COPY packages/protocol/package.json ./packages/protocol/
 

@@ -5,10 +5,12 @@ import { createPostgresDatabase } from './hub/db/postgres.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { startRuntime } from './runtime.js';
 import { nodeProcessProbe } from './server/node-process-probe.js';
+import { nodePtyFactory } from './server/node-pty-factory.js';
 import { nodeStoreFileSystem } from './server/node-store-files.js';
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { nodeProviderFiles } from './server/providers/node-provider-files.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
+import { createPtySupervisor } from './server/pty-supervisor.js';
 import { systemClock } from './shared/clock.js';
 import { randomIdGenerator } from './shared/ids.js';
 import { createLogger, jsonLineSink } from './shared/logger.js';
@@ -58,6 +60,15 @@ async function main(): Promise<void> {
       providers: createProviderRegistry([
         createClaudeAdapter({ files: nodeProviderFiles, probe: nodeProcessProbe }),
       ]),
+      // The only place a real pty is opened, and the only place `process.env`
+      // is read as the environment a child inherits. What gets scrubbed out of
+      // it is each adapter's call, carried on its launch plan.
+      sessions: createPtySupervisor({
+        pty: nodePtyFactory,
+        clock: systemClock,
+        ids: randomIdGenerator,
+        environment: process.env,
+      }),
       clock: systemClock,
     });
   } catch (error) {

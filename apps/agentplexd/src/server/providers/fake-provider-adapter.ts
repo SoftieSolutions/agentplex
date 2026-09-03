@@ -82,7 +82,7 @@ export function createFakeProviderAdapter(
         plan: {
           command: provider,
           args: request.prompt === null ? [] : [request.prompt],
-          cwd: request.store.path,
+          cwd: request.cwd,
           env: {},
           scrubEnvPrefixes: [],
         },
@@ -90,12 +90,18 @@ export function createFakeProviderAdapter(
     },
 
     resume(request: ResumeRequest): Launch {
+      // A made-up provider that records no cwd is exactly the case the seam
+      // has to keep expressible: discovery reports `null` and the only honest
+      // answer is a refusal.
+      if (request.cwd === null) {
+        return { ok: false, problem: 'this session has no working directory to run in' };
+      }
       return {
         ok: true,
         plan: {
           command: provider,
           args: ['--resume', request.session.sessionId],
-          cwd: request.store.path,
+          cwd: request.cwd,
           env: {},
           scrubEnvPrefixes: [],
         },
