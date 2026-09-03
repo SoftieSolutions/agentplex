@@ -4,6 +4,7 @@ import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import type { OperationRegistry } from './server/operations/operation-registry.js';
 import type { ProviderRegistry } from './server/providers/provider-registry.js';
+import type { TokenMinter } from './server/server-identity.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { TerminalManager } from './server/terminal-manager.js';
 import type { StoreFileSystem } from './server/store-identity.js';
@@ -27,6 +28,15 @@ export interface RuntimeDependencies {
   readonly migrationFileSystem: MigrationFileSystem;
   /** The store volumes, injected for the same reason the migrations directory is. */
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * Where the server role's pairing token comes from on a first start.
+   *
+   * Injected rather than imported for the reason the id source is, and one
+   * more: a test that asserts on a handshake needs to know the token, and a
+   * seam is how it does that without the entropy being weaker in the build
+   * anyone actually runs.
+   */
+  readonly tokens: TokenMinter;
   /**
    * The provider adapters this process runs with.
    *
@@ -73,6 +83,7 @@ export async function startRuntime(
     migrationsDirectory,
     migrationFileSystem,
     storeFileSystem,
+    tokens,
     providers,
     terminals,
     operations,
@@ -110,6 +121,8 @@ export async function startRuntime(
         port: config.server.port,
         storePaths: config.server.storePaths,
         storeFileSystem,
+        identityPath: config.server.identityPath,
+        tokens,
         providers,
         terminals,
         operations,

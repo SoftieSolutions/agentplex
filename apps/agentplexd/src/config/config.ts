@@ -53,6 +53,23 @@ export interface ServerConfig {
    * and never a path holds without an exception carved out for configuration.
    */
   readonly binPath: readonly string[];
+
+  /**
+   * Where this server keeps its own identity: its `serverId` and the pairing
+   * token the user types into the hub.
+   *
+   * Required, and absolute, for the reason the store paths are: this file is
+   * the difference between a server the hub recognises and one it has never
+   * met, and a path resolved against whatever directory a unit file or a
+   * container image happened to leave the process in would silently become a
+   * different file — at which point the server mints a new identity, the
+   * pairing stops working, and nothing says why.
+   *
+   * There is no default. A location this consequential is a deployment
+   * decision, and a default would be picked once, by accident, on the machine
+   * where it happened to work.
+   */
+  readonly identityPath: string;
   /**
    * How many terminals this server may hold at once.
    *
@@ -114,6 +131,10 @@ const DEFAULT_HOST = '0.0.0.0';
 const MISSING_DATABASE_FILE =
   'the hub role needs a database: set AGENTPLEX_DATABASE_FILE or pass --database-file';
 
+const MISSING_IDENTITY_FILE =
+  'the server role needs somewhere to keep its identity and pairing token: ' +
+  'set AGENTPLEX_SERVER_IDENTITY_FILE or pass --server-identity-file (an absolute path)';
+
 /**
  * Each setting has one flag and one env var. Flags win, because a flag is
  * typed by a person at the moment they mean it and an env var is inherited.
@@ -134,6 +155,10 @@ const SETTINGS = {
   storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
   /** Repeatable, and ordered: the first directory holding a program wins. */
   binPath: { flag: '--bin-path', env: 'AGENTPLEX_BIN_PATH' },
+  serverIdentityFile: {
+    flag: '--server-identity-file',
+    env: 'AGENTPLEX_SERVER_IDENTITY_FILE',
+  },
   terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
 } as const;
 
@@ -217,17 +242,59 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   const databaseFile = readDatabaseFile(read(SETTINGS.databaseFile), role, problems);
 
+  const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), role, problems);
+
   if (role === undefined || problems.length > 0) return { ok: false, problems };
 
-  const server: ServerConfig = { port: serverPort, storePaths, binPath, terminalCap };
+  // Each role is assembled from exactly the settings it has, which is what the
+  // `Config` union is for: there is no server half to give an identity file to
+  // in `--role=hub`, and no database file to read in `--role=server`.
+  if (role === 'hub') {
+    if (databaseFile === undefined) return { ok: false, problems: [MISSING_DATABASE_FILE] };
+    return { ok: true, config: { role, logLevel, host, hub: { port: hubPort, databaseFile } } };
+  }
+
+  if (identityPath === undefined) return { ok: false, problems: [MISSING_IDENTITY_FILE] };
+  const server: ServerConfig = {
+    port: serverPort,
+    storePaths,
+    binPath,
+    identityPath,
+    terminalCap,
+  };
   if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
 
   if (databaseFile === undefined) return { ok: false, problems: [MISSING_DATABASE_FILE] };
   const hub: HubConfig = { port: hubPort, databaseFile };
+  return { ok: true, config: { role, logLevel, host, hub, server } };
+}
 
-  return role === 'hub'
-    ? { ok: true, config: { role, logLevel, host, hub } }
-    : { ok: true, config: { role, logLevel, host, hub, server } };
+/**
+ * The identity file path, required by every role that runs a session server.
+ *
+ * Absolute for the reason the store paths are, and with more at stake: a
+ * relative path is resolved against whatever directory the process was left
+ * in, so the same command run from two places is two identities, two tokens,
+ * and a pairing that works from one shell and not the other.
+ */
+function readIdentityPath(
+  raw: string | undefined,
+  role: Role | undefined,
+  problems: string[],
+): string | undefined {
+  if (role === undefined || role === 'hub') return undefined;
+
+  if (raw === undefined) {
+    problems.push(MISSING_IDENTITY_FILE);
+    return undefined;
+  }
+  if (!isAbsolute(raw)) {
+    problems.push(
+      `${SETTINGS.serverIdentityFile.flag} must be an absolute path, not ${JSON.stringify(raw)}`,
+    );
+    return undefined;
+  }
+  return resolve(raw);
 }
 
 /** The flags this build understands, for a usage message. */

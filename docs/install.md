@@ -57,16 +57,17 @@ Every setting the process reads has one flag and one environment variable, and
 the flag wins, because a flag is typed by a person at the moment they mean it
 and an environment variable is inherited.
 
-| Flag              | Environment               | Default        | Meaning                                                                           |
-| ----------------- | ------------------------- | -------------- | --------------------------------------------------------------------------------- |
-| `--role`          | `AGENTPLEX_ROLE`          | none, required | `hub`, `server` or `both`                                                         |
-| `--host`          | `AGENTPLEX_HOST`          | `0.0.0.0`      | Interface to bind                                                                 |
-| `--hub-port`      | `AGENTPLEX_HUB_PORT`      | `8080`         | Port the hub serves on                                                            |
-| `--server-port`   | `AGENTPLEX_SERVER_PORT`   | `8081`         | Port the hub dials                                                                |
-| `--database-file` | `AGENTPLEX_DATABASE_FILE` | none           | SQLite file, absolute; required for `hub`, `both`                                 |
-| `--store-path`    | `AGENTPLEX_STORE_PATH`    | none           | A store root, absolute; repeat the flag per store                                 |
-| `--bin-path`      | `AGENTPLEX_BIN_PATH`      | none           | A directory to resolve agent binaries in, absolute; repeat the flag per directory |
-| `--log-level`     | `AGENTPLEX_LOG_LEVEL`     | `info`         | `debug`, `info`, `warn`, `error`                                                  |
+| Flag                     | Environment                      | Default        | Meaning                                                                           |
+| ------------------------ | -------------------------------- | -------------- | --------------------------------------------------------------------------------- |
+| `--role`                 | `AGENTPLEX_ROLE`                 | none, required | `hub`, `server` or `both`                                                         |
+| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`      | Interface to bind                                                                 |
+| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`         | Port the hub serves on                                                            |
+| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`         | Port the hub dials                                                                |
+| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none           | SQLite file, absolute; required for `hub`, `both`                                 |
+| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none           | A store root, absolute; repeat the flag per store                                 |
+| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none           | Absolute path to this server's identity; required for `server`, `both`            |
+| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none           | A directory to resolve agent binaries in, absolute; repeat the flag per directory |
+| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`         | `debug`, `info`, `warn`, `error`                                                  |
 
 A container is reached from outside its own loopback, so `0.0.0.0` is the
 default that suits one; on a laptop, `--host=127.0.0.1` is often what you want.
@@ -123,6 +124,50 @@ something on this machine terminates TLS — Caddy, `tailscale serve`, a reverse
 proxy — because in every one of those cases the hub's plain HTTP port has no
 business being reachable from the network. Widening it to `0.0.0.0` serves
 unencrypted HTTP to anyone who can route to the host.
+
+## Pairing a server with the hub
+
+> The server half of this is wired today: a server mints its identity, listens,
+> and completes the handshake. The hub side is the connection supervisor and the
+> pairing screen, which arrive with the client; until then there is nothing to
+> type the token into.
+
+`--server-identity-file` is where a server keeps the two facts it must not lose
+across a restart: the `serverId` the hub knows it by, and the token that admits
+a hub. Both are minted on first start, into a file the server creates and never
+overwrites. Point it somewhere durable — a bind-mounted path in a container, a
+real path under `/etc` or the user's home on bare metal. A relative path is
+refused, because it would resolve against whatever directory the process was
+left in, and a server that reads a different file mints a second identity and
+silently stops matching the pairing you made.
+
+Pairing is the token out of that file, typed into the hub with the server's
+address:
+
+```sh
+cat /etc/agentplexd/server.json    # {"serverId": "...", "token": "..."}
+```
+
+The token is never logged; the server logs only the path, because a secret in a
+log file is one that has to be rotated. Pairing is always this — the user typing
+that server's token into the hub. LAN discovery, when it arrives, pre-fills the
+address and nothing else: being heard on a network is nowhere near being trusted
+by it.
+
+Tokens are per server, so revoking one instance touches no other. If a server
+loses its identity file it comes back as a machine the hub has never met, and
+you pair it again.
+
+The hub dials the server; a server dials out to nothing. So a server needs one
+inbound port reachable by the hub — the same `--server-port` that answers
+`/health` also carries the hub's websocket — and no outbound rule at all. TLS is
+terminated in front of the process (the bundled Caddy, an existing reverse
+proxy, or a Tailscale/WireGuard route), which is why the address you type must
+be `wss://`: the token travels on that socket.
+
+The hub and the server must speak the same protocol version, compared exactly.
+A mismatch is refused at the handshake and named, rather than becoming a
+connection where neither end knows which fields the other understood.
 
 ## The image
 
@@ -205,13 +250,22 @@ git clone https://github.com/SoftieSolutions/agentplex.git
 cd agentplex
 pnpm install
 pnpm build
-node apps/agentplexd/dist/main.js --role=server --server-port=8081
+mkdir -p ~/.agentplexd
+node apps/agentplexd/dist/main.js \
+  --role=server \
+  --server-port=8081 \
+  --server-identity-file="$HOME/.agentplexd/server.json"
 ```
 
-It holds no database and needs no configuration beyond its port. It dials out
-to nothing; the hub dials it, so the one requirement is that the hub can reach
-that port — over a LAN, a tailnet, a VPN, or an SSH tunnel. How the route
-exists is deployment, not protocol.
+It holds no database. The identity file is the one piece of state it keeps, and
+it has to outlive a restart: the first start mints the `serverId` and the
+pairing token into it, and every later start reads them back. See
+[Pairing a server with the hub](#pairing-a-server-with-the-hub).
+
+It dials out to nothing; the hub dials it, so the one requirement is that the
+hub can reach that port — over a LAN, a tailnet, a VPN, or an SSH tunnel. How
+the route exists is deployment, not protocol. The hub dials `wss://`, so
+whatever terminates TLS in front of the process is part of that route.
 
 To keep it running across reboots, hand it to whatever the machine already
 uses: `launchd` on macOS, a systemd user unit on Linux. Both stop a service

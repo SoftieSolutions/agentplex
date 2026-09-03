@@ -3,9 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig, usage, type ConfigResult } from './config.js';
 
 const DATABASE_FILE = '/var/lib/agentplex/agentplex.db';
+const IDENTITY_FILE = '/etc/agentplexd/server.json';
 
+/**
+ * Every server-role case needs an identity file, the way every hub-role case
+ * needs a database url.
+ *
+ * It is supplied through the environment rather than written into each argv so
+ * that a test about the terminal cap stays a test about the terminal cap. A
+ * caller's own env wins, and the block that is actually about this setting
+ * calls `loadConfig` directly so it can leave it out.
+ */
 function load(argv: string[], env: Record<string, string | undefined> = {}): ConfigResult {
-  return loadConfig({ argv, env });
+  return loadConfig({ argv, env: { AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE, ...env } });
 }
 
 function expectProblems(result: ConfigResult): readonly string[] {
@@ -303,6 +313,58 @@ describe('loadConfig terminal cap', () => {
   it('refuses a cap that is not a whole number of terminals', () => {
     expect(expectProblems(load(['--role=server', '--terminal-cap=lots']))).toHaveLength(1);
     expect(expectProblems(load(['--role=server', '--terminal-cap=2.5']))).toHaveLength(1);
+  });
+});
+
+describe('loadConfig server identity file', () => {
+  /** Deliberately not the helper above: these cases are about its absence. */
+  function loadBare(argv: string[], env: Record<string, string | undefined> = {}): ConfigResult {
+    return loadConfig({ argv, env });
+  }
+
+  function identityPath(argv: string[], env: Record<string, string | undefined> = {}) {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok && 'server' in result.config ? result.config.server.identityPath : undefined;
+  }
+
+  it('requires one for the server role', () => {
+    const problems = expectProblems(loadBare(['--role=server']));
+    expect(problems[0]).toContain('AGENTPLEX_SERVER_IDENTITY_FILE');
+  });
+
+  it('requires one for the both role, which runs a server half', () => {
+    const problems = expectProblems(loadBare(['--role=both', `--database-file=${DATABASE_FILE}`]));
+    expect(problems[0]).toContain('AGENTPLEX_SERVER_IDENTITY_FILE');
+  });
+
+  it('does not ask the hub role for one, because a hub has no identity file', () => {
+    const result = loadBare(['--role=hub', `--database-file=${DATABASE_FILE}`]);
+    expect(result).toMatchObject({ ok: true, config: { role: 'hub' } });
+  });
+
+  it('reads it from a flag', () => {
+    expect(identityPath(['--role=server', '--server-identity-file=/srv/id.json'])).toBe(
+      '/srv/id.json',
+    );
+  });
+
+  it('reads it from the environment, which is all a container is configured with', () => {
+    expect(identityPath(['--role=server'])).toBe(IDENTITY_FILE);
+  });
+
+  it('refuses a relative path, which would be a different file per working directory', () => {
+    // The failure this prevents is silent: a server started from elsewhere
+    // mints a second identity, and the pairing the user completed stops
+    // working with nothing anywhere saying why.
+    const problems = expectProblems(load(['--role=server', '--server-identity-file=server.json']));
+    expect(problems[0]).toContain('absolute path');
+  });
+
+  it('normalizes the path it was given', () => {
+    expect(identityPath(['--role=server', '--server-identity-file=/srv/../srv/id.json'])).toBe(
+      '/srv/id.json',
+    );
   });
 });
 
