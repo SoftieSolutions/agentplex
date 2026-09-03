@@ -51,14 +51,14 @@ architecture: its decisions are requirements, and each records why.
 - A postinstall script runs only for packages listed in `allowBuilds` in
   `pnpm-workspace.yaml`. Adding one grants that package arbitrary code execution
   at install; do it deliberately.
-- No barrel files, no circular dependencies. Export what is needed.
+- No internal barrel files (a package entry point is not one), no cycles.
 
 ## GIT DIRECTIVES
 
 - `master` is the main branch.
 - One ticket per branch, one branch per pull request. Never commit to `master`.
-- Every task gets its own worktree, cut before the first edit. They live in
-  `.claude/worktrees/`, which is gitignored.
+- Every task gets its own worktree, cut before the first edit. They live where
+  `.claude/settings.json` points, which is outside this repository.
 - A fresh worktree has no `node_modules`: run `pnpm install` in it before
   testing, or the first run fails on something unrelated-looking.
 - When tickets form a dependency chain, stack the pull requests — each based on
