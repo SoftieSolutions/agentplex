@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { delimiter } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { childEnvironment } from '../config/child-environment.js';
 import { systemClock } from '../shared/clock.js';
 import { randomIdGenerator } from '../shared/ids.js';
 import { nodePtyFactory } from './node-pty-factory.js';
-import { createPtySupervisor, type PtyRun } from './pty-supervisor.js';
+import { createProbeProgram } from './probe-program.js';
+import { createPtySupervisor, type PtyRun, type PtySupervisor } from './pty-supervisor.js';
 import type { Launch } from './providers/provider-adapter.js';
 
 /**
@@ -174,6 +177,115 @@ describe('nodePtyFactory', () => {
       await output(run);
 
       expect(run.exit).not.toBeNull();
+    },
+    CHILD_TIMEOUT_MS,
+  );
+});
+
+/**
+ * The same claim as in the process runner's integration test, on the seam that
+ * actually starts a coding agent.
+ *
+ * This is the one that matters for `CLAUDE_COMMAND`: it stays the bare name
+ * `claude`, and what turns that name into a binary is the recorded directory
+ * list rather than the PATH systemd happened to hand the unit. Where a test
+ * needs to prove nothing else could have supplied the program, the inherited
+ * PATH is empty, so a child that starts at all resolved through `binPath`.
+ *
+ * And the other half, which is what a session actually depends on: the tools
+ * the agent itself runs are still on the far side of those directories.
+ */
+describe('nodePtyFactory with a configured binPath', () => {
+  const probe = createProbeProgram();
+  // What the machine already had: on this seam it stands for `git`, `rg` and
+  // everything else a coding agent shells out to during a session.
+  const tool = createProbeProgram('agentplex-tool');
+  afterAll(() => {
+    probe.remove();
+    tool.remove();
+  });
+
+  function launchNamed(command: string): Launch {
+    return {
+      ok: true,
+      plan: {
+        command,
+        args: ['-e', 'process.stdout.write(`PATH=${process.env.PATH}\\n`)'],
+        cwd: process.cwd(),
+        env: {},
+        scrubEnvPrefixes: [],
+      },
+    };
+  }
+
+  function launchProbe(): Launch {
+    return launchNamed(probe.name);
+  }
+
+  function supervisorFor(binPath: readonly string[], inheritedPath = ''): PtySupervisor {
+    return createPtySupervisor({
+      pty: nodePtyFactory,
+      clock: systemClock,
+      ids: randomIdGenerator,
+      environment: childEnvironment({ inherited: { PATH: inheritedPath }, binPath }),
+    });
+  }
+
+  it(
+    'starts a bare program name found in a configured directory',
+    async () => {
+      const started = supervisorFor([probe.directory]).launch(launchProbe());
+
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+      // And the child's own PATH is the configured list, read from inside it.
+      expect(await output(started.run)).toContain(`PATH=${probe.directory}`);
+    },
+    CHILD_TIMEOUT_MS,
+  );
+
+  it(
+    'still starts a program that exists only on the inherited PATH',
+    async () => {
+      // A session is not just the agent binary. Claude Code shells out to
+      // `git`, `rg`, `node` and whatever the operator's project needs, all
+      // resolved from this same PATH, and none of them is in a provider
+      // directory. With PATH replaced rather than prepended this child would
+      // not start — and, per the test below, would not report why either.
+      const started = supervisorFor([probe.directory], tool.directory).launch(
+        launchNamed(tool.name),
+      );
+
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+
+      const printed = await output(started.run);
+
+      expect(printed).toContain(`PATH=${[probe.directory, tool.directory].join(delimiter)}`);
+      expect(started.run.exit).toEqual({ exitCode: 0, signal: null });
+    },
+    CHILD_TIMEOUT_MS,
+  );
+
+  it(
+    'runs nothing when no directory holds the program, which is what makes the above about binPath',
+    async () => {
+      const started = supervisorFor([]).launch(launchProbe());
+
+      // The control, and a fact worth writing down: on a pty the fork itself
+      // succeeds and the failure to resolve happens on the far side of it, so
+      // this arrives as a session that ends immediately rather than as a
+      // refusal a caller could read. That is precisely the shape the spec
+      // opened with — `ENOENT` reported as "the machine said no", with nothing
+      // pointing at the cause — and it is why resolution has to be decided by
+      // configuration rather than discovered at spawn time.
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+
+      const printed = await output(started.run);
+
+      expect(printed).not.toContain('PATH=');
+      expect(started.run.exit?.exitCode).not.toBe(0);
     },
     CHILD_TIMEOUT_MS,
   );

@@ -39,6 +39,21 @@ export interface ServerConfig {
    */
   readonly storePaths: readonly string[];
   /**
+   * The directories a spawned program is looked for in, absolute, in search
+   * order, and deduplicated.
+   *
+   * Empty is legal and means what it always meant: the child inherits this
+   * process's PATH. Recorded directories are searched ahead of it, which is
+   * what makes a bare program name resolve the same under systemd as in the
+   * operator's shell — while leaving the machine's own tools reachable, since
+   * `git`, `ps` and everything a session shells out to come from there.
+   *
+   * Directories, never binaries. `CLAUDE_COMMAND` stays the bare name
+   * `claude`, so the operation registry's rule that a program name is a name
+   * and never a path holds without an exception carved out for configuration.
+   */
+  readonly binPath: readonly string[];
+  /**
    * How many terminals this server may hold at once.
    *
    * Configuration rather than a constant because it is a statement about the
@@ -115,8 +130,10 @@ const SETTINGS = {
   hubPort: { flag: '--hub-port', env: 'AGENTPLEX_HUB_PORT' },
   serverPort: { flag: '--server-port', env: 'AGENTPLEX_SERVER_PORT' },
   databaseFile: { flag: '--database-file', env: 'AGENTPLEX_DATABASE_FILE' },
-  /** The one repeatable setting: a server may mount more than one store. */
+  /** Repeatable: a server may mount more than one store. */
   storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
+  /** Repeatable, and ordered: the first directory holding a program wins. */
+  binPath: { flag: '--bin-path', env: 'AGENTPLEX_BIN_PATH' },
   terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
 } as const;
 
@@ -182,9 +199,17 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
     problems,
   );
 
-  const storePaths = readStorePaths(
+  const storePaths = readAbsolutePaths(
+    SETTINGS.storePath,
     flags.values.get(SETTINGS.storePath.flag),
     env[SETTINGS.storePath.env],
+    problems,
+  );
+
+  const binPath = readAbsolutePaths(
+    SETTINGS.binPath,
+    flags.values.get(SETTINGS.binPath.flag),
+    env[SETTINGS.binPath.env],
     problems,
   );
 
@@ -194,7 +219,7 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   if (role === undefined || problems.length > 0) return { ok: false, problems };
 
-  const server: ServerConfig = { port: serverPort, storePaths, terminalCap };
+  const server: ServerConfig = { port: serverPort, storePaths, binPath, terminalCap };
   if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
 
   if (databaseFile === undefined) return { ok: false, problems: [MISSING_DATABASE_FILE] };
@@ -363,20 +388,24 @@ function readPort(
 }
 
 /**
- * Store roots, from repeated flags or from one delimiter-separated env var.
+ * An ordered list of absolute directories, from repeated flags or from one
+ * delimiter-separated env var. Both list settings are this: the store roots to
+ * watch, and the directories to resolve a program in.
  *
  * Flags replace the environment rather than adding to it, for the same reason
- * they win everywhere else: a person listing stores on a command line is
- * saying which stores, not which extra ones. The env var takes a `PATH`-shaped
+ * they win everywhere else: a person listing directories on a command line is
+ * saying which ones, not which extra ones. The env var takes a `PATH`-shaped
  * list because a container is configured with environment and nothing else,
  * and mounting two volumes must not require rewriting the command.
  *
  * A relative path is refused rather than resolved: it would mean whatever
  * directory the unit file, the shell, or the container image happened to leave
- * the process in, and a store that moves when the working directory moves is a
- * store whose identity file is somewhere nobody meant.
+ * the process in. A store that moves when the working directory moves is a
+ * store whose identity file is somewhere nobody meant, and a bin directory
+ * that moves is the silent resolution failure this list exists to end.
  */
-function readStorePaths(
+function readAbsolutePaths(
+  setting: { readonly flag: string },
   flagValues: readonly string[] | undefined,
   envValue: string | undefined,
   problems: string[],
@@ -389,22 +418,20 @@ function readStorePaths(
     const trimmed = candidate.trim();
     if (trimmed.length === 0) {
       // An empty segment in the env var is a trailing delimiter, which is a
-      // typo with an obvious meaning. `--store-path=` is a person asking for
-      // something that does not exist, and gets told so.
-      if (fromFlags) problems.push(`${SETTINGS.storePath.flag} needs a path`);
+      // typo with an obvious meaning. A flag given no value is a person asking
+      // for something that does not exist, and gets told so.
+      if (fromFlags) problems.push(`${setting.flag} needs a path`);
       continue;
     }
 
     if (!isAbsolute(trimmed)) {
-      problems.push(
-        `${SETTINGS.storePath.flag} must be an absolute path, not ${JSON.stringify(trimmed)}`,
-      );
+      problems.push(`${setting.flag} must be an absolute path, not ${JSON.stringify(trimmed)}`);
       continue;
     }
 
     // `resolve` on an already-absolute path never consults the working
     // directory; it collapses `..` and a trailing separator so that the same
-    // volume spelled two ways is reported once rather than twice.
+    // directory spelled two ways is listed once rather than twice.
     const normalized = resolve(trimmed);
     if (!paths.includes(normalized)) paths.push(normalized);
   }

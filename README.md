@@ -93,6 +93,7 @@ Every setting has one flag and one environment variable; the flag wins.
 | `--server-port`   | `AGENTPLEX_SERVER_PORT`   | `8081`         | Port the hub dials                                   |
 | `--database-file` | `AGENTPLEX_DATABASE_FILE` | none           | SQLite file, absolute; required for `hub` and `both` |
 | `--store-path`    | `AGENTPLEX_STORE_PATH`    | none           | Store root; repeatable, absolute                     |
+| `--bin-path`      | `AGENTPLEX_BIN_PATH`      | none           | Agent directory, searched before `PATH`; repeatable  |
 | `--terminal-cap`  | `AGENTPLEX_TERMINAL_CAP`  | `8`            | Terminals held at once; at least 1                   |
 | `--log-level`     | `AGENTPLEX_LOG_LEVEL`     | `info`         | `debug`, `info`, `warn`, `error`                     |
 

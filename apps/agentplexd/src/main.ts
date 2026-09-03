@@ -1,5 +1,6 @@
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { childEnvironment } from './config/child-environment.js';
 import { loadConfig, usage } from './config/config.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { createSqliteDatabase } from './hub/db/sqlite.js';
@@ -49,11 +50,20 @@ async function main(): Promise<void> {
   const config = loaded.config;
   const logger = createLogger(config.logLevel, jsonLineSink(write, systemClock));
 
-  // The one place a one-shot child is started, and the second of the two places
-  // this process's own environment is read as something a child inherits (the
-  // pty supervisor below is the other). Every operation shares it, so what a
-  // child inherits is decided here and cannot be added to further down.
-  const processRunner = createNodeProcessRunner({ environment: process.env });
+  // What every child of this process gets, composed once: what agentplexd
+  // inherited, with the configured directories ahead of its PATH. Both spawn
+  // seams below take it at construction, so nothing downstream has an
+  // environment to read or a variable to add — and a hub-only process, which
+  // has no server half to configure, keeps inheriting exactly as before.
+  const environment = childEnvironment({
+    inherited: process.env,
+    binPath: 'server' in config ? config.server.binPath : [],
+  });
+
+  // The one place a one-shot child is started. Every operation shares this
+  // runner, so what a child inherits is decided above and cannot be added to
+  // further down.
+  const processRunner = createNodeProcessRunner({ environment });
 
   let runtime;
   try {
@@ -75,9 +85,10 @@ async function main(): Promise<void> {
       // Closed: the operations are a list in that module, and there is no
       // parameter here through which a build could add one.
       operations: createOperationRegistry(processRunner),
-      // The only place a real pty is opened, and the only place `process.env`
-      // is read as the environment a child inherits. What gets scrubbed out of
-      // it is each adapter's call, carried on its launch plan.
+      // The only place a real pty is opened. It is handed the same composed
+      // environment as the one-shot runner, so a provider binary resolves the
+      // same way whether it is being probed or driven. What gets scrubbed out
+      // of it is each adapter's call, carried on its launch plan.
       //
       // The cap is spread rather than passed as possibly-undefined: the
       // workspace is on `exactOptionalPropertyTypes`, so an absent property is
@@ -88,7 +99,7 @@ async function main(): Promise<void> {
           pty: nodePtyFactory,
           clock: systemClock,
           ids: randomIdGenerator,
-          environment: process.env,
+          environment,
         }),
         clock: systemClock,
         ...('server' in config ? { cap: config.server.terminalCap } : {}),

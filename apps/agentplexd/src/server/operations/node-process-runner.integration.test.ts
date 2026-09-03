@@ -1,5 +1,8 @@
+import { delimiter } from 'node:path';
 import process from 'node:process';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+import { childEnvironment } from '../../config/child-environment.js';
+import { createMarkerProgram, createProbeProgram } from '../probe-program.js';
 import { createNodeProcessRunner } from './node-process-runner.js';
 
 /**
@@ -123,5 +126,133 @@ describe('createNodeProcessRunner', () => {
 
     expect(outcome).toMatchObject({ kind: 'failed' });
     if (outcome.kind === 'failed') expect(outcome.problem).toContain('250ms');
+  });
+});
+
+/**
+ * The two claims `binPath` exists to make: a bare program name resolves from
+ * the directories the deployment recorded, and everything else on the machine
+ * is still reachable behind them.
+ *
+ * The inherited environment is a directory holding one program, or an empty
+ * PATH where a test needs to prove that nothing else could have supplied one.
+ * Both are stand-ins for the developer's real PATH, deliberately, because a
+ * test that left that in place could not tell a program found in `binPath`
+ * from one found in `/opt/homebrew/bin`.
+ *
+ * The programs are made here rather than taken from the machine for the reason
+ * the header above gives: `git` and `ps` — the two a real operation spawns —
+ * are in neither `node:24-bookworm-slim` nor a minimal container, so a suite
+ * built on them would pass on a developer's mac and fail in the image this
+ * deploys as. `tool` below stands for exactly those.
+ */
+describe('createNodeProcessRunner with a configured binPath', () => {
+  const probe = createProbeProgram();
+  // A second directory, holding a second program: what the machine already had
+  // on its PATH before agentplexd recorded anything.
+  const tool = createProbeProgram('agentplex-tool');
+  afterAll(() => {
+    probe.remove();
+    tool.remove();
+  });
+
+  const inherited = { PATH: '' };
+
+  it('resolves a bare program name from a configured directory', async () => {
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({ inherited, binPath: [probe.directory] }),
+    });
+
+    const outcome = await runner.run({
+      file: probe.name,
+      args: ['-e', 'process.stdout.write("resolved")'],
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    expect(outcome).toMatchObject({ kind: 'exited', exitCode: 0, stdout: 'resolved' });
+  });
+
+  it('finds nothing without it, which is what makes the test above about binPath', async () => {
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({ inherited, binPath: [] }),
+    });
+
+    const outcome = await runner.run({ file: probe.name, args: [], timeoutMs: TIMEOUT_MS });
+
+    expect(outcome).toMatchObject({ kind: 'failed' });
+  });
+
+  it('still resolves a program that exists only on the inherited PATH', async () => {
+    // The regression that matters once anybody sets this. `git.status` builds
+    // `file: 'git'` and `process.start-time` builds `file: 'ps'`, and both
+    // resolve from the child's PATH — as does everything a coding agent shells
+    // out to inside a session. A PATH replaced by the recorded directories
+    // would break every one of them, and this is the assertion that says so.
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({
+        inherited: { PATH: tool.directory },
+        binPath: [probe.directory],
+      }),
+    });
+
+    const outcome = await runner.run({
+      file: tool.name,
+      args: ['-e', 'process.stdout.write("still here")'],
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    expect(outcome).toMatchObject({ kind: 'exited', exitCode: 0, stdout: 'still here' });
+  });
+
+  it('gives the child the configured directories in front of what it inherited', async () => {
+    // Read out of the child's own environment rather than out of the record
+    // built for it: the whole failure this fixes is a PATH that was one thing
+    // where the operator looked and another where the child ran.
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({
+        inherited: { PATH: tool.directory },
+        binPath: [probe.directory],
+      }),
+    });
+
+    const outcome = await runner.run({
+      file: probe.name,
+      args: ['-e', 'process.stdout.write(process.env.PATH ?? "unset")'],
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    expect(outcome).toMatchObject({
+      kind: 'exited',
+      stdout: [probe.directory, tool.directory].join(delimiter),
+    });
+  });
+
+  it('prefers the configured directory when both hold the same program name', async () => {
+    // What "in front of" buys, and the reason appending would not do: the
+    // binary setup probed is the one that runs, even on a machine that already
+    // had one under that name. This is the adoption rule's other half — the
+    // directory the operator recorded decides, and the rest of PATH is a
+    // fallback rather than a competitor.
+    const recorded = createMarkerProgram('agentplex-both', 'recorded');
+    const alsoOnPath = createMarkerProgram('agentplex-both', 'inherited');
+    try {
+      const runner = createNodeProcessRunner({
+        environment: childEnvironment({
+          inherited: { PATH: alsoOnPath.directory },
+          binPath: [recorded.directory],
+        }),
+      });
+
+      const outcome = await runner.run({
+        file: recorded.name,
+        args: [],
+        timeoutMs: TIMEOUT_MS,
+      });
+
+      expect(outcome).toMatchObject({ kind: 'exited', exitCode: 0, stdout: 'recorded' });
+    } finally {
+      recorded.remove();
+      alsoOnPath.remove();
+    }
   });
 });

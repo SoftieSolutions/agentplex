@@ -70,7 +70,7 @@ const serverOnly: Config = {
   role: 'server',
   logLevel: 'error',
   host: HOST,
-  server: { port: 0, storePaths: [], terminalCap: 8 },
+  server: { port: 0, storePaths: [], binPath: [], terminalCap: 8 },
 };
 const hubOnly: Config = {
   role: 'hub',
@@ -83,7 +83,7 @@ const both: Config = {
   logLevel: 'error',
   host: HOST,
   hub: { port: 0, databaseFile: '/unused/agentplex.db' },
-  server: { port: 0, storePaths: [], terminalCap: 8 },
+  server: { port: 0, storePaths: [], binPath: [], terminalCap: 8 },
 };
 
 let runtime: Runtime | undefined;
