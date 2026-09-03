@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { providerSchema, sessionRefSchema } from './identity.js';
+import { providerSchema, sessionIdSchema, sessionRefSchema } from './identity.js';
 
 /**
  * How a session is doing, in the one vocabulary every provider is reduced to.
@@ -64,3 +64,32 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
   title: z.string().min(1).nullable(),
 });
 export type SessionDescriptor = z.infer<typeof sessionDescriptorSchema>;
+
+/**
+ * A session one server is running right now, as that server says so.
+ *
+ * This is the one-live-process-per-session rule made into a fact the hub can
+ * read. A session is held by whichever server has a live process on it, and
+ * only the server can know that; the hub is the authority on the rule across
+ * servers, and it can only be that if the servers say which sessions they hold.
+ *
+ * What is deliberately not here is the pid and the terminal id. Both are the
+ * server's own bookkeeping, and neither survives the trip usefully: a pid is
+ * meaningless on any other machine and a terminal id is a handle nothing off
+ * that server may hold. A stop names `{ storeId, sessionId }` and the server
+ * resolves it back to its own terminal, which is what keeps the process handle
+ * on the machine that owns the process.
+ *
+ * `stoppable` is on the wire rather than derived from `status`, because it is
+ * the server's answer and not a rule anybody else may restate. The one live
+ * meaning today is that a working agent is not offered a stop — interrupting a
+ * turn mid-tool is how a half-applied edit is left on disk — and a client that
+ * re-derived that from a status would be a second copy of the rule to keep in
+ * step with the first.
+ */
+export const sessionHoldSchema = z.object({
+  sessionId: sessionIdSchema,
+  /** Whether a stop may be offered. False while the agent is mid-turn. */
+  stoppable: z.boolean(),
+});
+export type SessionHold = z.infer<typeof sessionHoldSchema>;

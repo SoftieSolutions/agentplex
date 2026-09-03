@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { Duplex } from 'node:stream';
 
 /**
  * A listening HTTP server, reduced to what a caller needs: the port actually
@@ -11,6 +12,20 @@ export interface HttpListener {
 }
 
 export type RequestHandler = (request: IncomingMessage, response: ServerResponse) => void;
+
+/**
+ * A connection asking to stop being HTTP.
+ *
+ * Taken as a handler rather than by exposing the `http.Server` itself, so that
+ * this module stays the only thing that has the server object and a caller
+ * cannot quietly add a second listener to it. The websocket a role serves goes
+ * on the port it already binds: a server needs exactly one inbound port
+ * reachable by the hub, and two would make that promise false.
+ *
+ * A handler that does not want the connection destroys the socket. There is no
+ * response to write: the request has already left HTTP.
+ */
+export type UpgradeHandler = (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
 
 export interface HttpTimeouts {
   /**
@@ -65,8 +80,14 @@ export function startHttpServer(
   host: string,
   handler: RequestHandler,
   timeouts: HttpTimeouts = HTTP_TIMEOUTS,
+  onUpgrade?: UpgradeHandler,
 ): Promise<HttpListener> {
   const server = createServer({ connectionsCheckingInterval: timeouts.checkIntervalMs }, handler);
+
+  // Without a listener Node destroys every upgrade request itself, which is
+  // the right default for a role that serves no socket: the hub role has no
+  // websocket for a server to dial, because it is the hub that dials.
+  if (onUpgrade !== undefined) server.on('upgrade', onUpgrade);
 
   // Set explicitly rather than left to the runtime: Node's defaults are chosen
   // for a service behind something else, and this one is the edge.

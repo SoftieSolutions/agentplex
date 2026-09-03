@@ -10,6 +10,9 @@ import type { StoreFileSystem } from './server/store-identity.js';
 import type { Clock } from './shared/clock.js';
 import type { IdGenerator } from './shared/ids.js';
 import type { Logger } from './shared/logger.js';
+import type { SocketDialer } from './shared/message-socket.js';
+import type { Timers } from './shared/timers.js';
+import type { TokenMinter } from './shared/tokens.js';
 
 /**
  * Composition of the roles a configuration asks for.
@@ -27,6 +30,16 @@ export interface RuntimeDependencies {
   readonly migrationFileSystem: MigrationFileSystem;
   /** The store volumes, injected for the same reason the migrations directory is. */
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * Where a secret comes from: the server role's pairing token on a first
+   * start, and every ticket the hub role issues to a client.
+   *
+   * Injected rather than imported for the reason the id source is, and one
+   * more: a test that asserts on a handshake or redeems a ticket needs to know
+   * the value, and a seam is how it does that without the entropy being weaker
+   * in the build anyone actually runs.
+   */
+  readonly tokens: TokenMinter;
   /**
    * The provider adapters this process runs with.
    *
@@ -53,6 +66,14 @@ export interface RuntimeDependencies {
    * have to reach for `process.env` two layers below the entrypoint.
    */
   readonly operations: OperationRegistry;
+  /**
+   * What the hub role dials paired servers with, and the deadlines it retries
+   * on. Injected for the same reason everything else here is: a test drives
+   * the whole runtime against fake sockets and a clock it controls, and the
+   * one place a real websocket is opened stays visible in `main`.
+   */
+  readonly dialer: SocketDialer;
+  readonly timers: Timers;
   readonly clock: Clock;
 }
 
@@ -73,9 +94,12 @@ export async function startRuntime(
     migrationsDirectory,
     migrationFileSystem,
     storeFileSystem,
+    tokens,
     providers,
     terminals,
     operations,
+    dialer,
+    timers,
     clock,
   } = dependencies;
   // The interface to bind is a setting like any other, so it arrives with the
@@ -96,10 +120,14 @@ export async function startRuntime(
         logger,
         ids,
         clock,
+        dialer,
+        timers,
         migrationsDirectory,
         migrationFileSystem,
         host,
         port: config.hub.port,
+        clientToken: config.hub.clientToken,
+        tokens,
       });
     }
     if ('server' in config) {
@@ -110,6 +138,8 @@ export async function startRuntime(
         port: config.server.port,
         storePaths: config.server.storePaths,
         storeFileSystem,
+        identityPath: config.server.identityPath,
+        tokens,
         providers,
         terminals,
         operations,

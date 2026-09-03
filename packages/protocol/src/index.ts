@@ -9,8 +9,11 @@ export type { FrameId, ProtocolErrorFrame, RefusalCode } from './frames.js';
 
 export {
   hubIdSchema,
+  nodeIdSchema,
+  nodeKindSchema,
   providerSchema,
   serverIdSchema,
+  serverRegistrationIdSchema,
   sessionIdSchema,
   sessionRefSchema,
   storeDescriptorSchema,
@@ -18,16 +21,41 @@ export {
 } from './identity.js';
 export type {
   HubId,
+  NodeId,
+  NodeKind,
   Provider,
   ServerId,
+  ServerRegistrationId,
   SessionId,
   SessionRef,
   StoreDescriptor,
   StoreId,
 } from './identity.js';
 
-export { sessionDescriptorSchema, sessionStatusSchema } from './session.js';
-export type { SessionDescriptor, SessionStatus } from './session.js';
+export { layoutNodeSchema, layoutSchema } from './layout.js';
+export type { Layout, LayoutNode } from './layout.js';
+
+export {
+  machineStateSchema,
+  serverPhaseSchema,
+  serverViewSchema,
+  sessionHolderSchema,
+  sessionRowSchema,
+  staleReasonSchema,
+  storeViewSchema,
+} from './machine-state.js';
+export type {
+  MachineState,
+  ServerPhase,
+  ServerView,
+  SessionHolder,
+  SessionRow,
+  StaleReason,
+  StoreView,
+} from './machine-state.js';
+
+export { sessionDescriptorSchema, sessionHoldSchema, sessionStatusSchema } from './session.js';
+export type { SessionDescriptor, SessionHold, SessionStatus } from './session.js';
 
 export { clientFrameSchema, hubFrameSchema, parseClientFrame, parseHubFrame } from './client.js';
 export type { ClientFrame, HubFrame } from './client.js';

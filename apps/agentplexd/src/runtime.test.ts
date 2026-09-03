@@ -12,7 +12,9 @@ import { createFakeProcessProbe } from './server/fake-process-probe.js';
 import { createFakeProcessRunner } from './server/operations/fake-process-runner.js';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
 import { createFakeStoreFiles } from './server/fake-store-files.js';
+import { createUnreachableDialer } from './shared/fake-message-socket.js';
 import { createLogger, type LogRecord } from './shared/logger.js';
+import { createFakeTimers } from './shared/timers.js';
 import type { Config } from './config/config.js';
 
 const logger = createLogger('error', () => {});
@@ -33,14 +35,24 @@ function fakeHubDatabase(options: Parameters<typeof createFakeDatabase>[0] = {})
   return createFakeDatabase({ ...options, respondWith: [hubIdentityRow] });
 }
 
-function dependencies(database = fakeHubDatabase(), storeFileSystem = createFakeStoreFiles()) {
+function dependencies(
+  database = fakeHubDatabase(),
+  storeFileSystem = createFakeStoreFiles(),
+  dialer = createUnreachableDialer(),
+) {
   return {
     logger,
     ids,
+    // Nothing is paired in most of these, so nothing is dialled. Where
+    // something is, an unreachable server is the honest default: the hub must
+    // come up regardless, which is the claim being made.
+    dialer,
+    timers: createFakeTimers(),
     openDatabase: () => database,
     migrationsDirectory: '/migrations',
     migrationFileSystem,
     storeFileSystem,
+    tokens: { newToken: () => 'token-under-test' },
     // No adapters: this file is about which halves start and stop, and a
     // registry with a real one in it would put a provider's disk layout into
     // every test here.
@@ -66,24 +78,32 @@ function dependencies(database = fakeHubDatabase(), storeFileSystem = createFake
 
 const HOST = '127.0.0.1';
 
+/**
+ * On the fake volume, like everything else here. The server role mints its
+ * identity before it serves, so every config that starts one needs somewhere
+ * to put it.
+ */
+const IDENTITY_PATH = '/etc/agentplexd/server.json';
+const CLIENT_TOKEN = 'a-client-token-long-enough-to-be-one';
+
 const serverOnly: Config = {
   role: 'server',
   logLevel: 'error',
   host: HOST,
-  server: { port: 0, storePaths: [], binPath: [], terminalCap: 8 },
+  server: { port: 0, storePaths: [], binPath: [], identityPath: IDENTITY_PATH, terminalCap: 8 },
 };
 const hubOnly: Config = {
   role: 'hub',
   logLevel: 'error',
   host: HOST,
-  hub: { port: 0, databaseFile: '/unused/agentplex.db' },
+  hub: { port: 0, databaseFile: '/unused/agentplex.db', clientToken: CLIENT_TOKEN },
 };
 const both: Config = {
   role: 'both',
   logLevel: 'error',
   host: HOST,
-  hub: { port: 0, databaseFile: '/unused/agentplex.db' },
-  server: { port: 0, storePaths: [], binPath: [], terminalCap: 8 },
+  hub: { port: 0, databaseFile: '/unused/agentplex.db', clientToken: CLIENT_TOKEN },
+  server: { port: 0, storePaths: [], binPath: [], identityPath: IDENTITY_PATH, terminalCap: 8 },
 };
 
 let runtime: Runtime | undefined;
@@ -122,6 +142,66 @@ describe('startRuntime', () => {
     expect(runtime.server).not.toBeNull();
   });
 
+  it('dials the servers the hub is paired with', async () => {
+    // The wiring, asserted where the wiring is: a hub that came up without
+    // dialling anything would look identical to one whose servers are all
+    // asleep, and the difference would surface as a product that does nothing.
+    const database = createFakeDatabase({
+      respondWith: [
+        hubIdentityRow,
+        {
+          match: /FROM servers/,
+          rows: [
+            {
+              id: 'registration-laptop',
+              label: 'laptop',
+              address: 'wss://laptop.example:8443',
+              token: 'tok-laptop',
+              server_id: null,
+              created_at: 1_756_000_000_000,
+              revoked_at: null,
+              last_connected_at: null,
+            },
+          ],
+        },
+      ],
+    });
+    const dialer = createUnreachableDialer();
+
+    runtime = await startRuntime(hubOnly, dependencies(database, createFakeStoreFiles(), dialer));
+
+    expect(runtime.hub?.connections.snapshot().map((report) => report.label)).toEqual(['laptop']);
+    expect(dialer.dialled).toEqual(['wss://laptop.example:8443']);
+  });
+
+  it('comes up even though the server it is paired with is unreachable', async () => {
+    // An unreachable server is a label on a row, never a reason not to start.
+    const database = createFakeDatabase({
+      respondWith: [
+        hubIdentityRow,
+        {
+          match: /FROM servers/,
+          rows: [
+            {
+              id: 'registration-laptop',
+              label: 'laptop',
+              address: 'wss://laptop.example:8443',
+              token: 'tok-laptop',
+              server_id: null,
+              created_at: 1_756_000_000_000,
+              revoked_at: null,
+              last_connected_at: null,
+            },
+          ],
+        },
+      ],
+    });
+
+    runtime = await startRuntime(hubOnly, dependencies(database));
+
+    expect(runtime.hub).not.toBeNull();
+  });
+
   it('migrates before it serves', async () => {
     const database = fakeHubDatabase();
     runtime = await startRuntime(hubOnly, dependencies(database));
@@ -150,7 +230,12 @@ describe('startRuntime', () => {
     expect(runtime.server?.stores).toEqual([
       { storeId: 'hub-under-test', path: '/volumes/claude' },
     ]);
-    expect([...files.contents.keys()]).toEqual(['/volumes/claude/agentplex-store.json']);
+    // The identity file too, and before the store: a server that cannot say
+    // who it is has nothing useful to report a store to.
+    expect([...files.contents.keys()]).toEqual([
+      IDENTITY_PATH,
+      '/volumes/claude/agentplex-store.json',
+    ]);
   });
 
   it('scans every store it mounted with the adapters it was given', async () => {

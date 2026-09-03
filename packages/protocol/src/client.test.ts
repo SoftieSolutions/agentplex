@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from './version.js';
 import { parseClientFrame, parseHubFrame, type ClientFrame, type HubFrame } from './client.js';
-import { hubIdSchema } from './identity.js';
+import {
+  hubIdSchema,
+  nodeIdSchema,
+  nodeKindSchema,
+  serverIdSchema,
+  serverRegistrationIdSchema,
+  sessionIdSchema,
+  storeIdSchema,
+} from './identity.js';
 import { parseTextFrame } from './parse.js';
 
 describe('parseClientFrame', () => {
@@ -30,6 +38,68 @@ describe('parseClientFrame', () => {
   });
 });
 
+describe('parseClientFrame on the session frames', () => {
+  const A_START = {
+    type: 'session-start',
+    id: 1,
+    storeId: 'store-work',
+    sessionId: null,
+    provider: 'claude',
+    prompt: null,
+    server: null,
+  };
+
+  it('accepts a start that names a store and lets the hub schedule it', () => {
+    expect(parseClientFrame(A_START).ok).toBe(true);
+  });
+
+  it('accepts a start that overrides the machine', () => {
+    expect(parseClientFrame({ ...A_START, server: 'registration-2' }).ok).toBe(true);
+  });
+
+  it('strips a working directory, an argv, an environment or an operation name', () => {
+    // The `{ command }` frame the operation registry exists to prevent, in each
+    // of the shapes it likes to arrive as. The parser is the boundary: whatever
+    // a caller put on the wire, what reaches the hub's own code has no field to
+    // read it out of, so no later handler can be talked into using one.
+    const smuggled = parseClientFrame({
+      ...A_START,
+      cwd: '/etc',
+      args: ['--dangerously-skip-permissions'],
+      env: { PATH: '/tmp' },
+      command: 'claude',
+      operation: 'git-status',
+    });
+    expect(smuggled.ok).toBe(true);
+    if (!smuggled.ok) return;
+    for (const forbidden of ['cwd', 'args', 'env', 'command', 'operation']) {
+      expect(smuggled.value).not.toHaveProperty(forbidden);
+    }
+  });
+
+  it('rejects a start for a provider nothing implements', () => {
+    expect(parseClientFrame({ ...A_START, provider: 'sh' }).ok).toBe(false);
+  });
+
+  it('rejects a start with an empty prompt, which is neither text nor absence', () => {
+    expect(parseClientFrame({ ...A_START, prompt: '' }).ok).toBe(false);
+  });
+
+  it('drops a process handle from a stop: a stop addresses a session', () => {
+    const stop = { type: 'session-stop', id: 2, storeId: 'store-work', sessionId: 'session-1' };
+    expect(parseClientFrame(stop).ok).toBe(true);
+    const named = parseClientFrame({ ...stop, pid: 4321, terminalId: 'terminal-1' });
+    expect(named.ok).toBe(true);
+    if (!named.ok) return;
+    expect(named.value).not.toHaveProperty('pid');
+    expect(named.value).not.toHaveProperty('terminalId');
+  });
+
+  it('rejects a stop with no session: a stop addresses one session, never a store', () => {
+    expect(parseClientFrame({ type: 'session-stop', id: 2, storeId: 'store-work' }).ok).toBe(false);
+  });
+});
+
 describe('parseHubFrame', () => {
   it('accepts a welcome', () => {
     const result = parseHubFrame({
@@ -47,8 +117,19 @@ describe('parseHubFrame', () => {
       replyTo: 1,
       code: 'unauthorized',
       message: 'token not accepted',
+      holder: null,
     });
     expect(result.ok).toBe(true);
+  });
+
+  it('rejects a refusal that leaves out the holder, so every refusal has one shape', () => {
+    const result = parseHubFrame({
+      type: 'refusal',
+      replyTo: 1,
+      code: 'refused',
+      message: 'no',
+    });
+    expect(result.ok).toBe(false);
   });
 
   it('rejects a refusal with a code outside the closed set', () => {
@@ -57,6 +138,7 @@ describe('parseHubFrame', () => {
       replyTo: 1,
       code: 'teapot',
       message: 'no',
+      holder: null,
     });
     expect(result.ok).toBe(false);
   });
@@ -79,6 +161,31 @@ describe('client and hub round trips', () => {
   const clientFrames: readonly ClientFrame[] = [
     { type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION },
     { type: 'ping', id: 2 },
+    { type: 'layout-request', id: 3 },
+    {
+      type: 'session-start',
+      id: 4,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: null,
+      provider: 'claude',
+      prompt: 'take a look at the failing test',
+      server: null,
+    },
+    {
+      type: 'session-start',
+      id: 5,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      provider: 'claude',
+      prompt: null,
+      server: serverRegistrationIdSchema.parse('registration-2'),
+    },
+    {
+      type: 'session-stop',
+      id: 6,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
   ];
 
@@ -90,9 +197,122 @@ describe('client and hub round trips', () => {
       hubId: hubIdSchema.parse('hub-1'),
     },
     { type: 'pong', replyTo: 2 },
-    { type: 'refusal', replyTo: 3, code: 'unauthorized', message: 'token not accepted' },
+    {
+      type: 'refusal',
+      replyTo: 3,
+      code: 'unauthorized',
+      message: 'token not accepted',
+      holder: null,
+    },
+    {
+      type: 'refusal',
+      replyTo: 4,
+      code: 'refused',
+      message: 'session-1 is already running on workshop',
+      holder: {
+        server: serverRegistrationIdSchema.parse('registration-1'),
+        stoppable: false,
+      },
+    },
+    {
+      type: 'session-started',
+      replyTo: 4,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: null,
+      server: serverRegistrationIdSchema.parse('registration-1'),
+    },
+    {
+      type: 'session-stopped',
+      replyTo: 6,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      server: serverRegistrationIdSchema.parse('registration-1'),
+    },
+    {
+      type: 'layout',
+      replyTo: 3,
+      nodes: [
+        {
+          id: nodeIdSchema.parse('node-1'),
+          parentId: null,
+          kind: nodeKindSchema.parse('folder'),
+          position: 0,
+          name: 'this week',
+          named: true,
+          anchor: null,
+        },
+        {
+          id: nodeIdSchema.parse('node-2'),
+          parentId: nodeIdSchema.parse('node-1'),
+          kind: nodeKindSchema.parse('session'),
+          position: 0,
+          name: null,
+          named: false,
+          anchor: {
+            storeId: storeIdSchema.parse('store-work'),
+            sessionId: sessionIdSchema.parse('session-1'),
+          },
+        },
+      ],
+    },
+    {
+      type: 'machine-state',
+      state: {
+        version: 7,
+        stores: [
+          {
+            storeId: storeIdSchema.parse('store-work'),
+            servers: [serverRegistrationIdSchema.parse('registration-1')],
+            reachable: true,
+            unreachableSince: null,
+            lastReachableAt: 1_000,
+            sessions: [
+              {
+                descriptor: {
+                  storeId: storeIdSchema.parse('store-work'),
+                  sessionId: sessionIdSchema.parse('session-1'),
+                  provider: 'claude',
+                  status: 'awaiting-permission',
+                  updatedAt: 900,
+                  cwd: '/srv/work',
+                  title: 'the ticket',
+                },
+                source: serverRegistrationIdSchema.parse('registration-1'),
+                reportedBy: [serverRegistrationIdSchema.parse('registration-1')],
+                reportedAt: 1_000,
+                reachable: true,
+                holder: {
+                  server: serverRegistrationIdSchema.parse('registration-1'),
+                  stoppable: true,
+                },
+              },
+            ],
+          },
+        ],
+        servers: [
+          {
+            registrationId: serverRegistrationIdSchema.parse('registration-1'),
+            label: 'workshop',
+            serverId: serverIdSchema.parse('server-1'),
+            phase: 'connected',
+            stores: [storeIdSchema.parse('store-work')],
+            connectedSince: 1_000,
+            staleSince: null,
+            lastConnectedAt: 1_000,
+            staleReason: null,
+            problem: null,
+          },
+        ],
+      },
+    },
     { type: 'protocol-error', code: 'protocol-version', message: 'this hub speaks version 2' },
   ];
+
+  it('sends the state with no replyTo, because nobody asked for it', () => {
+    const broadcast = hubFrames.find((frame) => frame.type === 'machine-state');
+    expect(broadcast).toBeDefined();
+    expect(broadcast).not.toHaveProperty('replyTo');
+  });
 
   it.each(clientFrames)('the hub reads back the $type a client sends', (frame) => {
     expect(parseTextFrame(parseClientFrame, JSON.stringify(frame))).toEqual({
