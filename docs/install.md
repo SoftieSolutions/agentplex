@@ -5,10 +5,10 @@ is the only thing clients talk to; the **server** runs sessions on its own
 machine. They are the same binary started with `--role=hub`, `--role=server` or
 `--role=both`.
 
-Docker is one way to run this and no longer the only one. The hub's database is
+Docker is one way to run this, not the only one. The hub's database is
 a SQLite file, so a container is packaging and process supervision rather than a
-dependency you could not otherwise satisfy: it stays the primary path for the
-checks and the right way to run a hosted hub, and it has stopped being the price
+dependency you could not otherwise satisfy: it is the primary path for the
+checks and the right way to run a hosted hub, and it is not the price
 of entry for a single machine. One box can run `--role=both` natively, over one
 file. The server role in particular is better off outside a container, and is
 covered under [The server role, bare metal](#the-server-role-bare-metal).

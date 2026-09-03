@@ -42,9 +42,9 @@ export class MigrationError extends Error {
 /**
  * `applied_at` is epoch milliseconds and carries no default.
  *
- * SQLite has no `now()` that means what `timestamptz DEFAULT now()` meant, and
- * the substitutes it does have — `unixepoch()`, `CURRENT_TIMESTAMP` — would be
- * the one clock in this codebase that a test cannot set. Everything above the
+ * A database-side default would have to come from `unixepoch()` or
+ * `CURRENT_TIMESTAMP`, which would be the one clock in this codebase that a
+ * test cannot set. Everything above the
  * database already takes its time from an injected clock, so this row does too:
  * the caller passes the millisecond it means, and the schema states the unit.
  */
@@ -69,16 +69,15 @@ export interface MigrationOutcome {
 /**
  * The whole run is one transaction, and that is what serializes it.
  *
- * There is no advisory lock to take: a single-file database has no second
- * process to take one from, and SQLite already has the primitive this needs.
+ * No separate lock is needed, because the database already has the primitive.
  * `BEGIN IMMEDIATE` — which is what the driver opens a transaction with — takes
  * the database's write lock at the first statement rather than at the first
  * write, so a second hub process starting against the same file waits on the
  * driver's busy timeout and then fails, instead of interleaving its DDL with
  * this one's.
  *
- * One transaction for the run rather than one per migration is a change of
- * shape that SQLite makes and Postgres did not force. It keeps the property
+ * One transaction for the run rather than one per migration is the shape
+ * SQLite's single write lock makes natural. It keeps the property
  * that mattered — a migration is never recorded as applied unless every one of
  * its statements ran — and strengthens it: a run that fails halfway leaves the
  * schema exactly where it started, so the next start applies the same list
@@ -89,7 +88,7 @@ export interface MigrationOutcome {
  * Every statement — the bookkeeping table, the reconciliation read, each
  * migration — is issued on the transaction's handle, so the run reads the same
  * schema it is changing. There is no pinned connection to ask for: with one
- * file the transaction is the whole of what a pinned connection used to buy.
+ * file the transaction is the whole of what a pinned connection would buy.
  */
 export async function migrate(
   database: Database,

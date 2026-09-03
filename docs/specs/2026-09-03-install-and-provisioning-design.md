@@ -3,9 +3,9 @@
 How agentplex gets onto a machine, how the coding-agent CLIs it drives get
 there, and how the server finds them afterwards.
 
-Depends on `2026-09-03-sqlite-hub-storage-design.md`. Without it the hub needs
-Postgres, a one-box install needs Docker, and most of this document is not worth
-building.
+Depends on `2026-09-03-sqlite-hub-storage-design.md`: a hub whose database is a
+file is what makes a one-box install possible without Docker, and most of this
+document is not worth building otherwise.
 
 Status: proposed, 2026-09-03. Nothing here is built.
 

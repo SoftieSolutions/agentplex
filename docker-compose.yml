@@ -2,13 +2,13 @@
 #
 # Copy .env.example to .env, then `docker compose up -d`.
 #
-# What Docker is for, now that the hub's database is a file: it is still the
-# primary path for running the checks, and it is still the right way to run a
-# hosted hub — one image, one restart policy, one process supervised by
-# something that already knows how to restart it, and TLS in front. What it has
-# stopped being is the price of entry. A single machine can run agentplexd
-# natively and never build an image, which is what the installer does. Nothing
-# here is legacy; it is the deployment that wants a container.
+# What Docker is for: it is the primary path for running the checks, and the
+# right way to run a hosted hub — one image, one restart policy, one process
+# supervised by something that already knows how to restart it, and TLS in
+# front. What it is not is the price of entry. The hub's database is a file, so
+# a single machine can run agentplexd natively and never build an image, which
+# is what the installer does. This file is for the deployment that wants a
+# container.
 #
 # Caddy is optional and dropping it is a supported path, not a hypothetical:
 # `docker compose up -d hub` starts the hub and nothing else, and the hub's own
@@ -39,11 +39,11 @@ services:
       # Named, so `docker compose down` is not the same act as deleting the
       # database. `down -v` is.
       #
-      # That argument carried when the database was a Postgres data directory
-      # and it carries harder now. The hub's entire state — its identity, the
-      # servers paired to it, the tokens they hold — is one file plus SQLite's
-      # -wal and -shm beside it, which is small enough to lose without
-      # noticing. A named volume survives `down`, `up --build`, and the image
+      # The hub's entire state — its identity, the servers paired to it, the
+      # tokens they hold — is one file plus SQLite's -wal and -shm beside it,
+      # which is small enough to lose without noticing.
+      #
+      # A named volume survives `down`, `up --build`, and the image
       # being rebuilt underneath it; an anonymous one is abandoned by a `down`
       # and replaced by an empty one on the next `up`, which loses the database
       # without deleting anything and without saying so.
