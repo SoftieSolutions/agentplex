@@ -41,6 +41,7 @@ function dependencies(database = fakeHubDatabase(), storeFileSystem = createFake
     migrationsDirectory: '/migrations',
     migrationFileSystem,
     storeFileSystem,
+    tokens: { newToken: () => 'token-under-test' },
     // No adapters: this file is about which halves start and stop, and a
     // registry with a real one in it would put a provider's disk layout into
     // every test here.
@@ -66,11 +67,18 @@ function dependencies(database = fakeHubDatabase(), storeFileSystem = createFake
 
 const HOST = '127.0.0.1';
 
+/**
+ * On the fake volume, like everything else here. The server role mints its
+ * identity before it serves, so every config that starts one needs somewhere
+ * to put it.
+ */
+const IDENTITY_PATH = '/etc/agentplexd/server.json';
+
 const serverOnly: Config = {
   role: 'server',
   logLevel: 'error',
   host: HOST,
-  server: { port: 0, storePaths: [], binPath: [], terminalCap: 8 },
+  server: { port: 0, storePaths: [], binPath: [], identityPath: IDENTITY_PATH, terminalCap: 8 },
 };
 const hubOnly: Config = {
   role: 'hub',
@@ -83,7 +91,7 @@ const both: Config = {
   logLevel: 'error',
   host: HOST,
   hub: { port: 0, databaseFile: '/unused/agentplex.db' },
-  server: { port: 0, storePaths: [], binPath: [], terminalCap: 8 },
+  server: { port: 0, storePaths: [], binPath: [], identityPath: IDENTITY_PATH, terminalCap: 8 },
 };
 
 let runtime: Runtime | undefined;
@@ -150,7 +158,12 @@ describe('startRuntime', () => {
     expect(runtime.server?.stores).toEqual([
       { storeId: 'hub-under-test', path: '/volumes/claude' },
     ]);
-    expect([...files.contents.keys()]).toEqual(['/volumes/claude/agentplex-store.json']);
+    // The identity file too, and before the store: a server that cannot say
+    // who it is has nothing useful to report a store to.
+    expect([...files.contents.keys()]).toEqual([
+      IDENTITY_PATH,
+      '/volumes/claude/agentplex-store.json',
+    ]);
   });
 
   it('scans every store it mounted with the adapters it was given', async () => {

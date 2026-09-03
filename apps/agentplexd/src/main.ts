@@ -13,6 +13,7 @@ import { createOperationRegistry } from './server/operations/operation-registry.
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { nodeProviderFiles } from './server/providers/node-provider-files.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
+import { randomTokenMinter } from './server/server-identity.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createTerminalManager } from './server/terminal-manager.js';
 import { systemClock } from './shared/clock.js';
@@ -74,6 +75,10 @@ async function main(): Promise<void> {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
       migrationFileSystem: nodeMigrationFileSystem,
       storeFileSystem: nodeStoreFileSystem,
+      // The only place a pairing token is generated, and the CSPRNG is the
+      // whole implementation. What the operator pastes into the hub is what
+      // this produced, once, on the server's first start.
+      tokens: randomTokenMinter,
       // The providers this build drives, in one line. Adding codex is another
       // adapter file and another entry here, and nothing else.
       providers: createProviderRegistry([

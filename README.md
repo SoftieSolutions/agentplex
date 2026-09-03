@@ -85,17 +85,36 @@ pnpm docker:check   # the same, in a container
 
 Every setting has one flag and one environment variable; the flag wins.
 
-| Flag              | Environment               | Default        | Meaning                                              |
-| ----------------- | ------------------------- | -------------- | ---------------------------------------------------- |
-| `--role`          | `AGENTPLEX_ROLE`          | none, required | `hub`, `server` or `both`                            |
-| `--host`          | `AGENTPLEX_HOST`          | `0.0.0.0`      | Interface to bind                                    |
-| `--hub-port`      | `AGENTPLEX_HUB_PORT`      | `8080`         | Port the hub serves on                               |
-| `--server-port`   | `AGENTPLEX_SERVER_PORT`   | `8081`         | Port the hub dials                                   |
-| `--database-file` | `AGENTPLEX_DATABASE_FILE` | none           | SQLite file, absolute; required for `hub` and `both` |
-| `--store-path`    | `AGENTPLEX_STORE_PATH`    | none           | Store root; repeatable, absolute                     |
-| `--bin-path`      | `AGENTPLEX_BIN_PATH`      | none           | Agent directory, searched before `PATH`; repeatable  |
-| `--terminal-cap`  | `AGENTPLEX_TERMINAL_CAP`  | `8`            | Terminals held at once; at least 1                   |
-| `--log-level`     | `AGENTPLEX_LOG_LEVEL`     | `info`         | `debug`, `info`, `warn`, `error`                     |
+| Flag                     | Environment                      | Default        | Meaning                                              |
+| ------------------------ | -------------------------------- | -------------- | ---------------------------------------------------- |
+| `--role`                 | `AGENTPLEX_ROLE`                 | none, required | `hub`, `server` or `both`                            |
+| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`      | Interface to bind                                    |
+| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`         | Port the hub serves on                               |
+| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`         | Port the hub dials                                   |
+| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none           | SQLite file, absolute; required for `hub` and `both` |
+| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none           | Store root; repeatable, absolute                     |
+| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none           | Absolute; required for `server` and `both`           |
+| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none           | Agent directory, searched before `PATH`; repeatable  |
+| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`            | Terminals held at once; at least 1                   |
+| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`         | `debug`, `info`, `warn`, `error`                     |
+
+### Pairing a server with the hub
+
+A server mints two durable facts into its identity file on first start: the
+`serverId` it answers to, and the token that admits a hub. The file is not
+logged, only its path — open it, copy the token, and type it into the hub along
+with the server's `wss://` address. That is the only way a pairing is made;
+discovery on the LAN pre-fills the address and nothing more.
+
+Tokens are per server, so revoking one instance touches no other. Keep the
+identity file somewhere that survives a restart: a server that loses it mints a
+new identity, and the pairing stops working until you pair again.
+
+The hub dials the server, never the reverse, so a server needs one inbound port
+reachable by the hub and dials out to nothing. That port carries both the health
+check and the hub's websocket. TLS is terminated in front of the process — the
+bundled Caddy, an existing reverse proxy, or a Tailscale/WireGuard route — which
+is why the hub refuses to dial anything but `wss://`.
 
 A server holds at most `--terminal-cap` terminals. Reaching the cap closes the
 one whose last watcher left longest ago, never one somebody is watching; the

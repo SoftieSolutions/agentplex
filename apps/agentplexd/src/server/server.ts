@@ -1,11 +1,14 @@
-import { PROTOCOL_VERSION, type StoreDescriptor } from '@agentplex/protocol';
+import { PROTOCOL_VERSION, type ServerId, type StoreDescriptor } from '@agentplex/protocol';
 import type { Clock } from '../shared/clock.js';
-import { sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
+import { HTTP_TIMEOUTS, sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { Logger } from '../shared/logger.js';
+import { createWebSocketListener } from '../shared/ws-message-socket.js';
+import { serveHubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProviderRegistry } from './providers/provider-registry.js';
 import { discoverStoreSessions } from './providers/store-discovery.js';
+import { ensureServerIdentity, type TokenMinter } from './server-identity.js';
 import type { TerminalManager } from './terminal-manager.js';
 import { ensureStores, type StoreFileSystem } from './store-identity.js';
 
@@ -28,6 +31,15 @@ export interface SessionServerDependencies {
   /** Store roots from configuration, already absolute and deduplicated. */
   readonly storePaths: readonly string[];
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * Where this server's own identity and pairing token live, absolute.
+   *
+   * Not in a store: a store is a volume two servers may mount at once, and an
+   * identity written there would hand both of them the same name and secret.
+   */
+  readonly identityPath: string;
+  /** Where the pairing token comes from the first time this server starts. */
+  readonly tokens: TokenMinter;
   /** The adapters this build can drive. An empty registry finds nothing and says nothing. */
   readonly providers: ProviderRegistry;
   readonly clock: Clock;
@@ -65,6 +77,8 @@ export interface SessionServerDependencies {
 
 export interface SessionServer {
   readonly port: number;
+  /** What this server calls itself to every hub that dials it. */
+  readonly serverId: ServerId;
   /** The stores this server can speak for. A store it could not read is not in here. */
   readonly stores: readonly StoreDescriptor[];
   stop(): Promise<void>;
@@ -73,9 +87,44 @@ export interface SessionServer {
 export async function startSessionServer(
   dependencies: SessionServerDependencies,
 ): Promise<SessionServer> {
-  const { host, port, ids, storePaths, storeFileSystem, providers, clock, terminals, operations } =
-    dependencies;
+  const {
+    host,
+    port,
+    ids,
+    storePaths,
+    storeFileSystem,
+    identityPath,
+    tokens,
+    providers,
+    clock,
+    terminals,
+    operations,
+  } = dependencies;
   const logger = dependencies.logger.child({ role: 'server' });
+
+  // Before anything is served, and fatally. A store that cannot be read costs
+  // itself; an identity that cannot be read costs the whole server, because
+  // every alternative is worse: minting a fresh one would present this machine
+  // to the hub as a server nobody has paired, with a token the user has never
+  // seen, and the only symptom would be a paired server that quietly stopped
+  // answering.
+  const identity = await ensureServerIdentity(identityPath, {
+    files: storeFileSystem,
+    ids,
+    tokens,
+  });
+  if (!identity.ok) {
+    throw new Error(`agentplexd cannot establish its server identity: ${identity.problem}`);
+  }
+
+  // The path, never the token. The file is where the operator reads the token
+  // to paste into the hub, and a secret in a log line is one that has to be
+  // rotated. `logger.ts` would redact a `token` field anyway; not gathering it
+  // is the version that does not depend on remembering.
+  logger.info(identity.minted ? 'server identity minted' : 'server identity loaded', {
+    serverId: identity.identity.serverId,
+    identityPath,
+  });
 
   // What this build can run, said out loud at boot. The registry is closed, so
   // this line is the complete answer to "what can this server start", and an
@@ -125,18 +174,48 @@ export async function startSessionServer(
     }
   }
 
-  const listener: HttpListener = await startHttpServer(port, host, (request, response) => {
-    if (request.url === '/health') {
-      sendJson(response, 200, { status: 'ok', role: 'server', protocolVersion: PROTOCOL_VERSION });
-      return;
-    }
-    sendJson(response, 404, { error: 'not found' });
+  // The one thing a hub can do with this server before it has proved itself:
+  // open a socket. Everything past that is the handshake's to allow.
+  const hubs = createWebSocketListener({
+    onConnection: (socket) =>
+      void serveHubConnection(socket, {
+        identity: identity.identity,
+        // Read at connection time rather than captured, so a hub that dials
+        // after a store came back reachable is told what is mounted now.
+        stores,
+        logger,
+      }),
   });
 
-  logger.info('server listening', { port: listener.port, stores: stores.length });
+  const listener: HttpListener = await startHttpServer(
+    port,
+    host,
+    (request, response) => {
+      if (request.url === '/health') {
+        sendJson(response, 200, {
+          status: 'ok',
+          role: 'server',
+          protocolVersion: PROTOCOL_VERSION,
+        });
+        return;
+      }
+      sendJson(response, 404, { error: 'not found' });
+    },
+    HTTP_TIMEOUTS,
+    // Same port as the health check: a server needs exactly one inbound port
+    // reachable by the hub, and that is a promise to whoever opens the firewall.
+    hubs.onUpgrade,
+  );
+
+  logger.info('server listening', {
+    port: listener.port,
+    serverId: identity.identity.serverId,
+    stores: stores.length,
+  });
 
   return {
     port: listener.port,
+    serverId: identity.identity.serverId,
     stores,
     async stop() {
       // Children first. Closing the listener only stops new work arriving;
@@ -144,6 +223,10 @@ export async function startSessionServer(
       // nothing left to watch it.
       const running = terminals.terminals.length;
       terminals.closeAll();
+      // Then the hub sockets: an upgraded connection is not an HTTP request,
+      // so closing the listener does not reach it, and a live websocket would
+      // hold the process open after everything it could ask about had stopped.
+      hubs.close();
       await listener.close();
       logger.info('server stopped', { killed: running });
     },
