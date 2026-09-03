@@ -13,6 +13,7 @@ import type { Database } from './db/database.js';
 import { loadMigrations, type MigrationFileSystem } from './db/migration-files.js';
 import { migrate } from './db/migrations.js';
 import { ensureHubIdentity } from './hub-identity.js';
+import { createReducer, type Reducer } from './state/reducer.js';
 
 /**
  * The hub role.
@@ -20,8 +21,8 @@ import { ensureHubIdentity } from './hub-identity.js';
  * Milestone 1 brought up what everything later stands on: the database is
  * migrated before anything is served, the hub knows its own id, and it answers
  * a health check. Milestone 3 adds the outbound half -- the hub dials every
- * paired server and keeps dialling. The reducer and the client socket arrive
- * with the milestones that own them.
+ * paired server and keeps dialling, and the reducer merges what they report
+ * into one state. The client socket that broadcasts it arrives next.
  */
 
 export interface HubDependencies {
@@ -60,6 +61,13 @@ export interface Hub {
    * shows a store has to be able to say whether anybody can still reach it.
    */
   readonly connections: ConnectionSupervisor;
+  /**
+   * Everything every server has reported, merged: one store per volume, one
+   * session list under it, and the servers attached to it. The read surface
+   * the client broadcast is built on, and the only place a session row is
+   * assembled.
+   */
+  readonly state: Reducer;
   stop(): Promise<void>;
 }
 
@@ -92,6 +100,11 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // the pairing table. A server that is switched off must not delay the hub
   // coming up: it is marked stale, dialled again on a backoff, and the hub
   // serves in the meantime with its rows labelled rather than absent.
+  // Built before the supervisor, because the supervisor starts dialling as
+  // soon as it exists and a connection that came up before there was anywhere
+  // to put it would be a state that is wrong until the next change.
+  const state = createReducer({ logger });
+
   const connections = await startConnectionSupervisor({
     database,
     dialer,
@@ -99,6 +112,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     timers,
     clock,
     logger,
+    onChange: (report) => state.applyConnection(report),
   });
 
   const listener: HttpListener = await startHttpServer(port, host, (request, response) => {
@@ -119,6 +133,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     hubId,
     port: listener.port,
     connections,
+    state,
     async stop() {
       // Outbound first. The dials are what hold sockets open and what would
       // otherwise still be retrying while the listener is closing.
