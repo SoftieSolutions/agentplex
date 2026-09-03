@@ -1,4 +1,4 @@
-import type { Database, DatabaseSession, Queryable, QueryResult } from './database.js';
+import type { Database, Queryable, QueryResult } from './database.js';
 
 /**
  * An in-memory stand-in for the database, understanding only the statements the
@@ -9,9 +9,11 @@ import type { Database, DatabaseSession, Queryable, QueryResult } from './databa
  * a database. The SQL itself is not exercised here; `migrations.integration.test`
  * runs that against a real SQLite file.
  *
- * It models connections as well as statements, because a run that reconciles on
- * one connection and writes on another has read a schema it is not the one
- * changing.
+ * It labels each statement with the transaction it ran in, because a run that
+ * reconciles outside the transaction it writes in has read a schema it is not
+ * the one changing. That used to be recorded as a connection number, back when
+ * a pool could hand a second statement a second backend; with one file the
+ * distinction that is left is inside the transaction or beside it.
  */
 export interface FakeDatabaseOptions {
   /** Migrations already recorded as applied, as `version -> name`. */
@@ -27,16 +29,16 @@ export interface ScriptedResponse {
   readonly rows: readonly unknown[];
 }
 
-/** A statement and the connection it ran on. */
+/** A statement and the transaction it ran in, or `null` when it ran outside one. */
 export interface IssuedStatement {
   readonly text: string;
-  readonly connection: number;
+  readonly transaction: number | null;
 }
 
 export interface FakeDatabase extends Database {
-  /** Every statement issued, in order, for asserting on lock and commit order. */
+  /** Every statement issued, in order, for asserting on what a run did and when. */
   readonly statements: readonly string[];
-  /** The same statements, each with the connection that ran it. */
+  /** The same statements, each with the transaction that ran it. */
   readonly issued: readonly IssuedStatement[];
   readonly appliedVersions: readonly number[];
   readonly closed: boolean;
@@ -46,12 +48,12 @@ export function createFakeDatabase(options: FakeDatabaseOptions = {}): FakeDatab
   const applied = new Map(options.applied ?? []);
   const issued: IssuedStatement[] = [];
   let closed = false;
-  let nextConnection = 0;
+  let nextTransaction = 0;
 
-  const runOn =
-    (connection: number) =>
+  const runIn =
+    (transaction: number | null) =>
     async <Row>(text: string, values?: readonly unknown[]): Promise<QueryResult<Row>> => {
-      issued.push({ text: text.trim(), connection });
+      issued.push({ text: text.trim(), transaction });
 
       if (options.failOn?.test(text) === true) {
         throw new Error(`fake database refused: ${text.trim()}`);
@@ -76,34 +78,21 @@ export function createFakeDatabase(options: FakeDatabaseOptions = {}): FakeDatab
       return { rows: [], rowCount: 0 };
     };
 
-  const transactionOn = (connection: number) => {
-    return async <T>(body: (tx: Queryable) => Promise<T>): Promise<T> => {
+  return {
+    query: (text, values) => runIn(null)(text, values),
+
+    async transaction<T>(body: (tx: Queryable) => Promise<T>): Promise<T> {
+      const transaction = (nextTransaction += 1);
       // The snapshot is the rollback: a body that throws leaves no trace.
       const snapshot = new Map(applied);
       try {
-        return await body({ query: runOn(connection) });
+        return await body({ query: runIn(transaction) });
       } catch (error) {
         applied.clear();
         for (const [version, name] of snapshot) applied.set(version, name);
         throw error;
       }
-    };
-  };
-
-  const session = async <T>(body: (handle: DatabaseSession) => Promise<T>): Promise<T> => {
-    // One connection for the whole body, the way a checked-out pool client is.
-    const connection = (nextConnection += 1);
-    return body({ query: runOn(connection), transaction: transactionOn(connection) });
-  };
-
-  return {
-    // A pool hands out whichever connection is free, so every statement issued
-    // outside a session is modelled as landing on a different one.
-    query: (text, values) => runOn((nextConnection += 1))(text, values),
-
-    transaction: (body) => session((handle) => handle.transaction(body)),
-
-    session,
+    },
 
     async close() {
       closed = true;

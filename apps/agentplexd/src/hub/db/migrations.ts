@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Database, DatabaseSession, Queryable } from './database.js';
+import type { Database, Queryable } from './database.js';
 import type { Clock } from '../../shared/clock.js';
 import type { Logger } from '../../shared/logger.js';
 
@@ -86,8 +86,10 @@ export interface MigrationOutcome {
  * lock across the whole run is affordable because migrating happens before the
  * hub listens, so nothing else is asking for it yet.
  *
- * It still runs inside a `session`, so every statement — the bookkeeping table,
- * the reconciliation read, each migration — lands on one connection.
+ * Every statement — the bookkeeping table, the reconciliation read, each
+ * migration — is issued on the transaction's handle, so the run reads the same
+ * schema it is changing. There is no pinned connection to ask for: with one
+ * file the transaction is the whole of what a pinned connection used to buy.
  */
 export async function migrate(
   database: Database,
@@ -97,22 +99,20 @@ export async function migrate(
 ): Promise<MigrationOutcome> {
   const ordered = orderMigrations(migrations);
 
-  return database.session((session: DatabaseSession) =>
-    session.transaction(async (tx: Queryable) => {
-      await tx.query(BOOKKEEPING_TABLE);
-      const applied = await readApplied(tx);
+  return database.transaction(async (tx: Queryable) => {
+    await tx.query(BOOKKEEPING_TABLE);
+    const applied = await readApplied(tx);
 
-      reconcile(ordered, applied);
+    reconcile(ordered, applied);
 
-      const pending = ordered.filter((migration) => !applied.has(migration.version));
-      for (const migration of pending) {
-        await apply(tx, migration, clock);
-        logger.info('migration applied', { version: migration.version, name: migration.name });
-      }
+    const pending = ordered.filter((migration) => !applied.has(migration.version));
+    for (const migration of pending) {
+      await apply(tx, migration, clock);
+      logger.info('migration applied', { version: migration.version, name: migration.name });
+    }
 
-      return { applied: pending, alreadyApplied: applied.size };
-    }),
-  );
+    return { applied: pending, alreadyApplied: applied.size };
+  });
 }
 
 /** Sorts by version and refuses a set that has the same version twice. */
@@ -131,8 +131,8 @@ export function orderMigrations(migrations: readonly Migration[]): readonly Migr
   return ordered;
 }
 
-async function readApplied(session: Queryable): Promise<ReadonlyMap<number, string>> {
-  const result = await session.query('SELECT version, name FROM schema_migrations');
+async function readApplied(tx: Queryable): Promise<ReadonlyMap<number, string>> {
+  const result = await tx.query('SELECT version, name FROM schema_migrations');
   const applied = new Map<number, string>();
   for (const row of result.rows) {
     // Rows are read back as claims, not as the shape we assume we wrote.

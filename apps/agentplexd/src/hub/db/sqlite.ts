@@ -1,6 +1,6 @@
 import { backup as backUpTo, DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { z } from 'zod';
-import type { Database, DatabaseSession, Queryable, QueryResult } from './database.js';
+import type { Database, Queryable, QueryResult } from './database.js';
 
 /**
  * The one module that names the SQLite driver.
@@ -112,15 +112,6 @@ export function createSqliteDatabase(path: string, options: SqliteOptions = {}):
     query,
 
     transaction: (body) => exclusively(() => runTransaction(body)),
-
-    /**
-     * One connection means a session is the whole database held still: the
-     * pinned-connection idea this interface was shaped around belongs to a
-     * pool, and there is no pool. The interface is narrowed where it is
-     * declared, not worked around here.
-     */
-    session: (body) =>
-      exclusively(() => body({ query, transaction: runTransaction } satisfies DatabaseSession)),
 
     backup: (destination) => exclusively(() => backUpTo(connection, destination)),
 

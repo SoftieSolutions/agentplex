@@ -4,8 +4,8 @@
  * Everything above this line talks to `Database`; exactly one module below it
  * (`sqlite.ts`) names the driver `main` opens. A test supplies its own
  * implementation, and swapping drivers touches one file — which is what is
- * happening now: `postgres.ts` is the driver being replaced, still here because
- * the migrations are still written in its dialect, and it goes when they do.
+ * happening now: `postgres.ts` is the driver being replaced, no longer reached
+ * by anything but its own suite, and it goes in its own ticket.
  */
 export interface QueryResult<Row> {
   readonly rows: readonly Row[];
@@ -20,34 +20,26 @@ export interface Queryable {
 }
 
 /**
- * One connection, held for as long as the body runs.
+ * A database, which is a `Queryable` that can also group statements and close.
  *
- * This exists because Postgres has state that lives on a connection rather than
- * in the database: an advisory lock belongs to the backend that took it, and a
- * pool that hands out a different backend per query releases nothing. A session
- * can open transactions, and they run on the same connection, so a lock taken
- * before them is still held after they commit.
+ * There was a third verb here — `session`, a connection pinned for the length
+ * of a body — and it is worth saying why it is gone rather than leaving the
+ * next reader to wonder. It existed for one Postgres fact: an advisory lock
+ * belongs to the backend that took it, and a pool that hands out a different
+ * backend per query releases the lock as soon as it releases the client. The
+ * migration runner was the only caller, and the lock was the only reason.
+ * SQLite has neither: one file, one connection, and `BEGIN IMMEDIATE` in place
+ * of the advisory lock. A pinned handle is what every handle already is, so the
+ * verb no longer distinguishes anything, and an interface that promises a
+ * guarantee it cannot describe is worse than one that does not offer it — the
+ * next reader would take `session` for a lock and reach for it.
  */
-export interface DatabaseSession extends Queryable {
-  /**
-   * Runs `body` inside one transaction on this connection: committed when it
-   * returns, rolled back when it throws.
-   */
-  transaction<T>(body: (tx: Queryable) => Promise<T>): Promise<T>;
-}
-
 export interface Database extends Queryable {
   /**
    * Runs `body` inside one transaction: committed when it returns, rolled back
    * when it throws. The handle is a `Queryable` and not a `Database`, because a
-   * transaction cannot open a transaction or close the pool.
+   * transaction cannot open a transaction or close the database under itself.
    */
   transaction<T>(body: (tx: Queryable) => Promise<T>): Promise<T>;
-  /**
-   * Runs `body` against one connection pinned for its whole lifetime. The
-   * handle is a `DatabaseSession` and not a `Database`: a session cannot close
-   * the pool it was checked out of.
-   */
-  session<T>(body: (session: DatabaseSession) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
