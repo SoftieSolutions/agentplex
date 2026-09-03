@@ -176,24 +176,24 @@ describe('createSqliteDatabase', () => {
     expect(await probeValues(database)).toEqual([1, 2, 3, 4]);
   });
 
-  it('runs a transaction opened inside a session', async () => {
-    const database = openDatabase('session.db');
+  it('puts a query issued during a transaction inside that transaction', async () => {
+    const database = openDatabase('joined.db');
     await createProbeTable(database);
 
-    await database.session(async (session) => {
-      await session.query('INSERT INTO probe (value) VALUES (?)', [1]);
-      await session.transaction(async (tx) => {
-        await tx.query('INSERT INTO probe (value) VALUES (?)', [2]);
-      });
-      await expect(
-        session.transaction(async (tx) => {
-          await tx.query('INSERT INTO probe (value) VALUES (?)', [3]);
-          throw new Error('no');
-        }),
-      ).rejects.toThrow('no');
-    });
+    // What a pinned handle used to be asked for, without one. There is one
+    // connection and `query` is deliberately not queued, so a statement issued
+    // beside a running transaction still lands on the connection that
+    // transaction is open on. The rollback is the proof: a statement genuinely
+    // outside it would have survived.
+    await expect(
+      database.transaction(async (tx) => {
+        await tx.query('INSERT INTO probe (value) VALUES (?)', [1]);
+        await database.query('INSERT INTO probe (value) VALUES (?)', [2]);
+        throw new Error('no');
+      }),
+    ).rejects.toThrow('no');
 
-    expect(await probeValues(database)).toEqual([1, 2]);
+    expect(await probeValues(database)).toEqual([]);
   });
 
   it('copies an open database with backup, including uncommitted-then-committed rows', async () => {

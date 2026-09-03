@@ -102,19 +102,20 @@ describe('migrate', () => {
     expect(database.appliedVersions).toEqual([]);
   });
 
-  it('runs the whole migration inside one transaction on one connection', async () => {
+  it('issues every statement of the run inside one transaction', async () => {
     const database = createFakeDatabase();
     const { logger } = silentLogger();
 
     await migrate(database, [migration(1, 'first'), migration(2, 'second')], logger, clock);
 
-    // Reconciling on one connection and writing on another would mean reading a
-    // schema this run is not the one changing. There is nothing else to assert
+    // Reconciling outside the transaction it writes in would mean reading a
+    // schema this run is not the one changing, and a statement outside it would
+    // survive the rollback the run relies on. There is nothing else to assert
     // about serialization here: the write lock the run holds belongs to the
     // driver, and `migrations.integration.test` is where a second connection
     // meets it.
-    const connections = new Set(database.issued.map((statement) => statement.connection));
-    expect(connections.size).toBe(1);
+    const transactions = new Set(database.issued.map((statement) => statement.transaction));
+    expect(transactions).toEqual(new Set([1]));
   });
 
   it('says which migrations it applied, so a deploy log shows the schema change', async () => {

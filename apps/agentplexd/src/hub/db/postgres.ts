@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { Database, DatabaseSession, Queryable, QueryResult } from './database.js';
+import type { Database, Queryable, QueryResult } from './database.js';
 
 /**
  * The one module that names the Postgres driver.
@@ -15,7 +15,41 @@ export interface PostgresOptions {
   readonly connectionTimeoutMs?: number;
 }
 
-export function createPostgresDatabase(url: string, options: PostgresOptions = {}): Database {
+/**
+ * One connection out of the pool, held for as long as the body runs.
+ *
+ * This used to sit on `Database`, and it came back here when the seam was
+ * narrowed: pinning a connection is a thing a pool can do and a single-file
+ * database cannot say. The reason it ever existed is Postgres state that lives
+ * on a connection rather than in the database — an advisory lock belongs to the
+ * backend that took it, and a pool that hands out a different backend per query
+ * releases nothing. A session can open transactions, and they run on the same
+ * connection, so a lock taken before them is still held after they commit.
+ *
+ * Nothing above the seam calls this any more; it stays only as long as the
+ * driver does, which is until this file is deleted.
+ */
+export interface PostgresSession extends Queryable {
+  /**
+   * Runs `body` inside one transaction on this connection: committed when it
+   * returns, rolled back when it throws.
+   */
+  transaction<T>(body: (tx: Queryable) => Promise<T>): Promise<T>;
+}
+
+export interface PostgresDatabase extends Database {
+  /**
+   * Runs `body` against one connection pinned for its whole lifetime. The
+   * handle is a `PostgresSession` and not a `Database`: a session cannot close
+   * the pool it was checked out of.
+   */
+  session<T>(body: (session: PostgresSession) => Promise<T>): Promise<T>;
+}
+
+export function createPostgresDatabase(
+  url: string,
+  options: PostgresOptions = {},
+): PostgresDatabase {
   const pool = new pg.Pool({
     connectionString: url,
     max: options.maxConnections ?? 10,
@@ -49,7 +83,7 @@ export function createPostgresDatabase(url: string, options: PostgresOptions = {
       }
     };
 
-  const session = async <T>(body: (handle: DatabaseSession) => Promise<T>): Promise<T> => {
+  const session = async <T>(body: (handle: PostgresSession) => Promise<T>): Promise<T> => {
     const client = await pool.connect();
     try {
       return await body({ query: queryOn(client), transaction: transactionOn(client) });
