@@ -88,7 +88,14 @@ Every setting has one flag and one environment variable; the flag wins.
 | `--server-port`  | `AGENTPLEX_SERVER_PORT`  | `8081`         | Port the hub dials                      |
 | `--database-url` | `AGENTPLEX_DATABASE_URL` | none           | Postgres; required for `hub` and `both` |
 | `--store-path`   | `AGENTPLEX_STORE_PATH`   | none           | Store root; repeatable, absolute        |
+| `--terminal-cap` | `AGENTPLEX_TERMINAL_CAP` | `8`            | Terminals held at once; at least 1      |
 | `--log-level`    | `AGENTPLEX_LOG_LEVEL`    | `info`         | `debug`, `info`, `warn`, `error`        |
+
+A server holds at most `--terminal-cap` terminals. Reaching the cap closes the
+one whose last watcher left longest ago, never one somebody is watching; the
+session itself is untouched, because its transcript is on disk and resuming it
+starts a new terminal. Nothing else closes a terminal — there is no idle timer,
+and a session outlives the tab that opened it — except stopping the server.
 
 A store is identified by an `agentplex-store.json` file at its root, minted the
 first time a server mounts it. Two servers mounting the same volume report the

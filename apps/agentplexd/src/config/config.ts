@@ -1,5 +1,6 @@
 import { delimiter, isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
+import { DEFAULT_TERMINAL_CAP } from '../server/terminal-manager.js';
 import { LOG_LEVELS, type LogLevel } from '../shared/logger.js';
 
 /**
@@ -34,6 +35,17 @@ export interface ServerConfig {
    * refusing to start, and the hub is told the truth either way.
    */
   readonly storePaths: readonly string[];
+  /**
+   * How many terminals this server may hold at once.
+   *
+   * Configuration rather than a constant because it is a statement about the
+   * machine: the same build runs on a laptop that is also somebody's desktop
+   * and on a box that exists to run agents. Reaching the cap is not an error —
+   * the longest-unwatched terminal is closed and its session stays resumable —
+   * so the setting trades memory against how often somebody's background
+   * session has to be started again.
+   */
+  readonly terminalCap: number;
 }
 
 /**
@@ -102,6 +114,7 @@ const SETTINGS = {
   databaseUrl: { flag: '--database-url', env: 'AGENTPLEX_DATABASE_URL' },
   /** The one repeatable setting: a server may mount more than one store. */
   storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
+  terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
 } as const;
 
 /**
@@ -158,12 +171,14 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
     problems,
   );
 
+  const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
+
   const databaseUrl = read(SETTINGS.databaseUrl);
   if (role !== 'server' && databaseUrl === undefined) problems.push(MISSING_DATABASE_URL);
 
   if (role === undefined || problems.length > 0) return { ok: false, problems };
 
-  const server: ServerConfig = { port: serverPort, storePaths };
+  const server: ServerConfig = { port: serverPort, storePaths, terminalCap };
   if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
 
   if (databaseUrl === undefined) return { ok: false, problems: [MISSING_DATABASE_URL] };
@@ -264,6 +279,28 @@ function readRole(raw: string | undefined, problems: string[]): Role | undefined
     return undefined;
   }
   return result.data;
+}
+
+/**
+ * The terminal cap: a whole number of terminals, at least one.
+ *
+ * Zero is refused rather than taken literally. It would parse, and it would
+ * mean a server that accepts sessions and can never run one — a configuration
+ * whose only symptom is every launch being refused for a reason that reads like
+ * a bug. There is no upper bound: how much memory the machine has is the
+ * operator's to know, and a ceiling invented here would be wrong on the box
+ * that was bought to run twenty of them.
+ */
+function readTerminalCap(raw: string | undefined, problems: string[]): number {
+  if (raw === undefined) return DEFAULT_TERMINAL_CAP;
+  const cap = Number(raw);
+  if (!Number.isInteger(cap) || cap < 1) {
+    problems.push(
+      `${SETTINGS.terminalCap.flag} must be a whole number of terminals, at least 1, not ${JSON.stringify(raw)}`,
+    );
+    return DEFAULT_TERMINAL_CAP;
+  }
+  return cap;
 }
 
 function readPort(

@@ -180,6 +180,32 @@ describe('loadConfig store paths', () => {
   });
 });
 
+describe('loadConfig terminal cap', () => {
+  function terminalCap(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok && 'server' in result.config ? result.config.server.terminalCap : undefined;
+  }
+
+  it('defaults to a number a laptop survives', () => {
+    expect(terminalCap(['--role=server'])).toBe(8);
+  });
+
+  it('reads a cap from the environment, which is all a container is configured with', () => {
+    expect(terminalCap(['--role=server'], { AGENTPLEX_TERMINAL_CAP: '2' })).toBe(2);
+  });
+
+  it('refuses a cap of zero rather than starting a server that can never run one', () => {
+    const problems = expectProblems(load(['--role=server', '--terminal-cap=0']));
+    expect(problems[0]).toContain('at least 1');
+  });
+
+  it('refuses a cap that is not a whole number of terminals', () => {
+    expect(expectProblems(load(['--role=server', '--terminal-cap=lots']))).toHaveLength(1);
+    expect(expectProblems(load(['--role=server', '--terminal-cap=2.5']))).toHaveLength(1);
+  });
+});
+
 describe('loadConfig log level', () => {
   it('defaults to info', () => {
     expect(load(['--role=server'])).toMatchObject({ ok: true, config: { logLevel: 'info' } });

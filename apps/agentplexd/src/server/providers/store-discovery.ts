@@ -23,9 +23,6 @@ export interface SessionLiveness {
   isRunning(session: SessionRef): boolean;
 }
 
-/** Before the PTY supervisor exists, nothing is running, and saying so is honest. */
-export const noLiveSessions: SessionLiveness = { isRunning: () => false };
-
 export interface StoreDiscoveryDependencies {
   readonly registry: ProviderRegistry;
   readonly clock: Clock;
