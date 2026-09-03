@@ -5,6 +5,7 @@ import type { IdGenerator } from '../shared/ids.js';
 import type { Logger } from '../shared/logger.js';
 import type { ProviderRegistry } from './providers/provider-registry.js';
 import { discoverStoreSessions, noLiveSessions } from './providers/store-discovery.js';
+import type { PtySupervisor } from './pty-supervisor.js';
 import { ensureStores, type StoreFileSystem } from './store-identity.js';
 
 /**
@@ -13,8 +14,9 @@ import { ensureStores, type StoreFileSystem } from './store-identity.js';
  * A session runner and nothing else: it holds no database, and it dials out to
  * nothing. The hub dials it. Milestone 2 gives it the one durable fact it
  * owns — the identity of each store it has mounted — which is what every
- * session id it later reports is scoped by. The provider adapters and the PTY
- * supervisor follow.
+ * session id it later reports is scoped by. It also holds the one thing here
+ * that starts processes, the PTY supervisor, because a shutdown that does not
+ * reach the agents it started has not shut anything down.
  */
 
 export interface SessionServerDependencies {
@@ -28,6 +30,16 @@ export interface SessionServerDependencies {
   /** The adapters this build can drive. An empty registry finds nothing and says nothing. */
   readonly providers: ProviderRegistry;
   readonly clock: Clock;
+  /**
+   * The one thing on this server that starts processes.
+   *
+   * It is held here rather than made here so that shutdown can reach it. A
+   * server that closes its port and leaves agents running has not stopped: the
+   * processes keep the store's transcripts moving, the next server to start
+   * finds sessions it did not launch and cannot drive, and on a laptop they
+   * outlive the terminal that started them.
+   */
+  readonly sessions: PtySupervisor;
 }
 
 export interface SessionServer {
@@ -40,7 +52,7 @@ export interface SessionServer {
 export async function startSessionServer(
   dependencies: SessionServerDependencies,
 ): Promise<SessionServer> {
-  const { host, port, ids, storePaths, storeFileSystem, providers, clock } = dependencies;
+  const { host, port, ids, storePaths, storeFileSystem, providers, clock, sessions } = dependencies;
   const logger = dependencies.logger.child({ role: 'server' });
 
   // A store that cannot be read costs itself and nothing else: the server
@@ -95,8 +107,13 @@ export async function startSessionServer(
     port: listener.port,
     stores,
     async stop() {
+      // Children first. Closing the listener only stops new work arriving;
+      // anything already running would go on writing into the store with
+      // nothing left to watch it.
+      const running = sessions.runs.length;
+      sessions.stopAll();
       await listener.close();
-      logger.info('server stopped');
+      logger.info('server stopped', { killed: running });
     },
   };
 }

@@ -165,6 +165,16 @@ export interface StatusObservation {
 export interface SpawnRequest {
   readonly store: StoreDescriptor;
   /**
+   * Where to run, resolved by the server from its own configuration.
+   *
+   * Not off the wire. No frame carries a cwd, because a `{ cwd }` field is a
+   * remote code execution primitive wearing a path — whoever holds a client
+   * token picks a directory and runs an agent with write access to it. A frame
+   * names a store; the server turns that into a directory, and
+   * `parseWorkingDirectory` is the gate the answer passes on the way in.
+   */
+  readonly cwd: string;
+  /**
    * The text to open the session with, or `null` to leave the provider at its
    * own prompt. User content, never an option: the adapter places it as one
    * argv element and no shell ever sees it.
@@ -175,6 +185,17 @@ export interface SpawnRequest {
 export interface ResumeRequest {
   readonly store: StoreDescriptor;
   readonly session: SessionRef;
+  /**
+   * Where this session already ran, as discovery read it out of the provider's
+   * own files — `DiscoveredSession.cwd`, passed back in.
+   *
+   * Nobody gets to choose it. A session resumed in another directory is a
+   * different session that happens to share a history: every relative path in
+   * that history now points somewhere else, and the agent will act on the
+   * difference without noticing it. `null` is what discovery reports when the
+   * provider never recorded one, and an adapter refuses rather than guessing.
+   */
+  readonly cwd: string | null;
 }
 
 /**

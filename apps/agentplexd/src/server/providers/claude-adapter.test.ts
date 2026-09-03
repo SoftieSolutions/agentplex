@@ -327,25 +327,126 @@ describe('createClaudeAdapter.status', () => {
   });
 });
 
-describe('createClaudeAdapter launch plans', () => {
-  it('refuses to build one, naming what is missing', () => {
-    // A refusal is the honest value here and an invented argv is not. Claude
-    // Code takes its working directory from the process it is spawned in, and
-    // neither request carries one — the store path is the config directory
-    // (`~/.claude` generalized), and launching a session with that as its cwd
-    // would point the agent at the provider's own state directory, which is
-    // the one place the spec forbids agentplex to write.
-    const adapter = adapterOver({});
+const CWD = '/Users/dev/Code/agentplex';
+const SESSION = sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: SESSION_ID });
 
-    const spawned = adapter.spawn({ store: STORE, prompt: null });
-    const resumed = adapter.resume({
+/** Every argv this adapter can produce, for the rules that hold across all of them. */
+function everyArgv() {
+  const adapter = adapterOver({});
+  const plans = [
+    adapter.spawn({ store: STORE, cwd: CWD, prompt: null }),
+    adapter.spawn({ store: STORE, cwd: CWD, prompt: 'fix the flaky test' }),
+    adapter.resume({ store: STORE, session: SESSION, cwd: CWD }),
+  ];
+  return plans.flatMap((launch) => (launch.ok ? [launch.plan.args] : []));
+}
+
+describe('createClaudeAdapter.spawn', () => {
+  it('runs claude in the directory the caller resolved, with no prompt to open with', () => {
+    const spawned = adapterOver({}).spawn({ store: STORE, cwd: CWD, prompt: null });
+
+    expect(spawned).toEqual({
+      ok: true,
+      plan: {
+        command: 'claude',
+        args: [],
+        cwd: CWD,
+        env: { CLAUDE_CONFIG_DIR: STORE.path },
+        scrubEnvPrefixes: ['CLAUDE', 'AI_AGENT'],
+      },
+    });
+  });
+
+  it('places the prompt as one argv element', () => {
+    // One element, whatever is in it. It is user text, it will contain spaces
+    // and quotes and newlines, and the only reason that is safe is that there
+    // is no shell anywhere on this path.
+    const spawned = adapterOver({}).spawn({
       store: STORE,
-      session: sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: SESSION_ID }),
+      cwd: CWD,
+      prompt: 'rm -rf / ; echo "not a command"',
+    });
+
+    expect(spawned.ok && spawned.plan.args).toEqual(['rm -rf / ; echo "not a command"']);
+  });
+
+  it('points the child at this store instead of the default config directory', () => {
+    // Without this the spawned session writes its transcript into the user's
+    // own `~/.claude` and the store agentplex is watching never hears about the
+    // session it just started. The variable is set *after* the CLAUDE scrub,
+    // which is the whole reason the supervisor applies a plan's variables last.
+    const spawned = adapterOver({}).spawn({ store: STORE, cwd: CWD, prompt: null });
+
+    expect(spawned.ok && spawned.plan.env.CLAUDE_CONFIG_DIR).toBe(STORE.path);
+    expect(spawned.ok && spawned.plan.scrubEnvPrefixes).toContain('CLAUDE');
+  });
+
+  it('refuses a working directory inside the store', () => {
+    const spawned = adapterOver({}).spawn({
+      store: STORE,
+      cwd: `${STORE.path}/${CLAUDE_PROJECTS_DIRECTORY}`,
+      prompt: null,
     });
 
     expect(spawned.ok).toBe(false);
+    expect(!spawned.ok && spawned.problem).toContain('inside the store');
+  });
+
+  it('refuses a working directory that is not an absolute path', () => {
+    const spawned = adapterOver({}).spawn({ store: STORE, cwd: 'Code/agentplex', prompt: null });
+
+    expect(spawned.ok).toBe(false);
+  });
+});
+
+describe('createClaudeAdapter.resume', () => {
+  it('resumes by session id, in the directory the session already had', () => {
+    const resumed = adapterOver({}).resume({ store: STORE, session: SESSION, cwd: CWD });
+
+    expect(resumed).toEqual({
+      ok: true,
+      plan: {
+        command: 'claude',
+        args: ['--resume', SESSION_ID],
+        cwd: CWD,
+        env: { CLAUDE_CONFIG_DIR: STORE.path },
+        scrubEnvPrefixes: ['CLAUDE', 'AI_AGENT'],
+      },
+    });
+  });
+
+  it('refuses a session whose working directory the provider never recorded', () => {
+    // `DiscoveredSession.cwd` is null for these. Resuming one in a directory
+    // somebody guessed would silently continue the conversation somewhere it
+    // has never run, with every relative path in its history now pointing
+    // somewhere else.
+    const resumed = adapterOver({}).resume({ store: STORE, session: SESSION, cwd: null });
+
     expect(resumed.ok).toBe(false);
-    expect(!spawned.ok && spawned.problem).toContain('working directory');
     expect(!resumed.ok && resumed.problem).toContain('working directory');
+  });
+});
+
+describe('createClaudeAdapter argv invariants', () => {
+  it('never names a session id and never forks one', () => {
+    // The pin, and the reason it is a test rather than a comment. Both flags
+    // are real and both are one edit away from looking like the obvious fix
+    // for a resume bug: `--session-id` makes agentplex mint the id instead of
+    // Claude Code, and `--fork-session` gives a resumed session a *new* id.
+    // Either one splits a history in two — the client keeps watching the
+    // transcript it knows and the work continues in a file nobody is reading.
+    // Claude Code mints the id, discovery finds it afterwards.
+    for (const args of everyArgv()) {
+      expect(args).not.toContain('--fork-session');
+      expect(args).not.toContain('--session-id');
+    }
+  });
+
+  it('passes no flag as anything but its own argv element', () => {
+    // A joined string is the shape that only works with a shell, and the
+    // registry exists so that no spawn ever has one.
+    for (const args of everyArgv()) {
+      for (const element of args) expect(element).not.toMatch(/^--\S+[ =]/);
+    }
   });
 });

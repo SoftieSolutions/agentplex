@@ -89,7 +89,9 @@ export default tseslint.config(
   {
     // Tests and the support modules they import. `test-*.ts` is the same set
     // `tsconfig.build.json` excludes, so nothing matched here reaches `dist/`.
-    files: ['**/*.test.ts', '**/*.test.tsx', '**/test-*.ts', 'scripts/**/*.js'],
+    // Install-time and tooling scripts match wherever they live: they run
+    // under Node and their whole job is to say what they changed.
+    files: ['**/*.test.ts', '**/*.test.tsx', '**/test-*.ts', '**/scripts/**/*.js'],
     languageOptions: { globals: globals.node },
     rules: { 'no-console': 'off' },
   },
