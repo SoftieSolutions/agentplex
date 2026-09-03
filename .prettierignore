@@ -14,3 +14,7 @@ docs/specs
 # fixture is that it is byte-for-byte what the real thing produced — including
 # whether it is one line or fifty.
 apps/agentplexd/src/server/providers/fixtures
+# The same rule for the operation registry's fixtures, where the bytes prettier
+# would tidy away are the ones under test: `ps` pads its columns with trailing
+# spaces, and `git status --porcelain=v2` is defined line by line.
+apps/agentplexd/src/server/operations/fixtures

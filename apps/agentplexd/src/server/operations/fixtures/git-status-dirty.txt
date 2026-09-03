@@ -1,0 +1,7 @@
+# branch.oid c51c17004bca26459fc9b1394bb72fef10c228b6
+# branch.head agx-21-operation-registry
+# branch.upstream origin/agx-20-terminal-cap
+# branch.ab +0 -0
+1 .M N... 100644 100644 100644 caf480452e8491d9ee5a53796b76e1fdb775301f caf480452e8491d9ee5a53796b76e1fdb775301f .prettierignore
+1 .M N... 100644 100644 100644 48076255364c4c3a5a43729035fcbed8369df237 48076255364c4c3a5a43729035fcbed8369df237 eslint.config.js
+? apps/agentplexd/src/server/operations/

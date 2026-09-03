@@ -4,9 +4,11 @@ import { loadConfig, usage } from './config/config.js';
 import { createPostgresDatabase } from './hub/db/postgres.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { startRuntime } from './runtime.js';
-import { nodeProcessProbe } from './server/node-process-probe.js';
+import { createNodeProcessProbe } from './server/node-process-probe.js';
 import { nodePtyFactory } from './server/node-pty-factory.js';
 import { nodeStoreFileSystem } from './server/node-store-files.js';
+import { createNodeProcessRunner } from './server/operations/node-process-runner.js';
+import { createOperationRegistry } from './server/operations/operation-registry.js';
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { nodeProviderFiles } from './server/providers/node-provider-files.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
@@ -47,6 +49,12 @@ async function main(): Promise<void> {
   const config = loaded.config;
   const logger = createLogger(config.logLevel, jsonLineSink(write, systemClock));
 
+  // The one place a one-shot child is started, and the second of the two places
+  // this process's own environment is read as something a child inherits (the
+  // pty supervisor below is the other). Every operation shares it, so what a
+  // child inherits is decided here and cannot be added to further down.
+  const processRunner = createNodeProcessRunner({ environment: process.env });
+
   let runtime;
   try {
     runtime = await startRuntime(config, {
@@ -59,8 +67,14 @@ async function main(): Promise<void> {
       // The providers this build drives, in one line. Adding codex is another
       // adapter file and another entry here, and nothing else.
       providers: createProviderRegistry([
-        createClaudeAdapter({ files: nodeProviderFiles, probe: nodeProcessProbe }),
+        createClaudeAdapter({
+          files: nodeProviderFiles,
+          probe: createNodeProcessProbe({ runner: processRunner }),
+        }),
       ]),
+      // Closed: the operations are a list in that module, and there is no
+      // parameter here through which a build could add one.
+      operations: createOperationRegistry(processRunner),
       // The only place a real pty is opened, and the only place `process.env`
       // is read as the environment a child inherits. What gets scrubbed out of
       // it is each adapter's call, carried on its launch plan.
