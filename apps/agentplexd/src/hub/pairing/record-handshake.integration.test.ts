@@ -193,6 +193,39 @@ describe('recordHandshake', () => {
     expect(outcome).toMatchObject({ kind: 'recorded' });
   });
 
+  it('records that the hub connected, so a stale label can carry an age', async () => {
+    // The one connectivity fact a column may hold: it is about the past, and
+    // no restart can make it untrue. Without it a hub that came back up could
+    // only say "not connected", never "not connected since Friday".
+    const registration = await register('laptop');
+    expect(registration.lastConnectedAt).toBeNull();
+
+    await recordHandshake(db(), clock, registration.id, {
+      serverId: serverIdSchema.parse('server-laptop'),
+      stores: [],
+    });
+
+    expect((await findServer(db(), registration.id))?.lastConnectedAt).toBe(NOW);
+  });
+
+  it('writes nothing about connecting when it refuses the handshake', async () => {
+    // A refusal is not a connection. Recording one would make the pairing
+    // screen claim the hub reached a server it hung up on.
+    const registration = await register('laptop');
+    await recordHandshake(db(), clock, registration.id, {
+      serverId: serverIdSchema.parse('server-original'),
+      stores: [],
+    });
+    await db().query('UPDATE servers SET last_connected_at = NULL');
+
+    await recordHandshake(db(), clock, registration.id, {
+      serverId: serverIdSchema.parse('server-replacement'),
+      stores: [],
+    });
+
+    expect((await findServer(db(), registration.id))?.lastConnectedAt).toBeNull();
+  });
+
   it('moves last-seen forward on a reconnect without moving first-seen', async () => {
     const registration = await register('laptop');
     const accepted = {

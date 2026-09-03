@@ -11,6 +11,8 @@ import type { StoreFileSystem } from './server/store-identity.js';
 import type { Clock } from './shared/clock.js';
 import type { IdGenerator } from './shared/ids.js';
 import type { Logger } from './shared/logger.js';
+import type { SocketDialer } from './shared/message-socket.js';
+import type { Timers } from './shared/timers.js';
 
 /**
  * Composition of the roles a configuration asks for.
@@ -63,6 +65,14 @@ export interface RuntimeDependencies {
    * have to reach for `process.env` two layers below the entrypoint.
    */
   readonly operations: OperationRegistry;
+  /**
+   * What the hub role dials paired servers with, and the deadlines it retries
+   * on. Injected for the same reason everything else here is: a test drives
+   * the whole runtime against fake sockets and a clock it controls, and the
+   * one place a real websocket is opened stays visible in `main`.
+   */
+  readonly dialer: SocketDialer;
+  readonly timers: Timers;
   readonly clock: Clock;
 }
 
@@ -87,6 +97,8 @@ export async function startRuntime(
     providers,
     terminals,
     operations,
+    dialer,
+    timers,
     clock,
   } = dependencies;
   // The interface to bind is a setting like any other, so it arrives with the
@@ -107,6 +119,8 @@ export async function startRuntime(
         logger,
         ids,
         clock,
+        dialer,
+        timers,
         migrationsDirectory,
         migrationFileSystem,
         host,
