@@ -36,7 +36,7 @@ function db(): Database {
 }
 
 /**
- * The clock the schema no longer has. Fixed, so a stored millisecond is a value
+ * The clock the schema does not supply. Fixed, so a stored millisecond is a value
  * a test can assert on -- and so every `created_at` in a run is identical,
  * which leaves the list ordering entirely to the counter ids below rather than
  * to whether two inserts landed in the same millisecond.

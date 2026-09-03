@@ -24,7 +24,7 @@ import { openMigratedSchema, type MigratedSchema } from './test-migrated-schema.
 
 let migrated: MigratedSchema | null = null;
 
-/** The clock the schema no longer has, fixed so a stored millisecond is checkable. */
+/** The clock the schema does not supply, fixed so a stored millisecond is checkable. */
 const NOW = 1_756_000_000_000;
 const clock = { now: () => NOW };
 
@@ -42,8 +42,8 @@ function store(value: string): StoreId {
  *
  * Asserting that `last_seen_at` moved needs a gap, and waiting for one would be
  * a slow test that is still occasionally wrong. With the clock injected and the
- * column a plain integer, the arithmetic that was `now() - interval '1 day'`
- * is now subtraction a reader can check.
+ * column a plain integer, backdating is subtraction a reader can check rather
+ * than an expression the database evaluates out of sight.
  */
 const A_DAY = 24 * 60 * 60 * 1000;
 
