@@ -10,10 +10,13 @@
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
     "dev": "vite",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "icons": "node scripts/generate-icons.js"
   },
   "dependencies": {
     "@agentplex/protocol": "workspace:*",
+    "@mantine/core": "9.6.0",
+    "@mantine/hooks": "9.6.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

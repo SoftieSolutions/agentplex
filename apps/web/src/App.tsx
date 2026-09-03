@@ -1,15 +1,35 @@
 import { PROTOCOL_VERSION } from '@agentplex/protocol';
+import { type JSX } from 'react';
+
+import { MantineProvider, Stack, Text, Title } from './ui/components.js';
+import { theme } from './ui/theme.js';
 
 /**
- * The scaffold's placeholder. It imports the protocol package so that the
- * dependency the workspace boundaries allow is real from the first commit.
- * The session list, terminal pane and layout tree arrive in milestone 4.
+ * The root: provider chrome only. Everything a feature ticket adds mounts
+ * inside AppShell, so this file changes when the provider stack changes and
+ * for no other reason.
  */
-export function App(): React.JSX.Element {
+export function App(): JSX.Element {
   return (
-    <main>
-      <h1>agentplex</h1>
-      <p>Protocol version {PROTOCOL_VERSION}</p>
-    </main>
+    <MantineProvider theme={theme} defaultColorScheme="dark">
+      <AppShell />
+    </MantineProvider>
+  );
+}
+
+/**
+ * Where the application lives. The stacked tickets — session list, terminal
+ * pane, layout tree, settings — replace the placeholder below with their
+ * routes and panes; the provider stack above stays out of their way.
+ *
+ * It imports the protocol package so the one workspace dependency the
+ * boundaries allow is real from the first commit.
+ */
+function AppShell(): JSX.Element {
+  return (
+    <Stack component="main" p="md" gap="xs">
+      <Title order={1}>agentplex</Title>
+      <Text c="dimmed">Protocol version {PROTOCOL_VERSION}</Text>
+    </Stack>
   );
 }
