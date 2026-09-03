@@ -77,7 +77,9 @@ export default tseslint.config(
     languageOptions: { globals: globals.browser },
   },
   {
-    files: ['**/*.test.ts', '**/*.test.tsx', 'scripts/**/*.js'],
+    // Tests and the support modules they import. `test-*.ts` is the same set
+    // `tsconfig.build.json` excludes, so nothing matched here reaches `dist/`.
+    files: ['**/*.test.ts', '**/*.test.tsx', '**/test-*.ts', 'scripts/**/*.js'],
     languageOptions: { globals: globals.node },
     rules: { 'no-console': 'off' },
   },

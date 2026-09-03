@@ -211,7 +211,10 @@ pnpm docker:test    # tests only
 ```
 
 The database is why that file exists. The migration suite runs its SQL against
-a real server when `AGENTPLEX_TEST_DATABASE_URL` is set and skips itself when
-it is not, rather than passing quietly; the test compose file sets it. When you
-are done, `docker compose -f docker-compose.test.yml down -v` removes the
+a real server, and the test compose file supplies one through
+`AGENTPLEX_TEST_DATABASE_URL`. Without that variable the suite starts a
+throwaway Postgres container of its own through testcontainers, so `pnpm test`
+on a laptop with a Docker daemon runs the same tests; with no daemon either, it
+skips itself and says so on stderr rather than passing quietly. When you are
+done, `docker compose -f docker-compose.test.yml down -v` removes the
 throwaway database, which is otherwise left running for the next run to reuse.

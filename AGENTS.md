@@ -33,10 +33,10 @@ architecture: its decisions are requirements, and each records why.
 - `pnpm check` — build, lint, typecheck, test. CI runs the same set as four
   jobs: `build`, then `lint`, `typecheck` and `test` in parallel.
 - `pnpm docker:check` — the same in a container, against a real Postgres;
-  `docker:lint` / `docker:typecheck` / `docker:test` run one check alone. This
-  is the only path where the migration integration tests actually run; without
-  `AGENTPLEX_TEST_DATABASE_URL` they skip themselves rather than failing, so a
-  green run that never started a database has not tested them.
+  `docker:lint` / `docker:typecheck` / `docker:test` run one check alone. The
+  database suites take `AGENTPLEX_TEST_DATABASE_URL` when it is set and start a
+  testcontainer when it is not; with neither they skip themselves loudly, so a
+  green run that never reached a database has not tested them.
 - `pnpm docker:up` / `pnpm docker:down` — the hub, Postgres and Caddy.
 - Docker is the primary path for testing and for running the stack.
 
