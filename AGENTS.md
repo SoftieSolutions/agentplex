@@ -32,13 +32,11 @@ architecture: its decisions are requirements, and each records why.
 
 - `pnpm check` — build, lint, typecheck, test. CI runs the same set as four
   jobs: `build`, then `lint`, `typecheck` and `test` in parallel.
-- `pnpm docker:check` — the same in a container, against a real Postgres;
-  `docker:lint` / `docker:typecheck` / `docker:test` run one check alone. The
-  database suites take `AGENTPLEX_TEST_DATABASE_URL` when it is set and start a
-  testcontainer when it is not; with neither they skip themselves loudly, so a
-  green run that never reached a database has not tested them.
-- `pnpm docker:up` / `pnpm docker:down` — the hub, Postgres and Caddy.
-- Docker is the primary path for testing and for running the stack.
+- `pnpm docker:check` — the same in a container; `docker:lint` /
+  `docker:typecheck` / `docker:test` run one check alone.
+- `pnpm docker:up` / `pnpm docker:down` — the hub and Caddy.
+- Docker is the primary path for the checks and for a hosted hub, not the price
+  of entry: the database is a file, so one machine runs `--role=both` natively.
 
 ## DEPENDENCIES DIRECTIVES
 

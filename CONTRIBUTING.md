@@ -7,7 +7,7 @@ Docker is the primary path; Node 24 and pnpm 11 are the alternative.
 ```sh
 pnpm install
 pnpm check          # build, lint, typecheck, test — the same set CI runs
-pnpm docker:check   # the same, in a container, with a real Postgres
+pnpm docker:check   # the same, in a container
 ```
 
 `pnpm check` runs the whole set, starting with the build, because typecheck and
@@ -23,7 +23,7 @@ own, which is what to reach for when one job is red and the others are green:
 ```sh
 pnpm docker:lint
 pnpm docker:typecheck
-pnpm docker:test    # the only one that starts Postgres
+pnpm docker:test
 ```
 
 ## The shape of the codebase
