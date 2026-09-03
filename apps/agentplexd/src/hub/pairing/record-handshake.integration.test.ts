@@ -32,7 +32,7 @@ function db(): Database {
   return migrated.database;
 }
 
-/** The clock the schema no longer has, fixed so a stored millisecond is checkable. */
+/** The clock the schema does not supply, fixed so a stored millisecond is checkable. */
 const NOW = 1_756_000_000_000;
 const clock = { now: () => NOW };
 
