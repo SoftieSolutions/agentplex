@@ -4,7 +4,6 @@ import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import type { OperationRegistry } from './server/operations/operation-registry.js';
 import type { ProviderRegistry } from './server/providers/provider-registry.js';
-import type { TokenMinter } from './server/server-identity.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { TerminalManager } from './server/terminal-manager.js';
 import type { StoreFileSystem } from './server/store-identity.js';
@@ -13,6 +12,7 @@ import type { IdGenerator } from './shared/ids.js';
 import type { Logger } from './shared/logger.js';
 import type { SocketDialer } from './shared/message-socket.js';
 import type { Timers } from './shared/timers.js';
+import type { TokenMinter } from './shared/tokens.js';
 
 /**
  * Composition of the roles a configuration asks for.
@@ -31,12 +31,13 @@ export interface RuntimeDependencies {
   /** The store volumes, injected for the same reason the migrations directory is. */
   readonly storeFileSystem: StoreFileSystem;
   /**
-   * Where the server role's pairing token comes from on a first start.
+   * Where a secret comes from: the server role's pairing token on a first
+   * start, and every ticket the hub role issues to a client.
    *
    * Injected rather than imported for the reason the id source is, and one
-   * more: a test that asserts on a handshake needs to know the token, and a
-   * seam is how it does that without the entropy being weaker in the build
-   * anyone actually runs.
+   * more: a test that asserts on a handshake or redeems a ticket needs to know
+   * the value, and a seam is how it does that without the entropy being weaker
+   * in the build anyone actually runs.
    */
   readonly tokens: TokenMinter;
   /**
@@ -125,6 +126,8 @@ export async function startRuntime(
         migrationFileSystem,
         host,
         port: config.hub.port,
+        clientToken: config.hub.clientToken,
+        tokens,
       });
     }
     if ('server' in config) {

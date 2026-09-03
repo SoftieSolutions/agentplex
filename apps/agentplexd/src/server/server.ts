@@ -3,12 +3,13 @@ import type { Clock } from '../shared/clock.js';
 import { HTTP_TIMEOUTS, sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { Logger } from '../shared/logger.js';
+import type { TokenMinter } from '../shared/tokens.js';
 import { createWebSocketListener } from '../shared/ws-message-socket.js';
 import { serveHubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProviderRegistry } from './providers/provider-registry.js';
 import { discoverStoreSessions } from './providers/store-discovery.js';
-import { ensureServerIdentity, type TokenMinter } from './server-identity.js';
+import { ensureServerIdentity } from './server-identity.js';
 import type { TerminalManager } from './terminal-manager.js';
 import { ensureStores, type StoreFileSystem } from './store-identity.js';
 

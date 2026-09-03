@@ -24,6 +24,22 @@ export interface HubConfig {
    * and the directory it sits in is the operator's to create and to back up.
    */
   readonly databaseFile: string;
+  /**
+   * The shared credential a client presents to get a websocket ticket.
+   *
+   * Configuration rather than something the hub mints, because the hub has
+   * nowhere to put a minted one: a server writes its token to a file the
+   * operator reads, and the hub's equivalent would be a secret printed into a
+   * log that `logger.ts` exists to keep secrets out of. What the operator sets
+   * here is what the user types on the device, which is the whole of the
+   * pairing the spec describes.
+   *
+   * There is no default, for the reason the database file has none, with more
+   * at stake: a default would be published, and a hub is a thing on the
+   * internet. A minimum length is enforced rather than trusted — see
+   * `MIN_CLIENT_TOKEN_LENGTH`.
+   */
+  readonly clientToken: string;
 }
 
 export interface ServerConfig {
@@ -131,6 +147,20 @@ const DEFAULT_HOST = '0.0.0.0';
 const MISSING_DATABASE_FILE =
   'the hub role needs a database: set AGENTPLEX_DATABASE_FILE or pass --database-file';
 
+/**
+ * Short enough to be typed on a phone, long enough that guessing it is not a
+ * plan. 32 characters is under what `randomTokenMinter` produces (43), so the
+ * documented way of generating one always passes; what this refuses is the
+ * password somebody picked because it was quick, on the one credential standing
+ * between the internet and every session on every paired machine.
+ */
+const MIN_CLIENT_TOKEN_LENGTH = 32;
+
+const BAD_CLIENT_TOKEN =
+  'the hub role needs a client token of at least ' +
+  `${MIN_CLIENT_TOKEN_LENGTH} characters: set AGENTPLEX_CLIENT_TOKEN or pass --client-token ` +
+  '(generate one with: openssl rand -base64 32)';
+
 const MISSING_IDENTITY_FILE =
   'the server role needs somewhere to keep its identity and pairing token: ' +
   'set AGENTPLEX_SERVER_IDENTITY_FILE or pass --server-identity-file (an absolute path)';
@@ -151,6 +181,7 @@ const SETTINGS = {
   hubPort: { flag: '--hub-port', env: 'AGENTPLEX_HUB_PORT' },
   serverPort: { flag: '--server-port', env: 'AGENTPLEX_SERVER_PORT' },
   databaseFile: { flag: '--database-file', env: 'AGENTPLEX_DATABASE_FILE' },
+  clientToken: { flag: '--client-token', env: 'AGENTPLEX_CLIENT_TOKEN' },
   /** Repeatable: a server may mount more than one store. */
   storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
   /** Repeatable, and ordered: the first directory holding a program wins. */
@@ -242,6 +273,8 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   const databaseFile = readDatabaseFile(read(SETTINGS.databaseFile), role, problems);
 
+  const clientToken = readClientToken(read(SETTINGS.clientToken), role, problems);
+
   const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), role, problems);
 
   if (role === undefined || problems.length > 0) return { ok: false, problems };
@@ -251,7 +284,11 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
   // in `--role=hub`, and no database file to read in `--role=server`.
   if (role === 'hub') {
     if (databaseFile === undefined) return { ok: false, problems: [MISSING_DATABASE_FILE] };
-    return { ok: true, config: { role, logLevel, host, hub: { port: hubPort, databaseFile } } };
+    if (clientToken === undefined) return { ok: false, problems: [BAD_CLIENT_TOKEN] };
+    return {
+      ok: true,
+      config: { role, logLevel, host, hub: { port: hubPort, databaseFile, clientToken } },
+    };
   }
 
   if (identityPath === undefined) return { ok: false, problems: [MISSING_IDENTITY_FILE] };
@@ -265,8 +302,34 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
   if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
 
   if (databaseFile === undefined) return { ok: false, problems: [MISSING_DATABASE_FILE] };
-  const hub: HubConfig = { port: hubPort, databaseFile };
+  if (clientToken === undefined) return { ok: false, problems: [BAD_CLIENT_TOKEN] };
+  const hub: HubConfig = { port: hubPort, databaseFile, clientToken };
   return { ok: true, config: { role, logLevel, host, hub, server } };
+}
+
+/**
+ * The client credential, required by every role that serves a hub.
+ *
+ * Absent and too short are one problem with one message, because they are one
+ * mistake: somebody has not yet put a real secret here. It is trimmed by
+ * `nonEmpty` before it arrives, so a token cannot pick up the whitespace an env
+ * file left around it and then fail to match what the user typed.
+ */
+function readClientToken(
+  raw: string | undefined,
+  role: Role | undefined,
+  problems: string[],
+): string | undefined {
+  if (role === 'server') return undefined;
+
+  if (raw === undefined || raw.length < MIN_CLIENT_TOKEN_LENGTH) {
+    // A role that did not parse is reported already; it is still asked for a
+    // token, so that the run which fixes the role does not then discover a
+    // second missing setting.
+    problems.push(BAD_CLIENT_TOKEN);
+    return undefined;
+  }
+  return raw;
 }
 
 /**

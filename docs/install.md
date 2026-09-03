@@ -25,11 +25,15 @@ Requires Docker with the Compose plugin. Nothing else — not Node, not pnpm.
 git clone https://github.com/SoftieSolutions/agentplex.git
 cd agentplex
 cp .env.example .env
+echo "AGENTPLEX_CLIENT_TOKEN=$(openssl rand -base64 32)" >> .env
 docker compose up -d
 ```
 
-Nothing in `.env` has to be edited to reach a hub on `localhost`: every setting
-in it has a default that works there.
+One setting in `.env` has no default and has to be filled in: the client token,
+which is what you type on a phone or a laptop to reach this hub. Compose refuses
+to start without it rather than bringing up a hub anyone can attach to, and the
+hub refuses a token shorter than 32 characters for the same reason. Everything
+else in `.env` has a default that works on `localhost`.
 
 That builds one `agentplexd` image and starts two containers: the hub, and Caddy
 in front of it. The hub creates and migrates its database — one SQLite file in
@@ -57,17 +61,18 @@ Every setting the process reads has one flag and one environment variable, and
 the flag wins, because a flag is typed by a person at the moment they mean it
 and an environment variable is inherited.
 
-| Flag                     | Environment                      | Default        | Meaning                                                                           |
-| ------------------------ | -------------------------------- | -------------- | --------------------------------------------------------------------------------- |
-| `--role`                 | `AGENTPLEX_ROLE`                 | none, required | `hub`, `server` or `both`                                                         |
-| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`      | Interface to bind                                                                 |
-| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`         | Port the hub serves on                                                            |
-| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`         | Port the hub dials                                                                |
-| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none           | SQLite file, absolute; required for `hub`, `both`                                 |
-| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none           | A store root, absolute; repeat the flag per store                                 |
-| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none           | Absolute path to this server's identity; required for `server`, `both`            |
-| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none           | A directory to resolve agent binaries in, absolute; repeat the flag per directory |
-| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`         | `debug`, `info`, `warn`, `error`                                                  |
+| Flag                     | Environment                      | Default        | Meaning                                                                               |
+| ------------------------ | -------------------------------- | -------------- | ------------------------------------------------------------------------------------- |
+| `--role`                 | `AGENTPLEX_ROLE`                 | none, required | `hub`, `server` or `both`                                                             |
+| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`      | Interface to bind                                                                     |
+| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`         | Port the hub serves on                                                                |
+| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`         | Port the hub dials                                                                    |
+| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none           | SQLite file, absolute; required for `hub`, `both`                                     |
+| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none           | What a client presents to the hub, at least 32 characters; required for `hub`, `both` |
+| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none           | A store root, absolute; repeat the flag per store                                     |
+| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none           | Absolute path to this server's identity; required for `server`, `both`                |
+| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none           | A directory to resolve agent binaries in, absolute; repeat the flag per directory     |
+| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`         | `debug`, `info`, `warn`, `error`                                                      |
 
 A container is reached from outside its own loopback, so `0.0.0.0` is the
 default that suits one; on a laptop, `--host=127.0.0.1` is often what you want.
@@ -124,6 +129,31 @@ something on this machine terminates TLS — Caddy, `tailscale serve`, a reverse
 proxy — because in every one of those cases the hub's plain HTTP port has no
 business being reachable from the network. Widening it to `0.0.0.0` serves
 unencrypted HTTP to anyone who can route to the host.
+
+## Reaching the hub from a device
+
+> The hub half of this is wired today: the exchange below works and a socket that
+> passes it is served the machine state. The PWA that does it for you is a later
+> milestone; until then `curl` and `websocat` are the client.
+
+`AGENTPLEX_CLIENT_TOKEN` is the whole of it. One token for the hub rather than
+one per device, typed on each device that should reach it, and changing it is
+how you revoke every device at once.
+
+The token is never put in a URL. A `WebSocket` constructor cannot set a header,
+so a socket is opened with a ticket instead: the device presents the token to an
+ordinary request, gets a ticket good for one use and ten seconds, and spends it
+opening the socket.
+
+```sh
+TICKET=$(curl -sk -X POST https://localhost/client/ticket \
+  -H "authorization: Bearer $AGENTPLEX_CLIENT_TOKEN" | jq -r .ticket)
+websocat -k "wss://localhost/client?ticket=$TICKET"
+```
+
+A wrong token is a `401`. A ticket that was already spent, or issued more than
+ten seconds ago, closes the socket with `1008`. Both mean the same thing and say
+the same thing — `not authorized` — and neither says which of the two it was.
 
 ## Pairing a server with the hub
 
@@ -272,7 +302,8 @@ uses: `launchd` on macOS, a systemd user unit on Linux. Both stop a service
 with `SIGTERM`, which is the signal the process already shuts down cleanly on.
 
 The same applies to the hub if you would rather not run Docker at all: point
-`--database-file` at a file on a disk you back up and run `--role=hub`, or
+`--database-file` at a file on a disk you back up, set `AGENTPLEX_CLIENT_TOKEN`,
+and run `--role=hub`, or
 `--role=both` to have one process do both jobs on one machine, which is the
 ordinary single-machine case.
 

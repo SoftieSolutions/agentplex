@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   closure,
@@ -124,20 +125,37 @@ export interface WebSocketListener {
   close(): void;
 }
 
+/**
+ * What an accepted upgrade is allowed to remember about the request that made
+ * it.
+ *
+ * The URL, and nothing else. Not the `IncomingMessage`: a browser cannot set a
+ * header on a websocket, so a rule written against one would be a rule no
+ * client could satisfy, and holding the request object here is how somebody
+ * later writes one anyway. It is the raw request target, which on the hub's
+ * client route carries a ticket — so it is a secret, and `requestPath` is what
+ * anything logging it goes through.
+ */
+export interface UpgradeRequest {
+  readonly url: string;
+}
+
 export interface WebSocketListenerOptions {
   /**
    * Called once per accepted connection, with the seam rather than the
    * websocket.
    *
-   * Every path is accepted, deliberately. The hub dials the address the user
-   * typed and nothing appends to it, because that address may be a tunnel or a
-   * reverse proxy with a prefix this process cannot know about — and a path
-   * check here would reject exactly the deployments the transport-agnostic
-   * design exists to support. Nothing is protected by it either: the token is
-   * what admits a peer, and it is checked on the first frame whatever path the
-   * socket arrived on.
+   * Every path is accepted here, deliberately, and what to do about that is the
+   * caller's. The hub dials a server at the address the user typed and nothing
+   * appends to it, because that address may be a tunnel or a reverse proxy with
+   * a prefix this process cannot know about — and a path check in this file
+   * would reject exactly the deployments the transport-agnostic design exists
+   * to support. Nothing is protected by it either: on the server role the token
+   * is what admits a peer, checked on the first frame whatever path the socket
+   * arrived on, and on the hub's client route the ticket in the URL is, checked
+   * before the socket is served.
    */
-  readonly onConnection: (socket: MessageSocket) => void;
+  readonly onConnection: (socket: MessageSocket, request: UpgradeRequest) => void;
   /** How large a frame may be, in bytes, before the connection is dropped. */
   readonly maxPayloadBytes?: number;
 }
@@ -162,8 +180,8 @@ export function createWebSocketListener(options: WebSocketListenerOptions): WebS
     maxPayload: options.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
   });
 
-  server.on('connection', (socket: WebSocket) => {
-    options.onConnection(wrapWebSocket(socket));
+  server.on('connection', (socket: WebSocket, request: IncomingMessage) => {
+    options.onConnection(wrapWebSocket(socket), { url: request.url ?? '/' });
   });
 
   return {
