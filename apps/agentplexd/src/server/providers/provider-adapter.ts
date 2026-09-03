@@ -91,6 +91,19 @@ export interface DiscoveredSession {
   readonly signal: TranscriptSignal;
   /** Epoch ms, as the provider dated its own last write. */
   readonly updatedAt: number;
+  /**
+   * Where the session was working, read out of the provider's own files.
+   *
+   * This is the adapter's answer and not the caller's, because the only place
+   * the answer is reliable is inside the provider's format. Claude Code, for
+   * one, names its per-project directory after an encoding of the cwd that
+   * flattens `/` and `.` to the same character, so the directory name cannot be
+   * decoded back into a path; the transcript records the cwd verbatim on every
+   * entry. `null` when the provider does not say.
+   */
+  readonly cwd: string | null;
+  /** What the provider calls this session, or `null` if it does not name it. */
+  readonly title: string | null;
 }
 
 export interface DiscoveryProblem {

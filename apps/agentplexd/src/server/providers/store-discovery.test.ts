@@ -16,7 +16,7 @@ function transcriptsAt(provider: string): string {
 }
 
 function transcript(signal: string, updatedAt: number = NOW - 1_000): string {
-  return JSON.stringify({ signal, updatedAt });
+  return JSON.stringify({ signal, updatedAt, cwd: '/work', title: 'a made-up session' });
 }
 
 function liveness(...running: readonly string[]): SessionLiveness {
@@ -50,6 +50,8 @@ describe('discoverStoreSessions', () => {
         provider: 'claude',
         status: 'awaiting-permission',
         updatedAt: NOW - 1_000,
+        cwd: '/work',
+        title: 'a made-up session',
       },
       {
         storeId: 'store-a',
@@ -57,8 +59,34 @@ describe('discoverStoreSessions', () => {
         provider: 'claude',
         status: 'idle',
         updatedAt: NOW - 1_000,
+        cwd: '/work',
+        title: 'a made-up session',
       },
     ]);
+  });
+
+  it('carries a cwd and title the adapter did not find as null, and derives neither itself', async () => {
+    // The only place a cwd is reliable is inside the provider's own format —
+    // Claude Code's per-project directory name, for one, encodes `/` and `.`
+    // onto the same character and cannot be decoded back. So a provider that
+    // records neither yields null here rather than something reconstructed.
+    const files = createFakeProviderFiles({
+      files: {
+        [`${transcriptsAt('claude')}/session-a.json`]: JSON.stringify({
+          signal: 'quiet',
+          updatedAt: NOW - 1_000,
+        }),
+      },
+    });
+    const registry = createProviderRegistry([createFakeProviderAdapter({ files })]);
+
+    const discovered = await discoverStoreSessions(STORE, {
+      registry,
+      clock,
+      liveness: nothingRunning,
+    });
+
+    expect(discovered.sessions[0]).toMatchObject({ cwd: null, title: null });
   });
 
   it('hands the adapter liveness and the clock, and takes the status it answers', async () => {

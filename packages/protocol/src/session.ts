@@ -46,5 +46,21 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
    * another disk keeps its sessions, and mtime does not survive the copy.
    */
   updatedAt: z.int().nonnegative(),
+  /**
+   * The directory the session was working in, as its own transcript recorded
+   * it, or `null` when the provider does not say.
+   *
+   * Nullable rather than optional, and on the wire rather than derived later,
+   * for the reason `provider` is: a list of sessions with nothing but ids on it
+   * is unreadable, and every provider that keeps transcripts records a working
+   * directory in them. `null` is the adapter saying it looked and found none,
+   * which is a different fact from a field nobody filled in.
+   *
+   * It is a label, never an argument. Nothing sends it back, and no spawn
+   * takes a cwd off a frame: that is the operation registry's job.
+   */
+  cwd: z.string().min(1).nullable(),
+  /** What the provider calls this session, if it names its sessions at all. */
+  title: z.string().min(1).nullable(),
 });
 export type SessionDescriptor = z.infer<typeof sessionDescriptorSchema>;

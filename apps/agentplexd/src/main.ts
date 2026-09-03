@@ -5,6 +5,9 @@ import { createPostgresDatabase } from './hub/db/postgres.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { startRuntime } from './runtime.js';
 import { nodeStoreFileSystem } from './server/node-store-files.js';
+import { createClaudeAdapter } from './server/providers/claude-adapter.js';
+import { nodeProviderFiles } from './server/providers/node-provider-files.js';
+import { createProviderRegistry } from './server/providers/provider-registry.js';
 import { systemClock } from './shared/clock.js';
 import { randomIdGenerator } from './shared/ids.js';
 import { createLogger, jsonLineSink } from './shared/logger.js';
@@ -49,6 +52,10 @@ async function main(): Promise<void> {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
       migrationFileSystem: nodeMigrationFileSystem,
       storeFileSystem: nodeStoreFileSystem,
+      // The providers this build drives, in one line. Adding codex is another
+      // adapter file and another entry here, and nothing else.
+      providers: createProviderRegistry([createClaudeAdapter({ files: nodeProviderFiles })]),
+      clock: systemClock,
     });
   } catch (error) {
     logger.error('agentplexd failed to start', { error: String(error) });

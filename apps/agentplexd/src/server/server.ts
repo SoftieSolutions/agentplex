@@ -1,7 +1,10 @@
 import { PROTOCOL_VERSION, type StoreDescriptor } from '@agentplex/protocol';
+import type { Clock } from '../shared/clock.js';
 import { sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { Logger } from '../shared/logger.js';
+import type { ProviderRegistry } from './providers/provider-registry.js';
+import { discoverStoreSessions, noLiveSessions } from './providers/store-discovery.js';
 import { ensureStores, type StoreFileSystem } from './store-identity.js';
 
 /**
@@ -22,6 +25,9 @@ export interface SessionServerDependencies {
   /** Store roots from configuration, already absolute and deduplicated. */
   readonly storePaths: readonly string[];
   readonly storeFileSystem: StoreFileSystem;
+  /** The adapters this build can drive. An empty registry finds nothing and says nothing. */
+  readonly providers: ProviderRegistry;
+  readonly clock: Clock;
 }
 
 export interface SessionServer {
@@ -34,7 +40,7 @@ export interface SessionServer {
 export async function startSessionServer(
   dependencies: SessionServerDependencies,
 ): Promise<SessionServer> {
-  const { host, port, ids, storePaths, storeFileSystem } = dependencies;
+  const { host, port, ids, storePaths, storeFileSystem, providers, clock } = dependencies;
   const logger = dependencies.logger.child({ role: 'server' });
 
   // A store that cannot be read costs itself and nothing else: the server
@@ -50,6 +56,28 @@ export async function startSessionServer(
       logger.info('store mounted', { ...result.store, minted: result.minted });
     } else {
       logger.error('store unavailable', { path: result.path, problem: result.problem });
+    }
+  }
+
+  // One pass over every mounted store, so that a misconfigured store path is
+  // discovered at boot rather than the first time somebody opens the client.
+  // It is a log line and not a field on the returned server on purpose: a
+  // snapshot taken at startup goes stale the moment a session writes, and a
+  // stale list presented as current is the failure the watcher exists to
+  // avoid. Nothing is running yet, and `noLiveSessions` says so honestly.
+  for (const store of stores) {
+    const found = await discoverStoreSessions(store, {
+      registry: providers,
+      clock,
+      liveness: noLiveSessions,
+    });
+    logger.info('store scanned', {
+      storeId: store.storeId,
+      sessions: found.sessions.length,
+      providers: providers.providers,
+    });
+    for (const { provider, subject, problem } of found.problems) {
+      logger.warn('session unreadable', { provider, subject, problem });
     }
   }
 
