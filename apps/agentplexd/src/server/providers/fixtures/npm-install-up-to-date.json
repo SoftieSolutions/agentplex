@@ -1,0 +1,45 @@
+{
+  "add": [],
+  "added": 0,
+  "audited": 0,
+  "change": [
+    {
+      "from": {
+        "name": "@anthropic-ai/claude-code",
+        "version": "2.1.259",
+        "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@anthropic-ai/claude-code"
+      },
+      "to": {
+        "name": "@anthropic-ai/claude-code",
+        "version": "2.1.259",
+        "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@anthropic-ai/claude-code"
+      }
+    },
+    {
+      "from": {
+        "name": "@anthropic-ai/claude-code-darwin-arm64",
+        "version": "2.1.259",
+        "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/claude-code-darwin-arm64"
+      },
+      "to": {
+        "name": "@anthropic-ai/claude-code-darwin-arm64",
+        "version": "2.1.259",
+        "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/claude-code-darwin-arm64"
+      }
+    }
+  ],
+  "changed": 2,
+  "funding": 0,
+  "remove": [],
+  "removed": 0,
+  "unreviewedScripts": [
+    {
+      "name": "@anthropic-ai/claude-code",
+      "version": "2.1.259",
+      "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@anthropic-ai/claude-code",
+      "scripts": {
+        "postinstall": "node install.cjs"
+      }
+    }
+  ]
+}
