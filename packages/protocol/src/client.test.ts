@@ -3,6 +3,8 @@ import { PROTOCOL_VERSION } from './version.js';
 import { parseClientFrame, parseHubFrame, type ClientFrame, type HubFrame } from './client.js';
 import {
   hubIdSchema,
+  nodeIdSchema,
+  nodeKindSchema,
   serverIdSchema,
   serverRegistrationIdSchema,
   sessionIdSchema,
@@ -98,6 +100,33 @@ describe('client and hub round trips', () => {
     },
     { type: 'pong', replyTo: 2 },
     { type: 'refusal', replyTo: 3, code: 'unauthorized', message: 'token not accepted' },
+    {
+      type: 'layout',
+      replyTo: 3,
+      nodes: [
+        {
+          id: nodeIdSchema.parse('node-1'),
+          parentId: null,
+          kind: nodeKindSchema.parse('folder'),
+          position: 0,
+          name: 'this week',
+          named: true,
+          anchor: null,
+        },
+        {
+          id: nodeIdSchema.parse('node-2'),
+          parentId: nodeIdSchema.parse('node-1'),
+          kind: nodeKindSchema.parse('session'),
+          position: 0,
+          name: null,
+          named: false,
+          anchor: {
+            storeId: storeIdSchema.parse('store-work'),
+            sessionId: sessionIdSchema.parse('session-1'),
+          },
+        },
+      ],
+    },
     {
       type: 'machine-state',
       state: {

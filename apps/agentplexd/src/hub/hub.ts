@@ -24,6 +24,7 @@ import type { Database } from './db/database.js';
 import { loadMigrations, type MigrationFileSystem } from './db/migration-files.js';
 import { migrate } from './db/migrations.js';
 import { ensureHubIdentity } from './hub-identity.js';
+import { readLayout } from './layout/node-tree.js';
 import { createReducer, type Reducer } from './state/reducer.js';
 
 /**
@@ -150,7 +151,17 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // still see it -- the state is whole and read at the moment it is sent -- but
   // a broadcast that missed changes it was running for would be a pipeline
   // whose correctness depended on start order.
-  const clients = startClientBroadcast({ hubId, state, timers, logger });
+  // The layout is read from the database per request rather than held in
+  // memory beside the reducer's state. It is durable and the state is not:
+  // where the user put things survives a restart, and which sessions are
+  // reachable this second does not.
+  const clients = startClientBroadcast({
+    hubId,
+    state,
+    timers,
+    logger,
+    readLayout: () => readLayout(database),
+  });
 
   const connections = await startConnectionSupervisor({
     database,

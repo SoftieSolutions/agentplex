@@ -1,4 +1,4 @@
-import type { HubId } from '@agentplex/protocol';
+import type { HubId, Layout } from '@agentplex/protocol';
 import type { Logger } from '../../shared/logger.js';
 import { closure, CLOSE_NORMAL, type MessageSocket } from '../../shared/message-socket.js';
 import type { Timers } from '../../shared/timers.js';
@@ -36,6 +36,15 @@ export interface ClientBroadcastDependencies {
   readonly hubId: HubId;
   /** The state to publish. Subscribed to once, for all clients. */
   readonly state: Reducer;
+  /**
+   * The stored layout, read once per client that asks.
+   *
+   * Not subscribed to and not cached beside the encoded state, because it is
+   * not the same kind of thing: the machine state is one shared fact pushed to
+   * everybody, and a layout is a reply to whoever asked. There is nothing to
+   * encode once here, since there is no moment at which every client wants it.
+   */
+  readonly readLayout: () => Promise<Layout>;
   /**
    * The deadline seam the flush is scheduled on.
    *
@@ -80,7 +89,7 @@ export interface ClientBroadcast {
 const DEFAULT_COALESCE_MS = 0;
 
 export function startClientBroadcast(dependencies: ClientBroadcastDependencies): ClientBroadcast {
-  const { hubId, state, timers } = dependencies;
+  const { hubId, state, timers, readLayout } = dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
 
@@ -146,6 +155,7 @@ export function startClientBroadcast(dependencies: ClientBroadcastDependencies):
         hubId,
         logger,
         currentState: current,
+        readLayout,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);
         },

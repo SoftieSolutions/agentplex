@@ -7,6 +7,7 @@ import {
   type FrameId,
   type HubFrame,
   type HubId,
+  type Layout,
   type RefusalCode,
 } from '@agentplex/protocol';
 import type { Logger } from '../../shared/logger.js';
@@ -82,6 +83,16 @@ export interface ClientConnectionDependencies {
    * not looking at an empty screen until something happens to change.
    */
   readonly currentState: () => EncodedMachineState;
+  /**
+   * The stored layout, read when a client asks for one.
+   *
+   * A function rather than a value, and read per request rather than cached
+   * beside the state: the layout changes when the user rearranges their tree,
+   * not when a server reports, so it has neither the machine state's version
+   * nor its schedule. Encoding it once for everybody would be wrong anyway --
+   * this is the one thing the hub sends that is not the same for every client.
+   */
+  readonly readLayout: () => Promise<Layout>;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -93,7 +104,7 @@ export function encodeHubFrame(frame: HubFrame): string {
 
 export function serveClientConnection(
   socket: MessageSocket,
-  { hubId, logger, currentState, onClosed }: ClientConnectionDependencies,
+  { hubId, logger, currentState, readLayout, onClosed }: ClientConnectionDependencies,
 ): ClientConnection {
   let state: ClientConnectionState = 'awaiting-hello';
   let lastVersion: number | null = null;
@@ -190,20 +201,14 @@ export function serveClientConnection(
           helloFirst(frame.id);
           return;
         }
-        // The seam, and today a refusal rather than an answer: nothing stores a
-        // layout yet. The node tree it is a view of is AGX-28's, and a payload
-        // invented here would commit the wire to a shape designed by nothing.
+        // The reply names the frame that asked and reaches that client alone.
+        // No other client is told that somebody asked for a layout, because a
+        // layout is one person's arrangement of their own screen.
         //
-        // What is real now is where the answer goes. This reply names the frame
-        // that asked and reaches that client alone -- no other client is told
-        // that somebody asked for a layout, because a layout is one person's
-        // arrangement of their own screen. When AGX-28 has somewhere to read it
-        // from, the answer replaces this refusal on exactly this path, and the
-        // routing it needs is already the tested behaviour.
-        //
-        // The connection is not closed. Being told no is an answer, not a
-        // protocol violation.
-        refuse(frame.id, 'refused', 'this hub does not store a layout yet');
+        // Not awaited, and it cannot be: reading the tree is a database round
+        // trip and this handler is what `onMessage` calls. Awaiting here would
+        // stall every later frame on this socket behind one read.
+        void answerLayout(frame.id);
         return;
       }
 
@@ -215,6 +220,32 @@ export function serveClientConnection(
         end(closure(CLOSE_NORMAL, 'client reported a protocol error'));
         return;
       }
+    }
+  }
+
+  /**
+   * Reads the stored layout and replies to the client that asked.
+   *
+   * The state check is repeated after the await, because the socket can close
+   * while the tree is being read and sending on a closed socket is an error
+   * this connection would then have to explain.
+   *
+   * A read that throws is `internal` rather than `refused`, and the difference
+   * is what a client does next. `refused` says the hub understood and declined,
+   * which invites nothing; `internal` says the hub broke and retrying may work,
+   * which is true -- a busy timeout on the write lock is the ordinary cause.
+   * The problem is logged here and not sent: what went wrong inside the hub's
+   * database is not a client's to render.
+   */
+  async function answerLayout(replyTo: FrameId): Promise<void> {
+    try {
+      const nodes = await readLayout();
+      if (state !== 'established') return;
+      send({ type: 'layout', replyTo, nodes });
+    } catch (error) {
+      logger.error('could not read the layout', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not read its layout');
     }
   }
 

@@ -31,6 +31,24 @@ export type ServerRegistrationId = z.infer<typeof serverRegistrationIdSchema>;
 export const hubIdSchema = opaqueId.brand<'HubId'>();
 export type HubId = z.infer<typeof hubIdSchema>;
 
+/** One node in the user's tree. Minted by the hub, stable across renames and moves. */
+export const nodeIdSchema = opaqueId.brand<'NodeId'>();
+export type NodeId = z.infer<typeof nodeIdSchema>;
+
+/**
+ * What a node is, as an open string rather than an enum.
+ *
+ * This is the wire half of kind-as-foreign-key. A new kind is a row in the
+ * hub's `node_kinds` table, and if this were `z.enum([...])` it would also be a
+ * protocol change and a client release — which is the schema rewrite the design
+ * spent a lookup table to avoid, moved onto the wire. A client that meets a
+ * kind it does not know renders it as an ordinary node rather than failing to
+ * parse the layout: the tree is still the user's tree, and refusing the whole
+ * of it because one row is newer than the client would be the over-claim.
+ */
+export const nodeKindSchema = opaqueId.brand<'NodeKind'>();
+export type NodeKind = z.infer<typeof nodeKindSchema>;
+
 /**
  * A session's identity is its store and its id within it — never the machine.
  *
