@@ -50,10 +50,9 @@ export type NewServerRegistration = z.infer<typeof newServerRegistrationSchema>;
 /**
  * Timestamps are epoch milliseconds in the column, on the protocol, and here.
  *
- * There is no conversion left to do -- the Postgres driver this module was
- * written against handed back a `Date` and this schema existed to flatten it --
- * but the parse stays, because a column being an integer is a claim the
- * database makes and this is the boundary that stops trusting claims.
+ * There is no conversion to do at any of those boundaries, and the parse still
+ * stays: a column being an integer is a claim the database makes, and this is
+ * the boundary that stops trusting claims.
  */
 const timestampSchema = z.number().int();
 
