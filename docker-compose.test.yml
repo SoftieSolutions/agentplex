@@ -9,13 +9,11 @@
 # contributor reproducing a red check should be able to run that check alone
 # rather than waiting on the three that were already green.
 #
-# No database service. This file existed for one, back when the migration suite
-# needed a Postgres reachable over the network and skipped itself when it could
-# not find one. The hub's database is a file now, so those suites open one in a
-# temporary directory and run unconditionally here, in CI, and on a laptop.
-# What is left is the reason the file still earns its place: every check runs
-# against the same built tree in the same image, so a green run here is the
-# same evidence CI produces.
+# No database service, and none is needed: the hub's database is a file, so the
+# migration and query suites open one in a temporary directory and run
+# unconditionally here, in CI, and on a laptop. What this file buys is that
+# every check runs against the same built tree in the same image, so a green
+# run here is the same evidence CI produces.
 
 name: agentplex-test
 

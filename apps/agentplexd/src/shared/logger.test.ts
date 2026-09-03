@@ -75,15 +75,15 @@ describe('redaction', () => {
       ticket: 'b',
       password: 'c',
       authorization: 'd',
-      databaseUrl: 'postgres://agentplex:hunter2@localhost:5432/agentplex',
+      databaseUrl: 'db://agentplex:hunter2@db.internal/agentplex',
     });
     expect(Object.values(redacted)).toEqual([REDACTED, REDACTED, REDACTED, REDACTED, REDACTED]);
   });
 
   it('does not care how the key was spelled', () => {
     const redacted = redactSecrets({
-      DATABASE_URL: 'postgres://x',
-      'database-url': 'postgres://y',
+      DATABASE_URL: 'db://x',
+      'database-url': 'db://y',
       serverToken: 'z',
     });
     expect(Object.values(redacted)).toEqual([REDACTED, REDACTED, REDACTED]);

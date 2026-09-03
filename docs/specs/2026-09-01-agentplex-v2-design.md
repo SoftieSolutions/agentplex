@@ -17,7 +17,7 @@ Three ideas, two artifacts:
 phone PWA ──┐
 laptop PWA ─┼─ wss/https ─> HUB (role) ── wss ─> SERVER (role) ── pty/fs ─> sessions + store volume
 MCP agent ──┘                 │                  SERVER (role) ─────────────> same or another store
-                           Postgres
+                            SQLite
 ```
 
 - **`agentplexd`** — one deployable Node service that runs with `--role=hub`,
@@ -75,18 +75,24 @@ cert, or the bundled Caddy handles it. v1's "TLS for the LAN: settled against"
 does not carry over — that rejection priced a per-laptop CA; the hub is a hosted
 service with a stable address.
 
-### Database: Postgres, hub-owned, single writer
+### Database: SQLite, hub-owned, single writer
 
-All durable state lives in one Postgres owned by the hub. There is no store-scoped
-database on the volume: everything travels through the hub anyway, and an embedded
-DB on a multi-attached volume (NFS, EBS multi-attach) has unreliable locking and
-fails silently. Exactly one writer — the hub — so no coordination problem exists.
+All durable state lives in one SQLite database owned by the hub. There is no
+store-scoped database on the volume: everything travels through the hub anyway,
+and an embedded DB on a multi-attached volume (NFS, EBS multi-attach) has
+unreliable locking and fails silently. The hub's database lives on the hub's own
+disk, and exactly one process writes it, so no coordination problem exists.
 
-Postgres over SQLite was the user's call, and it buys real things here:
-LISTEN/NOTIFY fits the push-everything architecture, JSONB holds cached provider
-and far-system payloads, mature migration tooling, pgvector available if the
-orchestrator agent grows memory. The cost — a second service to run — is absorbed
-by the compose file.
+Single writer is what makes a file the right shape. One process reads and writes
+this data, the working set is small, and every query is a keyed lookup or a
+small scan — there is nothing here a network database would answer better.
+Transactions, foreign keys and JSON columns all arrive without a second service
+to run, a second port to secure, or a second set of credentials to rotate. That
+matters most at the cheapest end: `--role=both` on one box is a first-class
+install rather than a compromise, because there is nothing to stand up beside
+the process. Push to clients is the hub's own concern — it already fans out over
+websockets from the writes it just made — so no database-side notification
+channel is needed to carry it.
 
 Carried over from v1 verbatim:
 
@@ -96,7 +102,7 @@ Carried over from v1 verbatim:
 - Node tree with kind-as-foreign-key (a new node kind is an INSERT, not a schema
   rewrite). Session-keyed tables hold no FK into nodes; a prune sweeps them.
 - A removal is remembered, not merely applied.
-- Migrations forward-only, append-only, one transaction each; a database ahead of
+- Migrations forward-only, append-only, applied in one transaction; a database ahead of
   the running build throws rather than opening.
 - Caches are `Projection`s of the far system, never authority: a failed refresh
   writes nothing, a lapsed entry is served stale and labeled with its age, a
@@ -210,7 +216,8 @@ consuming this same contract; v2 ships the surface.
 Design-minimum deliverables, not an afterthought:
 
 - One image for `agentplexd`; role chosen by env/flag.
-- `docker-compose.yml` standing up hub + Postgres + Caddy in one command. Caddy
+- `docker-compose.yml` standing up hub + Caddy in one command, the hub's
+  database a file on a named volume. Caddy
   exists only to terminate TLS with automatic certificate issue/renewal (web
   push requires HTTPS); it is optional — anyone with TLS already handled
   (Tailscale HTTPS, an existing reverse proxy) drops it from the compose file.
@@ -274,15 +281,15 @@ system small while the product grows.
   consuming the MCP surface from milestone 6 — same contract any external agent
   gets, no privileged backdoor.
 - **Multi-agents / graph of agents**: hub-side orchestration state. A graph is
-  nodes (sessions/agents) and edges (routing rules) in Postgres; the hub
+  nodes (sessions/agents) and edges (routing rules) in the hub's database; the hub
   already owns starting, watching, and feeding sessions by milestone 3, so a
   graph is coordination data over existing capabilities.
 - **Routines**: scheduled or recurring runs — a hub scheduler table triggering
   the existing session-start operation. A trigger, not a new capability.
-- **Search**: Postgres full-text over the transcript-derived columns the hub
-  already caches.
-- **Vector search**: pgvector over the same rows (part of why Postgres over an
-  embedded DB was the right call).
+- **Search**: SQLite full-text (FTS5) over the transcript-derived columns the
+  hub already caches — verify the build ships it before committing to it.
+- **Vector search**: embeddings stored beside the same rows and ranked in the
+  hub process. At one user's corpus that is a scan, not an index problem.
 
 ## Out of scope for v2
 
@@ -303,7 +310,7 @@ system small while the product grows.
 ## Milestones (shape, not schedule)
 
 1. Repo scaffold, protocol package, `agentplexd` skeleton with both roles in one
-   process, Postgres migrations runner, compose file.
+   process, migrations runner, compose file.
 2. Server role: store identity, Claude adapter discovery, PTY supervisor with the
    v1 invariants (cap, eviction, env scrub, one-writer).
 3. Hub role: server pairing + handshake, connection supervisor, reducer,

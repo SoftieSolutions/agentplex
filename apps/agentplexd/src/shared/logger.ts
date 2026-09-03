@@ -41,8 +41,10 @@ export const REDACTED = '[redacted]';
  * worth paying: a secret in a log file is one that has to be rotated, and a
  * count that reads `[redacted]` is an annoyance.
  *
- * `databaseurl` is here because a Postgres URL carries its password inline, so
- * the field is a credential whatever it is named.
+ * `databaseurl` is here because a database URL carries its password inline, so
+ * the field is a credential whatever it is named. The hub's own database is a
+ * file and not a URL, but the rule costs nothing and the day something logs
+ * one is not the day to discover the list is missing it.
  */
 const SECRET_KEYS = [
   'token',
