@@ -14,6 +14,19 @@ export type SessionId = z.infer<typeof sessionIdSchema>;
 export const serverIdSchema = opaqueId.brand<'ServerId'>();
 export type ServerId = z.infer<typeof serverIdSchema>;
 
+/**
+ * The hub's own name for a pairing. Distinct from `ServerId`, which is what
+ * the server calls itself: this one exists from the moment the user submits
+ * the form, and the other only after a handshake has confirmed it.
+ *
+ * It lives here rather than beside the pairing table because it is on the wire:
+ * the machine-state frame keys every server on it, and a store names its
+ * attached servers by it. A client needs a stable key for a row, and `ServerId`
+ * cannot be one while it is still `null` for a pairing that has never answered.
+ */
+export const serverRegistrationIdSchema = opaqueId.brand<'ServerRegistrationId'>();
+export type ServerRegistrationId = z.infer<typeof serverRegistrationIdSchema>;
+
 /** Identifies the hub to clients; distinguishes two hubs to one paired server. */
 export const hubIdSchema = opaqueId.brand<'HubId'>();
 export type HubId = z.infer<typeof hubIdSchema>;

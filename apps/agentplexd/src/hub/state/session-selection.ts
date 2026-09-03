@@ -1,5 +1,4 @@
-import type { SessionDescriptor } from '@agentplex/protocol';
-import type { ServerRegistrationId } from '../pairing/server-registrations.js';
+import type { ServerRegistrationId, SessionDescriptor } from '@agentplex/protocol';
 
 /**
  * Which server's reading of a session the hub shows.

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { serverIdSchema, type ServerId } from '@agentplex/protocol';
+import { serverIdSchema, serverRegistrationIdSchema, type ServerId } from '@agentplex/protocol';
 import type { Database } from '../db/database.js';
 import {
   findServer,
@@ -9,7 +9,6 @@ import {
   recordServerIdentity,
   registerServer,
   revokeServer,
-  serverRegistrationIdSchema,
   type LiveServerRegistration,
 } from './server-registrations.js';
 import { openMigratedSchema, type MigratedSchema } from './test-migrated-schema.js';

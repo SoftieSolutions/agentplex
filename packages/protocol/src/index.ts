@@ -11,6 +11,7 @@ export {
   hubIdSchema,
   providerSchema,
   serverIdSchema,
+  serverRegistrationIdSchema,
   sessionIdSchema,
   sessionRefSchema,
   storeDescriptorSchema,
@@ -20,11 +21,29 @@ export type {
   HubId,
   Provider,
   ServerId,
+  ServerRegistrationId,
   SessionId,
   SessionRef,
   StoreDescriptor,
   StoreId,
 } from './identity.js';
+
+export {
+  machineStateSchema,
+  serverPhaseSchema,
+  serverViewSchema,
+  sessionRowSchema,
+  staleReasonSchema,
+  storeViewSchema,
+} from './machine-state.js';
+export type {
+  MachineState,
+  ServerPhase,
+  ServerView,
+  SessionRow,
+  StaleReason,
+  StoreView,
+} from './machine-state.js';
 
 export { sessionDescriptorSchema, sessionStatusSchema } from './session.js';
 export type { SessionDescriptor, SessionStatus } from './session.js';

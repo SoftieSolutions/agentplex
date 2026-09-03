@@ -5,6 +5,7 @@ import type { Logger } from '../shared/logger.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { SocketDialer } from '../shared/message-socket.js';
 import type { Timers } from '../shared/timers.js';
+import { startClientBroadcast, type ClientBroadcast } from './clients/client-broadcast.js';
 import {
   startConnectionSupervisor,
   type ConnectionSupervisor,
@@ -21,8 +22,11 @@ import { createReducer, type Reducer } from './state/reducer.js';
  * Milestone 1 brought up what everything later stands on: the database is
  * migrated before anything is served, the hub knows its own id, and it answers
  * a health check. Milestone 3 adds the outbound half -- the hub dials every
- * paired server and keeps dialling, and the reducer merges what they report
- * into one state. The client socket that broadcasts it arrives next.
+ * paired server and keeps dialling, the reducer merges what they report into
+ * one state, and the broadcast publishes that state whole to every client. The
+ * websocket route that hands the broadcast an authenticated socket arrives
+ * next; until it exists, `clients.attach` is reachable only from a test, which
+ * is the seam being tested rather than a missing piece.
  */
 
 export interface HubDependencies {
@@ -68,6 +72,12 @@ export interface Hub {
    * assembled.
    */
   readonly state: Reducer;
+  /**
+   * Every attached client, and the pipeline that keeps them all looking at the
+   * same thing. An authenticated socket is handed to `attach` and becomes a
+   * client; nothing else in the hub sends a client anything.
+   */
+  readonly clients: ClientBroadcast;
   stop(): Promise<void>;
 }
 
@@ -105,6 +115,13 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // to put it would be a state that is wrong until the next change.
   const state = createReducer({ logger });
 
+  // Subscribed before the supervisor exists, so that the first connectivity
+  // change has somewhere to go. A client that attached a moment later would
+  // still see it -- the state is whole and read at the moment it is sent -- but
+  // a broadcast that missed changes it was running for would be a pipeline
+  // whose correctness depended on start order.
+  const clients = startClientBroadcast({ hubId, state, timers, logger });
+
   const connections = await startConnectionSupervisor({
     database,
     dialer,
@@ -134,8 +151,14 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     port: listener.port,
     connections,
     state,
+    clients,
     async stop() {
-      // Outbound first. The dials are what hold sockets open and what would
+      // Clients first. Every server dropping in turn is a real sequence of
+      // changes, and a client still attached through the shutdown would be sent
+      // each one -- a screen that reports the fleet collapsing when what is
+      // actually happening is that the hub is going away.
+      clients.stop();
+      // Then outbound. The dials are what hold sockets open and what would
       // otherwise still be retrying while the listener is closing.
       await connections.stop();
       await listener.close();

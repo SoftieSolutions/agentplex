@@ -1,4 +1,4 @@
-import type { HubId, ServerId, StoreId } from '@agentplex/protocol';
+import type { HubId, ServerId, ServerRegistrationId, StoreId } from '@agentplex/protocol';
 import type { Clock } from '../../shared/clock.js';
 import type { Logger } from '../../shared/logger.js';
 import {
@@ -18,10 +18,7 @@ import {
   type HandshakeOutcome,
 } from '../pairing/server-handshake.js';
 import type { ServerAddress } from '../pairing/server-address.js';
-import type {
-  LiveServerRegistration,
-  ServerRegistrationId,
-} from '../pairing/server-registrations.js';
+import type { LiveServerRegistration } from '../pairing/server-registrations.js';
 import type { BackoffPolicy } from './backoff.js';
 import { startHeartbeat } from './connection-heartbeat.js';
 
