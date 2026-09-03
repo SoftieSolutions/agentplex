@@ -70,8 +70,18 @@ COPY --from=build /app/apps/agentplexd/dist ./apps/agentplexd/dist
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY apps/agentplexd/migrations ./apps/agentplexd/migrations
 
-# The node user ships with the image. A hub reads a database over the network
-# and writes nothing to its own filesystem, so root buys it nothing.
+# Somewhere for the hub's database to live. The directory has to exist in the
+# image, owned by the user that will write to it: Docker seeds a fresh named
+# volume from whatever is at the mount point, ownership included, and a mount
+# point the image does not have is created root-owned, which the node user
+# cannot then open a database in. There is no VOLUME instruction to go with it
+# on purpose — that would hand a bare `docker run` an anonymous volume, and an
+# anonymous volume is the failure the compose file's named one exists to avoid.
+RUN install --directory --owner=node --group=node /var/lib/agentplex
+
+# The node user ships with the image. Everything the hub writes goes to that
+# directory, which it owns, and the application tree stays read-only to it, so
+# root buys it nothing.
 USER node
 
 EXPOSE 8080 8081

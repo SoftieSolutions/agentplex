@@ -1,48 +1,49 @@
-# The hub, its Postgres, and Caddy in front of them.
+# The hub, Caddy in front of it, and the volume the database lives in.
 #
 # Copy .env.example to .env, then `docker compose up -d`.
 #
+# What Docker is for, now that the hub's database is a file: it is still the
+# primary path for running the checks, and it is still the right way to run a
+# hosted hub — one image, one restart policy, one process supervised by
+# something that already knows how to restart it, and TLS in front. What it has
+# stopped being is the price of entry. A single machine can run agentplexd
+# natively and never build an image, which is what the installer does. Nothing
+# here is legacy; it is the deployment that wants a container.
+#
 # Caddy is optional and dropping it is a supported path, not a hypothetical:
-# `docker compose up -d hub` starts Postgres and the hub and nothing else, and
-# the hub's own port is published on the host either way. See docs/install.md.
+# `docker compose up -d hub` starts the hub and nothing else, and the hub's own
+# port is published on the host either way. See docs/install.md.
 
 name: agentplex
 
 services:
-  postgres:
-    image: postgres:17-bookworm
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-agentplex}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-agentplex}
-    volumes:
-      # Named, so `docker compose down` is not the same act as deleting the
-      # database. `down -v` is.
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      # $$ so the shell inside the container expands these, not compose.
-      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-
   hub:
     build:
       context: .
       target: runtime
     restart: unless-stopped
-    depends_on:
-      postgres:
-        # The hub migrates before it listens, so it needs a database that is
-        # accepting connections rather than one whose container has started.
-        condition: service_healthy
     environment:
       AGENTPLEX_ROLE: hub
       AGENTPLEX_HUB_PORT: 8080
-      AGENTPLEX_DATABASE_URL: postgres://${POSTGRES_USER:-agentplex}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-agentplex}
+      # Inside the volume below, and not settable from .env: a path is only
+      # durable if it points at the mount, and an operator who moves it into
+      # the container's own filesystem gets a database that dies with the
+      # container without being told.
+      AGENTPLEX_DATABASE_FILE: /var/lib/agentplex/agentplex.db
       AGENTPLEX_LOG_LEVEL: ${AGENTPLEX_LOG_LEVEL:-info}
+    volumes:
+      # Named, so `docker compose down` is not the same act as deleting the
+      # database. `down -v` is.
+      #
+      # That argument carried when the database was a Postgres data directory
+      # and it carries harder now. The hub's entire state — its identity, the
+      # servers paired to it, the tokens they hold — is one file plus SQLite's
+      # -wal and -shm beside it, which is small enough to lose without
+      # noticing. A named volume survives `down`, `up --build`, and the image
+      # being rebuilt underneath it; an anonymous one is abandoned by a `down`
+      # and replaced by an empty one on the next `up`, which loses the database
+      # without deleting anything and without saying so.
+      - hub-data:/var/lib/agentplex
     ports:
       # Loopback by default: with Caddy in front, nothing outside this machine
       # should reach the hub's plain HTTP port. AGENTPLEX_HUB_BIND is what you
@@ -69,6 +70,6 @@ services:
       - '443:443/udp'
 
 volumes:
-  postgres-data:
+  hub-data:
   caddy-data:
   caddy-config:
