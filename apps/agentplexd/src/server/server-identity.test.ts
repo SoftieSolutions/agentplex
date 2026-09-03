@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createFakeStoreFiles } from './fake-store-files.js';
-import { ensureServerIdentity, randomTokenMinter } from './server-identity.js';
+import { ensureServerIdentity } from './server-identity.js';
+import { randomTokenMinter } from '../shared/tokens.js';
 
 const PATH = '/etc/agentplexd/server.json';
 

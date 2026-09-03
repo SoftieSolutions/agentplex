@@ -30,6 +30,10 @@ services:
       # the container's own filesystem gets a database that dies with the
       # container without being told.
       AGENTPLEX_DATABASE_FILE: /var/lib/agentplex/agentplex.db
+      # No default, and the `?` is deliberate: compose refuses to start the
+      # stack rather than bringing up a hub whose credential is a string
+      # published in this file. Set it in .env.
+      AGENTPLEX_CLIENT_TOKEN: ${AGENTPLEX_CLIENT_TOKEN:?set AGENTPLEX_CLIENT_TOKEN in .env (openssl rand -base64 32)}
       AGENTPLEX_LOG_LEVEL: ${AGENTPLEX_LOG_LEVEL:-info}
     volumes:
       # Named, so `docker compose down` is not the same act as deleting the

@@ -13,13 +13,13 @@ import { createOperationRegistry } from './server/operations/operation-registry.
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { nodeProviderFiles } from './server/providers/node-provider-files.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
-import { randomTokenMinter } from './server/server-identity.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createTerminalManager } from './server/terminal-manager.js';
 import { systemClock } from './shared/clock.js';
 import { randomIdGenerator } from './shared/ids.js';
 import { createLogger, jsonLineSink } from './shared/logger.js';
 import { systemTimers } from './shared/timers.js';
+import { randomTokenMinter } from './shared/tokens.js';
 import { createWebSocketDialer } from './shared/ws-message-socket.js';
 
 /**
@@ -77,9 +77,11 @@ async function main(): Promise<void> {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
       migrationFileSystem: nodeMigrationFileSystem,
       storeFileSystem: nodeStoreFileSystem,
-      // The only place a pairing token is generated, and the CSPRNG is the
-      // whole implementation. What the operator pastes into the hub is what
-      // this produced, once, on the server's first start.
+      // The only place a secret is generated, and the CSPRNG is the whole
+      // implementation. It mints two things: the server's pairing token, once,
+      // on its first start, and every websocket ticket the hub hands a client.
+      // The hub's own client token is not among them -- that one is typed by a
+      // person, so it arrives as configuration.
       tokens: randomTokenMinter,
       // The providers this build drives, in one line. Adding codex is another
       // adapter file and another entry here, and nothing else.

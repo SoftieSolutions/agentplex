@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   checkProtocolVersion,
   parseHubToServerFrame,
@@ -10,6 +9,7 @@ import {
 } from '@agentplex/protocol';
 import { closure, CLOSE_POLICY, type MessageSocket } from '../shared/message-socket.js';
 import type { Logger } from '../shared/logger.js';
+import { tokenMatches } from '../shared/tokens.js';
 import type { ServerIdentity } from './server-identity.js';
 
 /**
@@ -182,17 +182,4 @@ export function serveHubConnection(
       return state;
     },
   };
-}
-
-/**
- * Compares two tokens without leaking how far the comparison got.
- *
- * `timingSafeEqual` throws on differing lengths, and calling it on the raw
- * bytes would therefore turn the token's length into something an attacker can
- * read off an exception. Hashing both first makes every comparison the same
- * fixed width, so the only thing measurable is that one happened.
- */
-function tokenMatches(presented: string, expected: string): boolean {
-  const digest = (value: string): Buffer => createHash('sha256').update(value, 'utf8').digest();
-  return timingSafeEqual(digest(presented), digest(expected));
 }

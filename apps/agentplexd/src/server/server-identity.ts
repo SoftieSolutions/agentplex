@@ -1,7 +1,7 @@
-import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { serverIdSchema, type ServerId } from '@agentplex/protocol';
 import type { IdGenerator } from '../shared/ids.js';
+import type { TokenMinter } from '../shared/tokens.js';
 import type { StoreFileSystem } from './store-identity.js';
 
 /**
@@ -39,29 +39,6 @@ export interface ServerIdentity {
   /** Never logged and never in a frame the server sends. It only ever arrives. */
   readonly token: string;
 }
-
-/**
- * The entropy seam.
- *
- * Injected so a test can assert on the token it expects rather than on a
- * pattern, and so that the one place a secret is generated is visible in the
- * wiring. It is separate from `IdGenerator` because the two have different
- * jobs: an id must be unique and may be public, a token must be unguessable.
- * A uuid is the wrong thing to authenticate with and a token is the wrong
- * thing to put in a log line, and one interface for both invites each to be
- * used as the other.
- */
-export interface TokenMinter {
-  newToken(): string;
-}
-
-/**
- * 32 bytes from the CSPRNG, base64url so it survives being pasted into a form,
- * a shell, and a YAML file without quoting or escaping.
- */
-export const randomTokenMinter: TokenMinter = {
-  newToken: () => randomBytes(32).toString('base64url'),
-};
 
 export interface ServerIdentityDependencies {
   readonly files: StoreFileSystem;

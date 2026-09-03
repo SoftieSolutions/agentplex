@@ -84,6 +84,7 @@ const HOST = '127.0.0.1';
  * to put it.
  */
 const IDENTITY_PATH = '/etc/agentplexd/server.json';
+const CLIENT_TOKEN = 'a-client-token-long-enough-to-be-one';
 
 const serverOnly: Config = {
   role: 'server',
@@ -95,13 +96,13 @@ const hubOnly: Config = {
   role: 'hub',
   logLevel: 'error',
   host: HOST,
-  hub: { port: 0, databaseFile: '/unused/agentplex.db' },
+  hub: { port: 0, databaseFile: '/unused/agentplex.db', clientToken: CLIENT_TOKEN },
 };
 const both: Config = {
   role: 'both',
   logLevel: 'error',
   host: HOST,
-  hub: { port: 0, databaseFile: '/unused/agentplex.db' },
+  hub: { port: 0, databaseFile: '/unused/agentplex.db', clientToken: CLIENT_TOKEN },
   server: { port: 0, storePaths: [], binPath: [], identityPath: IDENTITY_PATH, terminalCap: 8 },
 };
 

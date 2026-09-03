@@ -1,10 +1,20 @@
 import { PROTOCOL_VERSION, type HubId } from '@agentplex/protocol';
-import { sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
+import { HTTP_TIMEOUTS, sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
 import type { Clock } from '../shared/clock.js';
 import type { Logger } from '../shared/logger.js';
 import type { IdGenerator } from '../shared/ids.js';
-import type { SocketDialer } from '../shared/message-socket.js';
+import { closure, CLOSE_POLICY, type SocketDialer } from '../shared/message-socket.js';
 import type { Timers } from '../shared/timers.js';
+import type { TokenMinter } from '../shared/tokens.js';
+import { createWebSocketListener } from '../shared/ws-message-socket.js';
+import {
+  admitsUpgrade,
+  answerTicketRequest,
+  requestPath,
+  CLIENT_TICKET_PATH,
+  NOT_AUTHORIZED,
+} from './clients/client-auth.js';
+import { createClientTickets } from './clients/client-tickets.js';
 import { startClientBroadcast, type ClientBroadcast } from './clients/client-broadcast.js';
 import {
   startConnectionSupervisor,
@@ -23,10 +33,16 @@ import { createReducer, type Reducer } from './state/reducer.js';
  * migrated before anything is served, the hub knows its own id, and it answers
  * a health check. Milestone 3 adds the outbound half -- the hub dials every
  * paired server and keeps dialling, the reducer merges what they report into
- * one state, and the broadcast publishes that state whole to every client. The
- * websocket route that hands the broadcast an authenticated socket arrives
- * next; until it exists, `clients.attach` is reachable only from a test, which
- * is the seam being tested rather than a missing piece.
+ * one state, and the broadcast publishes that state whole to every client --
+ * and the inbound one: a client exchanges the credential it was configured with
+ * for a single-use ticket, opens a socket with it, and is attached.
+ *
+ * This file is where the two failures of that exchange are made into one fact.
+ * A wrong credential is a 401 from the ticket route; a bad, spent or expired
+ * ticket is a 1008 close on the socket. Both say `not authorized`, both are
+ * logged as one refusal with no field saying which check it was, and neither
+ * ever carries the URL it came in on -- see `client-auth.ts` for why the
+ * distinction is not this hub's to publish.
  */
 
 export interface HubDependencies {
@@ -50,6 +66,18 @@ export interface HubDependencies {
    * were written, and SQLite has no `now()` default that a test could set.
    */
   readonly clock: Clock;
+  /**
+   * The shared credential a client presents to be given a ticket. It arrives
+   * from configuration and is never minted here, because a hub has nowhere to
+   * put a minted secret that the person typing it on a phone can read.
+   */
+  readonly clientToken: string;
+  /**
+   * Where a ticket's entropy comes from. Injected next to the id source rather
+   * than folded into it: an id may be public and a ticket may not, and one seam
+   * for both is how a uuid ends up authenticating a socket.
+   */
+  readonly tokens: TokenMinter;
   readonly migrationsDirectory: string;
   readonly migrationFileSystem: MigrationFileSystem;
   readonly host: string;
@@ -86,6 +114,8 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     database,
     ids,
     clock,
+    clientToken,
+    tokens,
     dialer,
     timers,
     migrationsDirectory,
@@ -132,13 +162,60 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     onChange: (report) => state.applyConnection(report),
   });
 
-  const listener: HttpListener = await startHttpServer(port, host, (request, response) => {
-    if (request.url === '/health') {
-      sendJson(response, 200, { status: 'ok', role: 'hub', protocolVersion: PROTOCOL_VERSION });
-      return;
-    }
-    sendJson(response, 404, { error: 'not found' });
+  // The short-lived half of client auth. Nothing durable: a ticket outliving a
+  // restart would be a credential the hub could not count the uses of, and the
+  // client holds the long-lived token it can always exchange for another.
+  const tickets = createClientTickets({ tokens, clock });
+
+  // A socket is admitted by its ticket and then handed straight to the
+  // broadcast. There is no third state: either the ticket was good and this is
+  // a client, or it was not and the socket is closed before it has been read
+  // from. `onConnection` is where the check lives rather than `onUpgrade`,
+  // because a refusal has to be a 1008 close and a close is only available once
+  // the upgrade has completed -- a browser handed a failed upgrade is told
+  // nothing it can act on, and telling the user "not authorized" is the point.
+  const sockets = createWebSocketListener({
+    onConnection: (socket, request) => {
+      if (!admitsUpgrade(request.url, tickets)) {
+        // The path and nothing else. The URL carries the ticket, so logging the
+        // request target would be logging the credential.
+        logger.warn('client refused', { path: requestPath(request.url) });
+        socket.close(closure(CLOSE_POLICY, NOT_AUTHORIZED));
+        return;
+      }
+      clients.attach(socket);
+    },
   });
+
+  const listener: HttpListener = await startHttpServer(
+    port,
+    host,
+    (request, response) => {
+      const path = requestPath(request.url);
+
+      if (path === '/health') {
+        sendJson(response, 200, { status: 'ok', role: 'hub', protocolVersion: PROTOCOL_VERSION });
+        return;
+      }
+
+      if (path === CLIENT_TICKET_PATH) {
+        const answer = answerTicketRequest(
+          { method: request.method, authorization: request.headers.authorization },
+          { token: clientToken, tickets },
+        );
+        if (answer.status === 401) logger.warn('client refused', { path });
+        sendJson(response, answer.status, answer.body);
+        return;
+      }
+
+      sendJson(response, 404, { error: 'not found' });
+    },
+    HTTP_TIMEOUTS,
+    // The same port the health check is on. One inbound port per process is the
+    // promise both roles make to whoever opens the firewall, and the client
+    // socket is not an exception to it.
+    sockets.onUpgrade,
+  );
 
   logger.info('hub listening', {
     port: listener.port,
@@ -158,6 +235,11 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // each one -- a screen that reports the fleet collapsing when what is
       // actually happening is that the hub is going away.
       clients.stop();
+      // Then the sockets those clients were served on. An upgraded connection
+      // is not an HTTP request, so closing the listener below does not reach
+      // it, and a live websocket would hold the process open after everything
+      // it could ask about had stopped.
+      sockets.close();
       // Then outbound. The dials are what hold sockets open and what would
       // otherwise still be retrying while the listener is closing.
       await connections.stop();
