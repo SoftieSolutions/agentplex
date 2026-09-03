@@ -69,8 +69,7 @@ export interface MigrationOutcome {
 /**
  * The whole run is one transaction, and that is what serializes it.
  *
- * There is no advisory lock to take: a single-file database has no second
- * process to take one from, and SQLite already has the primitive this needs.
+ * No separate lock is needed, because the database already has the primitive.
  * `BEGIN IMMEDIATE` — which is what the driver opens a transaction with — takes
  * the database's write lock at the first statement rather than at the first
  * write, so a second hub process starting against the same file waits on the

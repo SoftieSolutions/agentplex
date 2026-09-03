@@ -11,9 +11,8 @@ import type { Database, Queryable, QueryResult } from './database.js';
  *
  * It labels each statement with the transaction it ran in, because a run that
  * reconciles outside the transaction it writes in has read a schema it is not
- * the one changing. That used to be recorded as a connection number, back when
- * a pool could hand a second statement a second backend; with one file the
- * distinction that is left is inside the transaction or beside it.
+ * the one changing. With one file there is one connection, so the only
+ * distinction worth labelling is inside the transaction or beside it.
  */
 export interface FakeDatabaseOptions {
   /** Migrations already recorded as applied, as `version -> name`. */

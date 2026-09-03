@@ -26,7 +26,7 @@ const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../../../migrations', import
 const directory = await mkdtemp(join(tmpdir(), 'agentplex-migrations-'));
 const logger = createLogger('error', () => {});
 
-/** The clock the schema no longer has, fixed so a stored millisecond is checkable. */
+/** The clock the schema does not supply, fixed so a stored millisecond is checkable. */
 const MINTED_AT = 1_756_000_000_000;
 const clock = { now: () => MINTED_AT };
 
@@ -172,10 +172,10 @@ describe('the shipped migrations against SQLite', () => {
     const migrations = await shippedMigrations();
 
     // A second connection stands in for a second hub process, holding the write
-    // lock for the whole attempt. This is what an advisory lock was for: with
-    // one file there is nothing to take but the lock SQLite already has, and
-    // `BEGIN IMMEDIATE` under a busy timeout is the whole mechanism. A short
-    // timeout keeps the test short; the hub's is five seconds.
+    // lock for the whole attempt. Serializing two hubs against one file is the
+    // database's own write lock and nothing else: `BEGIN IMMEDIATE` under a
+    // busy timeout is the whole mechanism. A short timeout keeps the test
+    // short; the hub's is five seconds.
     const holder = openDatabase(name);
     const contender = openDatabase(name, { busyTimeoutMs: 50 });
 

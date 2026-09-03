@@ -180,11 +180,11 @@ describe('createSqliteDatabase', () => {
     const database = openDatabase('joined.db');
     await createProbeTable(database);
 
-    // What a pinned handle used to be asked for, without one. There is one
-    // connection and `query` is deliberately not queued, so a statement issued
-    // beside a running transaction still lands on the connection that
-    // transaction is open on. The rollback is the proof: a statement genuinely
-    // outside it would have survived.
+    // What a caller would reach for a pinned handle to guarantee, guaranteed
+    // without one. There is a single connection and `query` is deliberately
+    // not queued, so a statement issued beside a running transaction still
+    // lands on the connection that transaction is open on. The rollback is the
+    // proof: a statement genuinely outside it would have survived.
     await expect(
       database.transaction(async (tx) => {
         await tx.query('INSERT INTO probe (value) VALUES (?)', [1]);
