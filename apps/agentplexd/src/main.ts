@@ -19,6 +19,8 @@ import { createTerminalManager } from './server/terminal-manager.js';
 import { systemClock } from './shared/clock.js';
 import { randomIdGenerator } from './shared/ids.js';
 import { createLogger, jsonLineSink } from './shared/logger.js';
+import { systemTimers } from './shared/timers.js';
+import { createWebSocketDialer } from './shared/ws-message-socket.js';
 
 /**
  * The entrypoint is wiring and process concerns only: argv, env, stdout,
@@ -109,6 +111,12 @@ async function main(): Promise<void> {
         clock: systemClock,
         ...('server' in config ? { cap: config.server.terminalCap } : {}),
       }),
+      // The one place a real websocket is opened from this side. The hub
+      // dials; nothing dials it. TLS verification is Node's own against the
+      // system trust store, which is why there is no certificate decision
+      // being made anywhere in this process.
+      dialer: createWebSocketDialer(),
+      timers: systemTimers,
       clock: systemClock,
     });
   } catch (error) {

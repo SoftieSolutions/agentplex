@@ -1,0 +1,31 @@
+-- When a paired server was last actually connected.
+--
+-- One column, and the argument is entirely about which fact is durable.
+--
+-- An unreachable server keeps its rows and is marked stale. A stale label with
+-- no age is the thing the connectivity design refuses -- a badge you cannot
+-- clear by looking is worse than none -- so the label has to be able to say
+-- *since when*, and it has to survive a hub restart. The moment the hub last
+-- had a live connection to this server is that anchor, it is a fact about the
+-- past, and no restart can make it untrue.
+--
+-- What is deliberately NOT here is liveness itself. A `connected` column, or a
+-- `last_seen_at` that a heartbeat moved, would be read back after a crash as a
+-- claim that a connection exists, and there is no such connection: the process
+-- holding it is gone. Every column in a database outlives the process that
+-- wrote it, so a column may only hold something that stays true when the
+-- process does not. Whether a server is reachable *now* is answered by the
+-- supervisor holding the socket, in memory, and it is `null` there too until a
+-- dial has actually been attempted.
+--
+-- NULL means never connected, which is a different fact from "connected long
+-- ago" and reads differently on a pairing screen: one is a pairing that has
+-- never worked, the other is a machine that is asleep. Collapsing them into a
+-- zero would lose the only distinction that tells an operator which of the two
+-- they are looking at.
+--
+-- Epoch milliseconds, no default, for the reason 0001 and 0002 both give: time
+-- comes from an injected clock, and a schema default is the one reading of the
+-- wall clock that no test can set.
+
+ALTER TABLE servers ADD COLUMN last_connected_at integer;

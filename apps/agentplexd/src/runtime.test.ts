@@ -12,7 +12,9 @@ import { createFakeProcessProbe } from './server/fake-process-probe.js';
 import { createFakeProcessRunner } from './server/operations/fake-process-runner.js';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
 import { createFakeStoreFiles } from './server/fake-store-files.js';
+import { createUnreachableDialer } from './shared/fake-message-socket.js';
 import { createLogger, type LogRecord } from './shared/logger.js';
+import { createFakeTimers } from './shared/timers.js';
 import type { Config } from './config/config.js';
 
 const logger = createLogger('error', () => {});
@@ -33,10 +35,19 @@ function fakeHubDatabase(options: Parameters<typeof createFakeDatabase>[0] = {})
   return createFakeDatabase({ ...options, respondWith: [hubIdentityRow] });
 }
 
-function dependencies(database = fakeHubDatabase(), storeFileSystem = createFakeStoreFiles()) {
+function dependencies(
+  database = fakeHubDatabase(),
+  storeFileSystem = createFakeStoreFiles(),
+  dialer = createUnreachableDialer(),
+) {
   return {
     logger,
     ids,
+    // Nothing is paired in most of these, so nothing is dialled. Where
+    // something is, an unreachable server is the honest default: the hub must
+    // come up regardless, which is the claim being made.
+    dialer,
+    timers: createFakeTimers(),
     openDatabase: () => database,
     migrationsDirectory: '/migrations',
     migrationFileSystem,
@@ -128,6 +139,66 @@ describe('startRuntime', () => {
 
     expect(runtime.hub).not.toBeNull();
     expect(runtime.server).not.toBeNull();
+  });
+
+  it('dials the servers the hub is paired with', async () => {
+    // The wiring, asserted where the wiring is: a hub that came up without
+    // dialling anything would look identical to one whose servers are all
+    // asleep, and the difference would surface as a product that does nothing.
+    const database = createFakeDatabase({
+      respondWith: [
+        hubIdentityRow,
+        {
+          match: /FROM servers/,
+          rows: [
+            {
+              id: 'registration-laptop',
+              label: 'laptop',
+              address: 'wss://laptop.example:8443',
+              token: 'tok-laptop',
+              server_id: null,
+              created_at: 1_756_000_000_000,
+              revoked_at: null,
+              last_connected_at: null,
+            },
+          ],
+        },
+      ],
+    });
+    const dialer = createUnreachableDialer();
+
+    runtime = await startRuntime(hubOnly, dependencies(database, createFakeStoreFiles(), dialer));
+
+    expect(runtime.hub?.connections.snapshot().map((report) => report.label)).toEqual(['laptop']);
+    expect(dialer.dialled).toEqual(['wss://laptop.example:8443']);
+  });
+
+  it('comes up even though the server it is paired with is unreachable', async () => {
+    // An unreachable server is a label on a row, never a reason not to start.
+    const database = createFakeDatabase({
+      respondWith: [
+        hubIdentityRow,
+        {
+          match: /FROM servers/,
+          rows: [
+            {
+              id: 'registration-laptop',
+              label: 'laptop',
+              address: 'wss://laptop.example:8443',
+              token: 'tok-laptop',
+              server_id: null,
+              created_at: 1_756_000_000_000,
+              revoked_at: null,
+              last_connected_at: null,
+            },
+          ],
+        },
+      ],
+    });
+
+    runtime = await startRuntime(hubOnly, dependencies(database));
+
+    expect(runtime.hub).not.toBeNull();
   });
 
   it('migrates before it serves', async () => {

@@ -5,6 +5,7 @@ import {
   findServer,
   listServers,
   newServerRegistrationSchema,
+  recordServerConnected,
   recordServerIdentity,
   registerServer,
   revokeServer,
@@ -202,6 +203,25 @@ describe('server registrations', () => {
 
     expect(identified?.serverId).toBe('server-abc');
     expect(identified?.token).toBe('tok-new');
+  });
+
+  it('records when a live pairing connected, and starts out never having', async () => {
+    const registration = await register('laptop', 'tok-1');
+    expect(registration.lastConnectedAt).toBeNull();
+
+    const connected = await recordServerConnected(db(), clock, registration.id);
+
+    expect(connected?.lastConnectedAt).toBe(NOW);
+  });
+
+  it('will not record a connection to a revoked pairing', async () => {
+    // A pairing the operator withdrew is history, and history does not acquire
+    // new facts. It is the same guard `recordServerIdentity` has, for the same
+    // reason: the supervisor takes `null` here as "stop".
+    const registration = await register('laptop', 'tok-1');
+    await revokeServer(db(), clock, registration.id);
+
+    expect(await recordServerConnected(db(), clock, registration.id)).toBeNull();
   });
 
   it('answers nothing for a pairing id nobody has', async () => {

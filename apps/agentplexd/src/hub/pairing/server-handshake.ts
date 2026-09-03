@@ -89,6 +89,15 @@ export type HandshakeOutcome =
        * itself all over again.
        */
       readonly socket: MessageSocket;
+      /**
+       * The connection's frame id counter, handed on with the socket.
+       *
+       * A frame id is unique within one connection and this handshake already
+       * spent the first one. Anything that goes on speaking here -- the
+       * heartbeat, and the reducer after it -- continues this counter rather
+       * than starting its own, which would re-issue an id the peer has seen.
+       */
+      readonly nextFrameId: () => number;
     }
   | {
       readonly ok: false;
@@ -176,7 +185,13 @@ export async function handshakeWithServer(
             serverId: frame.serverId,
             stores: frame.stores.length,
           });
-          settle({ ok: true, serverId: frame.serverId, stores: frame.stores, socket });
+          settle({
+            ok: true,
+            serverId: frame.serverId,
+            stores: frame.stores,
+            socket,
+            nextFrameId,
+          });
           return;
         }
 

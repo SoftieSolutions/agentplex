@@ -29,25 +29,38 @@ export interface FakeTimers extends Timers {
   /** Fires everything due at or before `afterMs` from when it was scheduled. */
   fireAll(): void;
   readonly pending: number;
+  /**
+   * The delays of everything currently scheduled, in the order it was
+   * scheduled.
+   *
+   * How a retry schedule is asserted. Firing timers proves a reconnect
+   * happened; only the delay proves it waited longer than the time before, and
+   * a backoff whose progression nothing checks is a backoff that quietly
+   * becomes a busy loop.
+   */
+  readonly delays: readonly number[];
 }
 
 export function createFakeTimers(): FakeTimers {
-  const scheduled = new Map<number, () => void>();
+  const scheduled = new Map<number, { readonly afterMs: number; readonly fire: () => void }>();
   let next = 0;
 
   return {
-    schedule(_afterMs: number, fire: () => void): () => void {
+    schedule(afterMs: number, fire: () => void): () => void {
       const id = (next += 1);
-      scheduled.set(id, fire);
+      scheduled.set(id, { afterMs, fire });
       return () => void scheduled.delete(id);
     },
     fireAll(): void {
-      const due = [...scheduled.entries()];
+      const due = [...scheduled.values()];
       scheduled.clear();
-      for (const [, fire] of due) fire();
+      for (const { fire } of due) fire();
     },
     get pending(): number {
       return scheduled.size;
+    },
+    get delays(): readonly number[] {
+      return [...scheduled.values()].map((timer) => timer.afterMs);
     },
   };
 }

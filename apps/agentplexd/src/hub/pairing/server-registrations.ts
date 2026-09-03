@@ -62,6 +62,12 @@ const serverRowSchema = z.object({
   address: serverAddressSchema,
   server_id: serverIdSchema.nullable(),
   created_at: timestampSchema,
+  /**
+   * When the hub last held a live connection to this server, or `null` when it
+   * never has. A fact about the past, which is the only kind of connectivity
+   * fact a column may hold; see `0003` for why liveness itself is not here.
+   */
+  last_connected_at: timestampSchema.nullable(),
 });
 
 /**
@@ -81,6 +87,7 @@ const liveServerRegistrationSchema = serverRowSchema
     address: row.address,
     serverId: row.server_id,
     createdAt: row.created_at,
+    lastConnectedAt: row.last_connected_at,
     token: row.token,
     revokedAt: null,
   }));
@@ -94,6 +101,7 @@ const revokedServerRegistrationSchema = serverRowSchema
     address: row.address,
     serverId: row.server_id,
     createdAt: row.created_at,
+    lastConnectedAt: row.last_connected_at,
     token: null,
     revokedAt: row.revoked_at,
   }));
@@ -109,7 +117,7 @@ export type ServerRegistration = z.infer<typeof serverRegistrationSchema>;
  * Named once. Every statement below selects exactly this, so the parsers above
  * and the reads are the same list rather than two lists that agree today.
  */
-const COLUMNS = 'id, label, address, token, server_id, created_at, revoked_at';
+const COLUMNS = 'id, label, address, token, server_id, created_at, revoked_at, last_connected_at';
 
 /**
  * Records a pairing the user just entered.
@@ -214,6 +222,35 @@ export async function recordServerIdentity(
      WHERE id = ? AND revoked_at IS NULL
      RETURNING ${COLUMNS}`,
     [serverId, id],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : liveServerRegistrationSchema.parse(row);
+}
+
+/**
+ * Records that the hub has a live connection to this server, as of now.
+ *
+ * Written on every successful handshake, which is the only moment the hub
+ * knows the claim is true. It moves forward and never back: nothing clears it
+ * when the connection drops, because "when it was last up" is precisely what a
+ * stale label needs and precisely what clearing it would destroy.
+ *
+ * A separate statement from `recordServerIdentity` rather than a column added
+ * to it, because they are two different facts on two different schedules: the
+ * identity is learned once and then re-asserted, and this moves every time the
+ * hub reconnects. Callers that want both atomically run both in one
+ * transaction, which is what `recordHandshake` does.
+ */
+export async function recordServerConnected(
+  database: Queryable,
+  clock: Clock,
+  id: ServerRegistrationId,
+): Promise<LiveServerRegistration | null> {
+  const result = await database.query(
+    `UPDATE servers SET last_connected_at = ?
+     WHERE id = ? AND revoked_at IS NULL
+     RETURNING ${COLUMNS}`,
+    [clock.now(), id],
   );
   const row = result.rows[0];
   return row === undefined ? null : liveServerRegistrationSchema.parse(row);
