@@ -1,8 +1,8 @@
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, usage } from './config/config.js';
-import { createPostgresDatabase } from './hub/db/postgres.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
+import { createSqliteDatabase } from './hub/db/sqlite.js';
 import { startRuntime } from './runtime.js';
 import { createNodeProcessProbe } from './server/node-process-probe.js';
 import { nodePtyFactory } from './server/node-pty-factory.js';
@@ -60,7 +60,7 @@ async function main(): Promise<void> {
     runtime = await startRuntime(config, {
       logger,
       ids: randomIdGenerator,
-      openDatabase: (url) => createPostgresDatabase(url),
+      openDatabase: (path) => createSqliteDatabase(path),
       migrationsDirectory: MIGRATIONS_DIRECTORY,
       migrationFileSystem: nodeMigrationFileSystem,
       storeFileSystem: nodeStoreFileSystem,

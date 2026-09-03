@@ -2,8 +2,10 @@
  * The database seam.
  *
  * Everything above this line talks to `Database`; exactly one module below it
- * (`postgres.ts`) names the driver. A test supplies its own implementation, and
- * swapping drivers touches one file.
+ * (`sqlite.ts`) names the driver `main` opens. A test supplies its own
+ * implementation, and swapping drivers touches one file — which is what is
+ * happening now: `postgres.ts` is the driver being replaced, still here because
+ * the migrations are still written in its dialect, and it goes when they do.
  */
 export interface QueryResult<Row> {
   readonly rows: readonly Row[];

@@ -80,16 +80,16 @@ pnpm docker:check   # the same, in a container, against a real Postgres
 
 Every setting has one flag and one environment variable; the flag wins.
 
-| Flag             | Environment              | Default        | Meaning                                 |
-| ---------------- | ------------------------ | -------------- | --------------------------------------- |
-| `--role`         | `AGENTPLEX_ROLE`         | none, required | `hub`, `server` or `both`               |
-| `--host`         | `AGENTPLEX_HOST`         | `0.0.0.0`      | Interface to bind                       |
-| `--hub-port`     | `AGENTPLEX_HUB_PORT`     | `8080`         | Port the hub serves on                  |
-| `--server-port`  | `AGENTPLEX_SERVER_PORT`  | `8081`         | Port the hub dials                      |
-| `--database-url` | `AGENTPLEX_DATABASE_URL` | none           | Postgres; required for `hub` and `both` |
-| `--store-path`   | `AGENTPLEX_STORE_PATH`   | none           | Store root; repeatable, absolute        |
-| `--terminal-cap` | `AGENTPLEX_TERMINAL_CAP` | `8`            | Terminals held at once; at least 1      |
-| `--log-level`    | `AGENTPLEX_LOG_LEVEL`    | `info`         | `debug`, `info`, `warn`, `error`        |
+| Flag              | Environment               | Default        | Meaning                                              |
+| ----------------- | ------------------------- | -------------- | ---------------------------------------------------- |
+| `--role`          | `AGENTPLEX_ROLE`          | none, required | `hub`, `server` or `both`                            |
+| `--host`          | `AGENTPLEX_HOST`          | `0.0.0.0`      | Interface to bind                                    |
+| `--hub-port`      | `AGENTPLEX_HUB_PORT`      | `8080`         | Port the hub serves on                               |
+| `--server-port`   | `AGENTPLEX_SERVER_PORT`   | `8081`         | Port the hub dials                                   |
+| `--database-file` | `AGENTPLEX_DATABASE_FILE` | none           | SQLite file, absolute; required for `hub` and `both` |
+| `--store-path`    | `AGENTPLEX_STORE_PATH`    | none           | Store root; repeatable, absolute                     |
+| `--terminal-cap`  | `AGENTPLEX_TERMINAL_CAP`  | `8`            | Terminals held at once; at least 1                   |
+| `--log-level`     | `AGENTPLEX_LOG_LEVEL`     | `info`         | `debug`, `info`, `warn`, `error`                     |
 
 A server holds at most `--terminal-cap` terminals. Reaching the cap closes the
 one whose last watcher left longest ago, never one somebody is watching; the

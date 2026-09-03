@@ -19,8 +19,11 @@ export type Role = (typeof ROLES)[number];
 
 export interface HubConfig {
   readonly port: number;
-  /** The one connection string; the hub is the only writer to this database. */
-  readonly databaseUrl: string;
+  /**
+   * The SQLite file, absolute and normalized. The hub is the only writer to it,
+   * and the directory it sits in is the operator's to create and to back up.
+   */
+  readonly databaseFile: string;
 }
 
 export interface ServerConfig {
@@ -50,7 +53,7 @@ export interface ServerConfig {
 
 /**
  * A union rather than a record with optional halves: in `--role=server` there
- * is no database url to read, and the type should be what makes that true.
+ * is no database file to read, and the type should be what makes that true.
  *
  * `host` sits outside the halves because one process binds one interface, and
  * a hub and a server sharing a process share it.
@@ -93,8 +96,8 @@ const DEFAULT_LOG_LEVEL: LogLevel = 'info';
 /** Containers reach the process from outside their own loopback. */
 const DEFAULT_HOST = '0.0.0.0';
 
-const MISSING_DATABASE_URL =
-  'the hub role needs a database: set AGENTPLEX_DATABASE_URL or pass --database-url';
+const MISSING_DATABASE_FILE =
+  'the hub role needs a database: set AGENTPLEX_DATABASE_FILE or pass --database-file';
 
 /**
  * Each setting has one flag and one env var. Flags win, because a flag is
@@ -111,7 +114,7 @@ const SETTINGS = {
   host: { flag: '--host', env: 'AGENTPLEX_HOST' },
   hubPort: { flag: '--hub-port', env: 'AGENTPLEX_HUB_PORT' },
   serverPort: { flag: '--server-port', env: 'AGENTPLEX_SERVER_PORT' },
-  databaseUrl: { flag: '--database-url', env: 'AGENTPLEX_DATABASE_URL' },
+  databaseFile: { flag: '--database-file', env: 'AGENTPLEX_DATABASE_FILE' },
   /** The one repeatable setting: a server may mount more than one store. */
   storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
   terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
@@ -129,6 +132,20 @@ const roleSchema = z.enum(ROLES);
 const logLevelSchema = z.enum(LOG_LEVELS);
 const portSchema = z.coerce.number().int().min(1).max(65535);
 const hostSchema = z.string().min(1);
+/**
+ * The database file: absolute, and normalized to one spelling.
+ *
+ * Relative is refused for the same reason a store path is. It would name
+ * whatever directory the unit file, the shell, or the container image left the
+ * process in, and a hub whose database follows the working directory is a hub
+ * that silently comes up empty somewhere and migrates a second file. `resolve`
+ * on an already-absolute path never consults the working directory; it
+ * collapses `..` and a trailing separator so that one file has one name.
+ */
+const databaseFileSchema = z
+  .string()
+  .refine((value) => isAbsolute(value))
+  .transform((value) => resolve(value));
 
 export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
   const flags = readFlags(argv);
@@ -173,16 +190,15 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
 
-  const databaseUrl = read(SETTINGS.databaseUrl);
-  if (role !== 'server' && databaseUrl === undefined) problems.push(MISSING_DATABASE_URL);
+  const databaseFile = readDatabaseFile(read(SETTINGS.databaseFile), role, problems);
 
   if (role === undefined || problems.length > 0) return { ok: false, problems };
 
   const server: ServerConfig = { port: serverPort, storePaths, terminalCap };
   if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
 
-  if (databaseUrl === undefined) return { ok: false, problems: [MISSING_DATABASE_URL] };
-  const hub: HubConfig = { port: hubPort, databaseUrl };
+  if (databaseFile === undefined) return { ok: false, problems: [MISSING_DATABASE_FILE] };
+  const hub: HubConfig = { port: hubPort, databaseFile };
 
   return role === 'hub'
     ? { ok: true, config: { role, logLevel, host, hub } }
@@ -203,7 +219,7 @@ type FlagsResult =
  * Accepts `--flag=value` and `--flag value`, and refuses anything else.
  *
  * An unknown flag is a failure rather than a shrug: silently ignoring
- * `--databse-url` would start the process with the wrong database.
+ * `--databse-file` would start the process with the wrong database.
  *
  * `node:util.parseArgs` handles both forms and rejects unknown options, and it
  * was tried here. Under `strict: true` it throws on the first unknown option,
@@ -301,6 +317,36 @@ function readTerminalCap(raw: string | undefined, problems: string[]): number {
     return DEFAULT_TERMINAL_CAP;
   }
   return cap;
+}
+
+/**
+ * The hub's database, or the reason there isn't one.
+ *
+ * There is no default. A path invented here would be a file somebody has to
+ * find later in order to back it up, and inventing one under the working
+ * directory is how a hub ends up with two databases and no error.
+ */
+function readDatabaseFile(
+  raw: string | undefined,
+  role: Role | undefined,
+  problems: string[],
+): string | undefined {
+  if (raw === undefined) {
+    // Only a server is allowed to have none. A role that did not parse is
+    // reported already; it is still asked for a database, because the run that
+    // fixes the role should not then discover a second missing setting.
+    if (role !== 'server') problems.push(MISSING_DATABASE_FILE);
+    return undefined;
+  }
+
+  const result = databaseFileSchema.safeParse(raw);
+  if (!result.success) {
+    problems.push(
+      `${SETTINGS.databaseFile.flag} must be an absolute path, not ${JSON.stringify(raw)}`,
+    );
+    return undefined;
+  }
+  return result.data;
 }
 
 function readPort(

@@ -21,8 +21,8 @@ import type { Logger } from './shared/logger.js';
 export interface RuntimeDependencies {
   readonly logger: Logger;
   readonly ids: IdGenerator;
-  /** Named rather than imported, so no test path reaches a real Postgres by accident. */
-  readonly openDatabase: (url: string) => Database;
+  /** Named rather than imported, so no test path opens a real database by accident. */
+  readonly openDatabase: (path: string) => Database;
   readonly migrationsDirectory: string;
   readonly migrationFileSystem: MigrationFileSystem;
   /** The store volumes, injected for the same reason the migrations directory is. */
@@ -82,7 +82,7 @@ export async function startRuntime(
   // rest of them rather than as a dependency the process reads for itself.
   const host = config.host;
 
-  const database = 'hub' in config ? openDatabase(config.hub.databaseUrl) : null;
+  const database = 'hub' in config ? openDatabase(config.hub.databaseFile) : null;
 
   // Started one at a time, and torn back down on failure: a half-started
   // process that keeps a port open is harder to diagnose than one that exited.

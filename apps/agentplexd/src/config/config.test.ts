@@ -2,7 +2,7 @@ import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig, usage, type ConfigResult } from './config.js';
 
-const DATABASE_URL = 'postgres://agentplex@localhost:5432/agentplex';
+const DATABASE_FILE = '/var/lib/agentplex/agentplex.db';
 
 function load(argv: string[], env: Record<string, string | undefined> = {}): ConfigResult {
   return loadConfig({ argv, env });
@@ -39,19 +39,25 @@ describe('loadConfig roles', () => {
   });
 
   it('gives the both role a hub and a server half', () => {
-    const result = load(['--role=both', `--database-url=${DATABASE_URL}`]);
+    const result = load(['--role=both', `--database-file=${DATABASE_FILE}`]);
     expect(result).toMatchObject({
       ok: true,
-      config: { role: 'both', hub: { databaseUrl: DATABASE_URL }, server: { port: 8081 } },
+      config: { role: 'both', hub: { databaseFile: DATABASE_FILE }, server: { port: 8081 } },
     });
   });
 });
 
-describe('loadConfig database url', () => {
+describe('loadConfig database file', () => {
+  function databaseFile(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok && 'hub' in result.config ? result.config.hub.databaseFile : undefined;
+  }
+
   it('requires one for the hub role', () => {
     const problems = expectProblems(load(['--role=hub']));
     expect(problems).toEqual([
-      'the hub role needs a database: set AGENTPLEX_DATABASE_URL or pass --database-url',
+      'the hub role needs a database: set AGENTPLEX_DATABASE_FILE or pass --database-file',
     ]);
   });
 
@@ -63,11 +69,36 @@ describe('loadConfig database url', () => {
     const result = load(['--role=server']);
     expect(result.ok).toBe(true);
   });
+
+  it('reads the file from the environment, which is all a container is configured with', () => {
+    expect(databaseFile(['--role=hub'], { AGENTPLEX_DATABASE_FILE: DATABASE_FILE })).toBe(
+      DATABASE_FILE,
+    );
+  });
+
+  it('lets a flag override the environment, because a flag was just typed', () => {
+    expect(
+      databaseFile(['--role=hub', `--database-file=${DATABASE_FILE}`], {
+        AGENTPLEX_DATABASE_FILE: '/somewhere/else.db',
+      }),
+    ).toBe(DATABASE_FILE);
+  });
+
+  it('refuses a relative path, which names a different file per working directory', () => {
+    const problems = expectProblems(load(['--role=hub', '--database-file=agentplex.db']));
+    expect(problems[0]).toContain('absolute');
+  });
+
+  it('normalizes the path, so one file is not two names in a log line', () => {
+    expect(databaseFile(['--role=hub', '--database-file=/var/lib/other/../agentplex/hub.db'])).toBe(
+      '/var/lib/agentplex/hub.db',
+    );
+  });
 });
 
 describe('loadConfig ports', () => {
   it('defaults the two ports so a first run needs no port decision', () => {
-    const result = load(['--role=both', `--database-url=${DATABASE_URL}`]);
+    const result = load(['--role=both', `--database-file=${DATABASE_FILE}`]);
     expect(result).toMatchObject({
       ok: true,
       config: { hub: { port: 8080 }, server: { port: 8081 } },
@@ -97,8 +128,8 @@ describe('loadConfig failure reporting', () => {
   });
 
   it('refuses an unknown flag rather than silently ignoring a typo', () => {
-    const problems = expectProblems(load(['--role=server', '--databse-url=x']));
-    expect(problems[0]).toContain('--databse-url');
+    const problems = expectProblems(load(['--role=server', '--databse-file=x']));
+    expect(problems[0]).toContain('--databse-file');
   });
 
   it('refuses a flag left without a value', () => {
@@ -172,7 +203,7 @@ describe('loadConfig store paths', () => {
   });
 
   it('gives the both role its stores on the server half', () => {
-    const result = load(['--role=both', `--database-url=${DATABASE_URL}`, '--store-path=/store']);
+    const result = load(['--role=both', `--database-file=${DATABASE_FILE}`, '--store-path=/store']);
     expect(result).toMatchObject({
       ok: true,
       config: { role: 'both', server: { storePaths: ['/store'] } },
