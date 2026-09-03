@@ -11,6 +11,7 @@ import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { nodeProviderFiles } from './server/providers/node-provider-files.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
+import { createTerminalManager } from './server/terminal-manager.js';
 import { systemClock } from './shared/clock.js';
 import { randomIdGenerator } from './shared/ids.js';
 import { createLogger, jsonLineSink } from './shared/logger.js';
@@ -63,11 +64,20 @@ async function main(): Promise<void> {
       // The only place a real pty is opened, and the only place `process.env`
       // is read as the environment a child inherits. What gets scrubbed out of
       // it is each adapter's call, carried on its launch plan.
-      sessions: createPtySupervisor({
-        pty: nodePtyFactory,
+      //
+      // The cap is spread rather than passed as possibly-undefined: the
+      // workspace is on `exactOptionalPropertyTypes`, so an absent property is
+      // what takes the manager's own default, and a hub-only process has no
+      // server half to read one from.
+      terminals: createTerminalManager({
+        supervisor: createPtySupervisor({
+          pty: nodePtyFactory,
+          clock: systemClock,
+          ids: randomIdGenerator,
+          environment: process.env,
+        }),
         clock: systemClock,
-        ids: randomIdGenerator,
-        environment: process.env,
+        ...('server' in config ? { cap: config.server.terminalCap } : {}),
       }),
       clock: systemClock,
     });

@@ -4,8 +4,8 @@ import { sendJson, startHttpServer, type HttpListener } from '../shared/http.js'
 import type { IdGenerator } from '../shared/ids.js';
 import type { Logger } from '../shared/logger.js';
 import type { ProviderRegistry } from './providers/provider-registry.js';
-import { discoverStoreSessions, noLiveSessions } from './providers/store-discovery.js';
-import type { PtySupervisor } from './pty-supervisor.js';
+import { discoverStoreSessions } from './providers/store-discovery.js';
+import type { TerminalManager } from './terminal-manager.js';
 import { ensureStores, type StoreFileSystem } from './store-identity.js';
 
 /**
@@ -38,8 +38,12 @@ export interface SessionServerDependencies {
    * processes keep the store's transcripts moving, the next server to start
    * finds sessions it did not launch and cannot drive, and on a laptop they
    * outlive the terminal that started them.
+   *
+   * Shutdown is also the only thing besides the cap that closes a terminal:
+   * nothing here runs an idle timer, and a session whose last tab closed goes
+   * on working.
    */
-  readonly sessions: PtySupervisor;
+  readonly terminals: TerminalManager;
 }
 
 export interface SessionServer {
@@ -52,7 +56,8 @@ export interface SessionServer {
 export async function startSessionServer(
   dependencies: SessionServerDependencies,
 ): Promise<SessionServer> {
-  const { host, port, ids, storePaths, storeFileSystem, providers, clock, sessions } = dependencies;
+  const { host, port, ids, storePaths, storeFileSystem, providers, clock, terminals } =
+    dependencies;
   const logger = dependencies.logger.child({ role: 'server' });
 
   // A store that cannot be read costs itself and nothing else: the server
@@ -76,12 +81,14 @@ export async function startSessionServer(
   // It is a log line and not a field on the returned server on purpose: a
   // snapshot taken at startup goes stale the moment a session writes, and a
   // stale list presented as current is the failure the watcher exists to
-  // avoid. Nothing is running yet, and `noLiveSessions` says so honestly.
+  // avoid. The manager is the liveness source rather than a hardcoded "nothing
+  // is running": at boot it truthfully holds nothing, and it is what knows
+  // about the sessions this server started itself once it does.
   for (const store of stores) {
     const found = await discoverStoreSessions(store, {
       registry: providers,
       clock,
-      liveness: noLiveSessions,
+      liveness: terminals,
     });
     logger.info('store scanned', {
       storeId: store.storeId,
@@ -110,8 +117,8 @@ export async function startSessionServer(
       // Children first. Closing the listener only stops new work arriving;
       // anything already running would go on writing into the store with
       // nothing left to watch it.
-      const running = sessions.runs.length;
-      sessions.stopAll();
+      const running = terminals.terminals.length;
+      terminals.closeAll();
       await listener.close();
       logger.info('server stopped', { killed: running });
     },

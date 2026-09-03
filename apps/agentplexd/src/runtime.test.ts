@@ -7,6 +7,7 @@ import { createFakeProviderFiles } from './server/providers/fake-provider-files.
 import { createProviderRegistry } from './server/providers/provider-registry.js';
 import { createFakePtyFactory } from './server/fake-pty.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
+import { createTerminalManager } from './server/terminal-manager.js';
 import { createFakeProcessProbe } from './server/fake-process-probe.js';
 import { createFakeStoreFiles } from './server/fake-store-files.js';
 import { createLogger, type LogRecord } from './shared/logger.js';
@@ -42,13 +43,16 @@ function dependencies(database = fakeHubDatabase(), storeFileSystem = createFake
     // registry with a real one in it would put a provider's disk layout into
     // every test here.
     providers: createProviderRegistry([]),
-    // A supervisor over a pty nothing ever opens: this file is about which
-    // halves start and stop, and a real one would fork a process per test.
-    sessions: createPtySupervisor({
-      pty: createFakePtyFactory(),
+    // A manager over a pty nothing ever opens: this file is about which halves
+    // start and stop, and a real one would fork a process per test.
+    terminals: createTerminalManager({
+      supervisor: createPtySupervisor({
+        pty: createFakePtyFactory(),
+        clock: { now: () => 1_756_000_000_000 },
+        ids,
+        environment: {},
+      }),
       clock: { now: () => 1_756_000_000_000 },
-      ids,
-      environment: {},
     }),
     clock: { now: () => 1_756_000_000_000 },
   };
@@ -60,7 +64,7 @@ const serverOnly: Config = {
   role: 'server',
   logLevel: 'error',
   host: HOST,
-  server: { port: 0, storePaths: [] },
+  server: { port: 0, storePaths: [], terminalCap: 8 },
 };
 const hubOnly: Config = {
   role: 'hub',
@@ -73,7 +77,7 @@ const both: Config = {
   logLevel: 'error',
   host: HOST,
   hub: { port: 0, databaseUrl: 'postgres://unused' },
-  server: { port: 0, storePaths: [] },
+  server: { port: 0, storePaths: [], terminalCap: 8 },
 };
 
 let runtime: Runtime | undefined;
@@ -132,7 +136,7 @@ describe('startRuntime', () => {
     const files = createFakeStoreFiles();
     const withStore: Config = {
       ...serverOnly,
-      server: { port: 0, storePaths: ['/volumes/claude'] },
+      server: { ...serverOnly.server, storePaths: ['/volumes/claude'] },
     };
 
     runtime = await startRuntime(withStore, dependencies(fakeHubDatabase(), files));
@@ -150,7 +154,7 @@ describe('startRuntime', () => {
     const records: LogRecord[] = [];
     const withStore: Config = {
       ...serverOnly,
-      server: { port: 0, storePaths: ['/volumes/claude'] },
+      server: { ...serverOnly.server, storePaths: ['/volumes/claude'] },
     };
 
     runtime = await startRuntime(withStore, {
@@ -172,7 +176,7 @@ describe('startRuntime', () => {
     const files = createFakeStoreFiles({ unreadable: ['/volumes/broken/agentplex-store.json'] });
     const withStores: Config = {
       ...serverOnly,
-      server: { port: 0, storePaths: ['/volumes/broken', '/volumes/claude'] },
+      server: { ...serverOnly.server, storePaths: ['/volumes/broken', '/volumes/claude'] },
     };
 
     runtime = await startRuntime(withStores, dependencies(fakeHubDatabase(), files));

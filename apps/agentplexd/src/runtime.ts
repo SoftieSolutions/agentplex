@@ -3,8 +3,8 @@ import type { Database } from './hub/db/database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import type { ProviderRegistry } from './server/providers/provider-registry.js';
-import type { PtySupervisor } from './server/pty-supervisor.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
+import type { TerminalManager } from './server/terminal-manager.js';
 import type { StoreFileSystem } from './server/store-identity.js';
 import type { Clock } from './shared/clock.js';
 import type { IdGenerator } from './shared/ids.js';
@@ -36,11 +36,13 @@ export interface RuntimeDependencies {
    */
   readonly providers: ProviderRegistry;
   /**
-   * The supervisor the server role starts sessions on. Injected for the same
-   * reason the providers are: a test starts the whole runtime without forking
-   * anything, and the one place a real pty is opened stays visible in `main`.
+   * The terminal manager the server role starts sessions on, and the supervisor
+   * underneath it. Injected for the same reason the providers are: a test
+   * starts the whole runtime without forking anything, and the one place a real
+   * pty is opened stays visible in `main`. It is built there rather than here
+   * because its cap is configuration, and only `main` has read the config.
    */
-  readonly sessions: PtySupervisor;
+  readonly terminals: TerminalManager;
   readonly clock: Clock;
 }
 
@@ -62,7 +64,7 @@ export async function startRuntime(
     migrationFileSystem,
     storeFileSystem,
     providers,
-    sessions,
+    terminals,
     clock,
   } = dependencies;
   // The interface to bind is a setting like any other, so it arrives with the
@@ -97,7 +99,7 @@ export async function startRuntime(
         storePaths: config.server.storePaths,
         storeFileSystem,
         providers,
-        sessions,
+        terminals,
         clock,
       });
     }
