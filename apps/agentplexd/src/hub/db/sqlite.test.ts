@@ -101,6 +101,32 @@ describe('createSqliteDatabase', () => {
     ).rejects.toThrow('parameter 1');
   });
 
+  it('runs every statement of a script, not the first one and silence', async () => {
+    const database = openDatabase('script.db');
+
+    // What a migration file is. `prepare` compiles the leading statement and
+    // ignores the rest, so a driver that only prepared would create the table
+    // and skip its index while reporting success.
+    const result = await database.query(
+      'CREATE TABLE probe (value integer NOT NULL);\nCREATE INDEX probe_value ON probe (value);\n',
+    );
+
+    expect(result).toEqual({ rows: [], rowCount: 0 });
+    const objects = await database.query<{ name: string }>(
+      'SELECT name FROM sqlite_master ORDER BY name',
+    );
+    expect(objects.rows.map((row) => row.name)).toEqual(['probe', 'probe_value']);
+  });
+
+  it('refuses a script with parameters, which could only bind to its first statement', async () => {
+    const database = openDatabase('bound-script.db');
+    await createProbeTable(database);
+
+    await expect(
+      database.query('INSERT INTO probe (value) VALUES (?); DELETE FROM probe;', [1]),
+    ).rejects.toThrow('multi-statement script');
+  });
+
   it('commits a transaction that returns', async () => {
     const database = openDatabase('commit.db');
     await createProbeTable(database);

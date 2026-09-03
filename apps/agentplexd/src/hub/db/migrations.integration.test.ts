@@ -1,172 +1,232 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPostgresDatabase } from './postgres.js';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { loadMigrations } from './migration-files.js';
 import { nodeMigrationFileSystem } from './node-migration-files.js';
-import { ADVISORY_LOCK_KEY, migrate } from './migrations.js';
-import { openTestDatabase } from './test-database.js';
+import { migrate, type Migration } from './migrations.js';
+import { createSqliteDatabase, type SqliteDatabase } from './sqlite.js';
 import { ensureHubIdentity } from '../hub-identity.js';
-import type { Database, Queryable, QueryResult } from './database.js';
 import { createLogger } from '../../shared/logger.js';
 import { randomIdGenerator } from '../../shared/ids.js';
 
 /**
- * The migrations run against a real Postgres.
+ * The shipped migrations, against a real SQLite file.
  *
- * The fake in `migrations.test.ts` covers the runner's control flow; only a
- * real server can say whether the SQL is valid, and only a real pool can show
- * what happens to a session-scoped lock taken through one. `pnpm docker:test`
- * supplies the database; failing that, testcontainers starts one. With neither,
- * the suite skips itself and says so rather than passing quietly.
+ * The fake in `migrations.test.ts` covers the runner's control flow; only the
+ * engine can say whether the SQL is valid, whether the single-row constraint
+ * holds, and what a second process meets when it tries to migrate at the same
+ * time. Nothing here skips and nothing here starts a container: the database is
+ * a file in a temporary directory, so this suite runs on a laptop, in CI and in
+ * the image, always.
  */
-const testDatabase = await openTestDatabase();
-
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../../../migrations', import.meta.url));
 
-/**
- * Any advisory lock at all, on a database no other program is using. Counting
- * them from a separate query is the point: a lock the migration runner failed
- * to release is still visible here, held by an idle pooled connection.
- */
-async function advisoryLocksHeld(database: Database): Promise<number> {
-  const result = await database.query<{ held: number }>(
-    "SELECT count(*)::int AS held FROM pg_locks WHERE locktype = 'advisory'",
-  );
-  return result.rows[0]?.held ?? -1;
+const directory = await mkdtemp(join(tmpdir(), 'agentplex-migrations-'));
+const logger = createLogger('error', () => {});
+
+/** The clock the schema no longer has, fixed so a stored millisecond is checkable. */
+const MINTED_AT = 1_756_000_000_000;
+const clock = { now: () => MINTED_AT };
+
+let files = 0;
+const open: SqliteDatabase[] = [];
+
+function openDatabase(name: string, options?: { readonly busyTimeoutMs?: number }): SqliteDatabase {
+  const database = createSqliteDatabase(join(directory, name), options);
+  open.push(database);
+  return database;
 }
 
-/**
- * A database that starts one long query on the pool the instant the migration
- * lock is taken, and keeps it in flight until the runner is done.
- *
- * This is the accident the old runner depended on not happening. Taken through
- * a pool, `pg_advisory_lock` runs on whichever client was free, and the client
- * is handed straight back; one query in flight then takes that client, the
- * unlock is issued on a new one, and it releases nothing. Nothing raises: the
- * unlock simply answers false, the lock stays held by an idle connection, and
- * the next process to migrate waits on it. Migrating happens before the hub
- * listens today, but the hub is not the only thing that will hold this pool by
- * milestone 3, and a lock that is only correct while nothing else runs is not
- * one anybody can reason about.
- */
-function withTrafficDuringTheLock(database: Database): {
-  readonly database: Database;
-  settled(): Promise<void>;
-} {
-  let inFlight: Promise<unknown> = Promise.resolve();
-  let started = false;
-
-  const takeAConnection = (text: string): void => {
-    if (started || !text.includes('advisory_lock(')) return;
-    started = true;
-    inFlight = database.query('SELECT pg_sleep(1)');
-  };
-
-  const watch =
-    (handle: Queryable): Queryable['query'] =>
-    async <Row>(text: string, values?: readonly unknown[]): Promise<QueryResult<Row>> => {
-      const result = await handle.query<Row>(text, values);
-      takeAConnection(text);
-      return result;
-    };
-
-  return {
-    database: {
-      query: watch(database),
-      transaction: (body) => database.transaction(body),
-      session: (body) =>
-        database.session((session) =>
-          body({ query: watch(session), transaction: (inner) => session.transaction(inner) }),
-        ),
-      close: () => database.close(),
-    },
-    settled: async () => void (await inFlight),
-  };
+/** A fresh, empty database file, so "applies from empty" means it. */
+function emptyDatabase(options?: { readonly busyTimeoutMs?: number }): SqliteDatabase {
+  files += 1;
+  return openDatabase(`hub-${String(files)}.db`, options);
 }
 
-describe.skipIf(testDatabase === null)('migrations against Postgres', () => {
-  const database = createPostgresDatabase(testDatabase?.url ?? '');
-  const logger = createLogger('error', () => {});
+async function shippedMigrations(): Promise<readonly Migration[]> {
+  return loadMigrations(MIGRATIONS_DIRECTORY, nodeMigrationFileSystem);
+}
 
-  afterAll(async () => {
-    await database.close();
-    await testDatabase?.stop();
-  }, 60_000);
+afterEach(async () => {
+  await Promise.all(open.splice(0).map((database) => database.close()));
+});
 
-  beforeEach(async () => {
-    // Each test starts from nothing, so "applies from empty" means it.
-    await database.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-  });
+afterAll(async () => {
+  await rm(directory, { recursive: true, force: true });
+});
 
-  it('applies every shipped migration to an empty database', async () => {
-    const migrations = await loadMigrations(MIGRATIONS_DIRECTORY, nodeMigrationFileSystem);
+describe('the shipped migrations against SQLite', () => {
+  it('applies every one of them to an empty database', async () => {
+    const database = emptyDatabase();
+    const migrations = await shippedMigrations();
     expect(migrations.length).toBeGreaterThan(0);
 
-    const outcome = await migrate(database, migrations, logger);
+    const outcome = await migrate(database, migrations, logger, clock);
 
     expect(outcome.applied).toHaveLength(migrations.length);
   });
 
-  it('is idempotent: a second run applies nothing', async () => {
-    const migrations = await loadMigrations(MIGRATIONS_DIRECTORY, nodeMigrationFileSystem);
-    await migrate(database, migrations, logger);
+  it('is idempotent: a second run against a migrated file applies nothing', async () => {
+    const database = emptyDatabase();
+    const migrations = await shippedMigrations();
+    await migrate(database, migrations, logger, clock);
 
-    const second = await migrate(database, migrations, logger);
+    const second = await migrate(database, migrations, logger, clock);
 
     expect(second.applied).toEqual([]);
     expect(second.alreadyApplied).toBe(migrations.length);
   });
 
-  it('refuses to open a database that has run a migration this build does not ship', async () => {
-    const migrations = await loadMigrations(MIGRATIONS_DIRECTORY, nodeMigrationFileSystem);
-    await migrate(database, migrations, logger);
-    await database.query('INSERT INTO schema_migrations (version, name) VALUES (9999, $1)', [
-      'from_a_newer_build',
-    ]);
+  it('reopens a file another process migrated and applies nothing to it', async () => {
+    files += 1;
+    const name = `reopened-${String(files)}.db`;
+    const migrations = await shippedMigrations();
+    const first = openDatabase(name);
+    await migrate(first, migrations, logger, clock);
+    await first.close();
 
-    await expect(migrate(database, migrations, logger)).rejects.toMatchObject({
+    // A second start of the hub is a second connection to a file that is
+    // already at the current schema, which is the case every start after the
+    // first one is.
+    const second = openDatabase(name);
+    const outcome = await migrate(second, migrations, logger, clock);
+
+    expect(outcome.applied).toEqual([]);
+    expect(outcome.alreadyApplied).toBe(migrations.length);
+  });
+
+  it('stamps the bookkeeping row with the injected clock, in epoch milliseconds', async () => {
+    const database = emptyDatabase();
+    const migrations = await shippedMigrations();
+
+    await migrate(database, migrations, logger, clock);
+
+    const result = await database.query<{ applied_at: number }>(
+      'SELECT applied_at FROM schema_migrations ORDER BY version',
+    );
+    expect(result.rows.map((row) => row.applied_at)).toEqual(migrations.map(() => MINTED_AT));
+  });
+
+  it('refuses to open a database that has run a migration this build does not ship', async () => {
+    const database = emptyDatabase();
+    const migrations = await shippedMigrations();
+    await migrate(database, migrations, logger, clock);
+    await database.query(
+      'INSERT INTO schema_migrations (version, name, applied_at) VALUES (9999, ?, ?)',
+      ['from_a_newer_build', MINTED_AT],
+    );
+
+    await expect(migrate(database, migrations, logger, clock)).rejects.toMatchObject({
       code: 'database-ahead',
     });
   });
 
+  it('applies every statement of a migration that is a script, not just the first', async () => {
+    const database = emptyDatabase();
+
+    await migrate(
+      database,
+      [
+        {
+          version: 1,
+          name: 'two_statements',
+          sql: 'CREATE TABLE a (x integer);\nCREATE TABLE b (x integer);\n',
+        },
+      ],
+      logger,
+      clock,
+    );
+
+    const tables = await database.query<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('a', 'b') ORDER BY name",
+    );
+    expect(tables.rows.map((row) => row.name)).toEqual(['a', 'b']);
+  });
+
+  it('leaves nothing behind when a migration fails, not even the ones before it', async () => {
+    const database = emptyDatabase();
+
+    await expect(
+      migrate(
+        database,
+        [
+          { version: 1, name: 'good', sql: 'CREATE TABLE good (x integer)' },
+          { version: 2, name: 'bad', sql: 'CREATE TABLE bad (' },
+        ],
+        logger,
+        clock,
+      ),
+    ).rejects.toMatchObject({ code: 'apply-failed' });
+
+    const tables = await database.query<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table'",
+    );
+    expect(tables.rows.map((row) => row.name)).toEqual([]);
+  });
+
+  it('waits for a writer that already holds the database, then says so', async () => {
+    files += 1;
+    const name = `contended-${String(files)}.db`;
+    const migrations = await shippedMigrations();
+
+    // A second connection stands in for a second hub process, holding the write
+    // lock for the whole attempt. This is what an advisory lock was for: with
+    // one file there is nothing to take but the lock SQLite already has, and
+    // `BEGIN IMMEDIATE` under a busy timeout is the whole mechanism. A short
+    // timeout keeps the test short; the hub's is five seconds.
+    const holder = openDatabase(name);
+    const contender = openDatabase(name, { busyTimeoutMs: 50 });
+
+    let releaseHolder = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    const holding = holder.transaction(async (tx) => {
+      await tx.query('CREATE TABLE squatter (x integer)');
+      await held;
+    });
+
+    try {
+      await expect(migrate(contender, migrations, logger, clock)).rejects.toThrow(/locked|busy/i);
+    } finally {
+      releaseHolder();
+      await holding;
+    }
+
+    // And once the holder is gone the same migration goes through, so what
+    // failed was the contention and not the migration.
+    const outcome = await migrate(contender, migrations, logger, clock);
+    expect(outcome.applied).toHaveLength(migrations.length);
+  });
+});
+
+describe('hub identity against SQLite', () => {
   it('mints one hub id and returns the same one on every later start', async () => {
-    const migrations = await loadMigrations(MIGRATIONS_DIRECTORY, nodeMigrationFileSystem);
+    const database = emptyDatabase();
+    await migrate(database, await shippedMigrations(), logger, clock);
 
-    await migrate(database, migrations, logger);
-
-    const first = await ensureHubIdentity(database, randomIdGenerator);
-    const second = await ensureHubIdentity(database, randomIdGenerator);
+    const first = await ensureHubIdentity(database, randomIdGenerator, clock);
+    const second = await ensureHubIdentity(database, randomIdGenerator, clock);
 
     expect(second).toBe(first);
+    const rows = await database.query<{ only_row: number; created_at: number }>(
+      'SELECT only_row, created_at FROM hub_identity',
+    );
+    expect(rows.rows).toEqual([{ only_row: 1, created_at: MINTED_AT }]);
   });
 
-  it('releases the advisory lock even while another query holds a connection', async () => {
-    const migrations = await loadMigrations(MIGRATIONS_DIRECTORY, nodeMigrationFileSystem);
-    const traffic = withTrafficDuringTheLock(database);
+  it('refuses a second identity row rather than making one unlikely', async () => {
+    const database = emptyDatabase();
+    await migrate(database, await shippedMigrations(), logger, clock);
+    await ensureHubIdentity(database, randomIdGenerator, clock);
 
-    await migrate(traffic.database, migrations, logger);
-    await traffic.settled();
-
-    expect(await advisoryLocksHeld(database)).toBe(0);
-  });
-
-  it('gives up on a lock another connection holds rather than waiting forever', async () => {
-    const migrations = await loadMigrations(MIGRATIONS_DIRECTORY, nodeMigrationFileSystem);
-
-    // A second connection stands in for a second hub process, holding the lock
-    // for the whole attempt. `pg_advisory_lock` would block here with no
-    // timeout and no log line; the bounded retry produces an error instead.
-    const holder = createPostgresDatabase(testDatabase?.url ?? '');
-    try {
-      await holder.session(async (session) => {
-        await session.query('SELECT pg_advisory_lock($1)', [ADVISORY_LOCK_KEY]);
-
-        await expect(
-          migrate(database, migrations, logger, { attempts: 2, retryDelayMs: 10 }),
-        ).rejects.toMatchObject({ code: 'lock-timeout' });
-      });
-    } finally {
-      await holder.close();
-    }
+    await expect(
+      database.query('INSERT INTO hub_identity (only_row, hub_id, created_at) VALUES (2, ?, ?)', [
+        'a-second-hub',
+        MINTED_AT,
+      ]),
+    ).rejects.toThrow(/CHECK constraint failed/);
   });
 });

@@ -174,6 +174,26 @@ function execute<Row>(
   const statement = connection.prepare(text);
   const parameters = values.map(bindable);
 
+  // `prepare` compiles the first statement in the text and silently ignores
+  // whatever follows it, which is how a migration file with a table and its
+  // indexes in it would apply the table and quietly skip the indexes. Anything
+  // left over means this is a script, and a script goes to `exec`, which runs
+  // all of it. `sourceSQL` is the prefix SQLite consumed, so the remainder is
+  // what it did not.
+  //
+  // A script reports no rows and no row count, rather than the counts of
+  // whichever of its statements ran last: what a caller would do with that
+  // number is guess. A script with parameters is refused outright — the values
+  // could only bind to its first statement, which is not what anybody writing
+  // one would mean.
+  if (text.slice(statement.sourceSQL.length).trim().length > 0) {
+    if (parameters.length > 0) {
+      throw new TypeError('a multi-statement script cannot take bound parameters');
+    }
+    connection.exec(text);
+    return { rows: [], rowCount: 0 };
+  }
+
   // Which of the two ways to run a statement is not a guess: a statement with
   // no result columns is a write or a DDL statement, `all()` would run it and
   // report nothing about what it changed, and `run()` on a SELECT stops after
