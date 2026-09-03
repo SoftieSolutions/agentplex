@@ -1,4 +1,4 @@
-# Checks, in a container, against a real Postgres.
+# Checks, in a container.
 #
 #   pnpm docker:check       build, lint, typecheck and test, in that order
 #   pnpm docker:lint        lint only
@@ -9,9 +9,13 @@
 # contributor reproducing a red check should be able to run that check alone
 # rather than waiting on the three that were already green.
 #
-# The database is the reason this file exists. Without
-# AGENTPLEX_TEST_DATABASE_URL the migration suite skips itself rather than
-# passing quietly, and a skipped suite is not a green one.
+# No database service. This file existed for one, back when the migration suite
+# needed a Postgres reachable over the network and skipped itself when it could
+# not find one. The hub's database is a file now, so those suites open one in a
+# temporary directory and run unconditionally here, in CI, and on a laptop.
+# What is left is the reason the file still earns its place: every check runs
+# against the same built tree in the same image, so a green run here is the
+# same evidence CI produces.
 
 name: agentplex-test
 
@@ -24,39 +28,12 @@ x-checks: &checks
     context: .
     target: build
 
-# Only the suites that talk to a database pay for one. Lint and typecheck read
-# source and nothing else, so making them wait on a healthcheck buys nothing.
-x-database: &database
-  depends_on:
-    postgres:
-      condition: service_healthy
-  environment:
-    # Matches the credentials below. It is a throwaway database that lives for
-    # the length of one run, so the password is in the open on purpose.
-    AGENTPLEX_TEST_DATABASE_URL: postgres://agentplex:agentplex@postgres:5432/agentplex_test
-
 services:
-  postgres:
-    image: postgres:17-bookworm
-    environment:
-      POSTGRES_USER: agentplex
-      POSTGRES_PASSWORD: agentplex
-      POSTGRES_DB: agentplex_test
-    tmpfs:
-      # Nothing here is meant to outlive the run, so it never reaches a disk.
-      - /var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U agentplex -d agentplex_test']
-      interval: 2s
-      timeout: 5s
-      retries: 15
-      start_period: 5s
-
   # The whole set in one container, still. CI no longer runs this, but it is
   # what a contributor runs before opening a pull request, and it is the one
   # command that answers "would CI be green" without reading four job results.
   check:
-    <<: [*checks, *database]
+    <<: *checks
     command: ['pnpm', 'check']
 
   lint:
@@ -68,5 +45,5 @@ services:
     command: ['pnpm', 'typecheck']
 
   test:
-    <<: [*checks, *database]
+    <<: *checks
     command: ['pnpm', 'test']

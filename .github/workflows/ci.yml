@@ -96,8 +96,8 @@ jobs:
       - name: Install pnpm
         run: corepack enable && corepack install
 
-      # Only `test` brings up Postgres, and it does so because
-      # docker-compose.test.yml says its service depends on one. The workflow
-      # does not need to know which checks need a database.
+      # Every check is one container and nothing else: docker-compose.test.yml
+      # has no service for a database to run in any more, because the hub's is
+      # a file the suites make for themselves.
       - name: Check
         run: pnpm docker:${{ matrix.check }}
