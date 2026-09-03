@@ -2,6 +2,7 @@ import type { HubId, Layout } from '@agentplex/protocol';
 import type { Logger } from '../../shared/logger.js';
 import { closure, CLOSE_NORMAL, type MessageSocket } from '../../shared/message-socket.js';
 import type { Timers } from '../../shared/timers.js';
+import type { SessionControl } from '../sessions/session-control.js';
 import type { Reducer } from '../state/reducer.js';
 import {
   encodeHubFrame,
@@ -46,6 +47,14 @@ export interface ClientBroadcastDependencies {
    */
   readonly readLayout: () => Promise<Layout>;
   /**
+   * Starting and stopping sessions, handed to every client this serves.
+   *
+   * One instance for the whole broadcast rather than one per socket: which
+   * machine may run a session is a fact about the fleet, and a per-client copy
+   * of that decision is a second answer waiting to differ from the first.
+   */
+  readonly sessions: SessionControl;
+  /**
    * The deadline seam the flush is scheduled on.
    *
    * Injected rather than `setTimeout` because coalescing is exactly the
@@ -89,7 +98,7 @@ export interface ClientBroadcast {
 const DEFAULT_COALESCE_MS = 0;
 
 export function startClientBroadcast(dependencies: ClientBroadcastDependencies): ClientBroadcast {
-  const { hubId, state, timers, readLayout } = dependencies;
+  const { hubId, state, timers, readLayout, sessions } = dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
 
@@ -156,6 +165,7 @@ export function startClientBroadcast(dependencies: ClientBroadcastDependencies):
         logger,
         currentState: current,
         readLayout,
+        sessions,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);
         },

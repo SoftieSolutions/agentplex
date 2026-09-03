@@ -89,6 +89,7 @@ describe('storeId stamping', () => {
     const reducer = reduce();
     reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -110,6 +111,7 @@ describe('storeId stamping', () => {
     const reducer = reduce();
     reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1'), session('session-2', { storeId: store('store-other') })],
@@ -126,6 +128,7 @@ describe('storeId stamping', () => {
     reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
 
     const accepted = reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-elsewhere'),
       sessions: [session('session-1', { storeId: store('store-elsewhere') })],
@@ -143,6 +146,7 @@ describe('storeId stamping', () => {
     const reducer = reduce();
 
     const accepted = reducer.applySessions({
+      holding: [],
       registrationId: 'registration-ghost' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -173,12 +177,14 @@ describe('two servers on one volume', () => {
   it("unifies the session list rather than listing each server's copy", () => {
     const reducer = twoServers();
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1'), session('session-2')],
       reportedAt: START,
     });
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-ec2' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1'), session('session-3')],
@@ -192,12 +198,14 @@ describe('two servers on one volume', () => {
   it('records every server that reported a session, and which one the row came from', () => {
     const reducer = twoServers();
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1', { status: 'working' })],
       reportedAt: START,
     });
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-ec2' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1', { status: 'idle' })],
@@ -215,6 +223,7 @@ describe('two servers on one volume', () => {
     const reducer = twoServers();
     for (const registration of ['registration-laptop', 'registration-ec2']) {
       reducer.applySessions({
+        holding: [],
         registrationId: registration as ServerRegistrationId,
         storeId: store('store-work'),
         sessions: [session('session-1')],
@@ -225,6 +234,7 @@ describe('two servers on one volume', () => {
     // The laptop unmounted nothing and lost nothing; its scan simply no longer
     // finds the session. The store still has it, because a server still sees it.
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [],
@@ -249,12 +259,14 @@ describe('whole-row replacement', () => {
     // must not survive because the new row happens to say null there.
     const reducer = withOneServer();
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1', { title: 'refactor the parser', cwd: '/srv/work' })],
       reportedAt: START,
     });
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1', { title: null, cwd: null, updatedAt: START + 1_000 })],
@@ -271,6 +283,7 @@ describe('whole-row replacement', () => {
     const reducer = withOneServer();
     const sent = session('session-1', { title: 'one' });
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [sent],
@@ -283,12 +296,14 @@ describe('whole-row replacement', () => {
   it('drops a session that a report no longer carries', () => {
     const reducer = withOneServer();
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1'), session('session-2')],
       reportedAt: START,
     });
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-2')],
@@ -302,18 +317,21 @@ describe('whole-row replacement', () => {
     const reducer = reduce();
     reducer.applyConnection(connection('laptop', 'connected', ['store-work', 'store-notes']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
       reportedAt: START,
     });
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-notes'),
       sessions: [session('session-9', { storeId: store('store-notes') })],
       reportedAt: START,
     });
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [],
@@ -332,6 +350,7 @@ describe('staleness', () => {
     const reducer = reduce();
     reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -355,6 +374,7 @@ describe('staleness', () => {
     reducer.applyConnection(connection('laptop', 'stale', ['store-work']));
     reducer.applyConnection(connection('ec2', 'connected', ['store-work']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-ec2' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -385,6 +405,7 @@ describe('detach and reattach', () => {
     const reducer = reduce();
     reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -406,6 +427,7 @@ describe('detach and reattach', () => {
     reducer.applyConnection(connection('ec2', 'connected', ['store-work']));
     for (const registration of ['registration-laptop', 'registration-ec2']) {
       reducer.applySessions({
+        holding: [],
         registrationId: registration as ServerRegistrationId,
         storeId: store('store-work'),
         sessions: [session('session-1')],
@@ -425,6 +447,7 @@ describe('detach and reattach', () => {
     const reducer = reduce();
     reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1'), session('session-2')],
@@ -438,6 +461,7 @@ describe('detach and reattach', () => {
       connection('laptop', 'connected', ['store-work'], { connectedSince: START + 9_000 }),
     );
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-2')],
@@ -453,6 +477,7 @@ describe('detach and reattach', () => {
     const reducer = reduce();
     reducer.applyConnection(connection('laptop', 'connected', ['store-work', 'store-notes']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-notes'),
       sessions: [session('session-9', { storeId: store('store-notes') })],
@@ -475,6 +500,7 @@ describe('the change signal', () => {
 
     reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -491,6 +517,7 @@ describe('the change signal', () => {
     const reducer = reduce();
     reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],
@@ -500,6 +527,7 @@ describe('the change signal', () => {
     const seen: number[] = [];
     reducer.subscribe((snapshot) => seen.push(snapshot.version));
     reducer.applySessions({
+      holding: [],
       registrationId: 'registration-laptop' as ServerRegistrationId,
       storeId: store('store-work'),
       sessions: [session('session-1')],

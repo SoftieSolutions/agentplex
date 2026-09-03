@@ -8,8 +8,11 @@ import { listServers } from '../pairing/server-registrations.js';
 import { createExponentialBackoff, type BackoffPolicy } from './backoff.js';
 import {
   startServerConnection,
+  type InstructionOutcome,
   type ServerConnection,
   type ServerConnectionReport,
+  type ServerStoreReport,
+  type SessionInstruction,
 } from './server-connection.js';
 
 /**
@@ -44,6 +47,9 @@ export interface ConnectionSupervisorDependencies {
   readonly refusedRetryMs?: number;
   /** Called whenever any server's connectivity changes. The reducer's seam. */
   readonly onChange?: (report: ServerConnectionReport) => void;
+  /** Called with every store report any server sends. The reducer's other seam. */
+  readonly onReport?: (report: ServerStoreReport) => void;
+  readonly instructionTimeoutMs?: number;
 }
 
 export interface ConnectionSupervisor {
@@ -60,6 +66,22 @@ export interface ConnectionSupervisor {
   sync(): Promise<void>;
   /** What every paired server's connectivity is, right now. */
   snapshot(): readonly ServerConnectionReport[];
+  /**
+   * Puts an instruction to one paired server, by registration.
+   *
+   * Addressed by `ServerRegistrationId` because that is the hub's own name for
+   * a machine and the one every decision above here is made in: the scheduler
+   * chose a registration, and a supervisor that took a `ServerId` would make
+   * every caller translate between two names for one thing.
+   *
+   * A registration this hub is not supervising is a refusal rather than a
+   * throw, for the same reason an unreachable one is: both are answers a client
+   * is waiting for, and neither is exceptional.
+   */
+  ask(
+    registrationId: ServerRegistrationId,
+    instruction: SessionInstruction,
+  ): Promise<InstructionOutcome>;
   stop(): Promise<void>;
 }
 
@@ -124,6 +146,10 @@ export async function startConnectionSupervisor(
               ? {}
               : { refusedRetryMs: dependencies.refusedRetryMs }),
             ...(dependencies.onChange === undefined ? {} : { onChange: dependencies.onChange }),
+            ...(dependencies.onReport === undefined ? {} : { onReport: dependencies.onReport }),
+            ...(dependencies.instructionTimeoutMs === undefined
+              ? {}
+              : { instructionTimeoutMs: dependencies.instructionTimeoutMs }),
           }),
         );
       }
@@ -131,6 +157,22 @@ export async function startConnectionSupervisor(
 
     snapshot(): readonly ServerConnectionReport[] {
       return [...connections.values()].map((connection) => connection.report);
+    },
+
+    ask(
+      registrationId: ServerRegistrationId,
+      instruction: SessionInstruction,
+    ): Promise<InstructionOutcome> {
+      const connection = connections.get(registrationId);
+      if (connection === undefined) {
+        return Promise.resolve({
+          ok: false,
+          code: 'refused',
+          problem: 'this hub has no such server paired',
+          hold: null,
+        });
+      }
+      return connection.ask(instruction);
     },
 
     async stop(): Promise<void> {

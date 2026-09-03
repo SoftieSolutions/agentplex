@@ -8,8 +8,8 @@ import { createWebSocketListener } from '../shared/ws-message-socket.js';
 import { serveHubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProviderRegistry } from './providers/provider-registry.js';
-import { discoverStoreSessions } from './providers/store-discovery.js';
 import { ensureServerIdentity } from './server-identity.js';
+import { createSessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
 import { ensureStores, type StoreFileSystem } from './store-identity.js';
 
@@ -151,28 +151,25 @@ export async function startSessionServer(
     }
   }
 
+  // The one thing here that turns a store id and a provider name into a running
+  // agent. It is built once and outlives every hub connection: a socket comes
+  // and goes, and the sessions this server started go on running across both.
+  const sessions = createSessionController({ stores, providers, terminals, clock, logger });
+
   // One pass over every mounted store, so that a misconfigured store path is
   // discovered at boot rather than the first time somebody opens the client.
   // It is a log line and not a field on the returned server on purpose: a
   // snapshot taken at startup goes stale the moment a session writes, and a
   // stale list presented as current is the failure the watcher exists to
-  // avoid. The manager is the liveness source rather than a hardcoded "nothing
-  // is running": at boot it truthfully holds nothing, and it is what knows
-  // about the sessions this server started itself once it does.
+  // avoid. It goes through the same scan a hub is answered with, so there is
+  // one code path that reads a store rather than two that can disagree.
   for (const store of stores) {
-    const found = await discoverStoreSessions(store, {
-      registry: providers,
-      clock,
-      liveness: terminals,
-    });
+    const scanned = await sessions.report(store.storeId);
     logger.info('store scanned', {
       storeId: store.storeId,
-      sessions: found.sessions.length,
+      sessions: scanned?.sessions.length ?? 0,
       providers: providers.providers,
     });
-    for (const { provider, subject, problem } of found.problems) {
-      logger.warn('session unreadable', { provider, subject, problem });
-    }
   }
 
   // The one thing a hub can do with this server before it has proved itself:
@@ -181,6 +178,7 @@ export async function startSessionServer(
     onConnection: (socket) =>
       void serveHubConnection(socket, {
         identity: identity.identity,
+        sessions,
         // Read at connection time rather than captured, so a hub that dials
         // after a store came back reachable is told what is mounted now.
         stores,

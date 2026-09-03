@@ -78,5 +78,10 @@ function toSessionRow(row: ReducedSessionRow): SessionRow {
     reportedBy: [...row.reportedBy],
     reportedAt: row.reportedAt,
     reachable: row.reachable,
+    // Carried, not re-derived. Whether a session may be stopped is the holding
+    // server's answer about its own process, and a projection that recomputed
+    // it from the status would be a second copy of the rule, free to disagree
+    // with the machine that actually holds the terminal.
+    holder: row.holder,
   };
 }

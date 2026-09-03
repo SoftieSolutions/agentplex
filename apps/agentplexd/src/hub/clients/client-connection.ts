@@ -9,8 +9,10 @@ import {
   type HubId,
   type Layout,
   type RefusalCode,
+  type SessionHolder,
 } from '@agentplex/protocol';
 import type { Logger } from '../../shared/logger.js';
+import type { SessionControl } from '../sessions/session-control.js';
 import {
   closure,
   CLOSE_NORMAL,
@@ -93,6 +95,14 @@ export interface ClientConnectionDependencies {
    * this is the one thing the hub sends that is not the same for every client.
    */
   readonly readLayout: () => Promise<Layout>;
+  /**
+   * Starting and stopping sessions.
+   *
+   * A seam rather than a reducer and a supervisor reached directly, because
+   * what a client may ask for is one decision and this file is not where it
+   * lives: the routing sees the whole fleet, and a connection sees one socket.
+   */
+  readonly sessions: SessionControl;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -104,15 +114,19 @@ export function encodeHubFrame(frame: HubFrame): string {
 
 export function serveClientConnection(
   socket: MessageSocket,
-  { hubId, logger, currentState, readLayout, onClosed }: ClientConnectionDependencies,
+  { hubId, logger, currentState, readLayout, sessions, onClosed }: ClientConnectionDependencies,
 ): ClientConnection {
   let state: ClientConnectionState = 'awaiting-hello';
   let lastVersion: number | null = null;
 
   const send = (frame: HubFrame): void => void socket.send(encodeHubFrame(frame));
 
-  const refuse = (replyTo: FrameId, code: RefusalCode, message: string): void =>
-    send({ type: 'refusal', replyTo, code, message });
+  const refuse = (
+    replyTo: FrameId,
+    code: RefusalCode,
+    message: string,
+    holder: SessionHolder | null = null,
+  ): void => send({ type: 'refusal', replyTo, code, message, holder });
 
   const end = (reason: SocketClosure): void => {
     state = 'closed';
@@ -212,6 +226,34 @@ export function serveClientConnection(
         return;
       }
 
+      case 'session-start': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, and it cannot be: a start dials a server, waits for it
+        // to fork a process, and answers. Awaiting here would stall every later
+        // frame on this socket -- including this client's own stop -- behind
+        // one instruction on another machine.
+        void answerStart(frame.id, {
+          storeId: frame.storeId,
+          sessionId: frame.sessionId,
+          provider: frame.provider,
+          prompt: frame.prompt,
+          server: frame.server,
+        });
+        return;
+      }
+
+      case 'session-stop': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerStop(frame.id, { storeId: frame.storeId, sessionId: frame.sessionId });
+        return;
+      }
+
       case 'protocol-error': {
         // The client could not read something the hub sent. There is no reply
         // to an unsolicited error and nothing useful to retry: a client that
@@ -246,6 +288,73 @@ export function serveClientConnection(
       logger.error('could not read the layout', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not read its layout');
+    }
+  }
+
+  /**
+   * Starts a session and answers the client that asked.
+   *
+   * The state is checked again after the await for the reason the layout read
+   * checks it: an instruction takes as long as another machine takes, and this
+   * socket may have closed while it did. Nothing is undone in that case -- the
+   * session really did start, and it will appear in the state every other
+   * client is sent -- but there is nobody left to reply to.
+   *
+   * A throw is `internal` and not `refused`, and the difference is what the
+   * client does next: `refused` says the hub understood and declined, which
+   * invites nothing, and `internal` says the hub broke and retrying may work.
+   */
+  async function answerStart(
+    replyTo: FrameId,
+    request: Parameters<SessionControl['start']>[0],
+  ): Promise<void> {
+    try {
+      const outcome = await sessions.start(request);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
+        return;
+      }
+      send({
+        type: 'session-started',
+        replyTo,
+        storeId: outcome.storeId,
+        sessionId: outcome.sessionId,
+        server: outcome.server,
+      });
+    } catch (error) {
+      logger.error('could not start a session', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not start that session');
+    }
+  }
+
+  /** Stops a session and answers the client that asked. */
+  async function answerStop(
+    replyTo: FrameId,
+    request: Parameters<SessionControl['stop']>[0],
+  ): Promise<void> {
+    try {
+      const outcome = await sessions.stop(request);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
+        return;
+      }
+      send({
+        type: 'session-stopped',
+        replyTo,
+        storeId: outcome.storeId,
+        // A stop names the session it stopped, and the outcome carries the id
+        // the server answered with rather than the one asked for -- the two are
+        // the same, and taking the server's is one fewer place to get it wrong.
+        sessionId: outcome.sessionId ?? request.sessionId,
+        server: outcome.server,
+      });
+    } catch (error) {
+      logger.error('could not stop a session', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not stop that session');
     }
   }
 

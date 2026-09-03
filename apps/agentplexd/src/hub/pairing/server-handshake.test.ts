@@ -21,6 +21,7 @@ import { createLogger } from '../../shared/logger.js';
 import { createFakeTimers } from '../../shared/timers.js';
 import { handshakeWithServer, type DialTarget } from './server-handshake.js';
 import type { ServerAddress } from './server-address.js';
+import { createFakeSessionController } from '../../server/fake-session-controller.js';
 
 const logger = createLogger('error', () => {});
 const hubId = 'hub-under-test' as HubId;
@@ -60,7 +61,13 @@ describe('handshakeWithServer against a real server', () => {
    */
   function pair(serverOverrides: Partial<Parameters<typeof serveHubConnection>[1]> = {}) {
     const { hubEnd, serverEnd } = createSocketPair();
-    serveHubConnection(serverEnd, { identity, stores, logger, ...serverOverrides });
+    serveHubConnection(serverEnd, {
+      identity,
+      stores,
+      sessions: createFakeSessionController(),
+      logger,
+      ...serverOverrides,
+    });
     return dialerFor(hubEnd);
   }
 
@@ -260,7 +267,12 @@ describe('handshakeWithServer', () => {
 
   it('cancels the deadline once the handshake has been answered', async () => {
     const { hubEnd, serverEnd } = createSocketPair();
-    serveHubConnection(serverEnd, { identity, stores, logger });
+    serveHubConnection(serverEnd, {
+      identity,
+      stores,
+      sessions: createFakeSessionController(),
+      logger,
+    });
     const timers = createFakeTimers();
 
     await handshakeWithServer(target, { ...dependencies(dialerFor(hubEnd)), timers });

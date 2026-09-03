@@ -74,6 +74,7 @@ function published() {
   state.applyConnection(connection('workshop', 'connected', ['store-work']));
   state.applyConnection(connection('laptop', 'stale', ['store-work']));
   state.applySessions({
+    holding: [],
     registrationId: registration('workshop'),
     storeId: store('store-work'),
     sessions: [session('session-1')],

@@ -1,6 +1,8 @@
 import type {
   ServerRegistrationId,
   SessionDescriptor,
+  SessionHold,
+  SessionHolder,
   SessionRef,
   StoreId,
 } from '@agentplex/protocol';
@@ -56,6 +58,21 @@ export interface ServerSessionReport {
    * never a delta: what is absent from it is absent from that server's view.
    */
   readonly sessions: readonly SessionDescriptor[];
+  /**
+   * The sessions that server has a live process for, in this store.
+   *
+   * A separate list rather than a flag on a descriptor, because it is a
+   * different kind of claim. A descriptor is a reading of a transcript, and two
+   * servers on one volume read the same one; a hold is a fact about one
+   * machine's own processes, and only that machine can state it. Merging them
+   * would let the reducer pick a reading from one server and silently carry the
+   * other's liveness with it.
+   *
+   * It is also what makes one live process per session enforceable at the hub:
+   * the hub is the only thing that sees every server attached to a store, and
+   * it can only refuse a second start if the servers say what they are running.
+   */
+  readonly holding: readonly SessionHold[];
   readonly reportedAt: number;
 }
 
@@ -77,6 +94,17 @@ export interface SessionRow {
    * this is what says it cannot presently be acted on.
    */
   readonly reachable: boolean;
+  /**
+   * The server running this session right now, and whether it may be stopped,
+   * or `null` when nobody reports holding it.
+   *
+   * Not derived from the chosen descriptor's status: `working` is a reading of
+   * a transcript that any server with the volume mounted can make, and it says
+   * nothing about which machine has the process. This comes from the holding
+   * server's own account of what it is running, which is the only source that
+   * can answer it.
+   */
+  readonly holder: SessionHolder | null;
 }
 
 /** One store, however many servers have it mounted. */
@@ -158,6 +186,21 @@ export interface Reducer {
 /** One server's last report for one store. */
 interface StoredReport {
   readonly sessions: readonly SessionDescriptor[];
+  /**
+   * The sessions that server has a live process for, in this store.
+   *
+   * A separate list rather than a flag on a descriptor, because it is a
+   * different kind of claim. A descriptor is a reading of a transcript, and two
+   * servers on one volume read the same one; a hold is a fact about one
+   * machine's own processes, and only that machine can state it. Merging them
+   * would let the reducer pick a reading from one server and silently carry the
+   * other's liveness with it.
+   *
+   * It is also what makes one live process per session enforceable at the hub:
+   * the hub is the only thing that sees every server attached to a store, and
+   * it can only refuse a second start if the servers say what they are running.
+   */
+  readonly holding: readonly SessionHold[];
   readonly reportedAt: number;
 }
 
@@ -269,9 +312,19 @@ export function createReducer(dependencies: ReducerDependencies): Reducer {
       // "something changed". The held report is left exactly as it was, so
       // that `reportedAt` keeps saying when these rows last actually changed
       // rather than when a scan last confirmed they had not.
-      if (previous !== undefined && sameSessions(previous.sessions, belonging)) return true;
+      if (
+        previous !== undefined &&
+        sameSessions(previous.sessions, belonging) &&
+        sameHolds(previous.holding, report.holding)
+      ) {
+        return true;
+      }
 
-      held.set(report.storeId, { sessions: belonging, reportedAt: report.reportedAt });
+      held.set(report.storeId, {
+        sessions: belonging,
+        holding: report.holding,
+        reportedAt: report.reportedAt,
+      });
       changed();
       return true;
     },
@@ -312,6 +365,27 @@ function sameConnection(left: ServerConnectionReport, right: ServerConnectionRep
     left.stores.length === right.stores.length &&
     left.stores.every((storeId, index) => storeId === right.stores[index])
   );
+}
+
+/**
+ * Whether a server is running exactly what it was running last time.
+ *
+ * Compared alongside the sessions rather than folded into them, because a hold
+ * changing is a change a client must see even when every transcript reads the
+ * same: a session that has just been stopped looks identical on disk for as
+ * long as it takes the provider to write again, and the stop button has to go
+ * away the moment the process does.
+ */
+function sameHolds(left: readonly SessionHold[], right: readonly SessionHold[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((hold, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      hold.sessionId === other.sessionId &&
+      hold.stoppable === other.stoppable
+    );
+  });
 }
 
 /** Whether a scan found exactly what the previous one did, row for row. */
@@ -393,12 +467,31 @@ function buildSessionRows(
   reports: ReadonlyMap<ServerRegistrationId, ReadonlyMap<StoreId, StoredReport>>,
 ): readonly SessionRow[] {
   const readings = new Map<string, ReportedSession[]>();
+  const holders = new Map<string, SessionHolder>();
 
   for (const server of servers) {
     const report = reports.get(server.registrationId)?.get(storeId);
     if (report === undefined) continue;
 
     const reachable = countsTowardAttention(server);
+    // Only a server the hub is holding a connection to can be said to be
+    // running anything. A stale machine's holds are claims about a process
+    // nobody can presently reach, and offering a stop button aimed at one would
+    // be offering a button that cannot work.
+    if (reachable) {
+      for (const hold of report.holding) {
+        // First writer wins, and the servers are in label order, so two
+        // machines both claiming one session resolve the same way on every
+        // snapshot. It is the state the hub's own refusal exists to prevent;
+        // the reducer's job when it happens anyway is to be stable about it.
+        if (holders.has(hold.sessionId)) continue;
+        holders.set(hold.sessionId, {
+          server: server.registrationId,
+          stoppable: hold.stoppable,
+        });
+      }
+    }
+
     for (const descriptor of report.sessions) {
       const gathered = readings.get(descriptor.sessionId) ?? [];
       gathered.push({
@@ -421,6 +514,7 @@ function buildSessionRows(
       reportedBy: gathered.map((reading) => reading.registrationId).sort(),
       reportedAt: chosen.reportedAt,
       reachable: gathered.some((reading) => reading.reachable),
+      holder: holders.get(chosen.descriptor.sessionId) ?? null,
     });
   }
 
