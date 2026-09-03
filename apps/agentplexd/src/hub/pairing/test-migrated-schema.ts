@@ -9,22 +9,16 @@ import { createSqliteDatabase, type SqliteDatabase } from '../db/sqlite.js';
 /**
  * A private, migrated database for one integration suite.
  *
- * This was schema machinery once. Against Postgres every suite shared one
- * server, the migration suite reset itself by dropping `public` between tests,
- * and a suite that put its tables there would have them vanish mid-run in a
- * way that reads as a flake rather than a collision -- so each suite took a
- * schema named after itself and reached it through the connection's
- * `search_path`. A database that is a file needs none of that: a temporary
+ * A database that is a file needs no isolation machinery: the temporary
  * directory is the isolation, `close` is `rm`, and two suites cannot collide
- * because they were never in the same place. What is left is small enough to
- * read in one go, which is the point.
+ * because they were never in the same place. That is why this file is small
+ * enough to read in one go.
  *
- * The migrations are executed directly rather than through `migrate`, as
- * before: what a suite needs from here is the tables, and whether the runner
- * puts them there correctly is the migration suite's question and already
- * asked. `query` carries a whole migration file because the driver sends a
- * multi-statement script to `exec` rather than preparing only its first
- * statement.
+ * The migrations are executed directly rather than through `migrate`: what a
+ * suite needs from here is the tables, and whether the runner puts them there
+ * correctly is the migration suite's question and already asked. `query`
+ * carries a whole migration file because the driver sends a multi-statement
+ * script to `exec` rather than preparing only its first statement.
  *
  * Test support: `tsconfig.build.json` excludes `test-*.ts`, so this never ships.
  */

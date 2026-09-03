@@ -12,11 +12,11 @@ import { openMigratedSchema, type MigratedSchema } from './test-migrated-schema.
  * `last_seen_at` without disturbing `first_seen_at`, and that a batch naming
  * the same store twice yields one row rather than two.
  *
- * That second one changed meaning with the dialect and is worth the sentence.
- * Postgres refused such a batch outright, so the dedupe in `recordStores` was
- * keeping an error away; SQLite accepts it and reports the row once per
- * mention, so the dedupe is now keeping a duplicate out of the answer. The
- * assertion is the same, and what it protects against is worse.
+ * That second one is worth the sentence, because the engine will not raise it
+ * for us: SQLite accepts a batch naming one store twice and reports the row
+ * once per mention, so what the dedupe in `recordStores` keeps out is a
+ * duplicate in the answer rather than an error. A wrong list is quieter than a
+ * failed report, which is why the assertion is here.
  *
  * The database is a file in a temporary directory, so this suite never skips
  * and never starts a container.
@@ -24,7 +24,7 @@ import { openMigratedSchema, type MigratedSchema } from './test-migrated-schema.
 
 let migrated: MigratedSchema | null = null;
 
-/** The clock the schema no longer has, fixed so a stored millisecond is checkable. */
+/** The clock the schema does not supply, fixed so a stored millisecond is checkable. */
 const NOW = 1_756_000_000_000;
 const clock = { now: () => NOW };
 
@@ -42,8 +42,8 @@ function store(value: string): StoreId {
  *
  * Asserting that `last_seen_at` moved needs a gap, and waiting for one would be
  * a slow test that is still occasionally wrong. With the clock injected and the
- * column a plain integer, the arithmetic that was `now() - interval '1 day'`
- * is now subtraction a reader can check.
+ * column a plain integer, backdating is subtraction a reader can check rather
+ * than an expression the database evaluates out of sight.
  */
 const A_DAY = 24 * 60 * 60 * 1000;
 
@@ -108,9 +108,9 @@ describe('store records', () => {
 
   it('treats one store reported under two mounts as one store', async () => {
     // Two mounts of one volume are one store -- that is the entire premise of
-    // keying by the id on the volume -- and Postgres refuses an upsert that
-    // would touch the same row twice in one statement, so this would otherwise
-    // fail the whole report rather than the duplicate.
+    // keying by the id on the volume -- and the upsert will happily return
+    // that row once per mention, so without the dedupe this report comes back
+    // with a store counted twice.
     const recorded = await recordStores(db(), clock, [
       store('store-alpha'),
       store('store-alpha'),

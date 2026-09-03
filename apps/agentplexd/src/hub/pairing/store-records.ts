@@ -53,14 +53,13 @@ export async function recordStores(
   clock: Clock,
   storeIds: readonly StoreId[],
 ): Promise<readonly StoreRecord[]> {
-  // Deduping is load-bearing, and more so here than against Postgres. Postgres
-  // refused an ON CONFLICT DO UPDATE that touched one row twice in a
-  // statement, so a server reporting a store under two mounts failed the whole
-  // batch and said so. SQLite accepts it and returns that row once per
-  // mention, so the same input would hand the caller a list with one store in
-  // it twice -- a wrong answer instead of an error, which is the direction
-  // that hides. The premise is unchanged: two mounts of one store are one
-  // store, which is why the key is the id on the volume.
+  // Deduping is load-bearing. SQLite accepts an ON CONFLICT DO UPDATE that
+  // touches the same row twice in one statement and returns that row once per
+  // mention, so a server reporting one store under two mounts would otherwise
+  // hand the caller a list with that store in it twice -- a wrong answer
+  // rather than an error, which is the direction that hides. The premise is
+  // that two mounts of one store are one store, which is why the key is the id
+  // on the volume; deduping here is that premise applied to the input.
   const unique = [...new Set(storeIds)];
   if (unique.length === 0) return [];
 
