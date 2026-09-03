@@ -9,3 +9,8 @@ LICENSE
 # Design documents are prose, and reformatting an approved one produces a diff
 # that says nothing about the design.
 docs/specs
+# Fixtures are captured provider output. Reformatting one makes it a file this
+# repository wrote rather than one a provider did, and the whole value of a
+# fixture is that it is byte-for-byte what the real thing produced — including
+# whether it is one line or fifty.
+apps/agentplexd/src/server/providers/fixtures

@@ -4,6 +4,7 @@ import { loadConfig, usage } from './config/config.js';
 import { createPostgresDatabase } from './hub/db/postgres.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { startRuntime } from './runtime.js';
+import { nodeProcessProbe } from './server/node-process-probe.js';
 import { nodeStoreFileSystem } from './server/node-store-files.js';
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { nodeProviderFiles } from './server/providers/node-provider-files.js';
@@ -54,7 +55,9 @@ async function main(): Promise<void> {
       storeFileSystem: nodeStoreFileSystem,
       // The providers this build drives, in one line. Adding codex is another
       // adapter file and another entry here, and nothing else.
-      providers: createProviderRegistry([createClaudeAdapter({ files: nodeProviderFiles })]),
+      providers: createProviderRegistry([
+        createClaudeAdapter({ files: nodeProviderFiles, probe: nodeProcessProbe }),
+      ]),
       clock: systemClock,
     });
   } catch (error) {

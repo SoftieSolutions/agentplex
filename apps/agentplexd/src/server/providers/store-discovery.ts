@@ -89,10 +89,19 @@ async function discoverWithAdapter(
     return {
       ...ref,
       provider,
+      // Derived once, here, and carried to the hub as a fact rather than as
+      // inputs for someone else to re-derive. Two servers on one store would
+      // otherwise be free to disagree about a session, and the client would
+      // have no way to tell which reading it was looking at.
       status: adapter.status({
         signal: session.signal,
         updatedAt: session.updatedAt,
-        running: liveness.isRunning(ref),
+        // Either witness is enough and neither is authoritative alone: the
+        // adapter verified a process out of the provider's own registry, this
+        // server knows the sessions it spawned itself. A session driven through
+        // agentplex is both; a session someone started in a terminal is only
+        // the first, and it is the one that would otherwise go unreported.
+        running: session.running || liveness.isRunning(ref),
         now,
       }),
       updatedAt: session.updatedAt,
