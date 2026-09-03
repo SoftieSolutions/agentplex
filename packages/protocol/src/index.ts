@@ -26,6 +26,9 @@ export type {
   StoreId,
 } from './identity.js';
 
+export { sessionDescriptorSchema, sessionStatusSchema } from './session.js';
+export type { SessionDescriptor, SessionStatus } from './session.js';
+
 export { clientFrameSchema, hubFrameSchema, parseClientFrame, parseHubFrame } from './client.js';
 export type { ClientFrame, HubFrame } from './client.js';
 
