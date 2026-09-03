@@ -23,6 +23,7 @@ function fixture(name: string): string {
 }
 
 const CLEAN = fixture('git-status-clean.txt');
+const AHEAD = fixture('git-status-ahead.txt');
 const DIRTY = fixture('git-status-dirty.txt');
 const DETACHED = fixture('git-status-detached.txt');
 const NOT_A_REPOSITORY = fixture('git-not-a-repository.txt');
@@ -55,6 +56,15 @@ describe('git.status', () => {
         changes: 0,
       },
     });
+  });
+
+  it('reads how far the branch has moved from its upstream', async () => {
+    // Captured from this branch one commit after the registry landed, so the
+    // `+1 -0` below is a state a real repository was actually in rather than a
+    // shape written to make the parser look right.
+    const outcome = await runOperation(gitStatusOperation, { directory: DIRECTORY }, runner(AHEAD));
+
+    expect(outcome).toMatchObject({ ok: true, result: { ahead: 1, behind: 0 } });
   });
 
   it('counts the entries git reports for a dirty tree', async () => {
