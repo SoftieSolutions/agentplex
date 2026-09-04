@@ -6,9 +6,8 @@ import { SessionListScreen } from './sessions/session-list-screen.js';
 import { SettingsRoute } from './settings/settings-route.js';
 import { createBrowserDependencies } from './store/browser.js';
 import { createHubStore } from './store/hub-store.js';
-import { SessionPane } from './terminal/session-pane.js';
-import { sessionHash, useSessionRoute } from './terminal/session-route.js';
-import { MantineProvider, Stack, Text, Title } from './ui/components.js';
+import { useSessionRoute } from './terminal/session-route.js';
+import { MantineProvider, Stack } from './ui/components.js';
 import { cssVariablesResolver, theme } from './ui/theme.js';
 
 /**

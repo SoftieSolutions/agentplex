@@ -273,7 +273,7 @@ describe('commands', () => {
 
     socket.deliver(hubFrames.refusal);
     expect(h.store.getSnapshot().lastRefusal).toEqual({
-      replyTo: 4,
+      replyTo: 6,
       code: 'refused',
       message: 'no server the hub is paired with has that store mounted',
       holder: null,
