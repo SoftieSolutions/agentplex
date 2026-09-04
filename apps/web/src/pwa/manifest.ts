@@ -37,8 +37,8 @@ export function buildWebManifest(): WebManifest {
     start_url: '/',
     scope: '/',
     display: 'standalone',
-    background_color: hues.midnight,
-    theme_color: hues.midnight,
+    background_color: hues.char,
+    theme_color: hues.char,
     icons: [
       { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
       { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },

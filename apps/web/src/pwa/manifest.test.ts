@@ -13,8 +13,8 @@ describe('buildWebManifest', () => {
   });
 
   it('takes its colors from the tokens module, never from a literal of its own', () => {
-    expect(manifest.theme_color).toBe(hues.midnight);
-    expect(manifest.background_color).toBe(hues.midnight);
+    expect(manifest.theme_color).toBe(hues.char);
+    expect(manifest.background_color).toBe(hues.char);
   });
 
   it('ships the icon set installability requires: 192, 512, and a maskable variant', () => {

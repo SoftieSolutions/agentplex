@@ -66,9 +66,9 @@ function encodePng(size, pixel) {
   ]);
 }
 
-const background = rgb(hues.midnight);
-const pane = rgb(hues.fog);
-const focused = rgb(hues.signal);
+const background = rgb(hues.char);
+const pane = rgb(hues.oat);
+const focused = rgb(hues.amber);
 
 /**
  * @param {number} size

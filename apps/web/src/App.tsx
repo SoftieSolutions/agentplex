@@ -2,7 +2,7 @@ import { PROTOCOL_VERSION } from '@agentplex/protocol';
 import { type JSX } from 'react';
 
 import { MantineProvider, Stack, Text, Title } from './ui/components.js';
-import { theme } from './ui/theme.js';
+import { cssVariablesResolver, theme } from './ui/theme.js';
 
 /**
  * The root: provider chrome only. Everything a feature ticket adds mounts
@@ -11,7 +11,11 @@ import { theme } from './ui/theme.js';
  */
 export function App(): JSX.Element {
   return (
-    <MantineProvider theme={theme} defaultColorScheme="dark">
+    <MantineProvider
+      theme={theme}
+      cssVariablesResolver={cssVariablesResolver}
+      defaultColorScheme="dark"
+    >
       <AppShell />
     </MantineProvider>
   );

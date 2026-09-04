@@ -25,7 +25,7 @@ function webManifest(): Plugin {
     },
     transformIndexHtml() {
       return [
-        { tag: 'meta', attrs: { name: 'theme-color', content: hues.midnight }, injectTo: 'head' },
+        { tag: 'meta', attrs: { name: 'theme-color', content: hues.char }, injectTo: 'head' },
         { tag: 'link', attrs: { rel: 'manifest', href: `/${MANIFEST_PATH}` }, injectTo: 'head' },
         {
           tag: 'link',
