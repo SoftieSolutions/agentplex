@@ -57,7 +57,14 @@ export type {
 export { sessionDescriptorSchema, sessionHoldSchema, sessionStatusSchema } from './session.js';
 export type { SessionDescriptor, SessionHold, SessionStatus } from './session.js';
 
-export { clientFrameSchema, hubFrameSchema, parseClientFrame, parseHubFrame } from './client.js';
+export {
+  clientFrameSchema,
+  hubFrameSchema,
+  PANE_LAYOUT_MAX_CHARS,
+  paneLayoutTextSchema,
+  parseClientFrame,
+  parseHubFrame,
+} from './client.js';
 export type { ClientFrame, HubFrame } from './client.js';
 
 export {

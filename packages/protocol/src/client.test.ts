@@ -100,6 +100,30 @@ describe('parseClientFrame on the session frames', () => {
   });
 });
 
+describe('parseClientFrame on the pane layout frames', () => {
+  it('accepts a save whose layout it does not understand: the shape is the client tier alone', () => {
+    // Deliberately not a shape any current client writes. The hub-side rule
+    // under test is that no rule exists: a newer client's pane type crosses
+    // this parser untouched, so a new pane type needs no service release.
+    const result = parseClientFrame({
+      type: 'pane-layout-save',
+      id: 1,
+      layout: '{"v":9,"root":{"kind":"hologram"}}',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a save whose layout is not characters at all', () => {
+    expect(parseClientFrame({ type: 'pane-layout-save', id: 1, layout: { v: 1 } }).ok).toBe(false);
+    expect(parseClientFrame({ type: 'pane-layout-save', id: 1, layout: null }).ok).toBe(false);
+  });
+
+  it('rejects a save past the bound, which is a bug filling a column, not a layout', () => {
+    const oversized = 'x'.repeat(65_537);
+    expect(parseClientFrame({ type: 'pane-layout-save', id: 1, layout: oversized }).ok).toBe(false);
+  });
+});
+
 describe('parseHubFrame', () => {
   it('accepts a welcome', () => {
     const result = parseHubFrame({
@@ -186,6 +210,8 @@ describe('client and hub round trips', () => {
       storeId: storeIdSchema.parse('store-work'),
       sessionId: sessionIdSchema.parse('session-1'),
     },
+    { type: 'pane-layout-request', id: 7 },
+    { type: 'pane-layout-save', id: 8, layout: '{"v":1,"root":{"kind":"pane"}}' },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
   ];
 
@@ -255,6 +281,9 @@ describe('client and hub round trips', () => {
         },
       ],
     },
+    { type: 'pane-layout', replyTo: 7, layout: '{"v":1,"root":{"kind":"pane"}}' },
+    { type: 'pane-layout', replyTo: 7, layout: null },
+    { type: 'pane-layout-saved', replyTo: 8 },
     {
       type: 'machine-state',
       state: {

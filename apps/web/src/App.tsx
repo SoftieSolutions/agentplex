@@ -1,9 +1,9 @@
 import { PROTOCOL_VERSION } from '@agentplex/protocol';
 import { type JSX } from 'react';
 
+import { LayoutScreen } from './layout/layout-screen.js';
 import { SettingsRoute } from './settings/settings-route.js';
-import { SessionPane } from './terminal/session-pane.js';
-import { sessionHash, useSessionRoute } from './terminal/session-route.js';
+import { useSessionRoute } from './terminal/session-route.js';
 import { MantineProvider, Stack, Text, Title } from './ui/components.js';
 import { cssVariablesResolver, theme } from './ui/theme.js';
 
@@ -35,9 +35,10 @@ export function App(): JSX.Element {
 function AppShell(): JSX.Element {
   const sessionRef = useSessionRoute();
   if (sessionRef !== null) {
-    // Keyed on the route so navigating between sessions remounts the pane:
-    // its terminal feed and emulator belong to one session, never two.
-    return <SessionPane key={sessionHash(sessionRef)} sessionRef={sessionRef} />;
+    // Deliberately not keyed on the route: the layout outlives navigation,
+    // and the screen shows the addressed session in its focused pane. The
+    // panes key their own session mounts.
+    return <LayoutScreen session={sessionRef} />;
   }
   return (
     <Stack component="main" p="md" gap="md">

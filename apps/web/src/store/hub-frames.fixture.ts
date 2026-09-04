@@ -7,19 +7,21 @@
  * and these exist to test that it can read what the hub actually sends.
  * Re-capture after any change to the hub-to-client frames.
  *
- * Captured at protocol version 4.
+ * Captured at protocol version 5.
  */
 export const hubFrames = {
-  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":4,"hubId":"hub-1"}',
+  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":5,"hubId":"hub-1"}',
   machineState: '{"type":"machine-state","state":{"version":0,"stores":[],"servers":[]}}',
   pong: '{"type":"pong","replyTo":2}',
   layout: '{"type":"layout","replyTo":3,"nodes":[]}',
+  paneLayoutEmpty: '{"type":"pane-layout","replyTo":4,"layout":null}',
+  paneLayoutSaved: '{"type":"pane-layout-saved","replyTo":5}',
   refusal:
-    '{"type":"refusal","replyTo":4,"code":"refused","message":"no server the hub is paired with has that store mounted","holder":null}',
+    '{"type":"refusal","replyTo":6,"code":"refused","message":"no server the hub is paired with has that store mounted","holder":null}',
   protocolError:
     '{"type":"protocol-error","code":"bad-request","message":"frame is not valid JSON"}',
   refusalProtocolVersion:
-    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 4, not 5","holder":null}',
-  machineStateWithServer:
-    '{"type":"machine-state","state":{"version":1,"stores":[],"servers":[{"registrationId":"pairing-1","label":"gpu-box-01","serverId":null,"phase":"stale","stores":[],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":null,"staleReason":"unreachable","problem":"connection refused"}]}}',
+    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 5, not 6","holder":null}',
+  paneLayout:
+    '{"type":"pane-layout","replyTo":2,"layout":"{\\"v\\":1,\\"root\\":{\\"kind\\":\\"pane\\",\\"content\\":{\\"type\\":\\"empty\\"}}}"}',
 } as const;

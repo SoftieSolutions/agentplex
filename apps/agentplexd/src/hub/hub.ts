@@ -27,6 +27,7 @@ import { loadMigrations, type MigrationFileSystem } from './db/migration-files.j
 import { migrate } from './db/migrations.js';
 import { ensureHubIdentity } from './hub-identity.js';
 import { readLayout } from './layout/node-tree.js';
+import { readPaneLayout, writePaneLayout } from './layout/pane-layout.js';
 import { createReducer, type Reducer } from './state/reducer.js';
 
 /**
@@ -185,6 +186,8 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     timers,
     logger,
     readLayout: () => readLayout(database),
+    readPaneLayout: () => readPaneLayout(database),
+    writePaneLayout: (layout) => writePaneLayout(database, layout, clock),
     sessions,
   });
 

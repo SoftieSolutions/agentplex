@@ -96,6 +96,17 @@ export interface ClientConnectionDependencies {
    */
   readonly readLayout: () => Promise<Layout>;
   /**
+   * The stored pane layout: characters the hub keeps and never parses.
+   *
+   * Two functions and no cache, for the reason `readLayout` gives. What is
+   * different here is what the hub knows about the value: nothing. The split
+   * arrangement's shape rules live in the web client, and the hub's promise is
+   * to answer back exactly the characters the last save carried — so a new
+   * pane type is a client release, never a service one.
+   */
+  readonly readPaneLayout: () => Promise<string | null>;
+  readonly writePaneLayout: (layout: string) => Promise<void>;
+  /**
    * Starting and stopping sessions.
    *
    * A seam rather than a reducer and a supervisor reached directly, because
@@ -114,7 +125,16 @@ export function encodeHubFrame(frame: HubFrame): string {
 
 export function serveClientConnection(
   socket: MessageSocket,
-  { hubId, logger, currentState, readLayout, sessions, onClosed }: ClientConnectionDependencies,
+  {
+    hubId,
+    logger,
+    currentState,
+    readLayout,
+    readPaneLayout,
+    writePaneLayout,
+    sessions,
+    onClosed,
+  }: ClientConnectionDependencies,
 ): ClientConnection {
   let state: ClientConnectionState = 'awaiting-hello';
   let lastVersion: number | null = null;
@@ -226,6 +246,27 @@ export function serveClientConnection(
         return;
       }
 
+      case 'pane-layout-request': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // A reply to the asking client alone, like the node tree's, and not
+        // awaited for the same reason: a database round trip must not stall
+        // every later frame on this socket.
+        void answerPaneLayout(frame.id);
+        return;
+      }
+
+      case 'pane-layout-save': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerPaneLayoutSave(frame.id, frame.layout);
+        return;
+      }
+
       case 'session-start': {
         if (state !== 'established') {
           helloFirst(frame.id);
@@ -288,6 +329,42 @@ export function serveClientConnection(
       logger.error('could not read the layout', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not read its layout');
+    }
+  }
+
+  /**
+   * Answers the stored pane layout — the characters of the last save, or
+   * `null` when nothing was ever saved — to the client that asked. A throw is
+   * `internal` for the reason `answerLayout` gives: the hub broke, retrying
+   * may work, and what broke is not a client's to render.
+   */
+  async function answerPaneLayout(replyTo: FrameId): Promise<void> {
+    try {
+      const layout = await readPaneLayout();
+      if (state !== 'established') return;
+      send({ type: 'pane-layout', replyTo, layout });
+    } catch (error) {
+      logger.error('could not read the pane layout', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not read its pane layout');
+    }
+  }
+
+  /**
+   * Stores the pane layout, whole and unread, and acknowledges the client
+   * that saved it. The parser already held the frame to the protocol's bound;
+   * nothing here looks inside the characters, which is the contract that lets
+   * a newer client save a pane type this build has never heard of.
+   */
+  async function answerPaneLayoutSave(replyTo: FrameId, layout: string): Promise<void> {
+    try {
+      await writePaneLayout(layout);
+      if (state !== 'established') return;
+      send({ type: 'pane-layout-saved', replyTo });
+    } catch (error) {
+      logger.error('could not store the pane layout', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not store the pane layout');
     }
   }
 

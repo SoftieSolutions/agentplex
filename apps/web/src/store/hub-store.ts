@@ -75,6 +75,11 @@ export interface TerminalInputView {
   readonly notice: string | null;
 }
 
+export interface PaneLayoutAnswer {
+  /** Exactly the characters the last save carried, or `null`: never stored. */
+  readonly layout: string | null;
+}
+
 export interface RefusalView {
   readonly code: RefusalCode;
   readonly message: string;
@@ -93,6 +98,18 @@ export interface HubSnapshot {
   readonly machineState: MachineState | null;
   /** The stored layout, once a layout subscription has been answered. */
   readonly layout: Layout | null;
+  /**
+   * The stored pane layout, once a pane layout subscription has been
+   * answered, or `null` while no answer has arrived. The answer's own
+   * `layout` is `null` when the hub has never stored one — two different
+   * facts, so two levels of null: "not answered yet" renders as loading and
+   * "answered: nothing stored" renders as the default arrangement.
+   *
+   * Characters, not a tree. Every shape rule lives in the layout module's own
+   * parser (`src/layout/tree.ts`); the store carries what the hub answered,
+   * verbatim, the way the hub carries what a save sent.
+   */
+  readonly paneLayout: PaneLayoutAnswer | null;
   readonly commandQueue: CommandQueueView;
   readonly terminalInput: TerminalInputView;
   /** The hub's most recent "no", kept until a later command is answered yes. */
@@ -103,10 +120,17 @@ export interface HubSnapshot {
  * A command is a client frame body without its id: ids belong to the store's
  * counter, minted at the moment of acceptance so a queued command keeps one
  * identity from enqueue to reply. `hello` and `ping` are not commands — the
- * connection machinery owns them — and `layout-request` is a subscription
- * (standing interest in the layout), not a request the user makes once.
+ * connection machinery owns them — and `layout-request` and
+ * `pane-layout-request` are subscriptions (standing interest), not requests
+ * the user makes once. `pane-layout-save` is a command: a save is something
+ * that happened once, and if the connection is down when it does, the queue
+ * carries it — later saves replay after it, so the hub still ends on the
+ * newest arrangement.
  */
-type CommandFrame = Extract<ClientFrame, { type: 'session-start' | 'session-stop' }>;
+type CommandFrame = Extract<
+  ClientFrame,
+  { type: 'session-start' | 'session-stop' | 'pane-layout-save' }
+>;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type HubCommand = DistributiveOmit<CommandFrame, 'id'>;
 
@@ -132,6 +156,8 @@ export interface HubStore {
   subscribeSession(ref: SessionRef): () => void;
   /** Standing interest in the stored layout, re-requested on every reconnection. */
   subscribeLayout(): () => void;
+  /** Standing interest in the stored pane layout, re-requested the same way. */
+  subscribePaneLayout(): () => void;
 }
 
 export interface HubStoreDependencies {
@@ -189,6 +215,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     hubId: null,
     machineState: null,
     layout: null,
+    paneLayout: null,
     commandQueue: { ...INITIAL_QUEUE, capacity },
     terminalInput: INITIAL_TERMINAL,
     lastRefusal: null,
@@ -210,6 +237,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   const pending = new Set<FrameId>();
 
   let layoutWatchers = 0;
+  let paneLayoutWatchers = 0;
   const sessionWatchers = new Map<string, { readonly ref: SessionRef; count: number }>();
 
   function update(changes: Partial<HubSnapshot>): void {
@@ -324,6 +352,14 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({ layout: frame.nodes });
         return;
       }
+      case 'pane-layout': {
+        update({ paneLayout: { layout: frame.layout } });
+        return;
+      }
+      case 'pane-layout-saved': {
+        pending.delete(frame.replyTo);
+        return;
+      }
       case 'session-started':
       case 'session-stopped': {
         pending.delete(frame.replyTo);
@@ -363,6 +399,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     if (wire === null) return;
     if (layoutWatchers > 0) {
       wire.send(encodeClientFrame({ type: 'layout-request', id: frameIds.next() }));
+    }
+    if (paneLayoutWatchers > 0) {
+      wire.send(encodeClientFrame({ type: 'pane-layout-request', id: frameIds.next() }));
     }
     const encode = dependencies.encodeSessionSubscription;
     if (encode !== undefined) {
@@ -512,6 +551,19 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         if (!active) return;
         active = false;
         layoutWatchers -= 1;
+      };
+    },
+
+    subscribePaneLayout(): () => void {
+      paneLayoutWatchers += 1;
+      if (paneLayoutWatchers === 1 && established && socket !== null) {
+        socket.send(encodeClientFrame({ type: 'pane-layout-request', id: frameIds.next() }));
+      }
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        paneLayoutWatchers -= 1;
       };
     },
   };

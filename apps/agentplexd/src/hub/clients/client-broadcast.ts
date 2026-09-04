@@ -47,6 +47,15 @@ export interface ClientBroadcastDependencies {
    */
   readonly readLayout: () => Promise<Layout>;
   /**
+   * The stored pane layout, read and written per client request.
+   *
+   * Passed through untouched for the reason `readLayout` is: a reply to
+   * whoever asked, with nothing to encode once. The hub never parses the
+   * characters; see `client-connection.ts`.
+   */
+  readonly readPaneLayout: () => Promise<string | null>;
+  readonly writePaneLayout: (layout: string) => Promise<void>;
+  /**
    * Starting and stopping sessions, handed to every client this serves.
    *
    * One instance for the whole broadcast rather than one per socket: which
@@ -98,7 +107,8 @@ export interface ClientBroadcast {
 const DEFAULT_COALESCE_MS = 0;
 
 export function startClientBroadcast(dependencies: ClientBroadcastDependencies): ClientBroadcast {
-  const { hubId, state, timers, readLayout, sessions } = dependencies;
+  const { hubId, state, timers, readLayout, readPaneLayout, writePaneLayout, sessions } =
+    dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
 
@@ -165,6 +175,8 @@ export function startClientBroadcast(dependencies: ClientBroadcastDependencies):
         logger,
         currentState: current,
         readLayout,
+        readPaneLayout,
+        writePaneLayout,
         sessions,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);

@@ -150,7 +150,9 @@ export function SessionPane({ sessionRef, store }: SessionPaneProps): JSX.Elemen
   return (
     <Stack
       gap={0}
-      style={{ height: '100dvh' }}
+      // The pane fills whatever cell the layout gives it; before AGX-34 this
+      // was the whole viewport, and now the viewport is the layout screen's.
+      style={{ height: '100%' }}
       // Capture phase, on the pane's root: a chord is decided here, before
       // the emulator's own keydown listener can turn it into bytes for the
       // pty. React's onKeyDownCapture is the capture-phase listener.
