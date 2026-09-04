@@ -109,6 +109,47 @@ export default tseslint.config(
     },
   },
   {
+    // The design-system seam (AGX-30). Mantine enters the app through the
+    // pass-through module in src/ui/ and nowhere else, so replacing it later
+    // is an edit to one directory instead of a migration. The seam is worth
+    // exactly as much as this rule: an unenforced boundary erodes one
+    // convenient direct import at a time.
+    files: ['apps/web/**/*.{ts,tsx}'],
+    ignores: ['apps/web/src/ui/**'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['@mantine/*'],
+          message:
+            'Mantine is behind the pass-through in apps/web/src/ui/. Import from there, adding a re-export if the component is new to the app.',
+        },
+      ]),
+    },
+  },
+  {
+    // Hues are named once, in src/ui/tokens.ts (AGX-30). A color literal
+    // anywhere else is a second place a hue lives, which is how palettes
+    // drift. Status is expressed as a semantic tone through colorForTone.
+    files: ['apps/web/**/*.{ts,tsx}'],
+    ignores: ['apps/web/src/ui/tokens.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'Literal[value=/^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/]',
+          message:
+            'Color literals live in apps/web/src/ui/tokens.ts and nowhere else. Name the hue there, or ask for a semantic tone via colorForTone.',
+        },
+      ],
+    },
+  },
+  {
+    // The service worker is a plain script served from public/, outside the
+    // module graph, so it declares its own globals here.
+    files: ['apps/web/public/sw.js'],
+    languageOptions: { globals: globals.serviceworker },
+  },
+  {
     // Tests and the support modules they import. `test-*.ts` is the same set
     // `tsconfig.build.json` excludes, so nothing matched here reaches `dist/`.
     // Install-time and tooling scripts match wherever they live: they run
