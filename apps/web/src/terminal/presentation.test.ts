@@ -83,6 +83,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     commandQueue: { queued: 0, capacity: 32, overflowed: null },
     terminalInput: { discarded: 0, notice: null },
     lastRefusal: null,
+    lastStarted: null,
     ...overrides,
   };
 }
