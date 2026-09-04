@@ -273,7 +273,7 @@ describe('commands', () => {
 
     socket.deliver(hubFrames.refusal);
     expect(h.store.getSnapshot().lastRefusal).toEqual({
-      replyTo: 4,
+      replyTo: 6,
       code: 'refused',
       message: 'no server the hub is paired with has that store mounted',
       holder: null,
@@ -401,6 +401,66 @@ describe('subscriptions', () => {
       { type: 'hello', id: 3, protocolVersion: PROTOCOL_VERSION },
       { type: 'layout-request', id: 4 },
     ]);
+    unsubscribe();
+  });
+
+  it('replays the pane layout subscription and keeps the two null levels apart', async () => {
+    const h = harness();
+    const unsubscribe = h.store.subscribe(() => {});
+    h.store.subscribePaneLayout();
+    // Not answered yet: the snapshot says so with the outer null.
+    expect(h.store.getSnapshot().paneLayout).toBeNull();
+    expect(h.store.getSnapshot().commandQueue.queued).toBe(0);
+
+    await settle();
+    const socket = h.sockets.sockets[0] as FakeSocket;
+    socket.open();
+    socket.deliver(hubFrames.welcome);
+    expect(sentFrames(socket).at(-1)).toEqual({ type: 'pane-layout-request', id: 2 });
+
+    // Answered: the hub has never stored one, which is an answer, not absence.
+    socket.deliver(hubFrames.paneLayoutEmpty);
+    expect(h.store.getSnapshot().paneLayout).toEqual({ layout: null });
+
+    // Across a drop it is replayed with a fresh id, still bypassing the queue.
+    socket.drop();
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+    expect(sentFrames(next).at(-1)).toEqual({ type: 'pane-layout-request', id: 4 });
+
+    // A stored arrangement arrives as characters the store does not read.
+    next.deliver(hubFrames.paneLayout);
+    const answered = h.store.getSnapshot().paneLayout;
+    expect(answered?.layout).toContain('"kind":"pane"');
+    unsubscribe();
+  });
+
+  it('sends a pane layout save as a command and settles it on the acknowledgement', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+
+    const outcome = h.store.sendCommand({
+      type: 'pane-layout-save',
+      layout: '{"v":1,"root":{"kind":"pane","content":{"type":"empty"}}}',
+    });
+    expect(outcome).toEqual({ accepted: true, id: 2, delivery: 'sent' });
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'pane-layout-save',
+      id: 2,
+      layout: '{"v":1,"root":{"kind":"pane","content":{"type":"empty"}}}',
+    });
+
+    // The captured acknowledgement names id 5; a drop before it would have
+    // worded one unanswered command, so answer the id the fixture carries by
+    // sending enough saves to reach it.
+    h.store.sendCommand({ type: 'pane-layout-save', layout: '{}' });
+    h.store.sendCommand({ type: 'pane-layout-save', layout: '{}' });
+    h.store.sendCommand({ type: 'pane-layout-save', layout: '{}' });
+    socket.deliver(hubFrames.paneLayoutSaved);
+    socket.drop();
+    // Three still unanswered, not four: the acknowledged save is settled.
+    expect(h.store.getSnapshot().problem).toContain('3 commands');
     unsubscribe();
   });
 

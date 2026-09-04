@@ -227,6 +227,8 @@ async function start(): Promise<Harness> {
     timers,
     logger,
     readLayout: async () => [],
+    readPaneLayout: async () => null,
+    writePaneLayout: async () => undefined,
     sessions,
   });
 

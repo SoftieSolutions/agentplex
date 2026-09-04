@@ -121,10 +121,14 @@ function labelFor(text: string): string {
     // with a paired server in it as well as the empty one.
     return frame.state.servers.length > 0 ? 'machineStateWithServer' : 'machineState';
   }
+  if (frame.type === 'pane-layout') {
+    return frame.layout === null ? 'paneLayoutEmpty' : 'paneLayout';
+  }
   const labels = new Map<string, string>([
     ['welcome', 'welcome'],
     ['pong', 'pong'],
     ['layout', 'layout'],
+    ['pane-layout-saved', 'paneLayoutSaved'],
     ['session-started', 'sessionStarted'],
     ['protocol-error', 'protocolError'],
   ]);
@@ -290,28 +294,32 @@ async function captureState(hub: Hub): Promise<string> {
 describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures', () => {
   it('drives three conversations and writes what the hub said', async () => {
     let nextTicket = 0;
-    const hub = await startHub({
-      database: createFakeDatabase({
-        respondWith: [{ match: /SELECT hub_id FROM hub_identity/, rows: [{ hub_id: 'hub-1' }] }],
-      }),
+    const dependencies = {
       logger: createLogger('error', () => {}),
       ids: { newId: () => 'hub-1' },
       clock: { now: () => 1_756_000_000_000 },
       clientToken: CLIENT_TOKEN,
       tokens: { newToken: () => `ticket-${(nextTicket += 1)}` },
       dialer: createUnreachableDialer(),
-      timers: createFakeTimers(),
       migrationsDirectory: '/migrations',
       migrationFileSystem,
       host: HOST,
       port: 0,
+    };
+    const hub = await startHub({
+      ...dependencies,
+      database: createFakeDatabase({
+        respondWith: [{ match: /SELECT hub_id FROM hub_identity/, rows: [{ hub_id: 'hub-1' }] }],
+      }),
+      timers: createFakeTimers(),
     });
 
     // The first conversation, in an order a real client could have: a hello
     // (answered by a welcome and, unasked, the whole machine state), a ping, a
-    // layout request, a session start nothing can satisfy (answered by a
-    // refusal), and finally something that is not JSON at all, which earns the
-    // unsolicited protocol-error and a close.
+    // layout request, a pane layout request against a hub that has never
+    // stored one, a pane layout save, a session start nothing can satisfy
+    // (answered by a refusal), and finally something that is not JSON at all,
+    // which earns the unsolicited protocol-error and a close.
     const first = await openClient(hub);
     first.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
     await first.framesReceived(2);
@@ -319,18 +327,26 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     await first.framesReceived(3);
     first.send({ type: 'layout-request', id: 3 });
     await first.framesReceived(4);
+    first.send({ type: 'pane-layout-request', id: 4 });
+    await first.framesReceived(5);
+    first.send({
+      type: 'pane-layout-save',
+      id: 5,
+      layout: '{"v":1,"root":{"kind":"pane","content":{"type":"empty"}}}',
+    });
+    await first.framesReceived(6);
     first.send({
       type: 'session-start',
-      id: 4,
+      id: 6,
       storeId: 'store-observatory',
       sessionId: null,
       provider: 'claude',
       prompt: null,
       server: null,
     });
-    await first.framesReceived(5);
+    await first.framesReceived(7);
     first.sendText('definitely not a frame');
-    await first.framesReceived(6);
+    await first.framesReceived(8);
     await first.closed();
 
     // The second conversation is one frame long: a hello claiming a protocol
@@ -700,8 +716,37 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const machineStateSharedDegraded = await captureState(sharedHub.hub);
     await sharedHub.cleanup();
 
+    // A hub whose database already holds a pane layout, for the answer a
+    // stored arrangement earns. A second hub rather than a re-ask of the
+    // first, because the fake database records writes without keeping them;
+    // the scripted row stands in for a hub that persisted an earlier save.
+    const stored = await startHub({
+      ...dependencies,
+      database: createFakeDatabase({
+        respondWith: [
+          { match: /SELECT hub_id FROM hub_identity/, rows: [{ hub_id: 'hub-1' }] },
+          {
+            match: /SELECT layout FROM pane_layout/,
+            rows: [{ layout: '{"v":1,"root":{"kind":"pane","content":{"type":"empty"}}}' }],
+          },
+        ],
+      }),
+      timers: createFakeTimers(),
+    });
+    const fourth = await openClient(stored);
+    fourth.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await fourth.framesReceived(2);
+    fourth.send({ type: 'pane-layout-request', id: 2 });
+    await fourth.framesReceived(3);
+    await stored.stop();
+
     const captured = new Map<string, string>();
-    for (const text of [...first.received, ...second.received, ...third.received]) {
+    for (const text of [
+      ...first.received,
+      ...second.received,
+      ...third.received,
+      ...fourth.received,
+    ]) {
       captured.set(labelFor(text), text);
     }
     captured.set('machineStatePopulated', machineStatePopulated);

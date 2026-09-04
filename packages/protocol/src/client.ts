@@ -28,6 +28,20 @@ import { frameParser } from './parse.js';
  * Terminal frames arrive with the milestone that implements them.
  */
 
+/**
+ * The pane layout as it crosses the wire: characters the hub never parses.
+ *
+ * The split-pane arrangement is a client concern from end to end — what a
+ * pane is, how a split divides, what a ratio means. Those rules live in the
+ * web app's own parser, and the hub stores and answers the characters
+ * verbatim, so a new pane type is a client release and never a service one.
+ * The one thing the protocol does state is a bound: a blob this size is not a
+ * layout anybody arranged by hand, and an unbounded column filled by a bug
+ * would grow without anything ever objecting.
+ */
+export const PANE_LAYOUT_MAX_CHARS = 65_536;
+export const paneLayoutTextSchema = z.string().max(PANE_LAYOUT_MAX_CHARS);
+
 export const clientFrameSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('hello'),
@@ -53,6 +67,33 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('layout-request'),
     id: frameIdSchema,
+  }),
+  /**
+   * Asks for the stored pane layout: the split-pane arrangement of the screen,
+   * as distinct from the node tree `layout-request` asks for.
+   *
+   * Like the node tree, it carries nothing but its id — there is one stored
+   * pane layout and the asking is the whole request — and the answer is a
+   * reply to the asking client alone.
+   */
+  z.object({
+    type: z.literal('pane-layout-request'),
+    id: frameIdSchema,
+  }),
+  /**
+   * Stores the pane layout, replacing whatever was stored.
+   *
+   * Whole, never a delta: the client that saves owns the entire arrangement it
+   * is looking at, and a hub merging edits into characters it does not parse
+   * would be editing something it cannot read. The hub's part is to keep the
+   * characters and answer them back; every shape rule lives in the client (see
+   * `paneLayoutTextSchema` above), so this frame changes when the bound
+   * changes and for no other reason.
+   */
+  z.object({
+    type: z.literal('pane-layout-save'),
+    id: frameIdSchema,
+    layout: paneLayoutTextSchema,
   }),
   /**
    * Asks the hub to run a session, in a store.
@@ -156,6 +197,27 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('layout'),
     replyTo: frameIdSchema,
     nodes: layoutSchema,
+  }),
+  /**
+   * The stored pane layout, answered to the client that asked and to nobody
+   * else, for the reason the node tree is: one person's arrangement of one
+   * screen, and pushing it unasked would rearrange every other tab.
+   *
+   * `layout` is exactly the characters the last save carried — the hub reads
+   * nothing out of them — or `null` when nothing has ever been saved. `null`
+   * rather than an empty string, because "no layout has been arranged" is an
+   * answer the client renders as its default, and an empty string would be a
+   * blob that fails the client's parser and reads as damage.
+   */
+  z.object({
+    type: z.literal('pane-layout'),
+    replyTo: frameIdSchema,
+    layout: paneLayoutTextSchema.nullable(),
+  }),
+  /** The pane layout was stored. Nothing to carry: the client sent the bytes. */
+  z.object({
+    type: z.literal('pane-layout-saved'),
+    replyTo: frameIdSchema,
   }),
   /**
    * A session is running, and here is where it landed.

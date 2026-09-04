@@ -116,6 +116,10 @@ interface Harness {
 function harness(
   readLayout: () => Promise<Layout> = async () => [],
   sessions: FakeSessionControl = createFakeSessionControl(),
+  paneLayout: {
+    read?: () => Promise<string | null>;
+    write?: (layout: string) => Promise<void>;
+  } = {},
 ): Harness {
   const state = createReducer({ logger });
   const timers = createFakeTimers();
@@ -125,6 +129,8 @@ function harness(
     timers,
     logger,
     readLayout,
+    readPaneLayout: paneLayout.read ?? (async () => null),
+    writePaneLayout: paneLayout.write ?? (async () => undefined),
     sessions,
   });
   return { state, timers, broadcast, sessions };
@@ -408,6 +414,69 @@ describe('the stored layout', () => {
       replyTo: 2,
       code: 'internal',
       message: 'the hub could not read its layout',
+      holder: null,
+    });
+    expect(client.socket.closure).toBeNull();
+  });
+});
+
+describe('the stored pane layout', () => {
+  // Deliberately a shape no current client writes: the contract under test is
+  // that the hub carries the characters without reading them, so a newer
+  // client's pane type crosses this build untouched.
+  const FUTURE_LAYOUT = '{"v":9,"root":{"kind":"hologram","spin":0.5}}';
+
+  it('answers the save back verbatim, to the asking client and no other', async () => {
+    let stored: string | null = null;
+    const { broadcast } = harness(async () => [], createFakeSessionControl(), {
+      read: async () => stored,
+      write: async (layout) => {
+        stored = layout;
+      },
+    });
+    const asker = attach(broadcast);
+    const bystander = attach(broadcast);
+    await asker.hello();
+    await bystander.hello();
+    const bystanderSaw = bystander.received.length;
+
+    await asker.say({ type: 'pane-layout-save', id: 2, layout: FUTURE_LAYOUT });
+    await asker.say({ type: 'pane-layout-request', id: 3 });
+
+    expect(asker.received.at(-2)).toEqual({ type: 'pane-layout-saved', replyTo: 2 });
+    expect(asker.received.at(-1)).toEqual({
+      type: 'pane-layout',
+      replyTo: 3,
+      layout: FUTURE_LAYOUT,
+    });
+    // One person's arrangement of one screen: nothing reached the other tab.
+    expect(bystander.received.length).toBe(bystanderSaw);
+  });
+
+  it('answers null before anything was ever saved, which is an answer, not a refusal', async () => {
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'pane-layout-request', id: 2 });
+
+    expect(client.received.at(-1)).toEqual({ type: 'pane-layout', replyTo: 2, layout: null });
+  });
+
+  it('refuses as internal when the row cannot be written, and stays open', async () => {
+    const { broadcast } = harness(async () => [], createFakeSessionControl(), {
+      write: () => Promise.reject(new Error('database is locked')),
+    });
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'pane-layout-save', id: 2, layout: FUTURE_LAYOUT });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'internal',
+      message: 'the hub could not store the pane layout',
       holder: null,
     });
     expect(client.socket.closure).toBeNull();

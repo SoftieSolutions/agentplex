@@ -7,21 +7,25 @@
  * and these exist to test that it can read what the hub actually sends.
  * Re-capture after any change to the hub-to-client frames.
  *
- * Captured at protocol version 4.
+ * Captured at protocol version 5.
  */
 export const hubFrames = {
-  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":4,"hubId":"hub-1"}',
+  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":5,"hubId":"hub-1"}',
   machineState: '{"type":"machine-state","state":{"version":0,"stores":[],"servers":[]}}',
   pong: '{"type":"pong","replyTo":2}',
   layout: '{"type":"layout","replyTo":3,"nodes":[]}',
+  paneLayoutEmpty: '{"type":"pane-layout","replyTo":4,"layout":null}',
+  paneLayoutSaved: '{"type":"pane-layout-saved","replyTo":5}',
   refusal:
-    '{"type":"refusal","replyTo":4,"code":"refused","message":"no server the hub is paired with has that store mounted","holder":null}',
+    '{"type":"refusal","replyTo":6,"code":"refused","message":"no server the hub is paired with has that store mounted","holder":null}',
   protocolError:
     '{"type":"protocol-error","code":"bad-request","message":"frame is not valid JSON"}',
   refusalProtocolVersion:
-    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 4, not 5","holder":null}',
+    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 5, not 6","holder":null}',
   machineStateWithServer:
     '{"type":"machine-state","state":{"version":1,"stores":[],"servers":[{"registrationId":"pairing-1","label":"gpu-box-01","serverId":null,"phase":"stale","stores":[],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":null,"staleReason":"unreachable","problem":"connection refused"}]}}',
+  paneLayout:
+    '{"type":"pane-layout","replyTo":2,"layout":"{\\"v\\":1,\\"root\\":{\\"kind\\":\\"pane\\",\\"content\\":{\\"type\\":\\"empty\\"}}}"}',
   machineStatePopulated:
     '{"type":"machine-state","state":{"version":4,"stores":[{"storeId":"store-agentplex","servers":["registration-mbp-robert"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-agentplex","sessionId":"session-fix-auth","provider":"claude","status":"working","updatedAt":1755999280000,"cwd":"/Users/robert/code/agentplex","title":"fix-auth-refresh"},"source":"registration-mbp-robert","reportedBy":["registration-mbp-robert"],"reportedAt":1756000000000,"reachable":true,"holder":{"server":"registration-mbp-robert","stoppable":false}},{"descriptor":{"storeId":"store-agentplex","sessionId":"session-migrate-db","provider":"codex","status":"awaiting-permission","updatedAt":1755999820000,"cwd":"/Users/robert/code/agentplex/db","title":"migrate-db-v9"},"source":"registration-mbp-robert","reportedBy":["registration-mbp-robert"],"reportedAt":1756000000000,"reachable":true,"holder":{"server":"registration-mbp-robert","stoppable":true}},{"descriptor":{"storeId":"store-agentplex","sessionId":"session-spike-wasm","provider":"claude","status":"idle","updatedAt":1755992800000,"cwd":null,"title":"spike-wasm"},"source":"registration-mbp-robert","reportedBy":["registration-mbp-robert"],"reportedAt":1756000000000,"reachable":true,"holder":null}]},{"storeId":"store-universe","servers":["registration-gpu-box-01"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-universe","sessionId":"session-bench-tokenizer","provider":"claude","status":"working","updatedAt":1755997540000,"cwd":"/mnt/volumes/universe/bench","title":"bench-tokenizer"},"source":"registration-gpu-box-01","reportedBy":["registration-gpu-box-01"],"reportedAt":1756000000000,"reachable":true,"holder":{"server":"registration-gpu-box-01","stoppable":false}},{"descriptor":{"storeId":"store-universe","sessionId":"session-docs-sweep","provider":"codex","status":"awaiting-input","updatedAt":1755999760000,"cwd":"/mnt/volumes/universe/docs","title":"docs-sweep"},"source":"registration-gpu-box-01","reportedBy":["registration-gpu-box-01"],"reportedAt":1756000000000,"reachable":true,"holder":null},{"descriptor":{"storeId":"store-universe","sessionId":"session-train-lora","provider":"claude","status":"unknown","updatedAt":1755996400000,"cwd":null,"title":null},"source":"registration-gpu-box-01","reportedBy":["registration-gpu-box-01"],"reportedAt":1756000000000,"reachable":true,"holder":null}]}],"servers":[{"registrationId":"registration-gpu-box-01","label":"gpu-box-01","serverId":"server-gpu","phase":"connected","stores":["store-universe"],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"problem":null},{"registrationId":"registration-mbp-robert","label":"mbp-robert","serverId":"server-mbp","phase":"connected","stores":["store-agentplex"],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"problem":null}]}}',
   machineStateStale:
