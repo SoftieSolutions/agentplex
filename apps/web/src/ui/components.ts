@@ -11,6 +11,7 @@
 import '@mantine/core/styles.css';
 
 export {
+  Box,
   Button,
   Group,
   MantineProvider,
@@ -20,5 +21,6 @@ export {
   Text,
   TextInput,
   Title,
-  useComputedColorScheme,
 } from '@mantine/core';
+/** The resolved scheme, 'light' | 'dark' — the same union the tokens key on. */
+export { useComputedColorScheme } from '@mantine/core';
