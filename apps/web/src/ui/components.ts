@@ -17,10 +17,13 @@ export {
   MantineProvider,
   Paper,
   PasswordInput,
+  Select,
+  SimpleGrid,
   Stack,
   Text,
   TextInput,
   Title,
+  UnstyledButton,
 } from '@mantine/core';
 /** The resolved scheme, 'light' | 'dark' — the same union the tokens key on. */
 export { useComputedColorScheme } from '@mantine/core';
