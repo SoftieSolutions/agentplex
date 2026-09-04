@@ -20,4 +20,6 @@ export const hubFrames = {
     '{"type":"protocol-error","code":"bad-request","message":"frame is not valid JSON"}',
   refusalProtocolVersion:
     '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 4, not 5","holder":null}',
+  machineStateWithServer:
+    '{"type":"machine-state","state":{"version":1,"stores":[],"servers":[{"registrationId":"pairing-1","label":"gpu-box-01","serverId":null,"phase":"stale","stores":[],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":null,"staleReason":"unreachable","problem":"connection refused"}]}}',
 } as const;

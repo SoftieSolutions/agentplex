@@ -10,4 +10,15 @@
  */
 import '@mantine/core/styles.css';
 
-export { MantineProvider, Stack, Text, Title } from '@mantine/core';
+export {
+  Button,
+  Group,
+  MantineProvider,
+  Paper,
+  PasswordInput,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+  useComputedColorScheme,
+} from '@mantine/core';
