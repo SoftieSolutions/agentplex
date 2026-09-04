@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { machineStateSchema, serverViewSchema, sessionRowSchema } from './machine-state.js';
+import {
+  machineStateSchema,
+  serverCandidateSchema,
+  serverViewSchema,
+  sessionRowSchema,
+} from './machine-state.js';
 
 /**
  * Fixtures here are hand-written, and the exception is the point: these are
@@ -19,6 +24,13 @@ const A_SERVER = {
   lastConnectedAt: 1_000,
   staleReason: null,
   problem: null,
+};
+
+const A_CANDIDATE = {
+  serverId: 'server-1',
+  address: '192.168.1.24',
+  port: 8443,
+  protocolVersion: 5,
 };
 
 const A_SESSION_ROW = {
@@ -128,17 +140,95 @@ describe('sessionRowSchema', () => {
   });
 });
 
-describe('machineStateSchema', () => {
-  it('accepts the empty state a hub with no pairings publishes', () => {
-    expect(machineStateSchema.safeParse({ version: 0, stores: [], servers: [] }).success).toBe(
+describe('serverCandidateSchema', () => {
+  it('accepts a machine heard announcing itself', () => {
+    expect(serverCandidateSchema.safeParse(A_CANDIDATE).success).toBe(true);
+  });
+
+  it('accepts one claiming a protocol this build does not speak', () => {
+    // Kept rather than dropped: a hub that refused to publish a mismatched
+    // beacon could only report silence, where what it can report is a machine
+    // it can see and cannot speak to.
+    expect(serverCandidateSchema.safeParse({ ...A_CANDIDATE, protocolVersion: 1 }).success).toBe(
       true,
     );
+  });
+
+  it('rejects a candidate carrying a token, whatever the sender called the field', () => {
+    // The rule the beacon schema enforces on the wire in, restated on the wire
+    // out: there is nowhere here to put a secret, so a hub cannot forward one
+    // it was somehow sent.
+    const parsed = serverCandidateSchema.safeParse({ ...A_CANDIDATE, token: 'not-a-chance' });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(Object.keys(parsed.data).sort()).toEqual([
+      'address',
+      'port',
+      'protocolVersion',
+      'serverId',
+    ]);
+  });
+
+  it('rejects a candidate with no port: an address alone is not somewhere to dial', () => {
+    const { port, ...withoutPort } = A_CANDIDATE;
+    expect(port).toBe(8443);
+    expect(serverCandidateSchema.safeParse(withoutPort).success).toBe(false);
+  });
+
+  it('rejects a registrationId on a candidate, which is what a pairing has', () => {
+    // The structural half of "a candidate is not a peer": nothing here can be
+    // mistaken for a row in `servers`, because a candidate has no key that a
+    // paired server is addressed by.
+    expect(serverCandidateSchema.safeParse(A_CANDIDATE).success).toBe(true);
+    expect(serverViewSchema.safeParse(A_CANDIDATE).success).toBe(false);
+  });
+});
+
+describe('machineStateSchema', () => {
+  it('accepts the empty state a hub with no pairings publishes', () => {
+    expect(
+      machineStateSchema.safeParse({ version: 0, stores: [], servers: [], candidates: [] }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a state with no candidates field: heard-nothing is a list, not an absence', () => {
+    // A hub always has an answer to "what have you heard on the network" —
+    // usually the empty one. An optional field would let a client that saw no
+    // property and a client that saw an empty list draw different screens off
+    // the same fact.
+    expect(machineStateSchema.safeParse({ version: 0, stores: [], servers: [] }).success).toBe(
+      false,
+    );
+  });
+
+  it('keeps candidates out of the paired-server list entirely', () => {
+    const parsed = machineStateSchema.safeParse({
+      version: 7,
+      stores: [],
+      servers: [A_SERVER],
+      candidates: [A_CANDIDATE],
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.servers).toHaveLength(1);
+    expect(parsed.data.candidates).toHaveLength(1);
+    // The two collections are separate types as well as separate fields: a
+    // candidate is not admissible where a paired server goes.
+    expect(
+      machineStateSchema.safeParse({
+        version: 7,
+        stores: [],
+        servers: [A_CANDIDATE],
+        candidates: [],
+      }).success,
+    ).toBe(false);
   });
 
   it('accepts a store that names its servers by id', () => {
     const parsed = machineStateSchema.safeParse({
       version: 4,
       servers: [A_SERVER],
+      candidates: [],
       stores: [
         {
           storeId: 'store-work',
@@ -157,6 +247,7 @@ describe('machineStateSchema', () => {
     const parsed = machineStateSchema.safeParse({
       version: 4,
       servers: [A_SERVER],
+      candidates: [],
       stores: [
         {
           storeId: 'store-work',
@@ -172,8 +263,9 @@ describe('machineStateSchema', () => {
   });
 
   it('rejects a negative version', () => {
-    expect(machineStateSchema.safeParse({ version: -1, stores: [], servers: [] }).success).toBe(
-      false,
-    );
+    expect(
+      machineStateSchema.safeParse({ version: -1, stores: [], servers: [], candidates: [] })
+        .success,
+    ).toBe(false);
   });
 });

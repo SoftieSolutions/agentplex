@@ -1,5 +1,12 @@
-import type { MachineState, ServerView, SessionRow, StoreView } from '@agentplex/protocol';
+import type {
+  MachineState,
+  ServerCandidate,
+  ServerView,
+  SessionRow,
+  StoreView,
+} from '@agentplex/protocol';
 import type { ServerConnectionReport } from '../connections/server-connection.js';
+import type { DiscoveredServer } from '../discovery/beacon-listener.js';
 import type {
   HubStateSnapshot,
   SessionRow as ReducedSessionRow,
@@ -35,6 +42,37 @@ export function toMachineState(snapshot: HubStateSnapshot): MachineState {
     version: snapshot.version,
     stores: snapshot.stores.map(toStoreView),
     servers: snapshot.servers.map(toServerView),
+    // Its own field, from its own collection, through its own projection. There
+    // is no line in this file along which a candidate could arrive in `servers`.
+    candidates: snapshot.candidates.map(toServerCandidate),
+  };
+}
+
+/**
+ * A machine the hub has heard from, as a client reads it.
+ *
+ * Two internal fields do not make the trip, for the reason the dialled address
+ * and the retry counter do not. `heardAt` is what the aging is measured
+ * against, and it moves every five seconds for a machine that has done nothing
+ * but still be there -- publishing it would put a ticking field into a frame
+ * that goes whole to every client, and invite a client to re-derive an answer
+ * the hub has already given by keeping the candidate in the list at all.
+ * `heardFrom` is the cross-check on the announced address, which an operator
+ * reads in a log; a client handed both addresses has been handed a decision the
+ * hub could not make either.
+ *
+ * The protocol version is carried rather than judged. `checkProtocolVersion` is
+ * the verdict, and the client reading this frame is running the same protocol
+ * number as this hub -- its `hello` was compared with `===` before it was sent
+ * any of this -- so the verdict it reaches is the one the hub would reach, and
+ * a second field saying so could only ever disagree with the first.
+ */
+function toServerCandidate(candidate: DiscoveredServer): ServerCandidate {
+  return {
+    serverId: candidate.serverId,
+    address: candidate.address,
+    port: candidate.port,
+    protocolVersion: candidate.protocolVersion,
   };
 }
 

@@ -48,6 +48,7 @@ export type { Layout, LayoutNode } from './layout.js';
 
 export {
   machineStateSchema,
+  serverCandidateSchema,
   serverPhaseSchema,
   serverViewSchema,
   sessionHolderSchema,
@@ -57,6 +58,7 @@ export {
 } from './machine-state.js';
 export type {
   MachineState,
+  ServerCandidate,
   ServerPhase,
   ServerView,
   SessionHolder,

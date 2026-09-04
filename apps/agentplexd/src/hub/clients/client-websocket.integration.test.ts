@@ -8,6 +8,7 @@ import {
 } from '@agentplex/protocol';
 import { createFakeDatabase } from '../db/fake-database.js';
 import type { MigrationFileSystem } from '../db/migration-files.js';
+import { createFakeBeaconSource } from '../discovery/fake-beacon-source.js';
 import { startHub, type Hub } from '../hub.js';
 import { createUnreachableDialer } from '../../shared/fake-message-socket.js';
 import { CLOSE_POLICY } from '../../shared/message-socket.js';
@@ -67,6 +68,9 @@ async function startTestHub(clock = movableClock()): Promise<Hub> {
     clientToken: CLIENT_TOKEN,
     tokens: { newToken: () => `ticket-${(next += 1)}` },
     dialer: createUnreachableDialer(),
+    // A silent network: the hub listens because it always does, and hears
+    // nothing, so no candidate reaches the states these tests assert on.
+    discovery: createFakeBeaconSource(),
     // Nothing is paired, so nothing is dialled and no broadcast is scheduled.
     // The state a client is sent on hello is read at that moment rather than
     // flushed on a timer, which is exactly the path being exercised here.

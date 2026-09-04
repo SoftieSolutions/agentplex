@@ -165,6 +165,48 @@ export const storeViewSchema = z.object({
 });
 export type StoreView = z.infer<typeof storeViewSchema>;
 
+/**
+ * A machine the hub has heard announce itself, and has no relationship with.
+ *
+ * Its own type, in its own collection, on purpose. A candidate and a paired
+ * server are not two states of one thing: a server row is a pairing the user
+ * made, backed by a token in the hub's database and a supervisor dialling it,
+ * and this is a datagram somebody's network delivered. Merging them into one
+ * list with a flag would put an unauthenticated stranger's claim one boolean
+ * away from being drawn as a machine of yours, and every reader of the list
+ * would have to remember to check that boolean. Two lists, and there is nothing
+ * to remember.
+ *
+ * There is no `registrationId` here and no label, because both are things the
+ * hub knows about a pairing and nobody knows about a candidate. There is no
+ * token field either, which is the same rule the beacon schema enforces
+ * inbound, restated outbound: a beacon never carries one, so a hub has none to
+ * forward.
+ *
+ * Everything here is a claim by whoever sent the datagram. What the client does
+ * with it is fill in one line of the pairing form.
+ */
+export const serverCandidateSchema = z.object({
+  /** What the machine calls itself. Also the key: one candidate per server id. */
+  serverId: serverIdSchema,
+  /** Where it says it is. Not checked, and not reachable until somebody tries. */
+  address: z.string().min(1),
+  /** The port it says the hub would dial. Never the beacon port it was heard on. */
+  port: z.int().min(1).max(65535),
+  /**
+   * The protocol the beacon claimed, carried rather than judged.
+   *
+   * The verdict is not a second field, because a second field is a second copy
+   * of one fact free to disagree with the first. `checkProtocolVersion` is the
+   * verdict and every reader of this frame can reach it: a client is only
+   * reading a machine state at all because its own `hello` was accepted, and a
+   * hello is checked with `===`, so the client's `PROTOCOL_VERSION` and the
+   * hub's are already known to be the same number.
+   */
+  protocolVersion: z.int().positive(),
+});
+export type ServerCandidate = z.infer<typeof serverCandidateSchema>;
+
 export const machineStateSchema = z.object({
   /**
    * Bumped once per change that actually changed something.
@@ -177,5 +219,23 @@ export const machineStateSchema = z.object({
   stores: z.array(storeViewSchema),
   /** Every paired server the hub is supervising, sorted by label. */
   servers: z.array(serverViewSchema),
+  /**
+   * Every machine the hub can currently hear on the network and is paired with
+   * none of, sorted by server id.
+   *
+   * Required and usually empty, rather than optional. A hub always has an
+   * answer to "what have you heard", and an absent property would let two
+   * clients draw different screens off the same fact -- one showing nothing
+   * because the field was missing, one showing nothing because the list was
+   * empty, and no way to tell a hub that hears nothing from a hub too old to
+   * listen.
+   *
+   * Ephemeral by construction: nothing here is in the hub's database, and a
+   * claim that stops being repeated leaves this list after six missed
+   * announcements. A candidate the user acts on becomes a pairing the ordinary
+   * way -- they type that server's token -- and appears in `servers` because of
+   * that, never because it was heard.
+   */
+  candidates: z.array(serverCandidateSchema),
 });
 export type MachineState = z.infer<typeof machineStateSchema>;

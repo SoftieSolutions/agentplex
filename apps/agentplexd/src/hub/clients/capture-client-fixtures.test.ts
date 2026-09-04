@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { describe, it } from 'vitest';
 import {
+  formatServerBeacon,
   parseHubFrame,
   parseTextFrame,
   serverIdSchema,
@@ -16,6 +17,7 @@ import {
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import { createFakeSessionController } from '../../server/fake-session-controller.js';
+import { createFakeBeaconSource, type FakeBeaconSource } from '../discovery/fake-beacon-source.js';
 import { serveHubConnection } from '../../server/hub-connection.js';
 import type { SessionOutcome, StoreReport } from '../../server/session-control.js';
 import { createUnreachableDialer, createSocketPair } from '../../shared/fake-message-socket.js';
@@ -119,6 +121,7 @@ function labelFor(text: string): string {
   if (frame.type === 'machine-state') {
     // Labelled by what the state holds, so the web tests get a captured state
     // with a paired server in it as well as the empty one.
+    if (frame.state.candidates.length > 0) return 'machineStateDiscovered';
     return frame.state.servers.length > 0 ? 'machineStateWithServer' : 'machineState';
   }
   if (frame.type === 'pane-layout') {
@@ -229,6 +232,7 @@ async function startFleetHub(
   machines: Map<string, Machine>,
   registrations: readonly { label: string; host: string }[],
   live: Map<string, MessageSocket>,
+  discovery: FakeBeaconSource = createFakeBeaconSource(),
 ): Promise<{ hub: Hub; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(join(tmpdir(), 'agentplex-capture-'));
   const database = createSqliteDatabase(join(directory, 'hub.db'));
@@ -257,6 +261,7 @@ async function startFleetHub(
     clientToken: CLIENT_TOKEN,
     tokens: { newToken: () => `fleet-ticket-${(nextTicket += 1)}` },
     dialer: fleetDialer(machines, live),
+    discovery,
     timers: createFakeTimers(),
     migrationsDirectory,
     migrationFileSystem: nodeMigrationFileSystem,
@@ -301,6 +306,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       clientToken: CLIENT_TOKEN,
       tokens: { newToken: () => `ticket-${(nextTicket += 1)}` },
       dialer: createUnreachableDialer(),
+      // A silent network, so the states captured from this hub carry the
+      // empty candidate list a hub that has heard nothing publishes.
+      discovery: createFakeBeaconSource(),
       migrationsDirectory: '/migrations',
       migrationFileSystem,
       host: HOST,
@@ -389,6 +397,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       clientToken: CLIENT_TOKEN,
       tokens: { newToken: () => `ticket-${(nextTicket += 1)}` },
       dialer: createUnreachableDialer(),
+      discovery: createFakeBeaconSource(),
       timers: createFakeTimers(),
       migrationsDirectory: '/migrations',
       migrationFileSystem,
@@ -716,6 +725,41 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const machineStateSharedDegraded = await captureState(sharedHub.hub);
     await sharedHub.cleanup();
 
+    // A hub that has heard two machines announce themselves and is paired with
+    // neither. The beacons are formatted by the protocol's own formatter --
+    // the function an announcing server calls -- and travel the whole real
+    // path: the listener parses them, the reducer holds them in a collection
+    // of their own, and the broadcast publishes the frame captured here. One
+    // speaks this build's protocol and one does not, which is the pair of rows
+    // the settings screen has to draw differently.
+    const network = createFakeBeaconSource();
+    const listeningHub = await startFleetHub(new Map(), [], new Map(), network);
+    network.send(
+      formatServerBeacon({
+        type: 'agentplex-server-beacon',
+        protocolVersion: PROTOCOL_VERSION,
+        serverId: serverIdSchema.parse('server-mbp'),
+        address: '192.168.1.24',
+        port: 8443,
+      }),
+    );
+    network.send(
+      formatServerBeacon({
+        type: 'agentplex-server-beacon',
+        protocolVersion: PROTOCOL_VERSION - 1,
+        serverId: serverIdSchema.parse('server-old-build'),
+        address: '192.168.1.31',
+        port: 8443,
+      }),
+      '192.168.1.31',
+    );
+    await until(
+      () => listeningHub.hub.state.snapshot().candidates.length === 2,
+      'the beacons to be heard',
+    );
+    const machineStateDiscovered = await captureState(listeningHub.hub);
+    await listeningHub.cleanup();
+
     // A hub whose database already holds a pane layout, for the answer a
     // stored arrangement earns. A second hub rather than a re-ask of the
     // first, because the fake database records writes without keeping them;
@@ -755,6 +799,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('sessionStarted', sessionStarted);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
+    captured.set('machineStateDiscovered', machineStateDiscovered);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)

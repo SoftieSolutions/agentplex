@@ -9,6 +9,7 @@ import type {
 import type { Logger } from '../../shared/logger.js';
 import { countsTowardAttention } from '../connections/attention.js';
 import type { ServerConnectionReport } from '../connections/server-connection.js';
+import type { DiscoveredServer } from '../discovery/beacon-listener.js';
 import { chooseReportedSession, type ReportedSession } from './session-selection.js';
 
 /**
@@ -145,6 +146,25 @@ export interface HubStateSnapshot {
   readonly stores: readonly StoreView[];
   /** Every paired server the hub is supervising, sorted by label. */
   readonly servers: readonly ServerConnectionReport[];
+  /**
+   * Every machine heard announcing itself on the network, sorted by server id.
+   *
+   * A second collection rather than a flag on a server, and that is the whole
+   * of it: a paired server is something the user did, backed by a token in the
+   * database and a supervisor dialling it, and a candidate is a datagram
+   * anybody on the network can send. One list with a discriminator would put
+   * the two one boolean apart, and every reader of the list would have to
+   * remember to check it.
+   *
+   * It is held here rather than beside the reducer because there is exactly one
+   * `version`, and it means "a client holding this has the whole state".
+   * Anything published has to move that number, or the broadcast's encode cache
+   * -- keyed on the version -- would keep handing out a frame that is missing
+   * what changed. What discovery does not get from being here is any
+   * entanglement with the merge: no store is built out of it, no session row
+   * cites it, and neither `applyConnection` nor `applySessions` can reach it.
+   */
+  readonly candidates: readonly DiscoveredServer[];
 }
 
 export interface ReducerDependencies {
@@ -171,6 +191,21 @@ export interface Reducer {
    * word of something it cannot place.
    */
   applySessions(report: ServerSessionReport): boolean;
+  /**
+   * Takes the whole set of machines the beacon listener can currently hear.
+   *
+   * A whole list rather than an arrival or a departure, for the reason nothing
+   * here is a delta: the listener knows what it can hear, and a reducer
+   * applying "one left" would be keeping a second copy of that answer.
+   *
+   * A list that says what the last one said changes nothing, deliberately. A
+   * candidate is refreshed every five seconds by a machine that is simply
+   * still there, and waking every attached client for that would make the
+   * version mean "a datagram arrived" rather than "something changed". Only
+   * the published fields are compared -- when a claim was last heard is the
+   * hub's bookkeeping and no client is shown it.
+   */
+  applyCandidates(candidates: readonly DiscoveredServer[]): void;
   /** The whole state. The same object until something changes. */
   snapshot(): HubStateSnapshot;
   /**
@@ -213,6 +248,14 @@ export function createReducer(dependencies: ReducerDependencies): Reducer {
 
   let version = 0;
   let built: HubStateSnapshot | null = null;
+  /**
+   * What the network has been heard to say, kept whole and separate.
+   *
+   * Its own binding rather than a field folded into `connections`, so that
+   * there is no code path in this file along which a candidate could reach the
+   * server list: the two are never in the same map to be confused.
+   */
+  let candidates: readonly DiscoveredServer[] = [];
 
   const build = (): HubStateSnapshot => {
     const stores = buildStoreViews(connections, reports);
@@ -220,6 +263,7 @@ export function createReducer(dependencies: ReducerDependencies): Reducer {
       version,
       stores,
       servers: [...connections.values()].sort(byLabel),
+      candidates,
     };
   };
 
@@ -329,6 +373,12 @@ export function createReducer(dependencies: ReducerDependencies): Reducer {
       return true;
     },
 
+    applyCandidates(heard: readonly DiscoveredServer[]): void {
+      if (sameCandidates(candidates, heard)) return;
+      candidates = heard;
+      changed();
+    },
+
     snapshot,
 
     subscribe(listener: (snapshot: HubStateSnapshot) => void): () => void {
@@ -365,6 +415,31 @@ function sameConnection(left: ServerConnectionReport, right: ServerConnectionRep
     left.stores.length === right.stores.length &&
     left.stores.every((storeId, index) => storeId === right.stores[index])
   );
+}
+
+/**
+ * Whether the network is saying exactly what it was saying last time.
+ *
+ * Only the fields a client is shown. `heardAt` moves every five seconds for a
+ * machine that has done nothing but still be there, and comparing it would
+ * make every announcement a new version and a frame to every attached client.
+ * Both lists arrive sorted by server id, so position is comparable.
+ */
+function sameCandidates(
+  left: readonly DiscoveredServer[],
+  right: readonly DiscoveredServer[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((candidate, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      candidate.serverId === other.serverId &&
+      candidate.address === other.address &&
+      candidate.port === other.port &&
+      candidate.protocolVersion === other.protocolVersion
+    );
+  });
 }
 
 /**

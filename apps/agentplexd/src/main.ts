@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { childEnvironment } from './config/child-environment.js';
 import { loadConfig, usage } from './config/config.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
+import { createNodeBeaconSource } from './hub/discovery/node-beacon-listener.js';
 import { createSqliteDatabase } from './hub/db/sqlite.js';
 import { startRuntime } from './runtime.js';
 import { createNodeBeaconNetwork } from './server/node-beacon-transport.js';
@@ -124,6 +125,10 @@ async function main(): Promise<void> {
       // "can this process broadcast" stays a visible line in the entrypoint
       // rather than a decision taken somewhere below it.
       beacon: createNodeBeaconNetwork(logger),
+      // The other end of the same facility, and the one with no switch: a hub
+      // binds the discovery port whenever it runs, because hearing a machine
+      // announce itself costs nothing and grants nothing.
+      discovery: createNodeBeaconSource(logger),
       timers: systemTimers,
       clock: systemClock,
     });

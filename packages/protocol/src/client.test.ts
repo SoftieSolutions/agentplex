@@ -332,6 +332,14 @@ describe('client and hub round trips', () => {
             problem: null,
           },
         ],
+        candidates: [
+          {
+            serverId: serverIdSchema.parse('server-2'),
+            address: '192.168.1.24',
+            port: 8443,
+            protocolVersion: 6,
+          },
+        ],
       },
     },
     { type: 'protocol-error', code: 'protocol-version', message: 'this hub speaks version 2' },
