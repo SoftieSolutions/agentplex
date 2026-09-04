@@ -1,0 +1,139 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { systemClock } from '../shared/clock.js';
+import { randomIdGenerator } from '../shared/ids.js';
+import { nodePtyFactory } from './node-pty-factory.js';
+import { createPtySupervisor } from './pty-supervisor.js';
+import type { Launch } from './providers/provider-adapter.js';
+
+/**
+ * Captures real terminal output, chunked exactly as a pty delivered it, for
+ * the web terminal pane's tests.
+ *
+ * The pane's chunk feed trims its buffer by whole chunks because an ANSI
+ * escape can span a chunk boundary, and a test of that rule against
+ * hand-written chunks would prove the feed handles what its author imagined a
+ * pty sends. So this runs a real child on a real pty — the same factory the
+ * server role uses — and records every chunk verbatim, boundaries included.
+ * The child prints the things a coding agent's screen is made of: SGR color
+ * runs, cursor movement, line clearing, a spinner redrawn in place, and
+ * multibyte UTF-8, across several writes spaced out so the pty delivers
+ * multiple reads rather than one coalesced buffer.
+ *
+ * A test file so it runs under vitest (the one runner here that resolves
+ * `.js` specifiers to `.ts` sources); gated on an environment variable so an
+ * ordinary run never rewrites the fixture. To re-capture, from
+ * apps/agentplexd:
+ *
+ *   CAPTURE_FIXTURES=1 pnpm vitest run src/server/capture-terminal-fixtures.test.ts
+ */
+
+const CHILD_TIMEOUT_MS = 20_000;
+
+/**
+ * Writes escape-heavy output in stages. Timeouts between writes are what
+ * makes the pty hand the reader more than one chunk: a single synchronous
+ * burst can arrive as one read, and a fixture with one chunk exercises no
+ * boundary at all.
+ */
+const PRINTING = [
+  'const e = String.fromCharCode(27);',
+  'const out = (s) => process.stdout.write(s);',
+  'const steps = [',
+  // A prompt line with SGR color runs, then output with a colored FAIL.
+  '  () => out(`${e}[38;5;245m14:20:11${e}[0m ${e}[1m$ pnpm test auth${e}[0m\\r\\n`),',
+  '  () => out(`  ${e}[32m\\u2713${e}[0m refresh token rotates (212ms)\\r\\n`),',
+  '  () => out(`  ${e}[31m\\u2715${e}[0m concurrent refresh dedupes ${e}[41;97m FAIL ${e}[0m\\r\\n`),',
+  // A spinner redrawn in place: carriage return, erase-line, repaint.
+  '  () => out(`${e}[36m\\u280b${e}[0m thinking...`),',
+  '  () => out(`\\r${e}[2K${e}[36m\\u2819${e}[0m thinking, harder...`),',
+  '  () => out(`\\r${e}[2K${e}[33m\\u25b8${e}[0m plan: single in-flight promise\\r\\n`),',
+  // Cursor movement and a box-drawing panel, the TUI staples.
+  '  () => out(`${e}[2A${e}[0J\\u250c\\u2500 diff \\u2500\\u2510\\r\\n\\u2502 ${e}[32m+18${e}[0m ${e}[31m-4${e}[0m \\u2502\\r\\n\\u2514\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2518\\r\\n`),',
+  // A long uninterrupted SGR run, likelier than the rest to split mid-escape.
+  '  () => out(Array.from({length: 40}, (_, i) => `${e}[38;5;${100 + i}m\\u2588`).join("") + `${e}[0m\\r\\n`),',
+  '];',
+  'let i = 0;',
+  'const tick = () => { steps[i](); i += 1;',
+  '  if (i < steps.length) setTimeout(tick, 40); else process.exit(0); };',
+  'tick();',
+].join('');
+
+describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing terminal fixtures', () => {
+  it('runs a real pty and writes every chunk it delivered', async () => {
+    const supervisor = createPtySupervisor({
+      pty: nodePtyFactory,
+      clock: systemClock,
+      ids: randomIdGenerator,
+      environment: { PATH: process.env.PATH ?? '' },
+    });
+    const launch: Launch = {
+      ok: true,
+      plan: {
+        command: process.execPath,
+        args: ['-e', PRINTING],
+        cwd: process.cwd(),
+        env: {},
+        scrubEnvPrefixes: [],
+      },
+    };
+
+    const started = supervisor.launch(launch);
+    if (!started.ok) throw new Error(`the launch was refused: ${started.problem}`);
+    const run = started.run;
+
+    const chunks: Uint8Array[] = [];
+    run.subscribe((chunk) => chunks.push(Uint8Array.from(chunk)));
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the child never exited')), CHILD_TIMEOUT_MS);
+      const poll = setInterval(() => {
+        if (run.exit === null) return;
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve();
+      }, 10);
+    });
+
+    // A one-chunk capture exercises no chunk boundary; the delays above exist
+    // to prevent it, and this catches the platform where they did not.
+    expect(chunks.length).toBeGreaterThan(3);
+
+    // Single quotes, matching prettier, so a re-capture leaves a clean tree.
+    const entries = chunks
+      .map((chunk) => `  '${Buffer.from(chunk).toString('base64')}',`)
+      .join('\n');
+    const module = `/**
+ * Real terminal output, chunked exactly as a pty delivered it.
+ *
+ * Generated by apps/agentplexd/src/server/capture-terminal-fixtures.test.ts
+ * (see that file for how to re-run the capture). Never edited by hand: the
+ * chunk feed's whole-chunk trimming rule exists because escape sequences
+ * cross chunk boundaries, and only a real pty produces real boundaries.
+ *
+ * Base64 rather than byte arrays so the file stays reviewable; decoded here
+ * with atob, which exists in every browser and in the node vitest runs on.
+ */
+
+function decode(base64: string): Uint8Array {
+  const text = atob(base64);
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i += 1) bytes[i] = text.charCodeAt(i);
+  return bytes;
+}
+
+const encoded: readonly string[] = [
+${entries}
+];
+
+/** Oldest first, boundaries preserved. Callers must not mutate the arrays. */
+export const ptyChunks: readonly Uint8Array[] = encoded.map(decode);
+`;
+
+    const target = new URL('../../../web/src/terminal/pty-chunks.fixture.ts', import.meta.url);
+    await mkdir(new URL('.', target), { recursive: true });
+    await writeFile(target, module, 'utf8');
+    process.stdout.write(`wrote ${String(chunks.length)} chunks to ${fileURLToPath(target)}\n`);
+  });
+});
