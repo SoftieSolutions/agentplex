@@ -63,6 +63,12 @@ async function startServer(storePaths: readonly string[] = []) {
       clock,
     }),
     operations: createOperationRegistry(createFakeProcessRunner()),
+    timers: systemTimers,
+    // This suite opens real sockets on loopback on purpose, and a broadcast is
+    // the one thing it will not open: the handshake is what is under test, and
+    // a beacon would put datagrams on the network of whoever runs the tests.
+    // `null` is what a server without the setting is given.
+    announce: null,
   });
 }
 

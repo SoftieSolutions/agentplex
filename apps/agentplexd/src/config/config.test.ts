@@ -397,6 +397,48 @@ describe('loadConfig terminal cap', () => {
   });
 });
 
+describe('loadConfig announce', () => {
+  function announce(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok && 'server' in result.config ? result.config.server.announce : undefined;
+  }
+
+  it('is off until somebody says otherwise', () => {
+    // A default of on would be a program that broadcasts its address on
+    // whatever network it was installed next to. No default is right for both
+    // the homelab and the laptop on a cafe wifi, so the operator says.
+    expect(announce(['--role=server'])).toBe(false);
+  });
+
+  it('is turned on by the flag and by the environment alike', () => {
+    expect(announce(['--role=server', '--announce=true'])).toBe(true);
+    expect(announce(['--role=server'], { AGENTPLEX_ANNOUNCE: 'true' })).toBe(true);
+  });
+
+  it('can be turned back off on the command line', () => {
+    // Why the setting takes a value rather than being a bare presence flag: an
+    // image that sets the environment variable has to be overridable by the
+    // person typing the command, and `--announce` alone could only say yes.
+    expect(announce(['--role=server', '--announce=false'], { AGENTPLEX_ANNOUNCE: 'true' })).toBe(
+      false,
+    );
+  });
+
+  it('refuses a value it would have to guess at', () => {
+    // Guessing wrong in one direction starts broadcasting on a network where
+    // nobody asked for it.
+    const problems = expectProblems(load(['--role=server', '--announce=yes']));
+    expect(problems[0]).toContain('true or false');
+  });
+
+  it('is not a setting the hub role has, because only a server announces', () => {
+    const result = load(['--role=hub', `--database-file=${DATABASE_FILE}`, '--announce=true']);
+    expect(result).toMatchObject({ ok: true, config: { role: 'hub' } });
+    expect(result.ok && 'server' in result.config).toBe(false);
+  });
+});
+
 describe('loadConfig server identity file', () => {
   /**
    * Deliberately not the helper above: these cases are about the identity

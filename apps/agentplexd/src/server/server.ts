@@ -3,11 +3,13 @@ import type { Clock } from '../shared/clock.js';
 import { HTTP_TIMEOUTS, sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { Logger } from '../shared/logger.js';
+import type { Timers } from '../shared/timers.js';
 import type { TokenMinter } from '../shared/tokens.js';
 import { createWebSocketListener } from '../shared/ws-message-socket.js';
 import { serveHubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProviderRegistry } from './providers/provider-registry.js';
+import { announceServer, type BeaconNetwork } from './server-beacon.js';
 import { ensureServerIdentity } from './server-identity.js';
 import { createSessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
@@ -74,6 +76,19 @@ export interface SessionServerDependencies {
    * `main` may read this process's environment.
    */
   readonly operations: OperationRegistry;
+  readonly timers: Timers;
+  /**
+   * How this server announces itself on the local network, or `null` for one
+   * that does not.
+   *
+   * Opt-in expressed as a type rather than a flag beside a socket: a server
+   * that was not asked to announce is handed nothing to announce with, so
+   * "announcing is off" and "a UDP socket is open" cannot both be true. The
+   * hub's half of discovery is not symmetrical with this and is not meant to
+   * be — it listens unconditionally, because hearing a beacon costs nothing
+   * and grants nothing.
+   */
+  readonly announce: BeaconNetwork | null;
 }
 
 export interface SessionServer {
@@ -100,6 +115,8 @@ export async function startSessionServer(
     clock,
     terminals,
     operations,
+    timers,
+    announce,
   } = dependencies;
   const logger = dependencies.logger.child({ role: 'server' });
 
@@ -212,12 +229,28 @@ export async function startSessionServer(
     stores: stores.length,
   });
 
+  // Only once there is something to announce. The port comes from the listener
+  // rather than from the setting, so a server started on port 0 announces the
+  // port it actually got; announcing before the bind could name a port nothing
+  // is on, and a beacon that is wrong is worse than one that is late by a
+  // millisecond.
+  const beacon = announceServer(announce, {
+    host,
+    port: listener.port,
+    serverId: identity.identity.serverId,
+    timers,
+    logger,
+  });
+
   return {
     port: listener.port,
     serverId: identity.identity.serverId,
     stores,
     async stop() {
-      // Children first. Closing the listener only stops new work arriving;
+      // The beacon first, and before anything slow: every announcement from
+      // here on would be inviting a hub to dial a server that is going away.
+      beacon?.stop();
+      // Children next. Closing the listener only stops new work arriving;
       // anything already running would go on writing into the store with
       // nothing left to watch it.
       const running = terminals.terminals.length;

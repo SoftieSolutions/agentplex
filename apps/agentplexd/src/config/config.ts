@@ -97,6 +97,21 @@ export interface ServerConfig {
    * session has to be started again.
    */
   readonly terminalCap: number;
+  /**
+   * Whether this server broadcasts a UDP beacon saying it exists.
+   *
+   * Off unless the operator turns it on. Announcing is a fact about this
+   * machine handed to everyone on the network it is attached to, and the same
+   * build runs on the box in the basement — where discovery is the whole
+   * convenience — and on a laptop on a cafe wifi, where it is not. A default
+   * cannot be right for both, and the direction that does not over-claim is
+   * the quiet one. The hub's side of this has no such cost and is
+   * unconditional: it listens whether or not anything is announcing.
+   *
+   * What it buys is one line of a form. A beacon carries no token and proves
+   * nothing; pairing remains the user typing this server's token into the hub.
+   */
+  readonly announce: boolean;
 }
 
 /**
@@ -191,6 +206,14 @@ const SETTINGS = {
     env: 'AGENTPLEX_SERVER_IDENTITY_FILE',
   },
   terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
+  /**
+   * Takes `true` or `false` rather than being a bare presence flag, which
+   * `readFlags` would refuse anyway: every setting here has one value, and a
+   * flag with none is a typo. It earns its keep beyond consistency, too — an
+   * image that sets `AGENTPLEX_ANNOUNCE=true` can be run quiet with
+   * `--announce=false`, which a presence flag could never express.
+   */
+  announce: { flag: '--announce', env: 'AGENTPLEX_ANNOUNCE' },
 } as const;
 
 /**
@@ -271,6 +294,8 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
 
+  const announce = readAnnounce(read(SETTINGS.announce), problems);
+
   const databaseFile = readDatabaseFile(read(SETTINGS.databaseFile), role, problems);
 
   const clientToken = readClientToken(read(SETTINGS.clientToken), role, problems);
@@ -298,6 +323,7 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
     binPath,
     identityPath,
     terminalCap,
+    announce,
   };
   if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
 
@@ -472,6 +498,23 @@ function readTerminalCap(raw: string | undefined, problems: string[]): number {
     return DEFAULT_TERMINAL_CAP;
   }
   return cap;
+}
+
+/**
+ * Whether to announce on the local network. Off unless it says `true`.
+ *
+ * Only those two words are accepted. `yes`, `1` and `on` would each be
+ * somebody's reasonable guess, and accepting a family of spellings means
+ * eventually accepting one that was meant as a no — a mistake that, in this
+ * one direction, starts broadcasting a machine's address to a network where
+ * nobody asked for it. A refusal names the two words and costs one restart.
+ */
+function readAnnounce(raw: string | undefined, problems: string[]): boolean {
+  if (raw === undefined) return false;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  problems.push(`${SETTINGS.announce.flag} must be true or false, not ${JSON.stringify(raw)}`);
+  return false;
 }
 
 /**

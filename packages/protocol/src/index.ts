@@ -4,6 +4,17 @@ export type { ProtocolVersionMismatch } from './version.js';
 export { frameParser, parseTextFrame } from './parse.js';
 export type { ParseFailure, ParseResult } from './parse.js';
 
+export {
+  BEACON_ANNOUNCE_INTERVAL_MS,
+  BEACON_EXPIRY_MS,
+  BEACON_MISSED_LIMIT,
+  BEACON_PORT,
+  formatServerBeacon,
+  parseServerBeacon,
+  serverBeaconSchema,
+} from './beacon.js';
+export type { ServerBeacon } from './beacon.js';
+
 export { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 export type { FrameId, ProtocolErrorFrame, RefusalCode } from './frames.js';
 

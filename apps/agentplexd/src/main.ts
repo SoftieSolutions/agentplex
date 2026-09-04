@@ -5,6 +5,7 @@ import { loadConfig, usage } from './config/config.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { createSqliteDatabase } from './hub/db/sqlite.js';
 import { startRuntime } from './runtime.js';
+import { createNodeBeaconNetwork } from './server/node-beacon-transport.js';
 import { createNodeProcessProbe } from './server/node-process-probe.js';
 import { nodePtyFactory } from './server/node-pty-factory.js';
 import { nodeStoreFileSystem } from './server/node-store-files.js';
@@ -118,6 +119,11 @@ async function main(): Promise<void> {
       // system trust store, which is why there is no certificate decision
       // being made anywhere in this process.
       dialer: createWebSocketDialer(),
+      // The one place a UDP socket can be opened. Built whatever the role, and
+      // used only where the configuration turned announcing on, so that
+      // "can this process broadcast" stays a visible line in the entrypoint
+      // rather than a decision taken somewhere below it.
+      beacon: createNodeBeaconNetwork(logger),
       timers: systemTimers,
       clock: systemClock,
     });
