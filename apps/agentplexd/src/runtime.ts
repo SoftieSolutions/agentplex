@@ -4,6 +4,7 @@ import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import type { OperationRegistry } from './server/operations/operation-registry.js';
 import type { ProviderRegistry } from './server/providers/provider-registry.js';
+import type { BeaconNetwork } from './server/server-beacon.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { TerminalManager } from './server/terminal-manager.js';
 import type { StoreFileSystem } from './server/store-identity.js';
@@ -73,6 +74,16 @@ export interface RuntimeDependencies {
    * one place a real websocket is opened stays visible in `main`.
    */
   readonly dialer: SocketDialer;
+  /**
+   * What the server role would announce itself on, if it is configured to.
+   *
+   * Supplied whatever the configuration says, and consulted only when it says
+   * `announce`: the process owns the one place a UDP socket can be opened, the
+   * same way it owns the one place a websocket is dialled, and whether that
+   * capability is used is a setting rather than a fact about the build. A test
+   * drives the whole runtime without a network on the machine.
+   */
+  readonly beacon: BeaconNetwork;
   readonly timers: Timers;
   readonly clock: Clock;
 }
@@ -99,6 +110,7 @@ export async function startRuntime(
     terminals,
     operations,
     dialer,
+    beacon,
     timers,
     clock,
   } = dependencies;
@@ -144,6 +156,10 @@ export async function startRuntime(
         terminals,
         operations,
         clock,
+        timers,
+        // The setting decides, in the one place that has read it. A server
+        // that was not asked to announce is handed no socket to do it with.
+        announce: config.server.announce ? beacon : null,
       });
     }
   } catch (error) {

@@ -72,6 +72,16 @@ function dependencies(
     // which halves come up and go down, and the operations are closed anyway —
     // there is no fake registry to build, only a fake machine for it to run on.
     operations: createOperationRegistry(createFakeProcessRunner()),
+    // Announcing is off in every configuration in this file, so this is a
+    // capability nothing here may reach for. Opening it is the bug, and the
+    // fake fails loudly rather than quietly putting a UDP socket into a test
+    // about which halves start.
+    beacon: {
+      open: () => {
+        throw new Error('the runtime opened a beacon socket with announcing off');
+      },
+      localAddresses: () => [],
+    },
     clock: { now: () => 1_756_000_000_000 },
   };
 }
@@ -90,7 +100,16 @@ const serverOnly: Config = {
   role: 'server',
   logLevel: 'error',
   host: HOST,
-  server: { port: 0, storePaths: [], binPath: [], identityPath: IDENTITY_PATH, terminalCap: 8 },
+  server: {
+    port: 0,
+    storePaths: [],
+    binPath: [],
+    identityPath: IDENTITY_PATH,
+    terminalCap: 8,
+    // Quiet, like the default. This file is about which halves start and
+    // stop, and a beacon would be a second thing coming up with the server.
+    announce: false,
+  },
 };
 const hubOnly: Config = {
   role: 'hub',
@@ -103,7 +122,16 @@ const both: Config = {
   logLevel: 'error',
   host: HOST,
   hub: { port: 0, databaseFile: '/unused/agentplex.db', clientToken: CLIENT_TOKEN },
-  server: { port: 0, storePaths: [], binPath: [], identityPath: IDENTITY_PATH, terminalCap: 8 },
+  server: {
+    port: 0,
+    storePaths: [],
+    binPath: [],
+    identityPath: IDENTITY_PATH,
+    terminalCap: 8,
+    // Quiet, like the default. This file is about which halves start and
+    // stop, and a beacon would be a second thing coming up with the server.
+    announce: false,
+  },
 };
 
 let runtime: Runtime | undefined;
