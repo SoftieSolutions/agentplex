@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { startRuntime, type Runtime } from './runtime.js';
 import { createFakeDatabase } from './hub/db/fake-database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
+import { createFakeBeaconSource } from './hub/discovery/fake-beacon-source.js';
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { createFakeProviderFiles } from './server/providers/fake-provider-files.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
@@ -82,6 +83,10 @@ function dependencies(
       },
       localAddresses: () => [],
     },
+    // Listening has no such switch: a hub role always has a source, so every
+    // configuration here supplies one. This one hears nothing, which is a
+    // silent network rather than a hub that declined to listen.
+    discovery: createFakeBeaconSource(),
     clock: { now: () => 1_756_000_000_000 },
   };
 }

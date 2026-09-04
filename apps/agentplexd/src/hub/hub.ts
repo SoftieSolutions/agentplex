@@ -21,6 +21,7 @@ import {
   type ConnectionSupervisor,
 } from './connections/connection-supervisor.js';
 import type { InstructionOutcome, SessionInstruction } from './connections/server-connection.js';
+import { startBeaconListener, type BeaconSource } from './discovery/beacon-listener.js';
 import { createSessionControl } from './sessions/session-control.js';
 import type { Database } from './db/database.js';
 import { loadMigrations, type MigrationFileSystem } from './db/migration-files.js';
@@ -70,6 +71,20 @@ export interface HubDependencies {
    * were written, and SQLite has no `now()` default that a test could set.
    */
   readonly clock: Clock;
+  /**
+   * Where beacons are heard.
+   *
+   * Required rather than optional, because listening is unconditional:
+   * hearing a machine announce itself costs nothing and grants nothing, so
+   * there is no setting to consult and no state in which a hub is running and
+   * deliberately deaf. Announcing, on the other side, is opt-in — that
+   * asymmetry is the design, and this is the half of it that has no switch.
+   *
+   * A seam for the reason the dialer is one: every test in this repository
+   * that starts a hub would otherwise open a UDP port on the machine running
+   * the suite.
+   */
+  readonly discovery: BeaconSource;
   /**
    * The shared credential a client presents to be given a ticket. It arrives
    * from configuration and is never minted here, because a hub has nowhere to
@@ -121,6 +136,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     clientToken,
     tokens,
     dialer,
+    discovery,
     timers,
     migrationsDirectory,
     migrationFileSystem,
@@ -148,6 +164,21 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // soon as it exists and a connection that came up before there was anywhere
   // to put it would be a state that is wrong until the next change.
   const state = createReducer({ logger });
+
+  // Started before anything is served, because a machine that announced itself
+  // while the hub was coming up should be on the pairing screen when somebody
+  // opens it, rather than up to five seconds later. Nothing it hears is
+  // written down: candidates live in the reducer's own collection beside the
+  // paired servers and never among them, and a hub that restarts knows nothing
+  // about the network until it is announced to again -- which is the honest
+  // state, because a claim read back off a disk is a claim nobody made today.
+  const beacons = startBeaconListener({
+    source: discovery,
+    clock,
+    timers,
+    logger,
+  });
+  beacons.subscribe((candidates) => void state.applyCandidates(candidates));
 
   // Subscribed before the supervisor exists, so that the first connectivity
   // change has somewhere to go. A client that attached a moment later would
@@ -287,6 +318,10 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // each one -- a screen that reports the fleet collapsing when what is
       // actually happening is that the hub is going away.
       clients.stop();
+      // Then the ear. Nobody is left to be told what the network says, and a
+      // beacon arriving mid-shutdown would otherwise bump a state whose
+      // readers have all been closed.
+      beacons.stop();
       // Then the sockets those clients were served on. An upgraded connection
       // is not an HTTP request, so closing the listener below does not reach
       // it, and a live websocket would hold the process open after everything

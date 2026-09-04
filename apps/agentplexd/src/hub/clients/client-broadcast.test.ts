@@ -197,7 +197,7 @@ describe('a client that has just said hello', () => {
     await client.hello();
 
     expect(client.received.map((frame) => frame.type)).toEqual(['welcome', 'machine-state']);
-    expect(latest(client)).toEqual({ version: 0, stores: [], servers: [] });
+    expect(latest(client)).toEqual({ version: 0, stores: [], servers: [], candidates: [] });
   });
 
   it('is sent the state as it is now, not as it was when the hub started', async () => {

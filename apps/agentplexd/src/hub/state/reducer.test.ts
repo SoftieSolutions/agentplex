@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PROTOCOL_VERSION,
+  serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
   type ServerRegistrationId,
@@ -7,6 +9,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { createLogger } from '../../shared/logger.js';
+import type { DiscoveredServer } from '../discovery/beacon-listener.js';
 import { serverAddressSchema } from '../pairing/server-address.js';
 import type {
   ServerConnectionPhase,
@@ -573,5 +576,94 @@ describe('the change signal', () => {
 
     reducer.applyConnection(connection('ec2', 'connected', ['store-work']));
     expect(reducer.snapshot()).not.toBe(first);
+  });
+});
+
+/**
+ * Discovery, which is the one input here that is nobody's report.
+ *
+ * A candidate arrives from a datagram rather than from a connection the hub
+ * holds, and the tests below are all one claim: it never becomes a server.
+ */
+function candidate(serverId: string, overrides: Partial<DiscoveredServer> = {}): DiscoveredServer {
+  return {
+    serverId: serverIdSchema.parse(serverId),
+    address: '192.168.1.24',
+    port: 8443,
+    protocolVersion: PROTOCOL_VERSION,
+    heardAt: START,
+    heardFrom: '192.168.1.24',
+    ...overrides,
+  };
+}
+
+describe('discovered candidates', () => {
+  it('publishes a candidate without it becoming a paired server', () => {
+    const reducer = reduce();
+    reducer.applyCandidates([candidate('server-heard')]);
+
+    const snapshot = reducer.snapshot();
+    expect(snapshot.candidates.map((found) => found.serverId)).toEqual(['server-heard']);
+    // The whole ticket, as one assertion: being heard puts a machine nowhere
+    // near the list of machines this hub is paired with.
+    expect(snapshot.servers).toEqual([]);
+    expect(snapshot.stores).toEqual([]);
+  });
+
+  it('keeps a candidate apart from a paired server that answers to the same id', () => {
+    // The overlap is ordinary rather than exotic: a paired server that also
+    // announces is heard by its own hub. It is one machine and two facts --
+    // a pairing the user made, and a datagram the network delivered -- and
+    // collapsing them would make "the hub is paired with this" depend on
+    // whether a broadcast happened to arrive.
+    const reducer = reduce();
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], {
+        serverId: serverIdSchema.parse('server-laptop'),
+      }),
+    );
+    reducer.applyCandidates([candidate('server-laptop')]);
+
+    const snapshot = reducer.snapshot();
+    expect(snapshot.servers).toHaveLength(1);
+    expect(snapshot.candidates).toHaveLength(1);
+    expect(snapshot.servers[0]?.registrationId).toBe('registration-laptop');
+    expect(snapshot.candidates[0]).not.toHaveProperty('registrationId');
+  });
+
+  it('does not bump the version for a candidate list that says what the last one did', () => {
+    // The listener already refuses to publish a repeat, and this is the same
+    // rule stated where the version lives: a machine announcing every five
+    // seconds must not be a broadcast to every client every five seconds.
+    const reducer = reduce();
+    reducer.applyCandidates([candidate('server-heard')]);
+    const first = reducer.snapshot();
+
+    reducer.applyCandidates([candidate('server-heard', { heardAt: START + 5_000 })]);
+    expect(reducer.snapshot()).toBe(first);
+  });
+
+  it('bumps the version when a candidate moves, arrives, or ages out', () => {
+    const reducer = reduce();
+    const seen: number[] = [];
+    reducer.subscribe((snapshot) => seen.push(snapshot.candidates.length));
+
+    reducer.applyCandidates([candidate('server-heard')]);
+    reducer.applyCandidates([candidate('server-heard', { port: 9443 })]);
+    reducer.applyCandidates([candidate('server-heard', { port: 9443 }), candidate('server-other')]);
+    reducer.applyCandidates([]);
+
+    expect(seen).toEqual([1, 1, 2, 0]);
+  });
+
+  it('forgets a stopped server without touching what was heard', () => {
+    const reducer = reduce();
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+    reducer.applyCandidates([candidate('server-heard')]);
+    reducer.applyConnection(connection('laptop', 'stopped', ['store-work']));
+
+    const snapshot = reducer.snapshot();
+    expect(snapshot.servers).toEqual([]);
+    expect(snapshot.candidates).toHaveLength(1);
   });
 });

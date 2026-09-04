@@ -4,6 +4,7 @@ import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import type { OperationRegistry } from './server/operations/operation-registry.js';
 import type { ProviderRegistry } from './server/providers/provider-registry.js';
+import type { BeaconSource } from './hub/discovery/beacon-listener.js';
 import type { BeaconNetwork } from './server/server-beacon.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { TerminalManager } from './server/terminal-manager.js';
@@ -84,6 +85,17 @@ export interface RuntimeDependencies {
    * drives the whole runtime without a network on the machine.
    */
   readonly beacon: BeaconNetwork;
+  /**
+   * Where the hub role hears the beacons other machines send.
+   *
+   * The other half of the same facility, and a separate dependency because the
+   * two are separate decisions. Announcing is a setting the operator turns on;
+   * listening is what a hub does whenever it runs. One object carrying both
+   * would put "may this process broadcast its address" and "does this hub
+   * listen" behind a single name, and the first of those is the one that must
+   * stay off until somebody says otherwise.
+   */
+  readonly discovery: BeaconSource;
   readonly timers: Timers;
   readonly clock: Clock;
 }
@@ -111,6 +123,7 @@ export async function startRuntime(
     operations,
     dialer,
     beacon,
+    discovery,
     timers,
     clock,
   } = dependencies;
@@ -133,6 +146,8 @@ export async function startRuntime(
         ids,
         clock,
         dialer,
+        // No setting consulted: a hub listens whenever it runs.
+        discovery,
         timers,
         migrationsDirectory,
         migrationFileSystem,

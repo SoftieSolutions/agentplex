@@ -275,25 +275,21 @@ function PairingFormSection({
         server has its own token, so revoking one later touches nothing else.
       </Text>
       {candidates.length > 0 && (
-        <Stack gap={4}>
+        <Stack gap={6}>
           <Text size="sm" c="dimmed">
-            Heard on the network — selecting one fills in the address and nothing else:
+            Heard on the network — selecting one fills in the address and stops. You still type that
+            server&apos;s token: being heard is not being trusted.
           </Text>
-          <Group gap="xs">
+          <Stack gap={4}>
             {candidates.map((candidate) => (
-              <Button
-                key={candidate.address}
-                variant="default"
-                size="xs"
-                ff="monospace"
-                onClick={() => setAddress(prefillFromCandidate(candidate).address)}
-              >
-                {candidate.label === null
-                  ? candidate.address
-                  : `${candidate.label} · ${candidate.address}`}
-              </Button>
+              <CandidateRow
+                key={candidate.serverId}
+                candidate={candidate}
+                scheme={scheme}
+                onSelect={setAddress}
+              />
             ))}
-          </Group>
+          </Stack>
         </Stack>
       )}
       <TextInput
@@ -335,6 +331,68 @@ function PairingFormSection({
           </Text>
         ))}
     </Stack>
+  );
+}
+
+/**
+ * One machine heard on the network.
+ *
+ * Everything the beacon claimed is shown — what it calls itself, where it says
+ * it is, the port, and the protocol it speaks — because every one of those is a
+ * claim and the row is how the user judges it. A machine this build cannot
+ * speak to is drawn all the same, marked and with its selection refused: the
+ * honest report is "it is there and these two cannot talk", and leaving it out
+ * would report an empty network instead.
+ */
+function CandidateRow({
+  candidate,
+  scheme,
+  onSelect,
+}: {
+  readonly candidate: DiscoveredCandidate;
+  readonly scheme: Scheme;
+  readonly onSelect: (address: string) => void;
+}): JSX.Element {
+  const prefill = prefillFromCandidate(candidate);
+  return (
+    <Paper
+      withBorder
+      radius="md"
+      p="xs"
+      style={{
+        background: colorForRole('surfaceAlt', scheme),
+        borderColor: colorForRole('border', scheme),
+      }}
+    >
+      <Group gap={10} align="center" wrap="nowrap">
+        {/* Idle, not running: this machine is offering itself, and nothing
+            about hearing it says anything is working. */}
+        <ToneDot tone={candidate.unusable === null ? 'idle' : 'blocked'} scheme={scheme} />
+        <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+          <Text size="sm" ff="monospace">
+            {candidate.serverId}
+          </Text>
+          <Text size="xs" ff="monospace" c="dimmed">
+            {candidate.host}:{candidate.port} · protocol {candidate.protocolVersion}
+          </Text>
+          {candidate.unusable !== null && (
+            <Text size="xs" style={{ color: colorForTone('blocked', scheme) }}>
+              {candidate.unusable}
+            </Text>
+          )}
+        </Stack>
+        <Button
+          variant="default"
+          size="xs"
+          disabled={prefill === null}
+          onClick={() => {
+            if (prefill !== null) onSelect(prefill.address);
+          }}
+        >
+          Use address
+        </Button>
+      </Group>
+    </Paper>
   );
 }
 

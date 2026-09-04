@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PROTOCOL_VERSION,
   machineStateSchema,
+  serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
+  type MachineState,
   type ServerRegistrationId,
   type SessionDescriptor,
   type StoreId,
@@ -132,7 +135,73 @@ describe('toMachineState', () => {
 
   it('publishes the empty state a hub with no pairings has', () => {
     const state = toMachineState(createReducer({ logger }).snapshot());
-    expect(state).toEqual({ version: 0, stores: [], servers: [] });
+    expect(state).toEqual({ version: 0, stores: [], servers: [], candidates: [] });
     expect(machineStateSchema.safeParse(state).success).toBe(true);
+  });
+});
+
+describe('candidates on the wire', () => {
+  function heard(): MachineState {
+    const state = createReducer({ logger });
+    state.applyConnection(connection('workshop', 'connected', ['store-work']));
+    state.applyCandidates([
+      {
+        serverId: serverIdSchema.parse('server-heard'),
+        address: '192.168.1.24',
+        port: 8443,
+        protocolVersion: PROTOCOL_VERSION,
+        heardAt: START,
+        heardFrom: '192.168.1.24',
+      },
+    ]);
+    return toMachineState(state.snapshot());
+  }
+
+  it('publishes what was heard as a candidate and never as a server', () => {
+    const state = heard();
+    expect(state.candidates.map((candidate) => candidate.serverId)).toEqual(['server-heard']);
+    expect(state.servers.map((server) => server.registrationId)).toEqual([
+      registration('workshop'),
+    ]);
+    expect(machineStateSchema.safeParse(state).success).toBe(true);
+  });
+
+  it('drops when it was heard and where the datagram came from', () => {
+    // Both are the hub's own bookkeeping. The age is what the aging is done
+    // against, and publishing it would put a field that moves every five
+    // seconds into a frame that goes whole to every client; the source address
+    // is a cross-check an operator reads in a log, and a client shown two
+    // addresses has been handed a decision the hub could not make either.
+    const candidate = heard().candidates[0];
+    expect(candidate).toBeDefined();
+    if (candidate === undefined) return;
+    expect(Object.keys(candidate).sort()).toEqual([
+      'address',
+      'port',
+      'protocolVersion',
+      'serverId',
+    ]);
+  });
+
+  it('carries the claimed protocol version rather than a verdict about it', () => {
+    const state = createReducer({ logger });
+    state.applyCandidates([
+      {
+        serverId: serverIdSchema.parse('server-old'),
+        address: '192.168.1.9',
+        port: 8443,
+        protocolVersion: PROTOCOL_VERSION - 1,
+        heardAt: START,
+        heardFrom: '192.168.1.9',
+      },
+    ]);
+    const published = toMachineState(state.snapshot());
+    expect(published.candidates[0]?.protocolVersion).toBe(PROTOCOL_VERSION - 1);
+  });
+
+  it('publishes an empty list for a hub that has heard nothing', () => {
+    // Not an absent field: "I have heard nothing" is an answer, and a client
+    // must not have to tell it apart from a hub too old to have listened.
+    expect(toMachineState(createReducer({ logger }).snapshot()).candidates).toEqual([]);
   });
 });
