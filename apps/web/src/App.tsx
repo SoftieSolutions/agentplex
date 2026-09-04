@@ -1,6 +1,8 @@
 import { PROTOCOL_VERSION } from '@agentplex/protocol';
 import { type JSX } from 'react';
 
+import { SessionPane } from './terminal/session-pane.js';
+import { sessionHash, useSessionRoute } from './terminal/session-route.js';
 import { MantineProvider, Stack, Text, Title } from './ui/components.js';
 import { cssVariablesResolver, theme } from './ui/theme.js';
 
@@ -30,6 +32,12 @@ export function App(): JSX.Element {
  * boundaries allow is real from the first commit.
  */
 function AppShell(): JSX.Element {
+  const sessionRef = useSessionRoute();
+  if (sessionRef !== null) {
+    // Keyed on the route so navigating between sessions remounts the pane:
+    // its terminal feed and emulator belong to one session, never two.
+    return <SessionPane key={sessionHash(sessionRef)} sessionRef={sessionRef} />;
+  }
   return (
     <Stack component="main" p="md" gap="xs">
       <Title order={1}>agentplex</Title>

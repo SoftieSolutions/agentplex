@@ -10,4 +10,6 @@
  */
 import '@mantine/core/styles.css';
 
-export { MantineProvider, Stack, Text, Title } from '@mantine/core';
+export { Box, Button, Group, MantineProvider, Stack, Text, TextInput, Title } from '@mantine/core';
+/** The resolved scheme, 'light' | 'dark' — the same union the tokens key on. */
+export { useComputedColorScheme } from '@mantine/core';
