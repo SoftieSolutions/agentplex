@@ -1,5 +1,6 @@
 import { useState, type JSX } from 'react';
 import {
+  Button,
   Group,
   Select,
   SimpleGrid,
@@ -23,6 +24,7 @@ import {
   type ChipCount,
   type StatusChip,
 } from './session-list-model.js';
+import { NewSessionForm } from './new-session-form.js';
 import { SessionCard } from './session-card.js';
 
 /**
@@ -50,6 +52,7 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
   const [chip, setChip] = useState<StatusChip | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const state = snapshot.machineState;
   const notice = connectionNotice(snapshot.phase, snapshot.problem, state !== null);
@@ -94,16 +97,40 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
 
   return (
     <Stack component="main" p="md" gap="sm">
-      <Group gap={14} align="baseline">
-        <Title order={1} fz={16}>
-          Sessions
-        </Title>
-        {notice === null ? null : (
-          <Text fz={12} c="dimmed">
-            {notice}
-          </Text>
-        )}
+      <Group justify="space-between" align="center">
+        <Group gap={14} align="baseline">
+          <Title order={1} fz={16}>
+            Sessions
+          </Title>
+          {notice === null ? null : (
+            <Text fz={12} c="dimmed">
+              {notice}
+            </Text>
+          )}
+        </Group>
+        {/* The mockup's New popover lists five node kinds; Session is the one
+            live in this milestone, and a menu with one live option is not
+            drawn, so New is a direct button. On small screens the same action
+            is the mockup's floating button, bottom-right (7e). */}
+        <Button size="xs" visibleFrom="sm" onClick={() => setCreating(true)}>
+          New session
+        </Button>
+        <Button
+          hiddenFrom="sm"
+          size="md"
+          radius="xl"
+          onClick={() => setCreating(true)}
+          style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 20 }}
+        >
+          New session
+        </Button>
       </Group>
+      <NewSessionForm
+        store={store}
+        opened={creating}
+        onClose={() => setCreating(false)}
+        scheme={scheme}
+      />
 
       {stores.length === 0 && providers.length === 0 ? null : (
         <Group gap={8}>

@@ -8,8 +8,11 @@ import {
   type Layout,
   type MachineState,
   type RefusalCode,
+  type ServerRegistrationId,
   type SessionHolder,
+  type SessionId,
   type SessionRef,
+  type StoreId,
 } from '@agentplex/protocol';
 import type { FrameIds } from './frame-ids.js';
 import type { Timers } from './timers.js';
@@ -76,9 +79,27 @@ export interface TerminalInputView {
 }
 
 export interface RefusalView {
+  /** The id of the command it answers, so a screen can tell whose "no" it is. */
+  readonly replyTo: FrameId;
   readonly code: RefusalCode;
   readonly message: string;
   readonly holder: SessionHolder | null;
+}
+
+/**
+ * The hub's answer to a start, kept so the screen that asked can act on it.
+ *
+ * `sessionId` is `null` for a fresh spawn -- the provider mints its own id and
+ * the hub learns it from the next scan -- and the session's id for a resume.
+ * The distinction is the whole navigation rule in the new-session flow: an id
+ * here is an address a pane can open, and `null` is the honest absence of one.
+ */
+export interface StartedView {
+  readonly replyTo: FrameId;
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId | null;
+  /** The machine the hub picked (or the override it honoured). */
+  readonly server: ServerRegistrationId;
 }
 
 export interface HubSnapshot {
@@ -97,6 +118,8 @@ export interface HubSnapshot {
   readonly terminalInput: TerminalInputView;
   /** The hub's most recent "no", kept until a later command is answered yes. */
   readonly lastRefusal: RefusalView | null;
+  /** The hub's most recent yes to a start, kept until the next one. */
+  readonly lastStarted: StartedView | null;
 }
 
 /**
@@ -192,6 +215,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     commandQueue: { ...INITIAL_QUEUE, capacity },
     terminalInput: INITIAL_TERMINAL,
     lastRefusal: null,
+    lastStarted: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -324,7 +348,19 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({ layout: frame.nodes });
         return;
       }
-      case 'session-started':
+      case 'session-started': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastStarted: {
+            replyTo: frame.replyTo,
+            storeId: frame.storeId,
+            sessionId: frame.sessionId,
+            server: frame.server,
+          },
+        });
+        return;
+      }
       case 'session-stopped': {
         pending.delete(frame.replyTo);
         update({ lastRefusal: null });
@@ -333,7 +369,12 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       case 'refusal': {
         pending.delete(frame.replyTo);
         update({
-          lastRefusal: { code: frame.code, message: frame.message, holder: frame.holder },
+          lastRefusal: {
+            replyTo: frame.replyTo,
+            code: frame.code,
+            message: frame.message,
+            holder: frame.holder,
+          },
         });
         if (!established && frame.code === 'protocol-version') {
           // Redialling cannot change which protocol either side speaks, and a
