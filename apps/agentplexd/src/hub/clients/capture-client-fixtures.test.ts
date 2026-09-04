@@ -17,7 +17,7 @@ import {
 } from '@agentplex/protocol';
 import { createFakeSessionController } from '../../server/fake-session-controller.js';
 import { serveHubConnection } from '../../server/hub-connection.js';
-import type { StoreReport } from '../../server/session-control.js';
+import type { SessionOutcome, StoreReport } from '../../server/session-control.js';
 import { createUnreachableDialer, createSocketPair } from '../../shared/fake-message-socket.js';
 import { createLogger } from '../../shared/logger.js';
 import type { DialResult, MessageSocket, SocketDialer } from '../../shared/message-socket.js';
@@ -121,6 +121,7 @@ function labelFor(text: string): string {
     ['machine-state', 'machineState'],
     ['pong', 'pong'],
     ['layout', 'layout'],
+    ['session-started', 'sessionStarted'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -138,6 +139,8 @@ interface Machine {
   readonly serverId: string;
   readonly stores: readonly StoreDescriptor[];
   readonly reports: readonly StoreReport[];
+  /** What this machine's controller answers a start with. Default: a refusal. */
+  readonly startOutcome?: SessionOutcome;
 }
 
 const START = 1_756_000_000_000;
@@ -154,7 +157,11 @@ function fleetDialer(
       const machine = machines.get(host);
       if (machine === undefined) return { ok: false, problem: 'connection refused' };
       const { hubEnd, serverEnd } = createSocketPair();
-      const controller = createFakeSessionController({ reports: machine.reports });
+      const controller = createFakeSessionController(
+        machine.startOutcome === undefined
+          ? { reports: machine.reports }
+          : { reports: machine.reports, outcome: machine.startOutcome },
+      );
       serveHubConnection(serverEnd, {
         // A real scan reads a disk and takes event-loop turns; a fake that
         // resolved in the same microtask as the handshake would race its
@@ -500,6 +507,14 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
               holding: [hold('session-fix-auth', false)],
             },
           ],
+          // Answers a start the way a real spawn does: ok, with no session id,
+          // because the provider has not written one yet. The web form's
+          // follow-up rules are tested against exactly this reply.
+          startOutcome: {
+            ok: true,
+            storeId: storeIdSchema.parse('store-agentplex'),
+            sessionId: null,
+          },
         },
       ],
     ]);
@@ -515,7 +530,117 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the single machine to connect and report',
     );
     const machineStateSingle = await captureState(singleHub.hub);
+
+    // A start that succeeds, captured for the new-session flow: the reply names
+    // the machine the hub picked, and its sessionId is null because a fresh
+    // spawn has no id until the provider writes one -- the reply the web form's
+    // follow-up logic has to read honestly rather than invent an address from.
+    const starter = await openClient(singleHub.hub);
+    starter.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await starter.framesReceived(2);
+    starter.send({
+      type: 'session-start',
+      id: 2,
+      storeId: 'store-agentplex',
+      sessionId: null,
+      provider: 'claude',
+      prompt: 'fix the auth refresh loop',
+      server: null,
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'sessionStarted'),
+      'the start to be answered',
+    );
+    const sessionStarted = starter.received.find((text) => labelFor(text) === 'sessionStarted');
+    if (sessionStarted === undefined) throw new Error('the start was not answered');
     await singleHub.cleanup();
+
+    // A shared volume: two machines with the same store mounted. This is the
+    // state in which the new-session server override is drawn -- more than one
+    // connected machine could run the store -- and, degraded, the state in
+    // which it is not: two attached, one reachable, no decision left to make.
+    const sharedStore: StoreDescriptor = {
+      storeId: storeIdSchema.parse('store-shared'),
+      path: '/mnt/volumes/shared',
+    };
+    const sharedFleet = new Map<string, Machine>([
+      [
+        'mbp-robert.example',
+        {
+          serverId: 'server-mbp',
+          stores: [sharedStore],
+          reports: [
+            {
+              storeId: sharedStore.storeId,
+              sessions: [
+                descriptor(
+                  'store-shared',
+                  'session-shared-notes',
+                  'claude',
+                  'idle',
+                  START - 30 * MINUTE,
+                  '/mnt/volumes/shared/notes',
+                  'shared-notes',
+                ),
+              ],
+              holding: [],
+            },
+          ],
+        },
+      ],
+      [
+        'gpu-box.example',
+        {
+          serverId: 'server-gpu',
+          stores: [sharedStore],
+          reports: [
+            {
+              storeId: sharedStore.storeId,
+              sessions: [
+                descriptor(
+                  'store-shared',
+                  'session-shared-notes',
+                  'claude',
+                  'idle',
+                  START - 30 * MINUTE,
+                  '/mnt/volumes/shared/notes',
+                  'shared-notes',
+                ),
+              ],
+              holding: [],
+            },
+          ],
+        },
+      ],
+    ]);
+    const sharedLive = new Map<string, MessageSocket>();
+    const sharedHub = await startFleetHub(
+      sharedFleet,
+      [
+        { label: 'mbp-robert', host: 'mbp-robert.example' },
+        { label: 'gpu-box-01', host: 'gpu-box.example' },
+      ],
+      sharedLive,
+    );
+    await until(
+      () =>
+        sharedHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sharedHub.hub.state
+          .snapshot()
+          .stores.some((view) => view.storeId === 'store-shared' && view.servers.length === 2),
+      'the shared fleet to connect and report',
+    );
+    const machineStateShared = await captureState(sharedHub.hub);
+    sharedLive.get('gpu-box.example')?.close({ code: 1006, reason: 'the machine went away' });
+    await until(
+      () =>
+        sharedHub.hub.connections
+          .snapshot()
+          .some((report) => report.label === 'gpu-box-01' && report.phase === 'stale'),
+      'the shared gpu box to go stale',
+    );
+    const machineStateSharedDegraded = await captureState(sharedHub.hub);
+    await sharedHub.cleanup();
 
     const captured = new Map<string, string>();
     for (const text of [...first.received, ...second.received]) {
@@ -524,6 +649,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStatePopulated', machineStatePopulated);
     captured.set('machineStateStale', machineStateStale);
     captured.set('machineStateSingle', machineStateSingle);
+    captured.set('sessionStarted', sessionStarted);
+    captured.set('machineStateShared', machineStateShared);
+    captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)

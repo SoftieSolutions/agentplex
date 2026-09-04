@@ -12,12 +12,15 @@ import '@mantine/core/styles.css';
 
 export {
   Box,
+  Button,
   Group,
   MantineProvider,
+  Modal,
   Select,
   SimpleGrid,
   Stack,
   Text,
+  Textarea,
   TextInput,
   Title,
   UnstyledButton,
