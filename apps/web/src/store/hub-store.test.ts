@@ -273,10 +273,39 @@ describe('commands', () => {
 
     socket.deliver(hubFrames.refusal);
     expect(h.store.getSnapshot().lastRefusal).toEqual({
+      replyTo: 4,
       code: 'refused',
       message: 'no server the hub is paired with has that store mounted',
       holder: null,
     });
+  });
+
+  it('a session-started reply lands in the snapshot, correlated to its command', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const outcome = h.store.sendCommand(START);
+    if (!outcome.accepted) throw new Error(outcome.reason);
+
+    // Captured from a real start: the hub names the machine it picked, and the
+    // sessionId is null because the provider has not written one yet.
+    socket.deliver(hubFrames.sessionStarted);
+    expect(h.store.getSnapshot().lastStarted).toEqual({
+      replyTo: outcome.id,
+      storeId: 'store-agentplex',
+      sessionId: null,
+      server: 'registration-mbp-robert',
+    });
+  });
+
+  it('a session-started reply clears the refusal that preceded it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.sendCommand(START);
+
+    socket.deliver(hubFrames.refusal);
+    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
+    socket.deliver(hubFrames.sessionStarted);
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
   });
 
   it('drops the queue when the last subscriber leaves', async () => {
