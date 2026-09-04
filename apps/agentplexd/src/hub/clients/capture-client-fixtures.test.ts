@@ -94,9 +94,13 @@ function labelFor(text: string): string {
   if (frame.type === 'refusal') {
     return frame.code === 'protocol-version' ? 'refusalProtocolVersion' : 'refusal';
   }
+  if (frame.type === 'machine-state') {
+    // Labelled by what the state holds, so the web tests get a captured state
+    // with a paired server in it as well as the empty one.
+    return frame.state.servers.length > 0 ? 'machineStateWithServer' : 'machineState';
+  }
   const labels = new Map<string, string>([
     ['welcome', 'welcome'],
-    ['machine-state', 'machineState'],
     ['pong', 'pong'],
     ['layout', 'layout'],
     ['protocol-error', 'protocolError'],
@@ -107,7 +111,7 @@ function labelFor(text: string): string {
 }
 
 describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures', () => {
-  it('drives two conversations and writes what the hub said', async () => {
+  it('drives three conversations and writes what the hub said', async () => {
     let nextTicket = 0;
     const hub = await startHub({
       database: createFakeDatabase({
@@ -161,8 +165,63 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
 
     await hub.stop();
 
+    // A third conversation against a hub whose pairing table holds one server.
+    // The dialer is unreachable, so the machine state carries that pairing as
+    // a stale row — which is exactly the shape the settings screen's tests
+    // need: a real server row, captured, with its problem in the hub's words.
+    const pairedHub = await startHub({
+      database: createFakeDatabase({
+        respondWith: [
+          { match: /SELECT hub_id FROM hub_identity/, rows: [{ hub_id: 'hub-1' }] },
+          {
+            match: /FROM servers/,
+            rows: [
+              {
+                id: 'pairing-1',
+                label: 'gpu-box-01',
+                address: 'wss://gpu-box-01.example:8443',
+                token: 'the-token-the-server-printed',
+                server_id: null,
+                created_at: 1_755_000_000_000,
+                revoked_at: null,
+                last_connected_at: null,
+              },
+            ],
+          },
+        ],
+      }),
+      logger: createLogger('error', () => {}),
+      ids: { newId: () => 'hub-1' },
+      clock: { now: () => 1_756_000_000_000 },
+      clientToken: CLIENT_TOKEN,
+      tokens: { newToken: () => `ticket-${(nextTicket += 1)}` },
+      dialer: createUnreachableDialer(),
+      timers: createFakeTimers(),
+      migrationsDirectory: '/migrations',
+      migrationFileSystem,
+      host: HOST,
+      port: 0,
+    });
+    const third = await openClient(pairedHub);
+    third.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    // Wait until a broadcast shows the pairing as stale, however the dial
+    // failure raced the hello: the last machine-state captured is that one.
+    for (let count = 2; ; count += 1) {
+      await third.framesReceived(count);
+      const staleSeen = third.received.some((text) => {
+        const parsed = parseTextFrame(parseHubFrame, text);
+        return (
+          parsed.ok &&
+          parsed.value.type === 'machine-state' &&
+          parsed.value.state.servers.some((server) => server.phase === 'stale')
+        );
+      });
+      if (staleSeen) break;
+    }
+    await pairedHub.stop();
+
     const captured = new Map<string, string>();
-    for (const text of [...first.received, ...second.received]) {
+    for (const text of [...first.received, ...second.received, ...third.received]) {
       captured.set(labelFor(text), text);
     }
 

@@ -1,6 +1,7 @@
 import { PROTOCOL_VERSION } from '@agentplex/protocol';
 import { type JSX } from 'react';
 
+import { SettingsRoute } from './settings/settings-route.js';
 import { MantineProvider, Stack, Text, Title } from './ui/components.js';
 import { cssVariablesResolver, theme } from './ui/theme.js';
 
@@ -31,9 +32,10 @@ export function App(): JSX.Element {
  */
 function AppShell(): JSX.Element {
   return (
-    <Stack component="main" p="md" gap="xs">
+    <Stack component="main" p="md" gap="md">
       <Title order={1}>agentplex</Title>
       <Text c="dimmed">Protocol version {PROTOCOL_VERSION}</Text>
+      <SettingsRoute />
     </Stack>
   );
 }
