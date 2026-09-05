@@ -95,8 +95,17 @@ export async function ensureServerIdentity(
   return winner ?? { ok: false, path, problem: 'the identity file was created and then removed' };
 }
 
-/** `null` means there is no file yet, which is the one case that mints. */
-async function readServerIdentity(
+/**
+ * Reads the identity that is there, and never mints one. `null` means there is
+ * no file yet, which is the one case `ensureServerIdentity` mints in.
+ *
+ * Exported for the caller that must not be able to mint: setup pairs the local
+ * server with the token the identity file already holds, so what it needs is a
+ * read that cannot become a write. Reaching for `ensureServerIdentity` there
+ * would put a second minting path a step away from a hub row, and the machine
+ * would end up paired under a token nothing else on it has ever seen.
+ */
+export async function readServerIdentity(
   path: string,
   files: StoreFileSystem,
 ): Promise<ServerIdentityResult | null> {

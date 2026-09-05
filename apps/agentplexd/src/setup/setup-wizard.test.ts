@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { listServers } from '../hub/pairing/server-registrations.js';
 import { createFakeProcessProbe } from '../server/fake-process-probe.js';
 import { createFakePtyFactory, type FakePtyFactory } from '../server/fake-pty.js';
 import { createFakeStoreFiles, type FakeStoreFiles } from '../server/fake-store-files.js';
@@ -9,6 +10,7 @@ import { createClaudeAdapter } from '../server/providers/claude-adapter.js';
 import { createFakeProviderFiles } from '../server/providers/fake-provider-files.js';
 import { createProviderRegistry } from '../server/providers/provider-registry.js';
 import { createPtySupervisor } from '../server/pty-supervisor.js';
+import { createFakeHubDatabase, type FakeHubDatabase } from './fake-hub-database.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine, type FakeSetupMachine } from './fake-setup-machine.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
@@ -45,20 +47,21 @@ const PREFIX = `${HOME}/.agentplex`;
 const IDENTITY = `${PREFIX}/server.json`;
 const STORE = `${HOME}/.claude`;
 const PLAN_FILE = `${PREFIX}/setup-plan.json`;
+const HUB_DATABASE = `${PREFIX}/hub.db`;
 
 const INSTALL_ARGV =
   `npm install --global --prefix ${PREFIX} --json --no-ignore-scripts ` +
   '@anthropic-ai/claude-code@latest';
 
 /** Everything the operator presses return through, on a machine with claude on it. */
-const STRAIGHT_THROUGH = ['', '', '', '', '', '', ''];
+const STRAIGHT_THROUGH = ['', '', '', '', '', '', '', ''];
 
 /**
  * The same, on a machine whose `claude` is logged out: one more return, for the
  * offer to log it in. Pressing return through the whole wizard is meant to end
  * with the providers logged in, so that offer's own answer is yes.
  */
-const LOG_IN_TOO = ['', '', '', '', '', '', '', ''];
+const LOG_IN_TOO = ['', '', '', '', '', '', '', '', ''];
 
 /** A machine with `claude` on it that nobody has signed into. */
 function loggedOutMachine(): FakeMachine {
@@ -94,6 +97,20 @@ interface Run {
   /** The directories every pty the wizard opened would have resolved through. */
   readonly ptyBinPaths: readonly (readonly string[])[];
   readonly ptys: FakePtyFactory;
+  readonly hubDatabase: FakeHubDatabase;
+}
+
+/** Every in-memory hub database a case opened, released when the case is over. */
+const openedDatabases: FakeHubDatabase[] = [];
+
+afterEach(async () => {
+  for (const database of openedDatabases.splice(0)) await database.close();
+});
+
+/** The live pairings the hub at `path` holds, as the hub itself reads them. */
+async function pairings(hubDatabase: FakeHubDatabase, path = HUB_DATABASE) {
+  const database = hubDatabase.at(path);
+  return database === null ? [] : await listServers(database);
 }
 
 async function run(
@@ -104,6 +121,7 @@ async function run(
     readonly files?: FakeStoreFiles;
     readonly role?: 'hub' | 'server' | 'both';
     readonly terminal?: FakeTerminal;
+    readonly hubDatabase?: FakeHubDatabase;
   } = {},
 ): Promise<Run> {
   const terminal = options.terminal ?? createFakeTerminal({ answers });
@@ -117,6 +135,8 @@ async function run(
     });
   const runner = options.runner ?? createFakeMachine({ programs: loggedIn() });
   const files = options.files ?? createFakeStoreFiles();
+  const hubDatabase = options.hubDatabase ?? createFakeHubDatabase();
+  if (!openedDatabases.includes(hubDatabase)) openedDatabases.push(hubDatabase);
   const binPaths: (readonly string[])[] = [];
   const ptyBinPaths: (readonly string[])[] = [];
   // A login that prints something and ends, which is what one the operator
@@ -154,12 +174,24 @@ async function run(
           }),
         ]),
       files,
+      hubDatabase,
       ids: { newId: () => 'id-under-test' },
       tokens: { newToken: () => 'minted-on-the-machine' },
+      clock: { now: () => 1_700_000_000_000 },
     },
   );
 
-  return { outcome, terminal, runner, machine, files, binPaths, ptyBinPaths, ptys };
+  return {
+    outcome,
+    terminal,
+    runner,
+    machine,
+    files,
+    binPaths,
+    ptyBinPaths,
+    ptys,
+    hubDatabase,
+  };
 }
 
 /** The plan the wizard saved, read back through the parser that reads a file. */
@@ -269,7 +301,7 @@ describe('the setup wizard', () => {
   });
 
   it('leaves a provider out of the plan entirely when told to skip it', async () => {
-    const wizard = await run(['', '', '', '', 'skip', '', 'y', '']);
+    const wizard = await run(['', '', '', '', 'skip', '', '', 'y', '']);
 
     expect(wizard.runner.installs).toEqual([]);
     expect(wizard.terminal.transcript).toContain('providers: none');
@@ -308,7 +340,7 @@ describe('the setup wizard', () => {
     // The whole answer is asked for again rather than the good half being kept:
     // a relative path in a plan names a different directory on every boot, and
     // half of what somebody meant, provisioned quietly, is the worse outcome.
-    const wizard = await run(['', '', '', 'work, /srv/other', '/srv/other', '', '', '']);
+    const wizard = await run(['', '', '', 'work, /srv/other', '/srv/other', '', '', '', '']);
 
     expect(wizard.terminal.transcript).toContain('A store path has to be absolute: work');
     expect(wizard.terminal.transcript).toContain('stores: /srv/other');
@@ -317,14 +349,14 @@ describe('the setup wizard', () => {
   it('takes no stores at all as an answer', async () => {
     // Legal in the configuration too: a server whose volume is not mounted yet
     // reports no stores rather than refusing to start.
-    const wizard = await run(['', '', '', 'none', '', '', 'y', '']);
+    const wizard = await run(['', '', '', 'none', '', '', '', 'y', '']);
 
     const plan = savedPlan(wizard.files);
     expect('server' in plan && plan.server.storePaths).toEqual([]);
   });
 
   it('saves the plan it applied, and it is a plan the other front end reads', async () => {
-    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 6), 'y', '']);
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', '']);
 
     expect(wizard.terminal.transcript).toContain(`Saved ${PLAN_FILE}`);
     const plan = savedPlan(wizard.files);
@@ -341,7 +373,7 @@ describe('the setup wizard', () => {
     // A plan is a file that ends up in user-data, in an image, and in whatever
     // bucket somebody copied it to. The token this machine pairs with is minted
     // into the identity file, where the server has always kept it.
-    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 6), 'y', '']);
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', '']);
 
     const contents = wizard.files.contents.get(PLAN_FILE) ?? '';
     expect(contents).not.toContain('minted-on-the-machine');
@@ -351,7 +383,7 @@ describe('the setup wizard', () => {
 
   it('never writes over a plan that is already there', async () => {
     const files = createFakeStoreFiles({ files: { [PLAN_FILE]: '{"someone else": true}' } });
-    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 6), 'y', '', 'y', '/tmp/plan.json'], {
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', '', 'y', '/tmp/plan.json'], {
       files,
     });
 
@@ -436,7 +468,7 @@ describe('the setup wizard', () => {
   it('names the login to run for a provider the operator will log in later', async () => {
     // Declining is a legitimate answer, and the sentence it gets is the one that
     // was already true: installed, not logged in, and here is what to type.
-    const wizard = await run(['', '', '', '', '', '', 'n', ''], { runner: loggedOutMachine() });
+    const wizard = await run(['', '', '', '', '', '', 'n', '', ''], { runner: loggedOutMachine() });
 
     expect(wizard.ptys.opened).toEqual([]);
     expect(wizard.terminal.transcript).toContain(
@@ -476,17 +508,91 @@ describe('the setup wizard', () => {
     expect(wizard.terminal.transcript).toContain('did not report its authentication state');
   });
 
-  it('says the local server still has to be paired, and where its token is', async () => {
+  it('pairs the server on this machine with the hub on it, and nobody types a token', async () => {
+    // The exception, exercised: one operator, one host, one interactive run, and
+    // a server the hub reaches over the loopback. Making somebody hand-pair
+    // their own box would be ceremony with no security value.
     const wizard = await run(STRAIGHT_THROUGH);
 
+    const rows = await pairings(wizard.hubDatabase);
+    expect(rows).toEqual([
+      expect.objectContaining({ address: 'ws://127.0.0.1:8081', token: 'minted-on-the-machine' }),
+    ]);
+    // The token is the one the identity file holds, which is the one the server
+    // will present. Nothing minted a second.
+    expect(wizard.files.contents.get(IDENTITY)).toContain('minted-on-the-machine');
+    expect(wizard.terminal.questions.some((question) => question.includes('token'))).toBe(false);
+  });
+
+  it('names the database the hub has to be started against, and never the token', async () => {
+    // The one way this arrangement fails silently: a row in a file the hub is
+    // never pointed at reads, from the hub, as a machine that is not there.
+    const wizard = await run(STRAIGHT_THROUGH);
+
+    expect(wizard.terminal.transcript).toContain('the hub will dial ws://127.0.0.1:8081');
+    expect(wizard.terminal.transcript).toContain(`--database-file ${HUB_DATABASE}`);
+    expect(wizard.terminal.transcript).not.toContain('minted-on-the-machine');
+    // The directory the operator named, made before anything tried to open a
+    // file in it: `createFile` is exclusive and creates no parents.
+    expect(wizard.machine.made).toContain(PREFIX);
+  });
+
+  it('leaves one pairing behind when setup is run twice against the same hub', async () => {
+    const hubDatabase = createFakeHubDatabase();
+    const files = createFakeStoreFiles();
+
+    await run(STRAIGHT_THROUGH, { hubDatabase, files });
+    const again = await run(STRAIGHT_THROUGH, { hubDatabase, files });
+
+    expect(await pairings(hubDatabase)).toHaveLength(1);
+    expect(again.terminal.transcript).toContain('is already paired with the server on it');
+  });
+
+  it('writes no pairing when the operator does not name a hub database', async () => {
+    // Declining is a legitimate answer, and what it gets is the sentence that
+    // was true before this step existed: the token is in that file, and typing
+    // it into a hub is how this machine gets paired.
+    const wizard = await run(['', '', '', '', '', '', 'none', '']);
+
+    expect(wizard.hubDatabase.opened).toEqual([]);
     expect(wizard.terminal.transcript).toContain(`paired: the pairing token is in ${IDENTITY}`);
+  });
+
+  it('pairs nothing in --role=server, and does not ask about a database', async () => {
+    // The bound that matters most. A `--role=server` machine is one a hub
+    // elsewhere has to be told about by a person, which is the rule the
+    // loopback case is the exception to.
+    const wizard = await run(['', '', '', '', '', ''], { role: 'server' });
+
+    expect(wizard.hubDatabase.opened).toEqual([]);
+    expect(wizard.terminal.questions.some((question) => question.startsWith('Hub database'))).toBe(
+      false,
+    );
+  });
+
+  it('pairs nothing in --role=hub: there is no server on this machine', async () => {
+    const wizard = await run(['hub', '', '', ''], {});
+
+    expect(wizard.hubDatabase.opened).toEqual([]);
     expect(wizard.terminal.transcript).toContain(
       'The hub needs a database file and a client token to start.',
     );
   });
 
+  it('says what it could not pair rather than failing the run', async () => {
+    const wizard = await run(STRAIGHT_THROUGH, {
+      hubDatabase: createFakeHubDatabase({ unopenable: [HUB_DATABASE] }),
+    });
+
+    // A machine that is provisioned and unpaired is a machine somebody can
+    // finish by hand; a run that exited over it would have thrown away the
+    // providers it installed.
+    expect(wizard.outcome).toEqual({ kind: 'applied', problems: [] });
+    expect(wizard.terminal.transcript).toContain('This machine was not paired');
+  });
+
   it('asks again rather than taking a port it could not read', async () => {
-    const wizard = await run(['', 'eight thousand', '9090', '', '', '', '', '']);
+    const wizard = await run(['', 'eight thousand', '9090', '', '', '', '', '', '']);
 
     expect(wizard.terminal.transcript).toContain(
       'eight thousand is not a port between 1 and 65535',

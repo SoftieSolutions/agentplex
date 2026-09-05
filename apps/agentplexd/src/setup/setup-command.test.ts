@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createFakeProcessProbe } from '../server/fake-process-probe.js';
 import { createFakePtyFactory } from '../server/fake-pty.js';
 import { createFakeStoreFiles, type FakeStoreFiles } from '../server/fake-store-files.js';
@@ -10,6 +10,7 @@ import { createClaudeAdapter } from '../server/providers/claude-adapter.js';
 import { createFakeProviderFiles } from '../server/providers/fake-provider-files.js';
 import { createProviderRegistry } from '../server/providers/provider-registry.js';
 import { createPtySupervisor } from '../server/pty-supervisor.js';
+import { createFakeHubDatabase, type FakeHubDatabase } from './fake-hub-database.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine } from './fake-setup-machine.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
@@ -70,7 +71,15 @@ interface Run {
   readonly files: FakeStoreFiles;
   readonly binPaths: readonly (readonly string[])[];
   readonly terminal: FakeTerminal;
+  readonly hubDatabase: FakeHubDatabase;
 }
+
+/** Every in-memory hub database a case opened, released when the case is over. */
+const openedDatabases: FakeHubDatabase[] = [];
+
+afterEach(async () => {
+  for (const database of openedDatabases.splice(0)) await database.close();
+});
 
 async function run(
   argv: readonly string[],
@@ -80,9 +89,12 @@ async function run(
     readonly files?: FakeStoreFiles;
     /** What the operator types, when the invocation is the interactive one. */
     readonly answers?: readonly string[];
+    readonly hubDatabase?: FakeHubDatabase;
   } = {},
 ): Promise<Run> {
   const machine = options.machine ?? machineWithClaude();
+  const hubDatabase = options.hubDatabase ?? createFakeHubDatabase();
+  if (!openedDatabases.includes(hubDatabase)) openedDatabases.push(hubDatabase);
   const files =
     options.files ??
     createFakeStoreFiles({
@@ -123,14 +135,24 @@ async function run(
         }),
       ]),
     files,
+    hubDatabase,
     ids: { newId: () => 'id-under-test' },
     tokens: { newToken: () => 'minted-on-the-machine' },
+    clock: { now: () => 1_700_000_000_000 },
     write: (line) => out.push(line),
     writeError: (line) => errors.push(line),
   };
 
   const code = await runSetupCommand(argv, dependencies);
-  return { code, out: out.join('\n'), errors: errors.join('\n'), files, binPaths, terminal };
+  return {
+    code,
+    out: out.join('\n'),
+    errors: errors.join('\n'),
+    files,
+    binPaths,
+    terminal,
+    hubDatabase,
+  };
 }
 
 describe('agentplexd setup --plan', () => {
@@ -175,6 +197,41 @@ describe('agentplexd setup --plan', () => {
     // Named by its location instead, which is the one thing an operator needs.
     expect(replayed.out).toContain('the pairing token is in that file');
     expect(replayed.files.contents.get(IDENTITY)).toContain(PRE_MINTED);
+  });
+
+  it('pairs nothing, even in --role=both, and even with a database in reach', async () => {
+    // The bound the local-pairing exception is drawn at. This run is
+    // `--role=both`, so a hub and a server end up on one host, and the command
+    // is holding a hub database seam the wizard would have used. It writes no
+    // row: a machine the plan named and nobody was present for is not a machine
+    // a hub may decide to trust.
+    const replayed = await run(['--plan', PLAN_FILE], { plan: PLAN });
+
+    expect(replayed.hubDatabase.opened).toEqual([]);
+    expect(replayed.code).toBe(0);
+  });
+
+  it('says the plan named the token, which is the unattended way to be pairable', async () => {
+    // The sanctioned path for the fleet tier: somebody decided this secret
+    // before the machine existed, so the instance is pairable the moment it
+    // boots and the hub's end is made by whoever holds the hub.
+    const replayed = await run(['--plan', PLAN_FILE], { plan: PLAN });
+
+    expect(replayed.out).toContain('pairing: this machine is pairable with the token the plan');
+    expect(replayed.out).not.toContain(PRE_MINTED);
+  });
+
+  it('says a token it minted has to be typed into a hub by somebody', async () => {
+    // No token in the plan, so this machine minted its own. Pairing a hub with a
+    // secret the run generated a moment earlier, with nobody present, is the hub
+    // choosing which machines it trusts.
+    const plan = JSON.parse(PLAN) as { server: { pairingToken: string | null } };
+    plan.server.pairingToken = null;
+    const replayed = await run(['--plan', PLAN_FILE], { plan: JSON.stringify(plan) });
+
+    expect(replayed.hubDatabase.opened).toEqual([]);
+    expect(replayed.out).toContain(`pairing: a token was minted into ${IDENTITY}`);
+    expect(replayed.out).not.toContain('minted-on-the-machine');
   });
 
   it('refuses an argument it does not know', async () => {

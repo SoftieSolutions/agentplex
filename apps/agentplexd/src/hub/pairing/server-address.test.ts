@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { serverAddressSchema } from './server-address.js';
+import { loopbackServerAddress, serverAddressSchema } from './server-address.js';
 
 function problem(text: string): string {
   const parsed = serverAddressSchema.safeParse(text);
@@ -46,5 +46,34 @@ describe('serverAddressSchema', () => {
 
   it('refuses the empty address', () => {
     expect(problem('   ')).not.toBe('');
+  });
+});
+
+describe('loopbackServerAddress', () => {
+  it('builds the address of a server in this same process', () => {
+    expect(loopbackServerAddress(8081)).toBe('ws://127.0.0.1:8081');
+  });
+
+  it('takes a port and nothing else, so no host can be asked for', () => {
+    // The bound, expressed as a signature: there is no parameter here through
+    // which somebody else's machine could arrive. Every other address in this
+    // build comes from `serverAddressSchema`, which refuses `ws://` outright.
+    expect(problem('ws://127.0.0.1:8081')).toContain('wss://');
+  });
+
+  it('refuses a port that is not one, rather than formatting it into an address', () => {
+    expect(loopbackServerAddress(0)).toBeNull();
+    expect(loopbackServerAddress(65_536)).toBeNull();
+    expect(loopbackServerAddress(8081.5)).toBeNull();
+  });
+
+  it('is a ServerAddress nobody can produce by typing one', () => {
+    // Both halves matter. It is a real `ServerAddress`, so the pairing table
+    // takes it without anything casting; and the address it produces is still
+    // refused by the parser a pairing form goes through, so the plaintext
+    // allowance cannot be reached from outside this build.
+    const address = loopbackServerAddress(8081);
+    expect(address).not.toBeNull();
+    expect(serverAddressSchema.safeParse(String(address)).success).toBe(false);
   });
 });
