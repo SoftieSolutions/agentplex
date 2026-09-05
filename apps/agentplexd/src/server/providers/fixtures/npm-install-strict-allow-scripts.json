@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "ESTRICTALLOWSCRIPTS",
+    "summary": "--strict-allow-scripts: 1 package(s) have install scripts not covered by allowScripts:\n  @anthropic-ai/claude-code@2.1.259 (postinstall: node install.cjs)\nAllow them with `--allow-scripts`, persist them with `npm config set allow-scripts=@anthropic-ai/claude-code --location=user`, or bypass this check with `--dangerously-allow-all-scripts`.",
+    "detail": ""
+  }
+}
