@@ -77,3 +77,26 @@ export function childEnvironment({
 
   return environment;
 }
+
+/**
+ * The directories a child of this process will search, in order.
+ *
+ * The inverse of the function above, and deliberately derived from its output
+ * rather than from `binPath`: the question the preflight asks is "where will a
+ * bare program name actually resolve", and the only honest answer is the one
+ * the child's own PATH gives. Reading `binPath` instead would report the
+ * configured directories and miss the `claude` further down the inherited PATH
+ * that a spawn would find when none of them holds one -- which is precisely the
+ * case `childEnvironment` says prepending leaves open, and precisely the case
+ * "which directory did this come from" exists to answer.
+ *
+ * Empty segments are dropped for the reason they are dropped there: an empty
+ * PATH entry means the current directory, and a preflight that reported a
+ * provider as resolving from wherever the process was started would be reading
+ * an ambiguity as a fact.
+ */
+export function childSearchPath(
+  environment: Readonly<Record<string, string | undefined>>,
+): readonly string[] {
+  return (environment['PATH'] ?? '').split(delimiter).filter((entry) => entry.length > 0);
+}

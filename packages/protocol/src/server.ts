@@ -9,6 +9,7 @@ import {
   storeIdSchema,
 } from './identity.js';
 import { frameParser } from './parse.js';
+import { providerReadinessSchema } from './readiness.js';
 import { sessionDescriptorSchema, sessionHoldSchema } from './session.js';
 
 /**
@@ -91,6 +92,24 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
     protocolVersion: z.int(),
     serverId: serverIdSchema,
     stores: z.array(storeDescriptorSchema),
+    /**
+     * What this machine can actually start, resolved once at startup.
+     *
+     * Here rather than in a frame of its own, and required rather than
+     * optional, because it answers the same question `stores` does -- what is
+     * on this box -- and because the hub has to hold it before it can route the
+     * first start. A server that reports nothing here reports that it can start
+     * nothing, which is what a build with no adapters is; there is no shape in
+     * which "it did not say" and "it has none" are the same value.
+     *
+     * It is a reading and not a promise. The state is as of boot, so a provider
+     * uninstalled while the server runs is still listed as ready and the start
+     * still fails -- worse than perfect and far better than the alternative,
+     * which is probing a binary on the path of every session start. What this
+     * buys is the failure that actually happens: a machine provisioned wrong,
+     * or never provisioned, saying so before anybody taps start.
+     */
+    providers: z.array(providerReadinessSchema),
   }),
   /**
    * Says that the handshake failed, and no more. A rejection that explained

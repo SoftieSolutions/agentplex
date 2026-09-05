@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   type FrameId,
   type HubToServerFrame,
+  type ProviderReadiness,
   type ServerToHubFrame,
   type SessionId,
   type StoreDescriptor,
@@ -42,6 +43,22 @@ export interface HubConnectionDependencies {
    */
   readonly stores: readonly StoreDescriptor[];
   /**
+   * What each provider on this machine turned out to be, from the startup
+   * preflight.
+   *
+   * A value for the same reason the stores are: the server role resolved it
+   * once at boot, and a connection has nothing to add. Re-probing per handshake
+   * would put two child processes per provider in front of every reconnection,
+   * on a path a flaky network walks repeatedly.
+   *
+   * It is stated at the handshake rather than waited for, because the hub needs
+   * it before it routes the first start. A provider that is not on this machine
+   * cannot be reported at spawn time on the seam that runs it -- the pty forks
+   * successfully and dies on the far side -- so if it is not said here it is not
+   * said at all.
+   */
+  readonly providers: readonly ProviderReadiness[];
+  /**
    * The one thing on this connection that starts and stops sessions.
    *
    * Injected rather than built here, because it holds the terminals: a
@@ -71,7 +88,7 @@ export interface HubConnection {
  */
 export function serveHubConnection(
   socket: MessageSocket,
-  { identity, stores, sessions, logger }: HubConnectionDependencies,
+  { identity, stores, providers, sessions, logger }: HubConnectionDependencies,
 ): HubConnection {
   let state: HubConnectionState = 'awaiting-handshake';
 
@@ -156,11 +173,16 @@ export function serveHubConnection(
           protocolVersion: PROTOCOL_VERSION,
           serverId: identity.serverId,
           stores: [...stores],
+          providers: [...providers],
         });
         logger.info('hub connection established', {
           hubId: frame.hubId,
           serverId: identity.serverId,
           stores: stores.length,
+          // The states and not the whole readings: a log line says whether this
+          // machine can run what it is about to be asked for, and the versions
+          // and directories were logged once at boot where they belong.
+          providers: providers.map((readiness) => `${readiness.provider}:${readiness.state}`),
         });
         // Every mounted store, straight away and unasked. A hub that has just
         // connected knows what this machine has mounted and nothing about what

@@ -67,6 +67,13 @@ export type {
   StoreView,
 } from './machine-state.js';
 
+export {
+  providerReadinessSchema,
+  providerReadinessStateSchema,
+  readinessRefusal,
+} from './readiness.js';
+export type { ProviderReadiness, ProviderReadinessState } from './readiness.js';
+
 export { sessionDescriptorSchema, sessionHoldSchema, sessionStatusSchema } from './session.js';
 export type { SessionDescriptor, SessionHold, SessionStatus } from './session.js';
 

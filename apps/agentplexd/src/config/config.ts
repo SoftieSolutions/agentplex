@@ -17,6 +17,22 @@ import { LOG_LEVELS, type LogLevel } from '../shared/logger.js';
 const ROLES = ['hub', 'server', 'both'] as const;
 export type Role = (typeof ROLES)[number];
 
+/**
+ * What this invocation is for. One binary, two things to do with it.
+ *
+ * `serve` is the absence of a command, so every unit file, image and documented
+ * command line that predates this keeps working unchanged. It is named rather
+ * than left as `undefined` because a caller branching on a word reads better
+ * than one branching on a missing field.
+ *
+ * `doctor` is read-only and exits. It takes exactly the configuration the
+ * service would take, deliberately: the question it answers is what *this
+ * deployment* can start, and a doctor with flags of its own would be reporting
+ * on a machine nobody is going to run.
+ */
+const COMMANDS = ['serve', 'doctor'] as const;
+export type Command = (typeof COMMANDS)[number];
+
 export interface HubConfig {
   readonly port: number;
   /**
@@ -143,7 +159,7 @@ export type Config =
     };
 
 export type ConfigResult =
-  | { readonly ok: true; readonly config: Config }
+  | { readonly ok: true; readonly command: Command; readonly config: Config }
   /** Every problem, not the first: fixing one env var at a time is a bad loop. */
   | { readonly ok: false; readonly problems: readonly string[] };
 
@@ -225,6 +241,7 @@ const SETTINGS = {
  * and a line per zod issue would read as more problems than there are.
  */
 const roleSchema = z.enum(ROLES);
+const commandSchema = z.enum(COMMANDS);
 const logLevelSchema = z.enum(LOG_LEVELS);
 const portSchema = z.coerce.number().int().min(1).max(65535);
 const hostSchema = z.string().min(1);
@@ -244,10 +261,12 @@ const databaseFileSchema = z
   .transform((value) => resolve(value));
 
 export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
-  const flags = readFlags(argv);
-  if (!flags.ok) return flags;
-
   const problems: string[] = [];
+  const { command, rest } = readCommand(argv, problems);
+
+  const flags = readFlags(rest);
+  if (!flags.ok) return { ok: false, problems: [...problems, ...flags.problems] };
+
   const read = (setting: { flag: string; env: string }): string | undefined =>
     flags.values.get(setting.flag)?.at(-1) ?? nonEmpty(env[setting.env]);
 
@@ -312,6 +331,7 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
     if (clientToken === undefined) return { ok: false, problems: [BAD_CLIENT_TOKEN] };
     return {
       ok: true,
+      command,
       config: { role, logLevel, host, hub: { port: hubPort, databaseFile, clientToken } },
     };
   }
@@ -325,12 +345,12 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
     terminalCap,
     announce,
   };
-  if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
+  if (role === 'server') return { ok: true, command, config: { role, logLevel, host, server } };
 
   if (databaseFile === undefined) return { ok: false, problems: [MISSING_DATABASE_FILE] };
   if (clientToken === undefined) return { ok: false, problems: [BAD_CLIENT_TOKEN] };
   const hub: HubConfig = { port: hubPort, databaseFile, clientToken };
-  return { ok: true, config: { role, logLevel, host, hub, server } };
+  return { ok: true, command, config: { role, logLevel, host, hub, server } };
 }
 
 /**
@@ -386,10 +406,47 @@ function readIdentityPath(
   return resolve(raw);
 }
 
-/** The flags this build understands, for a usage message. */
+/** The commands and flags this build understands, for a usage message. */
 export function usage(): string {
   const lines = Object.values(SETTINGS).map(({ flag, env }) => `  ${flag.padEnd(16)} (${env})`);
-  return ['Usage: agentplexd [options]', '', ...lines].join('\n');
+  return [
+    'Usage: agentplexd [command] [options]',
+    '',
+    '  (none)           run the roles the configuration asks for',
+    '  doctor           report what this configuration can start, and change nothing',
+    '',
+    ...lines,
+  ].join('\n');
+}
+
+/**
+ * The command word, and the arguments left for the flag parser.
+ *
+ * Read only from the first position, and only when it is not a flag. Scanning
+ * argv for the first bare word would find the value of `--role server`, which
+ * is a setting and not an instruction; a command is the first thing typed or it
+ * is not there.
+ *
+ * An unrecognised word is a problem rather than something to ignore. Falling
+ * through to `serve` would start a long-running service for somebody who typed
+ * a word they expected to be read-only and exit.
+ */
+function readCommand(
+  argv: readonly string[],
+  problems: string[],
+): { command: Command; rest: readonly string[] } {
+  const first = argv[0];
+  if (first === undefined || first.startsWith('--')) return { command: 'serve', rest: argv };
+
+  const parsed = commandSchema.safeParse(first);
+  if (!parsed.success) {
+    problems.push(
+      `unknown command ${JSON.stringify(first)}: expected one of ${COMMANDS.join(', ')}`,
+    );
+    return { command: 'serve', rest: argv.slice(1) };
+  }
+
+  return { command: parsed.data, rest: argv.slice(1) };
 }
 
 type FlagsResult =

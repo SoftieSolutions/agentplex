@@ -12,11 +12,13 @@ import {
   sessionIdSchema,
   storeIdSchema,
   PROTOCOL_VERSION,
+  type ProviderReadiness,
   type SessionDescriptor,
   type SessionHold,
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import { createFakeSessionController } from '../../server/fake-session-controller.js';
+import { missingProvider, readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import { createFakeBeaconSource, type FakeBeaconSource } from '../discovery/fake-beacon-source.js';
 import { serveHubConnection } from '../../server/hub-connection.js';
 import type { SessionOutcome, StoreReport } from '../../server/session-control.js';
@@ -150,6 +152,8 @@ interface Machine {
   readonly serverId: string;
   readonly stores: readonly StoreDescriptor[];
   readonly reports: readonly StoreReport[];
+  /** What that machine's startup preflight found, as it reports it. */
+  readonly providers: readonly ProviderReadiness[];
   /** What this machine's controller answers a start with. Default: a refusal. */
   readonly startOutcome?: SessionOutcome;
 }
@@ -187,6 +191,7 @@ function fleetDialer(
         },
         identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
         stores: machine.stores,
+        providers: machine.providers,
         logger,
       });
       live.set(host, serverEnd);
@@ -432,6 +437,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         'mbp-robert.example',
         {
           serverId: 'server-mbp',
+          providers: [readyProvider('claude'), readyProvider('codex')],
           stores: [
             {
               storeId: storeIdSchema.parse('store-agentplex'),
@@ -479,6 +485,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         'gpu-box.example',
         {
           serverId: 'server-gpu',
+          providers: [readyProvider('claude'), missingProvider('codex')],
           stores: [
             { storeId: storeIdSchema.parse('store-universe'), path: '/mnt/volumes/universe' },
           ],
@@ -558,6 +565,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         'mbp-robert.example',
         {
           serverId: 'server-mbp',
+          providers: [readyProvider('claude'), readyProvider('codex')],
           stores: [
             {
               storeId: storeIdSchema.parse('store-agentplex'),
@@ -651,6 +659,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         'mbp-robert.example',
         {
           serverId: 'server-mbp',
+          providers: [readyProvider('claude'), readyProvider('codex')],
           stores: [sharedStore],
           reports: [
             {
@@ -675,6 +684,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         'gpu-box.example',
         {
           serverId: 'server-gpu',
+          providers: [readyProvider('claude'), missingProvider('codex')],
           stores: [sharedStore],
           reports: [
             {

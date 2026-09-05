@@ -7,6 +7,7 @@ import {
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import { serveHubConnection } from '../../server/hub-connection.js';
+import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import {
   createFakeMessageSocket,
   createSocketPair,
@@ -122,6 +123,7 @@ function fakeMachine(options: {
           sessions: createFakeSessionController(),
           identity: { serverId: machine.serverId, token: machine.token },
           stores: machine.stores,
+          providers: [readyProvider()],
           logger,
         });
         live = serverEnd;
@@ -551,6 +553,7 @@ describe('startServerConnection', () => {
       sessions: createFakeSessionController(),
       identity: { serverId: serverIdSchema.parse('server-laptop'), token: 'tok-laptop' },
       stores: [store('store-a', '/volumes/claude')],
+      providers: [readyProvider()],
       logger,
     });
 

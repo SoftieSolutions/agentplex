@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { storeIdSchema, type ServerRegistrationId, type StoreId } from '@agentplex/protocol';
+import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import { serverAddressSchema } from '../pairing/server-address.js';
 import { attentionEligibleStores, countsTowardAttention, unreachableStores } from './attention.js';
 import type { ServerConnectionPhase, ServerConnectionReport } from './server-connection.js';
@@ -29,6 +30,7 @@ function report(
     address: serverAddressSchema.parse(`wss://${label}.example:8443`),
     serverId: null,
     phase,
+    providers: [readyProvider()],
     stores: stores.map(store),
     connectedSince: phase === 'connected' ? START : null,
     staleSince: phase === 'stale' ? START : null,

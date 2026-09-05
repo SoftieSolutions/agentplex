@@ -21,7 +21,7 @@ import {
   type PairingFormProblems,
 } from './pairing-form.js';
 import type { PairingOperations } from './pairing-operations.js';
-import { serverRows, type ServerRowView } from './server-rows.js';
+import { serverRows, type ProviderRowView, type ServerRowView } from './server-rows.js';
 
 /**
  * The settings screen: hub access, server pairing, and the paired-server
@@ -396,6 +396,39 @@ function CandidateRow({
   );
 }
 
+/**
+ * One agent this machine can, or cannot, run.
+ *
+ * Drawn on every row rather than only on the unhappy ones: which version of
+ * `claude` a box will actually start is the thing an operator comes here to
+ * check, and a line that only appears when something is broken teaches nobody
+ * where to look. The tone carries the verdict, the words carry the version, and
+ * the machine's own sentence sits underneath when there is one.
+ */
+function ProviderLine({
+  provider,
+  scheme,
+}: {
+  readonly provider: ProviderRowView;
+  readonly scheme: Scheme;
+}): JSX.Element {
+  return (
+    <Stack gap={0}>
+      <Group gap={6} align="center">
+        <ToneDot tone={provider.tone} scheme={scheme} />
+        <Text size="xs" ff="monospace" c="dimmed">
+          {provider.words}
+        </Text>
+      </Group>
+      {provider.problem !== null && (
+        <Text size="xs" style={{ color: colorForTone(provider.tone, scheme) }}>
+          {provider.problem}
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
 function PairedServersSection({
   snapshot,
   pairing,
@@ -481,6 +514,9 @@ function ServerRow({
               {row.problem}
             </Text>
           )}
+          {row.providers.map((provider) => (
+            <ProviderLine key={provider.name} provider={provider} scheme={scheme} />
+          ))}
           {refusal !== null && (
             <Text size="xs" style={{ color: colorForTone('blocked', scheme) }}>
               {refusal}

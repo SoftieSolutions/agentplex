@@ -1,4 +1,5 @@
 import type {
+  ProviderReadiness,
   ServerRegistrationId,
   SessionDescriptor,
   SessionHold,
@@ -412,9 +413,36 @@ function sameConnection(left: ServerConnectionReport, right: ServerConnectionRep
     left.failedAttempts === right.failedAttempts &&
     left.problem === right.problem &&
     left.staleReason === right.staleReason &&
+    sameProviders(left.providers, right.providers) &&
     left.stores.length === right.stores.length &&
     left.stores.every((storeId, index) => storeId === right.stores[index])
   );
+}
+
+/**
+ * Whether a machine is reporting the same providers, in the same states.
+ *
+ * Compared at all because a provider installed between two connections is a
+ * change a client has to see: the settings screen draws these words, and a row
+ * that went on saying "claude is missing" after somebody installed it would be
+ * exactly the stale claim the age labels exist to prevent.
+ */
+function sameProviders(
+  left: readonly ProviderReadiness[],
+  right: readonly ProviderReadiness[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((readiness, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      readiness.provider === other.provider &&
+      readiness.state === other.state &&
+      readiness.version === other.version &&
+      readiness.directory === other.directory &&
+      readiness.problem === other.problem
+    );
+  });
 }
 
 /**

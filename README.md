@@ -99,6 +99,16 @@ Every setting has one flag and one environment variable; the flag wins.
 | `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`            | Terminals held at once; at least 1                       |
 | `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`         | `debug`, `info`, `warn`, `error`                         |
 
+### Checking a machine
+
+`agentplexd doctor`, with the configuration the service would take, reports what
+that machine can actually start: per provider, the version, the directory it
+resolved from and whether it is logged in; per store path, whether it is there.
+It changes nothing and exits `1` when anything it looked at is unusable. The
+same check runs at server startup and its result travels in the handshake, so a
+provider that is missing or logged out is a named fact on the settings screen
+and a refused start, rather than a session that appears and vanishes.
+
 ### Pairing a server with the hub
 
 A server mints two durable facts into its identity file on first start: the

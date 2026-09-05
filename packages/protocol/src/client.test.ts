@@ -325,6 +325,15 @@ describe('client and hub round trips', () => {
             serverId: serverIdSchema.parse('server-1'),
             phase: 'connected',
             stores: [storeIdSchema.parse('store-work')],
+            providers: [
+              {
+                provider: 'claude',
+                state: 'ready',
+                version: '2.1.259',
+                directory: '/home/robert/.local/bin',
+                problem: null,
+              },
+            ],
             connectedSince: 1_000,
             staleSince: null,
             lastConnectedAt: 1_000,

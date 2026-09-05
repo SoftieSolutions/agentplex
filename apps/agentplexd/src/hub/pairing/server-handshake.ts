@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   type HubId,
   type HubToServerFrame,
+  type ProviderReadiness,
   type ServerId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
@@ -82,6 +83,16 @@ export type HandshakeOutcome =
       readonly ok: true;
       readonly serverId: ServerId;
       readonly stores: readonly StoreDescriptor[];
+      /**
+       * What that machine says it can start, from its own startup preflight.
+       *
+       * Carried out of the handshake rather than asked for afterwards, because
+       * this is the one moment it is offered and because the hub has to hold it
+       * before it routes a start. Judged nowhere here: this function finds out
+       * what is on the other end, and what to do about a provider that is
+       * missing is the scheduler's.
+       */
+      readonly providers: readonly ProviderReadiness[];
       /**
        * Left open, and the caller owns it from here. This is the point of
        * returning it: the connection the supervisor keeps is the one that
@@ -184,11 +195,13 @@ export async function handshakeWithServer(
             address: target.address,
             serverId: frame.serverId,
             stores: frame.stores.length,
+            providers: frame.providers.map(({ provider, state }) => `${provider}:${state}`),
           });
           settle({
             ok: true,
             serverId: frame.serverId,
             stores: frame.stores,
+            providers: frame.providers,
             socket,
             nextFrameId,
           });

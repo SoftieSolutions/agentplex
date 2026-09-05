@@ -63,6 +63,18 @@ function stateWith(overrides?: {
         serverId: 'srv-1',
         phase: 'connected',
         stores: ['store-a'],
+        // What that machine can start. This file is about drawing sessions, so
+        // it is the ordinary case: the provider these sessions run under is
+        // installed and logged in.
+        providers: [
+          {
+            provider: 'claude',
+            state: 'ready',
+            version: '2.1.259',
+            directory: '/home/robert/.local/bin',
+            problem: null,
+          },
+        ],
         connectedSince: 1_756_000_000_000,
         staleSince: null,
         lastConnectedAt: 1_756_000_000_000,

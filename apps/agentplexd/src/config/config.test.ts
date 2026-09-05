@@ -536,3 +536,45 @@ describe('loadConfig host', () => {
     expect(usage()).toContain('AGENTPLEX_HOST');
   });
 });
+
+describe('loadConfig commands', () => {
+  it('runs the service when no command is given', () => {
+    // The bare invocation every unit file and every image already uses. A
+    // command that had to be typed would break each of them.
+    const result = load(['--role=server']);
+
+    expect(result).toMatchObject({ ok: true, command: 'serve' });
+  });
+
+  it('reads a command word before the flags', () => {
+    const result = load(['doctor', '--role=server']);
+
+    expect(result).toMatchObject({ ok: true, command: 'doctor', config: { role: 'server' } });
+  });
+
+  it('refuses a command nothing implements, rather than falling through to serving', () => {
+    // Falling through would start a long-running service for somebody who
+    // typed a word they expected to be read-only.
+    const problems = expectProblems(load(['doctro', '--role=server']));
+
+    expect(problems.join(' ')).toContain('doctro');
+  });
+
+  it('collects a bad command alongside every other problem', () => {
+    const problems = expectProblems(loadConfig({ argv: ['nonsense', '--role=nonsense'], env: {} }));
+
+    expect(problems.length).toBeGreaterThan(1);
+  });
+
+  it('reads a command only as the first argument, so a value is never one', () => {
+    // `--role server` puts a bare word in argv that is not a command, and a
+    // parser scanning for the first non-flag anywhere would take it as one.
+    const result = load(['--role', 'server']);
+
+    expect(result).toMatchObject({ ok: true, command: 'serve', config: { role: 'server' } });
+  });
+
+  it('names the commands in the usage message', () => {
+    expect(usage()).toContain('doctor');
+  });
+});

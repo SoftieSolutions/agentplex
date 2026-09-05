@@ -1,4 +1,4 @@
-import type { FileCreate, FileRead, StoreFileSystem } from './store-identity.js';
+import type { DirectoryState, FileCreate, FileRead, StoreFileSystem } from './store-identity.js';
 
 /**
  * An in-memory store volume.
@@ -15,6 +15,11 @@ export interface FakeStoreFilesOptions {
   readonly unreadable?: readonly string[];
   /** Paths whose create fails: a read-only mount, a full disk. */
   readonly unwritable?: readonly string[];
+  /**
+   * Directories on the volume. Absent means the path is not there, which is
+   * what an unmounted volume looks like from inside the process.
+   */
+  readonly directories?: readonly string[];
   /**
    * Awaited before every create, so a test can let another server mint first
    * and exercise the losing side of the race rather than describing it.
@@ -33,6 +38,7 @@ export function createFakeStoreFiles(options: FakeStoreFilesOptions = {}): FakeS
   const files = new Map(Object.entries(options.files ?? {}));
   const unreadable = new Set(options.unreadable ?? []);
   const unwritable = new Set(options.unwritable ?? []);
+  const directories = new Set(options.directories ?? []);
   const creates: string[] = [];
 
   return {
@@ -40,6 +46,14 @@ export function createFakeStoreFiles(options: FakeStoreFilesOptions = {}): FakeS
       if (unreadable.has(path)) return { kind: 'failed', reason: `EACCES: ${path}` };
       const contents = files.get(path);
       return contents === undefined ? { kind: 'missing' } : { kind: 'read', contents };
+    },
+
+    async statDirectory(path: string): Promise<DirectoryState> {
+      if (unreadable.has(path)) return { kind: 'failed', reason: `EACCES: ${path}` };
+      if (directories.has(path)) return { kind: 'directory' };
+      // A store root with a file where the directory should be, which is what a
+      // typo in a path most often turns out to be.
+      return files.has(path) ? { kind: 'not-a-directory' } : { kind: 'missing' };
     },
 
     async createFile(path: string, contents: string): Promise<FileCreate> {

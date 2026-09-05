@@ -1,19 +1,22 @@
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { childEnvironment } from './config/child-environment.js';
+import { childEnvironment, childSearchPath } from './config/child-environment.js';
 import { loadConfig, usage } from './config/config.js';
+import { formatDoctorReport, inspectMachine } from './doctor.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { createNodeBeaconSource } from './hub/discovery/node-beacon-listener.js';
 import { createSqliteDatabase } from './hub/db/sqlite.js';
 import { startRuntime } from './runtime.js';
 import { createNodeBeaconNetwork } from './server/node-beacon-transport.js';
 import { createNodeProcessProbe } from './server/node-process-probe.js';
+import { createNodeProgramResolver } from './server/node-program-resolver.js';
 import { nodePtyFactory } from './server/node-pty-factory.js';
 import { nodeStoreFileSystem } from './server/node-store-files.js';
 import { createNodeProcessRunner } from './server/operations/node-process-runner.js';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { nodeProviderFiles } from './server/providers/node-provider-files.js';
+import { createProviderPreflight } from './server/providers/preflight.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createTerminalManager } from './server/terminal-manager.js';
@@ -34,6 +37,15 @@ import { createWebSocketDialer } from './shared/ws-message-socket.js';
 const EXIT_BAD_CONFIGURATION = 2;
 /** Startup failed for a reason that may pass, such as a database not up yet. */
 const EXIT_STARTUP_FAILED = 1;
+/**
+ * `doctor` found something this machine cannot do.
+ *
+ * The same 1, deliberately: to a script `agentplexd doctor` is a check, and a
+ * check that says "not ready" has failed in the only sense a shell understands.
+ * Nothing here distinguishes a missing provider from an unmounted store by
+ * code, because the report already does, in words, on stdout.
+ */
+const EXIT_NOT_READY = 1;
 
 /**
  * `migrations/` sits beside `src/` and `dist/`, so this resolves the same way
@@ -43,6 +55,7 @@ const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../migrations', import.meta.
 
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
+  const writeError = (line: string): void => void process.stderr.write(`${line}\n`);
   const loaded = loadConfig({ argv: process.argv.slice(2), env: process.env });
 
   if (!loaded.ok) {
@@ -53,7 +66,14 @@ async function main(): Promise<void> {
   }
 
   const config = loaded.config;
-  const logger = createLogger(config.logLevel, jsonLineSink(write, systemClock));
+  // The service logs on stdout, because that is what a supervisor collects.
+  // `doctor` gives stdout to its report and puts its own log lines on stderr,
+  // so that what an operator reads -- or pipes into an issue -- is the report
+  // and not the report with a JSON line about a probe in the middle of it.
+  const logger = createLogger(
+    config.logLevel,
+    jsonLineSink(loaded.command === 'doctor' ? writeError : write, systemClock),
+  );
 
   // What every child of this process gets, composed once: what agentplexd
   // inherited, with the configured directories ahead of its PATH. Both spawn
@@ -70,6 +90,43 @@ async function main(): Promise<void> {
   // further down.
   const processRunner = createNodeProcessRunner({ environment });
 
+  // Where a bare program name will actually resolve, read back out of the
+  // environment composed above rather than out of the setting that shaped it.
+  // The preflight's whole value is that its answer is the one a spawn would
+  // reach, and a second list built from `binPath` here could differ from the
+  // first the day the composition changes.
+  const programs = createNodeProgramResolver(childSearchPath(environment));
+
+  // What this build drives, in one line, shared by `doctor` and by the service.
+  // Adding codex is another adapter file and another entry here, and nothing
+  // else.
+  const providers = createProviderRegistry([
+    createClaudeAdapter({
+      files: nodeProviderFiles,
+      probe: createNodeProcessProbe({ runner: processRunner }),
+    }),
+  ]);
+
+  // What those adapters turn out to be on this machine, asked once. The service
+  // asks it at boot and carries the answer into every handshake; `doctor` asks
+  // it and prints it. One implementation, so the two can never disagree about
+  // whether a binary is there -- which is exactly the moment somebody is
+  // staring at a machine wondering why a session will not start.
+  const preflight = createProviderPreflight({ programs, probes: processRunner, logger });
+
+  if (loaded.command === 'doctor') {
+    // Read-only, and then it exits. Nothing below this line runs: no port is
+    // bound, no database is opened, no store file is minted.
+    const report = await inspectMachine(config, {
+      providers,
+      preflight,
+      files: nodeStoreFileSystem,
+    });
+    for (const line of formatDoctorReport(report)) write(line);
+    if (!report.usable) process.exitCode = EXIT_NOT_READY;
+    return;
+  }
+
   let runtime;
   try {
     runtime = await startRuntime(config, {
@@ -85,14 +142,13 @@ async function main(): Promise<void> {
       // The hub's own client token is not among them -- that one is typed by a
       // person, so it arrives as configuration.
       tokens: randomTokenMinter,
-      // The providers this build drives, in one line. Adding codex is another
-      // adapter file and another entry here, and nothing else.
-      providers: createProviderRegistry([
-        createClaudeAdapter({
-          files: nodeProviderFiles,
-          probe: createNodeProcessProbe({ runner: processRunner }),
-        }),
-      ]),
+      providers,
+      // Asked once at boot, and the answer carried into every handshake. It
+      // shares the one-shot runner above, so a provider is probed through
+      // exactly the environment its sessions will run in -- and it is nowhere
+      // in the operation registry, so nothing reachable over a socket can ask
+      // this process to run a provider probe.
+      preflight,
       // Closed: the operations are a list in that module, and there is no
       // parameter here through which a build could add one.
       operations: createOperationRegistry(processRunner),

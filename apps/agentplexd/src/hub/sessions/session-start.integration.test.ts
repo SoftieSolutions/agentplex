@@ -12,6 +12,7 @@ import {
   type ClientFrame,
   type HubFrame,
   type MachineState,
+  type ProviderReadiness,
   type ServerRegistrationId,
   type SessionRow,
   type StoreDescriptor,
@@ -22,7 +23,11 @@ import type { DialResult, SocketDialer } from '../../shared/message-socket.js';
 import { createFakeTimers, type FakeTimers } from '../../shared/timers.js';
 import { serveHubConnection } from '../../server/hub-connection.js';
 import { createFakePtyFactory, type FakePtyFactory } from '../../server/fake-pty.js';
-import { createFakeProviderAdapter } from '../../server/providers/fake-provider-adapter.js';
+import {
+  createFakeProviderAdapter,
+  missingProvider,
+  readyProvider,
+} from '../../server/providers/fake-provider-adapter.js';
 import { createFakeProviderFiles } from '../../server/providers/fake-provider-files.js';
 import { createProviderRegistry } from '../../server/providers/provider-registry.js';
 import { createPtySupervisor } from '../../server/pty-supervisor.js';
@@ -93,6 +98,14 @@ interface Machine {
   readonly label: string;
   readonly terminals: TerminalManager;
   readonly ptys: FakePtyFactory;
+  /**
+   * What this machine's startup preflight found, as its handshake reports it.
+   *
+   * Mutable, because the interesting case is a fleet where one box has the
+   * provider and another does not, and the hub has to be shown telling them
+   * apart on the same volume.
+   */
+  providers: readonly ProviderReadiness[];
   /** Every frame this machine sent to the hub, and every one it received. */
   readonly sentToHub: string[];
   readonly sentToServer: string[];
@@ -122,7 +135,7 @@ function registrationOf(label: string): ServerRegistrationId {
  * hub that reconnects finds the agents it left running, not a fresh manager
  * that has forgotten them.
  */
-function buildMachine(label: string): Machine {
+function buildMachine(label: string, providers: readonly ProviderReadiness[]): Machine {
   const ptys = createFakePtyFactory();
   const supervisor = createPtySupervisor({
     pty: ptys,
@@ -132,7 +145,14 @@ function buildMachine(label: string): Machine {
   });
   const terminals = createTerminalManager({ supervisor, clock });
 
-  return { label, terminals, ptys, sentToHub: [], sentToServer: [] };
+  return {
+    label,
+    terminals,
+    ptys,
+    providers,
+    sentToHub: [],
+    sentToServer: [],
+  };
 }
 
 /** One connection to that machine: a fresh socket, and the store as it reads it. */
@@ -148,6 +168,7 @@ function serveMachine(machine: Machine): DialResult {
       token: `tok-${machine.label}`,
     },
     stores,
+    providers: machine.providers,
     sessions: createSessionController({
       stores,
       providers: createProviderRegistry([adapter]),
@@ -173,14 +194,24 @@ function serveMachine(machine: Machine): DialResult {
   return { ok: true, socket: capturing };
 }
 
-async function start(): Promise<Harness> {
+/**
+ * The whole fleet, its hub, and a client-facing broadcast over the lot.
+ *
+ * `preflightOf` is what each machine's startup preflight found. A parameter
+ * rather than a constant because the interesting case is a fleet where a box
+ * cannot run what it is being asked for, and that has to be true before the
+ * handshake -- which is the only moment a server ever states it.
+ */
+async function start(
+  preflightOf: (label: string) => readonly ProviderReadiness[] = () => [readyProvider('claude')],
+): Promise<Harness> {
   suite += 1;
   migrated = await openMigratedSchema(`session-start-${suite}`);
   const database = migrated.database;
 
   const machines = new Map<string, Machine>();
   for (const label of ['attic', 'workshop']) {
-    machines.set(label, buildMachine(label));
+    machines.set(label, buildMachine(label, preflightOf(label)));
     await registerServer(
       database,
       { newId: () => registrationOf(label) },
@@ -646,6 +677,96 @@ describe('a client-initiated session start', () => {
     for (const frame of [...clientToHub, ...hubToServer]) {
       expect(keysOf(frame), `${frame.type} carried a cwd`).not.toContain('cwd');
     }
+  });
+});
+
+/**
+ * The negative case, end to end.
+ *
+ * AGX-68 established that a pty cannot report this: the fork succeeds, the
+ * program fails to resolve on the far side of it, and what the user gets is a
+ * session that appears and vanishes with a nonzero code and no output. So the
+ * claim being made here is not that the start fails -- it always did -- but
+ * that it fails as a sentence, before anything is forked, and that the machine
+ * is told nothing at all.
+ */
+describe('a session start against a machine with no such provider installed', () => {
+  beforeEach(async () => {
+    harness = await start(() => [missingProvider('claude')]);
+    await until(
+      () =>
+        held()
+          .connections.snapshot()
+          .every((report) => report.phase === 'connected'),
+      'both servers to be connected',
+    );
+  });
+
+  afterEach(async () => {
+    await harness?.connections.stop();
+    harness?.clients.stop();
+    await migrated?.close();
+    harness = null;
+    migrated = null;
+  });
+
+  it('refuses the start with a named reason and forks nothing anywhere', async () => {
+    const client = await attach();
+
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: 'look at the failing test',
+      server: null,
+    });
+
+    const answer = client.reply(2);
+    expect(answer).toMatchObject({ type: 'refusal', code: 'refused', holder: null });
+    if (answer.type !== 'refusal') return;
+    // A sentence naming the machine and the provider, not "the machine said no".
+    expect(answer.message).toContain('claude');
+    expect(answer.message).toMatch(/attic|workshop/);
+
+    // Nothing was started, and nothing was even asked. A refusal that still
+    // sent the instruction would be a pty forked into a program that is not
+    // there, which is the failure this whole path exists to remove.
+    expect(launches(machine('attic'))).toEqual([]);
+    expect(launches(machine('workshop'))).toEqual([]);
+    for (const label of ['attic', 'workshop']) {
+      const instructions = machine(label)
+        .sentToServer.map((text) => parsed<{ type: string }>(parseHubToServerFrame, text))
+        .filter((frame) => frame.type === 'session-start');
+      expect(instructions, `${label} was told to start something`).toEqual([]);
+    }
+  });
+
+  it('still lists that machine, its stores and its sessions', async () => {
+    // An unusable provider costs itself. A server whose claude is missing is
+    // not a server that has disappeared: its transcripts are still readable,
+    // its stores still mounted, and everything already on disk still shown.
+    const client = await attach();
+    const state = client.states.at(-1);
+
+    expect(state?.stores[0]?.sessions.length).toBeGreaterThan(0);
+    expect(state?.servers.map((server) => server.label).sort()).toEqual(['attic', 'workshop']);
+  });
+
+  it('publishes why, so the settings screen can say it before anybody taps start', async () => {
+    const client = await attach();
+    const state = client.states.at(-1);
+
+    expect(state?.servers[0]?.providers).toEqual([
+      {
+        provider: 'claude',
+        state: 'missing',
+        version: null,
+        directory: null,
+        problem: expect.any(String),
+      },
+    ]);
   });
 });
 

@@ -1,9 +1,11 @@
-import type {
-  RefusalCode,
-  ServerRegistrationId,
-  SessionHolder,
-  SessionId,
-  StoreId,
+import {
+  readinessRefusal,
+  type Provider,
+  type RefusalCode,
+  type ServerRegistrationId,
+  type SessionHolder,
+  type SessionId,
+  type StoreId,
 } from '@agentplex/protocol';
 import { countsTowardAttention } from '../connections/attention.js';
 import type { ServerConnectionReport } from '../connections/server-connection.js';
@@ -33,11 +35,17 @@ import type { HubStateSnapshot, StoreView } from '../state/reducer.js';
  * state and the instruction arriving.
  */
 
-/** A start, as the hub reads it: a store, maybe a session, maybe a machine. */
+/** A start, as the hub reads it: a store, a provider, maybe a session, maybe a machine. */
 export interface StartRequest {
   readonly storeId: StoreId;
   /** The session to resume, or `null` for a new one the provider will name. */
   readonly sessionId: SessionId | null;
+  /**
+   * Which agent to run. Part of the routing decision and not merely payload:
+   * a machine that cannot run this provider is not a machine this start can be
+   * scheduled onto, however idle it is.
+   */
+  readonly provider: Provider;
   /** The user's override, or `null` to let the hub schedule it. */
   readonly server: ServerRegistrationId | null;
 }
@@ -88,7 +96,17 @@ export function routeStart(state: HubStateSnapshot, request: StartRequest): Rout
 
   if (request.server !== null) {
     const chosen = live.find((server) => server.registrationId === request.server);
-    if (chosen !== undefined) return { ok: true, server: chosen };
+    if (chosen !== undefined) {
+      // The machine the user picked, checked before it is instructed. This is
+      // the refusal the preflight exists to make possible: on a pty a provider
+      // that is not there is not an error, it is a session that appears and
+      // vanishes, and here is the last place it can still be a sentence.
+      const unusable = cannotRun(chosen, request.provider);
+      if (unusable !== null) {
+        return { ok: false, code: 'refused', problem: unusable, holder: null };
+      }
+      return { ok: true, server: chosen };
+    }
 
     // The two ways an override fails are different things for a person to do,
     // so they are different sentences. A machine that has the store but is
@@ -105,17 +123,59 @@ export function routeStart(state: HubStateSnapshot, request: StartRequest): Rout
     };
   }
 
-  const scheduled = leastLoaded(state, live);
+  // Filtered before the scheduling rather than after it, so a fleet where one
+  // machine has the provider and another does not schedules onto the one that
+  // does. An unusable provider costs its own machine a start and never the
+  // store: every other server on the volume is a candidate exactly as before.
+  const capable = live.filter((server) => cannotRun(server, request.provider) === null);
+
+  const scheduled = leastLoaded(state, capable);
   if (scheduled === undefined) {
     return {
       ok: false,
       code: 'refused',
-      problem: 'no server with that store mounted is connected right now',
+      problem: whyNothingCanRun(live, request.provider),
       holder: null,
     };
   }
 
   return { ok: true, server: scheduled };
+}
+
+/**
+ * Why this machine must not be asked to run this provider, or `null`.
+ *
+ * A provider a server never mentioned is refused as firmly as one it reported
+ * missing, and the sentence says which of the two it is: a build with no
+ * adapter and a machine with no binary are different things to go and fix.
+ *
+ * The words come from the machine that took the reading. The hub is repeating a
+ * fact, not diagnosing one, and a sentence composed here would be the hub's
+ * guess at what some other box meant.
+ */
+function cannotRun(server: ServerConnectionReport, provider: Provider): string | null {
+  const readiness = server.providers.find((entry) => entry.provider === provider);
+  if (readiness === undefined) return `${server.label} does not run ${provider}`;
+
+  const refusal = readinessRefusal(readiness);
+  return refusal === null ? null : `${server.label} cannot run ${provider}: ${refusal}`;
+}
+
+/**
+ * What to say when every reachable machine on the store refuses.
+ *
+ * Their own reasons, joined, rather than one flat "nothing can run this".
+ * "gpu-box-01 cannot run claude: no directory this server searches holds
+ * claude" is a thing to go and fix; the flat version is a thing to guess at.
+ */
+function whyNothingCanRun(live: readonly ServerConnectionReport[], provider: Provider): string {
+  const reasons = live
+    .map((server) => cannotRun(server, provider))
+    .filter((reason): reason is string => reason !== null);
+
+  return reasons.length === 0
+    ? 'no server with that store mounted is connected right now'
+    : reasons.join('; ');
 }
 
 /**
