@@ -9,6 +9,7 @@ import {
 import { createFakeDatabase } from '../db/fake-database.js';
 import type { MigrationFileSystem } from '../db/migration-files.js';
 import { createFakeBeaconSource } from '../discovery/fake-beacon-source.js';
+import { createFakeWebAssets } from '../web/fake-web-assets.js';
 import { startHub, type Hub } from '../hub.js';
 import { createUnreachableDialer } from '../../shared/fake-message-socket.js';
 import { CLOSE_POLICY } from '../../shared/message-socket.js';
@@ -77,6 +78,10 @@ async function startTestHub(clock = movableClock()): Promise<Hub> {
     timers: createFakeTimers(),
     migrationsDirectory: '/migrations',
     migrationFileSystem,
+    // An empty web root. This file is about the authenticated routes, and a
+    // client build in it would be a second thing the hub answers on the port
+    // these tests are reading.
+    webAssets: createFakeWebAssets(),
     host: HOST,
     port: 0,
   });

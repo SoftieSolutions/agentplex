@@ -1,5 +1,11 @@
 import { PROTOCOL_VERSION, type HubId } from '@agentplex/protocol';
-import { HTTP_TIMEOUTS, sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
+import {
+  HTTP_TIMEOUTS,
+  sendBytes,
+  sendJson,
+  startHttpServer,
+  type HttpListener,
+} from '../shared/http.js';
 import type { Clock } from '../shared/clock.js';
 import type { Logger } from '../shared/logger.js';
 import type { IdGenerator } from '../shared/ids.js';
@@ -30,6 +36,7 @@ import { ensureHubIdentity } from './hub-identity.js';
 import { readLayout } from './layout/node-tree.js';
 import { readPaneLayout, writePaneLayout } from './layout/pane-layout.js';
 import { createReducer, type Reducer } from './state/reducer.js';
+import { answerWebAssetRequest, SHELL_FILE, type WebAssetFileSystem } from './web/web-assets.js';
 
 /**
  * The hub role.
@@ -48,6 +55,11 @@ import { createReducer, type Reducer } from './state/reducer.js';
  * logged as one refusal with no field saying which check it was, and neither
  * ever carries the URL it came in on -- see `client-auth.ts` for why the
  * distinction is not this hub's to publish.
+ *
+ * The client the browser runs is served from the same handler, last, after
+ * every route this hub owns. One origin for the app, the socket and the MCP
+ * endpoint is a requirement rather than packaging convenience --
+ * `web/web-assets.ts` carries that argument.
  */
 
 export interface HubDependencies {
@@ -99,6 +111,16 @@ export interface HubDependencies {
   readonly tokens: TokenMinter;
   readonly migrationsDirectory: string;
   readonly migrationFileSystem: MigrationFileSystem;
+  /**
+   * The built PWA, on whatever disk it turned out to be on.
+   *
+   * A dependency rather than a directory this file opens, for the reason the
+   * migrations are one and for one more: where the client lives is a fact
+   * about how agentplexd was installed — a workspace build, a layer in the
+   * image, a published package — and the hub should serve the same way in all
+   * three. `main.ts` is the only thing that knows which of them this is.
+   */
+  readonly webAssets: WebAssetFileSystem;
   readonly host: string;
   readonly port: number;
 }
@@ -140,6 +162,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     timers,
     migrationsDirectory,
     migrationFileSystem,
+    webAssets,
     host,
     port,
   } = dependencies;
@@ -268,6 +291,14 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     },
   });
 
+  // Asked once, before the port is open, so that a hub with nothing to serve
+  // says so in the first lines of its log rather than in a 503 nobody is
+  // watching for. It is a warning and not a failure: this hub still owns the
+  // database, still dials every paired server and still answers a health
+  // check, and refusing to start would take a fleet down over a directory
+  // that did not get copied.
+  await reportClientBuild(webAssets, logger);
+
   const listener: HttpListener = await startHttpServer(
     port,
     host,
@@ -289,7 +320,20 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
         return;
       }
 
-      sendJson(response, 404, { error: 'not found' });
+      // Last, and only last. The hub's own routes are matched above against
+      // literal paths, so nothing that ends up in the web root can take one
+      // over -- which is what lets the PWA and the authenticated endpoints
+      // share an origin without the origin becoming a place to negotiate.
+      void answerWebAssetRequest({ method: request.method, path }, webAssets).then(
+        (answer) => sendBytes(response, answer),
+        (error: unknown) => {
+          // A read that failed for a reason that is not absence. The path is
+          // safe to log -- it is the normalized one, with the query gone --
+          // and this is a fault rather than a missing file, so it says 500.
+          logger.error('client asset unreadable', { path, error: String(error) });
+          sendJson(response, 500, { error: 'internal' });
+        },
+      );
     },
     HTTP_TIMEOUTS,
     // The same port the health check is on. One inbound port per process is the
@@ -334,4 +378,27 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       logger.info('hub stopped');
     },
   };
+}
+
+/**
+ * Says, at startup, whether there is a client to serve.
+ *
+ * The directory is named here and nowhere a browser can read it. An operator
+ * looking at a hub that answers 503 needs to know which path it looked in;
+ * an unauthenticated visitor needs to know that there is no client, and
+ * nothing about this machine's filesystem.
+ */
+async function reportClientBuild(webAssets: WebAssetFileSystem, logger: Logger): Promise<void> {
+  try {
+    const shell = await webAssets.read(SHELL_FILE);
+    if (shell === null) {
+      logger.warn('no client build to serve', { from: webAssets.root });
+      return;
+    }
+    logger.info('serving the client', { from: webAssets.root });
+  } catch (error) {
+    // A web root that cannot be read at all. Still not a reason not to start:
+    // the same 503 covers it, and this is the line that explains it.
+    logger.warn('client build unreadable', { from: webAssets.root, error: String(error) });
+  }
 }

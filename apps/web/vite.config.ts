@@ -38,11 +38,37 @@ function webManifest(): Plugin {
 }
 
 /**
+ * Where a `pnpm dev` server sends the requests it does not serve itself.
+ *
+ * The hub's default port on the loopback, because the ordinary way to develop
+ * against one is to run `--role=both` beside this. It is a constant rather than
+ * a setting: what this reproduces is the deployed arrangement, where the app
+ * and the hub are one origin, and a knob here would be a way to develop against
+ * an arrangement that does not exist in production.
+ */
+const DEV_HUB = 'http://127.0.0.1:8080';
+
+/**
  * The PWA is served by the hub, so the build output is static and the dev
  * server proxies the hub rather than the other way round.
+ *
+ * The proxy is what makes that sentence true in dev. The app reads its own
+ * `window.location` to reach the hub — one origin for the shell, the ticket
+ * exchange, the client socket and, later, MCP — so a dev server that served
+ * only the app would leave those three routes pointing at itself.
  */
 export default defineConfig({
   plugins: [react(), webManifest()],
   build: { outDir: 'dist', sourcemap: true },
-  server: { port: 5173 },
+  server: {
+    port: 5173,
+    proxy: {
+      // `/client` and `/client/ticket` both, since a proxy key is a prefix.
+      // `ws` is not optional: the client socket is the application, and a
+      // proxy that answers an upgrade with a 200 looks exactly like a hub that
+      // accepts connections and then says nothing.
+      '/client': { target: DEV_HUB, ws: true },
+      '/health': { target: DEV_HUB },
+    },
+  },
 });

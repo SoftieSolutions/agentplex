@@ -3,6 +3,7 @@ import { startRuntime, type Runtime } from './runtime.js';
 import { createFakeDatabase } from './hub/db/fake-database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { createFakeBeaconSource } from './hub/discovery/fake-beacon-source.js';
+import { createFakeWebAssets } from './hub/web/fake-web-assets.js';
 import { createClaudeAdapter } from './server/providers/claude-adapter.js';
 import { createFakeProviderFiles } from './server/providers/fake-provider-files.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
@@ -52,6 +53,10 @@ function dependencies(
     openDatabase: () => database,
     migrationsDirectory: '/migrations',
     migrationFileSystem,
+    // An empty web root, like the fake volume everything else here runs on:
+    // this file is about which halves start and stop, and a hub with no client
+    // build still starts, which is itself one of the claims below.
+    webAssets: createFakeWebAssets(),
     storeFileSystem,
     tokens: { newToken: () => 'token-under-test' },
     // No adapters: this file is about which halves start and stop, and a

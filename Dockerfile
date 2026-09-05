@@ -69,6 +69,14 @@ COPY packages/protocol/package.json ./packages/protocol/
 COPY --from=build /app/apps/agentplexd/dist ./apps/agentplexd/dist
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY apps/agentplexd/migrations ./apps/agentplexd/migrations
+# The client. The build stage already produced it and this image dropped it
+# until now, which made every image an installer could produce a hub with
+# nothing to serve. It is static files: the runtime needs the bytes and none of
+# the dependencies that made them, which is why this is a copy out of `build`
+# and not a second entry in `runtime-deps`. The path is the workspace's,
+# because main.js resolves it as ../../web/dist relative to itself, exactly the
+# way it resolves ../migrations.
+COPY --from=build /app/apps/web/dist ./apps/web/dist
 
 # Somewhere for the hub's database to live. The directory has to exist in the
 # image, owned by the user that will write to it: Docker seeds a fresh named

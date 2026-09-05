@@ -6,6 +6,7 @@ import type { OperationRegistry } from './server/operations/operation-registry.j
 import type { ProviderPreflight } from './server/providers/preflight.js';
 import type { ProviderRegistry } from './server/providers/provider-registry.js';
 import type { BeaconSource } from './hub/discovery/beacon-listener.js';
+import type { WebAssetFileSystem } from './hub/web/web-assets.js';
 import type { BeaconNetwork } from './server/server-beacon.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { TerminalManager } from './server/terminal-manager.js';
@@ -31,6 +32,13 @@ export interface RuntimeDependencies {
   readonly openDatabase: (path: string) => Database;
   readonly migrationsDirectory: string;
   readonly migrationFileSystem: MigrationFileSystem;
+  /**
+   * The built PWA the hub role serves, injected for the same reason the
+   * migrations are. Where it sits is a fact about the installation — a
+   * workspace build, a layer in the image, a published package — and `main` is
+   * the only place that has read one.
+   */
+  readonly webAssets: WebAssetFileSystem;
   /** The store volumes, injected for the same reason the migrations directory is. */
   readonly storeFileSystem: StoreFileSystem;
   /**
@@ -128,6 +136,7 @@ export async function startRuntime(
     openDatabase,
     migrationsDirectory,
     migrationFileSystem,
+    webAssets,
     storeFileSystem,
     tokens,
     providers,
@@ -164,6 +173,7 @@ export async function startRuntime(
         timers,
         migrationsDirectory,
         migrationFileSystem,
+        webAssets,
         host,
         port: config.hub.port,
         clientToken: config.hub.clientToken,
