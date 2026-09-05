@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { createFakeProcessProbe } from '../fake-process-probe.js';
+import { createClaudeAdapter } from '../providers/claude-adapter.js';
+import { createFakeProviderFiles } from '../providers/fake-provider-files.js';
+import { createProviderRegistry } from '../providers/provider-registry.js';
 import { createFakeProcessRunner, printed } from './fake-process-runner.js';
 import { createOperationRegistry } from './operation-registry.js';
+import { createSetupOperationRegistry } from './setup-operation-registry.js';
 
 /**
  * These are the tests about the registry as a rule rather than about any one
@@ -123,6 +128,39 @@ describe('the operation registry', () => {
     // And the directory really did reach git as an argument it parses.
     expect(runner.requests[0]?.args).toContain('-C');
     expect(runner.requests[0]?.args).toContain(DIRECTORY);
+  });
+
+  it('holds none of the operations setup has', () => {
+    // AGX-71, and the assertion the second registry exists for. A long-running
+    // daemon that can be asked over a socket to fetch and execute an installer
+    // is precisely the failure mode the registry exists to prevent, so
+    // provisioning is not a flag on this registry, not an operation guarded by
+    // a caller check, and not present at all.
+    //
+    // Both sides are read from the registries rather than written down here, so
+    // a fourth provisioning operation added in a year is checked by this test
+    // without anybody remembering it exists. That is the only way a rule about
+    // "every spawn" survives the people who were not in the room for it.
+    const wire = createOperationRegistry(createFakeProcessRunner());
+    const setup = createSetupOperationRegistry({
+      runner: createFakeProcessRunner(),
+      providers: createProviderRegistry([
+        createClaudeAdapter({
+          files: createFakeProviderFiles(),
+          probe: createFakeProcessProbe({}),
+        }),
+      ]),
+    });
+
+    const wireNames = new Set(wire.operations.map(({ name }) => name));
+    expect(setup.operations).not.toEqual([]);
+    for (const { name } of setup.operations) expect(wireNames).not.toContain(name);
+
+    // And the namespace itself, so that a provisioning operation cannot reach
+    // the wire by being spelled differently from the one setup registered.
+    // Setup owns `provider.`; this registry holds nothing in it.
+    for (const { name } of setup.operations) expect(name).toMatch(/^provider\./);
+    for (const name of wireNames) expect(name).not.toMatch(/^provider\./);
   });
 
   it('starts no child for any operation until its request has parsed', async () => {

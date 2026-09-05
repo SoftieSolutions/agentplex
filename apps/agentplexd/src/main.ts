@@ -183,7 +183,10 @@ async function main(): Promise<void> {
       // this process to run a provider probe.
       preflight,
       // Closed: the operations are a list in that module, and there is no
-      // parameter here through which a build could add one.
+      // parameter here through which a build could add one. Provisioning is not
+      // among them, and `createSetupOperationRegistry` is deliberately not
+      // called here: a serving agentplexd has no installer to be asked for over
+      // a socket, rather than one it declines to use.
       operations: createOperationRegistry(processRunner),
       // The only place a real pty is opened. It is handed the same composed
       // environment as the one-shot runner, so a provider binary resolves the

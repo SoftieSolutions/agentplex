@@ -124,7 +124,15 @@ export async function runOperation<Request, Result>(
   return operation.read(outcome, parsed.data);
 }
 
-/** Zod's issues, flattened into the one line a refusal carries. */
-function describeIssues(issues: readonly { path: PropertyKey[]; message: string }[]): string {
+/**
+ * Zod's issues, flattened into the one line a refusal carries.
+ *
+ * Exported for `runSetupOperation`, which parses a request exactly as this does
+ * and must say no in exactly the same words. Two spellings of "that request does
+ * not typecheck" would be two things to keep in step for no benefit.
+ */
+export function describeIssues(
+  issues: readonly { path: PropertyKey[]; message: string }[],
+): string {
   return issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
 }
