@@ -129,16 +129,21 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # A person, not root, which is the policy under test.
-RUN useradd --create-home operator \
-    && echo 'operator ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/operator \
-    && chmod 0440 /etc/sudoers.d/operator
+#
+# Named `alice` and not `operator`: Debian's base image already ships an
+# `operator` *group* at GID 37, and `useradd` refuses a user whose implied group
+# exists, with an exit code of 9 and a message about `-g`. A stand-in name with
+# no meaning to the distribution has no such collision to have.
+RUN useradd --create-home alice \
+    && echo 'alice ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/alice \
+    && chmod 0440 /etc/sudoers.d/alice
 
 COPY --from=package /package/ /package/
 COPY apps/agentplexd/packaging/install.sh /install.sh
 
-USER operator
-ENV HOME=/home/operator
-WORKDIR /home/operator
+USER alice
+ENV HOME=/home/alice
+WORKDIR /home/alice
 # Pipelines below carry the assertion, and sh's default is the exit status of
 # the last command in one -- so without this a failing install ending in `tee`
 # would be a green layer.
@@ -186,7 +191,7 @@ RUN test -f "$HOME/.config/systemd/user/agentplexd.service" \
 # ticket that installs providers and is not on this branch. It goes into the
 # prefix the script created, through the npm that came with the Node the script
 # installed, which is exactly what setup's install plan does.
-ENV PATH=/home/operator/.agentplex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/home/alice/.agentplex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN npm install --global --prefix "$HOME/.agentplex" @anthropic-ai/claude-code
 
 # What is asserted is the directory: the provider resolved out of the prefix
@@ -201,11 +206,17 @@ RUN npm install --global --prefix "$HOME/.agentplex" @anthropic-ai/claude-code
 # statement about this container, so the report is what is read and not the
 # code. Reaching a report at all is also the node-pty assertion -- the process
 # loads the addon on the way to printing one.
+#
+# The report goes to a file rather than through a pipe, and that is this stage's
+# `pipefail` being taken seriously rather than worked around: under it, `doctor
+# | grep` fails on doctor's exit 1 no matter what grep found. `|| true` is
+# therefore deliberate and narrow -- the exit code of this one command is not
+# the assertion, and the two lines below are.
 RUN agentplexd doctor --role=server \
     --bin-path="$HOME/.agentplex/bin" \
-    --server-identity-file="$HOME/.agentplex/server.json" \
-    | tee /dev/stderr \
-    | grep -Eq '^  claude +(ready|unauthenticated|unknown) +.*/home/operator/\.agentplex/bin$'
+    --server-identity-file="$HOME/.agentplex/server.json" >/tmp/doctor.log 2>&1 || true
+RUN cat /tmp/doctor.log \
+    && grep -Eq '^  claude +(ready|unauthenticated|unknown) +.*/home/alice/\.agentplex/bin$' /tmp/doctor.log
 
 # The fleet path, which is a different account, a different prefix and a
 # different unit scope. It runs as root because that is what it is for: it
@@ -213,9 +224,9 @@ RUN agentplexd doctor --role=server \
 # as root -- the unit carries User=.
 #
 # PATH is put back to a machine's own first, so that this run finds no Node and
-# installs its own into /opt/agentplex. Leaving the operator's prefix on it
-# would have this adopt a runtime inside another user's home directory, which is
-# a Node the service account may not be able to read.
+# installs its own into /opt/agentplex. Leaving alice's prefix on it would have
+# this adopt a runtime inside another user's home directory, which is a Node the
+# service account may not be able to read.
 USER root
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # No --no-setup here: --system declines a wizard on its own, and the run has to

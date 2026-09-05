@@ -82,6 +82,6 @@ services:
     command:
       - bash
       - -c
-      - PATH=/home/operator/.agentplex/bin:$$PATH agentplexd doctor --role=server
-        --bin-path=/home/operator/.agentplex/bin
-        --server-identity-file=/home/operator/.agentplex/server.json
+      - PATH=/home/alice/.agentplex/bin:$$PATH agentplexd doctor --role=server
+        --bin-path=/home/alice/.agentplex/bin
+        --server-identity-file=/home/alice/.agentplex/server.json

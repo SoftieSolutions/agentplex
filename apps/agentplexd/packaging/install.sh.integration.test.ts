@@ -36,6 +36,13 @@ const documentation = join(packagingDirectory, '..', '..', '..', 'docs', 'instal
 
 const suiteIsRoot = process.getuid?.() === 0;
 
+/**
+ * Whether this machine could run a systemd unit, asked the way the script asks
+ * it. The check container is a Node image and has no systemd, so a suite that
+ * assumed one would be asserting about the machine it was written on.
+ */
+const machineHasSystemd = spawnSync('bash', ['-c', 'command -v systemctl']).status === 0;
+
 interface RunResult {
   readonly status: number;
   readonly stdout: string;
@@ -169,8 +176,23 @@ describe('the plan a dry run prints', () => {
     expect(result.status).toBe(0);
     expect(planned(result.stdout, 'package')).toBe(`agentplexd@latest into ${home}/.agentplex`);
     expect(planned(result.stdout, 'settings')).toContain(`${home}/.agentplex/agentplexd.env`);
-    expect(planned(result.stdout, 'unit')).toContain(
-      `${home}/.config/systemd/user/agentplexd.service`,
+  });
+
+  /**
+   * The unit line is the one thing in the plan that depends on the machine
+   * running the suite, so it is asserted against that machine rather than
+   * against an assumption about it. The check container is a Node image with no
+   * systemd in it, and a plan claiming it would write a unit there would be the
+   * over-claim, not the skip.
+   */
+  it('plans a user unit where there is a systemd to run one, and says so where there is not', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=server']);
+
+    expect(planned(result.stdout, 'unit')).toBe(
+      machineHasSystemd
+        ? `${home}/.config/systemd/user/agentplexd.service (write, not enabled)`
+        : 'skipped: no systemctl on this machine',
     );
   });
 
