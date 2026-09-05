@@ -22,6 +22,7 @@ import { createProviderPreflight } from './server/providers/preflight.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createTerminalManager } from './server/terminal-manager.js';
+import { runSetupCommand, setupUsage } from './setup/setup-command.js';
 import { systemClock } from './shared/clock.js';
 import { randomIdGenerator } from './shared/ids.js';
 import { createLogger, jsonLineSink } from './shared/logger.js';
@@ -85,11 +86,23 @@ const WEB_ROOT = fileURLToPath(new URL('../../web/dist', import.meta.url));
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
   const writeError = (line: string): void => void process.stderr.write(`${line}\n`);
-  const loaded = loadConfig({ argv: process.argv.slice(2), env: process.env });
+  const argv = process.argv.slice(2);
+
+  // `setup` is a different program that happens to share a binary: it reads a
+  // plan rather than a configuration, binds no port, opens no database, and
+  // exits when it is done. It is dispatched before `loadConfig` because the
+  // daemon's flags are not its flags, and because the settings a run of setup
+  // produces are the ones the daemon will later be started with.
+  if (argv[0] === 'setup') {
+    process.exitCode = await setUp(argv.slice(1), write);
+    return;
+  }
+
+  const loaded = loadConfig({ argv, env: process.env });
 
   if (!loaded.ok) {
     for (const problem of loaded.problems) process.stderr.write(`agentplexd: ${problem}\n`);
-    process.stderr.write(`\n${usage()}\n`);
+    process.stderr.write(`\n${usage()}\n\n${setupUsage()}\n`);
     process.exitCode = EXIT_BAD_CONFIGURATION;
     return;
   }
@@ -241,6 +254,47 @@ async function main(): Promise<void> {
       });
     });
   }
+}
+
+/**
+ * `agentplexd setup --plan <file>`, wired.
+ *
+ * The two factories are the whole of why this is here rather than in the command
+ * itself: what a child of setup inherits comes from the directories the plan
+ * names, and this is the only place allowed to read `process.env`. The command
+ * reads the plan, hands the directories back, and gets a runner composed exactly
+ * the way the server's will be — which is what makes a replay find what the
+ * previous one installed instead of installing it again.
+ *
+ * The provisioning operations are reachable from this branch and from nowhere
+ * else: `startRuntime` below is wired with the wire-facing registry, which holds
+ * none of them, so a serving agentplexd has no installer to be asked for over a
+ * socket rather than one it declines to use. That is the whole of AGX-71's split,
+ * and this is the process that is on the other side of it.
+ */
+async function setUp(argv: readonly string[], write: (line: string) => void): Promise<number> {
+  return runSetupCommand(argv, {
+    runnerFor: (binPath) =>
+      createNodeProcessRunner({
+        environment: childEnvironment({ inherited: process.env, binPath }),
+      }),
+    // The same one line the runtime has, for the same reason: which providers
+    // this build drives is a fact about the build and belongs in the entrypoint.
+    providersFor: (runner) =>
+      createProviderRegistry([
+        createClaudeAdapter({
+          files: nodeProviderFiles,
+          probe: createNodeProcessProbe({ runner }),
+        }),
+      ]),
+    files: nodeStoreFileSystem,
+    ids: randomIdGenerator,
+    // A plan that brought no pairing token gets one minted here, from the same
+    // CSPRNG a server's first start would have used.
+    tokens: randomTokenMinter,
+    write,
+    writeError: (line) => void process.stderr.write(`${line}\n`),
+  });
 }
 
 await main();

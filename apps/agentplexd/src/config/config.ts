@@ -14,7 +14,7 @@ import { LOG_LEVELS, type LogLevel } from '../shared/logger.js';
  * session runner in one process, which is a wiring choice and not a third kind
  * of program.
  */
-const ROLES = ['hub', 'server', 'both'] as const;
+export const ROLES = ['hub', 'server', 'both'] as const;
 export type Role = (typeof ROLES)[number];
 
 /**
