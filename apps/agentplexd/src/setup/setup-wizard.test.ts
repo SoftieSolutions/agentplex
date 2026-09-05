@@ -2,11 +2,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFakeProcessProbe } from '../server/fake-process-probe.js';
+import { createFakePtyFactory, type FakePtyFactory } from '../server/fake-pty.js';
 import { createFakeStoreFiles, type FakeStoreFiles } from '../server/fake-store-files.js';
 import { printed, refused } from '../server/operations/fake-process-runner.js';
 import { createClaudeAdapter } from '../server/providers/claude-adapter.js';
 import { createFakeProviderFiles } from '../server/providers/fake-provider-files.js';
 import { createProviderRegistry } from '../server/providers/provider-registry.js';
+import { createPtySupervisor } from '../server/pty-supervisor.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine, type FakeSetupMachine } from './fake-setup-machine.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
@@ -51,6 +53,30 @@ const INSTALL_ARGV =
 /** Everything the operator presses return through, on a machine with claude on it. */
 const STRAIGHT_THROUGH = ['', '', '', '', '', '', ''];
 
+/**
+ * The same, on a machine whose `claude` is logged out: one more return, for the
+ * offer to log it in. Pressing return through the whole wizard is meant to end
+ * with the providers logged in, so that offer's own answer is yes.
+ */
+const LOG_IN_TOO = ['', '', '', '', '', '', '', ''];
+
+/** A machine with `claude` on it that nobody has signed into. */
+function loggedOutMachine(): FakeMachine {
+  return createFakeMachine({
+    programs: {
+      'claude --version': printed(fixture('claude-version.txt')),
+      // Captured with the exit code it really has: 2.1.259 exits 1 while
+      // printing the answer.
+      'claude auth status --json': {
+        kind: 'exited',
+        exitCode: 1,
+        stdout: fixture('claude-auth-status-logged-out.json'),
+        stderr: '',
+      },
+    },
+  });
+}
+
 function loggedIn(): Readonly<Record<string, ReturnType<typeof printed>>> {
   return {
     'claude --version': printed(fixture('claude-version.txt')),
@@ -65,6 +91,9 @@ interface Run {
   readonly machine: FakeSetupMachine;
   readonly files: FakeStoreFiles;
   readonly binPaths: readonly (readonly string[])[];
+  /** The directories every pty the wizard opened would have resolved through. */
+  readonly ptyBinPaths: readonly (readonly string[])[];
+  readonly ptys: FakePtyFactory;
 }
 
 async function run(
@@ -74,9 +103,10 @@ async function run(
     readonly runner?: FakeMachine;
     readonly files?: FakeStoreFiles;
     readonly role?: 'hub' | 'server' | 'both';
+    readonly terminal?: FakeTerminal;
   } = {},
 ): Promise<Run> {
-  const terminal = createFakeTerminal({ answers });
+  const terminal = options.terminal ?? createFakeTerminal({ answers });
   const machine =
     options.machine ??
     createFakeSetupMachine({
@@ -88,6 +118,15 @@ async function run(
   const runner = options.runner ?? createFakeMachine({ programs: loggedIn() });
   const files = options.files ?? createFakeStoreFiles();
   const binPaths: (readonly string[])[] = [];
+  const ptyBinPaths: (readonly string[])[] = [];
+  // A login that prints something and ends, which is what one the operator
+  // completed looks like from outside the pty.
+  const ptys = createFakePtyFactory({
+    child: {
+      prints: 'Log in at https://example.invalid/\r\n',
+      exit: { exitCode: 0, signal: null },
+    },
+  });
 
   const outcome = await runSetupWizard(
     { role: options.role ?? null },
@@ -97,6 +136,15 @@ async function run(
       runnerFor: (binPath) => {
         binPaths.push(binPath);
         return runner;
+      },
+      supervisorFor: (binPath) => {
+        ptyBinPaths.push(binPath);
+        return createPtySupervisor({
+          pty: ptys,
+          clock: { now: () => 1_700_000_000_000 },
+          ids: { newId: () => 'login-run' },
+          environment: { PATH: binPath.join(':') },
+        });
       },
       providersFor: () =>
         createProviderRegistry([
@@ -111,7 +159,7 @@ async function run(
     },
   );
 
-  return { outcome, terminal, runner, machine, files, binPaths };
+  return { outcome, terminal, runner, machine, files, binPaths, ptyBinPaths, ptys };
 }
 
 /** The plan the wizard saved, read back through the parser that reads a file. */
@@ -344,28 +392,88 @@ describe('the setup wizard', () => {
     expect(wizard.files.creates).toEqual([]);
   });
 
-  it('names the login to run for a provider that is not logged in', async () => {
-    // The command is the adapter's own login launch, which is the value the pty
-    // supervisor is handed when setup drives the login itself. Reading it out of
-    // the seam is what keeps the sentence true when a provider renames its
-    // subcommand.
+  it('drives the login of a provider that is not logged in, on the pty seam', async () => {
+    // The step this ticket is about. A provider that is installed and logged out
+    // is a session that will not start, and the only thing that fixes it is the
+    // provider's own browser flow — which needs a terminal, which setup is.
+    const wizard = await run(LOG_IN_TOO, { runner: loggedOutMachine() });
+
+    expect(wizard.outcome).toEqual({ kind: 'applied', problems: [] });
+    // The argv is the adapter's own login launch and not a string written in the
+    // wizard, which is what keeps it right when a provider renames a subcommand.
+    expect(wizard.ptys.opened.map((request) => [request.command, ...request.args])).toEqual([
+      ['claude', 'auth', 'login'],
+    ]);
+    // In the store the sessions will run against, not in whichever home the
+    // setup process happens to have.
+    expect(wizard.ptys.opened[0]?.env['CLAUDE_CONFIG_DIR']).toBe(STORE);
+    // And what the login printed reached the operator.
+    expect(wizard.terminal.attachedOutput.join('')).toContain('https://example.invalid/');
+  });
+
+  it('resolves the login through the directories the plan recorded', async () => {
+    // The whole of the adoption rule, applied to the one operation that changes a
+    // provider's state: the copy that gets logged in has to be the copy the
+    // server will run, or the credentials belong to a binary nothing starts.
+    const wizard = await run(LOG_IN_TOO, { runner: loggedOutMachine() });
+
+    expect(wizard.ptyBinPaths).toEqual([[HOMEBREW, `${PREFIX}/bin`]]);
+  });
+
+  it('asks the provider again afterwards rather than believing the login exit code', async () => {
+    // The login exits 0 here and the machine still says logged out, which is
+    // exactly what a flow cancelled at the browser looks like. The probe is what
+    // the preflight, `doctor` and the first session read, so the probe is what
+    // the wizard reports.
+    const wizard = await run(LOG_IN_TOO, { runner: loggedOutMachine() });
+
+    expect(wizard.terminal.transcript).toContain(
+      'The login ran and it still reports itself logged out.',
+    );
+    expect(wizard.terminal.transcript).toContain('Run: claude auth login');
+  });
+
+  it('names the login to run for a provider the operator will log in later', async () => {
+    // Declining is a legitimate answer, and the sentence it gets is the one that
+    // was already true: installed, not logged in, and here is what to type.
+    const wizard = await run(['', '', '', '', '', '', 'n', ''], { runner: loggedOutMachine() });
+
+    expect(wizard.ptys.opened).toEqual([]);
+    expect(wizard.terminal.transcript).toContain(
+      'claude is installed and not logged in. Run: claude auth login',
+    );
+  });
+
+  it('says what is left rather than hanging a login on an input that is not a terminal', async () => {
+    // `printf ... | agentplexd setup`: there is a wizard, because its answers
+    // arrived on stdin, and there is nobody to answer an OAuth prompt.
+    const terminal = createFakeTerminal({
+      answers: LOG_IN_TOO,
+      notATerminal: 'this input is not a terminal',
+    });
+    const wizard = await run([], { runner: loggedOutMachine(), terminal });
+
+    expect(wizard.terminal.transcript).toContain(
+      'Setup could not run the login here: this input is not a terminal',
+    );
+    expect(wizard.terminal.transcript).toContain('Run: claude auth login');
+  });
+
+  it('offers no login for a provider whose state could not be read', async () => {
+    // `authState` is null when the probe would not answer — a wrapper in front
+    // of `claude`, a release that stopped printing what the parser reads. Sending
+    // an operator through a login for that would be inventing a diagnosis, and
+    // the apply path has already reported it in the program's own words.
     const runner = createFakeMachine({
       programs: {
         'claude --version': printed(fixture('claude-version.txt')),
-        'claude auth status --json': {
-          kind: 'exited',
-          exitCode: 1,
-          stdout: fixture('claude-auth-status-logged-out.json'),
-          stderr: '',
-        },
+        'claude auth status --json': printed('Corporate SSO required\n'),
       },
     });
     const wizard = await run(STRAIGHT_THROUGH, { runner });
 
-    expect(wizard.outcome).toEqual({ kind: 'applied', problems: [] });
-    expect(wizard.terminal.transcript).toContain(
-      'claude is installed and not logged in. Run: claude auth login',
-    );
+    expect(wizard.ptys.opened).toEqual([]);
+    expect(wizard.terminal.transcript).toContain('did not report its authentication state');
   });
 
   it('says the local server still has to be paired, and where its token is', async () => {

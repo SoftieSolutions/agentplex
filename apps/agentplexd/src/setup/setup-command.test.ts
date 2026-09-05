@@ -2,12 +2,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFakeProcessProbe } from '../server/fake-process-probe.js';
+import { createFakePtyFactory } from '../server/fake-pty.js';
 import { createFakeStoreFiles, type FakeStoreFiles } from '../server/fake-store-files.js';
 import { printed } from '../server/operations/fake-process-runner.js';
 import type { ProcessRunner } from '../server/operations/process-runner.js';
 import { createClaudeAdapter } from '../server/providers/claude-adapter.js';
 import { createFakeProviderFiles } from '../server/providers/fake-provider-files.js';
 import { createProviderRegistry } from '../server/providers/provider-registry.js';
+import { createPtySupervisor } from '../server/pty-supervisor.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine } from './fake-setup-machine.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
@@ -103,6 +105,16 @@ async function run(
       binPaths.push(binPath);
       return machine;
     },
+    // Composed the way the entrypoint composes it, and reached only from the
+    // wizard, and there only where a provider turns out to be logged out. A
+    // `--plan` replay has nobody to hand a terminal to.
+    supervisorFor: (binPath) =>
+      createPtySupervisor({
+        pty: createFakePtyFactory({ child: { exit: { exitCode: 0, signal: null } } }),
+        clock: { now: () => 1_700_000_000_000 },
+        ids: { newId: () => 'login-run' },
+        environment: { PATH: binPath.join(':') },
+      }),
     providersFor: () =>
       createProviderRegistry([
         createClaudeAdapter({

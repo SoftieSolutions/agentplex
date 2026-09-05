@@ -32,7 +32,65 @@ export interface SetupTerminal {
    * rejects: an input that has ended is an answer of its own kind.
    */
   ask(question: string): Promise<TerminalInput>;
+  /**
+   * Hands the operator's terminal to a running program until it ends.
+   *
+   * This is on the terminal rather than beside it because there is exactly one
+   * operator terminal and two things cannot both be reading it. A separate seam
+   * that reached for the same input would leave the wizard's own line reader
+   * eating the keystrokes meant for the program, echoing them a second time,
+   * and holding on to whatever it managed to parse as an answer to the next
+   * question — silently, and in a way no unit test of either half would show.
+   * Whoever owns the input is who can lend it out.
+   *
+   * Line-oriented output and raw bytes are not the same thing, which is the
+   * other half of why this is one method and not `enterRaw`/`leaveRaw`: for the
+   * duration of an attach the program's bytes go through untouched, and the
+   * only way to guarantee the terminal is put back is for the borrowing to have
+   * a scope.
+   */
+  attach(program: AttachedProgram): Promise<Attached>;
 }
+
+/**
+ * A running program the operator's terminal can be put in front of.
+ *
+ * Deliberately the four things an attach needs and not a `PtyRun`. What setup
+ * drives is a pty run today, and this file is the seam a wizard is written
+ * against rather than the server's session bookkeeping — a run id, a scrollback
+ * and a pid are none of a terminal's business. `PtyRun` satisfies it as it is.
+ */
+export interface AttachedProgram {
+  /** Raw output. Returns the unsubscribe, which an attach owes on the way out. */
+  subscribe(listener: (chunk: Uint8Array) => void): () => void;
+  /** Keystrokes, as the operator typed them. */
+  write(input: string): void;
+  resize(cols: number, rows: number): void;
+  /** Settles when the program has ended. The value is the program's, not this. */
+  whenExited(): Promise<unknown>;
+}
+
+/**
+ * How the operator's terminal came back.
+ *
+ * Three outcomes because the caller does something different with each, and the
+ * difference is what the ticket calls degrading honestly: a program that ran to
+ * completion is worth re-probing, a program the operator walked away from has
+ * to be killed rather than left holding a terminal nobody is at, and a terminal
+ * that could never have been handed over means printing what to run instead.
+ */
+export type Attached =
+  /** The program ended while the operator's terminal was in front of it. */
+  | { readonly kind: 'ended' }
+  /** The operator's input ended first. The program is still running. */
+  | { readonly kind: 'abandoned' }
+  /**
+   * There was no terminal to hand over: a piped stdin, a `< /dev/null`, an
+   * input that has already ended. An interactive program needs an interactive
+   * terminal, and pretending otherwise produces a child sitting on an OAuth
+   * prompt that nobody can ever answer.
+   */
+  | { readonly kind: 'unavailable'; readonly problem: string };
 
 export type TerminalInput =
   | { readonly kind: 'typed'; readonly text: string }

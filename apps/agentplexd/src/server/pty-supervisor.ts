@@ -85,6 +85,27 @@ export interface PtyRun {
   readonly startedAt: number;
   /** `null` while it is still running. */
   readonly exit: PtyExit | null;
+  /**
+   * Settles when the child has ended, with the exit it ended on.
+   *
+   * A promise rather than a subscription, and rather than nothing at all.
+   *
+   * Every existing caller reads `exit` when it happens to be looking — a status
+   * being computed, a listing being built — and for those "has it ended yet" is
+   * the honest question. Setup's login step is the first caller whose whole job
+   * is to wait: it hands the operator's terminal to a `claude auth login` and
+   * takes it back when that login is over, and there is nothing else for it to
+   * do in between. Polling `exit` on a timer would need a timer seam in the
+   * wizard and would make the answer arrive up to an interval late, which on a
+   * terminal being handed back is a visible stall.
+   *
+   * A promise rather than an `onExit(listener)` because an exit happens once and
+   * a listener registered a tick after it fires never hears it — a caller that
+   * launched, attached and then subscribed would wait forever for a child that
+   * had already gone. This settles for a caller that arrives late, which is the
+   * only shape of the two that cannot be used wrongly.
+   */
+  whenExited(): Promise<PtyExit>;
   /** Recent output, oldest first, trimmed by whole chunks. */
   scrollback(): readonly Uint8Array[];
   /** Whether the beginning has been dropped, so a viewer can say so. */
@@ -205,6 +226,14 @@ function trackRun(pty: Pty, runId: string, startedAt: number, scrollbackBytes: n
   const listeners = new Set<(chunk: Uint8Array) => void>();
   let exit: PtyExit | null = null;
 
+  // The executor runs synchronously, so `settle` is assigned before anything
+  // can have exited, and a promise that has already settled still delivers to
+  // whoever awaits it afterwards. That is the property `whenExited` is for.
+  let settle: (exit: PtyExit) => void = () => undefined;
+  const exited = new Promise<PtyExit>((resolve) => {
+    settle = resolve;
+  });
+
   pty.onData((chunk) => {
     buffer.append(chunk);
     for (const listener of listeners) listener(chunk);
@@ -212,6 +241,7 @@ function trackRun(pty: Pty, runId: string, startedAt: number, scrollbackBytes: n
 
   pty.onExit((ended) => {
     exit = ended;
+    settle(ended);
   });
 
   return {
@@ -221,6 +251,10 @@ function trackRun(pty: Pty, runId: string, startedAt: number, scrollbackBytes: n
 
     get exit(): PtyExit | null {
       return exit;
+    },
+
+    whenExited(): Promise<PtyExit> {
+      return exited;
     },
 
     scrollback(): readonly Uint8Array[] {
