@@ -13,6 +13,7 @@
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
     "start": "node dist/main.js",
+    "package": "node packaging/assemble-package.ts",
     "postinstall": "node scripts/fix-node-pty-permissions.js",
     "dev": "node --watch --experimental-strip-types src/main.ts"
   },

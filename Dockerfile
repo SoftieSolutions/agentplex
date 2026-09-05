@@ -47,6 +47,60 @@ COPY . .
 # declarations, so the build is a precondition for checking, not a step after.
 RUN pnpm build
 
+# The publishable package, and then the install nobody in this repository can
+# otherwise perform: a machine that has never seen this checkout.
+#
+# `pnpm package` stages the tarball's contents and `npm pack` seals them. Both
+# run here rather than on a laptop because the thing being tested is what a
+# stranger gets, and a laptop with a warm pnpm store cannot tell you that.
+FROM build AS package
+RUN pnpm --filter agentplexd package \
+    && mkdir -p /package \
+    && cd apps/agentplexd/release \
+    && npm pack --pack-destination /package
+
+# The clean-install check. Stock `debian:bookworm-slim` with nothing but Node
+# added, which is the machine `install.sh` will meet.
+FROM debian:bookworm-slim AS install-check
+# Node, npm and corepack, taken from the official image rather than a distro
+# package, so the version is the one this workspace declares. `/usr/local` is
+# where that image keeps all three.
+COPY --from=node:24-bookworm-slim /usr/local /usr/local
+# The toolchain decision, made visible. node-pty ships prebuilt binaries for
+# macOS and Windows only, so on Linux npm compiles the addon and node-gyp needs
+# python3, make and a C++ compiler; without them the very first command of the
+# very first install dies inside node-gyp with an error that names neither
+# agentplex nor a missing compiler. `install.sh` (AGX-78) installs exactly these
+# on the Linux path, and this line is what that decision looks like when
+# something checks it. ca-certificates is not part of it: a bare Debian has no
+# trust store at all, so npm could not reach a registry over TLS to fail at
+# node-gyp in the first place.
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes ca-certificates python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=package /package/ /package/
+
+# Deliberately the ticket's own command, with no flags to help it along. npm
+# 11.19 warns that node-pty's and agentplexd's install scripts are "not yet
+# covered by allowScripts" and runs them anyway; an npm that starts enforcing
+# that gate turns this line red, which is the whole reason for testing an
+# install rather than reasoning about one.
+RUN npm install --global /package/agentplexd-*.tgz
+
+# Three assertions, and the first is the one that matters. `doctor` reaches its
+# report only by loading every module `main.js` imports, and node-pty is among
+# them: a report on stdout is proof that the native addon was compiled here and
+# can be loaded. It exits 1 on this machine because no coding agent is installed
+# on it, which is a true statement about the container and not a packaging
+# failure, so the report is what gets asserted and not the code.
+RUN agentplexd doctor --role=server --server-identity-file=/var/lib/agentplex/server.json \
+    | tee /dev/stderr | grep -qx providers
+# The client and the schema travel inside the package or the hub has nothing to
+# serve and no database to open. Read back out of the installed tree, at the
+# paths `main.js` resolves rather than the paths packaging wrote.
+RUN test -f "$(npm root -g)/agentplexd/apps/web/dist/index.html" \
+    && test -f "$(npm root -g)/agentplexd/apps/agentplexd/migrations/0001_hub_identity.sql"
+
 # Runtime dependencies only, resolved on their own rather than pruned out of
 # the build stage: a prune leaves whatever it failed to notice.
 FROM manifests AS runtime-deps

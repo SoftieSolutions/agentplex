@@ -45,3 +45,24 @@ services:
   test:
     <<: *checks
     command: ['pnpm', 'test']
+
+  # The one check that is not about this tree. `install-check` assembles the
+  # publishable package, packs it, and installs it with a bare npm on a stock
+  # `debian:bookworm-slim` with nothing but Node added -- the machine a user
+  # actually has, and the only place the native addon, the bundled protocol and
+  # the `bin` shebang are exercised together.
+  #
+  # The assertions are RUN lines inside that stage, so this passes or fails
+  # during `--build`. The command below runs the report again for a person to
+  # read: `doctor` exits 1 in a container with no coding agent installed, which
+  # is a true statement about the container, so what is checked is that the
+  # report was produced at all.
+  install:
+    build:
+      context: .
+      target: install-check
+    command:
+      - sh
+      - -c
+      - agentplexd doctor --role=server --server-identity-file=/var/lib/agentplex/server.json
+        | tee /dev/stderr | grep -qx providers

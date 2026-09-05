@@ -1,6 +1,9 @@
 **/node_modules
 **/dist
 **/coverage
+# The staged package. The `package` stage assembles its own from the build it
+# has just made; one carried in from a laptop could only be older than that.
+apps/agentplexd/release
 .git
 .env
 .env.local

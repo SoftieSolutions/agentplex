@@ -20,7 +20,9 @@ const restrictedImports = (extra) => ['error', { patterns: [forbidAppInternals, 
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/*.d.ts'],
+    // `apps/agentplexd/release` is the staged package: every file in it is a
+    // copy of something already linted where it was written.
+    ignores: ['**/dist/**', '**/coverage/**', '**/*.d.ts', 'apps/agentplexd/release/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
