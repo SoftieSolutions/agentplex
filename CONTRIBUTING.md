@@ -26,6 +26,19 @@ pnpm docker:typecheck
 pnpm docker:test
 ```
 
+Two further checks are about what a stranger gets rather than about this tree,
+and CI runs each under its own name for that reason:
+
+```sh
+pnpm docker:install    # the published package, installed by a bare npm
+pnpm docker:bootstrap  # install.sh, on a Debian container with no Node on it
+pnpm lint:shell        # shellcheck over install.sh
+```
+
+`pnpm lint:shell` is deliberately not part of `pnpm lint`: the image the checks
+run in is a Node image, and adding shellcheck to it to lint one file is a worse
+trade than a second command. CI runs it on the runner, which ships one.
+
 ## The shape of the codebase
 
 A few rules carry most of the weight. They are not style preferences; each one

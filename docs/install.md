@@ -17,7 +17,153 @@ covered under [The server role, bare metal](#the-server-role-bare-metal).
 > answers `/health`; it does not yet run sessions. Everything below is real
 > today, and the parts that are not yet wired say so.
 
+Three deployments follow from those two roles — one machine, one network,
+several EC2 instances — and each is walked through end to end in
+[deployments.md](deployments.md).
+
+## The bootstrap script
+
+On a machine that has nothing on it yet, this is the whole install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/<tag>/apps/agentplexd/packaging/install.sh | bash
+```
+
+`--role=both` is the default; `bash -s --` passes options through:
+
+```sh
+curl -fsSL <url> | bash -s -- --role=server              # a session machine
+curl -fsSL <url> | bash -s -- --role=hub                 # a hub box
+curl -fsSL <url> | bash -s -- --role=server --no-setup   # takes a plan later
+```
+
+It ensures a Node runtime and the C++ toolchain, installs the `agentplexd`
+package, writes an environment file and a systemd unit it does not start, and
+hands over to `agentplexd setup`. It knows nothing about providers, stores or
+databases — everything provider-specific lives in TypeScript beside the adapter
+that knows the provider, so adding a provider is never an edit to a shell script
+nobody tests.
+
+| Option           | Meaning                                                     |
+| ---------------- | ----------------------------------------------------------- |
+| `--role=<role>`  | `hub`, `server` or `both`; pre-seeds setup (default `both`) |
+| `--no-setup`     | stop once the binary lands                                  |
+| `--system`       | install under a dedicated service account; needs root       |
+| `--version=<v>`  | pin the `agentplexd` version                                |
+| `--prefix=<dir>` | install somewhere other than the default prefix             |
+| `--dry-run`      | print the plan and change nothing                           |
+| `--print-unit`   | print the systemd unit it would write, and stop             |
+| `--help`         | the same table                                              |
+
+`--role` pre-seeds setup rather than replacing it. `--no-setup` is for a machine
+that will receive a plan file from cloud-init or a configuration manager and run
+`agentplexd setup --plan` itself, which is the EC2 tier in
+[deployments.md](deployments.md).
+
+### Download, read, execute
+
+`curl | bash` is an acceptable happy path and an unacceptable only path. The
+same script, read first:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/<tag>/apps/agentplexd/packaging/install.sh -o install.sh
+less install.sh
+bash install.sh --role=server
+```
+
+`bash install.sh --dry-run` goes one better: it resolves every decision the real
+run would make — the prefix, the package spec, whether it will install a Node,
+whether it will install a toolchain and with which package manager, where the
+unit goes — prints them as a plan, and changes nothing.
+
+### Where the script is served from
+
+The URL above is one constant at the top of the script, and a test holds this
+document and that constant together, so there is exactly one place to change.
+
+Three constraints settle it: HTTPS, a path this project controls, and a version
+in that path, so that a command written down today keeps fetching the bytes it
+fetched today. A tag satisfies all three — it names an immutable tree, served
+over TLS, from the repository the script lives in. A short alias in front of it
+(`get.<domain>/v1/install.sh`) is the remaining piece, and it is pending a
+registration rather than a decision.
+
+Until that registration exists, no domain name appears here as a command to run.
+Publishing `curl | bash` against a host nobody has registered is an invitation
+for somebody else to register it, and the instruction would still look exactly
+right on the day they did.
+
+### Not as root
+
+The script refuses to install as root, and the refusal is the point rather than
+caution. A server spawns coding agents with your credentials, reads the provider
+state directories in your home, and writes into your checkouts. Root-owned
+stores and root-run agents are a bad outcome that is tedious to reverse, so the
+default install is for the invoking user, into `~/.agentplex`, with a systemd
+_user_ unit that runs as that user by construction.
+
+`--system` is the other supported path, and it does not run anything as root
+either: it creates an `agentplex` service account, installs into
+`/opt/agentplex`, and writes a system unit carrying `User=agentplex`. It is for
+the fleet case — an image, a scaling group — where there is no human user to be.
+It also never opens a wizard, because there is nobody at that machine to answer
+one; a `--system` install takes a plan file, replayed as the service account.
+
+The prefix is not put on your `PATH` for you. The script prints the one line to
+add, and nothing that matters depends on your having added it: the unit's
+`ExecStart` is an absolute path, and the directories a session resolves agent
+binaries from are recorded as configuration rather than inherited.
+
+### The systemd unit
+
+The unit is written and deliberately not enabled. Nothing can start until the
+environment file has a role, a database file, a client token or an identity file
+in it, and a unit enabled before then would produce a restart loop rather than a
+service.
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now agentplexd
+loginctl enable-linger "$USER"   # so it survives you logging out
+```
+
+For a `--system` install, the same two commands without `--user`.
+
+Four decisions inside it are worth knowing, and `--print-unit` shows the whole
+thing without installing anything:
+
+- **`Environment=PATH=` starts with the prefix**, and carries the directory of
+  the Node the install settled on when that is somewhere a service would never
+  look. A systemd unit gets a minimal `PATH` with no homebrew, no
+  `~/.local/bin` and no version-manager shims, which is the failure this whole
+  design opens with — and it applies to the runtime too, because `agentplexd`
+  is a script whose first line is `#!/usr/bin/env node`. In front of the rest of
+  the machine rather than instead of it: a session is not only the agent, it
+  shells out to `git`, `rg` and whatever else the project needs.
+- **`RestartPreventExitStatus=2`.** Exit 2 is agentplexd saying its
+  configuration is wrong. Restarting will not help and somebody has to act, so
+  the unit stops instead of hiding that message inside a restart loop.
+- **`EnvironmentFile=`, and the file is written once.** Everything in it is a
+  decision somebody made, by hand or through `agentplexd setup`, so re-running
+  the installer leaves an existing one exactly as it is. The same goes for the
+  unit: an existing unit is left alone, and `--print-unit` is how you diff it
+  against what this version would have written.
+- **No sandboxing at all** — no `ProtectHome`, no `ProtectSystem=strict`, no
+  `NoNewPrivileges`. This service's job is to run a developer's own tooling as
+  that developer, against their home directory and their checkouts. Every one of
+  those directives turns that job into a failure that reads like a bug in the
+  agent. The isolation that matters here is the account the service runs as.
+
+The script writes two settings into the environment file and no others: the role
+you asked for, and `AGENTPLEX_BIN_PATH` pointing at the prefix it just created.
+Both are facts the installer had. A database path or a store path is not, and a
+guessed value is worse than an absent one.
+
 ## Installing the package
+
+What the bootstrap script does, by hand. Reach for this when the machine already
+has Node and a toolchain, or when you would rather run the three steps yourself
+than read a shell script.
 
 ```sh
 npm install --global agentplexd
@@ -155,6 +301,8 @@ and an environment variable is inherited.
 | `--store-path`           | `AGENTPLEX_STORE_PATH`           | none           | A store root, absolute; repeat the flag per store                                     |
 | `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none           | Absolute path to this server's identity; required for `server`, `both`                |
 | `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none           | A directory to resolve agent binaries in, absolute; repeat the flag per directory     |
+| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`            | How many terminals one server keeps open at once                                      |
+| `--announce`             | `AGENTPLEX_ANNOUNCE`             | `false`        | `true` to broadcast a LAN beacon saying where this server is                          |
 | `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`         | `debug`, `info`, `warn`, `error`                                                      |
 
 A container is reached from outside its own loopback, so `0.0.0.0` is the
@@ -331,9 +479,9 @@ cat /etc/agentplexd/server.json    # {"serverId": "...", "token": "..."}
 
 The token is never logged; the server logs only the path, because a secret in a
 log file is one that has to be rotated. Pairing is always this — the user typing
-that server's token into the hub. LAN discovery, when it arrives, pre-fills the
-address and nothing else: being heard on a network is nowhere near being trusted
-by it.
+that server's token into the hub. LAN discovery pre-fills the address and
+nothing else: being heard on a network is nowhere near being trusted by it. See
+[One network](deployments.md#one-network) for how a server is heard at all.
 
 Tokens are per server, so revoking one instance touches no other. If a server
 loses its identity file it comes back as a machine the hub has never met, and
@@ -493,3 +641,19 @@ CI, and under a plain `pnpm test` on a laptop with no Docker at all. What that
 file is still for is sameness — every check runs against the same built tree in
 the same image, so a green run there is the evidence CI produces rather than an
 approximation of it.
+
+Two checks are about the bootstrap rather than about this tree:
+
+```sh
+pnpm lint:shell     # shellcheck over install.sh
+pnpm docker:bootstrap
+```
+
+`pnpm lint:shell` is not part of `pnpm lint`, because the image the checks run
+in has no shellcheck in it and adding one to a Node image to lint one file is a
+worse trade than a second command. CI runs it on the runner, which ships one.
+
+`pnpm docker:bootstrap` is the acceptance criterion for the script: a stock
+`debian:bookworm-slim` with no Node, no compiler and no agentplexd, three
+packages added to model the machine a person actually has, and then `install.sh`
+run as an unprivileged user with `agentplexd doctor` at the end of it.

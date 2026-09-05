@@ -66,3 +66,22 @@ services:
       - -c
       - agentplexd doctor --role=server --server-identity-file=/var/lib/agentplex/server.json
         | tee /dev/stderr | grep -qx providers
+
+  # The bootstrap, on the machine it was written for: a stock
+  # `debian:bookworm-slim` with no Node, no compiler and no agentplexd, where
+  # `install.sh` has to produce all three as an unprivileged user.
+  #
+  # The assertions are RUN lines inside `bootstrap-check`, so this passes or
+  # fails during `--build`. The command below prints the report a person wants
+  # to see afterwards: which provider `doctor` found, and which directory it
+  # came out of.
+  bootstrap:
+    build:
+      context: .
+      target: bootstrap-check
+    command:
+      - bash
+      - -c
+      - PATH=/home/operator/.agentplex/bin:$$PATH agentplexd doctor --role=server
+        --bin-path=/home/operator/.agentplex/bin
+        --server-identity-file=/home/operator/.agentplex/server.json

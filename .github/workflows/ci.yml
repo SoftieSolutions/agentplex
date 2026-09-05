@@ -133,3 +133,48 @@ jobs:
           context: .
           target: install-check
           cache-from: type=gha
+
+  # The bootstrap: `install.sh` against the machine it was written for. The job
+  # above starts from a container that already has Node and a compiler, because
+  # that is the artifact's criterion; this one starts from a container that has
+  # neither, because producing them is the script's.
+  #
+  # shellcheck runs on the runner and not in a container. The check image is a
+  # Node image, and adding a Haskell binary to it to lint one shell script is a
+  # worse trade than a job that runs the tool the runner already ships. It is
+  # first because it costs seconds: a quoting bug should not wait behind a
+  # container that downloads a runtime to find it.
+  bootstrap:
+    name: bootstrap
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # So that the command run here is the command in package.json, which is
+      # the command a contributor runs. shellcheck itself is on the runner.
+      - name: Install pnpm
+        run: corepack enable && corepack install
+
+      - name: Lint install.sh
+        run: pnpm lint:shell
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Every assertion is a RUN line inside the stage -- the runtime it
+      # downloaded, the toolchain sudo installed, the unit systemd itself
+      # verified, and `doctor` naming the provider and the directory it resolved
+      # from -- so building it is running them.
+      - name: Bootstrap a stock Debian container with install.sh
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: bootstrap-check
+          cache-from: type=gha
