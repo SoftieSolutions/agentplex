@@ -22,6 +22,8 @@ import { createProviderPreflight } from './server/providers/preflight.js';
 import { createProviderRegistry } from './server/providers/provider-registry.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createTerminalManager } from './server/terminal-manager.js';
+import { createNodeSetupMachine } from './setup/node-setup-machine.js';
+import { createNodeSetupTerminal } from './setup/node-setup-terminal.js';
 import { runSetupCommand, setupUsage } from './setup/setup-command.js';
 import { systemClock } from './shared/clock.js';
 import { randomIdGenerator } from './shared/ids.js';
@@ -257,14 +259,20 @@ async function main(): Promise<void> {
 }
 
 /**
- * `agentplexd setup --plan <file>`, wired.
+ * `agentplexd setup`, wired: the wizard and the plan replay both.
  *
  * The two factories are the whole of why this is here rather than in the command
- * itself: what a child of setup inherits comes from the directories the plan
- * names, and this is the only place allowed to read `process.env`. The command
- * reads the plan, hands the directories back, and gets a runner composed exactly
- * the way the server's will be — which is what makes a replay find what the
- * previous one installed instead of installing it again.
+ * itself: what a child of setup inherits comes from the directories in hand, and
+ * this is the only place allowed to read `process.env`. The command hands the
+ * directories back — out of a plan on one path, out of what the wizard found on
+ * the other — and gets a runner composed exactly the way the server's will be,
+ * which is what makes a replay find what the previous run installed instead of
+ * installing it again.
+ *
+ * The terminal and the machine are the wizard's two windows onto the world, and
+ * they are opened here for the same reason: `$HOME` and `$PATH` are environment,
+ * and stdin is this process's own. What the wizard adopts is decided against the
+ * operator's PATH, so that list has to come from the process they started.
  *
  * The provisioning operations are reachable from this branch and from nowhere
  * else: `startRuntime` below is wired with the wire-facing registry, which holds
@@ -274,6 +282,16 @@ async function main(): Promise<void> {
  */
 async function setUp(argv: readonly string[], write: (line: string) => void): Promise<number> {
   return runSetupCommand(argv, {
+    terminal: createNodeSetupTerminal({ input: process.stdin, output: process.stdout }),
+    machine: createNodeSetupMachine({
+      // `os.homedir()` is deliberately not the fallback. It reads the passwd
+      // entry, so under `sudo` it answers with the invoking user's home while
+      // `$HOME` answers root's — two different directories, and the provider
+      // state that matters is in whichever one the operator's shell was using.
+      // A missing `$HOME` is a machine to say something about, not to guess at.
+      home: process.env['HOME'] ?? '',
+      path: process.env['PATH'],
+    }),
     runnerFor: (binPath) =>
       createNodeProcessRunner({
         environment: childEnvironment({ inherited: process.env, binPath }),

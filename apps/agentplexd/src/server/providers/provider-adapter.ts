@@ -37,6 +37,26 @@ export interface ProviderAdapter {
   readonly provider: Provider;
 
   /**
+   * Where this provider keeps its state when nobody has told it otherwise,
+   * relative to a home directory.
+   *
+   * A store's location is configuration everywhere else in this codebase, and
+   * this does not change that: it is the one directory setup can *offer*, so
+   * that an operator installing on their own laptop presses return instead of
+   * typing a path they would have had to look up. Nothing reads it at runtime.
+   *
+   * It sits on the adapter because it is provider knowledge — `.claude` is
+   * Claude Code's answer and nobody else's — and the alternative was the wizard
+   * carrying a list of directories keyed by provider name, which is the shape
+   * that makes a second provider an edit to the setup path instead of a new
+   * file. Relative to a home directory rather than absolute for the reason a
+   * plan's `installPrefix` is absolute and this is not: this is a fact about the
+   * provider, and the home directory it is resolved against is a fact about the
+   * machine setup is running on.
+   */
+  readonly defaultStoreDirectory: string;
+
+  /**
    * Every session this provider has in the given store.
    *
    * Never throws for a session it cannot read: an unreadable transcript is a

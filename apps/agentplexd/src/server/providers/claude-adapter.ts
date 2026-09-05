@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { sessionIdSchema, type SessionStatus, type StoreDescriptor } from '@agentplex/protocol';
 import type { ProcessProbe } from '../process-probe.js';
-import { planClaudeLaunch } from './claude-launch.js';
+import { CLAUDE_DEFAULT_STORE_DIRECTORY, planClaudeLaunch } from './claude-launch.js';
 import { createClaudeProvisioning } from './claude-provisioning.js';
 import {
   CLAUDE_SESSIONS_DIRECTORY,
@@ -67,6 +67,8 @@ export interface ClaudeAdapterDependencies {
 export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies): ProviderAdapter {
   return {
     provider: 'claude',
+
+    defaultStoreDirectory: CLAUDE_DEFAULT_STORE_DIRECTORY,
 
     async discover(store: StoreDescriptor): Promise<ProviderDiscovery> {
       // The registry is read first and once, not per session: it is one

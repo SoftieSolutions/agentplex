@@ -169,8 +169,13 @@ export interface ConfigSources {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
-const DEFAULT_HUB_PORT = 8080;
-const DEFAULT_SERVER_PORT = 8081;
+/**
+ * Exported so the wizard can offer the port the daemon will take when nobody
+ * says otherwise. Two lists of defaults that drift apart are a setup run whose
+ * plan names a port nothing ever binds.
+ */
+export const DEFAULT_HUB_PORT = 8080;
+export const DEFAULT_SERVER_PORT = 8081;
 const DEFAULT_LOG_LEVEL: LogLevel = 'info';
 /** Containers reach the process from outside their own loopback. */
 const DEFAULT_HOST = '0.0.0.0';

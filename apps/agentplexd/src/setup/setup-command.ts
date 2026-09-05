@@ -1,29 +1,30 @@
+import { ROLES, type Role } from '../config/config.js';
 import type { ProcessRunner } from '../server/operations/process-runner.js';
 import type { ProviderRegistry } from '../server/providers/provider-registry.js';
 import type { StoreFileSystem } from '../server/store-identity.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { TokenMinter } from '../shared/tokens.js';
-import {
-  applySetupPlan,
-  type ProviderReport,
-  type SetupOutcome,
-  type ServerSetupOutcome,
-} from './apply-setup-plan.js';
+import { applySetupPlan } from './apply-setup-plan.js';
+import { describeOutcome } from './describe-outcome.js';
+import type { SetupMachine } from './setup-machine.js';
 import { parseSetupPlan, setupBinPath } from './setup-plan.js';
+import type { SetupTerminal } from './setup-terminal.js';
+import { runSetupWizard } from './setup-wizard.js';
 
 /**
- * `agentplexd setup --plan <file>`: a plan replayed unattended.
+ * `agentplexd setup`: two front ends onto one provisioning.
  *
- * This is the front end that has no person in it. The interactive wizard is the
- * other one, and it produces a `SetupPlan` rather than doing anything itself, so
- * both ends run the same provisioning against the same value. Building this half
- * first is what gives the wizard something to produce into.
+ * `--plan <file>` replays a plan with no person in it. With no plan, the wizard
+ * asks what it cannot discover, builds a `SetupPlan` out of the answers, hands it
+ * to the same apply path, and offers to save it. Both ends run one code path
+ * against one value, which is the only way an interactive run and an unattended
+ * one can be claimed to produce the same machine.
  *
- * The command is argv, a file, and a report. Every rule about what a plan means
- * lives in `setup-plan.ts`, and everything that touches the machine lives in
- * `apply-setup-plan.ts`, so this file has one job: turn a command line into one
- * of those runs, and turn its outcome into lines somebody can read and an exit
- * code cloud-init can act on.
+ * The command is argv, a plan, and a report. Every rule about what a plan means
+ * lives in `setup-plan.ts`, everything that touches the machine lives in
+ * `apply-setup-plan.ts`, and every question lives in `setup-wizard.ts`, so this
+ * file has one job: turn a command line into one of those runs, and turn its
+ * outcome into an exit code cloud-init can act on.
  */
 
 /** Nothing to report: the machine matches the plan. */
@@ -40,8 +41,13 @@ const EXIT_PROBLEMS = 1;
 const EXIT_BAD_PLAN = 2;
 
 const PLAN_FLAG = '--plan';
+const ROLE_FLAG = '--role';
 
 export interface SetupCommandDependencies {
+  /** Where the wizard asks its questions. Unused on the `--plan` path. */
+  readonly terminal: SetupTerminal;
+  /** What the wizard discovers from: a home directory, a PATH, and a filesystem. */
+  readonly machine: SetupMachine;
   /**
    * The one-shot process seam, built from the directories the plan names.
    *
@@ -68,12 +74,20 @@ export interface SetupCommandDependencies {
 
 export function setupUsage(): string {
   return [
-    'Usage: agentplexd setup --plan <file>',
+    'Usage: agentplexd setup [--role <hub|server|both>]',
+    '       agentplexd setup --plan <file>',
     '',
-    '  Replays a setup plan: the providers to have, the stores to identify, the',
-    '  ports, the directories a server resolves programs in, and the pairing',
-    '  token if the plan brought one. Running the same plan twice leaves the',
-    '  machine in the same state.',
+    '  With no plan, setup asks what it cannot discover. Which providers are',
+    '  installed, which directory each is in, whether they are logged in and',
+    '  which stores exist are all found rather than asked, and the last screen',
+    '  offers to save the plan the answers produced.',
+    '',
+    '  --role pre-seeds the first question rather than replacing it.',
+    '',
+    '  --plan replays one of those files: the providers to have, the stores to',
+    '  identify, the ports, the directories a server resolves programs in, and',
+    '  the pairing token if the plan brought one. Running the same plan twice',
+    '  leaves the machine in the same state.',
   ].join('\n');
 }
 
@@ -81,31 +95,78 @@ export async function runSetupCommand(
   argv: readonly string[],
   dependencies: SetupCommandDependencies,
 ): Promise<number> {
-  const { write, writeError } = dependencies;
+  const { writeError } = dependencies;
   const report = (problems: readonly string[]): number => {
     for (const problem of problems) writeError(`agentplexd setup: ${problem}`);
     writeError(`\n${setupUsage()}`);
     return EXIT_BAD_PLAN;
   };
 
-  const planFile = readPlanFlag(argv);
-  if (!planFile.ok) return report(planFile.problems);
+  const flags = readSetupFlags(argv);
+  if (!flags.ok) return report(flags.problems);
 
-  const file = await dependencies.files.readFile(planFile.file);
-  if (file.kind !== 'read') {
+  return flags.plan === null
+    ? askAndProvision(flags.role, dependencies)
+    : replayPlan(flags.plan, dependencies, report);
+}
+
+/**
+ * The interactive front end, and the exit code its outcome deserves.
+ *
+ * The wizard reports through the terminal it was given, so nothing is written
+ * again here: on a real machine both ends of this are the same tty, and a
+ * problem printed twice reads as two problems.
+ */
+async function askAndProvision(
+  role: Role | null,
+  dependencies: SetupCommandDependencies,
+): Promise<number> {
+  const outcome = await runSetupWizard({ role }, dependencies);
+
+  if (outcome.kind === 'no-input') {
+    // Nothing was asked and nothing was assumed. The other front end is the one
+    // that works without a person, so it is what this points at.
+    dependencies.writeError(
+      `agentplexd setup: there is nobody to ask. Run it in a terminal, or replay a plan with ${PLAN_FLAG} <file>.`,
+    );
+    return EXIT_BAD_PLAN;
+  }
+
+  // The same code a plan file that does not parse gets, because it is the same
+  // fact: these answers will not provision a machine however many times they are
+  // given. The wizard has already named which field.
+  if (outcome.kind === 'unusable') return EXIT_BAD_PLAN;
+
+  // A plan the operator declined is a run that did what it was asked. Nothing on
+  // the machine was changed and nothing failed, and an installer that treated
+  // that as an error would be wrong about it.
+  if (outcome.kind === 'abandoned') return EXIT_OK;
+
+  return outcome.problems.length === 0 ? EXIT_OK : EXIT_PROBLEMS;
+}
+
+async function replayPlan(
+  file: string,
+  dependencies: SetupCommandDependencies,
+  report: (problems: readonly string[]) => number,
+): Promise<number> {
+  const { write, writeError } = dependencies;
+
+  const contents = await dependencies.files.readFile(file);
+  if (contents.kind !== 'read') {
     return report([
-      file.kind === 'missing'
-        ? `there is no plan at ${planFile.file}`
-        : `cannot read ${planFile.file}: ${file.reason}`,
+      contents.kind === 'missing'
+        ? `there is no plan at ${file}`
+        : `cannot read ${file}: ${contents.reason}`,
     ]);
   }
 
-  const parsed = parseSetupPlan(file.contents);
+  const parsed = parseSetupPlan(contents.contents);
   if (!parsed.ok) {
     // Every problem in the file, not the first. A plan replayed on a machine
     // that boots to run it fails whole, and fixing one field per boot is the
     // loop this shape exists to avoid.
-    return report(parsed.problems.map((problem) => `${planFile.file}: ${problem}`));
+    return report(parsed.problems.map((problem) => `${file}: ${problem}`));
   }
 
   const runner = dependencies.runnerFor(setupBinPath(parsed.plan));
@@ -117,19 +178,25 @@ export async function runSetupCommand(
     tokens: dependencies.tokens,
   });
 
-  write(`agentplexd setup: replayed ${planFile.file}`);
+  write(`agentplexd setup: replayed ${file}`);
   for (const line of describeOutcome(outcome)) write(line);
   for (const problem of outcome.problems) writeError(`agentplexd setup: ${problem}`);
 
   return outcome.problems.length === 0 ? EXIT_OK : EXIT_PROBLEMS;
 }
 
-type PlanFlag =
-  | { readonly ok: true; readonly file: string }
+type SetupFlags =
+  | {
+      readonly ok: true;
+      /** The plan to replay, or `null` to ask. */
+      readonly plan: string | null;
+      /** The role the wizard starts on, or `null` to offer the usual one. */
+      readonly role: Role | null;
+    }
   | { readonly ok: false; readonly problems: readonly string[] };
 
 /**
- * The one flag this command takes.
+ * The two flags this command takes.
  *
  * An unknown argument is a refusal rather than a shrug, for the reason
  * `readFlags` gives: silently ignoring `--pln` would replay nothing and report
@@ -137,101 +204,64 @@ type PlanFlag =
  * one wins, because that is the convention every other flag in this binary
  * follows and a second convention is a thing to remember.
  *
- * The path is used exactly as it was typed. A relative one resolves against the
- * directory the operator was standing in when they typed it, which is what they
- * meant; the paths *inside* a plan are a different question, and the plan parser
- * refuses those unless they are absolute.
+ * The two together are refused. `--role` pre-seeds a question, and a plan
+ * already states its role — so an invocation carrying both is somebody expecting
+ * one of them to win, and the one they expected is not knowable from here.
+ *
+ * A plan path is used exactly as it was typed. A relative one resolves against
+ * the directory the operator was standing in when they typed it, which is what
+ * they meant; the paths *inside* a plan are a different question, and the plan
+ * parser refuses those unless they are absolute.
  */
-function readPlanFlag(argv: readonly string[]): PlanFlag {
+function readSetupFlags(argv: readonly string[]): SetupFlags {
   const problems: string[] = [];
-  let file: string | undefined;
+  let plan: string | null = null;
+  let role: Role | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index] ?? '';
     const separator = argument.indexOf('=');
     const flag = separator === -1 ? argument : argument.slice(0, separator);
 
-    if (flag !== PLAN_FLAG) {
+    if (flag !== PLAN_FLAG && flag !== ROLE_FLAG) {
       problems.push(`unknown argument: ${argument}`);
       continue;
     }
 
+    let value: string;
     if (separator !== -1) {
-      file = argument.slice(separator + 1);
+      value = argument.slice(separator + 1);
+    } else {
+      const next = argv[index + 1];
+      if (next === undefined || next.startsWith('--')) {
+        problems.push(`${flag} needs a value`);
+        continue;
+      }
+      value = next;
+      index += 1;
+    }
+
+    if (value.length === 0) {
+      problems.push(`${flag} needs a value`);
       continue;
     }
 
-    const next = argv[index + 1];
-    if (next === undefined || next.startsWith('--')) {
-      problems.push(`${PLAN_FLAG} needs a value`);
+    if (flag === PLAN_FLAG) {
+      plan = value;
       continue;
     }
-    file = next;
-    index += 1;
+
+    const named = ROLES.find((one) => one === value);
+    if (named === undefined) {
+      problems.push(`${ROLE_FLAG} takes one of: ${ROLES.join(', ')}`);
+      continue;
+    }
+    role = named;
   }
 
-  if (file === undefined || file.length === 0) {
-    // There is no interactive fallback in this build, and saying so is better
-    // than starting one that does not exist. The wizard is the other front end
-    // and it will be the way in with no `--plan` at all.
-    problems.push(`no plan: pass ${PLAN_FLAG} <file>`);
+  if (plan !== null && role !== null) {
+    problems.push(`${ROLE_FLAG} pre-seeds the wizard, and a plan states its own role: pass one`);
   }
 
-  return problems.length > 0 || file === undefined ? { ok: false, problems } : { ok: true, file };
-}
-
-/**
- * The run as lines a person reads.
- *
- * Facts and no advice: what role this machine is, what it will resolve programs
- * in, which providers are there and whether they are logged in. The pairing
- * token is named by its location and never printed — a terminal is a scrollback
- * and, on a cloud instance, the boot log.
- */
-function describeOutcome(outcome: SetupOutcome): readonly string[] {
-  const lines = [`role: ${outcome.role}`];
-  if (outcome.hub !== null) lines.push(`hub: port ${outcome.hub.port}`);
-  if (outcome.server !== null) lines.push(...describeServer(outcome.server));
-  return lines;
-}
-
-function describeServer(server: ServerSetupOutcome): readonly string[] {
-  const lines = [
-    `server: port ${server.port}`,
-    `bin path: ${server.binPath.join(', ')}`,
-    `identity: ${server.identity.path}${
-      server.identity.serverId === null ? '' : ` (server ${server.identity.serverId})`
-    }${server.identity.minted ? ' - minted; the pairing token is in that file' : ''}`,
-  ];
-
-  for (const store of server.stores) {
-    lines.push(
-      store.ok
-        ? `store: ${store.store.path} (store ${store.store.storeId})${store.minted ? ' - minted' : ''}`
-        : `store: ${store.path} - unusable`,
-    );
-  }
-
-  for (const provider of server.providers) lines.push(describeProvider(provider));
-
-  return lines;
-}
-
-function describeProvider(provider: ProviderReport): string {
-  const state =
-    provider.authState === null
-      ? 'login state unknown'
-      : provider.authState === 'authenticated'
-        ? 'logged in'
-        : 'not logged in';
-
-  if (provider.action === 'none') {
-    // What is on the machine, when there is something, so that "the pinned
-    // version could not be installed" does not read as "there is no provider".
-    // Why it could not be is one of the problem lines on stderr.
-    const present = provider.version === null ? '' : ` (${provider.version} is what is there)`;
-    return `provider: ${provider.provider} - not provisioned${present}`;
-  }
-
-  return `provider: ${provider.provider} ${provider.version ?? 'version unknown'} - ${provider.action}, ${state}`;
+  return problems.length > 0 ? { ok: false, problems } : { ok: true, plan, role };
 }
