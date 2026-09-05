@@ -1,4 +1,4 @@
-import { createInterface } from 'node:readline';
+import { createInterface, type Interface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import type { SetupTerminal, TerminalInput } from './setup-terminal.js';
 
@@ -34,6 +34,25 @@ import type { SetupTerminal, TerminalInput } from './setup-terminal.js';
  * `setPrompt`/`prompt` is what puts the question on the output, so readline
  * knows the prompt's width and line editing on a real terminal redraws
  * correctly.
+ *
+ * The fourth is about the end rather than the middle, and it is the one a stream
+ * cannot show you. **An input that has been read holds the event loop open until
+ * it ends, and a terminal never ends.** A piped run exits because the pipe ran
+ * out, which is why every test above it passes; a person at a tty gets a finished
+ * wizard and a shell prompt that never comes back. Measured at the origin on the
+ * same Node: after the last question, `close()` on the interface releases
+ * readline's listeners and pauses the input and the process still does not exit,
+ * and `pause()` on the input does not help either — the handle stays referenced.
+ * `unref` is what releases it. So `close` does both, and it is on the returned
+ * type rather than on `SetupTerminal`: closing a terminal is a property of the
+ * one that owns an interface, not of the abstraction the wizard asks questions
+ * through, and whoever opened it is the one that closes it.
+ *
+ * The interface is created at the first question rather than at construction for
+ * the same reason. `createInterface` attaches a `data` listener immediately, so a
+ * terminal that is built and never asked anything — which is every
+ * `agentplexd setup --plan` run — would resume stdin and hang a replay that has
+ * nobody at it at all.
  */
 
 export interface NodeSetupTerminalStreams {
@@ -41,15 +60,25 @@ export interface NodeSetupTerminalStreams {
   readonly output: Writable;
 }
 
+export interface NodeSetupTerminal extends SetupTerminal {
+  /**
+   * Gives the input back.
+   *
+   * Safe to call when nothing was ever asked, and safe to call twice. Every
+   * question after it is answered "ended", which is the truth: there is nothing
+   * left listening.
+   */
+  close(): void;
+}
+
 export function createNodeSetupTerminal({
   input,
   output,
-}: NodeSetupTerminalStreams): SetupTerminal {
-  const readline = createInterface({ input, output });
-
+}: NodeSetupTerminalStreams): NodeSetupTerminal {
   /** Lines that arrived before anything asked for them. Oldest first. */
   const unclaimed: string[] = [];
   let waiting: ((input: TerminalInput) => void) | null = null;
+  let readline: Interface | null = null;
   let closed = false;
 
   const answer = (input: TerminalInput): boolean => {
@@ -60,14 +89,24 @@ export function createNodeSetupTerminal({
     return true;
   };
 
-  readline.on('line', (text: string) => {
-    if (!answer({ kind: 'typed', text })) unclaimed.push(text);
-  });
+  /** Built once, at the first question, because building one starts a read. */
+  const reading = (): Interface => {
+    if (readline !== null) return readline;
 
-  readline.once('close', () => {
-    closed = true;
-    answer({ kind: 'ended' });
-  });
+    const started = createInterface({ input, output });
+    readline = started;
+
+    started.on('line', (text: string) => {
+      if (!answer({ kind: 'typed', text })) unclaimed.push(text);
+    });
+
+    started.once('close', () => {
+      closed = true;
+      answer({ kind: 'ended' });
+    });
+
+    return started;
+  };
 
   return {
     write(line: string): void {
@@ -85,11 +124,33 @@ export function createNodeSetupTerminal({
 
       if (closed) return { kind: 'ended' };
 
+      const started = reading();
       return new Promise<TerminalInput>((resolve) => {
         waiting = resolve;
-        readline.setPrompt(question);
-        readline.prompt();
+        started.setPrompt(question);
+        started.prompt();
       });
     },
+
+    close(): void {
+      closed = true;
+      // Closed first: a readline that is still reading goes on consuming the
+      // input whatever is done to the stream underneath it.
+      readline?.close();
+      readline = null;
+      if (releasable(input)) input.unref();
+      answer({ kind: 'ended' });
+    },
   };
+}
+
+/**
+ * Whether this input is one the event loop can be told to stop counting.
+ *
+ * `process.stdin` is, and it is the one that matters: a tty and a pipe are both
+ * libuv handles that keep a process alive once they have been read. A stream
+ * built in a test is not, and does not need to be — it ends.
+ */
+function releasable(stream: Readable): stream is Readable & { unref(): void } {
+  return 'unref' in stream && typeof stream.unref === 'function';
 }

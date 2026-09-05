@@ -281,38 +281,54 @@ async function main(): Promise<void> {
  * and this is the process that is on the other side of it.
  */
 async function setUp(argv: readonly string[], write: (line: string) => void): Promise<number> {
-  return runSetupCommand(argv, {
-    terminal: createNodeSetupTerminal({ input: process.stdin, output: process.stdout }),
-    machine: createNodeSetupMachine({
-      // `os.homedir()` is deliberately not the fallback. It reads the passwd
-      // entry, so under `sudo` it answers with the invoking user's home while
-      // `$HOME` answers root's — two different directories, and the provider
-      // state that matters is in whichever one the operator's shell was using.
-      // A missing `$HOME` is a machine to say something about, not to guess at.
-      home: process.env['HOME'] ?? '',
-      path: process.env['PATH'],
-    }),
-    runnerFor: (binPath) =>
-      createNodeProcessRunner({
-        environment: childEnvironment({ inherited: process.env, binPath }),
+  const terminal = createNodeSetupTerminal({ input: process.stdin, output: process.stdout });
+
+  try {
+    return await runSetupCommand(argv, {
+      terminal,
+      machine: createNodeSetupMachine({
+        // `os.homedir()` is deliberately not the fallback. It reads the passwd
+        // entry, so under `sudo` it answers with the invoking user's home while
+        // `$HOME` answers root's — two different directories, and the provider
+        // state that matters is in whichever one the operator's shell was using.
+        // A missing `$HOME` is a machine to say something about, not to guess
+        // at.
+        home: process.env['HOME'] ?? '',
+        path: process.env['PATH'],
       }),
-    // The same one line the runtime has, for the same reason: which providers
-    // this build drives is a fact about the build and belongs in the entrypoint.
-    providersFor: (runner) =>
-      createProviderRegistry([
-        createClaudeAdapter({
-          files: nodeProviderFiles,
-          probe: createNodeProcessProbe({ runner }),
+      runnerFor: (binPath) =>
+        createNodeProcessRunner({
+          environment: childEnvironment({ inherited: process.env, binPath }),
         }),
-      ]),
-    files: nodeStoreFileSystem,
-    ids: randomIdGenerator,
-    // A plan that brought no pairing token gets one minted here, from the same
-    // CSPRNG a server's first start would have used.
-    tokens: randomTokenMinter,
-    write,
-    writeError: (line) => void process.stderr.write(`${line}\n`),
-  });
+      // The same one line the runtime has, for the same reason: which providers
+      // this build drives is a fact about the build and belongs in the
+      // entrypoint.
+      providersFor: (runner) =>
+        createProviderRegistry([
+          createClaudeAdapter({
+            files: nodeProviderFiles,
+            probe: createNodeProcessProbe({ runner }),
+          }),
+        ]),
+      files: nodeStoreFileSystem,
+      ids: randomIdGenerator,
+      // A plan that brought no pairing token gets one minted here, from the same
+      // CSPRNG a server's first start would have used.
+      tokens: randomTokenMinter,
+      write,
+      writeError: (line) => void process.stderr.write(`${line}\n`),
+    });
+  } finally {
+    // The input, given back. `setup` is the one subcommand that reads stdin, and
+    // a stdin that has been read keeps the event loop alive until it ends — which
+    // a terminal never does. Without this the wizard finishes, prints its last
+    // line and hangs, and the operator's shell prompt never comes back.
+    //
+    // In a `finally` because it is true of every way this returns, and here
+    // rather than inside the command because this is where the terminal was
+    // opened.
+    terminal.close();
+  }
 }
 
 await main();
