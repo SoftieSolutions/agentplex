@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { startRuntime, type Runtime } from './runtime.js';
+import { startRuntime, type Runtime } from './boot.js';
 import { createClaudeAdapter, createProviderRegistry } from '@agentplex/providers';
 import {
   createFakeProviderFiles,
@@ -9,11 +9,11 @@ import {
 } from '@agentplex/providers/testing';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
-import { createTerminalManager } from './server/terminal-manager.js';
-import { createOperationRegistry } from './server/operations/operation-registry.js';
+import { createTerminalManager } from './terminal-manager.js';
+import { createOperationRegistry } from './operations/operation-registry.js';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
-import type { Config } from './config/config.js';
+import type { ServerConfig } from './config.js';
 
 const logger = createLogger('error', () => {});
 const ids = { newId: () => 'hub-under-test' };
@@ -71,20 +71,17 @@ const HOST = '127.0.0.1';
  */
 const IDENTITY_PATH = '/etc/agentplexd/server.json';
 
-const serverOnly: Config = {
-  role: 'server',
+const serverOnly: ServerConfig = {
   logLevel: 'error',
   host: HOST,
-  server: {
-    port: 0,
-    storePaths: [],
-    binPath: [],
-    identityPath: IDENTITY_PATH,
-    terminalCap: 8,
-    // Quiet, like the default. This file is about which halves start and
-    // stop, and a beacon would be a second thing coming up with the server.
-    announce: false,
-  },
+  port: 0,
+  storePaths: [],
+  binPath: [],
+  identityPath: IDENTITY_PATH,
+  terminalCap: 8,
+  // Quiet, like the default. This file is about what starts and stops, and a
+  // beacon would be a second thing coming up with the server.
+  announce: false,
 };
 let runtime: Runtime | undefined;
 
@@ -112,9 +109,9 @@ describe('startRuntime', () => {
 
   it('mints the identity of each configured store and reports it', async () => {
     const files = createFakeStoreFiles();
-    const withStore: Config = {
+    const withStore: ServerConfig = {
       ...serverOnly,
-      server: { ...serverOnly.server, storePaths: ['/volumes/claude'] },
+      storePaths: ['/volumes/claude'],
     };
 
     runtime = await startRuntime(withStore, dependencies(files));
@@ -135,9 +132,9 @@ describe('startRuntime', () => {
     // that only surfaces the first time somebody opens the client is a support
     // ticket; one that surfaces in the boot log is a fixed typo.
     const records: LogRecord[] = [];
-    const withStore: Config = {
+    const withStore: ServerConfig = {
       ...serverOnly,
-      server: { ...serverOnly.server, storePaths: ['/volumes/claude'] },
+      storePaths: ['/volumes/claude'],
     };
 
     runtime = await startRuntime(withStore, {
@@ -157,9 +154,9 @@ describe('startRuntime', () => {
 
   it('comes up without the store it could not read, rather than not coming up', async () => {
     const files = createFakeStoreFiles({ unreadable: ['/volumes/broken/agentplex-store.json'] });
-    const withStores: Config = {
+    const withStores: ServerConfig = {
       ...serverOnly,
-      server: { ...serverOnly.server, storePaths: ['/volumes/broken', '/volumes/claude'] },
+      storePaths: ['/volumes/broken', '/volumes/claude'],
     };
 
     runtime = await startRuntime(withStores, dependencies(files));

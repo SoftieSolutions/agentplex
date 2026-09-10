@@ -7,7 +7,7 @@ import {
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { serveHubConnection } from '../../../apps/agentplexd/src/server/hub-connection.js';
+import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerIdentity } from '@agentplex/providers';
 import {
@@ -25,7 +25,7 @@ import {
   type DialTarget,
 } from '../../../apps/hub/src/pairing/server-handshake.js';
 import type { ServerAddress } from '../../../apps/hub/src/pairing/server-address.js';
-import { createFakeSessionController } from '../../../apps/agentplexd/src/server/fake-session-controller.js';
+import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 
 const logger = createLogger('error', () => {});
 const hubId = 'hub-under-test' as HubId;

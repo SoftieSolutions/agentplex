@@ -14,7 +14,7 @@ const IDENTITY_FILE = '/etc/agentplexd/server.json';
  */
 function load(argv: string[], env: Record<string, string | undefined> = {}): ConfigResult {
   return loadConfig({
-    argv,
+    argv: ['doctor', ...argv],
     env: {
       AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE,
       ...env,
@@ -298,7 +298,7 @@ describe('loadConfig server identity file', () => {
    * file's absence, so it is the one setting left out.
    */
   function loadBare(argv: string[], env: Record<string, string | undefined> = {}): ConfigResult {
-    return loadConfig({ argv, env });
+    return loadConfig({ argv: ['doctor', ...argv], env });
   }
 
   function identityPath(argv: string[], env: Record<string, string | undefined> = {}) {
@@ -380,16 +380,22 @@ describe('loadConfig host', () => {
 });
 
 describe('loadConfig commands', () => {
-  it('runs the service when no command is given', () => {
-    // The bare invocation every unit file and every image already uses. A
-    // command that had to be typed would break each of them.
-    const result = load(['--role=server']);
+  it('refuses to serve, and names the program that does', () => {
+    // The bare invocation every unit file used to use. The server is its own
+    // program now, and a unit that still starts this one is told which to
+    // start rather than left running nothing.
+    const problems = expectProblems(
+      loadConfig({
+        argv: ['--role=server'],
+        env: { AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE },
+      }),
+    );
 
-    expect(result).toMatchObject({ ok: true, command: 'serve' });
+    expect(problems[0]).toContain('apps/server');
   });
 
   it('reads a command word before the flags', () => {
-    const result = load(['doctor', '--role=server']);
+    const result = load(['--role=server']);
 
     expect(result).toMatchObject({ ok: true, command: 'doctor', config: { role: 'server' } });
   });
@@ -413,7 +419,7 @@ describe('loadConfig commands', () => {
     // parser scanning for the first non-flag anywhere would take it as one.
     const result = load(['--role', 'server']);
 
-    expect(result).toMatchObject({ ok: true, command: 'serve', config: { role: 'server' } });
+    expect(result).toMatchObject({ ok: true, command: 'doctor', config: { role: 'server' } });
   });
 
   it('names the commands in the usage message', () => {

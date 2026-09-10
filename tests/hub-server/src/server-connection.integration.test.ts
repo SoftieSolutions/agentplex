@@ -6,7 +6,7 @@ import {
   type ServerId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
-import { serveHubConnection } from '../../../apps/agentplexd/src/server/hub-connection.js';
+import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import {
   createFakeMessageSocket,
@@ -35,7 +35,7 @@ import {
   startServerConnection,
   type ServerConnection,
 } from '../../../apps/hub/src/connections/server-connection.js';
-import { createFakeSessionController } from '../../../apps/agentplexd/src/server/fake-session-controller.js';
+import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 
 /**
  * The connection supervisor for one server, driven end to end.

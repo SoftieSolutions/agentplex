@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import {
-  DEFAULT_HUB_PORT,
   DEFAULT_SERVER_PORT,
   LOG_LEVELS,
   readAbsolutePath,
@@ -12,42 +11,25 @@ import {
   usageLines,
   type LogLevel,
 } from '@agentplex/node-shared';
+import { DEFAULT_TERMINAL_CAP } from './terminal-manager.js';
 
 /**
- * Configuration is a value produced from argv and env by a pure function, so
- * that every rule about what the server requires is testable without opening a
- * port. `main` calls this once and wires the result.
- */
-
-/**
- * The three roles a machine can be, which is setup's vocabulary: `--role`
- * decides which files setup writes and which units the installer will run.
- * This program runs only one of them. The hub is its own program
- * (`apps/hub`), and a machine that is both starts one of each; asking this
- * daemon for `hub` or `both` is refused with the program to run instead.
- */
-export const ROLES = ['hub', 'server', 'both'] as const;
-export type Role = (typeof ROLES)[number];
-
-/** Re-exported for the wizard, which offers both ports. */
-export { DEFAULT_HUB_PORT, DEFAULT_SERVER_PORT };
-
-/**
- * What this invocation is for.
+ * The server's configuration: a value produced from argv and env by a pure
+ * function, so that every rule about what the server requires is testable
+ * without opening a port. `main` calls this once and wires the result.
  *
- * `doctor` is read-only and exits. It takes exactly the configuration the
- * server takes, deliberately: the question it answers is what *this
- * deployment* can start, and a doctor with flags of its own would be reporting
- * on a machine nobody is going to run.
- *
- * `serve` is the absence of a command and is refused: the server is its own
- * program now (`apps/server`), and a unit file that still starts this one bare
- * is told which to start instead rather than silently running nothing.
+ * There is no `--role`. Which daemon runs is which program was started, and
+ * this is the server. The env var names keep their `AGENTPLEX_` prefix and
+ * their meanings, so a settings file written by an installer that predates the
+ * split still starts this daemon: it reads the keys it needs out of that file,
+ * and a key the hub owns is not an error, because a setting the server never
+ * reads is a setting it never sees.
  */
-const COMMANDS = ['serve', 'doctor'] as const;
-export type Command = (typeof COMMANDS)[number];
 
 export interface ServerConfig {
+  readonly logLevel: LogLevel;
+  /** The interface to bind, a setting like any other. */
+  readonly host: string;
   /** The port the hub dials. A server dials out to nothing. */
   readonly port: number;
   /**
@@ -118,32 +100,18 @@ export interface ServerConfig {
   readonly announce: boolean;
 }
 
-export interface Config {
-  readonly role: 'server';
-  readonly logLevel: LogLevel;
-  /** The interface to bind, a setting like any other. */
-  readonly host: string;
-  readonly server: ServerConfig;
-}
-
-export type ConfigResult =
-  | { readonly ok: true; readonly command: Command; readonly config: Config }
+export type ServerConfigResult =
+  | { readonly ok: true; readonly config: ServerConfig }
   /** Every problem, not the first: fixing one env var at a time is a bad loop. */
   | { readonly ok: false; readonly problems: readonly string[] };
 
-export interface ConfigSources {
+export interface ServerConfigSources {
   /** Arguments after the node binary and script path. */
   readonly argv: readonly string[];
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
 const DEFAULT_LOG_LEVEL: LogLevel = 'info';
-/**
- * The terminal manager's own default, restated: it lives in `apps/server` now
- * and this program may not import it. AGX-100 replaces this configuration with
- * the doctor's own, and this constant goes with it.
- */
-const DEFAULT_TERMINAL_CAP = 8;
 /** Containers reach the process from outside their own loopback. */
 const DEFAULT_HOST = '0.0.0.0';
 
@@ -161,7 +129,6 @@ const MISSING_IDENTITY_FILE =
  * anyone tried to type it.
  */
 const SETTINGS = {
-  role: { flag: '--role', env: 'AGENTPLEX_ROLE' },
   logLevel: { flag: '--log-level', env: 'AGENTPLEX_LOG_LEVEL' },
   host: { flag: '--host', env: 'AGENTPLEX_HOST' },
   serverPort: { flag: '--server-port', env: 'AGENTPLEX_SERVER_PORT' },
@@ -184,25 +151,20 @@ const SETTINGS = {
   announce: { flag: '--announce', env: 'AGENTPLEX_ANNOUNCE' },
 } as const;
 
-const roleSchema = z.enum(ROLES);
-const commandSchema = z.enum(COMMANDS);
 const logLevelSchema = z.enum(LOG_LEVELS);
 const hostSchema = z.string().min(1);
 
-export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
+export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConfigResult {
   const problems: string[] = [];
-  const { command, rest } = readCommand(argv, problems);
 
   const flags = readFlags(
-    rest,
+    argv,
     Object.values(SETTINGS).map((setting) => setting.flag),
   );
-  if (!flags.ok) return { ok: false, problems: [...problems, ...flags.problems] };
+  if (!flags.ok) return { ok: false, problems: [...flags.problems] };
 
   const read = (setting: { readonly flag: string; readonly env: string }): string | undefined =>
     settingValue(flags.values, env, setting);
-
-  const role = readRole(read(SETTINGS.role), problems);
 
   const logLevel = readSetting(logLevelSchema, read(SETTINGS.logLevel), DEFAULT_LOG_LEVEL, (raw) =>
     problems.push(
@@ -243,19 +205,21 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), problems);
 
-  if (role === undefined || identityPath === undefined || problems.length > 0) {
-    return { ok: false, problems };
-  }
+  if (identityPath === undefined || problems.length > 0) return { ok: false, problems };
 
-  const server: ServerConfig = {
-    port: serverPort,
-    storePaths,
-    binPath,
-    identityPath,
-    terminalCap,
-    announce,
+  return {
+    ok: true,
+    config: {
+      logLevel,
+      host,
+      port: serverPort,
+      storePaths,
+      binPath,
+      identityPath,
+      terminalCap,
+      announce,
+    },
   };
-  return { ok: true, command, config: { role, logLevel, host, server } };
 }
 
 /**
@@ -274,80 +238,11 @@ function readIdentityPath(raw: string | undefined, problems: string[]): string |
   return readAbsolutePath(raw, SETTINGS.serverIdentityFile.flag, problems);
 }
 
-/** The commands and flags this build understands, for a usage message. */
-export function usage(): string {
-  return [
-    'Usage: agentplexd doctor [options]',
-    '',
-    '  doctor           report what this configuration can start, and change nothing',
-    '',
-    ...usageLines(Object.values(SETTINGS)),
-  ].join('\n');
-}
-
-/**
- * The command word, and the arguments left for the flag parser.
- *
- * Read only from the first position, and only when it is not a flag. Scanning
- * argv for the first bare word would find the value of `--role server`, which
- * is a setting and not an instruction; a command is the first thing typed or it
- * is not there.
- *
- * An unrecognised word is a problem rather than something to ignore. Falling
- * through to `serve` would start a long-running service for somebody who typed
- * a word they expected to be read-only and exit.
- */
-function readCommand(
-  argv: readonly string[],
-  problems: string[],
-): { command: Command; rest: readonly string[] } {
-  const first = argv[0];
-  if (first === undefined || first.startsWith('--')) {
-    problems.push(
-      'this program no longer runs the server: start node apps/server/dist/main.js, ' +
-        'or give a command (doctor)',
-    );
-    return { command: 'serve', rest: argv };
-  }
-
-  const parsed = commandSchema.safeParse(first);
-  if (!parsed.success) {
-    problems.push(
-      `unknown command ${JSON.stringify(first)}: expected one of ${COMMANDS.join(', ')}`,
-    );
-    return { command: 'serve', rest: argv.slice(1) };
-  }
-
-  return { command: parsed.data, rest: argv.slice(1) };
-}
-
-/**
- * The role, which for this program can only be `server`.
- *
- * `hub` and `both` are still words setup and the installer know, and a
- * settings file written for a machine that is both is a settings file this
- * program will be started from. They are refused with the program to run
- * instead, rather than with "unknown role", because the operator who typed one
- * is not confused about roles; the layout changed under them.
- */
-function readRole(raw: string | undefined, problems: string[]): 'server' | undefined {
-  if (raw === undefined) {
-    problems.push(`no role: set ${SETTINGS.role.env} or pass ${SETTINGS.role.flag} server`);
-    return undefined;
-  }
-  const result = roleSchema.safeParse(raw);
-  if (!result.success) {
-    problems.push(`unknown role ${JSON.stringify(raw)}: expected one of ${ROLES.join(', ')}`);
-    return undefined;
-  }
-  if (result.data !== 'server') {
-    problems.push(
-      `--role=${result.data} is not a role this program runs: the hub is its own program ` +
-        `(node apps/hub/dist/main.js), and a machine that is both starts one of each`,
-    );
-    return undefined;
-  }
-  return result.data;
+/** The flags this program understands, for a usage message. */
+export function serverUsage(): string {
+  return ['Usage: agentplex server [options]', '', ...usageLines(Object.values(SETTINGS))].join(
+    '\n',
+  );
 }
 
 /**

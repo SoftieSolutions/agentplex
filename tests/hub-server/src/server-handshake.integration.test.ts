@@ -2,14 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { HubId } from '@agentplex/protocol';
 import { createFakeStoreFiles, createFakeProcessRunner } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
-import { createOperationRegistry } from '../../../apps/agentplexd/src/server/operations/operation-registry.js';
+import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
-import { createTerminalManager } from '../../../apps/agentplexd/src/server/terminal-manager.js';
-import {
-  startSessionServer,
-  type SessionServer,
-} from '../../../apps/agentplexd/src/server/server.js';
+import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
+import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
 import {
   createLogger,
   closure,

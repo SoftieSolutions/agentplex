@@ -17,18 +17,15 @@ import {
   type SessionHold,
   type StoreDescriptor,
 } from '@agentplex/protocol';
-import { createFakeSessionController } from '../../../apps/agentplexd/src/server/fake-session-controller.js';
+import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 import { missingProvider, readyProvider, createFakeStoreFiles } from '@agentplex/providers/testing';
 import {
   createFakeBeaconSource,
   type FakeBeaconSource,
 } from '../../../apps/hub/src/discovery/fake-beacon-source.js';
 import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web-assets.js';
-import { serveHubConnection } from '../../../apps/agentplexd/src/server/hub-connection.js';
-import type {
-  SessionOutcome,
-  StoreReport,
-} from '../../../apps/agentplexd/src/server/session-control.js';
+import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
+import type { SessionOutcome, StoreReport } from '../../../apps/server/src/session-control.js';
 import {
   createUnreachableDialer,
   createSocketPair,

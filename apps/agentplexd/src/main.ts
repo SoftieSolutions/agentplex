@@ -5,15 +5,12 @@ import {
   childSearchPath,
   systemClock,
   randomIdGenerator,
+  randomTokenMinter,
   createLogger,
   jsonLineSink,
-  systemTimers,
-  randomTokenMinter,
 } from '@agentplex/node-shared';
 import { loadConfig, usage } from './config/config.js';
 import { formatDoctorReport, inspectMachine } from './doctor.js';
-import { startRuntime } from './runtime.js';
-import { createNodeBeaconNetwork } from './server/node-beacon-transport.js';
 import {
   createNodeProcessProbe,
   createNodeProgramResolver,
@@ -25,8 +22,6 @@ import {
   createProviderRegistry,
 } from '@agentplex/providers';
 import { nodePtyFactory, createPtySupervisor } from '@agentplex/pty';
-import { createOperationRegistry } from './server/operations/operation-registry.js';
-import { createTerminalManager } from './server/terminal-manager.js';
 import { createNodeSetupMachine } from './setup/node-setup-machine.js';
 import { createNodeSetupTerminal } from './setup/node-setup-terminal.js';
 import { runSetupCommand, setupUsage } from './setup/setup-command.js';
@@ -47,8 +42,6 @@ import { runSetupCommand, setupUsage } from './setup/setup-command.js';
 
 /** Configuration was wrong. Restarting will not help; the operator must act. */
 const EXIT_BAD_CONFIGURATION = 2;
-/** Startup failed for a reason that may pass, such as a database not up yet. */
-const EXIT_STARTUP_FAILED = 1;
 /**
  * `doctor` found something this machine cannot do.
  *
@@ -90,10 +83,7 @@ async function main(): Promise<void> {
   // `doctor` gives stdout to its report and puts its own log lines on stderr,
   // so that what an operator reads -- or pipes into an issue -- is the report
   // and not the report with a JSON line about a probe in the middle of it.
-  const logger = createLogger(
-    config.logLevel,
-    jsonLineSink(loaded.command === 'doctor' ? writeError : write, systemClock),
-  );
+  const logger = createLogger(config.logLevel, jsonLineSink(writeError, systemClock));
 
   // What every child of this process gets, composed once: what agentplexd
   // inherited, with the configured directories ahead of its PATH. Both spawn
@@ -130,7 +120,7 @@ async function main(): Promise<void> {
   // staring at a machine wondering why a session will not start.
   const preflight = createProviderPreflight({ programs, probes: processRunner, logger });
 
-  if (loaded.command === 'doctor') {
+  {
     // Read-only, and then it exits. Nothing below this line runs: no port is
     // bound, no database is opened, no store file is minted.
     const report = await inspectMachine(config, {
@@ -141,69 +131,6 @@ async function main(): Promise<void> {
     for (const line of formatDoctorReport(report)) write(line);
     if (!report.usable) process.exitCode = EXIT_NOT_READY;
     return;
-  }
-
-  let runtime;
-  try {
-    runtime = await startRuntime(config, {
-      logger,
-      ids: randomIdGenerator,
-      storeFileSystem: nodeStoreFileSystem,
-      // The only place a secret is generated, and the CSPRNG is the whole
-      // implementation: the server's pairing token, once, on its first start.
-      tokens: randomTokenMinter,
-      providers,
-      // Asked once at boot, and the answer carried into every handshake. It
-      // shares the one-shot runner above, so a provider is probed through
-      // exactly the environment its sessions will run in -- and it is nowhere
-      // in the operation registry, so nothing reachable over a socket can ask
-      // this process to run a provider probe.
-      preflight,
-      // Closed: the operations are a list in that module, and there is no
-      // parameter here through which a build could add one. Provisioning is not
-      // among them, and `createSetupOperationRegistry` is deliberately not
-      // called here: a serving agentplexd has no installer to be asked for over
-      // a socket, rather than one it declines to use.
-      operations: createOperationRegistry(processRunner),
-      // The only place a real pty is opened. It is handed the same composed
-      // environment as the one-shot runner, so a provider binary resolves the
-      // same way whether it is being probed or driven. What gets scrubbed out
-      // of it is each adapter's call, carried on its launch plan.
-      //
-      terminals: createTerminalManager({
-        supervisor: createPtySupervisor({
-          pty: nodePtyFactory,
-          clock: systemClock,
-          ids: randomIdGenerator,
-          environment,
-        }),
-        clock: systemClock,
-        cap: config.server.terminalCap,
-      }),
-      // The one place a UDP socket can be opened. Built whatever the setting,
-      // and used only where the configuration turned announcing on, so that
-      // "can this process broadcast" stays a visible line in the entrypoint
-      // rather than a decision taken somewhere below it.
-      beacon: createNodeBeaconNetwork(logger),
-      timers: systemTimers,
-      clock: systemClock,
-    });
-  } catch (error) {
-    logger.error('agentplexd failed to start', { error: String(error) });
-    process.exitCode = EXIT_STARTUP_FAILED;
-    return;
-  }
-
-  // Containers stop with SIGTERM; a terminal stops with SIGINT. A second signal
-  // means the operator is done waiting, so it is not intercepted.
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.once(signal, () => {
-      logger.info('shutting down', { signal });
-      void runtime.stop().catch((error: unknown) => {
-        logger.error('shutdown failed', { error: String(error) });
-        process.exitCode = EXIT_STARTUP_FAILED;
-      });
-    });
   }
 }
 

@@ -91,13 +91,27 @@ const hubManifest: Manifest = {
   },
 };
 
+const serverAppManifest: Manifest = {
+  name: '@agentplex/server',
+  version: '1.2.3',
+  license: 'Apache-2.0',
+  type: 'module',
+  dependencies: {
+    '@agentplex/node-shared': 'workspace:*',
+    '@agentplex/protocol': 'workspace:*',
+    '@agentplex/providers': 'workspace:*',
+    '@agentplex/pty': 'workspace:*',
+    zod: '^4.1.13',
+  },
+};
+
 const bundledManifests = [protocolManifest, nodeSharedManifest, providersManifest, ptyManifest];
 
 function derived(): Record<string, unknown> {
   return publishedManifest({
     root: rootManifest,
     service: serviceManifest,
-    apps: [hubManifest],
+    apps: [hubManifest, serverAppManifest],
     bundled: bundledManifests,
   });
 }
@@ -224,6 +238,7 @@ describe('packageEntries', () => {
 
     expect(sources).toContain('apps/agentplexd/dist');
     expect(sources).toContain('apps/hub/dist');
+    expect(sources).toContain('apps/server/dist');
     expect(sources).toContain('apps/hub/migrations');
     expect(sources).toContain('packages/protocol/dist');
     expect(sources).toContain('packages/node-shared/dist');
@@ -318,6 +333,8 @@ describe('the assembled package', () => {
     await write('apps/agentplexd/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
     await write('apps/hub/package.json', JSON.stringify(hubManifest));
     await write('apps/hub/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
+    await write('apps/server/package.json', JSON.stringify(serverAppManifest));
+    await write('apps/server/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
     await write('apps/hub/migrations/0001_hub_identity.sql', 'create table hub (id text);\n');
     await write('packages/protocol/package.json', JSON.stringify(protocolManifest));
     await write('packages/protocol/dist/index.js', 'export const version = 7;\n');

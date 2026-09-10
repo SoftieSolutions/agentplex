@@ -29,14 +29,15 @@ MCP agent  ─┘                │             SERVER ────────
   `agentplex-store.json` at its root. A session's identity is its store and its
   id within it, never the machine it happens to be running on.
 
-The hub is `apps/hub` and the server is `agentplexd --role=server`, two
-programs; a machine that runs both starts one of each.
+The hub is `apps/hub` and the server is `apps/server`, two programs; a machine
+that runs both starts one of each.
 
 ## Repository layout
 
 ```
 apps/hub/              the hub: database, migrations, pairing, discovery, the PWA's bytes
-apps/agentplexd/       the server, setup and doctor, until each is its own app
+apps/server/           the server: terminals, session control, identity, beacon, the hub connection
+apps/agentplexd/       setup and doctor, until each is its own app
 apps/web/              the PWA
 packages/protocol/     frame types and parsers, shared by the service and the PWA
 packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share

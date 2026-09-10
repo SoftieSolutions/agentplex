@@ -24,7 +24,7 @@ import {
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
-import { serveHubConnection } from '../../../apps/agentplexd/src/server/hub-connection.js';
+import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
@@ -34,11 +34,11 @@ import {
   createFakeProviderFiles,
 } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
-import { createSessionController } from '../../../apps/agentplexd/src/server/session-control.js';
+import { createSessionController } from '../../../apps/server/src/session-control.js';
 import {
   createTerminalManager,
   type TerminalManager,
-} from '../../../apps/agentplexd/src/server/terminal-manager.js';
+} from '../../../apps/server/src/terminal-manager.js';
 import {
   startClientBroadcast,
   type ClientBroadcast,
