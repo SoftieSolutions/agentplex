@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import {
-  DEFAULT_HUB_PORT,
   DEFAULT_SERVER_PORT,
   LOG_LEVELS,
   readAbsolutePath,
@@ -14,38 +13,22 @@ import {
 } from '@agentplex/node-shared';
 
 /**
- * Configuration is a value produced from argv and env by a pure function, so
- * that every rule about what the server requires is testable without opening a
- * port. `main` calls this once and wires the result.
+ * The doctor's configuration: the settings the installer wrote, read the way
+ * the daemons read them, so that the question it answers is what *this
+ * deployment* can start. A doctor with flags of its own would be reporting on
+ * a machine nobody is going to run. `main` calls this once and wires the
+ * result.
  */
 
 /**
- * The three roles a machine can be, which is setup's vocabulary: `--role`
- * decides which files setup writes and which units the installer will run.
- * This program runs only one of them. The hub is its own program
- * (`apps/hub`), and a machine that is both starts one of each; asking this
- * daemon for `hub` or `both` is refused with the program to run instead.
+ * The three things a machine can be, which is what `AGENTPLEX_ROLE` in the
+ * settings file says. The doctor reads it to know which half to inspect: a
+ * hub-only machine starts no sessions, mounts no stores and drives no
+ * providers, and probing them anyway would report on a machine this
+ * deployment never touches.
  */
 export const ROLES = ['hub', 'server', 'both'] as const;
 export type Role = (typeof ROLES)[number];
-
-/** Re-exported for the wizard, which offers both ports. */
-export { DEFAULT_HUB_PORT, DEFAULT_SERVER_PORT };
-
-/**
- * What this invocation is for.
- *
- * `doctor` is read-only and exits. It takes exactly the configuration the
- * server takes, deliberately: the question it answers is what *this
- * deployment* can start, and a doctor with flags of its own would be reporting
- * on a machine nobody is going to run.
- *
- * `serve` is the absence of a command and is refused: the server is its own
- * program now (`apps/server`), and a unit file that still starts this one bare
- * is told which to start instead rather than silently running nothing.
- */
-const COMMANDS = ['serve', 'doctor'] as const;
-export type Command = (typeof COMMANDS)[number];
 
 export interface ServerConfig {
   /** The port the hub dials. A server dials out to nothing. */
@@ -118,16 +101,25 @@ export interface ServerConfig {
   readonly announce: boolean;
 }
 
-export interface Config {
-  readonly role: 'server';
-  readonly logLevel: LogLevel;
-  /** The interface to bind, a setting like any other. */
-  readonly host: string;
-  readonly server: ServerConfig;
-}
+/**
+ * A union rather than a record with an optional half: in `--role=hub` there
+ * is no server to inspect, and the type should be what makes that true.
+ */
+export type Config =
+  | {
+      readonly role: 'hub';
+      readonly logLevel: LogLevel;
+      readonly host: string;
+    }
+  | {
+      readonly role: 'server' | 'both';
+      readonly logLevel: LogLevel;
+      readonly host: string;
+      readonly server: ServerConfig;
+    };
 
 export type ConfigResult =
-  | { readonly ok: true; readonly command: Command; readonly config: Config }
+  | { readonly ok: true; readonly config: Config }
   /** Every problem, not the first: fixing one env var at a time is a bad loop. */
   | { readonly ok: false; readonly problems: readonly string[] };
 
@@ -185,19 +177,17 @@ const SETTINGS = {
 } as const;
 
 const roleSchema = z.enum(ROLES);
-const commandSchema = z.enum(COMMANDS);
 const logLevelSchema = z.enum(LOG_LEVELS);
 const hostSchema = z.string().min(1);
 
-export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
+export function loadDoctorConfig({ argv, env }: ConfigSources): ConfigResult {
   const problems: string[] = [];
-  const { command, rest } = readCommand(argv, problems);
 
   const flags = readFlags(
-    rest,
+    argv,
     Object.values(SETTINGS).map((setting) => setting.flag),
   );
-  if (!flags.ok) return { ok: false, problems: [...problems, ...flags.problems] };
+  if (!flags.ok) return { ok: false, problems: [...flags.problems] };
 
   const read = (setting: { readonly flag: string; readonly env: string }): string | undefined =>
     settingValue(flags.values, env, setting);
@@ -241,12 +231,13 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   const announce = readAnnounce(read(SETTINGS.announce), problems);
 
-  const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), problems);
+  const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), role, problems);
 
-  if (role === undefined || identityPath === undefined || problems.length > 0) {
-    return { ok: false, problems };
-  }
+  if (role === undefined || problems.length > 0) return { ok: false, problems };
 
+  if (role === 'hub') return { ok: true, config: { role, logLevel, host } };
+
+  if (identityPath === undefined) return { ok: false, problems: [MISSING_IDENTITY_FILE] };
   const server: ServerConfig = {
     port: serverPort,
     storePaths,
@@ -255,96 +246,50 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
     terminalCap,
     announce,
   };
-  return { ok: true, command, config: { role, logLevel, host, server } };
+  return { ok: true, config: { role, logLevel, host, server } };
 }
 
 /**
- * The identity file path, required by the server.
- *
- * Absolute for the reason the store paths are, and with more at stake: a
- * relative path is resolved against whatever directory the process was left
- * in, so the same command run from two places is two identities, two tokens,
- * and a pairing that works from one shell and not the other.
+ * The identity file path, required by every role that runs a server, and read
+ * the way the server reads it: absolute, because a relative path is resolved
+ * against whatever directory the process was left in.
  */
-function readIdentityPath(raw: string | undefined, problems: string[]): string | undefined {
+function readIdentityPath(
+  raw: string | undefined,
+  role: Role | undefined,
+  problems: string[],
+): string | undefined {
+  if (role === 'hub') return undefined;
   if (raw === undefined) {
+    // A role that did not parse is reported already; it is still asked for an
+    // identity file, so that the run which fixes the role does not then
+    // discover a second missing setting.
     problems.push(MISSING_IDENTITY_FILE);
     return undefined;
   }
   return readAbsolutePath(raw, SETTINGS.serverIdentityFile.flag, problems);
 }
 
-/** The commands and flags this build understands, for a usage message. */
-export function usage(): string {
-  return [
-    'Usage: agentplexd doctor [options]',
-    '',
-    '  doctor           report what this configuration can start, and change nothing',
-    '',
-    ...usageLines(Object.values(SETTINGS)),
-  ].join('\n');
+/** The settings this program reads, for a usage message. */
+export function doctorUsage(): string {
+  return ['Usage: agentplex doctor [options]', '', ...usageLines(Object.values(SETTINGS))].join(
+    '\n',
+  );
 }
 
 /**
- * The command word, and the arguments left for the flag parser.
- *
- * Read only from the first position, and only when it is not a flag. Scanning
- * argv for the first bare word would find the value of `--role server`, which
- * is a setting and not an instruction; a command is the first thing typed or it
- * is not there.
- *
- * An unrecognised word is a problem rather than something to ignore. Falling
- * through to `serve` would start a long-running service for somebody who typed
- * a word they expected to be read-only and exit.
+ * The role, which decides which half of the machine is inspected.
  */
-function readCommand(
-  argv: readonly string[],
-  problems: string[],
-): { command: Command; rest: readonly string[] } {
-  const first = argv[0];
-  if (first === undefined || first.startsWith('--')) {
-    problems.push(
-      'this program no longer runs the server: start node apps/server/dist/main.js, ' +
-        'or give a command (doctor)',
-    );
-    return { command: 'serve', rest: argv };
-  }
-
-  const parsed = commandSchema.safeParse(first);
-  if (!parsed.success) {
-    problems.push(
-      `unknown command ${JSON.stringify(first)}: expected one of ${COMMANDS.join(', ')}`,
-    );
-    return { command: 'serve', rest: argv.slice(1) };
-  }
-
-  return { command: parsed.data, rest: argv.slice(1) };
-}
-
-/**
- * The role, which for this program can only be `server`.
- *
- * `hub` and `both` are still words setup and the installer know, and a
- * settings file written for a machine that is both is a settings file this
- * program will be started from. They are refused with the program to run
- * instead, rather than with "unknown role", because the operator who typed one
- * is not confused about roles; the layout changed under them.
- */
-function readRole(raw: string | undefined, problems: string[]): 'server' | undefined {
+function readRole(raw: string | undefined, problems: string[]): Role | undefined {
   if (raw === undefined) {
-    problems.push(`no role: set ${SETTINGS.role.env} or pass ${SETTINGS.role.flag} server`);
+    problems.push(
+      `no role: set ${SETTINGS.role.env} or pass ${SETTINGS.role.flag} (${ROLES.join(', ')})`,
+    );
     return undefined;
   }
   const result = roleSchema.safeParse(raw);
   if (!result.success) {
     problems.push(`unknown role ${JSON.stringify(raw)}: expected one of ${ROLES.join(', ')}`);
-    return undefined;
-  }
-  if (result.data !== 'server') {
-    problems.push(
-      `--role=${result.data} is not a role this program runs: the hub is its own program ` +
-        `(node apps/hub/dist/main.js), and a machine that is both starts one of each`,
-    );
     return undefined;
   }
   return result.data;

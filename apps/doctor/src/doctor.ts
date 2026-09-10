@@ -1,5 +1,5 @@
 import type { ProviderReadiness } from '@agentplex/protocol';
-import type { Config, Role } from './config/config.js';
+import type { Config, Role } from './config.js';
 import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 
 /**
@@ -63,6 +63,13 @@ export async function inspectMachine(
   config: Config,
   { providers, preflight, files }: DoctorDependencies,
 ): Promise<DoctorReport> {
+  // A hub-only machine starts no sessions, mounts no stores and drives no
+  // providers. Probing them anyway would report on a machine this deployment
+  // never touches.
+  if (!('server' in config)) {
+    return { role: config.role, usable: true, providers: [], stores: [] };
+  }
+
   const readiness = await preflight.run(providers);
   const stores = await Promise.all(config.server.storePaths.map((path) => checkStore(path, files)));
 
@@ -103,14 +110,22 @@ export function formatDoctorReport(report: DoctorReport): readonly string[] {
 
   lines.push('providers');
   if (report.providers.length === 0) {
-    lines.push('  this build drives no providers');
+    lines.push(
+      report.role === 'hub'
+        ? '  this machine runs no server, so it starts no sessions'
+        : '  this build drives no providers',
+    );
   } else {
     for (const provider of report.providers) lines.push(`  ${providerLine(provider)}`);
   }
 
   lines.push('', 'stores');
   if (report.stores.length === 0) {
-    lines.push('  no store paths are configured');
+    lines.push(
+      report.role === 'hub'
+        ? '  this machine runs no server, so it mounts no stores'
+        : '  no store paths are configured',
+    );
   } else {
     for (const store of report.stores) lines.push(`  ${storeLine(store)}`);
   }

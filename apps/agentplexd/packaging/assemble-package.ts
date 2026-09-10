@@ -44,6 +44,7 @@ export const OTHER_APPS: readonly BundledPackage[] = [
   { name: '@agentplex/hub', directory: 'apps/hub' },
   { name: '@agentplex/server', directory: 'apps/server' },
   { name: '@agentplex/setup', directory: 'apps/setup' },
+  { name: '@agentplex/doctor', directory: 'apps/doctor' },
 ];
 
 /**
@@ -174,6 +175,13 @@ export function packageEntries(): readonly PackageEntry[] {
       kind: 'directory',
       proof: 'main.js',
       reason: 'the compiled setup wizard and plan replay',
+    },
+    {
+      from: 'apps/doctor/dist',
+      to: 'apps/doctor/dist',
+      kind: 'directory',
+      proof: 'main.js',
+      reason: 'the compiled doctor',
     },
     {
       from: 'apps/hub/migrations',
