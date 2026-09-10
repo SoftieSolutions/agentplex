@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerToHubFrame } from '@agentplex/protocol';
-import { createFakeMessageSocket, PEER_GONE } from '../../shared/fake-message-socket.js';
-import { createFrameIdCounter } from '../../shared/ids.js';
-import { createLogger } from '../../shared/logger.js';
-import { createFakeTimers } from '../../shared/timers.js';
+import {
+  createFakeMessageSocket,
+  PEER_GONE,
+  createFakeTimers,
+} from '@agentplex/node-shared/testing';
+import { createFrameIdCounter, createLogger } from '@agentplex/node-shared';
 import { startHeartbeat } from './connection-heartbeat.js';
 
 /**

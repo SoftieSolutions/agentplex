@@ -1,8 +1,7 @@
 import { z } from 'zod';
 import { hubIdSchema, type HubId } from '@agentplex/protocol';
 import type { Database } from './db/database.js';
-import type { Clock } from '../shared/clock.js';
-import type { IdGenerator } from '../shared/ids.js';
+import type { Clock, IdGenerator } from '@agentplex/node-shared';
 
 const identityRowSchema = z.object({ hub_id: hubIdSchema });
 

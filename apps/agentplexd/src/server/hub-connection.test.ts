@@ -8,9 +8,8 @@ import {
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { createFakeMessageSocket, PEER_GONE } from '../shared/fake-message-socket.js';
-import { createLogger } from '../shared/logger.js';
-import { CLOSE_POLICY } from '../shared/message-socket.js';
+import { createFakeMessageSocket, PEER_GONE } from '@agentplex/node-shared/testing';
+import { createLogger, CLOSE_POLICY } from '@agentplex/node-shared';
 import { serveHubConnection } from './hub-connection.js';
 import type { ServerIdentity } from './server-identity.js';
 import { createFakeSessionController } from './fake-session-controller.js';

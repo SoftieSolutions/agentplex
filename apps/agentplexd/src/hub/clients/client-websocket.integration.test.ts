@@ -11,10 +11,8 @@ import type { MigrationFileSystem } from '../db/migration-files.js';
 import { createFakeBeaconSource } from '../discovery/fake-beacon-source.js';
 import { createFakeWebAssets } from '../web/fake-web-assets.js';
 import { startHub, type Hub } from '../hub.js';
-import { createUnreachableDialer } from '../../shared/fake-message-socket.js';
-import { CLOSE_POLICY } from '../../shared/message-socket.js';
-import { createLogger } from '../../shared/logger.js';
-import { createFakeTimers } from '../../shared/timers.js';
+import { createUnreachableDialer, createFakeTimers } from '@agentplex/node-shared/testing';
+import { CLOSE_POLICY, createLogger } from '@agentplex/node-shared';
 import { CLIENT_SOCKET_PATH, CLIENT_TICKET_PATH, NOT_AUTHORIZED } from './client-auth.js';
 import { CLIENT_TICKET_LIFETIME_MS } from './client-tickets.js';
 

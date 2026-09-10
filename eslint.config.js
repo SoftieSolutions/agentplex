@@ -6,8 +6,9 @@ import tseslint from 'typescript-eslint';
 /**
  * Workspace boundaries (AGX-9).
  *
- * The dependency graph is a tree, not a mesh: both apps may depend on the
- * protocol package, and nothing else crosses a package line. Enforcing it here
+ * The dependency graph is a tree, not a mesh: an app may depend on the
+ * packages its manifest names, a package on the ones its manifest names, and
+ * nothing else crosses a package line. Enforcing it here
  * means a violation fails on the contributor's machine and in CI, rather than
  * being discovered when someone tries to split the packages apart.
  */
@@ -67,6 +68,29 @@ export default tseslint.config(
           group: ['node:*', '@agentplex/*'],
           message:
             'packages/protocol is shared by a Node service and a browser bundle: it may use neither Node builtins nor another workspace package.',
+        },
+      ]),
+    },
+  },
+  {
+    // A package's dependency list is its allowed import set (AGX-91). This one
+    // is the seam the hub and the server share -- clocks, ids, the logger, the
+    // message socket -- and it may reach only `protocol` in the workspace: a
+    // dependency on `providers` or `pty` would put the seam above the things
+    // that are supposed to sit on it.
+    files: ['packages/node-shared/**/*.ts'],
+    languageOptions: { globals: globals.node },
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['@agentplex/*', '!@agentplex/protocol'],
+          message:
+            'packages/node-shared may import @agentplex/protocol and no other workspace package.',
+        },
+        {
+          group: ['node:child_process', 'child_process'],
+          message:
+            'Starting a child directly bypasses the operation registry. Nothing in node-shared spawns.',
         },
       ]),
     },

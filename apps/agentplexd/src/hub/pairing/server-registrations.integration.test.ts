@@ -12,7 +12,7 @@ import {
   type LiveServerRegistration,
 } from './server-registrations.js';
 import { openMigratedSchema, type MigratedSchema } from './test-migrated-schema.js';
-import type { IdGenerator } from '../../shared/ids.js';
+import type { IdGenerator } from '@agentplex/node-shared';
 
 /**
  * Pairing against a real SQLite database.

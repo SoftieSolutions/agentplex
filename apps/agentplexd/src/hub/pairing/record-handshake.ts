@@ -1,6 +1,6 @@
 import type { ServerId, ServerRegistrationId, StoreDescriptor } from '@agentplex/protocol';
 import type { Database } from '../db/database.js';
-import type { Clock } from '../../shared/clock.js';
+import type { Clock } from '@agentplex/node-shared';
 import { findServer, recordServerConnected, recordServerIdentity } from './server-registrations.js';
 import { recordStores, type StoreRecord } from './store-records.js';
 

@@ -1,7 +1,6 @@
 import { sessionRefSchema, storeDescriptorSchema, type SessionId } from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
-import type { Clock } from '../shared/clock.js';
-import type { IdGenerator } from '../shared/ids.js';
+import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import { createFakePtyFactory, type FakePtyFactory } from './fake-pty.js';
 import type { Launch, LaunchPlan } from './providers/provider-adapter.js';
 import { createPtySupervisor, type PtySupervisor } from './pty-supervisor.js';

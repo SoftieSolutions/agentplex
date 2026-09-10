@@ -8,8 +8,7 @@ import { nodeMigrationFileSystem } from './node-migration-files.js';
 import { migrate, type Migration } from './migrations.js';
 import { createSqliteDatabase, type SqliteDatabase } from './sqlite.js';
 import { ensureHubIdentity } from '../hub-identity.js';
-import { createLogger } from '../../shared/logger.js';
-import { randomIdGenerator } from '../../shared/ids.js';
+import { createLogger, randomIdGenerator } from '@agentplex/node-shared';
 
 /**
  * The shipped migrations, against a real SQLite file.

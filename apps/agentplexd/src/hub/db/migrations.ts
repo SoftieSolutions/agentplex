@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { Database, Queryable } from './database.js';
-import type { Clock } from '../../shared/clock.js';
-import type { Logger } from '../../shared/logger.js';
+import type { Clock, Logger } from '@agentplex/node-shared';
 
 /**
  * Forward-only, append-only migrations.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sessionIdSchema, storeIdSchema, type StoreDescriptor } from '@agentplex/protocol';
-import { createLogger } from '../shared/logger.js';
+import { createLogger } from '@agentplex/node-shared';
 import { createFakePtyFactory, type FakePtyFactory } from './fake-pty.js';
 import { createFakeProviderAdapter } from './providers/fake-provider-adapter.js';
 import { createFakeProviderFiles } from './providers/fake-provider-files.js';

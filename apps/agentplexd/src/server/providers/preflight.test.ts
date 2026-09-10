@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLogger } from '../../shared/logger.js';
+import { createLogger } from '@agentplex/node-shared';
 import { createFakeProcessRunner, printed, refused } from '../operations/fake-process-runner.js';
 import type { ProcessOutcome } from '../operations/process-runner.js';
 import type { ProgramResolver } from '../program-resolver.js';

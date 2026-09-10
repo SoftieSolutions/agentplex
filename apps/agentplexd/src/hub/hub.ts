@@ -5,14 +5,16 @@ import {
   sendJson,
   startHttpServer,
   type HttpListener,
-} from '../shared/http.js';
-import type { Clock } from '../shared/clock.js';
-import type { Logger } from '../shared/logger.js';
-import type { IdGenerator } from '../shared/ids.js';
-import { closure, CLOSE_POLICY, type SocketDialer } from '../shared/message-socket.js';
-import type { Timers } from '../shared/timers.js';
-import type { TokenMinter } from '../shared/tokens.js';
-import { createWebSocketListener } from '../shared/ws-message-socket.js';
+  type Clock,
+  type Logger,
+  type IdGenerator,
+  closure,
+  CLOSE_POLICY,
+  type SocketDialer,
+  type Timers,
+  type TokenMinter,
+  createWebSocketListener,
+} from '@agentplex/node-shared';
 import {
   admitsUpgrade,
   answerTicketRequest,

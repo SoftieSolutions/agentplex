@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { childEnvironment, childSearchPath } from './config/child-environment.js';
+import {
+  childEnvironment,
+  childSearchPath,
+  systemClock,
+  randomIdGenerator,
+  createLogger,
+  jsonLineSink,
+  systemTimers,
+  randomTokenMinter,
+  createWebSocketDialer,
+} from '@agentplex/node-shared';
 import { loadConfig, usage } from './config/config.js';
 import { formatDoctorReport, inspectMachine } from './doctor.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
@@ -26,12 +36,6 @@ import { createNodeHubDatabase } from './setup/node-hub-database.js';
 import { createNodeSetupMachine } from './setup/node-setup-machine.js';
 import { createNodeSetupTerminal } from './setup/node-setup-terminal.js';
 import { runSetupCommand, setupUsage } from './setup/setup-command.js';
-import { systemClock } from './shared/clock.js';
-import { randomIdGenerator } from './shared/ids.js';
-import { createLogger, jsonLineSink } from './shared/logger.js';
-import { systemTimers } from './shared/timers.js';
-import { randomTokenMinter } from './shared/tokens.js';
-import { createWebSocketDialer } from './shared/ws-message-socket.js';
 
 /**
  * The entrypoint is wiring and process concerns only: argv, env, stdout,

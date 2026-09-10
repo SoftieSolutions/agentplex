@@ -1,8 +1,6 @@
 import { delimiter } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { childEnvironment } from '../config/child-environment.js';
-import { systemClock } from '../shared/clock.js';
-import { randomIdGenerator } from '../shared/ids.js';
+import { childEnvironment, systemClock, randomIdGenerator } from '@agentplex/node-shared';
 import { nodePtyFactory } from './node-pty-factory.js';
 import { createProbeProgram } from './probe-program.js';
 import { createPtySupervisor, type PtyRun, type PtySupervisor } from './pty-supervisor.js';

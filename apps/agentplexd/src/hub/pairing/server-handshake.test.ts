@@ -17,9 +17,9 @@ import {
   createUnreachableDialer,
   PEER_GONE,
   type FakeMessageSocket,
-} from '../../shared/fake-message-socket.js';
-import { createLogger } from '../../shared/logger.js';
-import { createFakeTimers } from '../../shared/timers.js';
+  createFakeTimers,
+} from '@agentplex/node-shared/testing';
+import { createLogger } from '@agentplex/node-shared';
 import { handshakeWithServer, type DialTarget } from './server-handshake.js';
 import type { ServerAddress } from './server-address.js';
 import { createFakeSessionController } from '../../server/fake-session-controller.js';

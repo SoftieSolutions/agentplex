@@ -14,9 +14,8 @@ import { createFakeProcessProbe } from './server/fake-process-probe.js';
 import { createFakeProcessRunner } from './server/operations/fake-process-runner.js';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
 import { createFakeStoreFiles } from './server/fake-store-files.js';
-import { createUnreachableDialer } from './shared/fake-message-socket.js';
-import { createLogger, type LogRecord } from './shared/logger.js';
-import { createFakeTimers } from './shared/timers.js';
+import { createUnreachableDialer, createFakeTimers } from '@agentplex/node-shared/testing';
+import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import type { Config } from './config/config.js';
 
 const logger = createLogger('error', () => {});

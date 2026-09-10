@@ -1,6 +1,6 @@
 import { storeDescriptorSchema, type SessionRef } from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
-import type { Clock } from '../../shared/clock.js';
+import type { Clock } from '@agentplex/node-shared';
 import { createFakeProviderAdapter, FAKE_SESSIONS_DIRECTORY } from './fake-provider-adapter.js';
 import { createFakeProviderFiles } from './fake-provider-files.js';
 import { createProviderRegistry } from './provider-registry.js';

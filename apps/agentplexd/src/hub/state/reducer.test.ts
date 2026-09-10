@@ -9,7 +9,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { missingProvider, readyProvider } from '../../server/providers/fake-provider-adapter.js';
-import { createLogger } from '../../shared/logger.js';
+import { createLogger } from '@agentplex/node-shared';
 import type { DiscoveredServer } from '../discovery/beacon-listener.js';
 import { serverAddressSchema } from '../pairing/server-address.js';
 import type {

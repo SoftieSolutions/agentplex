@@ -7,7 +7,7 @@ import type {
   SessionRef,
   StoreId,
 } from '@agentplex/protocol';
-import type { Logger } from '../../shared/logger.js';
+import type { Logger } from '@agentplex/node-shared';
 import { countsTowardAttention } from '../connections/attention.js';
 import type { ServerConnectionReport } from '../connections/server-connection.js';
 import type { DiscoveredServer } from '../discovery/beacon-listener.js';

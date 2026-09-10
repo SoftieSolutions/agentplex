@@ -1,5 +1,4 @@
-import type { Clock } from '../../shared/clock.js';
-import { tokenMatches, type TokenMinter } from '../../shared/tokens.js';
+import { type Clock, tokenMatches, type TokenMinter } from '@agentplex/node-shared';
 
 /**
  * The short-lived half of client authentication.

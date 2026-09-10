@@ -11,12 +11,14 @@ import type { BeaconNetwork } from './server/server-beacon.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { TerminalManager } from './server/terminal-manager.js';
 import type { StoreFileSystem } from './server/store-identity.js';
-import type { Clock } from './shared/clock.js';
-import type { IdGenerator } from './shared/ids.js';
-import type { Logger } from './shared/logger.js';
-import type { SocketDialer } from './shared/message-socket.js';
-import type { Timers } from './shared/timers.js';
-import type { TokenMinter } from './shared/tokens.js';
+import type {
+  Clock,
+  IdGenerator,
+  Logger,
+  SocketDialer,
+  Timers,
+  TokenMinter,
+} from '@agentplex/node-shared';
 
 /**
  * Composition of the roles a configuration asks for.

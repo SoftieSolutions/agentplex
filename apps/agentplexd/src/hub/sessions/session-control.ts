@@ -6,7 +6,7 @@ import type {
   SessionId,
   StoreId,
 } from '@agentplex/protocol';
-import type { Logger } from '../../shared/logger.js';
+import type { Logger } from '@agentplex/node-shared';
 import type { InstructionOutcome, SessionInstruction } from '../connections/server-connection.js';
 import type { HubStateSnapshot } from '../state/reducer.js';
 import { routeStart, routeStop } from './session-routing.js';

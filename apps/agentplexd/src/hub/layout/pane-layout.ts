@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { paneLayoutTextSchema } from '@agentplex/protocol';
-import type { Clock } from '../../shared/clock.js';
+import type { Clock } from '@agentplex/node-shared';
 import type { Queryable } from '../db/database.js';
 
 /**

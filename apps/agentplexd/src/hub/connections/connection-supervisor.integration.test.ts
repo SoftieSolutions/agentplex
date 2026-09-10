@@ -7,10 +7,12 @@ import {
 } from '@agentplex/protocol';
 import { serveHubConnection } from '../../server/hub-connection.js';
 import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
-import { createSocketPair } from '../../shared/fake-message-socket.js';
-import { createLogger } from '../../shared/logger.js';
-import type { DialResult, SocketDialer } from '../../shared/message-socket.js';
-import { createFakeTimers, type FakeTimers } from '../../shared/timers.js';
+import {
+  createSocketPair,
+  createFakeTimers,
+  type FakeTimers,
+} from '@agentplex/node-shared/testing';
+import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
 import type { Database } from '../db/database.js';
 import {
   newServerRegistrationSchema,

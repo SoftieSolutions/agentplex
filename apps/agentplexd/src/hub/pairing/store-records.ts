@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { storeIdSchema, type StoreId } from '@agentplex/protocol';
 import type { Queryable } from '../db/database.js';
-import type { Clock } from '../../shared/clock.js';
+import type { Clock } from '@agentplex/node-shared';
 
 /**
  * The stores this hub has been told about, keyed by the id in the store's own

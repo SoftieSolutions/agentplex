@@ -4,8 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { nodePtyFactory } from '../server/node-pty-factory.js';
 import type { Launch } from '../server/providers/provider-adapter.js';
 import { createPtySupervisor, type PtyRun } from '../server/pty-supervisor.js';
-import { systemClock } from '../shared/clock.js';
-import { randomIdGenerator } from '../shared/ids.js';
+import { systemClock, randomIdGenerator } from '@agentplex/node-shared';
 import { createNodeSetupTerminal } from './node-setup-terminal.js';
 
 /**

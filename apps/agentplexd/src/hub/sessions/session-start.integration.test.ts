@@ -17,10 +17,13 @@ import {
   type SessionRow,
   type StoreDescriptor,
 } from '@agentplex/protocol';
-import { createFakeMessageSocket, createSocketPair } from '../../shared/fake-message-socket.js';
-import { createLogger } from '../../shared/logger.js';
-import type { DialResult, SocketDialer } from '../../shared/message-socket.js';
-import { createFakeTimers, type FakeTimers } from '../../shared/timers.js';
+import {
+  createFakeMessageSocket,
+  createSocketPair,
+  createFakeTimers,
+  type FakeTimers,
+} from '@agentplex/node-shared/testing';
+import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
 import { serveHubConnection } from '../../server/hub-connection.js';
 import { createFakePtyFactory, type FakePtyFactory } from '../../server/fake-pty.js';
 import {

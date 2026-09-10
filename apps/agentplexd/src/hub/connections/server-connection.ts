@@ -13,16 +13,16 @@ import {
   type SessionHold,
   type StoreId,
 } from '@agentplex/protocol';
-import type { Clock } from '../../shared/clock.js';
-import type { Logger } from '../../shared/logger.js';
 import {
+  type Clock,
+  type Logger,
   closure,
   CLOSE_NORMAL,
   CLOSE_POLICY,
   type MessageSocket,
   type SocketDialer,
-} from '../../shared/message-socket.js';
-import type { Timers } from '../../shared/timers.js';
+  type Timers,
+} from '@agentplex/node-shared';
 import type { Database } from '../db/database.js';
 import { recordHandshake } from '../pairing/record-handshake.js';
 import {

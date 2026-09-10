@@ -36,13 +36,14 @@ single-machine case.
 ## Repository layout
 
 ```
-apps/agentplexd/     the service: src/hub/, src/server/, src/shared/
-apps/web/            the PWA
-packages/protocol/   frame types and parsers, shared by both
+apps/agentplexd/       the service: src/hub/, src/server/, src/setup/
+apps/web/              the PWA
+packages/protocol/     frame types and parsers, shared by the service and the PWA
+packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share
 ```
 
-`packages/protocol` is a package because two apps share it, and neither app may
-import the other. That boundary is enforced by lint, not by convention.
+A package is a seam with at least two consumers, and neither app may import
+the other. That boundary is enforced by lint, not by convention.
 
 ## Running it
 

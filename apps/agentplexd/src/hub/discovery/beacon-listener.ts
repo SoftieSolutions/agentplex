@@ -6,9 +6,7 @@ import {
   parseTextFrame,
   type ServerId,
 } from '@agentplex/protocol';
-import type { Clock } from '../../shared/clock.js';
-import type { Logger } from '../../shared/logger.js';
-import type { Timers } from '../../shared/timers.js';
+import type { Clock, Logger, Timers } from '@agentplex/node-shared';
 
 /**
  * Hearing servers say where they are, and concluding almost nothing from it.

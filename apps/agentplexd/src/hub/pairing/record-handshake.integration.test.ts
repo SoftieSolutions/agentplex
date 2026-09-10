@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { serverIdSchema, storeIdSchema, type StoreDescriptor } from '@agentplex/protocol';
 import type { Database } from '../db/database.js';
-import type { IdGenerator } from '../../shared/ids.js';
+import type { IdGenerator } from '@agentplex/node-shared';
 import { recordHandshake } from './record-handshake.js';
 import {
   findServer,

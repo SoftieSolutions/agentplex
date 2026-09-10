@@ -15,8 +15,7 @@ import {
   type StoreFileSystem,
   type StoreIdentity,
 } from '../server/store-identity.js';
-import type { IdGenerator } from '../shared/ids.js';
-import { tokenMatches, type TokenMinter } from '../shared/tokens.js';
+import { type IdGenerator, tokenMatches, type TokenMinter } from '@agentplex/node-shared';
 import {
   setupBinPath,
   type PlannedHub,
