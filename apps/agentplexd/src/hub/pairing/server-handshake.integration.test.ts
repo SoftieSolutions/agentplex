@@ -8,10 +8,14 @@ import { createFakePtyFactory } from '../../server/fake-pty.js';
 import { createPtySupervisor } from '../../server/pty-supervisor.js';
 import { createTerminalManager } from '../../server/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../server/server.js';
-import { createLogger } from '../../shared/logger.js';
-import { closure, CLOSE_POLICY, type SocketDialer } from '../../shared/message-socket.js';
-import { systemTimers } from '../../shared/timers.js';
-import { createWebSocketDialer } from '../../shared/ws-message-socket.js';
+import {
+  createLogger,
+  closure,
+  CLOSE_POLICY,
+  type SocketDialer,
+  systemTimers,
+  createWebSocketDialer,
+} from '@agentplex/node-shared';
 import { handshakeWithServer, type DialTarget } from './server-handshake.js';
 import { serverAddressSchema } from './server-address.js';
 

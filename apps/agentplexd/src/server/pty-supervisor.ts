@@ -1,5 +1,4 @@
-import type { Clock } from '../shared/clock.js';
-import type { IdGenerator } from '../shared/ids.js';
+import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import type { Launch } from './providers/provider-adapter.js';
 import type { Pty, PtyExit, PtyFactory } from './pty.js';
 import { createScrollback, type Scrollback } from './scrollback.js';

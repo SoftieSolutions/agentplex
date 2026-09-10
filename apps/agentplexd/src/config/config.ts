@@ -1,7 +1,7 @@
 import { delimiter, isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
 import { DEFAULT_TERMINAL_CAP } from '../server/terminal-manager.js';
-import { LOG_LEVELS, type LogLevel } from '../shared/logger.js';
+import { LOG_LEVELS, type LogLevel } from '@agentplex/node-shared';
 
 /**
  * Configuration is a value produced from argv and env by a pure function, so

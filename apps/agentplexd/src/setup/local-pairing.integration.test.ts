@@ -9,8 +9,7 @@ import {
   type LiveServerRegistration,
 } from '../hub/pairing/server-registrations.js';
 import { openMigratedSchema, type MigratedSchema } from '../hub/pairing/test-migrated-schema.js';
-import type { Clock } from '../shared/clock.js';
-import type { IdGenerator } from '../shared/ids.js';
+import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import { recordLocalPairing, type LocalPairing } from './local-pairing.js';
 
 /**

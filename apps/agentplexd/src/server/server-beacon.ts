@@ -4,8 +4,7 @@ import {
   formatServerBeacon,
   type ServerId,
 } from '@agentplex/protocol';
-import type { Logger } from '../shared/logger.js';
-import type { Timers } from '../shared/timers.js';
+import type { Logger, Timers } from '@agentplex/node-shared';
 
 /**
  * Saying, on the local network, that this server exists.

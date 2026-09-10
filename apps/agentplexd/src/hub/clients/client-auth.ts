@@ -1,4 +1,4 @@
-import { tokenMatches } from '../../shared/tokens.js';
+import { tokenMatches } from '@agentplex/node-shared';
 import type { ClientTickets, IssuedTicket } from './client-tickets.js';
 
 /**

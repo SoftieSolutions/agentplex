@@ -1,5 +1,5 @@
 import type { Provider, SessionDescriptor, SessionRef, StoreDescriptor } from '@agentplex/protocol';
-import type { Clock } from '../../shared/clock.js';
+import type { Clock } from '@agentplex/node-shared';
 import type { DiscoveryProblem, ProviderAdapter } from './provider-adapter.js';
 import type { ProviderRegistry } from './provider-registry.js';
 

@@ -7,8 +7,8 @@ import {
   serverIdSchema,
   type ServerId,
 } from '@agentplex/protocol';
-import { createLogger, type LogRecord } from '../../shared/logger.js';
-import { createFakeTimers, type FakeTimers } from '../../shared/timers.js';
+import { createLogger, type LogRecord } from '@agentplex/node-shared';
+import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
 import {
   startBeaconListener,
   type BeaconDatagram,

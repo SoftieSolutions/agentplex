@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { serverIdSchema, type ServerId } from '@agentplex/protocol';
-import type { IdGenerator } from '../shared/ids.js';
-import type { TokenMinter } from '../shared/tokens.js';
+import type { IdGenerator, TokenMinter } from '@agentplex/node-shared';
 import type { StoreFileSystem } from './store-identity.js';
 
 /**

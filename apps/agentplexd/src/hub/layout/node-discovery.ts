@@ -1,7 +1,6 @@
 import type { SessionRef } from '@agentplex/protocol';
 import type { Database, Queryable } from '../db/database.js';
-import type { Clock } from '../../shared/clock.js';
-import type { IdGenerator } from '../../shared/ids.js';
+import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import { findNodeForSession, SESSION_KIND, type TreeNode } from './node-tree.js';
 
 /**

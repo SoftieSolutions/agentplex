@@ -1,8 +1,7 @@
 import { loadMigrations, type MigrationFileSystem } from '../hub/db/migration-files.js';
 import { migrate } from '../hub/db/migrations.js';
 import { createSqliteDatabase, type SqliteDatabase } from '../hub/db/sqlite.js';
-import type { Clock } from '../shared/clock.js';
-import type { Logger } from '../shared/logger.js';
+import type { Clock, Logger } from '@agentplex/node-shared';
 import type { HubDatabase, HubDatabaseResult } from './hub-database.js';
 
 /**

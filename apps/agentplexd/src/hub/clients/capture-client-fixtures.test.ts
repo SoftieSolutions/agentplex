@@ -23,10 +23,17 @@ import { createFakeBeaconSource, type FakeBeaconSource } from '../discovery/fake
 import { createFakeWebAssets } from '../web/fake-web-assets.js';
 import { serveHubConnection } from '../../server/hub-connection.js';
 import type { SessionOutcome, StoreReport } from '../../server/session-control.js';
-import { createUnreachableDialer, createSocketPair } from '../../shared/fake-message-socket.js';
-import { createLogger } from '../../shared/logger.js';
-import type { DialResult, MessageSocket, SocketDialer } from '../../shared/message-socket.js';
-import { createFakeTimers } from '../../shared/timers.js';
+import {
+  createUnreachableDialer,
+  createSocketPair,
+  createFakeTimers,
+} from '@agentplex/node-shared/testing';
+import {
+  createLogger,
+  type DialResult,
+  type MessageSocket,
+  type SocketDialer,
+} from '@agentplex/node-shared';
 import { createFakeDatabase } from '../db/fake-database.js';
 import { loadMigrations, type MigrationFileSystem } from '../db/migration-files.js';
 import { migrate } from '../db/migrations.js';

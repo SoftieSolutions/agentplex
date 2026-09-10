@@ -1,7 +1,7 @@
 import { delimiter } from 'node:path';
 import process from 'node:process';
 import { afterAll, describe, expect, it } from 'vitest';
-import { childEnvironment } from '../../config/child-environment.js';
+import { childEnvironment } from '@agentplex/node-shared';
 import { createMarkerProgram, createProbeProgram } from '../probe-program.js';
 import { createNodeProcessRunner } from './node-process-runner.js';
 

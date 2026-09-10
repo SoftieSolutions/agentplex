@@ -30,9 +30,9 @@ const serviceManifest: Manifest = {
   license: 'Apache-2.0',
   type: 'module',
   dependencies: {
+    '@agentplex/node-shared': 'workspace:*',
     '@agentplex/protocol': 'workspace:*',
     'node-pty': '1.1.0',
-    ws: '^8.21.3',
     zod: '^4.1.13',
   },
 };
@@ -45,52 +45,104 @@ const protocolManifest: Manifest = {
   dependencies: { zod: '^4.1.13' },
 };
 
+const nodeSharedManifest: Manifest = {
+  name: '@agentplex/node-shared',
+  version: '1.2.3',
+  license: 'Apache-2.0',
+  type: 'module',
+  dependencies: { ws: '^8.21.3' },
+};
+
 function derived(): Record<string, unknown> {
   return publishedManifest({
     root: rootManifest,
     service: serviceManifest,
-    bundled: [protocolManifest],
+    bundled: [protocolManifest, nodeSharedManifest],
   });
 }
 
 describe('publishedManifest', () => {
-  it('resolves the workspace protocol to an exact version and bundles it', () => {
+  it('resolves every workspace package to an exact version and bundles it', () => {
     const manifest = derived();
 
     expect(manifest['dependencies']).toEqual({
+      '@agentplex/node-shared': '1.2.3',
       '@agentplex/protocol': '1.2.3',
       'node-pty': '1.1.0',
       ws: '^8.21.3',
       zod: '^4.1.13',
     });
-    expect(manifest['bundleDependencies']).toEqual(['@agentplex/protocol']);
+    expect(manifest['bundleDependencies']).toEqual([
+      '@agentplex/node-shared',
+      '@agentplex/protocol',
+    ]);
   });
 
   it('refuses a workspace dependency nothing bundles', () => {
     expect(() =>
       publishedManifest({ root: rootManifest, service: serviceManifest, bundled: [] }),
-    ).toThrow('@agentplex/protocol');
+    ).toThrow('@agentplex/node-shared');
+  });
+
+  /**
+   * The resolver walks up out of one bundled directory into the next, so a
+   * bundled package's own workspace dependency has to be in the tarball too,
+   * and the assembly is where that is checked -- a published package is the
+   * wrong place to find out.
+   */
+  it('refuses a bundled package whose own workspace dependency nothing bundles', () => {
+    const dependent: Manifest = {
+      ...nodeSharedManifest,
+      dependencies: { '@agentplex/unbundled': 'workspace:*' },
+    };
+
+    expect(() =>
+      publishedManifest({
+        root: rootManifest,
+        service: serviceManifest,
+        bundled: [protocolManifest, dependent],
+      }),
+    ).toThrow('@agentplex/unbundled is a workspace dependency of @agentplex/node-shared');
   });
 
   /**
    * npm never fetches a bundled package's own dependencies, so one the tarball
    * does not satisfy installs as an empty directory and fails at the first
-   * import. The host has to declare them, and the assembly is where that is
-   * checked -- a published package is the wrong place to find out.
+   * import. The published package declares them instead, at the range the
+   * bundled package tested against.
    */
-  it('refuses to bundle a package whose dependencies the host does not declare', () => {
-    const service: Manifest = {
-      ...serviceManifest,
-      dependencies: { '@agentplex/protocol': 'workspace:*' },
+  it('declares what a bundled package needs, at the range it declares', () => {
+    expect(derived()['dependencies']).toMatchObject({ ws: '^8.21.3' });
+  });
+
+  it('refuses two ranges for one dependency', () => {
+    const conflicting: Manifest = {
+      ...nodeSharedManifest,
+      dependencies: { zod: '^3.0.0' },
     };
 
     expect(() =>
-      publishedManifest({ root: rootManifest, service, bundled: [protocolManifest] }),
+      publishedManifest({
+        root: rootManifest,
+        service: serviceManifest,
+        bundled: [protocolManifest, conflicting],
+      }),
     ).toThrow('zod');
   });
 
-  it('accepts a bundled dependency the host declares at the same range', () => {
-    expect(derived()['dependencies']).toMatchObject({ zod: '^4.1.13' });
+  it('lets the service win over a bundled package that asks for the same thing', () => {
+    const agreeing: Manifest = {
+      ...nodeSharedManifest,
+      dependencies: { zod: '^4.1.13' },
+    };
+
+    expect(
+      publishedManifest({
+        root: rootManifest,
+        service: serviceManifest,
+        bundled: [protocolManifest, agreeing],
+      })['dependencies'],
+    ).toMatchObject({ zod: '^4.1.13' });
   });
 
   it('declares node and not pnpm, because the target machine has only node', () => {
@@ -126,6 +178,7 @@ describe('packageEntries', () => {
 
     expect(sources).toContain('apps/agentplexd/dist');
     expect(sources).toContain('packages/protocol/dist');
+    expect(sources).toContain('packages/node-shared/dist');
     expect(sources).toContain('apps/web/dist');
     expect(sources).toContain('apps/agentplexd/migrations');
   });
@@ -141,6 +194,7 @@ describe('packageEntries', () => {
 describe('bundledManifest', () => {
   it('keeps the exports that make the bundled directory resolvable', () => {
     const kept = bundledManifest(
+      'packages/protocol/package.json',
       JSON.stringify({
         name: '@agentplex/protocol',
         version: '1.2.3',
@@ -169,6 +223,7 @@ describe('bundledManifest', () => {
    */
   it('declares no dependencies of its own', () => {
     const kept = bundledManifest(
+      'packages/protocol/package.json',
       JSON.stringify({
         name: '@agentplex/protocol',
         version: '1.2.3',
@@ -218,6 +273,8 @@ describe('the assembled package', () => {
     await write('apps/agentplexd/scripts/fix-node-pty-permissions.js', 'main();\n');
     await write('packages/protocol/package.json', JSON.stringify(protocolManifest));
     await write('packages/protocol/dist/index.js', 'export const version = 7;\n');
+    await write('packages/node-shared/package.json', JSON.stringify(nodeSharedManifest));
+    await write('packages/node-shared/dist/index.js', 'export const clock = 8;\n');
     if (options.client) {
       await write('apps/web/dist/index.html', '<!doctype html>\n');
       await write('apps/web/dist/assets/index-abc123.js', 'export {};\n');
@@ -264,19 +321,33 @@ describe('the assembled package', () => {
     );
   });
 
-  it('bundles the protocol at the path Node resolves it from', async () => {
+  it('bundles every workspace package at the path Node resolves it from', async () => {
     const root = await workspace({ client: true });
 
     const assembled = await assemblePackage({ workspaceRoot: root });
 
-    const bundled: unknown = JSON.parse(
-      await readFile(
-        join(assembled.directory, 'node_modules/@agentplex/protocol/package.json'),
+    const manifestOf = async (name: string): Promise<unknown> =>
+      JSON.parse(
+        await readFile(join(assembled.directory, `node_modules/${name}/package.json`), 'utf8'),
+      );
+    await expect(manifestOf('@agentplex/protocol')).resolves.toMatchObject({
+      name: '@agentplex/protocol',
+      version: '1.2.3',
+    });
+    await expect(manifestOf('@agentplex/node-shared')).resolves.toMatchObject({
+      name: '@agentplex/node-shared',
+      version: '1.2.3',
+    });
+    await expect(
+      readFile(
+        join(assembled.directory, 'node_modules/@agentplex/node-shared/dist/index.js'),
         'utf8',
       ),
-    );
-    expect(bundled).toMatchObject({ name: '@agentplex/protocol', version: '1.2.3' });
-    expect(assembled.manifest['bundleDependencies']).toEqual(['@agentplex/protocol']);
+    ).resolves.toContain('clock');
+    expect(assembled.manifest['bundleDependencies']).toEqual([
+      '@agentplex/node-shared',
+      '@agentplex/protocol',
+    ]);
   });
 
   /**

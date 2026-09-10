@@ -1,8 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { systemClock } from '../shared/clock.js';
-import { randomIdGenerator } from '../shared/ids.js';
+import { systemClock, randomIdGenerator } from '@agentplex/node-shared';
 import { nodePtyFactory } from './node-pty-factory.js';
 import { createPtySupervisor } from './pty-supervisor.js';
 import type { Launch } from './providers/provider-adapter.js';

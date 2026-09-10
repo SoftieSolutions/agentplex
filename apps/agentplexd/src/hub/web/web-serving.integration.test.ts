@@ -3,9 +3,8 @@ import { createFakeDatabase } from '../db/fake-database.js';
 import type { MigrationFileSystem } from '../db/migration-files.js';
 import { createFakeBeaconSource } from '../discovery/fake-beacon-source.js';
 import { startHub, type Hub } from '../hub.js';
-import { createUnreachableDialer } from '../../shared/fake-message-socket.js';
-import { createLogger, type LogRecord } from '../../shared/logger.js';
-import { createFakeTimers } from '../../shared/timers.js';
+import { createUnreachableDialer, createFakeTimers } from '@agentplex/node-shared/testing';
+import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { CLIENT_TICKET_PATH } from '../clients/client-auth.js';
 import { createFakeWebAssets, type FakeWebAssetsOptions } from './fake-web-assets.js';
 

@@ -11,7 +11,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
-import { createLogger } from '../../shared/logger.js';
+import { createLogger } from '@agentplex/node-shared';
 import type {
   ServerConnectionPhase,
   ServerConnectionReport,

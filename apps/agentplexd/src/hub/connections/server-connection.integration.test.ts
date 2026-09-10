@@ -13,10 +13,10 @@ import {
   createSocketPair,
   PEER_GONE,
   type FakeMessageSocket,
-} from '../../shared/fake-message-socket.js';
-import { createLogger } from '../../shared/logger.js';
-import { closure, CLOSE_NORMAL, type SocketDialer } from '../../shared/message-socket.js';
-import { createFakeTimers, type FakeTimers } from '../../shared/timers.js';
+  createFakeTimers,
+  type FakeTimers,
+} from '@agentplex/node-shared/testing';
+import { createLogger, closure, CLOSE_NORMAL, type SocketDialer } from '@agentplex/node-shared';
 import type { Database } from '../db/database.js';
 import {
   findServer,

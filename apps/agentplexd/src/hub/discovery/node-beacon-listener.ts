@@ -1,6 +1,6 @@
 import { createSocket } from 'node:dgram';
 import { BEACON_PORT } from '@agentplex/protocol';
-import type { Logger } from '../../shared/logger.js';
+import type { Logger } from '@agentplex/node-shared';
 import type { BeaconReceiver, BeaconSource } from './beacon-listener.js';
 
 /**

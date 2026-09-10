@@ -10,9 +10,7 @@ import {
 } from '../hub/pairing/server-registrations.js';
 import { readServerIdentity } from '../server/server-identity.js';
 import type { StoreFileSystem } from '../server/store-identity.js';
-import type { Clock } from '../shared/clock.js';
-import type { IdGenerator } from '../shared/ids.js';
-import { tokenMatches } from '../shared/tokens.js';
+import { type Clock, type IdGenerator, tokenMatches } from '@agentplex/node-shared';
 
 /**
  * Pairing the local server: the one pairing nobody types.

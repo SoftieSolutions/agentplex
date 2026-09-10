@@ -1,7 +1,11 @@
 import { parseServerToHubFrame, parseTextFrame, type HubToServerFrame } from '@agentplex/protocol';
-import type { Logger } from '../../shared/logger.js';
-import { closure, CLOSE_POLICY, type MessageSocket } from '../../shared/message-socket.js';
-import type { Timers } from '../../shared/timers.js';
+import {
+  type Logger,
+  closure,
+  CLOSE_POLICY,
+  type MessageSocket,
+  type Timers,
+} from '@agentplex/node-shared';
 
 /**
  * Proof that a connected server is still there.

@@ -8,8 +8,7 @@ import type {
   StoreDescriptor,
   StoreId,
 } from '@agentplex/protocol';
-import type { Clock } from '../shared/clock.js';
-import type { Logger } from '../shared/logger.js';
+import type { Clock, Logger } from '@agentplex/node-shared';
 import type { ProviderRegistry } from './providers/provider-registry.js';
 import { discoverStoreSessions } from './providers/store-discovery.js';
 import type { Terminal, TerminalManager, TerminalOutcome } from './terminal-manager.js';

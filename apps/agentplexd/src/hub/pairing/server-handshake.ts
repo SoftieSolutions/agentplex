@@ -9,15 +9,15 @@ import {
   type ServerId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
-import { createFrameIdCounter } from '../../shared/ids.js';
-import type { Logger } from '../../shared/logger.js';
 import {
+  createFrameIdCounter,
+  type Logger,
   closure,
   CLOSE_POLICY,
   type MessageSocket,
   type SocketDialer,
-} from '../../shared/message-socket.js';
-import type { Timers } from '../../shared/timers.js';
+  type Timers,
+} from '@agentplex/node-shared';
 import type { ServerAddress } from './server-address.js';
 
 /**

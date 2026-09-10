@@ -1,8 +1,5 @@
 import type { HubId, ServerRegistrationId } from '@agentplex/protocol';
-import type { Clock } from '../../shared/clock.js';
-import type { Logger } from '../../shared/logger.js';
-import type { SocketDialer } from '../../shared/message-socket.js';
-import type { Timers } from '../../shared/timers.js';
+import type { Clock, Logger, SocketDialer, Timers } from '@agentplex/node-shared';
 import type { Database } from '../db/database.js';
 import { listServers } from '../pairing/server-registrations.js';
 import { createExponentialBackoff, type BackoffPolicy } from './backoff.js';

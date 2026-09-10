@@ -5,7 +5,7 @@ import type {
   StoreDescriptor,
   StoreId,
 } from '@agentplex/protocol';
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '@agentplex/node-shared';
 import type { Launch } from './providers/provider-adapter.js';
 import type { SessionLiveness } from './providers/store-discovery.js';
 import type { LaunchOptions, PtyRun, PtySupervisor } from './pty-supervisor.js';

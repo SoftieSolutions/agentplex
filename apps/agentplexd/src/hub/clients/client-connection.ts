@@ -11,15 +11,15 @@ import {
   type RefusalCode,
   type SessionHolder,
 } from '@agentplex/protocol';
-import type { Logger } from '../../shared/logger.js';
-import type { SessionControl } from '../sessions/session-control.js';
 import {
+  type Logger,
   closure,
   CLOSE_NORMAL,
   CLOSE_POLICY,
   type MessageSocket,
   type SocketClosure,
-} from '../../shared/message-socket.js';
+} from '@agentplex/node-shared';
+import type { SessionControl } from '../sessions/session-control.js';
 
 /**
  * One client on one socket.

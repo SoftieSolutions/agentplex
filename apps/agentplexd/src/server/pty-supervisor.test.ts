@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Clock } from '../shared/clock.js';
-import type { IdGenerator } from '../shared/ids.js';
+import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import type { Launch, LaunchPlan } from './providers/provider-adapter.js';
 import { createFakePtyFactory } from './fake-pty.js';
 import { createPtySupervisor, scrubEnvironment } from './pty-supervisor.js';

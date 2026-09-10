@@ -35,6 +35,7 @@ COPY apps/agentplexd/package.json ./apps/agentplexd/
 # and not arrive later with the sources.
 COPY apps/agentplexd/scripts ./apps/agentplexd/scripts
 COPY apps/web/package.json ./apps/web/
+COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 
 # The full workspace: every dependency, every source file, everything built.
@@ -258,10 +259,13 @@ WORKDIR /app
 # ../migrations relative to itself.
 COPY --from=runtime-deps /app/node_modules ./node_modules
 COPY --from=runtime-deps /app/apps/agentplexd/node_modules ./apps/agentplexd/node_modules
+COPY --from=runtime-deps /app/packages/node-shared/node_modules ./packages/node-shared/node_modules
 COPY --from=runtime-deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
 COPY apps/agentplexd/package.json ./apps/agentplexd/
+COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY --from=build /app/apps/agentplexd/dist ./apps/agentplexd/dist
+COPY --from=build /app/packages/node-shared/dist ./packages/node-shared/dist
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY apps/agentplexd/migrations ./apps/agentplexd/migrations
 # The client. The build stage already produced it and this image dropped it

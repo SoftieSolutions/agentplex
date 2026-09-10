@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createFakeDatabase } from './fake-database.js';
 import { MigrationError, migrate, orderMigrations, type Migration } from './migrations.js';
-import { createLogger, type LogRecord } from '../../shared/logger.js';
+import { createLogger, type LogRecord } from '@agentplex/node-shared';
 
 function silentLogger(): { logger: ReturnType<typeof createLogger>; records: LogRecord[] } {
   const records: LogRecord[] = [];

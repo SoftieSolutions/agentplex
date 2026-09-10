@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { z } from 'zod';
 import { storeIdSchema, type StoreDescriptor, type StoreId } from '@agentplex/protocol';
-import type { IdGenerator } from '../shared/ids.js';
+import type { IdGenerator } from '@agentplex/node-shared';
 
 /**
  * Store identity: the file at the root of a store is the store's name.

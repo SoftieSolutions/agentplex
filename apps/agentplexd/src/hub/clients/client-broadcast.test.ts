@@ -19,10 +19,11 @@ import {
 import {
   createFakeMessageSocket,
   type FakeMessageSocket,
-} from '../../shared/fake-message-socket.js';
+  createFakeTimers,
+  type FakeTimers,
+} from '@agentplex/node-shared/testing';
+import { createLogger } from '@agentplex/node-shared';
 import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
-import { createLogger } from '../../shared/logger.js';
-import { createFakeTimers, type FakeTimers } from '../../shared/timers.js';
 import type {
   ServerConnectionPhase,
   ServerConnectionReport,

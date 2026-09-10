@@ -1,7 +1,11 @@
 import type { HubId, Layout } from '@agentplex/protocol';
-import type { Logger } from '../../shared/logger.js';
-import { closure, CLOSE_NORMAL, type MessageSocket } from '../../shared/message-socket.js';
-import type { Timers } from '../../shared/timers.js';
+import {
+  type Logger,
+  closure,
+  CLOSE_NORMAL,
+  type MessageSocket,
+  type Timers,
+} from '@agentplex/node-shared';
 import type { SessionControl } from '../sessions/session-control.js';
 import type { Reducer } from '../state/reducer.js';
 import {

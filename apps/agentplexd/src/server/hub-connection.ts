@@ -11,9 +11,13 @@ import {
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { closure, CLOSE_POLICY, type MessageSocket } from '../shared/message-socket.js';
-import type { Logger } from '../shared/logger.js';
-import { tokenMatches } from '../shared/tokens.js';
+import {
+  closure,
+  CLOSE_POLICY,
+  type MessageSocket,
+  type Logger,
+  tokenMatches,
+} from '@agentplex/node-shared';
 import type { ServerIdentity } from './server-identity.js';
 import type { SessionController } from './session-control.js';
 

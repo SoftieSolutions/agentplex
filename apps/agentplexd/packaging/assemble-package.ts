@@ -34,8 +34,25 @@ import { z } from 'zod';
 /** Where the assembled tree is written, relative to the workspace root. */
 export const OUTPUT_DIRECTORY = 'apps/agentplexd/release';
 
-/** The scoped name the compiled service imports the protocol by. */
-export const PROTOCOL_PACKAGE = '@agentplex/protocol';
+/**
+ * The workspace packages the compiled service imports, and where each lives.
+ *
+ * Every one is published under no name of its own, so each travels inside the
+ * tarball as a bundled dependency, at the one path Node's resolver reaches from
+ * `apps/agentplexd/dist/main.js`. The list is the whole of what gets bundled: a
+ * package the service imports that is not here stops the assembly by name,
+ * rather than shipping a tarball whose first import fails.
+ */
+export const BUNDLED_PACKAGES: readonly BundledPackage[] = [
+  { name: '@agentplex/protocol', directory: 'packages/protocol' },
+  { name: '@agentplex/node-shared', directory: 'packages/node-shared' },
+];
+
+export interface BundledPackage {
+  readonly name: string;
+  /** Relative to the workspace root. */
+  readonly directory: string;
+}
 
 /**
  * The file `bin` links, in the package and in the workspace alike.
@@ -49,7 +66,9 @@ export const PROTOCOL_PACKAGE = '@agentplex/protocol';
 export const ENTRYPOINT = 'apps/agentplexd/dist/main.js';
 
 /** Where a bundled dependency has to sit for Node's resolver to find it. */
-const BUNDLED_PROTOCOL = `node_modules/${PROTOCOL_PACKAGE}`;
+function bundledDirectory(name: string): string {
+  return `node_modules/${name}`;
+}
 
 /**
  * As much of a package.json as this needs to be sure of. Unknown fields are
@@ -131,13 +150,13 @@ export function packageEntries(): readonly PackageEntry[] {
       proof: 'index.html',
       reason: 'the built PWA the hub serves',
     },
-    {
-      from: 'packages/protocol/dist',
-      to: `${BUNDLED_PROTOCOL}/dist`,
+    ...BUNDLED_PACKAGES.map((bundled): PackageEntry => ({
+      from: `${bundled.directory}/dist`,
+      to: `${bundledDirectory(bundled.name)}/dist`,
       kind: 'directory',
       proof: 'index.js',
-      reason: 'the compiled protocol, bundled because it is published nowhere',
-    },
+      reason: `the compiled ${bundled.name}, bundled because it is published nowhere`,
+    })),
     {
       from: 'LICENSE',
       to: 'LICENSE',
@@ -168,11 +187,21 @@ export function packageEntries(): readonly PackageEntry[] {
  * that holds no sources, so the thing that can be published is the thing that
  * was assembled.
  *
- * **A `workspace:` range becomes a bundled dependency.** `@agentplex/protocol`
- * is published under no name of its own, so a range pointing at a registry
- * entry would be a dependency on a package that does not exist. The compiled
- * protocol travels inside the tarball instead, at the one path Node's resolver
- * reaches from `apps/agentplexd/dist/main.js`.
+ * **A `workspace:` range becomes a bundled dependency.** No workspace package
+ * is published under a name of its own, so a range pointing at a registry
+ * entry would be a dependency on a package that does not exist. Each one
+ * travels inside the tarball instead, at the one path Node's resolver reaches
+ * from `apps/agentplexd/dist/main.js`, and a bundled package's own workspace
+ * dependencies have to be bundled too, since the resolver walks up out of one
+ * bundled directory into the next.
+ *
+ * **What a bundled package needs, the published package declares.** npm treats
+ * every dependency of a bundled dependency as bundled too and never fetches it,
+ * so `bundledManifest` drops the field and the ranges are carried up here
+ * instead. The host's own range wins where it has one, and two bundled packages
+ * asking for different ranges of the same thing stop the assembly: a tarball
+ * cannot carry both, and picking one silently would ship a dependency that one
+ * of them was never tested against.
  *
  * **`engines` keeps node and drops pnpm.** The whole point of the artifact is a
  * machine with Node and nothing else; declaring pnpm would make the package
@@ -193,39 +222,45 @@ export function publishedManifest(input: {
 }): Record<string, unknown> {
   const versions = new Map(input.bundled.map((manifest) => [manifest.name, manifest.version]));
   const dependencies: Record<string, string> = {};
-  const bundleDependencies: string[] = [];
+  const declaredBy = new Map<string, string>();
+  const bundleDependencies = new Set<string>();
 
-  for (const name of Object.keys(input.service.dependencies).sort()) {
-    const range = input.service.dependencies[name] ?? '';
-    if (!range.startsWith('workspace:')) {
-      dependencies[name] = range;
-      continue;
-    }
-    const version = versions.get(name);
-    if (version === undefined) {
-      throw new Error(`${name} is a workspace dependency and nothing bundles it`);
-    }
-    // Exact, not a range: the copy in the tarball is the only copy there will
-    // ever be, so a range would describe a choice npm does not get to make.
-    dependencies[name] = version;
-    bundleDependencies.push(name);
-  }
-
-  // What a bundled subtree needs, the package has to declare. npm treats every
-  // dependency of a bundled dependency as bundled too and never fetches it: the
-  // protocol declaring `zod` while the tarball carries no `node_modules/zod`
-  // produces an install that reports success and leaves an empty `zod`
-  // directory behind, and the first thing to import it dies with
-  // ERR_MODULE_NOT_FOUND from a package that npm says is installed. Verified
-  // against npm 11.19. `bundledManifest` drops the field for that reason, and
-  // this is the guard that keeps dropping it honest -- the day agentplexd stops
-  // depending on zod directly, the assembly stops rather than the install.
-  for (const bundled of input.bundled) {
-    for (const [name, range] of Object.entries(bundled.dependencies)) {
-      if (dependencies[name] !== range) {
+  // The service first, then each bundled package: a range the service declares
+  // is the one its own imports were tested against, so it is the one that wins.
+  for (const manifest of [input.service, ...input.bundled]) {
+    for (const name of Object.keys(manifest.dependencies).sort()) {
+      const range = manifest.dependencies[name] ?? '';
+      if (range.startsWith('workspace:')) {
+        const version = versions.get(name);
+        if (version === undefined) {
+          throw new Error(
+            `${name} is a workspace dependency of ${manifest.name} and nothing bundles it`,
+          );
+        }
+        // Exact, not a range: the copy in the tarball is the only copy there
+        // will ever be, so a range would describe a choice npm does not get to
+        // make.
+        dependencies[name] = version;
+        bundleDependencies.add(name);
+        continue;
+      }
+      const existing = dependencies[name];
+      if (existing === undefined) {
+        dependencies[name] = range;
+        declaredBy.set(name, manifest.name);
+        continue;
+      }
+      // npm never fetches a bundled package's own dependencies: `zod` declared
+      // by a bundled package while the tarball carries no `node_modules/zod`
+      // installs as an empty directory, and the first import dies with
+      // ERR_MODULE_NOT_FOUND from a package npm says is installed. Verified
+      // against npm 11.19. So the range is carried up here, and one range per
+      // name is the invariant that keeps carrying it up honest.
+      if (existing !== range && !bundleDependencies.has(name)) {
         throw new Error(
-          `${bundled.name} needs ${name}@${range}, and a bundled package cannot bring its own: ` +
-            `declare it in apps/agentplexd/package.json at exactly that range`,
+          `${manifest.name} needs ${name}@${range} and ${declaredBy.get(name) ?? 'the service'} ` +
+            `needs ${name}@${existing}: one range, declared in both manifests, or the tarball ` +
+            'ships a dependency one of them was never tested against',
         );
       }
     }
@@ -253,8 +288,8 @@ export function publishedManifest(input: {
       .map((entry) => entry.to)
       .filter((path) => !path.startsWith('node_modules/')),
     scripts: { postinstall: 'node apps/agentplexd/scripts/fix-node-pty-permissions.js' },
-    dependencies,
-    bundleDependencies,
+    dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
+    bundleDependencies: [...bundleDependencies].sort(),
   };
 }
 
@@ -275,12 +310,12 @@ export function publishedManifest(input: {
  * in `publishedManifest` -- and Node's resolver walks up out of the bundled
  * directory to find them, which is the same walk it does in the workspace.
  */
-export function bundledManifest(text: string): Record<string, unknown> {
-  const source: Record<string, unknown> = JSON.parse(text);
+export function bundledManifest(source: string, text: string): Record<string, unknown> {
+  const parsed: Record<string, unknown> = JSON.parse(text);
   // Parsed for the same reason the others are: this one is copied field for
   // field, so an unreadable source has to stop the assembly rather than produce
   // a bundled package whose name or version is missing.
-  parseManifest(PROTOCOL_PACKAGE, text);
+  parseManifest(source, text);
   const kept: Record<string, unknown> = {};
   for (const field of [
     'name',
@@ -292,7 +327,7 @@ export function bundledManifest(text: string): Record<string, unknown> {
     'main',
     'types',
   ]) {
-    if (field in source) kept[field] = source[field];
+    if (field in parsed) kept[field] = parsed[field];
   }
   return kept;
 }
@@ -376,13 +411,18 @@ export async function assemblePackage(options: {
     'apps/agentplexd/package.json',
     await read('apps/agentplexd/package.json'),
   );
-  const protocolText = await read('packages/protocol/package.json');
-  const protocolManifest = parseManifest('packages/protocol/package.json', protocolText);
+  const bundled = await Promise.all(
+    BUNDLED_PACKAGES.map(async (item) => {
+      const path = `${item.directory}/package.json`;
+      const text = await read(path);
+      return { item, path, text, manifest: parseManifest(path, text) };
+    }),
+  );
 
   const manifest = publishedManifest({
     root: rootManifest,
     service: serviceManifest,
-    bundled: [protocolManifest],
+    bundled: bundled.map((entry) => entry.manifest),
   });
 
   const directory = join(workspaceRoot, OUTPUT_DIRECTORY);
@@ -398,7 +438,12 @@ export async function assemblePackage(options: {
     log(`  ${entry.to}  ${entry.reason}`);
   }
 
-  await writeJson(join(directory, BUNDLED_PROTOCOL, 'package.json'), bundledManifest(protocolText));
+  for (const entry of bundled) {
+    await writeJson(
+      join(directory, bundledDirectory(entry.item.name), 'package.json'),
+      bundledManifest(entry.path, entry.text),
+    );
+  }
   await writeJson(join(directory, 'package.json'), manifest);
   log(`  package.json  ${String(manifest['name'])}@${String(manifest['version'])}`);
 
