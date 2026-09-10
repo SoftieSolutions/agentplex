@@ -1,6 +1,7 @@
 import { ROLES, type Role } from '../config/config.js';
 import type { ProcessRunner } from '../server/operations/process-runner.js';
 import type { ProviderRegistry } from '../server/providers/provider-registry.js';
+import type { PtySupervisor } from '../server/pty-supervisor.js';
 import type { StoreFileSystem } from '../server/store-identity.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { TokenMinter } from '../shared/tokens.js';
@@ -57,6 +58,15 @@ export interface SetupCommandDependencies {
    * and stays the only place `process.env` is read.
    */
   readonly runnerFor: (binPath: readonly string[]) => ProcessRunner;
+  /**
+   * The pty seam, built from the same directories. Unused on the `--plan` path.
+   *
+   * A replay has nobody to hand a terminal to, and these logins are browser
+   * OAuth flows with no unattended form — so a plan that runs at boot leaves a
+   * provider it could not log in reported as exactly that, and the wizard is the
+   * front end that can finish the job.
+   */
+  readonly supervisorFor: (binPath: readonly string[]) => PtySupervisor;
   /**
    * The providers this build can drive, given the runner they will probe with.
    *

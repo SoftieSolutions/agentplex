@@ -2,13 +2,14 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { Provider, StoreDescriptor } from '@agentplex/protocol';
 import { DEFAULT_HUB_PORT, DEFAULT_SERVER_PORT, ROLES, type Role } from '../config/config.js';
 import type { ProcessRunner } from '../server/operations/process-runner.js';
-import type { ProviderAdapter } from '../server/providers/provider-adapter.js';
 import type { ProviderRegistry } from '../server/providers/provider-registry.js';
+import type { PtySupervisor } from '../server/pty-supervisor.js';
 import type { StoreFileSystem } from '../server/store-identity.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { TokenMinter } from '../shared/tokens.js';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
+import { describeProviderLogin, offerProviderLogin } from './provider-login.js';
 import type { SetupMachine } from './setup-machine.js';
 import {
   parseSetupPlan,
@@ -81,6 +82,16 @@ export interface SetupWizardDependencies {
    * about what agentplexd was started with.
    */
   readonly runnerFor: (binPath: readonly string[]) => ProcessRunner;
+  /**
+   * The pty seam, built from the same directories the one-shot runner gets.
+   *
+   * A factory for the same reason `runnerFor` is one, and composed the same way
+   * the server's own supervisor is composed in the entrypoint: the `claude` that
+   * gets logged in has to be the `claude` that will run, or the login writes
+   * credentials for a binary nothing starts. This is the only thing in setup
+   * that opens a pty, and it is here because a login is a TUI.
+   */
+  readonly supervisorFor: (binPath: readonly string[]) => PtySupervisor;
   readonly providersFor: (runner: ProcessRunner) => ProviderRegistry;
   readonly files: StoreFileSystem;
   readonly ids: IdGenerator;
@@ -192,10 +203,15 @@ export async function runSetupWizard(
   // a plan and has no standing to decide that a directory in it should exist.
   await makeOwnedPrefix(plan.plan, dependencies);
 
-  const runner = dependencies.runnerFor(setupBinPath(plan.plan));
+  // Everything from here on runs against the machine the plan describes rather
+  // than the one the survey found: the binaries resolve in the directories the
+  // plan named, which is what makes a login log in the copy that will run.
+  const binPath = setupBinPath(plan.plan);
+  const runner = dependencies.runnerFor(binPath);
+  const provisioned = dependencies.providersFor(runner);
   const outcome = await applySetupPlan(plan.plan, {
     runner,
-    providers: dependencies.providersFor(runner),
+    providers: provisioned,
     files: dependencies.files,
     ids: dependencies.ids,
     tokens: dependencies.tokens,
@@ -205,8 +221,17 @@ export async function runSetupWizard(
   for (const line of describeOutcome(outcome)) terminal.write(line);
   for (const problem of outcome.problems) terminal.write(`problem: ${problem}`);
 
+  // The one step that runs after the plan has been applied, because it can only
+  // be taken against a provider that is on the machine — and the one step that
+  // needs a person, which is what keeps it on this front end and out of a replay.
+  const logins = await logInProviders(
+    outcome,
+    { runner, providers: provisioned, binPath },
+    dependencies,
+  );
+
   terminal.write('');
-  for (const line of whatIsLeft(outcome, providers, machine)) terminal.write(line);
+  for (const line of [...logins, ...whatIsLeft(outcome)]) terminal.write(line);
 
   terminal.write('');
   await offerToSave(written, dependencies);
@@ -550,51 +575,89 @@ function describePlan(plan: SetupPlan): readonly string[] {
 }
 
 /**
- * What this machine still needs, after the plan has been applied.
+ * The provisioned machine, as the login step needs to see it.
  *
- * Two of these are the seams the next two tickets land on, and both are printed
- * as facts rather than stubbed as questions, because a wizard that offers to do
- * something this build cannot do is worse than one that says what is left.
- *
- * - **Logging a provider in (AGX-74).** The command printed is not a string
- *   written here: it is the adapter's own `login` launch, the same value the pty
- *   supervisor will be handed when setup drives the login itself. Reading it out
- *   of the seam is what keeps the sentence true when a provider changes its
- *   subcommand, and it is the exact place the login step slots in.
- * - **Pairing the local server (AGX-75).** In `--role=both` the hub still dials
- *   its own server over the loopback, so a pairing has to exist. The token is in
- *   the identity file, named and not printed, which is where it stays until
- *   setup writes both ends itself.
+ * The runner and the registry are the ones the apply path used, so the re-probe
+ * after a login is the same question through the same seam that decided the
+ * provider was logged out in the first place — and the answer is comparable
+ * rather than merely similar. `binPath` is what the supervisor's environment is
+ * composed from, so the `claude` that is driven is the `claude` that will run.
  */
-function whatIsLeft(
+interface Provisioned {
+  readonly runner: ProcessRunner;
+  readonly providers: ProviderRegistry;
+  readonly binPath: readonly string[];
+}
+
+/**
+ * Every provider the plan left logged out, offered its own login on a pty.
+ *
+ * This is where the wizard stops describing the machine and finishes it. A
+ * provider that is installed and logged out is a session that will not start,
+ * and the only thing that can fix it is the provider's own browser OAuth flow —
+ * which needs a terminal, which setup is. Everything about *how* is in
+ * `provider-login.ts`; what is here is which providers to offer it for, and the
+ * store their credentials have to land in.
+ *
+ * A provider whose state could not be read is deliberately not offered a login.
+ * `authState` is `null` when the probe would not answer — a wrapper in front of
+ * `claude`, a release that stopped printing what the parser reads — and sending
+ * an operator through a login for a binary whose problem is something else
+ * entirely would be inventing a diagnosis. The apply path has already reported
+ * that as a problem in its own words.
+ */
+async function logInProviders(
   outcome: SetupOutcome,
-  providers: ProviderRegistry,
-  machine: SetupMachine,
-): readonly string[] {
-  const lines: string[] = [];
+  provisioned: Provisioned,
+  dependencies: SetupWizardDependencies,
+): Promise<readonly string[]> {
   const server = outcome.server;
+  if (server === null) return [];
 
   // The first store that resolved. A login writes its credentials into the store
   // the sessions will run against, so there has to be one to name; a server with
-  // no store yet gets the sentence without the command rather than a command
-  // that would put the credentials somewhere nothing reads.
+  // no store yet is told so rather than handed a command that would put the
+  // credentials somewhere nothing reads.
   let store: StoreDescriptor | null = null;
-  for (const identified of server?.stores ?? []) {
+  for (const identified of server.stores) {
     if (identified.ok && store === null) store = identified.store;
   }
 
-  for (const provider of server?.providers ?? []) {
+  const lines: string[] = [];
+  // One at a time, in the plan's order: two logins at once is two TUIs drawing
+  // on one terminal, and there is one operator.
+  for (const provider of server.providers) {
     if (provider.authState !== 'unauthenticated') continue;
 
-    const found = providers.lookup(provider.provider);
-    const command = found.ok && store !== null ? loginCommand(found.adapter, store, machine) : null;
-
-    lines.push(
-      command === null
-        ? `${provider.provider} is installed and not logged in. Log it in before starting a session.`
-        : `${provider.provider} is installed and not logged in. Run: ${command}`,
+    const login = await offerProviderLogin(
+      { provider: provider.provider, store, cwd: dependencies.machine.home },
+      {
+        terminal: dependencies.terminal,
+        supervisor: dependencies.supervisorFor(provisioned.binPath),
+        providers: provisioned.providers,
+        runner: provisioned.runner,
+      },
     );
+    lines.push(...describeProviderLogin(provider.provider, login));
   }
+
+  return lines;
+}
+
+/**
+ * What this machine still needs, after the plan has been applied and the
+ * providers have been offered their logins.
+ *
+ * **Pairing the local server (AGX-75).** In `--role=both` the hub still dials
+ * its own server over the loopback, so a pairing has to exist. The token is in
+ * the identity file, named and not printed, which is where it stays until setup
+ * writes both ends itself. It is printed as a fact rather than stubbed as a
+ * question, because a wizard that offers to do something this build cannot do is
+ * worse than one that says what is left.
+ */
+function whatIsLeft(outcome: SetupOutcome): readonly string[] {
+  const lines: string[] = [];
+  const server = outcome.server;
 
   if (outcome.role === 'both') {
     lines.push(
@@ -615,19 +678,6 @@ function whatIsLeft(
   }
 
   return lines;
-}
-
-/** The provider's own login, as the provider states it. Never a sentence written here. */
-function loginCommand(
-  adapter: ProviderAdapter,
-  store: StoreDescriptor,
-  machine: SetupMachine,
-): string | null {
-  // The home directory and not the store: a launch is refused for a working
-  // directory inside the store it is run against, and a login still has to open
-  // its pty somewhere.
-  const launch = adapter.provisioning.login({ store, cwd: machine.home });
-  return launch.ok ? [launch.plan.command, ...launch.plan.args].join(' ') : null;
 }
 
 /**

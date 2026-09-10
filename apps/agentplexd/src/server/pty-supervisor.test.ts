@@ -255,6 +255,33 @@ describe('createPtySupervisor runs', () => {
     expect(decode(started.run.scrollback())).toBe('the last thing it said');
   });
 
+  it('settles whenExited for a caller that was already waiting', async () => {
+    // The setup login step is the first caller whose whole job is to wait: it
+    // hands the operator's terminal to a `claude auth login` and takes it back
+    // when that login is over.
+    const { supervisor, factory } = supervisorOver();
+    const started = supervisor.launch(launch());
+    if (!started.ok) throw new Error('the launch should have started');
+
+    const waiting = started.run.whenExited();
+    factory.last?.close({ exitCode: 0, signal: null });
+
+    expect(await waiting).toEqual({ exitCode: 0, signal: null });
+  });
+
+  it('settles whenExited for a caller that arrives after the exit', async () => {
+    // The reason this is a promise rather than an `onExit`. A login that will
+    // not start exits before the terminal has been handed to it, and a listener
+    // registered a tick late would wait forever for a child that has gone.
+    const { supervisor, factory } = supervisorOver();
+    const started = supervisor.launch(launch());
+    if (!started.ok) throw new Error('the launch should have started');
+
+    factory.last?.close({ exitCode: 127, signal: null });
+
+    expect(await started.run.whenExited()).toEqual({ exitCode: 127, signal: null });
+  });
+
   it('will not write to a run that has exited', () => {
     const { supervisor, factory } = supervisorOver();
     const started = supervisor.launch(launch());

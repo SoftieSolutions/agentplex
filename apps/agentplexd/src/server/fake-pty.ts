@@ -43,6 +43,29 @@ export interface FakePtyFactoryOptions {
   readonly failsToOpen?: string;
   /** The pid handed to each pty in turn, so a test can name one. */
   readonly pids?: readonly number[];
+  /**
+   * A child that runs itself, instead of one a test drives by hand.
+   *
+   * Most tests here are about what the supervisor does with output that
+   * arrives, so they emit and close where the assertion is. A caller that waits
+   * for the child — setup's login step hands the operator's terminal over and
+   * takes it back when the login ends — cannot do that: there is nowhere for
+   * the test to stand between the launch and the wait. So the child prints and
+   * ends on its own, which is what a login the operator completed looks like
+   * from the outside.
+   *
+   * It happens in a microtask rather than inside `open`, because the supervisor
+   * subscribes after `open` returns and a child that spoke first would be
+   * talking to nobody.
+   */
+  readonly child?: FakeChild;
+}
+
+export interface FakeChild {
+  /** What it prints, once. */
+  readonly prints?: string;
+  /** How it ends afterwards. Absent means it keeps running. */
+  readonly exit?: PtyExit;
 }
 
 export function createFakePtyFactory(options: FakePtyFactoryOptions = {}): FakePtyFactory {
@@ -56,6 +79,15 @@ export function createFakePtyFactory(options: FakePtyFactoryOptions = {}): FakeP
       opened.push(request);
       const pty = createFakePty(options.pids?.[ptys.length] ?? 1000 + ptys.length);
       ptys.push(pty);
+
+      const child = options.child;
+      if (child !== undefined) {
+        queueMicrotask(() => {
+          if (child.prints !== undefined) pty.emit(child.prints);
+          if (child.exit !== undefined) pty.close(child.exit);
+        });
+      }
+
       return pty;
     },
 

@@ -300,6 +300,18 @@ async function setUp(argv: readonly string[], write: (line: string) => void): Pr
         createNodeProcessRunner({
           environment: childEnvironment({ inherited: process.env, binPath }),
         }),
+      // The other place a real pty is opened, and the same composition the
+      // runtime's supervisor gets a few lines up. That is the point of it being
+      // here: a provider's login is driven through the seam a session is driven
+      // through, on the copy of the binary the recorded directories resolve, so
+      // what setup logs in is what the server will run.
+      supervisorFor: (binPath) =>
+        createPtySupervisor({
+          pty: nodePtyFactory,
+          clock: systemClock,
+          ids: randomIdGenerator,
+          environment: childEnvironment({ inherited: process.env, binPath }),
+        }),
       // The same one line the runtime has, for the same reason: which providers
       // this build drives is a fact about the build and belongs in the
       // entrypoint.
