@@ -10,5 +10,6 @@ apps/agentplexd/release/
 .env.local
 .DS_Store
 
-# Agent tooling checks this repository out inside itself here.
-.claude/worktrees/
+# Agent tooling's local configuration and the worktrees it checks this
+# repository out into, inside itself.
+.claude/

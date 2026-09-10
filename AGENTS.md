@@ -11,9 +11,6 @@ server reports. A server runs sessions through a PTY and watches a store on
 disk, holds no database, and dials out to nothing — the hub dials it. A
 session's identity is `{ storeId, sessionId }`, never the machine.
 
-`docs/specs/` holds the design. Read the current spec before proposing
-architecture: its decisions are requirements, and each records why.
-
 ## FOLDER STRUCTURE
 
 - `apps/` holds deployables: `hub`, `server`, `setup`, `doctor`, `install`,
@@ -32,7 +29,6 @@ architecture: its decisions are requirements, and each records why.
 - Until epic AGX-91 lands, the code still sits in `apps/agentplexd/src/` under
   `hub/`, `server/`, `setup/`, `shared/`. New code goes where the layout above
   says it will live.
-- `docs/specs/` — design documents, dated and append-only.
 - Every CI/CD workflow lives in `.github/workflows`, the only directory GitHub
   reads them from.
 - Test files sit next to the file under test: `config.test.ts` beside

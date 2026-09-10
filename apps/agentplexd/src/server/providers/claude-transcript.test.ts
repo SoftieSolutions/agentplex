@@ -11,8 +11,8 @@ import { parseClaudeTranscript } from './claude-transcript.js';
  * text, assistant text, thinking blocks and their signatures, tool inputs,
  * tool results, the absolute cwd — with `REDACTED`. Every key, every nesting
  * level, every field this parser reads is exactly as Claude Code wrote it.
- * `docs/` records nothing about the format on purpose: the fixtures are the
- * record, and re-capturing them is how a format change is noticed.
+ * No prose records the format on purpose: the fixtures are the record, and
+ * re-capturing them is how a format change is noticed.
  */
 function fixture(name: string): string {
   return readFileSync(join(import.meta.dirname, 'fixtures', name), 'utf8');
