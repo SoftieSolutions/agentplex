@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { sessionIdSchema, storeIdSchema, type StoreDescriptor } from '@agentplex/protocol';
 import { createLogger } from '@agentplex/node-shared';
-import { createFakePtyFactory, type FakePtyFactory } from './fake-pty.js';
+import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
+import { createPtySupervisor } from '@agentplex/pty';
 import { createFakeProviderAdapter, createFakeProviderFiles } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
-import { createPtySupervisor } from './pty-supervisor.js';
 import { createSessionController, type SessionController } from './session-control.js';
 import { createTerminalManager, type TerminalManager } from './terminal-manager.js';
 

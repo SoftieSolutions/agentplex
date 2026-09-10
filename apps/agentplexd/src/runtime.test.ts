@@ -11,8 +11,8 @@ import {
   createFakeProcessRunner,
   createFakeStoreFiles,
 } from '@agentplex/providers/testing';
-import { createFakePtyFactory } from './server/fake-pty.js';
-import { createPtySupervisor } from './server/pty-supervisor.js';
+import { createFakePtyFactory } from '@agentplex/pty/testing';
+import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from './server/terminal-manager.js';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
 import { createUnreachableDialer, createFakeTimers } from '@agentplex/node-shared/testing';

@@ -41,6 +41,7 @@ apps/web/              the PWA
 packages/protocol/     frame types and parsers, shared by the service and the PWA
 packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share
 packages/providers/    the provider seam, the process runner it needs, store identity
+packages/pty/          the pty seam, its supervisor, and node-pty
 ```
 
 A package is a seam with at least two consumers, and neither app may import

@@ -3,8 +3,8 @@ import type { HubId } from '@agentplex/protocol';
 import { createFakeStoreFiles, createFakeProcessRunner } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
 import { createOperationRegistry } from '../../server/operations/operation-registry.js';
-import { createFakePtyFactory } from '../../server/fake-pty.js';
-import { createPtySupervisor } from '../../server/pty-supervisor.js';
+import { createFakePtyFactory } from '@agentplex/pty/testing';
+import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from '../../server/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../server/server.js';
 import {

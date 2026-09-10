@@ -30,14 +30,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/agentplexd/package.json ./apps/agentplexd/
-# The install runs agentplexd's postinstall, which repairs the executable bit
-# on node-pty's spawn helper, so the script has to be here before the install
-# and not arrive later with the sources.
-COPY apps/agentplexd/scripts ./apps/agentplexd/scripts
 COPY apps/web/package.json ./apps/web/
 COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
+COPY packages/pty/package.json ./packages/pty/
+# The install runs the pty package's postinstall, which repairs the executable
+# bit on node-pty's spawn helper, so the script has to be here before the
+# install and not arrive later with the sources.
+COPY packages/pty/scripts ./packages/pty/scripts
 
 # The full workspace: every dependency, every source file, everything built.
 # This is what the test compose file runs its checks in, so a check in a
@@ -263,14 +264,17 @@ COPY --from=runtime-deps /app/apps/agentplexd/node_modules ./apps/agentplexd/nod
 COPY --from=runtime-deps /app/packages/node-shared/node_modules ./packages/node-shared/node_modules
 COPY --from=runtime-deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
 COPY --from=runtime-deps /app/packages/providers/node_modules ./packages/providers/node_modules
+COPY --from=runtime-deps /app/packages/pty/node_modules ./packages/pty/node_modules
 COPY apps/agentplexd/package.json ./apps/agentplexd/
 COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
+COPY packages/pty/package.json ./packages/pty/
 COPY --from=build /app/apps/agentplexd/dist ./apps/agentplexd/dist
 COPY --from=build /app/packages/node-shared/dist ./packages/node-shared/dist
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY --from=build /app/packages/providers/dist ./packages/providers/dist
+COPY --from=build /app/packages/pty/dist ./packages/pty/dist
 COPY apps/agentplexd/migrations ./apps/agentplexd/migrations
 # The client. The build stage already produced it and this image dropped it
 # until now, which made every image an installer could produce a hub with

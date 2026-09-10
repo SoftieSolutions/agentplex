@@ -33,7 +33,7 @@ const serviceManifest: Manifest = {
     '@agentplex/node-shared': 'workspace:*',
     '@agentplex/protocol': 'workspace:*',
     '@agentplex/providers': 'workspace:*',
-    'node-pty': '1.1.0',
+    '@agentplex/pty': 'workspace:*',
     zod: '^4.1.13',
   },
 };
@@ -66,7 +66,19 @@ const providersManifest: Manifest = {
   },
 };
 
-const bundledManifests = [protocolManifest, nodeSharedManifest, providersManifest];
+const ptyManifest: Manifest = {
+  name: '@agentplex/pty',
+  version: '1.2.3',
+  license: 'Apache-2.0',
+  type: 'module',
+  dependencies: {
+    '@agentplex/node-shared': 'workspace:*',
+    '@agentplex/providers': 'workspace:*',
+    'node-pty': '1.1.0',
+  },
+};
+
+const bundledManifests = [protocolManifest, nodeSharedManifest, providersManifest, ptyManifest];
 
 function derived(): Record<string, unknown> {
   return publishedManifest({
@@ -84,6 +96,7 @@ describe('publishedManifest', () => {
       '@agentplex/node-shared': '1.2.3',
       '@agentplex/protocol': '1.2.3',
       '@agentplex/providers': '1.2.3',
+      '@agentplex/pty': '1.2.3',
       'node-pty': '1.1.0',
       ws: '^8.21.3',
       zod: '^4.1.13',
@@ -92,6 +105,7 @@ describe('publishedManifest', () => {
       '@agentplex/node-shared',
       '@agentplex/protocol',
       '@agentplex/providers',
+      '@agentplex/pty',
     ]);
   });
 
@@ -117,7 +131,7 @@ describe('publishedManifest', () => {
       publishedManifest({
         root: rootManifest,
         service: serviceManifest,
-        bundled: [protocolManifest, providersManifest, dependent],
+        bundled: [protocolManifest, providersManifest, ptyManifest, dependent],
       }),
     ).toThrow('@agentplex/unbundled is a workspace dependency of @agentplex/node-shared');
   });
@@ -142,7 +156,7 @@ describe('publishedManifest', () => {
       publishedManifest({
         root: rootManifest,
         service: serviceManifest,
-        bundled: [protocolManifest, providersManifest, conflicting],
+        bundled: [protocolManifest, providersManifest, ptyManifest, conflicting],
       }),
     ).toThrow('zod');
   });
@@ -157,7 +171,7 @@ describe('publishedManifest', () => {
       publishedManifest({
         root: rootManifest,
         service: serviceManifest,
-        bundled: [protocolManifest, providersManifest, agreeing],
+        bundled: [protocolManifest, providersManifest, ptyManifest, agreeing],
       })['dependencies'],
     ).toMatchObject({ zod: '^4.1.13' });
   });
@@ -176,7 +190,7 @@ describe('publishedManifest', () => {
 
   it('keeps the node-pty permission repair as its only install script', () => {
     expect(derived()['scripts']).toEqual({
-      postinstall: 'node apps/agentplexd/scripts/fix-node-pty-permissions.js',
+      postinstall: 'node packages/pty/scripts/fix-node-pty-permissions.js',
     });
   });
 
@@ -197,6 +211,8 @@ describe('packageEntries', () => {
     expect(sources).toContain('packages/protocol/dist');
     expect(sources).toContain('packages/node-shared/dist');
     expect(sources).toContain('packages/providers/dist');
+    expect(sources).toContain('packages/pty/dist');
+    expect(sources).toContain('packages/pty/scripts/fix-node-pty-permissions.js');
     expect(sources).toContain('apps/web/dist');
     expect(sources).toContain('apps/agentplexd/migrations');
   });
@@ -288,13 +304,15 @@ describe('the assembled package', () => {
       'apps/agentplexd/migrations/0001_hub_identity.sql',
       'create table hub (id text);\n',
     );
-    await write('apps/agentplexd/scripts/fix-node-pty-permissions.js', 'main();\n');
     await write('packages/protocol/package.json', JSON.stringify(protocolManifest));
     await write('packages/protocol/dist/index.js', 'export const version = 7;\n');
     await write('packages/node-shared/package.json', JSON.stringify(nodeSharedManifest));
     await write('packages/node-shared/dist/index.js', 'export const clock = 8;\n');
     await write('packages/providers/package.json', JSON.stringify(providersManifest));
     await write('packages/providers/dist/index.js', 'export const claude = 9;\n');
+    await write('packages/pty/package.json', JSON.stringify(ptyManifest));
+    await write('packages/pty/dist/index.js', 'export const pty = 10;\n');
+    await write('packages/pty/scripts/fix-node-pty-permissions.js', 'main();\n');
     if (options.client) {
       await write('apps/web/dist/index.html', '<!doctype html>\n');
       await write('apps/web/dist/assets/index-abc123.js', 'export {};\n');
@@ -368,7 +386,21 @@ describe('the assembled package', () => {
       '@agentplex/node-shared',
       '@agentplex/protocol',
       '@agentplex/providers',
+      '@agentplex/pty',
     ]);
+  });
+
+  it('carries the postinstall at the path the published manifest names', async () => {
+    const root = await workspace({ client: true });
+
+    const assembled = await assemblePackage({ workspaceRoot: root });
+
+    await expect(
+      readFile(
+        join(assembled.directory, 'packages/pty/scripts/fix-node-pty-permissions.js'),
+        'utf8',
+      ),
+    ).resolves.toContain('main()');
   });
 
   /**

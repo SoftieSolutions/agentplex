@@ -7,7 +7,7 @@ import type {
 } from '@agentplex/protocol';
 import type { Clock } from '@agentplex/node-shared';
 import type { Launch, SessionLiveness } from '@agentplex/providers';
-import type { LaunchOptions, PtyRun, PtySupervisor } from './pty-supervisor.js';
+import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
 
 /**
  * The terminal manager: how many agents may be live at once, and who holds a

@@ -6,7 +6,7 @@ import {
   type Launch,
   type ProviderRegistry,
 } from '@agentplex/providers';
-import type { PtySupervisor } from '../server/pty-supervisor.js';
+import type { PtySupervisor } from '@agentplex/pty';
 import { askYesNo, type SetupTerminal } from './setup-terminal.js';
 
 /**

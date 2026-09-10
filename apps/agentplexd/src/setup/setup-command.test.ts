@@ -14,8 +14,8 @@ import {
   createClaudeAdapter,
   createProviderRegistry,
 } from '@agentplex/providers';
-import { createFakePtyFactory } from '../server/fake-pty.js';
-import { createPtySupervisor } from '../server/pty-supervisor.js';
+import { createFakePtyFactory } from '@agentplex/pty/testing';
+import { createPtySupervisor } from '@agentplex/pty';
 import { createFakeHubDatabase, type FakeHubDatabase } from './fake-hub-database.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine } from './fake-setup-machine.js';

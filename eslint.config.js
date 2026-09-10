@@ -118,6 +118,33 @@ export default tseslint.config(
     },
   },
   {
+    // The pty seam, and the one package that loads node-pty. It takes an
+    // adapter's launch plan, so it sits above `providers`; keeping the native
+    // addon here means a consumer of the provider seam does not inherit a
+    // toolchain requirement it does not use.
+    files: ['packages/pty/**/*.ts'],
+    languageOptions: { globals: globals.node },
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: [
+            '@agentplex/*',
+            '!@agentplex/protocol',
+            '!@agentplex/node-shared',
+            '!@agentplex/providers',
+          ],
+          message:
+            'packages/pty may import @agentplex/protocol, @agentplex/node-shared and @agentplex/providers and no other workspace package.',
+        },
+        {
+          group: ['node:child_process', 'child_process'],
+          message:
+            'Starting a child directly bypasses the operation registry. A pty is opened through the PtyFactory seam and nothing else.',
+        },
+      ]),
+    },
+  },
+  {
     files: ['apps/agentplexd/**/*.ts'],
     languageOptions: { globals: globals.node },
     rules: {

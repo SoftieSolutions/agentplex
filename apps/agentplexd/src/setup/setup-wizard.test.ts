@@ -11,8 +11,8 @@ import {
   providerFixturePath,
 } from '@agentplex/providers/testing';
 import { createClaudeAdapter, createProviderRegistry } from '@agentplex/providers';
-import { createFakePtyFactory, type FakePtyFactory } from '../server/fake-pty.js';
-import { createPtySupervisor } from '../server/pty-supervisor.js';
+import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
+import { createPtySupervisor } from '@agentplex/pty';
 import { createFakeHubDatabase, type FakeHubDatabase } from './fake-hub-database.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine, type FakeSetupMachine } from './fake-setup-machine.js';
