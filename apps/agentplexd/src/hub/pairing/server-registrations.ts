@@ -8,7 +8,7 @@ import {
 import type { Queryable } from '../db/database.js';
 import type { Clock } from '../../shared/clock.js';
 import type { IdGenerator } from '../../shared/ids.js';
-import { serverAddressSchema } from './server-address.js';
+import { serverAddressSchema, storedServerAddressSchema } from './server-address.js';
 
 /**
  * Pairing, as rows: which servers this hub may dial, and with what token.
@@ -52,7 +52,13 @@ const timestampSchema = z.number().int();
 const serverRowSchema = z.object({
   id: serverRegistrationIdSchema,
   label: z.string().min(1),
-  address: serverAddressSchema,
+  /**
+   * Read with the loopback allowance, written with whichever parser produced it.
+   * A `--role=both` machine's own pairing is a `ws://127.0.0.1:<port>` address
+   * that no form could have submitted, and a row parser that refused it would
+   * refuse to read back what setup wrote a moment earlier.
+   */
+  address: storedServerAddressSchema,
   server_id: serverIdSchema.nullable(),
   created_at: timestampSchema,
   /**

@@ -5,10 +5,13 @@ import type { ProcessRunner } from '../server/operations/process-runner.js';
 import type { ProviderRegistry } from '../server/providers/provider-registry.js';
 import type { PtySupervisor } from '../server/pty-supervisor.js';
 import type { StoreFileSystem } from '../server/store-identity.js';
+import type { Clock } from '../shared/clock.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { TokenMinter } from '../shared/tokens.js';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
+import type { HubDatabase } from './hub-database.js';
+import { describeLocalPairing, localPairingFor, recordLocalPairing } from './local-pairing.js';
 import { describeProviderLogin, offerProviderLogin } from './provider-login.js';
 import type { SetupMachine } from './setup-machine.js';
 import {
@@ -66,9 +69,20 @@ const OWNED_PREFIX_DIRECTORY = '.agentplex';
 const IDENTITY_FILE_NAME = 'server.json';
 /** What the wizard offers to save its plan as, in the prefix it already owns. */
 const PLAN_FILE_NAME = 'setup-plan.json';
+/**
+ * What the wizard offers as the hub's database, in the same prefix.
+ *
+ * An offer and not a default: the daemon has none, deliberately, and this is a
+ * suggestion the operator confirms rather than a location invented for them. It
+ * is the answer this run writes the hub's end of the pairing into, so the report
+ * names it as the `--database-file` the hub has to be started against.
+ */
+const HUB_DATABASE_FILE_NAME = 'hub.db';
 
 /** The spelling of "no stores", so an empty answer is expressible in a prompt. */
 const NO_STORES = 'none';
+/** The spelling of "do not pair this machine", for an operator who will do it themselves. */
+const NO_HUB_DATABASE = 'none';
 
 export interface SetupWizardDependencies {
   readonly terminal: SetupTerminal;
@@ -94,8 +108,19 @@ export interface SetupWizardDependencies {
   readonly supervisorFor: (binPath: readonly string[]) => PtySupervisor;
   readonly providersFor: (runner: ProcessRunner) => ProviderRegistry;
   readonly files: StoreFileSystem;
+  /**
+   * The hub's own database, for the one write setup makes into it.
+   *
+   * On this front end and not on the apply path, which is the whole of what
+   * keeps the local pairing an interactive step: a `SetupPlan` cannot name a
+   * database, so a replay has nothing to write a pairing into. See
+   * `local-pairing.ts` for the argument.
+   */
+  readonly hubDatabase: HubDatabase;
   readonly ids: IdGenerator;
   readonly tokens: TokenMinter;
+  /** A pairing row records when it was made, and SQLite has no `now()` a test could set. */
+  readonly clock: Clock;
 }
 
 export interface SetupWizardSeed {
@@ -231,7 +256,18 @@ export async function runSetupWizard(
   );
 
   terminal.write('');
-  for (const line of [...logins, ...whatIsLeft(outcome)]) terminal.write(line);
+  for (const line of logins) terminal.write(line);
+
+  // The other step that can only be taken after the plan has been applied: the
+  // token to pair with is the one the apply path just wrote, and this reads it
+  // back rather than minting a second.
+  const paired = await pairLocalServer(outcome, dependencies);
+  if (paired.kind === 'ended') return { kind: 'no-input' };
+
+  terminal.write('');
+  for (const line of [...paired.value.lines, ...whatIsLeft(outcome, paired.value.paired)]) {
+    terminal.write(line);
+  }
 
   terminal.write('');
   await offerToSave(written, dependencies);
@@ -644,40 +680,153 @@ async function logInProviders(
   return lines;
 }
 
+/** The pairing step's own report, and whether this machine came out paired. */
+interface LocalPairingStep {
+  readonly lines: readonly string[];
+  readonly paired: boolean;
+}
+
 /**
- * What this machine still needs, after the plan has been applied and the
- * providers have been offered their logins.
+ * Pairing the local server: the one pairing nobody types.
  *
- * **Pairing the local server (AGX-75).** In `--role=both` the hub still dials
- * its own server over the loopback, so a pairing has to exist. The token is in
- * the identity file, named and not printed, which is where it stays until setup
- * writes both ends itself. It is printed as a fact rather than stubbed as a
- * question, because a wizard that offers to do something this build cannot do is
- * worse than one that says what is left.
+ * In `--role=both` the hub dials its own server over the loopback, so a pairing
+ * has to exist, and setup writes both ends — the token into the identity file
+ * (the apply path did that), the row into the hub's database (this does). It is
+ * a deliberate, narrow exception to "pairing is always the user typing that
+ * server's token into the hub", and `local-pairing.ts` carries the argument and
+ * every bound.
+ *
+ * Two things are decided here rather than there, because both are about a person
+ * being present.
+ *
+ * **The operator names the hub.** The database file is configuration with no
+ * default, so there is nothing to assume; what there is, is a location to offer
+ * in the prefix setup already owns. Naming it is the operator saying which hub
+ * this machine belongs to, which is the act the typed-token rule exists to
+ * require. `none` leaves the machine unpaired and is a legitimate answer.
+ *
+ * **A failure costs itself.** A database that cannot be opened is reported and
+ * the run carries on: a machine that is provisioned and unpaired is one somebody
+ * can finish by hand, and a run that exited over it would have thrown away the
+ * providers it just installed.
  */
-function whatIsLeft(outcome: SetupOutcome): readonly string[] {
-  const lines: string[] = [];
+async function pairLocalServer(
+  outcome: SetupOutcome,
+  dependencies: SetupWizardDependencies,
+): Promise<Asked<LocalPairingStep>> {
+  const { terminal, machine } = dependencies;
   const server = outcome.server;
-
-  if (outcome.role === 'both') {
-    lines.push(
-      'The hub dials its own server over the loopback, so this machine still has to be ' +
-        `paired: the pairing token is in ${server?.identity.path ?? 'the identity file'}.`,
-    );
+  if (outcome.role !== 'both' || server === null) {
+    return { kind: 'answered', value: { lines: [], paired: false } };
   }
 
-  if (outcome.hub !== null) {
-    // Neither is in a plan, deliberately — a client token is the one credential
-    // between the internet and every session on every paired machine, and a plan
-    // is a file that travels. Saying so is better than a machine that provisions
-    // cleanly and then will not start.
-    lines.push(
-      'The hub needs a database file and a client token to start. Both are configuration ' +
+  const decision = await localPairingFor(
+    {
+      role: outcome.role,
+      serverPort: server.port,
+      identityPath: server.identity.path,
+    },
+    dependencies.files,
+  );
+  if (!decision.ok) {
+    return {
+      kind: 'answered',
+      value: { lines: [`This machine was not paired: ${decision.reason}`], paired: false },
+    };
+  }
+
+  terminal.write('');
+  terminal.write(
+    'The hub on this machine dials the server on it over the loopback, so the two have to be ' +
+      'paired. Setup can write both ends here, from the token already in ' +
+      `${server.identity.path}, so that nobody has to hand-pair their own box.`,
+  );
+
+  const path = await askForHubDatabase(machine.home, terminal);
+  if (path.kind === 'ended') return path;
+  if (path.value === null) {
+    return { kind: 'answered', value: { lines: [notPaired(server.identity.path)], paired: false } };
+  }
+
+  // The directory the operator just named. A database file is opened, not
+  // created exclusively, but the directory it sits in still has to be there.
+  await machine.makeDirectory(dirname(path.value));
+
+  const written = await dependencies.hubDatabase.withDatabase(path.value, (database) =>
+    recordLocalPairing(database, dependencies.ids, dependencies.clock, decision.pairing),
+  );
+  if (!written.ok) {
+    return {
+      kind: 'answered',
+      value: { lines: [`This machine was not paired: ${written.problem}`], paired: false },
+    };
+  }
+
+  return {
+    kind: 'answered',
+    value: {
+      lines: describeLocalPairing(written.value, path.value),
+      paired: written.value.kind !== 'left-alone',
+    },
+  };
+}
+
+/** The database to write the hub's end into, or `null` for a machine to leave unpaired. */
+async function askForHubDatabase(
+  home: string,
+  terminal: SetupTerminal,
+): Promise<Asked<string | null>> {
+  let offer = join(home, OWNED_PREFIX_DIRECTORY, HUB_DATABASE_FILE_NAME);
+
+  for (;;) {
+    const answered = await askText(
+      terminal,
+      `Hub database (${NO_HUB_DATABASE} to leave this machine unpaired)`,
+      offer,
+    );
+    if (answered.kind === 'ended') return answered;
+    if (answered.value === NO_HUB_DATABASE) return { kind: 'answered', value: null };
+
+    // Refused rather than resolved against wherever setup was started, for the
+    // reason every other path in a setup run is: the hub is started by a unit
+    // file from a directory nobody chose, and a database that moves with the
+    // working directory is a hub that quietly comes up empty.
+    if (isAbsolute(answered.value)) return { kind: 'answered', value: resolve(answered.value) };
+
+    terminal.write(`The hub database has to be an absolute path: ${answered.value}`);
+    offer = answered.value;
+  }
+}
+
+/** The sentence that was true before setup could pair anything, kept for when it cannot. */
+function notPaired(identityPath: string): string {
+  return (
+    'The hub dials its own server over the loopback, so this machine still has to be ' +
+    `paired: the pairing token is in ${identityPath}.`
+  );
+}
+
+/**
+ * What this machine still needs, after the plan has been applied, the providers
+ * have been offered their logins and the local server has been offered its
+ * pairing.
+ */
+function whatIsLeft(outcome: SetupOutcome, paired: boolean): readonly string[] {
+  if (outcome.hub === null) return [];
+
+  // Neither a client token nor a database file is in a plan, deliberately — a
+  // client token is the one credential between the internet and every session on
+  // every paired machine, and a plan is a file that travels. Saying so is better
+  // than a machine that provisions cleanly and then will not start. A machine
+  // that was just paired has already been told which database, on the line that
+  // named it.
+  return [
+    paired
+      ? 'The hub also needs a client token to start. It is configuration with no default, and ' +
+        'it is not carried in a plan.'
+      : 'The hub needs a database file and a client token to start. Both are configuration ' +
         'with no default, and neither is carried in a plan.',
-    );
-  }
-
-  return lines;
+  ];
 }
 
 /**

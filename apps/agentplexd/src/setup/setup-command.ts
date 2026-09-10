@@ -3,12 +3,14 @@ import type { ProcessRunner } from '../server/operations/process-runner.js';
 import type { ProviderRegistry } from '../server/providers/provider-registry.js';
 import type { PtySupervisor } from '../server/pty-supervisor.js';
 import type { StoreFileSystem } from '../server/store-identity.js';
+import type { Clock } from '../shared/clock.js';
 import type { IdGenerator } from '../shared/ids.js';
 import type { TokenMinter } from '../shared/tokens.js';
-import { applySetupPlan } from './apply-setup-plan.js';
+import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
+import type { HubDatabase } from './hub-database.js';
 import type { SetupMachine } from './setup-machine.js';
-import { parseSetupPlan, setupBinPath } from './setup-plan.js';
+import { parseSetupPlan, setupBinPath, type SetupPlan } from './setup-plan.js';
 import type { SetupTerminal } from './setup-terminal.js';
 import { runSetupWizard } from './setup-wizard.js';
 
@@ -76,8 +78,21 @@ export interface SetupCommandDependencies {
   readonly providersFor: (runner: ProcessRunner) => ProviderRegistry;
   /** Where the plan is read from, and where the identity and store files are written. */
   readonly files: StoreFileSystem;
+  /**
+   * The hub's own database. Reached from the wizard, and from nowhere else.
+   *
+   * It is in this list rather than composed inside the wizard for the reason the
+   * runner factories are: opening a SQLite file is a thing the process does, and
+   * the entrypoint owns those. That it is *here* and still unused by
+   * `replayPlan` below is the point — the capability is in reach of the
+   * unattended front end, and the unattended front end does not take it, because
+   * a pairing minted and then trusted with nobody present is the hub choosing
+   * rather than the operator.
+   */
+  readonly hubDatabase: HubDatabase;
   readonly ids: IdGenerator;
   readonly tokens: TokenMinter;
+  readonly clock: Clock;
   readonly write: (line: string) => void;
   readonly writeError: (line: string) => void;
 }
@@ -190,9 +205,47 @@ async function replayPlan(
 
   write(`agentplexd setup: replayed ${file}`);
   for (const line of describeOutcome(outcome)) write(line);
+  for (const line of describeUnattendedPairing(parsed.plan, outcome)) write(line);
   for (const problem of outcome.problems) writeError(`agentplexd setup: ${problem}`);
 
   return outcome.problems.length === 0 ? EXIT_OK : EXIT_PROBLEMS;
+}
+
+/**
+ * What a replay says about pairing, which is what is left to do and never a
+ * pairing it made.
+ *
+ * The exception the wizard takes — mint the token, write both ends, type
+ * nothing — is for one operator on one host in one interactive run. None of that
+ * is true here, and the difference is not a scruple: a run that minted a token
+ * at boot and then trusted it on the strength of having minted it would be the
+ * hub deciding which machines it trusts, which is exactly what the rule about
+ * typed tokens exists to prevent. So this path writes no row, and there is no
+ * database in a `SetupPlan` for it to write one into.
+ *
+ * That leaves two honest reports, and the difference between them is whether an
+ * operator chose the secret:
+ *
+ * - **The plan named a token.** This is the sanctioned unattended path, and the
+ *   whole reason `pairingToken` is in the schema: somebody decided the token
+ *   before the machine existed, so the instance is pairable the moment it boots
+ *   and the hub's end is made by whoever holds the hub, with a secret they
+ *   already have.
+ * - **The plan named none.** A token was minted onto this machine, and the only
+ *   thing that knows it is a file on it. Somebody has to read that file and type
+ *   it into a hub, which is the ordinary rule, unchanged.
+ */
+function describeUnattendedPairing(plan: SetupPlan, outcome: SetupOutcome): readonly string[] {
+  if (outcome.role !== 'both' || outcome.server === null || !('server' in plan)) return [];
+
+  const identityPath = outcome.server.identity.path;
+  return [
+    plan.server.pairingToken === null
+      ? `pairing: a token was minted into ${identityPath}. Type it into the hub to pair this ` +
+        'machine; an unattended run does not pair a hub with a token it minted itself.'
+      : `pairing: this machine is pairable with the token the plan named, which is in ` +
+        `${identityPath}. Nothing here writes the hub's end of it.`,
+  ];
 }
 
 type SetupFlags =
