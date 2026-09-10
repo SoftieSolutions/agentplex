@@ -46,6 +46,7 @@ export const OUTPUT_DIRECTORY = 'apps/agentplexd/release';
 export const BUNDLED_PACKAGES: readonly BundledPackage[] = [
   { name: '@agentplex/protocol', directory: 'packages/protocol' },
   { name: '@agentplex/node-shared', directory: 'packages/node-shared' },
+  { name: '@agentplex/providers', directory: 'packages/providers' },
 ];
 
 export interface BundledPackage {
