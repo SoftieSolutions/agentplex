@@ -67,6 +67,15 @@ and nothing downstream re-checks a frame's `type` by hand.
 Every spawn goes through the operation registry, `shell: false` always. A
 generic `{ command }` frame is the failure mode the registry exists to prevent.
 
+**Setup's spawns go through a second registry, not a wider one.** Installing a
+provider is a spawn, so it obeys every rule above, and it is registered where
+the wire cannot reach it: `createSetupOperationRegistry` is constructed on the
+setup path only, and the wire-facing registry does not contain
+`provider.install` at all. A long-running daemon that can be asked over a socket
+to fetch and execute an installer is exactly what the previous rule exists to
+prevent, and two disjoint lists say so in a way a flag could not. A test asserts
+the disjointness over whatever both registries hold.
+
 **Migrations are forward-only and append-only.** There is no `down`. An applied
 migration is history: add a new one rather than editing it.
 

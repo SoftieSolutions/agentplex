@@ -123,9 +123,44 @@ export function createClaudeProvisioning(): ProviderProvisioning {
           // and start being wherever that installer decides, which is the
           // property this whole seam is built on. It is also a chicken-and-egg
           // path: it can only be run by a `claude` that is already installed.
+          //
+          // `--no-ignore-scripts` is this provider's answer to the postinstall
+          // question, and it is Claude Code's answer rather than agentplex's
+          // policy: a provider that does not need its scripts belongs in its
+          // own file with its own flag, which is what the seam is for.
+          //
+          // Captured on npm 11.19 with 2.1.259. `--ignore-scripts` installs the
+          // package and its platform dependency, exits 0, and reports both
+          // under `add` — an install this file's reader would call a success —
+          // while leaving `bin/claude` as the 500-byte placeholder shipped in
+          // the tarball, which prints "claude native binary not installed" and
+          // exits 1. The postinstall is what replaces that placeholder with the
+          // 216MB native executable, so for this provider the script is the
+          // install and not an optional extra. npm's `unreviewedScripts` in the
+          // captured fixtures is an advisory listing of scripts not covered by
+          // an `allowScripts` policy; npm runs them regardless.
+          //
+          // It is on the argv rather than left to npm's default because the
+          // default is not what decides this on a real machine.
+          // `ignore-scripts=true` in a user or global npmrc is a reasonable
+          // hardening choice, and it would turn this install into a silent
+          // success with a binary that cannot start — the class of failure this
+          // repository refuses to ship. A command-line flag outranks every
+          // npmrc, so the answer stops depending on the machine. The npmrc that
+          // refuses instead of breaking, `strict-allow-scripts`, needs no
+          // counter-flag: it fails loudly with ESTRICTALLOWSCRIPTS, and the
+          // reader below hands the operator npm's own remediation.
           argv: {
             file: NPM_COMMAND,
-            args: ['install', '--global', '--prefix', prefix.prefix, '--json', spec],
+            args: [
+              'install',
+              '--global',
+              '--prefix',
+              prefix.prefix,
+              '--json',
+              '--no-ignore-scripts',
+              spec,
+            ],
           },
           timeoutMs: INSTALL_TIMEOUT_MS,
           read: readNpmInstall,

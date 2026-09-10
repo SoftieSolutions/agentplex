@@ -30,6 +30,14 @@ import type { InstallPlan, OneShotPlan } from './provider-adapter.js';
  * a perfectly good `"loggedIn": false`, so a reader that checked the exit code
  * first would never report a logout at all.
  *
+ * Two more were captured for the postinstall question (AGX-71) and are the same
+ * lesson again. `npm-install-strict-allow-scripts.json` is npm 11.19 refusing
+ * this install on a machine whose npmrc sets `strict-allow-scripts`, and
+ * `claude-version-no-native-binary.txt` is what `claude --version` writes to
+ * stderr, exiting 1, after an install whose postinstall did not run. Neither is
+ * hypothetical: both are this package on this npm, and between them they are
+ * why the install plan spells `--no-ignore-scripts` out.
+ *
  * The email, organisation and home directory in the logged-in capture are
  * REDACTED on purpose: they are personal identifiers and this repository is
  * public. Nothing in the parser reads them, so nobody needs to "fix" the
@@ -43,7 +51,9 @@ function fixture(name: string): string {
 const NPM_ADDED = fixture('npm-install-added.json');
 const NPM_UP_TO_DATE = fixture('npm-install-up-to-date.json');
 const NPM_NO_SUCH_VERSION = fixture('npm-install-no-such-version.json');
+const NPM_STRICT_ALLOW_SCRIPTS = fixture('npm-install-strict-allow-scripts.json');
 const CLAUDE_VERSION = fixture('claude-version.txt');
+const CLAUDE_NO_NATIVE_BINARY = fixture('claude-version-no-native-binary.txt');
 const AUTH_LOGGED_IN = fixture('claude-auth-status-logged-in.json');
 const AUTH_LOGGED_OUT = fixture('claude-auth-status-logged-out.json');
 
@@ -70,8 +80,38 @@ describe('createClaudeProvisioning.install', () => {
     // asks the implementation what it does and then agrees checks nothing.
     expect(plan.argv).toEqual({
       file: 'npm',
-      args: ['install', '--global', '--prefix', PREFIX, '--json', `${CLAUDE_PACKAGE}@${VERSION}`],
+      args: [
+        'install',
+        '--global',
+        '--prefix',
+        PREFIX,
+        '--json',
+        '--no-ignore-scripts',
+        `${CLAUDE_PACKAGE}@${VERSION}`,
+      ],
     });
+  });
+
+  it("runs this package's install scripts, and says so rather than inheriting it", () => {
+    // The postinstall question, answered per provider and asserted here rather
+    // than left to whatever npm and the operator's npmrc happen to agree on.
+    //
+    // Captured on npm 11.19 with this package: `--ignore-scripts` produces an
+    // install that npm reports as a success -- exit 0, the package and its
+    // platform dependency both under `add` -- whose `bin/claude` is a 500-byte
+    // shell script that prints "claude native binary not installed" and exits
+    // 1. The postinstall is what replaces that placeholder with the native
+    // binary, so for Claude Code the scripts are the install and not an extra.
+    //
+    // `--no-ignore-scripts` is npm's default, and it is on the argv because a
+    // default is not the thing that decides this: `ignore-scripts=true` in a
+    // user's npmrc is a reasonable hardening choice, and it turns this install
+    // into a silent success with a binary that will not start. The flag on the
+    // argv outranks every npmrc, so the answer stops depending on the machine.
+    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+
+    expect(plan.argv.args).toContain('--no-ignore-scripts');
+    expect(plan.argv.args).not.toContain('--ignore-scripts');
   });
 
   it('asks for the latest when the request pins no version', () => {
@@ -152,6 +192,26 @@ describe('createClaudeProvisioning.install', () => {
     expect(!read.ok && read.problem).toContain('No matching version found');
   });
 
+  it("carries npm's own remediation when a machine's npmrc forbids install scripts", () => {
+    // The other half of the postinstall decision, and the reason it needs no
+    // second flag. `--no-ignore-scripts` handles the npmrc that would have
+    // produced a silently broken install; `strict-allow-scripts` is the npmrc
+    // that refuses outright, and it refuses loudly -- ESTRICTALLOWSCRIPTS on
+    // stdout under --json, naming the package, the script and three ways to
+    // proceed. Setup passes that through verbatim, which is a better outcome
+    // than agentplexd quietly deciding on the operator's behalf that their
+    // hardening does not apply to it.
+    const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
+
+    const read = plan.read(
+      exited(1, NPM_STRICT_ALLOW_SCRIPTS, 'npm error code ESTRICTALLOWSCRIPTS\n'),
+    );
+
+    expect(read.ok).toBe(false);
+    expect(!read.ok && read.problem).toContain('install scripts not covered by allowScripts');
+    expect(!read.ok && read.problem).toContain('--allow-scripts');
+  });
+
   it('refuses output that is not the format npm was asked for', () => {
     // A corporate npm shim or a proxy login page in front of the registry is
     // the actual thing an operator has to deal with, and an exit code alone
@@ -207,6 +267,22 @@ describe('createClaudeProvisioning.version', () => {
 
     expect(read.ok).toBe(false);
     expect(!read.ok && read.problem).toContain('dyld: Library not loaded');
+  });
+
+  it('catches an install whose scripts did not run', () => {
+    // The safety net under the postinstall decision. If a machine ever does
+    // produce the package without its native binary -- a future npm, a
+    // registry mirror, an operator running the install by hand -- setup does
+    // not report an installed provider: the version probe it runs next comes
+    // back as a refusal carrying the package's own explanation, while a person
+    // is still at the terminal. Silence followed by an ENOENT at the first
+    // session start is the outcome this exists to prevent.
+    const probe = createClaudeProvisioning().version();
+
+    const read = probe.read(exited(1, '', CLAUDE_NO_NATIVE_BINARY));
+
+    expect(read.ok).toBe(false);
+    expect(!read.ok && read.problem).toContain('native binary not installed');
   });
 });
 
