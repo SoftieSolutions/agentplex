@@ -6,7 +6,7 @@ import {
   type ServerId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
-import { serveHubConnection } from '../../server/hub-connection.js';
+import { serveHubConnection } from '../../../apps/agentplexd/src/server/hub-connection.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import {
   createFakeMessageSocket,
@@ -17,19 +17,25 @@ import {
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
 import { createLogger, closure, CLOSE_NORMAL, type SocketDialer } from '@agentplex/node-shared';
-import type { Database } from '../db/database.js';
+import type { Database } from '../../../apps/hub/src/db/database.js';
 import {
   findServer,
   newServerRegistrationSchema,
   registerServer,
   revokeServer,
   type LiveServerRegistration,
-} from '../pairing/server-registrations.js';
-import { listStores } from '../pairing/store-records.js';
-import { openMigratedSchema, type MigratedSchema } from '../pairing/test-migrated-schema.js';
-import { createExponentialBackoff } from './backoff.js';
-import { startServerConnection, type ServerConnection } from './server-connection.js';
-import { createFakeSessionController } from '../../server/fake-session-controller.js';
+} from '../../../apps/hub/src/pairing/server-registrations.js';
+import { listStores } from '../../../apps/hub/src/pairing/store-records.js';
+import {
+  openMigratedSchema,
+  type MigratedSchema,
+} from '../../../apps/hub/src/pairing/test-migrated-schema.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/connections/backoff.js';
+import {
+  startServerConnection,
+  type ServerConnection,
+} from '../../../apps/hub/src/connections/server-connection.js';
+import { createFakeSessionController } from '../../../apps/agentplexd/src/server/fake-session-controller.js';
 
 /**
  * The connection supervisor for one server, driven end to end.

@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startRuntime, type Runtime } from './runtime.js';
-import { createFakeDatabase } from './hub/db/fake-database.js';
-import type { MigrationFileSystem } from './hub/db/migration-files.js';
-import { createFakeBeaconSource } from './hub/discovery/fake-beacon-source.js';
-import { createFakeWebAssets } from './hub/web/fake-web-assets.js';
 import { createClaudeAdapter, createProviderRegistry } from '@agentplex/providers';
 import {
   createFakeProviderFiles,
@@ -15,48 +11,18 @@ import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from './server/terminal-manager.js';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
-import { createUnreachableDialer, createFakeTimers } from '@agentplex/node-shared/testing';
+import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import type { Config } from './config/config.js';
 
 const logger = createLogger('error', () => {});
 const ids = { newId: () => 'hub-under-test' };
 
-const migrationFileSystem: MigrationFileSystem = {
-  readDirectory: async () => ['0001_hub_identity.sql'],
-  readFile: async () => 'CREATE TABLE hub_identity ()',
-};
-
-/** The hub reads its own id back after minting it; the fake has to answer that. */
-const hubIdentityRow = {
-  match: /SELECT hub_id FROM hub_identity/,
-  rows: [{ hub_id: 'hub-under-test' }],
-};
-
-function fakeHubDatabase(options: Parameters<typeof createFakeDatabase>[0] = {}) {
-  return createFakeDatabase({ ...options, respondWith: [hubIdentityRow] });
-}
-
-function dependencies(
-  database = fakeHubDatabase(),
-  storeFileSystem = createFakeStoreFiles(),
-  dialer = createUnreachableDialer(),
-) {
+function dependencies(storeFileSystem = createFakeStoreFiles()) {
   return {
     logger,
     ids,
-    // Nothing is paired in most of these, so nothing is dialled. Where
-    // something is, an unreachable server is the honest default: the hub must
-    // come up regardless, which is the claim being made.
-    dialer,
     timers: createFakeTimers(),
-    openDatabase: () => database,
-    migrationsDirectory: '/migrations',
-    migrationFileSystem,
-    // An empty web root, like the fake volume everything else here runs on:
-    // this file is about which halves start and stop, and a hub with no client
-    // build still starts, which is itself one of the claims below.
-    webAssets: createFakeWebAssets(),
     storeFileSystem,
     tokens: { newToken: () => 'token-under-test' },
     // No adapters: this file is about which halves start and stop, and a
@@ -92,10 +58,6 @@ function dependencies(
       },
       localAddresses: () => [],
     },
-    // Listening has no such switch: a hub role always has a source, so every
-    // configuration here supplies one. This one hears nothing, which is a
-    // silent network rather than a hub that declined to listen.
-    discovery: createFakeBeaconSource(),
     clock: { now: () => 1_756_000_000_000 },
   };
 }
@@ -108,7 +70,6 @@ const HOST = '127.0.0.1';
  * to put it.
  */
 const IDENTITY_PATH = '/etc/agentplexd/server.json';
-const CLIENT_TOKEN = 'a-client-token-long-enough-to-be-one';
 
 const serverOnly: Config = {
   role: 'server',
@@ -125,39 +86,6 @@ const serverOnly: Config = {
     announce: false,
   },
 };
-const hubOnly: Config = {
-  role: 'hub',
-  logLevel: 'error',
-  host: HOST,
-  hub: {
-    port: 0,
-    databaseFile: '/unused/agentplex.db',
-    clientToken: CLIENT_TOKEN,
-    localServer: null,
-  },
-};
-const both: Config = {
-  role: 'both',
-  logLevel: 'error',
-  host: HOST,
-  hub: {
-    port: 0,
-    databaseFile: '/unused/agentplex.db',
-    clientToken: CLIENT_TOKEN,
-    localServer: null,
-  },
-  server: {
-    port: 0,
-    storePaths: [],
-    binPath: [],
-    identityPath: IDENTITY_PATH,
-    terminalCap: 8,
-    // Quiet, like the default. This file is about which halves start and
-    // stop, and a beacon would be a second thing coming up with the server.
-    announce: false,
-  },
-};
-
 let runtime: Runtime | undefined;
 
 afterEach(async () => {
@@ -166,99 +94,11 @@ afterEach(async () => {
 });
 
 describe('startRuntime', () => {
-  it('starts only the server half for the server role, and opens no database', async () => {
-    const database = fakeHubDatabase();
-    runtime = await startRuntime(serverOnly, {
-      ...dependencies(database),
-      openDatabase: () => {
-        throw new Error('the server role must not open a database');
-      },
-    });
+  it('starts the server and stops it', async () => {
+    runtime = await startRuntime(serverOnly, dependencies());
 
-    expect(runtime.hub).toBeNull();
-    expect(runtime.server).not.toBeNull();
-    expect(database.statements).toEqual([]);
-  });
-
-  it('starts only the hub half for the hub role', async () => {
-    runtime = await startRuntime(hubOnly, dependencies());
-
-    expect(runtime.hub).not.toBeNull();
-    expect(runtime.server).toBeNull();
-  });
-
-  it('starts both halves in one process for the both role', async () => {
-    runtime = await startRuntime(both, dependencies());
-
-    expect(runtime.hub).not.toBeNull();
-    expect(runtime.server).not.toBeNull();
-  });
-
-  it('dials the servers the hub is paired with', async () => {
-    // The wiring, asserted where the wiring is: a hub that came up without
-    // dialling anything would look identical to one whose servers are all
-    // asleep, and the difference would surface as a product that does nothing.
-    const database = createFakeDatabase({
-      respondWith: [
-        hubIdentityRow,
-        {
-          match: /FROM servers/,
-          rows: [
-            {
-              id: 'registration-laptop',
-              label: 'laptop',
-              address: 'wss://laptop.example:8443',
-              token: 'tok-laptop',
-              server_id: null,
-              created_at: 1_756_000_000_000,
-              revoked_at: null,
-              last_connected_at: null,
-            },
-          ],
-        },
-      ],
-    });
-    const dialer = createUnreachableDialer();
-
-    runtime = await startRuntime(hubOnly, dependencies(database, createFakeStoreFiles(), dialer));
-
-    expect(runtime.hub?.connections.snapshot().map((report) => report.label)).toEqual(['laptop']);
-    expect(dialer.dialled).toEqual(['wss://laptop.example:8443']);
-  });
-
-  it('comes up even though the server it is paired with is unreachable', async () => {
-    // An unreachable server is a label on a row, never a reason not to start.
-    const database = createFakeDatabase({
-      respondWith: [
-        hubIdentityRow,
-        {
-          match: /FROM servers/,
-          rows: [
-            {
-              id: 'registration-laptop',
-              label: 'laptop',
-              address: 'wss://laptop.example:8443',
-              token: 'tok-laptop',
-              server_id: null,
-              created_at: 1_756_000_000_000,
-              revoked_at: null,
-              last_connected_at: null,
-            },
-          ],
-        },
-      ],
-    });
-
-    runtime = await startRuntime(hubOnly, dependencies(database));
-
-    expect(runtime.hub).not.toBeNull();
-  });
-
-  it('migrates before it serves', async () => {
-    const database = fakeHubDatabase();
-    runtime = await startRuntime(hubOnly, dependencies(database));
-
-    expect(database.appliedVersions).toEqual([1]);
+    expect(runtime.server.port).toBeGreaterThan(0);
+    await runtime.stop();
   });
 
   it('answers a health check on the port it bound', async () => {
@@ -277,7 +117,7 @@ describe('startRuntime', () => {
       server: { ...serverOnly.server, storePaths: ['/volumes/claude'] },
     };
 
-    runtime = await startRuntime(withStore, dependencies(fakeHubDatabase(), files));
+    runtime = await startRuntime(withStore, dependencies(files));
 
     expect(runtime.server?.stores).toEqual([
       { storeId: 'hub-under-test', path: '/volumes/claude' },
@@ -322,18 +162,9 @@ describe('startRuntime', () => {
       server: { ...serverOnly.server, storePaths: ['/volumes/broken', '/volumes/claude'] },
     };
 
-    runtime = await startRuntime(withStores, dependencies(fakeHubDatabase(), files));
+    runtime = await startRuntime(withStores, dependencies(files));
 
     expect(runtime.server?.stores.map((store) => store.path)).toEqual(['/volumes/claude']);
-  });
-
-  it('closes the database when it stops, so a restart is not blocked by a pool', async () => {
-    const database = fakeHubDatabase();
-    runtime = await startRuntime(hubOnly, dependencies(database));
-
-    await runtime.stop();
-
-    expect(database.closed).toBe(true);
   });
 
   it('is safe to stop twice, because a signal can arrive twice', async () => {
@@ -342,14 +173,5 @@ describe('startRuntime', () => {
     await runtime.stop();
 
     await expect(runtime.stop()).resolves.toBeUndefined();
-  });
-
-  it('leaves no listener behind when a half fails to start', async () => {
-    const database = fakeHubDatabase({ failOn: /CREATE TABLE hub_identity/ });
-
-    await expect(startRuntime(both, dependencies(database))).rejects.toThrow();
-
-    // The database was opened, so shutdown must have closed it.
-    expect(database.closed).toBe(true);
   });
 });

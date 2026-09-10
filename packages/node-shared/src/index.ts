@@ -39,3 +39,17 @@ export type {
 
 export { childEnvironment, childSearchPath } from './child-environment.js';
 export type { ChildEnvironmentSources } from './child-environment.js';
+
+export {
+  DEFAULT_HUB_PORT,
+  DEFAULT_SERVER_PORT,
+  nonEmpty,
+  readAbsolutePath,
+  readAbsolutePaths,
+  readFlags,
+  readPort,
+  readSetting,
+  settingValue,
+  usageLines,
+} from './settings.js';
+export type { FlagsResult, Setting } from './settings.js';

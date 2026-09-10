@@ -23,6 +23,9 @@ session's identity is `{ storeId, sessionId }`, never the machine.
   enforces both rules.
 - `packages/protocol` is bundled into a browser as well as loaded by a service,
   so it may use neither Node builtins nor another workspace package.
+- `tests/hub-server` is the one place both apps load into one process: the hub
+  driven against the real server end of its protocol. Nothing ships from it,
+  and no other directory may cross an app boundary.
 - Setup opens no database. It writes files; the hub imports the local pairing
   at boot.
 - A package exports its fakes from a `testing` entry. A fake is never copied.

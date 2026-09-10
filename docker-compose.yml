@@ -22,8 +22,10 @@ services:
       context: .
       target: runtime
     restart: unless-stopped
+    # The hub program, which has no role flag: which daemon runs is which
+    # program was started. AGX-99 folds this into `agentplex hub`.
+    entrypoint: ['node', 'apps/hub/dist/main.js']
     environment:
-      AGENTPLEX_ROLE: hub
       AGENTPLEX_HUB_PORT: 8080
       # Inside the volume below, and not settable from .env: a path is only
       # durable if it points at the mount, and an operator who moves it into

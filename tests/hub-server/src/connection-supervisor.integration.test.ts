@@ -5,7 +5,7 @@ import {
   type HubId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
-import { serveHubConnection } from '../../server/hub-connection.js';
+import { serveHubConnection } from '../../../apps/agentplexd/src/server/hub-connection.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import {
   createSocketPair,
@@ -13,18 +13,24 @@ import {
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
-import type { Database } from '../db/database.js';
+import type { Database } from '../../../apps/hub/src/db/database.js';
 import {
   newServerRegistrationSchema,
   registerServer,
   revokeServer,
   type LiveServerRegistration,
-} from '../pairing/server-registrations.js';
-import { openMigratedSchema, type MigratedSchema } from '../pairing/test-migrated-schema.js';
-import { attentionEligibleStores } from './attention.js';
-import { createExponentialBackoff } from './backoff.js';
-import { startConnectionSupervisor, type ConnectionSupervisor } from './connection-supervisor.js';
-import { createFakeSessionController } from '../../server/fake-session-controller.js';
+} from '../../../apps/hub/src/pairing/server-registrations.js';
+import {
+  openMigratedSchema,
+  type MigratedSchema,
+} from '../../../apps/hub/src/pairing/test-migrated-schema.js';
+import { attentionEligibleStores } from '../../../apps/hub/src/connections/attention.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/connections/backoff.js';
+import {
+  startConnectionSupervisor,
+  type ConnectionSupervisor,
+} from '../../../apps/hub/src/connections/connection-supervisor.js';
+import { createFakeSessionController } from '../../../apps/agentplexd/src/server/fake-session-controller.js';
 
 /**
  * The fleet: which servers are dialled, and what one being down costs the

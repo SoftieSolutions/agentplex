@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { HubId } from '@agentplex/protocol';
 import { createFakeStoreFiles, createFakeProcessRunner } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
-import { createOperationRegistry } from '../../server/operations/operation-registry.js';
+import { createOperationRegistry } from '../../../apps/agentplexd/src/server/operations/operation-registry.js';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
-import { createTerminalManager } from '../../server/terminal-manager.js';
-import { startSessionServer, type SessionServer } from '../../server/server.js';
+import { createTerminalManager } from '../../../apps/agentplexd/src/server/terminal-manager.js';
+import {
+  startSessionServer,
+  type SessionServer,
+} from '../../../apps/agentplexd/src/server/server.js';
 import {
   createLogger,
   closure,
@@ -15,8 +18,11 @@ import {
   systemTimers,
   createWebSocketDialer,
 } from '@agentplex/node-shared';
-import { handshakeWithServer, type DialTarget } from './server-handshake.js';
-import { serverAddressSchema } from './server-address.js';
+import {
+  handshakeWithServer,
+  type DialTarget,
+} from '../../../apps/hub/src/pairing/server-handshake.js';
+import { serverAddressSchema } from '../../../apps/hub/src/pairing/server-address.js';
 
 /**
  * The handshake over a real socket, against the real server role.

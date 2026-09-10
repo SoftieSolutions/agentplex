@@ -30,11 +30,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/agentplexd/package.json ./apps/agentplexd/
+COPY apps/hub/package.json ./apps/hub/
 COPY apps/web/package.json ./apps/web/
 COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
 COPY packages/pty/package.json ./packages/pty/
+COPY tests/hub-server/package.json ./tests/hub-server/
 # The install runs the pty package's postinstall, which repairs the executable
 # bit on node-pty's spawn helper, so the script has to be here before the
 # install and not arrive later with the sources.
@@ -102,7 +104,7 @@ RUN agentplexd doctor --role=server --server-identity-file=/var/lib/agentplex/se
 # serve and no database to open. Read back out of the installed tree, at the
 # paths `main.js` resolves rather than the paths packaging wrote.
 RUN test -f "$(npm root -g)/agentplexd/apps/web/dist/index.html" \
-    && test -f "$(npm root -g)/agentplexd/apps/agentplexd/migrations/0001_hub_identity.sql"
+    && test -f "$(npm root -g)/agentplexd/apps/hub/migrations/0001_hub_identity.sql"
 
 # The bootstrap check: `install.sh` against the machine it was written for.
 #
@@ -249,7 +251,7 @@ RUN id agentplex \
 # the build stage: a prune leaves whatever it failed to notice.
 FROM manifests AS runtime-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter agentplexd...
+    pnpm install --frozen-lockfile --prod --filter agentplexd... --filter @agentplex/hub...
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -257,25 +259,32 @@ WORKDIR /app
 
 # The workspace layout is kept rather than flattened: the dependency tree that
 # pnpm linked is a web of relative symlinks, and it resolves only where it was
-# linked. `migrations/` sits beside `dist/` because main.js resolves it as
-# ../migrations relative to itself.
+# linked. `migrations/` sits beside the hub's `dist/` because its main.js
+# resolves it as ../migrations relative to itself.
+#
+# Two programs in one image until AGX-99 gives them one bin: `apps/hub` is the
+# hub, and `apps/agentplexd` runs the server. The compose file's `hub` service
+# starts the first; the ENTRYPOINT below still starts the second.
 COPY --from=runtime-deps /app/node_modules ./node_modules
 COPY --from=runtime-deps /app/apps/agentplexd/node_modules ./apps/agentplexd/node_modules
+COPY --from=runtime-deps /app/apps/hub/node_modules ./apps/hub/node_modules
 COPY --from=runtime-deps /app/packages/node-shared/node_modules ./packages/node-shared/node_modules
 COPY --from=runtime-deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
 COPY --from=runtime-deps /app/packages/providers/node_modules ./packages/providers/node_modules
 COPY --from=runtime-deps /app/packages/pty/node_modules ./packages/pty/node_modules
 COPY apps/agentplexd/package.json ./apps/agentplexd/
+COPY apps/hub/package.json ./apps/hub/
 COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
 COPY packages/pty/package.json ./packages/pty/
 COPY --from=build /app/apps/agentplexd/dist ./apps/agentplexd/dist
+COPY --from=build /app/apps/hub/dist ./apps/hub/dist
 COPY --from=build /app/packages/node-shared/dist ./packages/node-shared/dist
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY --from=build /app/packages/providers/dist ./packages/providers/dist
 COPY --from=build /app/packages/pty/dist ./packages/pty/dist
-COPY apps/agentplexd/migrations ./apps/agentplexd/migrations
+COPY apps/hub/migrations ./apps/hub/migrations
 # The client. The build stage already produced it and this image dropped it
 # until now, which made every image an installer could produce a hub with
 # nothing to serve. It is static files: the runtime needs the bytes and none of

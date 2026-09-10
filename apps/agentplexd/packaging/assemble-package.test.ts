@@ -78,12 +78,26 @@ const ptyManifest: Manifest = {
   },
 };
 
+const hubManifest: Manifest = {
+  name: '@agentplex/hub',
+  version: '1.2.3',
+  license: 'Apache-2.0',
+  type: 'module',
+  dependencies: {
+    '@agentplex/node-shared': 'workspace:*',
+    '@agentplex/protocol': 'workspace:*',
+    '@agentplex/providers': 'workspace:*',
+    zod: '^4.1.13',
+  },
+};
+
 const bundledManifests = [protocolManifest, nodeSharedManifest, providersManifest, ptyManifest];
 
 function derived(): Record<string, unknown> {
   return publishedManifest({
     root: rootManifest,
     service: serviceManifest,
+    apps: [hubManifest],
     bundled: bundledManifests,
   });
 }
@@ -198,7 +212,8 @@ describe('publishedManifest', () => {
     const files = derived()['files'];
 
     expect(files).toContain('apps/web/dist');
-    expect(files).toContain('apps/agentplexd/migrations');
+    expect(files).toContain('apps/hub/dist');
+    expect(files).toContain('apps/hub/migrations');
     expect(files).not.toContain('node_modules/@agentplex/protocol/dist');
   });
 });
@@ -208,13 +223,14 @@ describe('packageEntries', () => {
     const sources = packageEntries().map((entry) => entry.from);
 
     expect(sources).toContain('apps/agentplexd/dist');
+    expect(sources).toContain('apps/hub/dist');
+    expect(sources).toContain('apps/hub/migrations');
     expect(sources).toContain('packages/protocol/dist');
     expect(sources).toContain('packages/node-shared/dist');
     expect(sources).toContain('packages/providers/dist');
     expect(sources).toContain('packages/pty/dist');
     expect(sources).toContain('packages/pty/scripts/fix-node-pty-permissions.js');
     expect(sources).toContain('apps/web/dist');
-    expect(sources).toContain('apps/agentplexd/migrations');
   });
 
   it('writes nothing outside the package root', () => {
@@ -300,10 +316,9 @@ describe('the assembled package', () => {
     await write('apps/agentplexd/package.json', JSON.stringify(serviceManifest));
     await write('apps/agentplexd/README.md', '# agentplexd\n');
     await write('apps/agentplexd/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
-    await write(
-      'apps/agentplexd/migrations/0001_hub_identity.sql',
-      'create table hub (id text);\n',
-    );
+    await write('apps/hub/package.json', JSON.stringify(hubManifest));
+    await write('apps/hub/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
+    await write('apps/hub/migrations/0001_hub_identity.sql', 'create table hub (id text);\n');
     await write('packages/protocol/package.json', JSON.stringify(protocolManifest));
     await write('packages/protocol/dist/index.js', 'export const version = 7;\n');
     await write('packages/node-shared/package.json', JSON.stringify(nodeSharedManifest));
@@ -328,9 +343,10 @@ describe('the assembled package', () => {
     const held = async (path: string): Promise<string> =>
       await readFile(join(assembled.directory, path), 'utf8');
     await expect(held('apps/agentplexd/dist/main.js')).resolves.toContain('main()');
-    await expect(held('apps/agentplexd/migrations/0001_hub_identity.sql')).resolves.toContain(
+    await expect(held('apps/hub/migrations/0001_hub_identity.sql')).resolves.toContain(
       'create table',
     );
+    await expect(held('apps/hub/dist/main.js')).resolves.toContain('main()');
     await expect(held('apps/web/dist/assets/index-abc123.js')).resolves.toContain('export');
     await expect(held('node_modules/@agentplex/protocol/dist/index.js')).resolves.toContain(
       'version',
@@ -350,9 +366,9 @@ describe('the assembled package', () => {
 
     const assembled = await assemblePackage({ workspaceRoot: root });
 
-    const main = pathToFileURL(join(assembled.directory, 'apps/agentplexd/dist/main.js'));
+    const main = pathToFileURL(join(assembled.directory, 'apps/hub/dist/main.js'));
     expect(fileURLToPath(new URL('../migrations', main))).toBe(
-      join(assembled.directory, 'apps/agentplexd/migrations'),
+      join(assembled.directory, 'apps/hub/migrations'),
     );
     expect(fileURLToPath(new URL('../../web/dist', main))).toBe(
       join(assembled.directory, 'apps/web/dist'),

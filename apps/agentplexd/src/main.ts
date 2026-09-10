@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 import {
   childEnvironment,
   childSearchPath,
@@ -10,14 +9,9 @@ import {
   jsonLineSink,
   systemTimers,
   randomTokenMinter,
-  createWebSocketDialer,
 } from '@agentplex/node-shared';
 import { loadConfig, usage } from './config/config.js';
 import { formatDoctorReport, inspectMachine } from './doctor.js';
-import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
-import { createNodeBeaconSource } from './hub/discovery/node-beacon-listener.js';
-import { createSqliteDatabase } from './hub/db/sqlite.js';
-import { createNodeWebAssets } from './hub/web/node-web-assets.js';
 import { startRuntime } from './runtime.js';
 import { createNodeBeaconNetwork } from './server/node-beacon-transport.js';
 import {
@@ -65,31 +59,6 @@ const EXIT_STARTUP_FAILED = 1;
  */
 const EXIT_NOT_READY = 1;
 
-/**
- * `migrations/` sits beside `src/` and `dist/`, so this resolves the same way
- * whether the process was started from source or from a build.
- */
-const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../migrations', import.meta.url));
-
-/**
- * The built PWA the hub serves.
- *
- * One expression, correct in all four places this process runs, because all
- * four keep the workspace layout: `apps/agentplexd/src/main.ts` and
- * `apps/agentplexd/dist/main.js` are the same distance from `apps/web/dist`,
- * and the runtime image copies the build to that path for exactly this reason.
- *
- * The fourth is the published package, and it was expected to be the exception
- * — the one line packaging would have to change. It is not, because packaging
- * chose to keep the invariant instead of adding a case to it: `agentplexd` is
- * published as the workspace laid out the way the image lays it out, so this
- * expression is as true after `npm install --global` as it is here. See
- * `packaging/assemble-package.ts`, which is where that decision is argued and
- * where a test holds it: a flat package would have needed a second set of
- * relative paths that nothing exercises until a stranger installs it.
- */
-const WEB_ROOT = fileURLToPath(new URL('../../web/dist', import.meta.url));
-
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
   const writeError = (line: string): void => void process.stderr.write(`${line}\n`);
@@ -129,12 +98,8 @@ async function main(): Promise<void> {
   // What every child of this process gets, composed once: what agentplexd
   // inherited, with the configured directories ahead of its PATH. Both spawn
   // seams below take it at construction, so nothing downstream has an
-  // environment to read or a variable to add — and a hub-only process, which
-  // has no server half to configure, keeps inheriting exactly as before.
-  const environment = childEnvironment({
-    inherited: process.env,
-    binPath: 'server' in config ? config.server.binPath : [],
-  });
+  // environment to read or a variable to add.
+  const environment = childEnvironment({ inherited: process.env, binPath: config.server.binPath });
 
   // The one place a one-shot child is started. Every operation shares this
   // runner, so what a child inherits is decided above and cannot be added to
@@ -183,19 +148,9 @@ async function main(): Promise<void> {
     runtime = await startRuntime(config, {
       logger,
       ids: randomIdGenerator,
-      openDatabase: (path) => createSqliteDatabase(path),
-      migrationsDirectory: MIGRATIONS_DIRECTORY,
-      migrationFileSystem: nodeMigrationFileSystem,
-      // The one place the client's files are read off a disk. A hub-only
-      // process and a `--role=both` one serve the same bytes from the same
-      // directory, and a `--role=server` one never asks.
-      webAssets: createNodeWebAssets(WEB_ROOT),
       storeFileSystem: nodeStoreFileSystem,
       // The only place a secret is generated, and the CSPRNG is the whole
-      // implementation. It mints two things: the server's pairing token, once,
-      // on its first start, and every websocket ticket the hub hands a client.
-      // The hub's own client token is not among them -- that one is typed by a
-      // person, so it arrives as configuration.
+      // implementation: the server's pairing token, once, on its first start.
       tokens: randomTokenMinter,
       providers,
       // Asked once at boot, and the answer carried into every handshake. It
@@ -215,10 +170,6 @@ async function main(): Promise<void> {
       // same way whether it is being probed or driven. What gets scrubbed out
       // of it is each adapter's call, carried on its launch plan.
       //
-      // The cap is spread rather than passed as possibly-undefined: the
-      // workspace is on `exactOptionalPropertyTypes`, so an absent property is
-      // what takes the manager's own default, and a hub-only process has no
-      // server half to read one from.
       terminals: createTerminalManager({
         supervisor: createPtySupervisor({
           pty: nodePtyFactory,
@@ -227,22 +178,13 @@ async function main(): Promise<void> {
           environment,
         }),
         clock: systemClock,
-        ...('server' in config ? { cap: config.server.terminalCap } : {}),
+        cap: config.server.terminalCap,
       }),
-      // The one place a real websocket is opened from this side. The hub
-      // dials; nothing dials it. TLS verification is Node's own against the
-      // system trust store, which is why there is no certificate decision
-      // being made anywhere in this process.
-      dialer: createWebSocketDialer(),
-      // The one place a UDP socket can be opened. Built whatever the role, and
-      // used only where the configuration turned announcing on, so that
+      // The one place a UDP socket can be opened. Built whatever the setting,
+      // and used only where the configuration turned announcing on, so that
       // "can this process broadcast" stays a visible line in the entrypoint
       // rather than a decision taken somewhere below it.
       beacon: createNodeBeaconNetwork(logger),
-      // The other end of the same facility, and the one with no switch: a hub
-      // binds the discovery port whenever it runs, because hearing a machine
-      // announce itself costs nothing and grants nothing.
-      discovery: createNodeBeaconSource(logger),
       timers: systemTimers,
       clock: systemClock,
     });

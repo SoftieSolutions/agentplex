@@ -29,19 +29,20 @@ MCP agent  ─┘                │             SERVER ────────
   `agentplex-store.json` at its root. A session's identity is its store and its
   id within it, never the machine it happens to be running on.
 
-Both roles are the same program, `agentplexd`, started with `--role=hub`,
-`--role=server`, or `--role=both`. Running both in one process is the ordinary
-single-machine case.
+The hub is `apps/hub` and the server is `agentplexd --role=server`, two
+programs; a machine that runs both starts one of each.
 
 ## Repository layout
 
 ```
-apps/agentplexd/       the service: src/hub/, src/server/, src/setup/
+apps/hub/              the hub: database, migrations, pairing, discovery, the PWA's bytes
+apps/agentplexd/       the server, setup and doctor, until each is its own app
 apps/web/              the PWA
 packages/protocol/     frame types and parsers, shared by the service and the PWA
 packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share
 packages/providers/    the provider seam, the process runner it needs, store identity
 packages/pty/          the pty seam, its supervisor, and node-pty
+tests/hub-server/      the hub driven against the real server end, both in one process
 ```
 
 A package is a seam with at least two consumers, and neither app may import

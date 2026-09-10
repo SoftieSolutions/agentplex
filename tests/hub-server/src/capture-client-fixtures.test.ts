@@ -17,12 +17,18 @@ import {
   type SessionHold,
   type StoreDescriptor,
 } from '@agentplex/protocol';
-import { createFakeSessionController } from '../../server/fake-session-controller.js';
+import { createFakeSessionController } from '../../../apps/agentplexd/src/server/fake-session-controller.js';
 import { missingProvider, readyProvider, createFakeStoreFiles } from '@agentplex/providers/testing';
-import { createFakeBeaconSource, type FakeBeaconSource } from '../discovery/fake-beacon-source.js';
-import { createFakeWebAssets } from '../web/fake-web-assets.js';
-import { serveHubConnection } from '../../server/hub-connection.js';
-import type { SessionOutcome, StoreReport } from '../../server/session-control.js';
+import {
+  createFakeBeaconSource,
+  type FakeBeaconSource,
+} from '../../../apps/hub/src/discovery/fake-beacon-source.js';
+import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web-assets.js';
+import { serveHubConnection } from '../../../apps/agentplexd/src/server/hub-connection.js';
+import type {
+  SessionOutcome,
+  StoreReport,
+} from '../../../apps/agentplexd/src/server/session-control.js';
 import {
   createUnreachableDialer,
   createSocketPair,
@@ -34,14 +40,23 @@ import {
   type MessageSocket,
   type SocketDialer,
 } from '@agentplex/node-shared';
-import { createFakeDatabase } from '../db/fake-database.js';
-import { loadMigrations, type MigrationFileSystem } from '../db/migration-files.js';
-import { migrate } from '../db/migrations.js';
-import { nodeMigrationFileSystem } from '../db/node-migration-files.js';
-import { createSqliteDatabase } from '../db/sqlite.js';
-import { newServerRegistrationSchema, registerServer } from '../pairing/server-registrations.js';
-import { startHub, type Hub } from '../hub.js';
-import { CLIENT_SOCKET_PATH, CLIENT_TICKET_PATH } from './client-auth.js';
+import { createFakeDatabase } from '../../../apps/hub/src/db/fake-database.js';
+import {
+  loadMigrations,
+  type MigrationFileSystem,
+} from '../../../apps/hub/src/db/migration-files.js';
+import { migrate } from '../../../apps/hub/src/db/migrations.js';
+import { nodeMigrationFileSystem } from '../../../apps/hub/src/db/node-migration-files.js';
+import { createSqliteDatabase } from '../../../apps/hub/src/db/sqlite.js';
+import {
+  newServerRegistrationSchema,
+  registerServer,
+} from '../../../apps/hub/src/pairing/server-registrations.js';
+import { startHub, type Hub } from '../../../apps/hub/src/hub.js';
+import {
+  CLIENT_SOCKET_PATH,
+  CLIENT_TICKET_PATH,
+} from '../../../apps/hub/src/clients/client-auth.js';
 
 /**
  * Captures what a real hub says to a client, for the web store's tests.
@@ -249,7 +264,9 @@ async function startFleetHub(
 ): Promise<{ hub: Hub; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(join(tmpdir(), 'agentplex-capture-'));
   const database = createSqliteDatabase(join(directory, 'hub.db'));
-  const migrationsDirectory = fileURLToPath(new URL('../../../migrations', import.meta.url));
+  const migrationsDirectory = fileURLToPath(
+    new URL('../../../apps/hub/migrations', import.meta.url),
+  );
   const migrations = await loadMigrations(migrationsDirectory, nodeMigrationFileSystem);
   const clock = { now: () => START };
   await migrate(database, migrations, logger, clock);
@@ -853,7 +870,7 @@ ${entries}
 } as const;
 `;
 
-    const target = new URL('../../../../web/src/store/hub-frames.fixture.ts', import.meta.url);
+    const target = new URL('../../../apps/web/src/store/hub-frames.fixture.ts', import.meta.url);
     await mkdir(new URL('.', target), { recursive: true });
     await writeFile(target, module, 'utf8');
     process.stdout.write(`wrote ${captured.size} frames to ${fileURLToPath(target)}\n`);
