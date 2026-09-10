@@ -24,18 +24,13 @@ const rootManifest: Manifest = {
   dependencies: {},
 };
 
+/** The bin's own manifest: no runtime dependency, because it only dispatches. */
 const serviceManifest: Manifest = {
-  name: 'agentplexd',
+  name: 'agentplex',
   version: '1.2.3',
   license: 'Apache-2.0',
   type: 'module',
-  dependencies: {
-    '@agentplex/node-shared': 'workspace:*',
-    '@agentplex/protocol': 'workspace:*',
-    '@agentplex/providers': 'workspace:*',
-    '@agentplex/pty': 'workspace:*',
-    zod: '^4.1.13',
-  },
+  dependencies: {},
 };
 
 const protocolManifest: Manifest = {
@@ -142,7 +137,12 @@ describe('publishedManifest', () => {
 
   it('refuses a workspace dependency nothing bundles', () => {
     expect(() =>
-      publishedManifest({ root: rootManifest, service: serviceManifest, bundled: [] }),
+      publishedManifest({
+        root: rootManifest,
+        service: serviceManifest,
+        apps: [hubManifest],
+        bundled: [],
+      }),
     ).toThrow('@agentplex/node-shared');
   });
 
@@ -216,7 +216,7 @@ describe('publishedManifest', () => {
 
     expect(manifest['private']).toBeUndefined();
     expect(manifest['devDependencies']).toBeUndefined();
-    expect(manifest['bin']).toEqual({ agentplexd: './apps/agentplexd/dist/main.js' });
+    expect(manifest['bin']).toEqual({ agentplex: './apps/install/dist/main.js' });
   });
 
   it('keeps the node-pty permission repair as its only install script', () => {
@@ -236,10 +236,10 @@ describe('publishedManifest', () => {
 });
 
 describe('packageEntries', () => {
-  it('carries the four halves the ticket names', () => {
+  it('carries the five programs, the client and the migrations', () => {
     const sources = packageEntries().map((entry) => entry.from);
 
-    expect(sources).toContain('apps/agentplexd/dist');
+    expect(sources).toContain('apps/install/dist');
     expect(sources).toContain('apps/hub/dist');
     expect(sources).toContain('apps/server/dist');
     expect(sources).toContain('apps/setup/dist');
@@ -323,7 +323,7 @@ describe('the assembled package', () => {
   });
 
   async function workspace(options: { readonly client: boolean }): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), 'agentplexd-package-'));
+    const root = await mkdtemp(join(tmpdir(), 'agentplex-package-'));
     temporary.push(root);
 
     const write = async (path: string, contents: string): Promise<void> => {
@@ -333,9 +333,9 @@ describe('the assembled package', () => {
 
     await write('package.json', JSON.stringify(rootManifest));
     await write('LICENSE', 'Apache License, Version 2.0\n');
-    await write('apps/agentplexd/package.json', JSON.stringify(serviceManifest));
-    await write('apps/agentplexd/README.md', '# agentplexd\n');
-    await write('apps/agentplexd/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
+    await write('apps/install/package.json', JSON.stringify(serviceManifest));
+    await write('apps/install/README.md', '# agentplex\n');
+    await write('apps/install/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
     await write('apps/hub/package.json', JSON.stringify(hubManifest));
     await write('apps/hub/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
     await write('apps/server/package.json', JSON.stringify(serverAppManifest));
@@ -368,7 +368,7 @@ describe('the assembled package', () => {
 
     const held = async (path: string): Promise<string> =>
       await readFile(join(assembled.directory, path), 'utf8');
-    await expect(held('apps/agentplexd/dist/main.js')).resolves.toContain('main()');
+    await expect(held('apps/install/dist/main.js')).resolves.toContain('main()');
     await expect(held('apps/hub/migrations/0001_hub_identity.sql')).resolves.toContain(
       'create table',
     );
@@ -378,7 +378,7 @@ describe('the assembled package', () => {
       'version',
     );
     await expect(held('LICENSE')).resolves.toContain('Apache');
-    await expect(held('README.md')).resolves.toContain('agentplexd');
+    await expect(held('README.md')).resolves.toContain('agentplex');
   });
 
   /**
@@ -447,13 +447,13 @@ describe('the assembled package', () => {
 
   /**
    * `bin` links a path, and the kernel reads the first two bytes of what it
-   * finds there. Without them the installed `agentplexd` is handed to the shell
+   * finds there. Without them the installed `agentplex` is handed to the shell
    * and answers `import: command not found` -- which is what the first install
    * of this package actually did.
    */
   it('refuses a compiled entrypoint the kernel cannot start', async () => {
     const root = await workspace({ client: true });
-    await writeFile(join(root, 'apps/agentplexd/dist/main.js'), 'await main();\n', 'utf8');
+    await writeFile(join(root, 'apps/install/dist/main.js'), 'await main();\n', 'utf8');
 
     await expect(assemblePackage({ workspaceRoot: root })).rejects.toThrow('shebang');
   });
@@ -465,7 +465,7 @@ describe('the assembled package', () => {
   });
 
   it('names every missing input rather than the first', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'agentplexd-package-'));
+    const root = await mkdtemp(join(tmpdir(), 'agentplex-package-'));
     temporary.push(root);
 
     const missing = await missingInputs(root, packageEntries());
@@ -476,12 +476,12 @@ describe('the assembled package', () => {
   it('replaces what was there rather than merging into it', async () => {
     const root = await workspace({ client: true });
     const first = await assemblePackage({ workspaceRoot: root });
-    await writeFile(join(first.directory, 'apps/agentplexd/dist/stale.js'), 'gone\n', 'utf8');
+    await writeFile(join(first.directory, 'apps/install/dist/stale.js'), 'gone\n', 'utf8');
 
     const second = await assemblePackage({ workspaceRoot: root });
 
     await expect(
-      readFile(join(second.directory, 'apps/agentplexd/dist/stale.js'), 'utf8'),
+      readFile(join(second.directory, 'apps/install/dist/stale.js'), 'utf8'),
     ).rejects.toThrow();
   });
 });

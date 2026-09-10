@@ -97,7 +97,7 @@ export function createProviderPreflight(
             // `missing`, because nothing here established that the program is
             // absent -- and saying "not installed" about a binary that may be
             // sitting right there is the over-claim this file exists to avoid.
-            const problem = `agentplexd could not check ${adapter.provider}: ${String(error)}`;
+            const problem = `agentplex could not check ${adapter.provider}: ${String(error)}`;
             logger.error('provider preflight failed', { provider: adapter.provider, problem });
             return unusable(adapter.provider, 'unknown', problem, null);
           }

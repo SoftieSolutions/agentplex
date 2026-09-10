@@ -6,7 +6,7 @@ import { z } from 'zod';
  * A setup plan: the machine somebody meant, as a file.
  *
  * The wizard is not the setup. It is one front end that produces one of these,
- * and provisioning consumes it — so `agentplexd setup --plan <file>` replays
+ * and provisioning consumes it — so `agentplex setup --plan <file>` replays
  * unattended exactly what an interactive run would have done, and an EC2
  * instance can be handed the artifact in user-data or have it baked into an
  * image. That is the whole reason the wizard produces a replayable value

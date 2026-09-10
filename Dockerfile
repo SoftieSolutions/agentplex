@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 
-# One image, both roles. The role is a runtime choice — AGENTPLEX_ROLE, or a
-# --role flag appended to `docker run` — because baking it in would give us two
-# images of the same program and a way for them to drift apart.
+# One image, every program. The entrypoint is the agentplex bin and the command
+# picks the daemon -- `hub` or `server` -- because baking one in would give us
+# two images of the same package and a way for them to drift apart. A container
+# that wants both runs two services from the same image.
 
 FROM node:24-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
@@ -29,9 +30,9 @@ RUN apt-get update \
     && apt-get install --no-install-recommends --yes python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY apps/agentplexd/package.json ./apps/agentplexd/
 COPY apps/doctor/package.json ./apps/doctor/
 COPY apps/hub/package.json ./apps/hub/
+COPY apps/install/package.json ./apps/install/
 COPY apps/server/package.json ./apps/server/
 COPY apps/setup/package.json ./apps/setup/
 COPY apps/web/package.json ./apps/web/
@@ -62,9 +63,9 @@ RUN pnpm build
 # run here rather than on a laptop because the thing being tested is what a
 # stranger gets, and a laptop with a warm pnpm store cannot tell you that.
 FROM build AS package
-RUN pnpm --filter agentplexd package \
+RUN pnpm --filter agentplex package \
     && mkdir -p /package \
-    && cd apps/agentplexd/release \
+    && cd apps/install/release \
     && npm pack --pack-destination /package
 
 # The clean-install check. Stock `debian:bookworm-slim` with nothing but Node
@@ -89,25 +90,29 @@ RUN apt-get update \
 COPY --from=package /package/ /package/
 
 # Deliberately the ticket's own command, with no flags to help it along. npm
-# 11.19 warns that node-pty's and agentplexd's install scripts are "not yet
+# 11.19 warns that node-pty's and agentplex's install scripts are "not yet
 # covered by allowScripts" and runs them anyway; an npm that starts enforcing
 # that gate turns this line red, which is the whole reason for testing an
 # install rather than reasoning about one.
-RUN npm install --global /package/agentplexd-*.tgz
+RUN npm install --global /package/agentplex-*.tgz
 
-# Three assertions, and the first is the one that matters. `doctor` reaches its
-# report only by loading every module `main.js` imports, and node-pty is among
-# them: a report on stdout is proof that the native addon was compiled here and
-# can be loaded. It exits 1 on this machine because no coding agent is installed
-# on it, which is a true statement about the container and not a packaging
-# failure, so the report is what gets asserted and not the code.
-RUN agentplexd doctor --role=server --server-identity-file=/var/lib/agentplex/server.json \
+# Four assertions. `doctor` reaches its report only by the bin dispatching to
+# it by path and the doctor loading every package it imports, so a report on
+# stdout is proof the dispatch and the bundled packages both resolve from the
+# installed tree. It exits 1 on this machine because no coding agent is
+# installed on it, which is a true statement about the container and not a
+# packaging failure, so the report is what gets asserted and not the code.
+RUN agentplex doctor --role=server --server-identity-file=/var/lib/agentplex/server.json \
     | tee /dev/stderr | grep -qx providers
+# The server is the program that loads node-pty, and a program that cannot
+# load it dies before it can refuse a flag: reaching its usage is proof the
+# addon compiled here and can be loaded.
+RUN agentplex server --role=server 2>&1 | grep -q 'Usage: agentplex server'
 # The client and the schema travel inside the package or the hub has nothing to
 # serve and no database to open. Read back out of the installed tree, at the
 # paths `main.js` resolves rather than the paths packaging wrote.
-RUN test -f "$(npm root -g)/agentplexd/apps/web/dist/index.html" \
-    && test -f "$(npm root -g)/agentplexd/apps/hub/migrations/0001_hub_identity.sql"
+RUN test -f "$(npm root -g)/agentplex/apps/web/dist/index.html" \
+    && test -f "$(npm root -g)/agentplex/apps/hub/migrations/0001_hub_identity.sql"
 
 # The bootstrap check: `install.sh` against the machine it was written for.
 #
@@ -147,7 +152,7 @@ RUN useradd --create-home alice \
     && chmod 0440 /etc/sudoers.d/alice
 
 COPY --from=package /package/ /package/
-COPY apps/agentplexd/packaging/install.sh /install.sh
+COPY apps/install/packaging/install.sh /install.sh
 
 USER alice
 ENV HOME=/home/alice
@@ -165,16 +170,16 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # AGENTPLEX_PACKAGE is the seam. It points the install at the tarball the
 # `package` stage just built, which is the only way to run this against a build
 # that has never been published.
-RUN AGENTPLEX_PACKAGE="$(echo /package/agentplexd-*.tgz)" \
+RUN AGENTPLEX_PACKAGE="$(echo /package/agentplex-*.tgz)" \
     bash /install.sh --role=server --no-setup | tee /tmp/install.log
 
 # What the script said it would do, read back off the machine.
 #
 # node first: nothing put one here, so an executable at this path is proof the
-# download, the checksum and the unpack all happened. agentplexd second, which
+# download, the checksum and the unpack all happened. agentplex second, which
 # is proof npm ran under that node and node-gyp found the toolchain sudo
 # installed -- the failure the whole toolchain decision exists to prevent.
-RUN test -x "$HOME/.agentplex/bin/node" && test -x "$HOME/.agentplex/bin/agentplexd"
+RUN test -x "$HOME/.agentplex/bin/node" && test -x "$HOME/.agentplex/bin/agentplex"
 # The prefix is not put on a PATH for anybody, so the script has to say so.
 RUN grep -q "export PATH=\"$HOME/.agentplex/bin:" /tmp/install.log
 
@@ -186,16 +191,18 @@ RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplexd.env")" = 600 \
 
 # The unit, and then systemd's own reading of it. `verify` resolves ExecStart,
 # so it is also an assertion that the unit points at a program that is really
-# there -- which is what makes this worth more than matching strings.
-RUN test -f "$HOME/.config/systemd/user/agentplexd.service" \
-    && grep -qx "ExecStart=$HOME/.agentplex/bin/agentplexd" "$HOME/.config/systemd/user/agentplexd.service" \
-    && ! grep -q '^User=' "$HOME/.config/systemd/user/agentplexd.service" \
-    && systemd-analyze verify "$HOME/.config/systemd/user/agentplexd.service"
+# there -- which is what makes this worth more than matching strings. One unit
+# for `--role=server`, and no hub unit beside it.
+RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
+    && ! test -e "$HOME/.config/systemd/user/agentplex-hub.service" \
+    && grep -qx "ExecStart=$HOME/.agentplex/bin/agentplex server" "$HOME/.config/systemd/user/agentplex-server.service" \
+    && ! grep -q '^User=' "$HOME/.config/systemd/user/agentplex-server.service" \
+    && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-server.service"
 
 # The ticket's own verification: a stock container, and `doctor` at the end of
 # it reporting a provider it can find.
 #
-# Claude Code is installed here rather than by `agentplexd setup`, which is the
+# Claude Code is installed here rather than by `agentplex setup`, which is the
 # ticket that installs providers and is not on this branch. It goes into the
 # prefix the script created, through the npm that came with the Node the script
 # installed, which is exactly what setup's install plan does.
@@ -220,7 +227,7 @@ RUN npm install --global --prefix "$HOME/.agentplex" @anthropic-ai/claude-code
 # | grep` fails on doctor's exit 1 no matter what grep found. `|| true` is
 # therefore deliberate and narrow -- the exit code of this one command is not
 # the assertion, and the two lines below are.
-RUN agentplexd doctor --role=server \
+RUN agentplex doctor --role=server \
     --bin-path="$HOME/.agentplex/bin" \
     --server-identity-file="$HOME/.agentplex/server.json" >/tmp/doctor.log 2>&1 || true
 RUN cat /tmp/doctor.log \
@@ -239,22 +246,29 @@ USER root
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # No --no-setup here: --system declines a wizard on its own, and the run has to
 # say so rather than be told to.
-RUN AGENTPLEX_PACKAGE="$(echo /package/agentplexd-*.tgz)" \
+RUN AGENTPLEX_PACKAGE="$(echo /package/agentplex-*.tgz)" \
     bash /install.sh --system --role=hub | tee /tmp/system-install.log
 RUN grep -q 'not run: --system machines take a plan' /tmp/system-install.log
 RUN id agentplex \
     && test -x /opt/agentplex/bin/node \
-    && test -x /opt/agentplex/bin/agentplexd \
+    && test -x /opt/agentplex/bin/agentplex \
     && test "$(stat -c '%U' /etc/agentplex/agentplexd.env)" = agentplex \
-    && grep -qx 'User=agentplex' /etc/systemd/system/agentplexd.service \
-    && grep -qx 'WantedBy=multi-user.target' /etc/systemd/system/agentplexd.service \
-    && systemd-analyze verify /etc/systemd/system/agentplexd.service
+    && grep -qx 'User=agentplex' /etc/systemd/system/agentplex-hub.service \
+    && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex hub' /etc/systemd/system/agentplex-hub.service \
+    && ! test -e /etc/systemd/system/agentplex-server.service \
+    && grep -qx 'WantedBy=multi-user.target' /etc/systemd/system/agentplex-hub.service \
+    && systemd-analyze verify /etc/systemd/system/agentplex-hub.service
+# The two-unit shape, which is the one this epic exists for on a single box:
+# `--role=both` renders both units, and each starts one daemon.
+RUN bash /install.sh --system --role=both --print-unit >/tmp/both-units.txt \
+    && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex hub' /tmp/both-units.txt \
+    && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex server' /tmp/both-units.txt
 
 # Runtime dependencies only, resolved on their own rather than pruned out of
 # the build stage: a prune leaves whatever it failed to notice.
 FROM manifests AS runtime-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter agentplexd... --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
+    pnpm install --frozen-lockfile --prod --filter agentplex... --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -263,15 +277,10 @@ WORKDIR /app
 # The workspace layout is kept rather than flattened: the dependency tree that
 # pnpm linked is a web of relative symlinks, and it resolves only where it was
 # linked. `migrations/` sits beside the hub's `dist/` because its main.js
-# resolves it as ../migrations relative to itself.
-#
-# Five programs in one image until AGX-99 gives them one bin: `apps/hub` is
-# the hub, `apps/server` is the server, `apps/setup` is the wizard,
-# `apps/doctor` is the check, and `apps/agentplexd` is the name the installed
-# package still links, dispatching `doctor` by path. The compose file's `hub` service starts the first; the ENTRYPOINT
-# below starts the second.
+# resolves it as ../migrations relative to itself, and the bin reaches the four
+# programs' `dist/` directories by the same relative paths it does in a
+# checkout.
 COPY --from=runtime-deps /app/node_modules ./node_modules
-COPY --from=runtime-deps /app/apps/agentplexd/node_modules ./apps/agentplexd/node_modules
 COPY --from=runtime-deps /app/apps/hub/node_modules ./apps/hub/node_modules
 COPY --from=runtime-deps /app/apps/server/node_modules ./apps/server/node_modules
 COPY --from=runtime-deps /app/apps/setup/node_modules ./apps/setup/node_modules
@@ -280,7 +289,7 @@ COPY --from=runtime-deps /app/packages/node-shared/node_modules ./packages/node-
 COPY --from=runtime-deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
 COPY --from=runtime-deps /app/packages/providers/node_modules ./packages/providers/node_modules
 COPY --from=runtime-deps /app/packages/pty/node_modules ./packages/pty/node_modules
-COPY apps/agentplexd/package.json ./apps/agentplexd/
+COPY apps/install/package.json ./apps/install/
 COPY apps/hub/package.json ./apps/hub/
 COPY apps/server/package.json ./apps/server/
 COPY apps/setup/package.json ./apps/setup/
@@ -289,7 +298,7 @@ COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
 COPY packages/pty/package.json ./packages/pty/
-COPY --from=build /app/apps/agentplexd/dist ./apps/agentplexd/dist
+COPY --from=build /app/apps/install/dist ./apps/install/dist
 COPY --from=build /app/apps/hub/dist ./apps/hub/dist
 COPY --from=build /app/apps/server/dist ./apps/server/dist
 COPY --from=build /app/apps/setup/dist ./apps/setup/dist
@@ -324,11 +333,14 @@ USER node
 
 EXPOSE 8080 8081
 
-# The health check reads the same environment the process does, so a container
-# that picks its role with a flag instead of AGENTPLEX_ROLE should set the env
-# var too or its health will be measured on the wrong port.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 CMD ["node", "-e", "const role=process.env.AGENTPLEX_ROLE||'hub';const ports=[];if(role!=='server')ports.push(process.env.AGENTPLEX_HUB_PORT||'8080');if(role!=='hub')ports.push(process.env.AGENTPLEX_SERVER_PORT||'8081');Promise.all(ports.map((p)=>fetch('http://127.0.0.1:'+p+'/health').then((r)=>{if(!r.ok)throw new Error(p+' answered '+r.status);}))).then(()=>process.exit(0),(error)=>{console.error(String(error));process.exit(1);});"]
+# The health check reads the command pid 1 was started with, so it probes the
+# port of the daemon that is actually running: `server` is the server's port,
+# anything else the hub's. Nothing here reads AGENTPLEX_ROLE, because the
+# daemons do not.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 CMD ["node", "-e", "const argv=require('node:fs').readFileSync('/proc/1/cmdline','utf8').split('\\0');const port=argv.includes('server')?(process.env.AGENTPLEX_SERVER_PORT||'8081'):(process.env.AGENTPLEX_HUB_PORT||'8080');fetch('http://127.0.0.1:'+port+'/health').then((r)=>{if(!r.ok)throw new Error(port+' answered '+r.status);process.exit(0);},(error)=>{console.error(String(error));process.exit(1);});"]
 
-# Exec form, so node is pid 1 and Docker's SIGTERM reaches the handler in
-# main.ts directly. Anything appended to `docker run` lands here as flags.
-ENTRYPOINT ["node", "apps/server/dist/main.js"]
+# Exec form, so node is pid 1 and Docker's SIGTERM reaches the handler in the
+# daemon's main.ts directly. The command picks the daemon; anything appended to
+# `docker run` after it lands as that daemon's flags.
+ENTRYPOINT ["node", "apps/install/dist/main.js"]
+CMD ["hub"]

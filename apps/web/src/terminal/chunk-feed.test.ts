@@ -6,7 +6,7 @@ import { ptyChunks } from './pty-chunks.fixture.js';
 /**
  * Driven with real pty output — chunk boundaries included — because the rule
  * under test exists for those boundaries. `pty-chunks.fixture.ts` is captured
- * from a real child on a real pty; see the capture test in apps/agentplexd.
+ * from a real child on a real pty; see the capture test in apps/agentplex.
  */
 
 const ESCAPE = 0x1b;

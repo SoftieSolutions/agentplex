@@ -15,7 +15,7 @@ import type { Attached, AttachedProgram, SetupTerminal, TerminalInput } from './
  * on Node 24.20 and each silent in the direction that loses an answer.
  *
  * - `readline`'s own `question` — the obvious way to write this — **never
- *   settles when the input ends while it is pending**. `agentplexd setup <
+ *   settles when the input ends while it is pending**. `agentplex setup <
  *   /dev/null` would hang forever on the first question rather than reporting
  *   that there is nobody to ask, and so would a `^D` at any prompt.
  * - Racing `question` against the interface's `close` event does not fix that:
@@ -25,7 +25,7 @@ import type { Attached, AttachedProgram, SetupTerminal, TerminalInput } from './
  *   emitter, so listening for both directly is the only arrangement in which
  *   "the operator typed this" reliably beats "the input has ended".
  * - A piped input is **read ahead of the questions**. `printf 'both\n8080\n' |
- *   agentplexd setup` emits both lines as they arrive whether or not anything is
+ *   agentplex setup` emits both lines as they arrive whether or not anything is
  *   asking, so a terminal that only listens while a question is outstanding
  *   drops every answer that arrived early — silently, and answering the
  *   questions it did hear with the wrong lines. Lines nobody has asked for yet
@@ -57,7 +57,7 @@ import type { Attached, AttachedProgram, SetupTerminal, TerminalInput } from './
  * The interface is created at the first question rather than at construction for
  * the same reason. `createInterface` attaches a `data` listener immediately, so a
  * terminal that is built and never asked anything — which is every
- * `agentplexd setup --plan` run — would resume stdin and hang a replay that has
+ * `agentplex setup --plan` run — would resume stdin and hang a replay that has
  * nobody at it at all. It is also what makes lending the terminal out cheap: an
  * `attach` gives the interface up and leaves nothing behind, and the next
  * question builds the next one.
@@ -199,7 +199,7 @@ export function createNodeSetupTerminal({
         };
       }
       if (unclaimed.length > 0) {
-        // A tty with a file behind it: `script -qec 'agentplexd setup' < answers`
+        // A tty with a file behind it: `script -qec 'agentplex setup' < answers`
         // and every other harness that allocates a terminal and then feeds it.
         // `isTTY` cannot tell that apart from a person, and answers that arrived
         // before the questions can: a person types one line per prompt, so this

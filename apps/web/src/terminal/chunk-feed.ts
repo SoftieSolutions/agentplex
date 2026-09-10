@@ -21,7 +21,7 @@ import type { EmulatorSink } from './emulator.js';
  * text, and the screen is wrong from the first character. Whole chunks cost
  * at most one chunk of memory over the cap and are always replayable. This is
  * the same rule, for the same reason, as the server's scrollback
- * (apps/agentplexd/src/server/scrollback.ts) — restated here because this
+ * (apps/agentplex/src/server/scrollback.ts) — restated here because this
  * buffer trims independently.
  *
  * Nothing in here reads a byte. Terminal output is opaque to everything but

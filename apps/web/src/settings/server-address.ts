@@ -6,7 +6,7 @@ import type { ParseResult } from '@agentplex/protocol';
  * first boundary that can say no to it.
  *
  * The rules mirror the hub's own pairing parser
- * (apps/agentplexd/src/hub/pairing/server-address.ts) and must stay in step
+ * (apps/agentplex/src/hub/pairing/server-address.ts) and must stay in step
  * with it — no code crosses a package line but the protocol, and the protocol
  * carries frames, not form validation. When a client pairing frame lands in
  * the protocol (see the settings screen's pairing seam), the address schema

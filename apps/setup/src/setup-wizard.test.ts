@@ -461,7 +461,7 @@ describe('the setup wizard', () => {
   });
 
   it('says what is left rather than hanging a login on an input that is not a terminal', async () => {
-    // `printf ... | agentplexd setup`: there is a wizard, because its answers
+    // `printf ... | agentplex setup`: there is a wizard, because its answers
     // arrived on stdin, and there is nobody to answer an OAuth prompt.
     const terminal = createFakeTerminal({
       answers: LOG_IN_TOO,

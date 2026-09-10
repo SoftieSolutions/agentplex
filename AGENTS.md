@@ -29,9 +29,6 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 - Setup opens no database. It writes files; the hub imports the local pairing
   at boot.
 - A package exports its fakes from a `testing` entry. A fake is never copied.
-- Until epic AGX-91 lands, the code still sits in `apps/agentplexd/src/` under
-  `hub/`, `server/`, `setup/`, `shared/`. New code goes where the layout above
-  says it will live.
 - Every CI/CD workflow lives in `.github/workflows`, the only directory GitHub
   reads them from.
 - Test files sit next to the file under test: `config.test.ts` beside

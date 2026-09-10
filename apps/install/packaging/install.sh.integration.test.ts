@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -174,7 +175,7 @@ describe('the plan a dry run prints', () => {
     const result = run(script, home, ['--dry-run', '--role=server']);
 
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(`agentplexd@latest into ${home}/.agentplex`);
+    expect(planned(result.stdout, 'package')).toBe(`agentplex@latest into ${home}/.agentplex`);
     expect(planned(result.stdout, 'settings')).toContain(`${home}/.agentplex/agentplexd.env`);
   });
 
@@ -191,7 +192,7 @@ describe('the plan a dry run prints', () => {
 
     expect(planned(result.stdout, 'unit')).toBe(
       machineHasSystemd
-        ? `${home}/.config/systemd/user/agentplexd.service (write, not enabled)`
+        ? `${home}/.config/systemd/user/agentplex-server.service (write, not enabled)`
         : 'skipped: no systemctl on this machine',
     );
   });
@@ -205,15 +206,15 @@ describe('the plan a dry run prints', () => {
   it('pins the version it was given, and says so as one spec', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--version=1.2.3']);
-    expect(planned(result.stdout, 'package')).toContain('agentplexd@1.2.3');
+    expect(planned(result.stdout, 'package')).toContain('agentplex@1.2.3');
   });
 
   it('installs whatever AGENTPLEX_PACKAGE names, which is how the container check reaches an unpublished build', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run'], {
-      environment: { AGENTPLEX_PACKAGE: '/package/agentplexd-0.0.0.tgz' },
+      environment: { AGENTPLEX_PACKAGE: '/package/agentplex-0.0.0.tgz' },
     });
-    expect(planned(result.stdout, 'package')).toContain('/package/agentplexd-0.0.0.tgz');
+    expect(planned(result.stdout, 'package')).toContain('/package/agentplex-0.0.0.tgz');
   });
 
   it('would hand over to setup, with the role it was given', () => {
@@ -223,7 +224,7 @@ describe('the plan a dry run prints', () => {
     // this process has a tty.
     const result = run(script, home, ['--dry-run', '--role=hub']);
     expect(result.stdout).toMatch(
-      /setup\s+(would run .*agentplexd setup --role=hub|not run: no terminal)/,
+      /setup\s+(would run .*agentplex setup --role=hub|not run: no terminal)/,
     );
   });
 
@@ -304,6 +305,41 @@ describe('installing as the wrong user', () => {
 });
 
 describe('the systemd unit', () => {
+  it('writes one unit per daemon the role runs, and both for --role=both', () => {
+    const { script, home } = scratch();
+    const both = run(script, home, ['--print-unit', '--role=both']).stdout;
+    const units = both.split('\n').filter((line) => line.startsWith('ExecStart='));
+
+    expect(units).toEqual([
+      `ExecStart=${home}/.agentplex/bin/agentplex hub`,
+      `ExecStart=${home}/.agentplex/bin/agentplex server`,
+    ]);
+    expect(both).toContain('Description=agentplex hub');
+    expect(both).toContain('Description=agentplex server');
+  });
+
+  it('retires the unit a pre-split install wrote, and says so in the plan', () => {
+    // A machine installed as agentplexd finds its settings, identity and prefix
+    // where they were; the one thing that cannot stay is the unit that started
+    // one program in every role, because two units starting the same daemons
+    // on one machine is two hubs on one database.
+    const { script, home } = scratch();
+    const unitDirectory = join(home, '.config', 'systemd', 'user');
+    mkdirSync(unitDirectory, { recursive: true });
+    writeFileSync(join(unitDirectory, 'agentplexd.service'), '[Unit]\n', 'utf8');
+
+    const result = run(script, home, ['--dry-run', '--role=both']);
+
+    if (machineHasSystemd) {
+      expect(planned(result.stdout, 'upgrade')).toContain(
+        `retire ${unitDirectory}/agentplexd.service`,
+      );
+      expect(planned(result.stdout, 'upgrade')).toContain('agentplex-hub.service');
+      expect(planned(result.stdout, 'upgrade')).toContain('agentplex-server.service');
+    }
+    expect(existsSync(join(unitDirectory, 'agentplexd.service'))).toBe(true);
+  });
+
   it('runs as the invoking user by living in their own unit directory', () => {
     const { script, home } = scratch();
     const unit = run(script, home, ['--print-unit', '--role=server']).stdout;
@@ -311,7 +347,8 @@ describe('the systemd unit', () => {
     // No User= directive at all: a user unit runs as its user, and a line
     // naming one would be a claim this scope cannot make.
     expect(unit.split('\n').filter((line) => line.startsWith('User='))).toEqual([]);
-    expect(unit).toContain(`ExecStart=${home}/.agentplex/bin/agentplexd`);
+    expect(unit).toContain(`ExecStart=${home}/.agentplex/bin/agentplex server`);
+    expect(unit).not.toContain('agentplex hub');
     expect(unit).toContain(`EnvironmentFile=${home}/.agentplex/agentplexd.env`);
     expect(unit).toContain('WantedBy=default.target');
   });
@@ -382,7 +419,8 @@ describe('the systemd unit', () => {
     }).stdout;
     expect(unit).toContain('User=agentplex');
     expect(unit).toContain('Group=agentplex');
-    expect(unit).toContain('ExecStart=/opt/agentplex/bin/agentplexd');
+    expect(unit).toContain('ExecStart=/opt/agentplex/bin/agentplex hub');
+    expect(unit).toContain('ExecStart=/opt/agentplex/bin/agentplex server');
     expect(unit).toContain('EnvironmentFile=/etc/agentplex/agentplexd.env');
     expect(unit).toContain('WantedBy=multi-user.target');
   });

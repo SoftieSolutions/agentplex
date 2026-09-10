@@ -147,7 +147,7 @@ async function run(
   };
 }
 
-describe('agentplexd setup --plan', () => {
+describe('agentplex setup --plan', () => {
   it('replays the plan it was pointed at and says what the machine now is', async () => {
     const replayed = await run(['--plan', PLAN_FILE], { plan: PLAN });
 
@@ -330,11 +330,11 @@ describe('agentplexd setup --plan', () => {
  * The other front end, from argv.
  *
  * What matters at this level is the dispatch and the exit code: which of the two
- * front ends an invocation means, and what an installer that ran `agentplexd
+ * front ends an invocation means, and what an installer that ran `agentplex
  * setup` learns from the number it gets back. The questions themselves are
  * `setup-wizard.test.ts`.
  */
-describe('agentplexd setup', () => {
+describe('agentplex setup', () => {
   it('asks when there is no plan to replay', async () => {
     const asked = await run([], { answers: ['', '', '', '', '', '', ''] });
 
@@ -377,7 +377,7 @@ describe('agentplexd setup', () => {
   });
 
   it('says there is nobody to ask, and points at the front end that needs no one', async () => {
-    // `agentplexd setup < /dev/null`, and a run under a service manager that
+    // `agentplex setup < /dev/null`, and a run under a service manager that
     // gave it no terminal. Nothing was asked and nothing was assumed.
     const asked = await run([]);
 

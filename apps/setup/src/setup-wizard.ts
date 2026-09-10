@@ -32,7 +32,7 @@ import {
 import { isAdoptable, surveyMachine, type ProviderSurvey } from './survey-machine.js';
 
 /**
- * `agentplexd setup`: the interactive front end.
+ * `agentplex setup`: the interactive front end.
  *
  * It is not the setup. It produces a `SetupPlan` and hands it to the same
  * provisioning `setup --plan` runs, so an operator answering questions and a
@@ -80,7 +80,7 @@ export interface SetupWizardDependencies {
    * The same factory the unattended command takes, for the same reason: the
    * entrypoint is the only reader of this process's environment, and what a
    * child of setup resolves is a fact about the directories in hand rather than
-   * about what agentplexd was started with.
+   * about what agentplex was started with.
    */
   readonly runnerFor: (binPath: readonly string[]) => ProcessRunner;
   /**
@@ -143,7 +143,7 @@ export async function runSetupWizard(
 ): Promise<WizardOutcome> {
   const { terminal, machine } = dependencies;
 
-  terminal.write('agentplexd setup');
+  terminal.write('agentplex setup');
   terminal.write('');
   terminal.write('Looking at this machine.');
 
@@ -856,7 +856,7 @@ async function offerToSave(
   { terminal, machine, files }: SetupWizardDependencies,
 ): Promise<void> {
   terminal.write(
-    'A saved plan replays this machine unattended: agentplexd setup --plan <file>, in ' +
+    'A saved plan replays this machine unattended: agentplex setup --plan <file>, in ' +
       'cloud-init or an image.',
   );
 

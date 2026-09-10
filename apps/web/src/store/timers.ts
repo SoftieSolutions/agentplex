@@ -1,7 +1,7 @@
 /**
  * The deadline seam, browser edition.
  *
- * The same shape as the service's `Timers` (apps/agentplexd/src/shared), and
+ * The same shape as the service's `Timers` (apps/agentplex/src/shared), and
  * deliberately not imported from there: nothing crosses a package line but the
  * protocol, and an interface this small is cheaper to restate than to share.
  * It exists for the reason the service's does — a test that waits out a real

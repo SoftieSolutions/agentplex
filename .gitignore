@@ -4,7 +4,7 @@ coverage/
 
 # The staged publishable package. `pnpm package` rebuilds it from dist/ and
 # apps/web/dist, so a checked-in copy could only ever be a stale one.
-apps/agentplexd/release/
+apps/install/release/
 *.tsbuildinfo
 .env
 .env.local

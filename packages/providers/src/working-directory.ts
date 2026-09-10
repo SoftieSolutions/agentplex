@@ -32,7 +32,7 @@ export type WorkingDirectory =
 /**
  * `null` is a real input: it is what discovery reports for a session whose
  * provider never recorded where it ran, and the honest answer is a refusal
- * rather than a guess at the store, the home directory, or wherever agentplexd
+ * rather than a guess at the store, the home directory, or wherever agentplex
  * happens to have been started.
  */
 export function parseWorkingDirectory(
@@ -54,7 +54,7 @@ export function parseWorkingDirectory(
       ok: false,
       problem:
         `a working directory must be an absolute path, and ${candidate} is not: ` +
-        'a relative one would resolve against whatever directory agentplexd was started in',
+        'a relative one would resolve against whatever directory agentplex was started in',
     };
   }
 

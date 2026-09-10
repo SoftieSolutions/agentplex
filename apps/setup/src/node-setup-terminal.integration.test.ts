@@ -42,7 +42,7 @@ function withinASecond<T>(work: Promise<T>): Promise<T | 'never settled'> {
 describe('the real setup terminal', () => {
   it('answers every question from a piped input, in order, however early it arrived', async () => {
     // Both lines are there before the first question is asked, which is what
-    // `printf 'a\nb\n' | agentplexd setup` looks like. A terminal that only
+    // `printf 'a\nb\n' | agentplex setup` looks like. A terminal that only
     // listens while a question is outstanding answers the first one and then
     // reports that the input ended, having silently dropped the rest.
     const { output, text } = collected();
@@ -66,7 +66,7 @@ describe('the real setup terminal', () => {
   });
 
   it('answers that the input ended when the input ends under a pending question', async () => {
-    // `agentplexd setup < /dev/null`, and the `^D` at any prompt. Node's own
+    // `agentplex setup < /dev/null`, and the `^D` at any prompt. Node's own
     // question promise never settles here; the race against `close` is the
     // whole of this module.
     const { output } = collected();
@@ -92,7 +92,7 @@ describe('the real setup terminal', () => {
   });
 
   it('reads nothing from an input nothing has asked about', async () => {
-    // `agentplexd setup --plan <file>` builds a terminal and never asks it
+    // `agentplex setup --plan <file>` builds a terminal and never asks it
     // anything. `createInterface` starts reading the moment it is built, so a
     // terminal built at construction would resume stdin — and an unattended
     // replay, which has nobody at it at all, would then never exit.
@@ -314,7 +314,7 @@ describe('the real setup terminal, handed to a real child on a pty', () => {
   it(
     'reports that there is no terminal to hand over rather than starting a flow nobody can finish',
     async () => {
-      // `printf '...' | agentplexd setup`. There is a wizard, because its
+      // `printf '...' | agentplex setup`. There is a wizard, because its
       // answers arrived on stdin, and there is nobody to answer an OAuth prompt:
       // a login driven from here would sit on a code that never comes.
       const { output } = collected();

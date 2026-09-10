@@ -2,7 +2,7 @@ import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadServerConfig, serverUsage, type ServerConfigResult } from './config.js';
 
-const IDENTITY_FILE = '/etc/agentplexd/server.json';
+const IDENTITY_FILE = '/etc/agentplex/server.json';
 
 /**
  * Every case needs an identity file.

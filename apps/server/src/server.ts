@@ -164,7 +164,7 @@ export async function startSessionServer(
     tokens,
   });
   if (!identity.ok) {
-    throw new Error(`agentplexd cannot establish its server identity: ${identity.problem}`);
+    throw new Error(`agentplex cannot establish its server identity: ${identity.problem}`);
   }
 
   // The path, never the token. The file is where the operator reads the token

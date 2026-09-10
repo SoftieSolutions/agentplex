@@ -120,7 +120,7 @@ export interface HubDependencies {
    *
    * A dependency rather than a directory this file opens, for the reason the
    * migrations are one and for one more: where the client lives is a fact
-   * about how agentplexd was installed — a workspace build, a layer in the
+   * about how agentplex was installed — a workspace build, a layer in the
    * image, a published package — and the hub should serve the same way in all
    * three. `main.ts` is the only thing that knows which of them this is.
    */

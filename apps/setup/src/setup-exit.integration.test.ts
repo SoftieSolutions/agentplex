@@ -9,7 +9,7 @@ import { providerFixturePath } from '@agentplex/providers/testing';
 import { nodePtyFactory, type Pty, type PtyExit } from '@agentplex/pty';
 
 /**
- * `agentplexd setup` on a real terminal, run to the end, and then: does it exit?
+ * `agentplex setup` on a real terminal, run to the end, and then: does it exit?
  *
  * Nothing below the process level can answer that. Every other test here drives
  * the terminal seam with a stream, and a stream ends — which is what makes a

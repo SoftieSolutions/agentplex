@@ -6,7 +6,7 @@ import { createScrollback, type Scrollback } from './scrollback.js';
 /**
  * The PTY supervisor: it turns a launch plan into a running session.
  *
- * It is the only thing in agentplexd that starts a process, and it is
+ * It is the only thing in agentplex that starts a process, and it is
  * deliberately ignorant of providers. An adapter decides *what* to run — argv,
  * working directory, which inherited variables would poison the child — and
  * this decides *how*: on a pty, with a scrubbed environment, with the output
@@ -193,7 +193,7 @@ export function createPtySupervisor({
  * Pure, and exported, because it is the rule most worth reading on its own.
  * The failure it prevents is silent in both directions: a Claude Code that
  * inherits `CLAUDECODE` and `CLAUDE_CODE_SSE_PORT` from the agent that started
- * agentplexd concludes it is a nested run and stops writing a transcript — the
+ * agentplex concludes it is a nested run and stops writing a transcript — the
  * session works, and agentplex never sees it again, because a transcript is
  * the only thing discovery reads.
  *

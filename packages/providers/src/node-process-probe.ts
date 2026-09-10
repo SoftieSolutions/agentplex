@@ -32,7 +32,7 @@ import type { ProcessProbe } from './process-probe.js';
  * the argv was obviously safe, and nothing about it looked like the generic
  * `{ command }` frame the registry exists to prevent. One exception is enough to
  * make the rule unenforceable, so `node-process-runner.ts` is now the only file
- * in agentplexd that may import `node:child_process`, and lint says so.
+ * in agentplex that may import `node:child_process`, and lint says so.
  */
 export interface NodeProcessProbeDependencies {
   /** The registry's spawn seam. The probe starts children only through it. */

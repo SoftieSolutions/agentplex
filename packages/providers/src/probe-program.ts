@@ -17,7 +17,7 @@ import process from 'node:process';
  * They are made rather than borrowed for a second reason. The programs a real
  * operation spawns are `git` and `ps`, and `node:24-bookworm-slim` — the image
  * the suite runs in — ships neither, so a test built on them would pass on a
- * developer's mac and fail in the image agentplexd deploys as.
+ * developer's mac and fail in the image agentplex deploys as.
  *
  * Both shapes run under the node binary running the suite, so the executable
  * bit comes from a binary that already has one, or from a mode this file sets.

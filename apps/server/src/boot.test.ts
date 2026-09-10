@@ -69,7 +69,7 @@ const HOST = '127.0.0.1';
  * identity before it serves, so every config that starts one needs somewhere
  * to put it.
  */
-const IDENTITY_PATH = '/etc/agentplexd/server.json';
+const IDENTITY_PATH = '/etc/agentplex/server.json';
 
 const serverOnly: ServerConfig = {
   logLevel: 'error',

@@ -21,7 +21,7 @@ import type { ProgramResolver } from './program-resolver.js';
  *
  * POSIX-shaped, like the rest of the spawn path here: no PATHEXT, no `.cmd`.
  * The pty seam already runs on `spawn-helper`, so the platform this is honest
- * about is the platform agentplexd runs on.
+ * about is the platform agentplex runs on.
  */
 export function createNodeProgramResolver(searchPath: readonly string[]): ProgramResolver {
   return {

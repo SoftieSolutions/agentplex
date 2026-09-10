@@ -30,43 +30,6 @@ importers:
         specifier: ^8.46.4
         version: 8.69.0(eslint@9.39.5(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
 
-  apps/agentplexd:
-    dependencies:
-      '@agentplex/node-shared':
-        specifier: workspace:*
-        version: link:../../packages/node-shared
-      '@agentplex/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-      '@agentplex/providers':
-        specifier: workspace:*
-        version: link:../../packages/providers
-      '@agentplex/pty':
-        specifier: workspace:*
-        version: link:../../packages/pty
-      zod:
-        specifier: ^4.1.13
-        version: 4.5.4
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.1
-        version: 24.13.3
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(supports-color@7.2.0)(vitest@3.2.7(@types/node@24.13.3)(supports-color@7.2.0)(yaml@2.9.0))
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/node@24.13.3)(supports-color@7.2.0)(yaml@2.9.0)
-      ws:
-        specifier: ^8.21.3
-        version: 8.21.3
-
   apps/doctor:
     dependencies:
       '@agentplex/node-shared':
@@ -128,6 +91,24 @@ importers:
       ws:
         specifier: ^8.21.3
         version: 8.21.3
+
+  apps/install:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.13.3
+      '@vitest/coverage-v8':
+        specifier: ^3.2.7
+        version: 3.2.7(supports-color@7.2.0)(vitest@3.2.7(@types/node@24.13.3)(supports-color@7.2.0)(yaml@2.9.0))
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@24.13.3)(supports-color@7.2.0)(yaml@2.9.0)
+      zod:
+        specifier: ^4.1.13
+        version: 4.5.4
 
   apps/server:
     dependencies:

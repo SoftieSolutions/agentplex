@@ -11,7 +11,7 @@ import { upsertSettings } from './settings-file.js';
  */
 
 const INSTALLED = [
-  '# agentplexd settings, read by the systemd unit as an EnvironmentFile.',
+  '# agentplex settings, read by the systemd unit as an EnvironmentFile.',
   '',
   'AGENTPLEX_ROLE=both',
   '',
@@ -32,7 +32,7 @@ describe('upsertSettings', () => {
     const written = upsertSettings(INSTALLED, [IDENTITY, PORT]);
 
     expect(written.split('\n')).toEqual([
-      '# agentplexd settings, read by the systemd unit as an EnvironmentFile.',
+      '# agentplex settings, read by the systemd unit as an EnvironmentFile.',
       '',
       'AGENTPLEX_ROLE=both',
       '',

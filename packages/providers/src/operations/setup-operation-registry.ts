@@ -9,7 +9,7 @@ import {
 import { runSetupOperation, type SetupOperation } from './setup-operation.js';
 
 /**
- * The setup registry: every program `agentplexd setup` can run, by name, and no
+ * The setup registry: every program `agentplex setup` can run, by name, and no
  * way to run one that is not here.
  *
  * A second registry, not a wider one. The spec states the rule and the reason
@@ -119,7 +119,7 @@ export interface SetupOperationRegistryDependencies {
 /**
  * Constructed on the setup path and nowhere else.
  *
- * `main.ts` never calls this: a serving `agentplexd` has no setup registry to
+ * `main.ts` never calls this: a serving `agentplex` has no setup registry to
  * be asked for, which is the difference between "the daemon refuses to install
  * things" and "the daemon has nothing to refuse with".
  */

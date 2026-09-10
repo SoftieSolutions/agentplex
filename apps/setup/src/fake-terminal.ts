@@ -28,7 +28,7 @@ export interface FakeTerminalOptions {
   /**
    * Makes the terminal refuse to hand itself over, in the words it would use.
    *
-   * `agentplexd setup` behind a pipe: there is a wizard, because its answers
+   * `agentplex setup` behind a pipe: there is a wizard, because its answers
    * arrived on stdin, and there is no terminal to put a login in front of.
    */
   readonly notATerminal?: string;
