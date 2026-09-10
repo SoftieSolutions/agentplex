@@ -71,4 +71,53 @@ describe('the paired-server rows', () => {
     expect(connecting[0]?.tone).toBe('idle');
     expect(connecting[0]?.phase).toBe('connecting');
   });
+
+  it('draws a provider that cannot be started, with the machine reason beside it', () => {
+    // The captured fleet has a box whose codex is not installed. This is the
+    // fact that used to arrive as a session that appeared and vanished; here it
+    // is a line on the screen a person goes to when something is not working.
+    const rows = serverRows(stateFrom(hubFrames.machineStatePopulated));
+    const gpu = rows.find((row) => row.label === 'gpu-box-01');
+    expect(gpu).toBeDefined();
+    if (gpu === undefined) return;
+
+    expect(gpu.providers).toEqual([
+      { name: 'claude', tone: 'running', words: 'claude 9.9.9', problem: null },
+      {
+        name: 'codex',
+        tone: 'blocked',
+        words: 'codex missing',
+        problem: 'no directory this server searches holds codex',
+      },
+    ]);
+  });
+
+  it('shows a provider that resolved but could not answer as needing a look, not as broken', () => {
+    // The binary is there, so sessions still start. Drawing it as blocked would
+    // tell somebody to go and fix a machine that is working.
+    const captured = stateFrom(hubFrames.machineStateWithServer);
+    const row = captured.servers[0];
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+
+    const [projected] = serverRows({
+      ...captured,
+      servers: [
+        {
+          ...row,
+          providers: [
+            {
+              provider: 'claude',
+              state: 'unknown',
+              version: null,
+              directory: '/usr/local/bin',
+              problem: 'claude printed no version',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(projected?.providers[0]).toMatchObject({ tone: 'needs-you', words: 'claude unknown' });
+  });
 });

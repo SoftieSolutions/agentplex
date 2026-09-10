@@ -58,6 +58,10 @@ function dependencies(
     // registry with a real one in it would put a provider's disk layout into
     // every test here.
     providers: createProviderRegistry([]),
+    // Nothing to preflight, because there are no adapters: this file is about
+    // which halves start and stop, and a preflight that resolved real programs
+    // would put the machine's PATH into every test here.
+    preflight: { run: async () => [] },
     // A manager over a pty nothing ever opens: this file is about which halves
     // start and stop, and a real one would fork a process per test.
     terminals: createTerminalManager({

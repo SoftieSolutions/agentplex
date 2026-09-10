@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   sessionIdSchema,
   storeIdSchema,
+  type ProviderReadiness,
   type ServerRegistrationId,
   type SessionDescriptor,
   type SessionHold,
   type SessionId,
   type StoreId,
 } from '@agentplex/protocol';
+import { missingProvider, readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import { createLogger } from '../../shared/logger.js';
 import type {
   ServerConnectionPhase,
@@ -45,6 +47,7 @@ function connection(
   label: string,
   phase: ServerConnectionPhase,
   stores: readonly StoreId[],
+  providers: readonly ProviderReadiness[] = [readyProvider()],
 ): ServerConnectionReport {
   return {
     registrationId: registration(label),
@@ -52,6 +55,7 @@ function connection(
     address: serverAddressSchema.parse(`wss://${label}.example:8443`),
     serverId: null,
     phase,
+    providers,
     stores,
     connectedSince: phase === 'connected' ? START : null,
     staleSince: phase === 'stale' ? START + 1_000 : null,
@@ -78,6 +82,8 @@ interface Machine {
   readonly label: string;
   readonly phase: ServerConnectionPhase;
   readonly stores: readonly StoreId[];
+  /** What that machine's preflight found. A ready `claude` unless a test says otherwise. */
+  readonly providers?: readonly ProviderReadiness[];
   /** What that machine reports per store: the sessions it sees and what it holds. */
   readonly reports?: readonly {
     readonly storeId: StoreId;
@@ -89,7 +95,9 @@ interface Machine {
 function fleet(machines: readonly Machine[]): HubStateSnapshot {
   const reducer = createReducer({ logger });
   for (const machine of machines) {
-    reducer.applyConnection(connection(machine.label, machine.phase, machine.stores));
+    reducer.applyConnection(
+      connection(machine.label, machine.phase, machine.stores, machine.providers),
+    );
   }
   for (const machine of machines) {
     for (const report of machine.reports ?? []) {
@@ -109,7 +117,12 @@ describe('routeStart', () => {
   it('sends a start to the one live server attached to the store', () => {
     const state = fleet([{ label: 'workshop', phase: 'connected', stores: [WORK] }]);
 
-    const routed = routeStart(state, { storeId: WORK, sessionId: null, server: null });
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
 
     expect(routed.ok).toBe(true);
     if (!routed.ok) return;
@@ -119,7 +132,12 @@ describe('routeStart', () => {
   it('refuses a store no paired server has mounted', () => {
     const state = fleet([{ label: 'workshop', phase: 'connected', stores: [WORK] }]);
 
-    const routed = routeStart(state, { storeId: SPARE, sessionId: null, server: null });
+    const routed = routeStart(state, {
+      storeId: SPARE,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
 
     expect(routed).toMatchObject({ ok: false, code: 'refused', holder: null });
   });
@@ -129,7 +147,12 @@ describe('routeStart', () => {
     // answer is that nothing can run it now, with the machines still listed.
     const state = fleet([{ label: 'workshop', phase: 'stale', stores: [WORK] }]);
 
-    const routed = routeStart(state, { storeId: WORK, sessionId: null, server: null });
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
 
     expect(routed).toMatchObject({ ok: false, code: 'refused' });
   });
@@ -158,12 +181,18 @@ describe('routeStart', () => {
       },
     ]);
 
-    const scheduled = routeStart(state, { storeId: WORK, sessionId: null, server: null });
+    const scheduled = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
     expect(scheduled.ok && scheduled.server.label).toBe('attic');
 
     const overridden = routeStart(state, {
       storeId: WORK,
       sessionId: null,
+      provider: 'claude',
       server: registration('workshop'),
     });
     expect(overridden.ok && overridden.server.label).toBe('workshop');
@@ -178,6 +207,7 @@ describe('routeStart', () => {
     const routed = routeStart(state, {
       storeId: WORK,
       sessionId: null,
+      provider: 'claude',
       server: registration('attic'),
     });
 
@@ -196,12 +226,219 @@ describe('routeStart', () => {
     const routed = routeStart(state, {
       storeId: WORK,
       sessionId: null,
+      provider: 'claude',
       server: registration('attic'),
     });
 
     expect(routed.ok).toBe(false);
     if (routed.ok) return;
     expect(routed.problem).toContain('attic');
+  });
+
+  it('refuses a start when the machine does not have that provider installed', () => {
+    // The case the whole preflight exists for. Without this the hub sends the
+    // instruction, the server forks a pty successfully, the program fails to
+    // resolve on the far side of it, and the user sees a session appear and
+    // vanish with no output and nothing pointing at the cause.
+    const state = fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        providers: [missingProvider('claude')],
+      },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
+
+    expect(routed).toMatchObject({ ok: false, code: 'refused', holder: null });
+    expect(routed.ok).toBe(false);
+    if (routed.ok) return;
+    // The machine's own words, not a hub-invented summary: it names the box and
+    // says what is wrong with it.
+    expect(routed.problem).toContain('workshop');
+    expect(routed.problem).toContain('claude');
+  });
+
+  it('refuses a start for a provider the machine never mentioned', () => {
+    // A build with no adapter for it. Different from a missing binary, and a
+    // different thing to fix, so it gets a different sentence.
+    const state = fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        providers: [readyProvider('claude')],
+      },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'codex',
+      server: null,
+    });
+
+    expect(routed.ok).toBe(false);
+    if (routed.ok) return;
+    expect(routed.problem).toBe('workshop does not run codex');
+  });
+
+  it('refuses a start for a provider the machine says is logged out', () => {
+    const state = fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        providers: [
+          {
+            provider: 'claude',
+            state: 'unauthenticated',
+            version: '9.9.9',
+            directory: '/opt/bin',
+            problem: 'claude is installed and logged out; run its login on that machine',
+          },
+        ],
+      },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
+
+    expect(routed.ok).toBe(false);
+    if (routed.ok) return;
+    expect(routed.problem).toContain('logged out');
+  });
+
+  it('starts anyway on a machine whose probes could not answer', () => {
+    // The binary resolved; only the version could not be read. Refusing here
+    // would turn "could not tell" into "no" and take a working machine out of
+    // the fleet over a provider that renamed a subcommand.
+    const state = fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        providers: [
+          {
+            provider: 'claude',
+            state: 'unknown',
+            version: null,
+            directory: '/opt/bin',
+            problem: 'claude printed no version',
+          },
+        ],
+      },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
+
+    expect(routed.ok && routed.server.label).toBe('workshop');
+  });
+
+  it('schedules onto the machine that has the provider, not the least loaded one', () => {
+    // An unusable provider costs its own machine a start and never the store.
+    // `attic` is idle and would win on load; it cannot run claude, so it does
+    // not win at all, and the store stays perfectly startable.
+    const state = fleet([
+      {
+        label: 'attic',
+        phase: 'connected',
+        stores: [WORK],
+        providers: [missingProvider('claude')],
+        reports: [{ storeId: WORK, sessions: [] }],
+      },
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        reports: [
+          {
+            storeId: WORK,
+            sessions: [session('session-1')],
+            holding: [{ sessionId: sessionId('session-1'), stoppable: true }],
+          },
+        ],
+      },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
+
+    expect(routed.ok && routed.server.label).toBe('workshop');
+  });
+
+  it('refuses an override naming a machine that cannot run the provider', () => {
+    const state = fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        providers: [missingProvider('claude')],
+      },
+      { label: 'attic', phase: 'connected', stores: [WORK] },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: registration('workshop'),
+    });
+
+    // Not quietly rescheduled onto the machine that can. The user picked a box,
+    // and answering by running it somewhere else would be the hub overriding a
+    // choice rather than reporting on it.
+    expect(routed.ok).toBe(false);
+    if (routed.ok) return;
+    expect(routed.problem).toContain('workshop');
+  });
+
+  it('names every machine that refused when no machine on the store can run it', () => {
+    const state = fleet([
+      {
+        label: 'attic',
+        phase: 'connected',
+        stores: [WORK],
+        providers: [missingProvider('claude')],
+      },
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        providers: [missingProvider('claude')],
+      },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
+
+    expect(routed.ok).toBe(false);
+    if (routed.ok) return;
+    expect(routed.problem).toContain('attic');
+    expect(routed.problem).toContain('workshop');
   });
 
   it('picks the machine running the fewest agents, not the one with fewest sessions', () => {
@@ -232,7 +469,12 @@ describe('routeStart', () => {
       },
     ]);
 
-    const routed = routeStart(state, { storeId: WORK, sessionId: null, server: null });
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
 
     expect(routed.ok && routed.server.label).toBe('workshop');
   });
@@ -258,7 +500,12 @@ describe('routeStart', () => {
       { label: 'workshop', phase: 'connected', stores: [WORK] },
     ]);
 
-    const routed = routeStart(state, { storeId: WORK, sessionId: null, server: null });
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
 
     expect(routed.ok && routed.server.label).toBe('workshop');
   });
@@ -270,7 +517,12 @@ describe('routeStart', () => {
     ]);
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      const routed = routeStart(state, { storeId: WORK, sessionId: null, server: null });
+      const routed = routeStart(state, {
+        storeId: WORK,
+        sessionId: null,
+        provider: 'claude',
+        server: null,
+      });
       expect(routed.ok && routed.server.label).toBe('attic');
     }
   });
@@ -295,6 +547,7 @@ describe('routeStart', () => {
     const routed = routeStart(state, {
       storeId: WORK,
       sessionId: sessionId('session-1'),
+      provider: 'claude',
       server: null,
     });
 
@@ -327,6 +580,7 @@ describe('routeStart', () => {
     const routed = routeStart(state, {
       storeId: WORK,
       sessionId: sessionId('session-1'),
+      provider: 'claude',
       server: registration('attic'),
     });
 
@@ -348,6 +602,7 @@ describe('routeStart', () => {
     const routed = routeStart(state, {
       storeId: WORK,
       sessionId: sessionId('session-1'),
+      provider: 'claude',
       server: null,
     });
 

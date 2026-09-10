@@ -1,5 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises';
-import type { FileCreate, FileRead, StoreFileSystem } from './store-identity.js';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import type { DirectoryState, FileCreate, FileRead, StoreFileSystem } from './store-identity.js';
 
 /**
  * The real store volume, named in one place so tests never have to reach for a
@@ -14,6 +14,20 @@ export const nodeStoreFileSystem: StoreFileSystem = {
   async readFile(path: string): Promise<FileRead> {
     try {
       return { kind: 'read', contents: await readFile(path, 'utf8') };
+    } catch (error) {
+      return errorCode(error) === 'ENOENT'
+        ? { kind: 'missing' }
+        : { kind: 'failed', reason: String(error) };
+    }
+  },
+
+  async statDirectory(path: string): Promise<DirectoryState> {
+    try {
+      // Follows symlinks on purpose: a store root that is a link to the volume
+      // is a store root, and reporting the link rather than what it points at
+      // would answer a question nobody asked.
+      const entry = await stat(path);
+      return entry.isDirectory() ? { kind: 'directory' } : { kind: 'not-a-directory' };
     } catch (error) {
       return errorCode(error) === 'ENOENT'
         ? { kind: 'missing' }

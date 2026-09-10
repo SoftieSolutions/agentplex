@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { serverIdSchema, serverRegistrationIdSchema, storeIdSchema } from './identity.js';
+import { providerReadinessSchema } from './readiness.js';
 import { sessionDescriptorSchema } from './session.js';
 
 /**
@@ -79,6 +80,19 @@ export const serverViewSchema = z.object({
    * age attached, rather than reading as a machine with nothing mounted.
    */
   stores: z.array(storeIdSchema),
+  /**
+   * What that machine said it can start, as its handshake reported it.
+   *
+   * Kept while it is stale for the same reason the store list is: the last
+   * thing known stays visible, and a row that emptied out would read as a
+   * machine with no providers rather than as one nobody can presently ask.
+   *
+   * This is the half of the fix a refusal cannot deliver. A refused start says
+   * why at the moment somebody taps start; this says it beforehand, on the
+   * screen a person goes to when something is not working, which is where "that
+   * box has no claude" stops being a mystery and becomes a line to act on.
+   */
+  providers: z.array(providerReadinessSchema),
   /** When the connection now held was established. `null` unless connected. */
   connectedSince: momentSchema,
   /** When this unreachable spell began -- the first failure, not the last retry. */

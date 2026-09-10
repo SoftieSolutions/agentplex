@@ -10,6 +10,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { serveHubConnection } from '../../server/hub-connection.js';
+import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import { createSocketPair } from '../../shared/fake-message-socket.js';
 import { createLogger } from '../../shared/logger.js';
 import type { DialResult, MessageSocket, SocketDialer } from '../../shared/message-socket.js';
@@ -86,6 +87,7 @@ const dialer: SocketDialer = {
       sessions: createFakeSessionController(),
       identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
       stores: machine.stores,
+      providers: [readyProvider()],
       logger,
     });
     live.set(host, serverEnd);

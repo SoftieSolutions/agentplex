@@ -4,6 +4,7 @@ import {
   type FrameId,
   type HubId,
   type HubToServerFrame,
+  type ProviderReadiness,
   type RefusalCode,
   type ServerId,
   type ServerRegistrationId,
@@ -101,6 +102,20 @@ export interface ServerConnectionReport {
    * that has nothing mounted.
    */
   readonly stores: readonly StoreId[];
+  /**
+   * What that machine reported it can start, from the last handshake.
+   *
+   * Kept while it is stale for the reason the store list is, and read by the
+   * scheduler: a start aimed at a machine whose `claude` is missing is refused
+   * here, where the fact is, rather than sent to a server that would fork a pty
+   * into nothing and report a session that appeared and vanished.
+   *
+   * Empty until a handshake has said otherwise -- for a pairing that has never
+   * connected there is nothing known, and nothing known is what an empty list
+   * means. A start against a machine in that state is already refused for not
+   * being connected.
+   */
+  readonly providers: readonly ProviderReadiness[];
   /** When the connection now held was established. `null` unless connected. */
   readonly connectedSince: number | null;
   /**
@@ -267,6 +282,7 @@ export function startServerConnection(
   let phase: ServerConnectionPhase = 'connecting';
   let serverId: ServerId | null = registration.serverId;
   let stores: readonly StoreId[] = [];
+  let providers: readonly ProviderReadiness[] = [];
   let connectedSince: number | null = null;
   let staleSince: number | null = null;
   let lastConnectedAt: number | null = registration.lastConnectedAt;
@@ -299,6 +315,7 @@ export function startServerConnection(
     serverId,
     phase,
     stores,
+    providers,
     connectedSince,
     staleSince,
     lastConnectedAt,
@@ -323,17 +340,26 @@ export function startServerConnection(
     changed();
   };
 
-  const goConnected = (id: ServerId, mounted: readonly StoreId[]): void => {
+  const goConnected = (
+    id: ServerId,
+    mounted: readonly StoreId[],
+    reported: readonly ProviderReadiness[],
+  ): void => {
     phase = 'connected';
     serverId = id;
     stores = mounted;
+    providers = reported;
     connectedSince = clock.now();
     lastConnectedAt = connectedSince;
     staleSince = null;
     staleReason = null;
     problem = null;
     failedAttempts = 0;
-    logger.info('server connected', { serverId: id, stores: mounted.length });
+    logger.info('server connected', {
+      serverId: id,
+      stores: mounted.length,
+      providers: reported.map(({ provider, state }) => `${provider}:${state}`),
+    });
     changed();
   };
 
@@ -604,9 +630,15 @@ export function startServerConnection(
 
         // The database's list, not the server's: it is deduplicated there, and
         // a server reporting one volume under two mounts is one store.
+        // The stores come from the database and the providers from the frame,
+        // and the asymmetry is deliberate: a store has a durable row the hub
+        // deduplicates, and a provider's readiness is a reading this server
+        // took at its own boot with nothing on the hub's side to reconcile it
+        // against.
         goConnected(
           outcome.serverId,
           recorded.stores.map((store) => store.storeId),
+          outcome.providers,
         );
         // After the state says this server is connected, because the reducer
         // refuses sessions from a server it has no connection for -- correctly,

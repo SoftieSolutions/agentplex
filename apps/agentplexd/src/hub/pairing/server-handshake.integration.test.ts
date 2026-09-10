@@ -52,6 +52,10 @@ async function startServer(storePaths: readonly string[] = []) {
     identityPath: IDENTITY_PATH,
     tokens: { newToken: () => TOKEN },
     providers: createProviderRegistry([]),
+    // No adapters, so nothing to preflight: this suite is about the handshake
+    // over a real socket, and a preflight that resolved programs would put the
+    // test machine's PATH into it.
+    preflight: { run: async () => [] },
     clock,
     terminals: createTerminalManager({
       supervisor: createPtySupervisor({

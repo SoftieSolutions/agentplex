@@ -20,6 +20,7 @@ import {
   createFakeMessageSocket,
   type FakeMessageSocket,
 } from '../../shared/fake-message-socket.js';
+import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import { createLogger } from '../../shared/logger.js';
 import { createFakeTimers, type FakeTimers } from '../../shared/timers.js';
 import type {
@@ -65,6 +66,7 @@ function connection(
     address: serverAddressSchema.parse(`wss://${label}.example:8443`),
     serverId: null,
     phase,
+    providers: [readyProvider()],
     stores: stores.map(store),
     connectedSince: phase === 'connected' ? START : null,
     staleSince: phase === 'stale' ? START + 1_000 : null,

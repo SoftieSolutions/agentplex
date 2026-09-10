@@ -83,6 +83,11 @@ function toServerView(report: ServerConnectionReport): ServerView {
     serverId: report.serverId,
     phase: report.phase,
     stores: [...report.stores],
+    // Published rather than reduced to a boolean. The version and the directory
+    // are the two things an operator asks for when the wrong agent runs, and a
+    // hub that summarised them into "ready" would be the only thing that had
+    // ever known the answer.
+    providers: [...report.providers],
     connectedSince: report.connectedSince,
     staleSince: report.staleSince,
     lastConnectedAt: report.lastConnectedAt,

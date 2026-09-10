@@ -1,6 +1,7 @@
 import {
   sessionIdSchema,
   type Provider,
+  type ProviderReadiness,
   type SessionStatus,
   type StoreDescriptor,
 } from '@agentplex/protocol';
@@ -124,6 +125,41 @@ export function createFakeProviderAdapter(
     get observations() {
       return observations;
     },
+  };
+}
+
+/**
+ * What a startup preflight reports for a provider that is installed, answers
+ * its version probe and says it is logged in.
+ *
+ * A helper rather than a literal in every test, because every test that starts
+ * a session needs one and none of them is about it: what they are about is what
+ * happens when a session is started on a machine where this holds. The unhappy
+ * readings are written out where they are the subject.
+ */
+export function readyProvider(provider: Provider = 'claude'): ProviderReadiness {
+  return {
+    provider,
+    state: 'ready',
+    version: '9.9.9',
+    directory: '/home/robert/.agentplex/bin',
+    problem: null,
+  };
+}
+
+/**
+ * What a preflight reports for a provider no directory on the machine holds.
+ *
+ * The reading that costs a start, and the one AGX-68 found could never be
+ * reported at spawn time on a pty.
+ */
+export function missingProvider(provider: Provider = 'claude'): ProviderReadiness {
+  return {
+    provider,
+    state: 'missing',
+    version: null,
+    directory: null,
+    problem: `no directory this server searches holds ${provider}`,
   };
 }
 

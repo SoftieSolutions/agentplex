@@ -3,6 +3,7 @@ import {
   parseServerToHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type ProviderReadiness,
   type ServerToHubFrame,
   type StoreDescriptor,
   type StoreId,
@@ -13,6 +14,7 @@ import { CLOSE_POLICY } from '../shared/message-socket.js';
 import { serveHubConnection } from './hub-connection.js';
 import type { ServerIdentity } from './server-identity.js';
 import { createFakeSessionController } from './fake-session-controller.js';
+import { missingProvider, readyProvider } from './providers/fake-provider-adapter.js';
 
 const logger = createLogger('error', () => {});
 
@@ -24,6 +26,9 @@ const identity: ServerIdentity = {
 const stores: readonly StoreDescriptor[] = [
   { storeId: 'store-a' as StoreId, path: '/volumes/claude' },
 ];
+
+/** What the startup preflight found, as every handshake reports it. */
+const providers: readonly ProviderReadiness[] = [readyProvider()];
 
 /** The frame a well-behaved hub opens with. */
 function handshake(overrides: Record<string, unknown> = {}): string {
@@ -42,6 +47,7 @@ function connect() {
   const connection = serveHubConnection(socket, {
     identity,
     stores,
+    providers,
     sessions: createFakeSessionController(),
     logger,
   });
@@ -74,6 +80,7 @@ describe('serveHubConnection', () => {
         protocolVersion: PROTOCOL_VERSION,
         serverId: 'server-under-test',
         stores: [{ storeId: 'store-a', path: '/volumes/claude' }],
+        providers: [readyProvider()],
       },
     ]);
     expect(connection.state).toBe('established');
@@ -85,6 +92,7 @@ describe('serveHubConnection', () => {
     serveHubConnection(socket, {
       identity,
       stores: [],
+      providers: [readyProvider()],
       sessions: createFakeSessionController(),
       logger,
     });
@@ -93,6 +101,31 @@ describe('serveHubConnection', () => {
     await settle();
 
     expect(replies(socket.sent)[0]).toMatchObject({ stores: [] });
+  });
+
+  it('says which providers it cannot run, rather than leaving that to a spawn', async () => {
+    // The whole point of the field. On a pty this server would accept the
+    // start, fork successfully, and report a session that appeared and
+    // vanished; the hub has to be able to say no before that, and it can only
+    // do that with what it is told here.
+    const socket = createFakeMessageSocket();
+    serveHubConnection(socket, {
+      identity,
+      stores,
+      providers: [missingProvider('claude'), readyProvider('codex')],
+      sessions: createFakeSessionController(),
+      logger,
+    });
+
+    socket.receive(handshake());
+    await settle();
+
+    expect(replies(socket.sent)[0]).toMatchObject({
+      providers: [
+        { provider: 'claude', state: 'missing' },
+        { provider: 'codex', state: 'ready' },
+      ],
+    });
   });
 
   it('refuses a wrong token and closes', async () => {

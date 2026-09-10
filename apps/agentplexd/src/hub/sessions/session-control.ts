@@ -92,6 +92,7 @@ export function createSessionControl(dependencies: SessionControlDependencies): 
       const routed = routeStart(state.snapshot(), {
         storeId: request.storeId,
         sessionId: request.sessionId,
+        provider: request.provider,
         server: request.server,
       });
       if (!routed.ok) {

@@ -1,6 +1,6 @@
 import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { childEnvironment } from './child-environment.js';
+import { childEnvironment, childSearchPath } from './child-environment.js';
 
 describe('childEnvironment', () => {
   it('hands back what was inherited when no directories were configured', () => {
@@ -87,5 +87,30 @@ describe('childEnvironment', () => {
     // Carried over rather than dropped: whatever it was spelled like, it was
     // the PATH this machine had, and the tools on it still have to resolve.
     expect(environment['PATH']).toBe(['/opt/bin', '/inherited/bin'].join(delimiter));
+  });
+});
+
+describe('childSearchPath', () => {
+  it('reads back the directories a child of this environment would search', () => {
+    const environment = childEnvironment({
+      inherited: { PATH: ['/usr/bin', '/bin'].join(delimiter) },
+      binPath: ['/home/a/.agentplex/bin'],
+    });
+
+    // The configured directory first, then the machine's own: the preflight
+    // has to report where a program will actually be found, not where it was
+    // configured to be looked for.
+    expect(childSearchPath(environment)).toEqual(['/home/a/.agentplex/bin', '/usr/bin', '/bin']);
+  });
+
+  it('drops the empty segment that would otherwise mean the working directory', () => {
+    expect(childSearchPath({ PATH: `/usr/bin${delimiter}${delimiter}/bin` })).toEqual([
+      '/usr/bin',
+      '/bin',
+    ]);
+  });
+
+  it('searches nothing when there is no PATH at all', () => {
+    expect(childSearchPath({})).toEqual([]);
   });
 });

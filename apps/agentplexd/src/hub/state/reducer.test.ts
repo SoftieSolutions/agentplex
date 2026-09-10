@@ -8,6 +8,7 @@ import {
   type SessionDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
+import { missingProvider, readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import { createLogger } from '../../shared/logger.js';
 import type { DiscoveredServer } from '../discovery/beacon-listener.js';
 import { serverAddressSchema } from '../pairing/server-address.js';
@@ -45,6 +46,7 @@ function connection(
     address: serverAddressSchema.parse(`wss://${label}.example:8443`),
     serverId: null,
     phase,
+    providers: [readyProvider()],
     stores: stores.map(store),
     connectedSince: phase === 'connected' ? START : null,
     staleSince: phase === 'stale' ? START + 1_000 : null,
@@ -512,6 +514,36 @@ describe('the change signal', () => {
 
     expect(seen).toEqual([1, 2]);
     expect(reducer.snapshot().version).toBe(2);
+  });
+
+  it('tells a subscriber when a machine reports a provider in a different state', () => {
+    // Somebody installed claude on a box that did not have it. The settings
+    // screen draws these words, so a row that went on saying "missing" would
+    // be exactly the stale claim the age labels exist to prevent.
+    const reducer = reduce();
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], { providers: [missingProvider()] }),
+    );
+
+    const seen: number[] = [];
+    reducer.subscribe((snapshot) => seen.push(snapshot.version));
+    reducer.applyConnection(
+      connection('laptop', 'connected', ['store-work'], { providers: [readyProvider()] }),
+    );
+
+    expect(seen).toEqual([2]);
+    expect(reducer.snapshot().servers[0]?.providers).toEqual([readyProvider()]);
+  });
+
+  it('says nothing when a machine reconnects reporting exactly the same providers', () => {
+    const reducer = reduce();
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+
+    const seen: number[] = [];
+    reducer.subscribe((snapshot) => seen.push(snapshot.version));
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+
+    expect(seen).toEqual([]);
   });
 
   it('says nothing when a report changes nothing', () => {

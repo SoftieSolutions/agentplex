@@ -3,6 +3,7 @@ import type { Database } from './hub/db/database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import type { OperationRegistry } from './server/operations/operation-registry.js';
+import type { ProviderPreflight } from './server/providers/preflight.js';
 import type { ProviderRegistry } from './server/providers/provider-registry.js';
 import type { BeaconSource } from './hub/discovery/beacon-listener.js';
 import type { BeaconNetwork } from './server/server-beacon.js';
@@ -51,6 +52,17 @@ export interface RuntimeDependencies {
    * drive" is one visible line in the entrypoint.
    */
   readonly providers: ProviderRegistry;
+  /**
+   * How the server role finds out at boot what those adapters can actually
+   * start on this machine.
+   *
+   * Injected for the same reason the operations are, and it is the same
+   * constraint underneath: it resolves programs against the search path a child
+   * of this process gets, and `main` is the only place allowed to know what
+   * that is. A test drives the whole runtime against a search path and a
+   * process table it wrote down, with nothing on the machine consulted.
+   */
+  readonly preflight: ProviderPreflight;
   /**
    * The terminal manager the server role starts sessions on, and the supervisor
    * underneath it. Injected for the same reason the providers are: a test
@@ -119,6 +131,7 @@ export async function startRuntime(
     storeFileSystem,
     tokens,
     providers,
+    preflight,
     terminals,
     operations,
     dialer,
@@ -168,6 +181,7 @@ export async function startRuntime(
         identityPath: config.server.identityPath,
         tokens,
         providers,
+        preflight,
         terminals,
         operations,
         clock,

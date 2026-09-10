@@ -1,4 +1,9 @@
-import { PROTOCOL_VERSION, type ServerId, type StoreDescriptor } from '@agentplex/protocol';
+import {
+  PROTOCOL_VERSION,
+  type ProviderReadiness,
+  type ServerId,
+  type StoreDescriptor,
+} from '@agentplex/protocol';
 import type { Clock } from '../shared/clock.js';
 import { HTTP_TIMEOUTS, sendJson, startHttpServer, type HttpListener } from '../shared/http.js';
 import type { IdGenerator } from '../shared/ids.js';
@@ -8,6 +13,7 @@ import type { TokenMinter } from '../shared/tokens.js';
 import { createWebSocketListener } from '../shared/ws-message-socket.js';
 import { serveHubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
+import type { ProviderPreflight } from './providers/preflight.js';
 import type { ProviderRegistry } from './providers/provider-registry.js';
 import { announceServer, type BeaconNetwork } from './server-beacon.js';
 import { ensureServerIdentity } from './server-identity.js';
@@ -45,6 +51,21 @@ export interface SessionServerDependencies {
   readonly tokens: TokenMinter;
   /** The adapters this build can drive. An empty registry finds nothing and says nothing. */
   readonly providers: ProviderRegistry;
+  /**
+   * How this server finds out, at boot, what it can actually start.
+   *
+   * A dependency rather than something built here for the reason the operation
+   * registry is one: it resolves programs against the environment children get,
+   * and only `main` may read this process's environment.
+   *
+   * Run once, and its answer carried into every handshake. Not on a timer and
+   * not per start: two child processes per provider on the path of every
+   * session start would cost every user a probe to catch a machine somebody
+   * reconfigured underneath a running service, which is not the failure this is
+   * for. The failure it is for is a machine that was never provisioned, and
+   * that one is true at boot and stays true.
+   */
+  readonly preflight: ProviderPreflight;
   readonly clock: Clock;
   /**
    * The one thing on this server that starts processes.
@@ -97,6 +118,8 @@ export interface SessionServer {
   readonly serverId: ServerId;
   /** The stores this server can speak for. A store it could not read is not in here. */
   readonly stores: readonly StoreDescriptor[];
+  /** What each provider turned out to be at boot, as every hub is told. */
+  readonly providers: readonly ProviderReadiness[];
   stop(): Promise<void>;
 }
 
@@ -112,6 +135,7 @@ export async function startSessionServer(
     identityPath,
     tokens,
     providers,
+    preflight,
     clock,
     terminals,
     operations,
@@ -168,6 +192,18 @@ export async function startSessionServer(
     }
   }
 
+  // What this machine can actually start, resolved once, before a hub can ask.
+  // A provider that is not here is not a reason to refuse to start: this server
+  // may have three others that work and stores full of sessions to report, and
+  // an unusable provider costs itself. What it must not do is stay quiet about
+  // it, because on a pty the same fact arrives later as a session that appears
+  // and vanishes.
+  const readiness = await preflight.run(providers);
+  for (const provider of readiness) {
+    if (provider.state === 'ready') continue;
+    logger.warn('provider unusable', { ...provider });
+  }
+
   // The one thing here that turns a store id and a provider name into a running
   // agent. It is built once and outlives every hub connection: a socket comes
   // and goes, and the sessions this server started go on running across both.
@@ -199,6 +235,7 @@ export async function startSessionServer(
         // Read at connection time rather than captured, so a hub that dials
         // after a store came back reachable is told what is mounted now.
         stores,
+        providers: readiness,
         logger,
       }),
   });
@@ -246,6 +283,7 @@ export async function startSessionServer(
     port: listener.port,
     serverId: identity.identity.serverId,
     stores,
+    providers: readiness,
     async stop() {
       // The beacon first, and before anything slow: every announcement from
       // here on would be inviting a hub to dial a server that is going away.

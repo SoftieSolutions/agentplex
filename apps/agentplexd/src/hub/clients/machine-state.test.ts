@@ -10,6 +10,7 @@ import {
   type SessionDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
+import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import { createLogger } from '../../shared/logger.js';
 import type {
   ServerConnectionPhase,
@@ -49,6 +50,7 @@ function connection(
     address: serverAddressSchema.parse(`wss://${label}.example:8443`),
     serverId: null,
     phase,
+    providers: [readyProvider()],
     stores: stores.map(store),
     connectedSince: phase === 'connected' ? START : null,
     staleSince: phase === 'stale' ? START + 1_000 : null,
@@ -131,6 +133,23 @@ describe('toMachineState', () => {
     // The reducer's `ref` is not restated: it is the descriptor's own two
     // fields, and two fields on a wire that must agree can disagree.
     expect(row).not.toHaveProperty('ref');
+  });
+
+  it('publishes each provider whole, version and directory included', () => {
+    // Not reduced to "ready". Which directory a provider came from is the
+    // question an operator asks when the wrong version runs, and the hub is the
+    // only thing that was ever told the answer.
+    const [server] = published().servers;
+
+    expect(server?.providers).toEqual([
+      {
+        provider: 'claude',
+        state: 'ready',
+        version: '9.9.9',
+        directory: '/home/robert/.agentplex/bin',
+        problem: null,
+      },
+    ]);
   });
 
   it('publishes the empty state a hub with no pairings has', () => {

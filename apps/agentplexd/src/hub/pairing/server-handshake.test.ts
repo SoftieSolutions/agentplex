@@ -8,6 +8,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { serveHubConnection } from '../../server/hub-connection.js';
+import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import type { ServerIdentity } from '../../server/server-identity.js';
 import {
   createFakeDialer,
@@ -64,6 +65,7 @@ describe('handshakeWithServer against a real server', () => {
     serveHubConnection(serverEnd, {
       identity,
       stores,
+      providers: [readyProvider()],
       sessions: createFakeSessionController(),
       logger,
       ...serverOverrides,
@@ -155,6 +157,7 @@ describe('handshakeWithServer', () => {
         protocolVersion: PROTOCOL_VERSION + 1,
         serverId: 'server-under-test',
         stores: [],
+        providers: [],
       }),
     );
 
@@ -173,6 +176,7 @@ describe('handshakeWithServer', () => {
         protocolVersion: 99,
         serverId: 's',
         stores: [],
+        providers: [],
       }),
     );
 
@@ -270,6 +274,7 @@ describe('handshakeWithServer', () => {
     serveHubConnection(serverEnd, {
       identity,
       stores,
+      providers: [readyProvider()],
       sessions: createFakeSessionController(),
       logger,
     });

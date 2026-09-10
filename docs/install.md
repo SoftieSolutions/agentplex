@@ -104,6 +104,42 @@ that resolves in your shell does not resolve in the unit, and the session fails
 at spawn time with nothing pointing at the cause. `command -v claude` in the
 shell you installed it from names the directory to list here.
 
+## Checking a machine: `agentplexd doctor`
+
+```sh
+agentplexd doctor --role=server --server-identity-file=... --store-path=...
+```
+
+`doctor` takes the same configuration the service takes and reports what that
+configuration can actually start: per provider, the version, the directory it
+resolved from and whether it says it is logged in; per store path, whether it is
+there. It changes nothing — it binds no port, opens no database, and does not
+mint the store file a first real start would. It exits `0` when everything it
+looked at is usable and `1` when anything is not, so it can be a check in a
+script; the report goes to stdout and its own log lines to stderr.
+
+```
+agentplexd doctor  role=server
+
+providers
+  claude     ready            2.1.259      /home/robert/.local/bin
+
+stores
+  present    /home/robert/code
+  missing    /mnt/volumes/universe
+    there is nothing at that path
+```
+
+"Which directory did this come from" is the question to ask when the wrong
+version runs, and until a session has started there is nowhere else it can be
+answered. The same resolution runs at server startup, and its result travels in
+the handshake, so the hub knows what each machine can start: a provider that is
+missing or logged out is named on the settings screen and a start aimed at that
+machine is refused with that reason, instead of a session that appears and
+immediately vanishes. That last shape is not a bug that could be fixed later —
+on a pty the fork succeeds and the program is resolved on the far side of it, so
+there is nothing to report at spawn time.
+
 The first time a server mounts a store it writes `agentplex-store.json` at that
 root, containing the id every session in that store is scoped by. The file is
 the store's identity: two servers mounting the same volume report the same

@@ -19,6 +19,15 @@ const A_SERVER = {
   serverId: 'server-1',
   phase: 'connected',
   stores: ['store-work'],
+  providers: [
+    {
+      provider: 'claude',
+      state: 'ready',
+      version: '2.1.259',
+      directory: '/home/robert/.local/bin',
+      problem: null,
+    },
+  ],
   connectedSince: 1_000,
   staleSince: null,
   lastConnectedAt: 1_000,
@@ -92,6 +101,31 @@ describe('serverViewSchema', () => {
 
   it('rejects a stale reason nothing produces, rather than passing the word along', () => {
     expect(serverViewSchema.safeParse({ ...A_SERVER, staleReason: 'grumpy' }).success).toBe(false);
+  });
+
+  it('carries what each provider on that machine turned out to be', () => {
+    const parsed = serverViewSchema.safeParse({
+      ...A_SERVER,
+      providers: [
+        {
+          provider: 'claude',
+          state: 'missing',
+          version: null,
+          directory: null,
+          problem: 'no directory this server searches holds claude',
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it('rejects a server view with no provider list at all', () => {
+    // Absent and empty would be drawn identically and mean different things:
+    // one is a build that drives nothing, the other is a fact nobody stated.
+    const { providers: _dropped, ...withoutProviders } = A_SERVER;
+
+    expect(serverViewSchema.safeParse(withoutProviders).success).toBe(false);
   });
 });
 

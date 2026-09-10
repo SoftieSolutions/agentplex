@@ -45,6 +45,20 @@ export type FileCreate =
   | { readonly kind: 'exists' }
   | { readonly kind: 'failed'; readonly reason: string };
 
+/**
+ * What a configured store root turned out to be, without touching it.
+ *
+ * Four answers rather than a boolean, because they are four different things
+ * for an operator to do: create it, fix the path, fix a mount, or fix a
+ * permission. "The path exists" collapses the last three into one shrug.
+ */
+export type DirectoryState =
+  | { readonly kind: 'directory' }
+  | { readonly kind: 'missing' }
+  /** Something is there and it is not a directory: a file, a stray symlink. */
+  | { readonly kind: 'not-a-directory' }
+  | { readonly kind: 'failed'; readonly reason: string };
+
 export interface StoreFileSystem {
   readFile(path: string): Promise<FileRead>;
   /**
@@ -53,6 +67,16 @@ export interface StoreFileSystem {
    * race this exists to close.
    */
   createFile(path: string, contents: string): Promise<FileCreate>;
+  /**
+   * Looks at a store root and writes nothing.
+   *
+   * Its own method rather than something inferred from `readFile`, which cannot
+   * tell a store root that is not there from one that is there and has never
+   * been used: both come back `missing` when the store file is read. `doctor`
+   * has to tell those apart, because one is a mount that failed and the other
+   * is a perfectly good store waiting for its first session.
+   */
+  statDirectory(path: string): Promise<DirectoryState>;
 }
 
 export interface StoreIdentityDependencies {

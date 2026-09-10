@@ -11,6 +11,15 @@ import { parseTextFrame } from './parse.js';
 
 const HUB_ID = hubIdSchema.parse('hub-1');
 
+/** One provider that resolved, reported a version and says it is logged in. */
+const READY_CLAUDE = {
+  provider: 'claude',
+  state: 'ready',
+  version: '2.1.259',
+  directory: '/home/robert/.local/bin',
+  problem: null,
+} as const;
+
 describe('parseHubToServerFrame', () => {
   it('accepts a handshake carrying a token', () => {
     const result = parseHubToServerFrame({
@@ -113,6 +122,7 @@ describe('parseServerToHubFrame', () => {
       protocolVersion: PROTOCOL_VERSION,
       serverId: 'server-1',
       stores: [{ storeId: 'store-1', path: '/data/store' }],
+      providers: [READY_CLAUDE],
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -126,8 +136,46 @@ describe('parseServerToHubFrame', () => {
       protocolVersion: PROTOCOL_VERSION,
       serverId: 'server-1',
       stores: [],
+      providers: [],
     });
     expect(result.ok).toBe(true);
+  });
+
+  it('carries the preflight, so a provider that cannot run is a fact before a start', () => {
+    const result = parseServerToHubFrame({
+      type: 'handshake-accepted',
+      replyTo: 1,
+      protocolVersion: PROTOCOL_VERSION,
+      serverId: 'server-1',
+      stores: [],
+      providers: [
+        {
+          provider: 'claude',
+          state: 'missing',
+          version: null,
+          directory: null,
+          problem: 'no directory this server searches holds claude',
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toMatchObject({ providers: [{ provider: 'claude', state: 'missing' }] });
+  });
+
+  it('refuses an acceptance that says nothing about its providers', () => {
+    // On a pty a missing binary is a session that starts and dies, so this is
+    // the one field the hub cannot do without and cannot infer.
+    const result = parseServerToHubFrame({
+      type: 'handshake-accepted',
+      replyTo: 1,
+      protocolVersion: PROTOCOL_VERSION,
+      serverId: 'server-1',
+      stores: [],
+    });
+
+    expect(result.ok).toBe(false);
   });
 
   it('accepts a store report carrying what is there and what is held', () => {
@@ -232,6 +280,7 @@ describe('hub and server round trips', () => {
       protocolVersion: PROTOCOL_VERSION,
       serverId: serverIdSchema.parse('server-1'),
       stores: [{ storeId: storeIdSchema.parse('store-1'), path: '/data/store' }],
+      providers: [READY_CLAUDE],
     },
     { type: 'handshake-rejected', replyTo: 1, reason: 'unauthorized' },
     { type: 'pong', replyTo: 2 },
