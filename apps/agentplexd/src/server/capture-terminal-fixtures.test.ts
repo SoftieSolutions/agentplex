@@ -2,8 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { systemClock, randomIdGenerator } from '@agentplex/node-shared';
-import { nodePtyFactory } from './node-pty-factory.js';
-import { createPtySupervisor } from './pty-supervisor.js';
+import { nodePtyFactory, createPtySupervisor } from '@agentplex/pty';
 import type { Launch } from '@agentplex/providers';
 
 /**

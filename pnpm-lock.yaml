@@ -41,9 +41,9 @@ importers:
       '@agentplex/providers':
         specifier: workspace:*
         version: link:../../packages/providers
-      node-pty:
-        specifier: 1.1.0
-        version: 1.1.0
+      '@agentplex/pty':
+        specifier: workspace:*
+        version: link:../../packages/pty
       zod:
         specifier: ^4.1.13
         version: 4.5.4
@@ -168,6 +168,31 @@ importers:
       zod:
         specifier: ^4.1.13
         version: 4.5.4
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.13.3
+      '@vitest/coverage-v8':
+        specifier: ^3.2.7
+        version: 3.2.7(supports-color@7.2.0)(vitest@3.2.7(@types/node@24.13.3)(supports-color@7.2.0)(yaml@2.9.0))
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@24.13.3)(supports-color@7.2.0)(yaml@2.9.0)
+
+  packages/pty:
+    dependencies:
+      '@agentplex/node-shared':
+        specifier: workspace:*
+        version: link:../node-shared
+      '@agentplex/providers':
+        specifier: workspace:*
+        version: link:../providers
+      node-pty:
+        specifier: 1.1.0
+        version: 1.1.0
     devDependencies:
       '@types/node':
         specifier: ^24.10.1

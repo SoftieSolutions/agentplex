@@ -47,6 +47,7 @@ export const BUNDLED_PACKAGES: readonly BundledPackage[] = [
   { name: '@agentplex/protocol', directory: 'packages/protocol' },
   { name: '@agentplex/node-shared', directory: 'packages/node-shared' },
   { name: '@agentplex/providers', directory: 'packages/providers' },
+  { name: '@agentplex/pty', directory: 'packages/pty' },
 ];
 
 export interface BundledPackage {
@@ -65,6 +66,16 @@ export interface BundledPackage {
  * because every other way of starting the service says `node` out loud.
  */
 export const ENTRYPOINT = 'apps/agentplexd/dist/main.js';
+
+/**
+ * The one install script, at the workspace path, in the package and in the
+ * workspace alike. It lives in the pty package because the helper it repairs
+ * is node-pty's, and node-pty is declared there and nowhere else. It resolves
+ * node-pty through `createRequire`, which from this path walks up to the
+ * package's own `node_modules` in the published tree exactly as it walks up to
+ * `packages/pty/node_modules` in a checkout.
+ */
+export const POSTINSTALL_SCRIPT = 'packages/pty/scripts/fix-node-pty-permissions.js';
 
 /** Where a bundled dependency has to sit for Node's resolver to find it. */
 function bundledDirectory(name: string): string {
@@ -139,8 +150,8 @@ export function packageEntries(): readonly PackageEntry[] {
       reason: 'the schema the hub applies before it listens',
     },
     {
-      from: 'apps/agentplexd/scripts/fix-node-pty-permissions.js',
-      to: 'apps/agentplexd/scripts/fix-node-pty-permissions.js',
+      from: POSTINSTALL_SCRIPT,
+      to: POSTINSTALL_SCRIPT,
       kind: 'file',
       reason: "the package's postinstall",
     },
@@ -288,7 +299,7 @@ export function publishedManifest(input: {
     files: packageEntries()
       .map((entry) => entry.to)
       .filter((path) => !path.startsWith('node_modules/')),
-    scripts: { postinstall: 'node apps/agentplexd/scripts/fix-node-pty-permissions.js' },
+    scripts: { postinstall: `node ${POSTINSTALL_SCRIPT}` },
     dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
     bundleDependencies: [...bundleDependencies].sort(),
   };

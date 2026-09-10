@@ -30,9 +30,8 @@ import {
   createProviderPreflight,
   createProviderRegistry,
 } from '@agentplex/providers';
-import { nodePtyFactory } from './server/node-pty-factory.js';
+import { nodePtyFactory, createPtySupervisor } from '@agentplex/pty';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
-import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createTerminalManager } from './server/terminal-manager.js';
 import { createNodeHubDatabase } from './setup/node-hub-database.js';
 import { createNodeSetupMachine } from './setup/node-setup-machine.js';

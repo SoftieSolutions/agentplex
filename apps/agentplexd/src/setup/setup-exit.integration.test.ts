@@ -6,8 +6,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { providerFixturePath } from '@agentplex/providers/testing';
-import { nodePtyFactory } from '../server/node-pty-factory.js';
-import type { Pty, PtyExit } from '../server/pty.js';
+import { nodePtyFactory, type Pty, type PtyExit } from '@agentplex/pty';
 
 /**
  * `agentplexd setup` on a real terminal, run to the end, and then: does it exit?

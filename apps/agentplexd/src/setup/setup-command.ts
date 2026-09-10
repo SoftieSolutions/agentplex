@@ -1,6 +1,6 @@
 import { ROLES, type Role } from '../config/config.js';
 import type { ProcessRunner, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
-import type { PtySupervisor } from '../server/pty-supervisor.js';
+import type { PtySupervisor } from '@agentplex/pty';
 import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
