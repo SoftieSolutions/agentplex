@@ -32,6 +32,7 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/agentplexd/package.json ./apps/agentplexd/
 COPY apps/hub/package.json ./apps/hub/
 COPY apps/server/package.json ./apps/server/
+COPY apps/setup/package.json ./apps/setup/
 COPY apps/web/package.json ./apps/web/
 COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
@@ -252,7 +253,7 @@ RUN id agentplex \
 # the build stage: a prune leaves whatever it failed to notice.
 FROM manifests AS runtime-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter agentplexd... --filter @agentplex/hub... --filter @agentplex/server...
+    pnpm install --frozen-lockfile --prod --filter agentplexd... --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup...
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -263,14 +264,15 @@ WORKDIR /app
 # linked. `migrations/` sits beside the hub's `dist/` because its main.js
 # resolves it as ../migrations relative to itself.
 #
-# Three programs in one image until AGX-99 gives them one bin: `apps/hub` is
-# the hub, `apps/server` is the server, and `apps/agentplexd` keeps setup and
-# doctor. The compose file's `hub` service starts the first; the ENTRYPOINT
+# Four programs in one image until AGX-99 gives them one bin: `apps/hub` is
+# the hub, `apps/server` is the server, `apps/setup` is the wizard, and
+# `apps/agentplexd` keeps doctor. The compose file's `hub` service starts the first; the ENTRYPOINT
 # below starts the second.
 COPY --from=runtime-deps /app/node_modules ./node_modules
 COPY --from=runtime-deps /app/apps/agentplexd/node_modules ./apps/agentplexd/node_modules
 COPY --from=runtime-deps /app/apps/hub/node_modules ./apps/hub/node_modules
 COPY --from=runtime-deps /app/apps/server/node_modules ./apps/server/node_modules
+COPY --from=runtime-deps /app/apps/setup/node_modules ./apps/setup/node_modules
 COPY --from=runtime-deps /app/packages/node-shared/node_modules ./packages/node-shared/node_modules
 COPY --from=runtime-deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
 COPY --from=runtime-deps /app/packages/providers/node_modules ./packages/providers/node_modules
@@ -278,6 +280,7 @@ COPY --from=runtime-deps /app/packages/pty/node_modules ./packages/pty/node_modu
 COPY apps/agentplexd/package.json ./apps/agentplexd/
 COPY apps/hub/package.json ./apps/hub/
 COPY apps/server/package.json ./apps/server/
+COPY apps/setup/package.json ./apps/setup/
 COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
@@ -285,6 +288,7 @@ COPY packages/pty/package.json ./packages/pty/
 COPY --from=build /app/apps/agentplexd/dist ./apps/agentplexd/dist
 COPY --from=build /app/apps/hub/dist ./apps/hub/dist
 COPY --from=build /app/apps/server/dist ./apps/server/dist
+COPY --from=build /app/apps/setup/dist ./apps/setup/dist
 COPY --from=build /app/packages/node-shared/dist ./packages/node-shared/dist
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY --from=build /app/packages/providers/dist ./packages/providers/dist

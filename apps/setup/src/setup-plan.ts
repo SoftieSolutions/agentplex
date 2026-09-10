@@ -199,6 +199,15 @@ const versionSchema = z.literal(SETUP_PLAN_VERSION);
  * — half of what somebody meant, provisioned quietly, is worse than a refusal
  * naming the block they deleted.
  */
+/**
+ * The three things a machine can be, which is what `--role` means to setup and
+ * to the installer: which files setup writes, and which units the installer
+ * will run. Neither daemon takes a role; which daemon runs is which program
+ * was started, and a machine that is `both` starts one of each.
+ */
+export const ROLES = ['hub', 'server', 'both'] as const;
+export type Role = (typeof ROLES)[number];
+
 const setupPlanSchema = z.discriminatedUnion('role', [
   z.strictObject({ version: versionSchema, role: z.literal('hub'), hub: plannedHubSchema }),
   z.strictObject({

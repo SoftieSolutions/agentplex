@@ -4,8 +4,6 @@ import {
   childEnvironment,
   childSearchPath,
   systemClock,
-  randomIdGenerator,
-  randomTokenMinter,
   createLogger,
   jsonLineSink,
 } from '@agentplex/node-shared';
@@ -21,10 +19,6 @@ import {
   createProviderPreflight,
   createProviderRegistry,
 } from '@agentplex/providers';
-import { nodePtyFactory, createPtySupervisor } from '@agentplex/pty';
-import { createNodeSetupMachine } from './setup/node-setup-machine.js';
-import { createNodeSetupTerminal } from './setup/node-setup-terminal.js';
-import { runSetupCommand, setupUsage } from './setup/setup-command.js';
 
 /**
  * The entrypoint is wiring and process concerns only: argv, env, stdout,
@@ -57,23 +51,11 @@ async function main(): Promise<void> {
   const writeError = (line: string): void => void process.stderr.write(`${line}\n`);
   const argv = process.argv.slice(2);
 
-  // `setup` is a different program that happens to share a binary: it reads a
-  // plan rather than a configuration, binds no port, opens no database, and
-  // exits when it is done. It writes files -- an identity, store files, the
-  // settings -- and the hub reads them at its next boot. It is dispatched
-  // before `loadConfig` because the daemon's flags are not its flags, and
-  // because the settings a run of setup produces are the ones the daemon will
-  // later be started with.
-  if (argv[0] === 'setup') {
-    process.exitCode = await setUp(argv.slice(1), write);
-    return;
-  }
-
   const loaded = loadConfig({ argv, env: process.env });
 
   if (!loaded.ok) {
     for (const problem of loaded.problems) process.stderr.write(`agentplexd: ${problem}\n`);
-    process.stderr.write(`\n${usage()}\n\n${setupUsage()}\n`);
+    process.stderr.write(`\n${usage()}\n`);
     process.exitCode = EXIT_BAD_CONFIGURATION;
     return;
   }
@@ -131,94 +113,6 @@ async function main(): Promise<void> {
     for (const line of formatDoctorReport(report)) write(line);
     if (!report.usable) process.exitCode = EXIT_NOT_READY;
     return;
-  }
-}
-
-/**
- * `agentplexd setup`, wired: the wizard and the plan replay both.
- *
- * The two factories are the whole of why this is here rather than in the command
- * itself: what a child of setup inherits comes from the directories in hand, and
- * this is the only place allowed to read `process.env`. The command hands the
- * directories back — out of a plan on one path, out of what the wizard found on
- * the other — and gets a runner composed exactly the way the server's will be,
- * which is what makes a replay find what the previous run installed instead of
- * installing it again.
- *
- * The terminal and the machine are the wizard's two windows onto the world, and
- * they are opened here for the same reason: `$HOME` and `$PATH` are environment,
- * and stdin is this process's own. What the wizard adopts is decided against the
- * operator's PATH, so that list has to come from the process they started.
- *
- * The provisioning operations are reachable from this branch and from nowhere
- * else: `startRuntime` below is wired with the wire-facing registry, which holds
- * none of them, so a serving agentplexd has no installer to be asked for over a
- * socket rather than one it declines to use. That is the whole of AGX-71's split,
- * and this is the process that is on the other side of it.
- */
-async function setUp(argv: readonly string[], write: (line: string) => void): Promise<number> {
-  const terminal = createNodeSetupTerminal({ input: process.stdin, output: process.stdout });
-
-  try {
-    return await runSetupCommand(argv, {
-      terminal,
-      machine: createNodeSetupMachine({
-        // `os.homedir()` is deliberately not the fallback. It reads the passwd
-        // entry, so under `sudo` it answers with the invoking user's home while
-        // `$HOME` answers root's — two different directories, and the provider
-        // state that matters is in whichever one the operator's shell was using.
-        // A missing `$HOME` is a machine to say something about, not to guess
-        // at.
-        home: process.env['HOME'] ?? '',
-        path: process.env['PATH'],
-      }),
-      runnerFor: (binPath) =>
-        createNodeProcessRunner({
-          environment: childEnvironment({ inherited: process.env, binPath }),
-        }),
-      // The other place a real pty is opened, and the same composition the
-      // runtime's supervisor gets a few lines up. That is the point of it being
-      // here: a provider's login is driven through the seam a session is driven
-      // through, on the copy of the binary the recorded directories resolve, so
-      // what setup logs in is what the server will run.
-      supervisorFor: (binPath) =>
-        createPtySupervisor({
-          pty: nodePtyFactory,
-          clock: systemClock,
-          ids: randomIdGenerator,
-          environment: childEnvironment({ inherited: process.env, binPath }),
-        }),
-      // The same one line the runtime has, for the same reason: which providers
-      // this build drives is a fact about the build and belongs in the
-      // entrypoint.
-      providersFor: (runner) =>
-        createProviderRegistry([
-          createClaudeAdapter({
-            files: nodeProviderFiles,
-            probe: createNodeProcessProbe({ runner }),
-          }),
-        ]),
-      files: nodeStoreFileSystem,
-      ids: randomIdGenerator,
-      // A plan that brought no pairing token gets one minted here, from the same
-      // CSPRNG a server's first start would have used. It is also the token the
-      // hub pairs the local server with at its next boot, read back off the
-      // identity file: setup has one place a secret comes from, and this is it.
-      tokens: randomTokenMinter,
-      clock: systemClock,
-      write,
-      writeError: (line) => void process.stderr.write(`${line}\n`),
-    });
-  } finally {
-    // The input, given back. `setup` is the one subcommand that reads stdin, and
-    // a stdin that has been read keeps the event loop alive until it ends — which
-    // a terminal never does. Without this the wizard finishes, prints its last
-    // line and hangs, and the operator's shell prompt never comes back.
-    //
-    // In a `finally` because it is true of every way this returns, and here
-    // rather than inside the command because this is where the terminal was
-    // opened.
-    terminal.close();
   }
 }
 

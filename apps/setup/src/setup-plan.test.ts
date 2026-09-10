@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ROLES } from '../config/config.js';
+import { ROLES } from './setup-plan.js';
 import {
   parseSetupPlan,
   serializeSetupPlan,

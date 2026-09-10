@@ -37,7 +37,8 @@ that runs both starts one of each.
 ```
 apps/hub/              the hub: database, migrations, pairing, discovery, the PWA's bytes
 apps/server/           the server: terminals, session control, identity, beacon, the hub connection
-apps/agentplexd/       setup and doctor, until each is its own app
+apps/setup/            the wizard and the plan replay
+apps/agentplexd/       doctor, until it is its own app
 apps/web/              the PWA
 packages/protocol/     frame types and parsers, shared by the service and the PWA
 packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share
