@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { childEnvironment, childSearchPath } from './config/child-environment.js';
@@ -32,6 +33,14 @@ import { createWebSocketDialer } from './shared/ws-message-socket.js';
  * The entrypoint is wiring and process concerns only: argv, env, stdout,
  * signals, exit codes. Every rule lives in a sibling module that a test can
  * reach without opening a port.
+ *
+ * The shebang above is the whole of what makes this file a command. `bin` in a
+ * package.json is a path, not an interpreter: npm links `agentplexd` at that
+ * path and marks it executable, and the kernel then hands a file with no `#!`
+ * to the shell, which reads `import process from 'node:process'` as a command
+ * called `import`. Nothing in this repository noticed, because the image and
+ * every script here start it as `node .../main.js`. `tsc` copies a leading
+ * shebang into the emitted file, so the built `dist/main.js` carries it too.
  */
 
 /** Configuration was wrong. Restarting will not help; the operator must act. */
@@ -57,16 +66,19 @@ const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../migrations', import.meta.
 /**
  * The built PWA the hub serves.
  *
- * One expression, correct in all three places this process runs, because all
- * three keep the workspace layout: `apps/agentplexd/src/main.ts` and
+ * One expression, correct in all four places this process runs, because all
+ * four keep the workspace layout: `apps/agentplexd/src/main.ts` and
  * `apps/agentplexd/dist/main.js` are the same distance from `apps/web/dist`,
  * and the runtime image copies the build to that path for exactly this reason.
  *
- * It is the one line the published package will change. That package is
- * `apps/agentplexd` alone, so the assets have to be copied inside it and this
- * has to point at where they landed — which is the whole of what serving asks
- * of packaging, because everything below this line takes the directory as a
- * dependency and none of it knows how the files got there.
+ * The fourth is the published package, and it was expected to be the exception
+ * — the one line packaging would have to change. It is not, because packaging
+ * chose to keep the invariant instead of adding a case to it: `agentplexd` is
+ * published as the workspace laid out the way the image lays it out, so this
+ * expression is as true after `npm install --global` as it is here. See
+ * `packaging/assemble-package.ts`, which is where that decision is argued and
+ * where a test holds it: a flat package would have needed a second set of
+ * relative paths that nothing exercises until a stranger installs it.
  */
 const WEB_ROOT = fileURLToPath(new URL('../../web/dist', import.meta.url));
 

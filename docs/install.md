@@ -17,6 +17,85 @@ covered under [The server role, bare metal](#the-server-role-bare-metal).
 > answers `/health`; it does not yet run sessions. Everything below is real
 > today, and the parts that are not yet wired say so.
 
+## Installing the package
+
+```sh
+npm install --global agentplexd
+```
+
+That is the whole of it on a machine that has Node. The package carries the
+compiled service, the compiled protocol, the built web app and the migrations,
+so nothing here needs pnpm, vite or a checkout of this repository, and an
+upgrade is an install of a later version. Pin one with `agentplexd@<version>`.
+
+The package is laid out the way this repository is — `apps/agentplexd/dist`,
+`apps/agentplexd/migrations`, `apps/web/dist` — because the service resolves its
+migrations and the client it serves relative to its own file, and keeping that
+layout is what makes those two expressions correct from a checkout, inside the
+image and after an install alike.
+
+### It needs a C++ toolchain on Linux
+
+This is the one thing most likely to stop a clean install, so it is first.
+
+Driving an agent through a real pseudoterminal means
+[node-pty](https://github.com/microsoft/node-pty), a native addon that ships
+prebuilt binaries for macOS and Windows only. On Linux npm compiles it at
+install time and node-gyp needs `python3`, `make` and a C++ compiler. On a stock
+`debian:bookworm-slim` none of them are there, and the install fails inside
+node-gyp with an error that mentions neither agentplex nor a compiler.
+
+```sh
+sudo apt-get install --no-install-recommends --yes python3 make g++   # Debian, Ubuntu
+sudo dnf install --assumeyes python3 make gcc-c++                     # Fedora, RHEL
+```
+
+The alternative — shipping prebuilt binaries in this package — was considered
+and does not work: they would have to be placed inside node-pty's own directory
+by a script of ours that runs _after_ node-pty's install script has already
+failed, and under exactly the npm settings that disable install scripts in the
+first place. So the toolchain is a prerequisite, `install.sh` installs it on the
+Linux path, and CI installs this package on a bare Debian container every run so
+that the claim keeps being tested rather than remembered.
+
+### If your npm is configured to skip install scripts
+
+node-pty's install scripts are what compile the addon, and agentplexd's own
+`postinstall` restores the executable bit the npm tarball drops from node-pty's
+`spawn-helper` — without which the first session fails with
+`Error: posix_spawnp failed.` and nothing else. An npmrc carrying
+`ignore-scripts=true` produces an install that reports success and a service
+that cannot start, so override it for this package:
+
+```sh
+npm install --global --ignore-scripts=false agentplexd
+```
+
+Recent npm versions have a second, narrower gate and warn that these scripts are
+"not yet covered by allowScripts". They still run today. To allow them
+explicitly:
+
+```sh
+npm install --global --allow-scripts=node-pty,agentplexd agentplexd
+```
+
+`agentplexd doctor` is the fastest way to tell whether any of this worked: the
+process loads node-pty on its way to printing a report, so a report is proof
+that the addon compiled and can be loaded.
+
+### Building the package from a checkout
+
+```sh
+pnpm package        # builds the workspace, then stages apps/agentplexd/release
+pnpm docker:install # packs that tree and installs it on a bare Debian
+```
+
+`pnpm package` writes the exact tree that gets published and nothing else;
+publishing is a separate, deliberate command aimed at that directory. It refuses
+to stage a workspace whose client or protocol was never built, and refuses a
+compiled entrypoint with no `#!` line, rather than producing a package that
+installs and then cannot start. `pnpm docker:install` is the check CI runs.
+
 ## Compose quickstart
 
 Requires Docker with the Compose plugin. Nothing else — not Node, not pnpm.
@@ -345,19 +424,22 @@ forwarded socket, and the reward for that work is isolation from a machine the
 sessions are supposed to be driving. On a personal mac mini or laptop, outside
 a container is the honest arrangement.
 
-Requires Node 24 and pnpm 11.
+Requires Node 24 and, on Linux, the toolchain under
+[Installing the package](#installing-the-package). It does not require pnpm or a
+checkout.
 
 ```sh
-git clone https://github.com/SoftieSolutions/agentplex.git
-cd agentplex
-pnpm install
-pnpm build
+npm install --global agentplexd
 mkdir -p ~/.agentplexd
-node apps/agentplexd/dist/main.js \
+agentplexd \
   --role=server \
   --server-port=8081 \
   --server-identity-file="$HOME/.agentplexd/server.json"
 ```
+
+From a checkout instead, `pnpm install && pnpm build` and then
+`node apps/agentplexd/dist/main.js` with the same flags: it is the same file the
+package installs, at the same path inside it.
 
 It holds no database. The identity file is the one piece of state it keeps, and
 it has to outlive a restart: the first start mints the `serverId` and the

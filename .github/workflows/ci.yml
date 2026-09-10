@@ -101,3 +101,35 @@ jobs:
       # a file the suites make for themselves.
       - name: Check
         run: pnpm docker:${{ matrix.check }}
+
+  # The clean install, which is the acceptance criterion for the published
+  # package and the one thing the four jobs above cannot tell you. They all run
+  # inside a workspace pnpm installed and built; this one assembles the package,
+  # packs it, and installs it with a bare npm on a stock `debian:bookworm-slim`
+  # with nothing but Node added.
+  #
+  # A job of its own rather than a fifth entry in that matrix: it builds a
+  # different stage, it reaches the npm registry, and the failures it catches --
+  # a native addon that will not compile, a bundled dependency npm declines to
+  # fetch, a `bin` the kernel hands to the shell -- are about the artifact and
+  # not about the tree. A red one here means a stranger's first command fails,
+  # which is not the same news as a red lint.
+  install:
+    name: install
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # The assertions are RUN lines inside the `install-check` stage, so
+      # building it is running them. `build` wrote the layers this reads, so the
+      # workspace is not installed and compiled a second time to get here.
+      - name: Install the published package on a bare machine
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: install-check
+          cache-from: type=gha
