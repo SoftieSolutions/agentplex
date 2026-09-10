@@ -51,7 +51,8 @@ apps/hub/           agentplex hub: database, migrations, pairing, discovery,
                     sessions, layout, clients, the PWA's bytes, later mcp/
 apps/server/        agentplex server: terminals, session control, identity,
                     beacon, the hub connection
-apps/setup/         agentplex setup and agentplex doctor
+apps/setup/         agentplex setup: the wizard and the plan replay
+apps/doctor/        agentplex doctor: the read-only check of a machine
 apps/install/       install.sh, the package assembler, the agentplex bin
 apps/web/           the PWA, unchanged
 packages/protocol/  frame types and parsers, unchanged
@@ -68,10 +69,18 @@ Dependencies, and nothing else:
 
 ```
 protocol      <- everything
-node-shared   <- providers, pty, hub, server, setup
-providers     <- pty, server, setup
+node-shared   <- providers, pty, hub, server, setup, doctor
+providers     <- pty, server, setup, doctor
 pty           <- server, setup
 ```
+
+`apps/doctor` is its own app rather than a subcommand of setup because the two
+answer different questions and need different things. Setup changes a machine
+and needs a terminal, a pty and the provisioning operations; doctor reads a
+machine and needs the provider seam, the store files and the settings the
+installer wrote, and nothing that opens a pty or writes. A doctor that could
+provision would be a doctor with a capability it never uses, and a check is
+easier to trust when the program running it cannot change what it checks.
 
 `apps/install` depends on no workspace package at build time. It composes the
 others' outputs, which is the subject of its own section.
@@ -154,7 +163,7 @@ hub" moves from setup to the hub's boot and keeps its shape:
 The hub's database, its migrations and its pairing code then have exactly one
 consumer and stay inside `apps/hub`.
 
-## One binary from four apps
+## One binary from five apps
 
 The operator installs one thing and runs one command. That has to survive the
 split, and it does, because packaging is where composition happens.
@@ -169,7 +178,7 @@ agentplex doctor    # read-only check of this machine
 The `agentplex` bin lives in `apps/install`. It is a dispatcher: it maps the
 first argument to the matching app's built entry and imports it by path. It
 imports nothing at build time, so the rule that apps do not import each other
-holds in source; the assembled package is where four `dist/` directories sit
+holds in source; the assembled package is where five `dist/` directories sit
 next to one another, exactly as the hub already reaches `apps/web/dist` by a
 relative path and never by an import.
 
@@ -238,8 +247,9 @@ order, so no step waits on a step after it.
    one place.
 5. AGX-96: `apps/hub`: `src/hub/`, the hub's config, `migrations/`, its own entry.
 6. AGX-97: `apps/server`: `src/server/`, the server's config, its own entry.
-7. AGX-98: `apps/setup`: `src/setup/` and `doctor`, its own entry.
-8. AGX-99: `apps/install`: packaging moves, the `agentplex` bin and its dispatch, the
+7. AGX-98: `apps/setup`: `src/setup/`, its own entry.
+8. AGX-100: `apps/doctor`: `doctor.ts` and its report, its own entry.
+9. AGX-99: `apps/install`: packaging moves, the `agentplex` bin and its dispatch, the
    package renamed, `install.sh` writing one or two units, the image and the
    compose file, the docs, and the deletion of `apps/agentplexd`.
 

@@ -16,8 +16,8 @@ architecture: its decisions are requirements, and each records why.
 
 ## FOLDER STRUCTURE
 
-- `apps/` holds deployables: `hub`, `server`, `setup`, `install`, `web`. An
-  app is a thing that runs. Nothing imports an app. `apps/install` composes
+- `apps/` holds deployables: `hub`, `server`, `setup`, `doctor`, `install`,
+  `web`. An app is a thing that runs. Nothing imports an app. `apps/install` composes
   the others' built output by path, never by import; that is where the one
   bin comes from.
 - `packages/` holds seams with at least two consumers: `protocol`,
