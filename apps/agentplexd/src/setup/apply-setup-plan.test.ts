@@ -1,16 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createFakeProcessProbe } from '../server/fake-process-probe.js';
-import { createFakeStoreFiles } from '../server/fake-store-files.js';
-import { printed } from '../server/operations/fake-process-runner.js';
-import type { ProcessOutcome } from '../server/operations/process-runner.js';
-import { createClaudeAdapter } from '../server/providers/claude-adapter.js';
-import { CLAUDE_PACKAGE } from '../server/providers/claude-provisioning.js';
-import { createFakeProviderAdapter } from '../server/providers/fake-provider-adapter.js';
-import { createFakeProviderFiles } from '../server/providers/fake-provider-files.js';
-import { createProviderRegistry } from '../server/providers/provider-registry.js';
-import { STORE_FILE_NAME } from '../server/store-identity.js';
+import {
+  createFakeProcessProbe,
+  createFakeStoreFiles,
+  printed,
+  createFakeProviderAdapter,
+  createFakeProviderFiles,
+  providerFixturePath,
+} from '@agentplex/providers/testing';
+import {
+  type ProcessOutcome,
+  createClaudeAdapter,
+  CLAUDE_PACKAGE,
+  createProviderRegistry,
+  STORE_FILE_NAME,
+} from '@agentplex/providers';
 import { applySetupPlan, type SetupPlanDependencies } from './apply-setup-plan.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { parseSetupPlan, SETUP_PLAN_VERSION, type SetupPlan } from './setup-plan.js';
@@ -27,10 +32,7 @@ import { parseSetupPlan, SETUP_PLAN_VERSION, type SetupPlan } from './setup-plan
  */
 
 function fixture(name: string): string {
-  return readFileSync(
-    join(import.meta.dirname, '..', 'server', 'providers', 'fixtures', name),
-    'utf8',
-  );
+  return readFileSync(providerFixturePath(name), 'utf8');
 }
 
 const CLAUDE_VERSION = '2.1.259';

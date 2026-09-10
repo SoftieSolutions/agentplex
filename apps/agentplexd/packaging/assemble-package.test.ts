@@ -32,6 +32,7 @@ const serviceManifest: Manifest = {
   dependencies: {
     '@agentplex/node-shared': 'workspace:*',
     '@agentplex/protocol': 'workspace:*',
+    '@agentplex/providers': 'workspace:*',
     'node-pty': '1.1.0',
     zod: '^4.1.13',
   },
@@ -53,11 +54,25 @@ const nodeSharedManifest: Manifest = {
   dependencies: { ws: '^8.21.3' },
 };
 
+const providersManifest: Manifest = {
+  name: '@agentplex/providers',
+  version: '1.2.3',
+  license: 'Apache-2.0',
+  type: 'module',
+  dependencies: {
+    '@agentplex/node-shared': 'workspace:*',
+    '@agentplex/protocol': 'workspace:*',
+    zod: '^4.1.13',
+  },
+};
+
+const bundledManifests = [protocolManifest, nodeSharedManifest, providersManifest];
+
 function derived(): Record<string, unknown> {
   return publishedManifest({
     root: rootManifest,
     service: serviceManifest,
-    bundled: [protocolManifest, nodeSharedManifest],
+    bundled: bundledManifests,
   });
 }
 
@@ -68,6 +83,7 @@ describe('publishedManifest', () => {
     expect(manifest['dependencies']).toEqual({
       '@agentplex/node-shared': '1.2.3',
       '@agentplex/protocol': '1.2.3',
+      '@agentplex/providers': '1.2.3',
       'node-pty': '1.1.0',
       ws: '^8.21.3',
       zod: '^4.1.13',
@@ -75,6 +91,7 @@ describe('publishedManifest', () => {
     expect(manifest['bundleDependencies']).toEqual([
       '@agentplex/node-shared',
       '@agentplex/protocol',
+      '@agentplex/providers',
     ]);
   });
 
@@ -100,7 +117,7 @@ describe('publishedManifest', () => {
       publishedManifest({
         root: rootManifest,
         service: serviceManifest,
-        bundled: [protocolManifest, dependent],
+        bundled: [protocolManifest, providersManifest, dependent],
       }),
     ).toThrow('@agentplex/unbundled is a workspace dependency of @agentplex/node-shared');
   });
@@ -125,7 +142,7 @@ describe('publishedManifest', () => {
       publishedManifest({
         root: rootManifest,
         service: serviceManifest,
-        bundled: [protocolManifest, conflicting],
+        bundled: [protocolManifest, providersManifest, conflicting],
       }),
     ).toThrow('zod');
   });
@@ -140,7 +157,7 @@ describe('publishedManifest', () => {
       publishedManifest({
         root: rootManifest,
         service: serviceManifest,
-        bundled: [protocolManifest, agreeing],
+        bundled: [protocolManifest, providersManifest, agreeing],
       })['dependencies'],
     ).toMatchObject({ zod: '^4.1.13' });
   });
@@ -179,6 +196,7 @@ describe('packageEntries', () => {
     expect(sources).toContain('apps/agentplexd/dist');
     expect(sources).toContain('packages/protocol/dist');
     expect(sources).toContain('packages/node-shared/dist');
+    expect(sources).toContain('packages/providers/dist');
     expect(sources).toContain('apps/web/dist');
     expect(sources).toContain('apps/agentplexd/migrations');
   });
@@ -275,6 +293,8 @@ describe('the assembled package', () => {
     await write('packages/protocol/dist/index.js', 'export const version = 7;\n');
     await write('packages/node-shared/package.json', JSON.stringify(nodeSharedManifest));
     await write('packages/node-shared/dist/index.js', 'export const clock = 8;\n');
+    await write('packages/providers/package.json', JSON.stringify(providersManifest));
+    await write('packages/providers/dist/index.js', 'export const claude = 9;\n');
     if (options.client) {
       await write('apps/web/dist/index.html', '<!doctype html>\n');
       await write('apps/web/dist/assets/index-abc123.js', 'export {};\n');
@@ -347,6 +367,7 @@ describe('the assembled package', () => {
     expect(assembled.manifest['bundleDependencies']).toEqual([
       '@agentplex/node-shared',
       '@agentplex/protocol',
+      '@agentplex/providers',
     ]);
   });
 

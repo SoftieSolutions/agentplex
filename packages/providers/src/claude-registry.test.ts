@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createFakeProcessProbe } from '../fake-process-probe.js';
+import { createFakeProcessProbe } from './fake-process-probe.js';
 import {
   CLAUDE_SESSIONS_DIRECTORY,
   parseClaudeRegistryEntry,
@@ -27,7 +27,7 @@ import { createFakeProviderFiles } from './fake-provider-files.js';
  * a status it does not know.
  */
 const CAPTURED = readFileSync(
-  join(import.meta.dirname, 'fixtures', 'claude-session-registry.json'),
+  join(import.meta.dirname, '..', 'fixtures', 'claude-session-registry.json'),
   'utf8',
 );
 

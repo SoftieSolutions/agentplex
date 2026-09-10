@@ -2,7 +2,7 @@ import process from 'node:process';
 import { PassThrough, Readable, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { nodePtyFactory } from '../server/node-pty-factory.js';
-import type { Launch } from '../server/providers/provider-adapter.js';
+import type { Launch } from '@agentplex/providers';
 import { createPtySupervisor, type PtyRun } from '../server/pty-supervisor.js';
 import { systemClock, randomIdGenerator } from '@agentplex/node-shared';
 import { createNodeSetupTerminal } from './node-setup-terminal.js';

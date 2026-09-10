@@ -8,7 +8,7 @@ import {
   type SessionDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { missingProvider, readyProvider } from '../../server/providers/fake-provider-adapter.js';
+import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { DiscoveredServer } from '../discovery/beacon-listener.js';
 import { serverAddressSchema } from '../pairing/server-address.js';

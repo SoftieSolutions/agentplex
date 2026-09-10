@@ -10,7 +10,7 @@ import {
   type SessionDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
+import { readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type {
   ServerConnectionPhase,

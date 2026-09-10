@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { storeIdSchema, type ServerRegistrationId, type StoreId } from '@agentplex/protocol';
-import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
+import { readyProvider } from '@agentplex/providers/testing';
 import { serverAddressSchema } from '../pairing/server-address.js';
 import { attentionEligibleStores, countsTowardAttention, unreachableStores } from './attention.js';
 import type { ServerConnectionPhase, ServerConnectionReport } from './server-connection.js';

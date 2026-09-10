@@ -2,9 +2,9 @@ import { delimiter } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { childEnvironment, systemClock, randomIdGenerator } from '@agentplex/node-shared';
 import { nodePtyFactory } from './node-pty-factory.js';
-import { createProbeProgram } from './probe-program.js';
+import { createProbeProgram } from '@agentplex/providers/testing';
+import type { Launch } from '@agentplex/providers';
 import { createPtySupervisor, type PtyRun, type PtySupervisor } from './pty-supervisor.js';
-import type { Launch } from './providers/provider-adapter.js';
 
 /**
  * A real pty, a real child process, on whatever machine is running this.

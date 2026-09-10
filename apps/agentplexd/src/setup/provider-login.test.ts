@@ -1,18 +1,20 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { storeIdSchema, type StoreDescriptor } from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
-import { createFakeProcessProbe } from '../server/fake-process-probe.js';
-import { createFakePtyFactory, type FakePtyFactory } from '../server/fake-pty.js';
+import {
+  createFakeProcessProbe,
+  createFakeProviderFiles,
+  providerFixturePath,
+} from '@agentplex/providers/testing';
 import {
   describeProcessRequest,
   type ProcessOutcome,
   type ProcessRequest,
   type ProcessRunner,
-} from '../server/operations/process-runner.js';
-import { createClaudeAdapter } from '../server/providers/claude-adapter.js';
-import { createFakeProviderFiles } from '../server/providers/fake-provider-files.js';
-import { createProviderRegistry } from '../server/providers/provider-registry.js';
+  createClaudeAdapter,
+  createProviderRegistry,
+} from '@agentplex/providers';
+import { createFakePtyFactory, type FakePtyFactory } from '../server/fake-pty.js';
 import type { Pty, PtyFactory, PtyRequest } from '../server/pty.js';
 import { createPtySupervisor } from '../server/pty-supervisor.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
@@ -38,10 +40,7 @@ import { describeProviderLogin, offerProviderLogin, type ProviderLogin } from '.
  */
 
 function fixture(name: string): string {
-  return readFileSync(
-    join(import.meta.dirname, '..', 'server', 'providers', 'fixtures', name),
-    'utf8',
-  );
+  return readFileSync(providerFixturePath(name), 'utf8');
 }
 
 const HOME = '/home/dev';

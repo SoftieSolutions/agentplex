@@ -2,7 +2,7 @@ import { sessionRefSchema, storeDescriptorSchema, type SessionId } from '@agentp
 import { describe, expect, it } from 'vitest';
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import { createFakePtyFactory, type FakePtyFactory } from './fake-pty.js';
-import type { Launch, LaunchPlan } from './providers/provider-adapter.js';
+import type { Launch, LaunchPlan } from '@agentplex/providers';
 import { createPtySupervisor, type PtySupervisor } from './pty-supervisor.js';
 import { createTerminalManager, type TerminalManager } from './terminal-manager.js';
 

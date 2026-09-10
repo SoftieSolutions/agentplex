@@ -3,14 +3,12 @@ import type { Database } from './hub/db/database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { startHub, type Hub } from './hub/hub.js';
 import type { OperationRegistry } from './server/operations/operation-registry.js';
-import type { ProviderPreflight } from './server/providers/preflight.js';
-import type { ProviderRegistry } from './server/providers/provider-registry.js';
+import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 import type { BeaconSource } from './hub/discovery/beacon-listener.js';
 import type { WebAssetFileSystem } from './hub/web/web-assets.js';
 import type { BeaconNetwork } from './server/server-beacon.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { TerminalManager } from './server/terminal-manager.js';
-import type { StoreFileSystem } from './server/store-identity.js';
 import type {
   Clock,
   IdGenerator,

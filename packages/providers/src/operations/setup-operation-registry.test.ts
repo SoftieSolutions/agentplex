@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFakeProcessProbe } from '../fake-process-probe.js';
-import { createClaudeAdapter } from '../providers/claude-adapter.js';
-import { CLAUDE_PACKAGE } from '../providers/claude-provisioning.js';
-import { createFakeProviderAdapter } from '../providers/fake-provider-adapter.js';
-import { createFakeProviderFiles } from '../providers/fake-provider-files.js';
-import { createProviderRegistry, type ProviderRegistry } from '../providers/provider-registry.js';
+import { createClaudeAdapter } from '../claude-adapter.js';
+import { CLAUDE_PACKAGE } from '../claude-provisioning.js';
+import { createFakeProviderAdapter } from '../fake-provider-adapter.js';
+import { createFakeProviderFiles } from '../fake-provider-files.js';
+import { createProviderRegistry, type ProviderRegistry } from '../provider-registry.js';
 import { createFakeProcessRunner, printed } from './fake-process-runner.js';
 import { createSetupOperationRegistry } from './setup-operation-registry.js';
 
@@ -35,7 +35,7 @@ const INSTALL = `npm install --global --prefix ${PREFIX} --json --no-ignore-scri
  * passes on a shape nobody has seen.
  */
 const NPM_ADDED = readFileSync(
-  join(import.meta.dirname, '..', 'providers', 'fixtures', 'npm-install-added.json'),
+  join(import.meta.dirname, '..', '..', 'fixtures', 'npm-install-added.json'),
   'utf8',
 );
 

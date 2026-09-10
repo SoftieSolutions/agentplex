@@ -6,8 +6,7 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import type { Clock } from '@agentplex/node-shared';
-import type { Launch } from './providers/provider-adapter.js';
-import type { SessionLiveness } from './providers/store-discovery.js';
+import type { Launch, SessionLiveness } from '@agentplex/providers';
 import type { LaunchOptions, PtyRun, PtySupervisor } from './pty-supervisor.js';
 
 /**

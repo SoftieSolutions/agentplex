@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeProcessProbe } from '../fake-process-probe.js';
-import { createClaudeAdapter } from '../providers/claude-adapter.js';
-import { createFakeProviderFiles } from '../providers/fake-provider-files.js';
-import { createProviderRegistry } from '../providers/provider-registry.js';
-import { createFakeProcessRunner, printed } from './fake-process-runner.js';
+import {
+  createFakeProcessProbe,
+  createFakeProviderFiles,
+  createFakeProcessRunner,
+  printed,
+} from '@agentplex/providers/testing';
+import {
+  createClaudeAdapter,
+  createProviderRegistry,
+  createSetupOperationRegistry,
+} from '@agentplex/providers';
 import { createOperationRegistry } from './operation-registry.js';
-import { createSetupOperationRegistry } from './setup-operation-registry.js';
 
 /**
  * These are the tests about the registry as a rule rather than about any one

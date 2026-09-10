@@ -1,35 +1,41 @@
 {
-  "name": "agentplexd",
+  "name": "@agentplex/providers",
   "version": "0.0.0",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
-  "bin": {
-    "agentplexd": "./dist/main.js"
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "fixtures"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "test:coverage": "vitest run --coverage --passWithNoTests",
-    "start": "node dist/main.js",
-    "package": "node packaging/assemble-package.ts",
-    "postinstall": "node scripts/fix-node-pty-permissions.js",
-    "dev": "node --watch --experimental-strip-types src/main.ts"
+    "test:coverage": "vitest run --coverage --passWithNoTests"
   },
   "dependencies": {
     "@agentplex/node-shared": "workspace:*",
     "@agentplex/protocol": "workspace:*",
-    "@agentplex/providers": "workspace:*",
-    "node-pty": "1.1.0",
     "zod": "^4.1.13"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^3.2.7",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4",
-    "ws": "^8.21.3"
+    "vitest": "^3.2.4"
   }
 }

@@ -1,7 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
-import type { CompletedProcess } from './process-runner.js';
-import type { Operation, OperationOutcome } from './operation.js';
+import type { CompletedProcess, Operation, OperationOutcome } from '@agentplex/providers';
 
 /**
  * What a session's working directory looks like to git right now.

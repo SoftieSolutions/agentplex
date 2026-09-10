@@ -1,7 +1,7 @@
 import type { Provider, ProviderReadiness } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
-import type { ProcessRunner } from '../operations/process-runner.js';
-import type { ProgramResolver } from '../program-resolver.js';
+import type { ProcessRunner } from './operations/process-runner.js';
+import type { ProgramResolver } from './program-resolver.js';
 import type { OneShotPlan, OneShotRead, ProviderAdapter } from './provider-adapter.js';
 import type { ProviderRegistry } from './provider-registry.js';
 

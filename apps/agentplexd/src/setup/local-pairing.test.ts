@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeStoreFiles } from '../server/fake-store-files.js';
+import { createFakeStoreFiles } from '@agentplex/providers/testing';
 import { localPairingFor } from './local-pairing.js';
 
 /**

@@ -30,9 +30,9 @@ import {
   createFakeProviderAdapter,
   missingProvider,
   readyProvider,
-} from '../../server/providers/fake-provider-adapter.js';
-import { createFakeProviderFiles } from '../../server/providers/fake-provider-files.js';
-import { createProviderRegistry } from '../../server/providers/provider-registry.js';
+  createFakeProviderFiles,
+} from '@agentplex/providers/testing';
+import { createProviderRegistry } from '@agentplex/providers';
 import { createPtySupervisor } from '../../server/pty-supervisor.js';
 import { createSessionController } from '../../server/session-control.js';
 import { createTerminalManager, type TerminalManager } from '../../server/terminal-manager.js';

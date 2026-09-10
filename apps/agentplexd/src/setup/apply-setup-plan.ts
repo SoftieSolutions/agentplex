@@ -1,20 +1,18 @@
 import type { Provider, ServerId } from '@agentplex/protocol';
 import type { Role } from '../config/config.js';
-import { runSetupOperation } from '../server/operations/setup-operation.js';
 import {
+  runSetupOperation,
   providerAuthStateOperation,
   providerInstallOperation,
   providerVersionOperation,
-} from '../server/operations/provider-provisioning-operations.js';
-import type { ProcessRunner } from '../server/operations/process-runner.js';
-import type { AuthState } from '../server/providers/provider-adapter.js';
-import type { ProviderRegistry } from '../server/providers/provider-registry.js';
-import { ensureServerIdentity } from '../server/server-identity.js';
-import {
+  type ProcessRunner,
+  type AuthState,
+  type ProviderRegistry,
   ensureStores,
   type StoreFileSystem,
   type StoreIdentity,
-} from '../server/store-identity.js';
+} from '@agentplex/providers';
+import { ensureServerIdentity } from '../server/server-identity.js';
 import { type IdGenerator, tokenMatches, type TokenMinter } from '@agentplex/node-shared';
 import {
   setupBinPath,

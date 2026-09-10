@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createFakeProcessRunner, printed, refused } from './fake-process-runner.js';
+import { createFakeProcessRunner, printed, refused } from '@agentplex/providers/testing';
+import { runOperation } from '@agentplex/providers';
 import { gitStatusOperation } from './git-status.js';
-import { runOperation } from './operation.js';
 
 /**
  * The fixtures are captured `git status --porcelain=v2 --branch` output, taken

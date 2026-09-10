@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { storeDescriptorSchema } from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
-import { createFakeProcessProbe } from '../fake-process-probe.js';
-import type { CompletedProcess } from '../operations/process-runner.js';
+import { createFakeProcessProbe } from './fake-process-probe.js';
+import type { CompletedProcess } from './operations/process-runner.js';
 import { CLAUDE_PROJECTS_DIRECTORY, createClaudeAdapter } from './claude-adapter.js';
 import { CLAUDE_PACKAGE, createClaudeProvisioning } from './claude-provisioning.js';
 import { createFakeProviderFiles } from './fake-provider-files.js';
@@ -45,7 +45,7 @@ import type { InstallPlan, OneShotPlan } from './provider-adapter.js';
  * account details for no test coverage at all.
  */
 function fixture(name: string): string {
-  return readFileSync(join(import.meta.dirname, 'fixtures', name), 'utf8');
+  return readFileSync(join(import.meta.dirname, '..', 'fixtures', name), 'utf8');
 }
 
 const NPM_ADDED = fixture('npm-install-added.json');

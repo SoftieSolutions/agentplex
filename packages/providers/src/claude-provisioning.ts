@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
-import type { CompletedProcess } from '../operations/process-runner.js';
+import type { CompletedProcess } from './operations/process-runner.js';
 import { planClaudeLaunch, CLAUDE_COMMAND } from './claude-launch.js';
 import type {
   AuthProbe,

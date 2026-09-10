@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
-import type { FileRead } from '../store-identity.js';
+import type { FileRead } from './store-identity.js';
 import type { DirectoryEntry, DirectoryRead, ProviderFiles } from './provider-files.js';
 
 /**

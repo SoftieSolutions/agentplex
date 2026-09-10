@@ -1,8 +1,6 @@
 import type { ProviderReadiness } from '@agentplex/protocol';
 import type { Config, Role } from './config/config.js';
-import type { ProviderPreflight } from './server/providers/preflight.js';
-import type { ProviderRegistry } from './server/providers/provider-registry.js';
-import type { StoreFileSystem } from './server/store-identity.js';
+import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 
 /**
  * `agentplexd doctor`: what this configuration can start, and nothing changed.
