@@ -9,6 +9,8 @@ import { createClaudeAdapter } from '../server/providers/claude-adapter.js';
 import { createFakeProviderFiles } from '../server/providers/fake-provider-files.js';
 import { createProviderRegistry } from '../server/providers/provider-registry.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
+import { createFakeSetupMachine } from './fake-setup-machine.js';
+import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
 import { runSetupCommand, type SetupCommandDependencies } from './setup-command.js';
 import { SETUP_PLAN_VERSION } from './setup-plan.js';
 
@@ -65,6 +67,7 @@ interface Run {
   readonly errors: string;
   readonly files: FakeStoreFiles;
   readonly binPaths: readonly (readonly string[])[];
+  readonly terminal: FakeTerminal;
 }
 
 async function run(
@@ -73,6 +76,8 @@ async function run(
     readonly plan?: string;
     readonly machine?: FakeMachine;
     readonly files?: FakeStoreFiles;
+    /** What the operator types, when the invocation is the interactive one. */
+    readonly answers?: readonly string[];
   } = {},
 ): Promise<Run> {
   const machine = options.machine ?? machineWithClaude();
@@ -84,8 +89,16 @@ async function run(
   const out: string[] = [];
   const errors: string[] = [];
   const binPaths: (readonly string[])[] = [];
+  const terminal = createFakeTerminal({ answers: options.answers ?? [] });
 
   const dependencies: SetupCommandDependencies = {
+    terminal,
+    machine: createFakeSetupMachine({
+      home: '/home/dev',
+      pathDirectories: ['/opt/homebrew/bin'],
+      directories: ['/home/dev/.claude'],
+      executables: ['/opt/homebrew/bin/claude'],
+    }),
     runnerFor: (binPath): ProcessRunner => {
       binPaths.push(binPath);
       return machine;
@@ -105,7 +118,7 @@ async function run(
   };
 
   const code = await runSetupCommand(argv, dependencies);
-  return { code, out: out.join('\n'), errors: errors.join('\n'), files, binPaths };
+  return { code, out: out.join('\n'), errors: errors.join('\n'), files, binPaths, terminal };
 }
 
 describe('agentplexd setup --plan', () => {
@@ -150,18 +163,6 @@ describe('agentplexd setup --plan', () => {
     // Named by its location instead, which is the one thing an operator needs.
     expect(replayed.out).toContain('the pairing token is in that file');
     expect(replayed.files.contents.get(IDENTITY)).toContain(PRE_MINTED);
-  });
-
-  it('refuses an invocation with no plan, and touches nothing', async () => {
-    // There is no interactive fallback in this build. Starting a wizard that
-    // does not exist, or provisioning some default machine, are both worse than
-    // saying which flag is missing.
-    const replayed = await run([]);
-
-    expect(replayed.code).toBe(2);
-    expect(replayed.errors).toContain('--plan');
-    expect(replayed.errors).toContain('Usage: agentplexd setup --plan <file>');
-    expect(replayed.files.creates).toEqual([]);
   });
 
   it('refuses an argument it does not know', async () => {
@@ -260,5 +261,86 @@ describe('agentplexd setup --plan', () => {
     expect(second.code).toBe(0);
     expect(new Map(files.contents)).toEqual(afterFirst);
     expect(machine.installs).toEqual([]);
+  });
+});
+
+/**
+ * The other front end, from argv.
+ *
+ * What matters at this level is the dispatch and the exit code: which of the two
+ * front ends an invocation means, and what an installer that ran `agentplexd
+ * setup` learns from the number it gets back. The questions themselves are
+ * `setup-wizard.test.ts`.
+ */
+describe('agentplexd setup', () => {
+  it('asks when there is no plan to replay', async () => {
+    const asked = await run([], { answers: ['', '', '', '', '', '', ''] });
+
+    expect(asked.code).toBe(0);
+    expect(asked.terminal.transcript).toContain('provider: claude 2.1.259 - adopted, logged in');
+    expect(asked.errors).toBe('');
+  });
+
+  it('pre-seeds the first question with the role an installer was told', async () => {
+    const asked = await run(['--role', 'server'], { answers: ['', '', '', '', ''] });
+
+    expect(asked.code).toBe(0);
+    expect(asked.terminal.questions).toContain('Role [server] ');
+  });
+
+  it('takes the role in either spelling of the flag', async () => {
+    const asked = await run(['--role=hub'], { answers: ['', '', ''] });
+
+    expect(asked.code).toBe(0);
+    expect(asked.terminal.transcript).toContain('role: hub');
+  });
+
+  it('refuses a role that is not one', async () => {
+    const asked = await run(['--role', 'gateway']);
+
+    expect(asked.code).toBe(2);
+    expect(asked.errors).toContain('--role takes one of: hub, server, both');
+    expect(asked.terminal.questions).toEqual([]);
+  });
+
+  it('refuses a plan and a role together rather than picking one', async () => {
+    // A plan states its own role and `--role` pre-seeds a question. An
+    // invocation carrying both is somebody expecting one of them to win, and
+    // which one they expected is not knowable from here.
+    const asked = await run(['--plan', PLAN_FILE, '--role', 'hub'], { plan: PLAN });
+
+    expect(asked.code).toBe(2);
+    expect(asked.errors).toContain('--role pre-seeds the wizard');
+    expect(asked.files.creates).toEqual([]);
+  });
+
+  it('says there is nobody to ask, and points at the front end that needs no one', async () => {
+    // `agentplexd setup < /dev/null`, and a run under a service manager that
+    // gave it no terminal. Nothing was asked and nothing was assumed.
+    const asked = await run([]);
+
+    expect(asked.code).toBe(2);
+    expect(asked.errors).toContain('there is nobody to ask');
+    expect(asked.errors).toContain('--plan');
+    expect(asked.files.creates).toEqual([]);
+  });
+
+  it('exits zero when the operator declines the plan it built', async () => {
+    // Nothing on the machine was changed and nothing failed. An installer that
+    // read that as an error would be wrong about it.
+    const declined = await run([], { answers: ['', '', '', '', '', 'n', 'n'] });
+
+    expect(declined.code).toBe(0);
+    expect(declined.files.creates).toEqual([]);
+  });
+
+  it('exits nonzero when the run it applied had problems', async () => {
+    const failed = await run([], {
+      answers: ['', '', '', '', '', '', ''],
+      machine: createFakeMachine(),
+    });
+
+    expect(failed.code).toBe(1);
+    expect(failed.terminal.transcript).toContain('provider: claude - not provisioned');
   });
 });

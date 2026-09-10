@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ROLES } from '../config/config.js';
-import { parseSetupPlan, setupBinPath, SETUP_PLAN_VERSION } from './setup-plan.js';
+import {
+  parseSetupPlan,
+  serializeSetupPlan,
+  setupBinPath,
+  SETUP_PLAN_VERSION,
+} from './setup-plan.js';
 
 /**
  * The plan file, as the thing it is: a claim that arrived from disk.
@@ -256,5 +261,30 @@ describe('the directories a setup run resolves programs in', () => {
     if (!parsed.ok) return;
 
     expect(setupBinPath(parsed.plan)).toEqual([]);
+  });
+});
+
+describe('writing a plan back out', () => {
+  it('writes a file this parser reads as the same plan', () => {
+    // The property the wizard's last screen depends on. What it saves has to be
+    // an artifact the unattended front end replays into the same machine, and a
+    // serializer agreeing with the parser about everything except one field
+    // would produce a file that provisions a machine nobody described.
+    const parsed = parseSetupPlan(ONE_BOX);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    expect(parseSetupPlan(serializeSetupPlan(parsed.plan))).toEqual(parsed);
+  });
+
+  it('writes a file a person can open and edit', () => {
+    const parsed = parseSetupPlan(ONE_BOX);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const written = serializeSetupPlan(parsed.plan);
+
+    expect(written).toContain('\n  "role": "both"');
+    expect(written.endsWith('\n')).toBe(true);
   });
 });

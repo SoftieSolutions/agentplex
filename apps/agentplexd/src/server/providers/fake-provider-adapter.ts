@@ -78,6 +78,11 @@ export function createFakeProviderAdapter(
   return {
     provider,
 
+    // A made-up provider keeps its state where a real one does not, and
+    // deliberately not in a dotfile: what setup has to be able to offer is
+    // whatever an adapter says, never a convention it could have assumed.
+    defaultStoreDirectory: `state/${provider}`,
+
     async discover(store: StoreDescriptor): Promise<ProviderDiscovery> {
       if (options.throwsOnDiscover !== undefined) throw new Error(options.throwsOnDiscover);
       return readSessions(sessionsDirectory(store, provider), files);

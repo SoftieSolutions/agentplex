@@ -50,6 +50,18 @@ export const CLAUDE_SCRUB_PREFIXES: readonly string[] = ['CLAUDE', 'AI_AGENT'];
 export const CLAUDE_CONFIG_DIR = 'CLAUDE_CONFIG_DIR';
 
 /**
+ * The directory Claude Code uses when `CLAUDE_CONFIG_DIR` says nothing, under
+ * the operator's own home.
+ *
+ * Beside the variable that overrides it, because the two are one fact. This is
+ * the store an operator installing agentplex on their own machine already has,
+ * with every session they have already run in it, so it is the store setup can
+ * offer them instead of asking for a path. Nothing at runtime reads it: where a
+ * store is stays configuration.
+ */
+export const CLAUDE_DEFAULT_STORE_DIRECTORY = '.claude';
+
+/**
  * One place every launch is built, because the difference between them is argv
  * and nothing else. Everything a launch can be refused for — a directory that
  * is not absolute, one inside the store, a session the provider never recorded

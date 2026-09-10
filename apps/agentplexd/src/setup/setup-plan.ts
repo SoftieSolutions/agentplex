@@ -242,6 +242,23 @@ export function parseSetupPlan(contents: string): SetupPlanParse {
 }
 
 /**
+ * A plan as a file, in the one spelling this program writes.
+ *
+ * Beside the parser deliberately: these two are a pair, and the property that
+ * matters about the wizard's last screen is that what it saves is a file this
+ * parser reads back as the same plan. A serializer somewhere else is a second
+ * opinion about the format, and the one that would rot is the one that is not
+ * next to the schema.
+ *
+ * Indented with a trailing newline, like the store file, because this is a file
+ * people open and hand-edit — that is the whole point of an artifact that gets
+ * baked into an image.
+ */
+export function serializeSetupPlan(plan: SetupPlan): string {
+  return `${JSON.stringify(plan, null, 2)}\n`;
+}
+
+/**
  * The directories a run of this plan resolves a program in, in search order.
  *
  * A pure function of the plan, which is what makes a replay deterministic: the
