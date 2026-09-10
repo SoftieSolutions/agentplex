@@ -1,6 +1,6 @@
 import type { ZodType } from 'zod';
-import type { OneShotPlan } from '../providers/provider-adapter.js';
-import type { ProviderRegistry } from '../providers/provider-registry.js';
+import type { OneShotPlan } from '../provider-adapter.js';
+import type { ProviderRegistry } from '../provider-registry.js';
 import { describeIssues, type OperationOutcome, type OperationRefusal } from './operation.js';
 import type { ProcessRequest, ProcessRunner } from './process-runner.js';
 

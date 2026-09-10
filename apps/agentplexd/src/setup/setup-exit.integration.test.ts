@@ -5,6 +5,7 @@ import { delimiter, dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { providerFixturePath } from '@agentplex/providers/testing';
 import { nodePtyFactory } from '../server/node-pty-factory.js';
 import type { Pty, PtyExit } from '../server/pty.js';
 
@@ -56,10 +57,7 @@ let home: string;
 let bin: string;
 
 function fixture(name: string): string {
-  return readFileSync(
-    join(import.meta.dirname, '..', 'server', 'providers', 'fixtures', name),
-    'utf8',
-  ).trim();
+  return readFileSync(providerFixturePath(name), 'utf8').trim();
 }
 
 /**

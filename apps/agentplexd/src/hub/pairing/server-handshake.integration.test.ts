@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { HubId } from '@agentplex/protocol';
-import { createFakeStoreFiles } from '../../server/fake-store-files.js';
-import { createFakeProcessRunner } from '../../server/operations/fake-process-runner.js';
+import { createFakeStoreFiles, createFakeProcessRunner } from '@agentplex/providers/testing';
+import { createProviderRegistry } from '@agentplex/providers';
 import { createOperationRegistry } from '../../server/operations/operation-registry.js';
-import { createProviderRegistry } from '../../server/providers/provider-registry.js';
 import { createFakePtyFactory } from '../../server/fake-pty.js';
 import { createPtySupervisor } from '../../server/pty-supervisor.js';
 import { createTerminalManager } from '../../server/terminal-manager.js';

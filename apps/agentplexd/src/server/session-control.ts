@@ -9,8 +9,7 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
-import type { ProviderRegistry } from './providers/provider-registry.js';
-import { discoverStoreSessions } from './providers/store-discovery.js';
+import { type ProviderRegistry, discoverStoreSessions } from '@agentplex/providers';
 import type { Terminal, TerminalManager, TerminalOutcome } from './terminal-manager.js';
 
 /**

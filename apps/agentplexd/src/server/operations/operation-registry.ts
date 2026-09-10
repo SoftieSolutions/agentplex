@@ -1,7 +1,12 @@
 import { gitStatusOperation } from './git-status.js';
-import { runOperation, type Operation, type OperationOutcome } from './operation.js';
-import { processStartTimeOperation } from './process-start-time.js';
-import type { ProcessRunner } from './process-runner.js';
+import {
+  runOperation,
+  type Operation,
+  type OperationOutcome,
+  type OperationSummary,
+  processStartTimeOperation,
+  type ProcessRunner,
+} from '@agentplex/providers';
 
 /**
  * The operation registry: every program agentplexd can run, by name, and no
@@ -86,11 +91,6 @@ export interface OperationRegistry {
    * run the same parser, build the same argv and start the same child.
    */
   execute(name: string, request: unknown): Promise<OperationOutcome<unknown>>;
-}
-
-export interface OperationSummary {
-  readonly name: string;
-  readonly summary: string;
 }
 
 export function createOperationRegistry(runner: ProcessRunner): OperationRegistry {

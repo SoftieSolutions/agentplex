@@ -18,13 +18,16 @@ import {
 } from '@agentplex/node-shared';
 import { serveHubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
-import type { ProviderPreflight } from './providers/preflight.js';
-import type { ProviderRegistry } from './providers/provider-registry.js';
+import {
+  type ProviderPreflight,
+  type ProviderRegistry,
+  ensureStores,
+  type StoreFileSystem,
+} from '@agentplex/providers';
 import { announceServer, type BeaconNetwork } from './server-beacon.js';
 import { ensureServerIdentity } from './server-identity.js';
 import { createSessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
-import { ensureStores, type StoreFileSystem } from './store-identity.js';
 
 /**
  * The server role.

@@ -1,6 +1,5 @@
-import type { ProviderRegistry } from '../providers/provider-registry.js';
-import type { OperationOutcome } from './operation.js';
-import type { OperationSummary } from './operation-registry.js';
+import type { ProviderRegistry } from '../provider-registry.js';
+import type { OperationOutcome, OperationSummary } from './operation.js';
 import type { ProcessRunner } from './process-runner.js';
 import {
   providerAuthStateOperation,
@@ -83,11 +82,10 @@ export interface SetupOperationRegistry {
   /**
    * What setup can run, for a wizard's transcript and for `doctor` to report.
    *
-   * `OperationSummary` is imported from the wire-facing registry's module
-   * because that is the file that defines it, and sharing the shape of "a name
-   * and a sentence" is sharing a vocabulary rather than a list. The lists are
-   * the thing that must not be shared, and they are two module constants in two
-   * files with nothing in common.
+   * `OperationSummary` is the shape the wire-facing registry lists too, and
+   * sharing the shape of "a name and a sentence" is sharing a vocabulary rather
+   * than a list. The lists are the thing that must not be shared, and they are
+   * two module constants in two files with nothing in common.
    */
   readonly operations: readonly OperationSummary[];
   /**

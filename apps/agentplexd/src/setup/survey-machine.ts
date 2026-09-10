@@ -3,11 +3,12 @@ import type { Provider } from '@agentplex/protocol';
 import {
   providerAuthStateOperation,
   providerVersionOperation,
-} from '../server/operations/provider-provisioning-operations.js';
-import type { ProcessRunner } from '../server/operations/process-runner.js';
-import { runSetupOperation } from '../server/operations/setup-operation.js';
-import type { AuthState, ProviderAdapter } from '../server/providers/provider-adapter.js';
-import type { ProviderRegistry } from '../server/providers/provider-registry.js';
+  type ProcessRunner,
+  runSetupOperation,
+  type AuthState,
+  type ProviderAdapter,
+  type ProviderRegistry,
+} from '@agentplex/providers';
 import { findProgram, type SetupMachine } from './setup-machine.js';
 
 /**

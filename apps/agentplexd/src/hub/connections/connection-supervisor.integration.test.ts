@@ -6,7 +6,7 @@ import {
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import { serveHubConnection } from '../../server/hub-connection.js';
-import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
+import { readyProvider } from '@agentplex/providers/testing';
 import {
   createSocketPair,
   createFakeTimers,

@@ -1,4 +1,4 @@
-import type { FileRead } from '../store-identity.js';
+import type { FileRead } from './store-identity.js';
 
 /**
  * The read-only view of a store that an adapter gets.

@@ -15,7 +15,7 @@ import { parseClaudeTranscript } from './claude-transcript.js';
  * re-capturing them is how a format change is noticed.
  */
 function fixture(name: string): string {
-  return readFileSync(join(import.meta.dirname, 'fixtures', name), 'utf8');
+  return readFileSync(join(import.meta.dirname, '..', 'fixtures', name), 'utf8');
 }
 
 const COMPLETED_TURN = fixture('claude-completed-turn.jsonl');

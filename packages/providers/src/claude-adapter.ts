@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { sessionIdSchema, type SessionStatus, type StoreDescriptor } from '@agentplex/protocol';
-import type { ProcessProbe } from '../process-probe.js';
+import type { ProcessProbe } from './process-probe.js';
 import { CLAUDE_DEFAULT_STORE_DIRECTORY, planClaudeLaunch } from './claude-launch.js';
 import { createClaudeProvisioning } from './claude-provisioning.js';
 import {

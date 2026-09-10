@@ -136,3 +136,14 @@ export function describeIssues(
 ): string {
   return issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
 }
+
+/**
+ * A name and a sentence: what a registry lists for a boot log line, a wizard's
+ * transcript, or an MCP listing. Defined here, beside `Operation`, because it
+ * is vocabulary both registries share; the lists are what must not be shared,
+ * and those are two module constants in two files.
+ */
+export interface OperationSummary {
+  readonly name: string;
+  readonly summary: string;
+}

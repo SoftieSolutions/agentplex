@@ -23,7 +23,7 @@ import {
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
 import { createLogger } from '@agentplex/node-shared';
-import { readyProvider } from '../../server/providers/fake-provider-adapter.js';
+import { readyProvider } from '@agentplex/providers/testing';
 import type {
   ServerConnectionPhase,
   ServerConnectionReport,

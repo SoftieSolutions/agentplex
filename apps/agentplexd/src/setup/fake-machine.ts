@@ -3,7 +3,7 @@ import {
   type ProcessOutcome,
   type ProcessRequest,
   type ProcessRunner,
-} from '../server/operations/process-runner.js';
+} from '@agentplex/providers';
 
 /**
  * A machine that changes when something is installed on it.

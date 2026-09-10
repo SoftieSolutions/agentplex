@@ -4,16 +4,17 @@ import { createFakeDatabase } from './hub/db/fake-database.js';
 import type { MigrationFileSystem } from './hub/db/migration-files.js';
 import { createFakeBeaconSource } from './hub/discovery/fake-beacon-source.js';
 import { createFakeWebAssets } from './hub/web/fake-web-assets.js';
-import { createClaudeAdapter } from './server/providers/claude-adapter.js';
-import { createFakeProviderFiles } from './server/providers/fake-provider-files.js';
-import { createProviderRegistry } from './server/providers/provider-registry.js';
+import { createClaudeAdapter, createProviderRegistry } from '@agentplex/providers';
+import {
+  createFakeProviderFiles,
+  createFakeProcessProbe,
+  createFakeProcessRunner,
+  createFakeStoreFiles,
+} from '@agentplex/providers/testing';
 import { createFakePtyFactory } from './server/fake-pty.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createTerminalManager } from './server/terminal-manager.js';
-import { createFakeProcessProbe } from './server/fake-process-probe.js';
-import { createFakeProcessRunner } from './server/operations/fake-process-runner.js';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
-import { createFakeStoreFiles } from './server/fake-store-files.js';
 import { createUnreachableDialer, createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import type { Config } from './config/config.js';

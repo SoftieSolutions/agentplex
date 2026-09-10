@@ -1,9 +1,11 @@
 import type { Provider, StoreDescriptor } from '@agentplex/protocol';
-import type { ProcessRunner } from '../server/operations/process-runner.js';
-import { providerAuthStateOperation } from '../server/operations/provider-provisioning-operations.js';
-import { runSetupOperation } from '../server/operations/setup-operation.js';
-import type { Launch } from '../server/providers/provider-adapter.js';
-import type { ProviderRegistry } from '../server/providers/provider-registry.js';
+import {
+  type ProcessRunner,
+  providerAuthStateOperation,
+  runSetupOperation,
+  type Launch,
+  type ProviderRegistry,
+} from '@agentplex/providers';
 import type { PtySupervisor } from '../server/pty-supervisor.js';
 import { askYesNo, type SetupTerminal } from './setup-terminal.js';
 

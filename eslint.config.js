@@ -96,6 +96,28 @@ export default tseslint.config(
     },
   },
   {
+    // The provider seam: adapters, the process runner they probe and provision
+    // through, and the store identity a provider's discovery is made durable
+    // by. Below `pty`, which takes an adapter's launch plan, and above
+    // `node-shared`; the manifest says the same in its dependency list.
+    files: ['packages/providers/**/*.ts'],
+    languageOptions: { globals: globals.node },
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['@agentplex/*', '!@agentplex/protocol', '!@agentplex/node-shared'],
+          message:
+            'packages/providers may import @agentplex/protocol and @agentplex/node-shared and no other workspace package.',
+        },
+        {
+          group: ['node:child_process', 'child_process'],
+          message:
+            'Starting a child directly bypasses the operation registry. Add an operation and run it through the injected ProcessRunner.',
+        },
+      ]),
+    },
+  },
+  {
     files: ['apps/agentplexd/**/*.ts'],
     languageOptions: { globals: globals.node },
     rules: {
@@ -109,7 +131,7 @@ export default tseslint.config(
         {
           group: ['node:child_process', 'child_process'],
           message:
-            'Starting a child directly bypasses the operation registry. Add an operation in src/server/operations/ and run it through the injected ProcessRunner.',
+            'Starting a child directly bypasses the operation registry. Add an operation and run it through the injected ProcessRunner.',
         },
       ]),
     },
@@ -119,7 +141,7 @@ export default tseslint.config(
     // absolute everywhere else in it: this file *is* the seam. It is where
     // `shell: false` is baked in and where the inherited environment is
     // decided, and it does nothing else.
-    files: ['apps/agentplexd/src/server/operations/node-process-runner.ts'],
+    files: ['packages/providers/src/operations/node-process-runner.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {

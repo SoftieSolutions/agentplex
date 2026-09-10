@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { sessionIdSchema, type SessionId } from '@agentplex/protocol';
 import { z } from 'zod';
-import type { ProcessProbe } from '../process-probe.js';
+import type { ProcessProbe } from './process-probe.js';
 import type { DiscoveryProblem, TranscriptSignal } from './provider-adapter.js';
 import type { ProviderFiles } from './provider-files.js';
 

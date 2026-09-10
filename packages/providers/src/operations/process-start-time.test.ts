@@ -16,7 +16,10 @@ import { processStartTimeOperation } from './process-start-time.js';
  * cannot find with exit 1 and no output at all, on either stream: there is no
  * message to quote, so the refusal has to be written rather than forwarded.
  */
-const LSTART = readFileSync(join(import.meta.dirname, 'fixtures', 'ps-lstart.txt'), 'utf8');
+const LSTART = readFileSync(
+  join(import.meta.dirname, '..', '..', 'fixtures', 'ps-lstart.txt'),
+  'utf8',
+);
 
 /** The moment in the fixture, in the zone `ps` printed it in: the local one. */
 const STARTED_AT = new Date(2026, 8, 3, 2, 4, 46).getTime();

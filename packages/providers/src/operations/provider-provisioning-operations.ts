@@ -1,10 +1,6 @@
 import { z } from 'zod';
-import type {
-  AuthState,
-  InstalledProvider,
-  ProviderProvisioning,
-} from '../providers/provider-adapter.js';
-import type { ProviderRegistry } from '../providers/provider-registry.js';
+import type { AuthState, InstalledProvider, ProviderProvisioning } from '../provider-adapter.js';
+import type { ProviderRegistry } from '../provider-registry.js';
 import type { OperationRefusal } from './operation.js';
 import type { SetupOperation } from './setup-operation.js';
 

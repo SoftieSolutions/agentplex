@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { systemClock, randomIdGenerator } from '@agentplex/node-shared';
 import { nodePtyFactory } from './node-pty-factory.js';
 import { createPtySupervisor } from './pty-supervisor.js';
-import type { Launch } from './providers/provider-adapter.js';
+import type { Launch } from '@agentplex/providers';
 
 /**
  * Captures real terminal output, chunked exactly as a pty delivered it, for

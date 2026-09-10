@@ -20,16 +20,18 @@ import { createSqliteDatabase } from './hub/db/sqlite.js';
 import { createNodeWebAssets } from './hub/web/node-web-assets.js';
 import { startRuntime } from './runtime.js';
 import { createNodeBeaconNetwork } from './server/node-beacon-transport.js';
-import { createNodeProcessProbe } from './server/node-process-probe.js';
-import { createNodeProgramResolver } from './server/node-program-resolver.js';
+import {
+  createNodeProcessProbe,
+  createNodeProgramResolver,
+  nodeStoreFileSystem,
+  createNodeProcessRunner,
+  createClaudeAdapter,
+  nodeProviderFiles,
+  createProviderPreflight,
+  createProviderRegistry,
+} from '@agentplex/providers';
 import { nodePtyFactory } from './server/node-pty-factory.js';
-import { nodeStoreFileSystem } from './server/node-store-files.js';
-import { createNodeProcessRunner } from './server/operations/node-process-runner.js';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
-import { createClaudeAdapter } from './server/providers/claude-adapter.js';
-import { nodeProviderFiles } from './server/providers/node-provider-files.js';
-import { createProviderPreflight } from './server/providers/preflight.js';
-import { createProviderRegistry } from './server/providers/provider-registry.js';
 import { createPtySupervisor } from './server/pty-supervisor.js';
 import { createTerminalManager } from './server/terminal-manager.js';
 import { createNodeHubDatabase } from './setup/node-hub-database.js';

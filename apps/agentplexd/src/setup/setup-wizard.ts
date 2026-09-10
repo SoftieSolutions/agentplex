@@ -1,10 +1,8 @@
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { Provider, StoreDescriptor } from '@agentplex/protocol';
 import { DEFAULT_HUB_PORT, DEFAULT_SERVER_PORT, ROLES, type Role } from '../config/config.js';
-import type { ProcessRunner } from '../server/operations/process-runner.js';
-import type { ProviderRegistry } from '../server/providers/provider-registry.js';
+import type { ProcessRunner, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 import type { PtySupervisor } from '../server/pty-supervisor.js';
-import type { StoreFileSystem } from '../server/store-identity.js';
 import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';

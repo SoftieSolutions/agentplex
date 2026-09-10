@@ -1,4 +1,4 @@
-import type { FileRead } from '../store-identity.js';
+import type { FileRead } from './store-identity.js';
 import type { DirectoryEntry, DirectoryRead, ProviderFiles } from './provider-files.js';
 
 /**

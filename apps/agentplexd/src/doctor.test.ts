@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Config } from './config/config.js';
 import { formatDoctorReport, inspectMachine } from './doctor.js';
-import { createFakeStoreFiles } from './server/fake-store-files.js';
 import {
+  createFakeStoreFiles,
   createFakeProviderAdapter,
   missingProvider,
   readyProvider,
-} from './server/providers/fake-provider-adapter.js';
-import { createProviderRegistry } from './server/providers/provider-registry.js';
+} from '@agentplex/providers/testing';
+import { createProviderRegistry } from '@agentplex/providers';
 
 /**
  * `agentplexd doctor`, against a configuration and a volume a test writes down.

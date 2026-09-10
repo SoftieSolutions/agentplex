@@ -1,14 +1,17 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { listServers } from '../hub/pairing/server-registrations.js';
-import { createFakeProcessProbe } from '../server/fake-process-probe.js';
+import {
+  createFakeProcessProbe,
+  createFakeStoreFiles,
+  type FakeStoreFiles,
+  printed,
+  refused,
+  createFakeProviderFiles,
+  providerFixturePath,
+} from '@agentplex/providers/testing';
+import { createClaudeAdapter, createProviderRegistry } from '@agentplex/providers';
 import { createFakePtyFactory, type FakePtyFactory } from '../server/fake-pty.js';
-import { createFakeStoreFiles, type FakeStoreFiles } from '../server/fake-store-files.js';
-import { printed, refused } from '../server/operations/fake-process-runner.js';
-import { createClaudeAdapter } from '../server/providers/claude-adapter.js';
-import { createFakeProviderFiles } from '../server/providers/fake-provider-files.js';
-import { createProviderRegistry } from '../server/providers/provider-registry.js';
 import { createPtySupervisor } from '../server/pty-supervisor.js';
 import { createFakeHubDatabase, type FakeHubDatabase } from './fake-hub-database.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
@@ -34,10 +37,7 @@ import { runSetupWizard, type WizardOutcome } from './setup-wizard.js';
  */
 
 function fixture(name: string): string {
-  return readFileSync(
-    join(import.meta.dirname, '..', 'server', 'providers', 'fixtures', name),
-    'utf8',
-  );
+  return readFileSync(providerFixturePath(name), 'utf8');
 }
 
 const HOME = '/home/dev';

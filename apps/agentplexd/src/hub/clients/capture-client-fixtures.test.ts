@@ -18,7 +18,7 @@ import {
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import { createFakeSessionController } from '../../server/fake-session-controller.js';
-import { missingProvider, readyProvider } from '../../server/providers/fake-provider-adapter.js';
+import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 import { createFakeBeaconSource, type FakeBeaconSource } from '../discovery/fake-beacon-source.js';
 import { createFakeWebAssets } from '../web/fake-web-assets.js';
 import { serveHubConnection } from '../../server/hub-connection.js';

@@ -5,8 +5,8 @@ import type {
   SessionStatus,
   StoreDescriptor,
 } from '@agentplex/protocol';
-import type { Argv } from '../operations/operation.js';
-import type { CompletedProcess } from '../operations/process-runner.js';
+import type { Argv } from './operations/operation.js';
+import type { CompletedProcess } from './operations/process-runner.js';
 
 /**
  * The provider seam.
