@@ -101,6 +101,147 @@ RUN agentplexd doctor --role=server --server-identity-file=/var/lib/agentplex/se
 RUN test -f "$(npm root -g)/agentplexd/apps/web/dist/index.html" \
     && test -f "$(npm root -g)/agentplexd/apps/agentplexd/migrations/0001_hub_identity.sql"
 
+# The bootstrap check: `install.sh` against the machine it was written for.
+#
+# The stage above installs the package on a box that already has Node and a
+# compiler, which is the artifact's acceptance criterion. This one starts with
+# neither, because ensuring both is what the script is for -- and every step of
+# that is invisible from inside a workspace: a runtime downloaded and checksummed,
+# a toolchain installed through sudo, a native addon compiled against a Node
+# nobody put there.
+FROM debian:bookworm-slim AS bootstrap-check
+
+# Four packages, and each one models something the operator's machine already
+# had rather than something agentplex needs.
+#
+# ca-certificates and curl are how the script arrived at all: `curl -fsSL
+# https://... | bash` cannot happen on a box with no trust store and no curl,
+# so a stage that installed neither would be testing a delivery nobody uses.
+#
+# sudo is the privilege an ordinary account has. Without it this could only test
+# the already-root path, which is the one path the script refuses.
+#
+# systemd is here to be an authority and not to run: `systemd-analyze verify`
+# below is systemd's own opinion of the unit the script wrote, which is worth
+# more than any grep this repository could write for the same lines.
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes ca-certificates curl sudo systemd \
+    && rm -rf /var/lib/apt/lists/*
+
+# A person, not root, which is the policy under test.
+#
+# Named `alice` and not `operator`: Debian's base image already ships an
+# `operator` *group* at GID 37, and `useradd` refuses a user whose implied group
+# exists, with an exit code of 9 and a message about `-g`. A stand-in name with
+# no meaning to the distribution has no such collision to have.
+RUN useradd --create-home alice \
+    && echo 'alice ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/alice \
+    && chmod 0440 /etc/sudoers.d/alice
+
+COPY --from=package /package/ /package/
+COPY apps/agentplexd/packaging/install.sh /install.sh
+
+USER alice
+ENV HOME=/home/alice
+WORKDIR /home/alice
+# Pipelines below carry the assertion, and sh's default is the exit status of
+# the last command in one -- so without this a failing install ending in `tee`
+# would be a green layer.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# The run under test, as an unprivileged user on a machine with no Node and no
+# compiler. --no-setup because a Docker build has no terminal: the script
+# declines to open a wizard on one anyway, and asking for what is wanted beats
+# depending on that.
+#
+# AGENTPLEX_PACKAGE is the seam. It points the install at the tarball the
+# `package` stage just built, which is the only way to run this against a build
+# that has never been published.
+RUN AGENTPLEX_PACKAGE="$(echo /package/agentplexd-*.tgz)" \
+    bash /install.sh --role=server --no-setup | tee /tmp/install.log
+
+# What the script said it would do, read back off the machine.
+#
+# node first: nothing put one here, so an executable at this path is proof the
+# download, the checksum and the unpack all happened. agentplexd second, which
+# is proof npm ran under that node and node-gyp found the toolchain sudo
+# installed -- the failure the whole toolchain decision exists to prevent.
+RUN test -x "$HOME/.agentplex/bin/node" && test -x "$HOME/.agentplex/bin/agentplexd"
+# The prefix is not put on a PATH for anybody, so the script has to say so.
+RUN grep -q "export PATH=\"$HOME/.agentplex/bin:" /tmp/install.log
+
+# The settings file: two facts the installer had, and 0600 because the client
+# token belongs in this file.
+RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplexd.env")" = 600 \
+    && grep -qx 'AGENTPLEX_ROLE=server' "$HOME/.agentplex/agentplexd.env" \
+    && grep -qx "AGENTPLEX_BIN_PATH=$HOME/.agentplex/bin" "$HOME/.agentplex/agentplexd.env"
+
+# The unit, and then systemd's own reading of it. `verify` resolves ExecStart,
+# so it is also an assertion that the unit points at a program that is really
+# there -- which is what makes this worth more than matching strings.
+RUN test -f "$HOME/.config/systemd/user/agentplexd.service" \
+    && grep -qx "ExecStart=$HOME/.agentplex/bin/agentplexd" "$HOME/.config/systemd/user/agentplexd.service" \
+    && ! grep -q '^User=' "$HOME/.config/systemd/user/agentplexd.service" \
+    && systemd-analyze verify "$HOME/.config/systemd/user/agentplexd.service"
+
+# The ticket's own verification: a stock container, and `doctor` at the end of
+# it reporting a provider it can find.
+#
+# Claude Code is installed here rather than by `agentplexd setup`, which is the
+# ticket that installs providers and is not on this branch. It goes into the
+# prefix the script created, through the npm that came with the Node the script
+# installed, which is exactly what setup's install plan does.
+ENV PATH=/home/alice/.agentplex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN npm install --global --prefix "$HOME/.agentplex" @anthropic-ai/claude-code
+
+# What is asserted is the directory: the provider resolved out of the prefix
+# this script created, which is the fact the whole binPath design exists to
+# produce. `ready` is not asserted because `ready` additionally means logged in
+# and a build has no credentials to log in with; `unknown` is allowed for the
+# same kind of honesty, since the probe is the provider's own program running in
+# a container with nothing else in it. `missing` is the failure this is here to
+# catch, and none of the three that are allowed can be reached from it.
+#
+# `doctor` exits 1 because a logged-out provider is not usable, which is a true
+# statement about this container, so the report is what is read and not the
+# code. Reaching a report at all is also the node-pty assertion -- the process
+# loads the addon on the way to printing one.
+#
+# The report goes to a file rather than through a pipe, and that is this stage's
+# `pipefail` being taken seriously rather than worked around: under it, `doctor
+# | grep` fails on doctor's exit 1 no matter what grep found. `|| true` is
+# therefore deliberate and narrow -- the exit code of this one command is not
+# the assertion, and the two lines below are.
+RUN agentplexd doctor --role=server \
+    --bin-path="$HOME/.agentplex/bin" \
+    --server-identity-file="$HOME/.agentplex/server.json" >/tmp/doctor.log 2>&1 || true
+RUN cat /tmp/doctor.log \
+    && grep -Eq '^  claude +(ready|unauthenticated|unknown) +.*/home/alice/\.agentplex/bin$' /tmp/doctor.log
+
+# The fleet path, which is a different account, a different prefix and a
+# different unit scope. It runs as root because that is what it is for: it
+# creates a service account and writes a system unit, and it still runs nothing
+# as root -- the unit carries User=.
+#
+# PATH is put back to a machine's own first, so that this run finds no Node and
+# installs its own into /opt/agentplex. Leaving alice's prefix on it would have
+# this adopt a runtime inside another user's home directory, which is a Node the
+# service account may not be able to read.
+USER root
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# No --no-setup here: --system declines a wizard on its own, and the run has to
+# say so rather than be told to.
+RUN AGENTPLEX_PACKAGE="$(echo /package/agentplexd-*.tgz)" \
+    bash /install.sh --system --role=hub | tee /tmp/system-install.log
+RUN grep -q 'not run: --system machines take a plan' /tmp/system-install.log
+RUN id agentplex \
+    && test -x /opt/agentplex/bin/node \
+    && test -x /opt/agentplex/bin/agentplexd \
+    && test "$(stat -c '%U' /etc/agentplex/agentplexd.env)" = agentplex \
+    && grep -qx 'User=agentplex' /etc/systemd/system/agentplexd.service \
+    && grep -qx 'WantedBy=multi-user.target' /etc/systemd/system/agentplexd.service \
+    && systemd-analyze verify /etc/systemd/system/agentplexd.service
+
 # Runtime dependencies only, resolved on their own rather than pruned out of
 # the build stage: a prune leaves whatever it failed to notice.
 FROM manifests AS runtime-deps

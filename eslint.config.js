@@ -91,10 +91,20 @@ export default tseslint.config(
     },
   },
   {
-    // The one exception, and the reason the rule can be absolute everywhere
-    // else: this file *is* the seam. It is where `shell: false` is baked in and
-    // where the inherited environment is decided, and it does nothing else.
+    // The one exception inside the service, and the reason the rule can be
+    // absolute everywhere else in it: this file *is* the seam. It is where
+    // `shell: false` is baked in and where the inherited environment is
+    // decided, and it does nothing else.
     files: ['apps/agentplexd/src/server/operations/node-process-runner.ts'],
+    rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
+  },
+  {
+    // The other exception, which is not service code at all. This suite's
+    // subject is a shell script -- the bootstrap that installs the package on a
+    // machine that does not have it yet -- so starting a child is the only way
+    // to have a subject. The rule above is about what the daemon may do, and
+    // nothing here is reachable from a socket, a frame or a running process.
+    files: ['apps/agentplexd/packaging/install.sh.integration.test.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {

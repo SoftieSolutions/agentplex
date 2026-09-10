@@ -10,6 +10,14 @@ npm install --global agentplexd
 agentplexd doctor --role=server --server-identity-file="$HOME/.agentplexd/server.json"
 ```
 
+On a machine that has nothing on it yet, `install.sh` does the whole of that —
+the Node runtime, the toolchain below, this package, and a systemd unit — for
+the user who runs it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/<tag>/apps/agentplexd/packaging/install.sh | bash
+```
+
 The package carries the compiled service, the compiled protocol, the built web
 app and the migrations, so a machine needs Node and nothing else from this
 project: no pnpm, no vite, no checkout. Upgrading is installing a later version,
