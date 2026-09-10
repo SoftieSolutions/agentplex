@@ -45,6 +45,10 @@ curl -k https://localhost/health
 # {"status":"ok","role":"hub","protocolVersion":2}
 ```
 
+Then open `https://localhost` in a browser. The hub serves the web app itself,
+on the same port and the same origin as everything else it answers — see
+[What the hub serves](#what-the-hub-serves).
+
 `docker compose logs -f hub` follows the hub. `docker compose down` stops
 everything and keeps the database; `docker compose down -v` deletes it.
 
@@ -166,11 +170,43 @@ proxy — because in every one of those cases the hub's plain HTTP port has no
 business being reachable from the network. Widening it to `0.0.0.0` serves
 unencrypted HTTP to anyone who can route to the host.
 
-## Reaching the hub from a device
+## What the hub serves
 
-> The hub half of this is wired today: the exchange below works and a socket that
-> passes it is served the machine state. The PWA that does it for you is a later
-> milestone; until then `curl` and `websocat` are the client.
+One port, one origin, four things: the web app, the client websocket, the MCP
+endpoint and web push. They are not separable. MCP is same-origin and
+token-authed, and same-origin is a claim about where the UI came from — it means
+something only because the hub is what served it.
+
+So the hub serves the built PWA off its own disk, from `apps/web/dist` beside
+the service's own build. The image ships that directory; a workspace build puts
+it there; `pnpm build` is what produces it on bare metal. Nothing else needs to
+be running, and there is no separate web server to configure.
+
+Two rules about caching, because they are the ones that bite later:
+
+- Everything under `/assets/` is fingerprinted by the build and is served
+  `immutable` for a year.
+- The shell, the service worker, the manifest and the icons are served
+  `no-cache`, which means "cache it and revalidate every time" rather than "do
+  not cache it". A cached shell names the bundle of the build that was deployed
+  when the browser cached it, and no later deploy can reach it.
+
+A path with no file behind it and no extension — `/settings`, say — is a screen
+the app routes to, and gets the shell. A path with an extension gets a 404 if
+it is not there, because answering a missing `index-abc123.js` with HTML turns a
+half-copied build into a syntax error in the browser console.
+
+A hub with no build beside it says so: it starts anyway, logs
+`no client build to serve` with the directory it looked in, and answers 503 to
+a browser rather than a 404 that would claim the page does not exist or a 500
+that would claim a fault. The database, the paired servers and `/health` are
+all unaffected — a missing directory is not a reason to take a fleet down.
+
+To develop against a running hub, `pnpm --filter @agentplex/web dev` serves the
+app on port 5173 and proxies `/client` and `/health` to `http://127.0.0.1:8080`,
+so the one-origin arrangement above holds in dev too.
+
+## Reaching the hub from a device
 
 `AGENTPLEX_CLIENT_TOKEN` is the whole of it. One token for the hub rather than
 one per device, typed on each device that should reach it, and changing it is

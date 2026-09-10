@@ -20,6 +20,7 @@ import {
 import { createFakeSessionController } from '../../server/fake-session-controller.js';
 import { missingProvider, readyProvider } from '../../server/providers/fake-provider-adapter.js';
 import { createFakeBeaconSource, type FakeBeaconSource } from '../discovery/fake-beacon-source.js';
+import { createFakeWebAssets } from '../web/fake-web-assets.js';
 import { serveHubConnection } from '../../server/hub-connection.js';
 import type { SessionOutcome, StoreReport } from '../../server/session-control.js';
 import { createUnreachableDialer, createSocketPair } from '../../shared/fake-message-socket.js';
@@ -270,6 +271,9 @@ async function startFleetHub(
     timers: createFakeTimers(),
     migrationsDirectory,
     migrationFileSystem: nodeMigrationFileSystem,
+    // Nothing to serve: these fixtures are the frames the hub sends over a
+    // socket, and no static file has ever been one of them.
+    webAssets: createFakeWebAssets(),
     host: HOST,
     port: 0,
   });
@@ -316,6 +320,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       discovery: createFakeBeaconSource(),
       migrationsDirectory: '/migrations',
       migrationFileSystem,
+      // Nothing to serve: these fixtures are the frames the hub sends over a
+      // socket, and no static file has ever been one of them.
+      webAssets: createFakeWebAssets(),
       host: HOST,
       port: 0,
     };
@@ -406,6 +413,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       timers: createFakeTimers(),
       migrationsDirectory: '/migrations',
       migrationFileSystem,
+      // Nothing to serve: these fixtures are the frames the hub sends over a
+      // socket, and no static file has ever been one of them.
+      webAssets: createFakeWebAssets(),
       host: HOST,
       port: 0,
     });

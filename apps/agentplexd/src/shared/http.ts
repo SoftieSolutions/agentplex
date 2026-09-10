@@ -124,3 +124,35 @@ export function sendJson(response: ServerResponse, status: number, body: unknown
   });
   response.end(payload);
 }
+
+/**
+ * A response whose body is bytes off a disk, and the three things that must
+ * travel with them.
+ *
+ * `cacheControl` is not optional. A static file served with no cache directive
+ * is cached by whatever heuristic the browser and every proxy between here and
+ * it happen to use, which is how an application shell gets pinned to the build
+ * that was deployed the day somebody first opened it. Deciding it is the
+ * caller's job; carrying it is not something the caller may forget.
+ */
+export interface BytesResponse {
+  readonly status: number;
+  readonly contentType: string;
+  readonly cacheControl: string;
+  readonly body: Uint8Array;
+}
+
+export function sendBytes(response: ServerResponse, payload: BytesResponse): void {
+  response.writeHead(payload.status, {
+    'content-type': payload.contentType,
+    'content-length': payload.body.byteLength,
+    'cache-control': payload.cacheControl,
+    // Every byte this process serves off a disk goes through here, and none of
+    // it should be re-typed by the browser. Sniffing is what turns a file whose
+    // extension nobody recognised into a document with a script in it.
+    'x-content-type-options': 'nosniff',
+  });
+  // Node drops the body of a HEAD response itself and keeps the length, so
+  // there is no second path here for a request that wanted only the headers.
+  response.end(payload.body);
+}

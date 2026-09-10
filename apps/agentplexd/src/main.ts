@@ -6,6 +6,7 @@ import { formatDoctorReport, inspectMachine } from './doctor.js';
 import { nodeMigrationFileSystem } from './hub/db/node-migration-files.js';
 import { createNodeBeaconSource } from './hub/discovery/node-beacon-listener.js';
 import { createSqliteDatabase } from './hub/db/sqlite.js';
+import { createNodeWebAssets } from './hub/web/node-web-assets.js';
 import { startRuntime } from './runtime.js';
 import { createNodeBeaconNetwork } from './server/node-beacon-transport.js';
 import { createNodeProcessProbe } from './server/node-process-probe.js';
@@ -52,6 +53,22 @@ const EXIT_NOT_READY = 1;
  * whether the process was started from source or from a build.
  */
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../migrations', import.meta.url));
+
+/**
+ * The built PWA the hub serves.
+ *
+ * One expression, correct in all three places this process runs, because all
+ * three keep the workspace layout: `apps/agentplexd/src/main.ts` and
+ * `apps/agentplexd/dist/main.js` are the same distance from `apps/web/dist`,
+ * and the runtime image copies the build to that path for exactly this reason.
+ *
+ * It is the one line the published package will change. That package is
+ * `apps/agentplexd` alone, so the assets have to be copied inside it and this
+ * has to point at where they landed — which is the whole of what serving asks
+ * of packaging, because everything below this line takes the directory as a
+ * dependency and none of it knows how the files got there.
+ */
+const WEB_ROOT = fileURLToPath(new URL('../../web/dist', import.meta.url));
 
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
@@ -135,6 +152,10 @@ async function main(): Promise<void> {
       openDatabase: (path) => createSqliteDatabase(path),
       migrationsDirectory: MIGRATIONS_DIRECTORY,
       migrationFileSystem: nodeMigrationFileSystem,
+      // The one place the client's files are read off a disk. A hub-only
+      // process and a `--role=both` one serve the same bytes from the same
+      // directory, and a `--role=server` one never asks.
+      webAssets: createNodeWebAssets(WEB_ROOT),
       storeFileSystem: nodeStoreFileSystem,
       // The only place a secret is generated, and the CSPRNG is the whole
       // implementation. It mints two things: the server's pairing token, once,
