@@ -1,8 +1,10 @@
 # REPOSITORY DESCRIPTION
 
-agentplex watches and drives coding-agent sessions across machines. Two
-deployables: `agentplexd`, one Node service that runs as `--role=hub`,
-`--role=server`, or `--role=both`; and `web`, a React PWA the hub serves.
+agentplex watches and drives coding-agent sessions across machines. One
+package and one bin, `agentplex`, with four subcommands: `hub` and `server`
+are separate daemons, `setup` is the wizard, `doctor` is the read-only check.
+`install.sh --role=hub|server|both` decides which units a machine gets. `web`
+is a React PWA the hub serves.
 
 The hub owns the database, serves the client, and merges what every paired
 server reports. A server runs sessions through a PTY and watches a store on
@@ -14,14 +16,23 @@ architecture: its decisions are requirements, and each records why.
 
 ## FOLDER STRUCTURE
 
-- `apps/agentplexd/` — the service. `src/hub/`, `src/server/`, `src/shared/`.
-- `apps/web/` — the PWA.
-- `packages/protocol/` — frame types and parsers, shared by both apps.
-- `docs/specs/` — design documents, dated and append-only.
-- Both apps may depend on `@agentplex/protocol`. Nothing else crosses a package
-  line, and neither app may import the other. `pnpm lint` enforces this.
+- `apps/` holds deployables: `hub`, `server`, `setup`, `install`, `web`. An
+  app is a thing that runs. Nothing imports an app. `apps/install` composes
+  the others' built output by path, never by import; that is where the one
+  bin comes from.
+- `packages/` holds seams with at least two consumers: `protocol`,
+  `node-shared`, `providers`, `pty`. A package's dependency list is its
+  allowed import set. One consumer means a folder, not a package. `pnpm lint`
+  enforces both rules.
 - `packages/protocol` is bundled into a browser as well as loaded by a service,
   so it may use neither Node builtins nor another workspace package.
+- Setup opens no database. It writes files; the hub imports the local pairing
+  at boot.
+- A package exports its fakes from a `testing` entry. A fake is never copied.
+- Until epic AGX-91 lands, the code still sits in `apps/agentplexd/src/` under
+  `hub/`, `server/`, `setup/`, `shared/`. New code goes where the layout above
+  says it will live.
+- `docs/specs/` — design documents, dated and append-only.
 - Every CI/CD workflow lives in `.github/workflows`, the only directory GitHub
   reads them from.
 - Test files sit next to the file under test: `config.test.ts` beside
@@ -36,7 +47,7 @@ architecture: its decisions are requirements, and each records why.
   `docker:typecheck` / `docker:test` run one check alone.
 - `pnpm docker:up` / `pnpm docker:down` — the hub and Caddy.
 - Docker is the primary path for the checks and for a hosted hub, not the price
-  of entry: the database is a file, so one machine runs `--role=both` natively.
+  of entry: the database is a file, so one machine runs both daemons natively.
 
 ## DEPENDENCIES DIRECTIVES
 
