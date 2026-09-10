@@ -9,7 +9,7 @@ import type { SetupTerminal } from './setup-terminal.js';
 import { runSetupWizard } from './setup-wizard.js';
 
 /**
- * `agentplexd setup`: two front ends onto one provisioning.
+ * `agentplex setup`: two front ends onto one provisioning.
  *
  * `--plan <file>` replays a plan with no person in it. With no plan, the wizard
  * asks what it cannot discover, builds a `SetupPlan` out of the answers, hands it

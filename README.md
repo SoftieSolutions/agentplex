@@ -29,8 +29,9 @@ MCP agent  ─┘                │             SERVER ────────
   `agentplex-store.json` at its root. A session's identity is its store and its
   id within it, never the machine it happens to be running on.
 
-The hub is `apps/hub` and the server is `apps/server`, two programs; a machine
-that runs both starts one of each.
+One package and one bin, `agentplex`, with four subcommands: `hub` and
+`server` are separate daemons, `setup` is the wizard, `doctor` is the
+read-only check. A machine that runs both daemons starts one of each.
 
 ## Repository layout
 
@@ -39,7 +40,7 @@ apps/hub/              the hub: database, migrations, pairing, discovery, the PW
 apps/server/           the server: terminals, session control, identity, beacon, the hub connection
 apps/setup/            the wizard and the plan replay
 apps/doctor/           the read-only check of a machine
-apps/agentplexd/       the installed name, dispatching doctor by path until AGX-99
+apps/install/          install.sh, the package assembler, and the agentplex bin
 apps/web/              the PWA
 packages/protocol/     frame types and parsers, shared by the service and the PWA
 packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share
@@ -104,7 +105,7 @@ Every setting has one flag and one environment variable; the flag wins.
 
 ### Checking a machine
 
-`agentplexd doctor`, with the configuration the service would take, reports what
+`agentplex doctor`, with the settings the daemons would take, reports what
 that machine can actually start: per provider, the version, the directory it
 resolved from and whether it is logged in; per store path, whether it is there.
 It changes nothing and exits `1` when anything it looked at is unusable. The

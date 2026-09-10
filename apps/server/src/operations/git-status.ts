@@ -55,7 +55,7 @@ export interface GitStatus {
  * A directory this operation will accept.
  *
  * Absolute, because a relative path would resolve against whatever directory
- * agentplexd happens to have been started in — and because an absolute path
+ * agentplex happens to have been started in — and because an absolute path
  * cannot be mistaken by git for one of its own options. No NUL, because a NUL
  * truncates the path at the syscall, so what is opened is a prefix of what was
  * checked.

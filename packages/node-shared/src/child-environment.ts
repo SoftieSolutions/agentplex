@@ -1,7 +1,7 @@
 import { delimiter } from 'node:path';
 
 /**
- * What a child of agentplexd gets for an environment: what this process
+ * What a child of agentplex gets for an environment: what this process
  * inherited, with the recorded directories put in front of its PATH.
  *
  * It is a pure function, and it is the whole of what `binPath` means. `main`

@@ -2,7 +2,7 @@
  * The settings file the daemons start from, as setup fills it in.
  *
  * `install.sh` writes this file once, with the two facts it had and every
- * other setting commented out, and says in it that `agentplexd setup` is what
+ * other setting commented out, and says in it that `agentplex setup` is what
  * fills the rest in. This module is that: a line for a setting that has none,
  * in place of the commented-out line the installer left for it where there is
  * one, and nothing else in the file touched. An operator's own edits are theirs;

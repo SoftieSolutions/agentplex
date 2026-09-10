@@ -3,7 +3,7 @@ import type { Config, Role } from './config.js';
 import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 
 /**
- * `agentplexd doctor`: what this configuration can start, and nothing changed.
+ * `agentplex doctor`: what this configuration can start, and nothing changed.
  *
  * It runs the same preflight the server role runs at boot, against the same
  * search path, through the same seams. That is the design and not an
@@ -106,7 +106,7 @@ async function checkStore(path: string, files: StoreFileSystem): Promise<StoreCh
  * pasted into an issue, and nothing here is wide enough to need more.
  */
 export function formatDoctorReport(report: DoctorReport): readonly string[] {
-  const lines = [`agentplexd doctor  role=${report.role}`, ''];
+  const lines = [`agentplex doctor  role=${report.role}`, ''];
 
   lines.push('providers');
   if (report.providers.length === 0) {

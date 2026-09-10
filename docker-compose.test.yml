@@ -64,11 +64,11 @@ services:
     command:
       - sh
       - -c
-      - agentplexd doctor --role=server --server-identity-file=/var/lib/agentplex/server.json
+      - agentplex doctor --role=server --server-identity-file=/var/lib/agentplex/server.json
         | tee /dev/stderr | grep -qx providers
 
   # The bootstrap, on the machine it was written for: a stock
-  # `debian:bookworm-slim` with no Node, no compiler and no agentplexd, where
+  # `debian:bookworm-slim` with no Node, no compiler and no agentplex, where
   # `install.sh` has to produce all three as an unprivileged user.
   #
   # The assertions are RUN lines inside `bootstrap-check`, so this passes or
@@ -82,6 +82,6 @@ services:
     command:
       - bash
       - -c
-      - PATH=/home/alice/.agentplex/bin:$$PATH agentplexd doctor --role=server
+      - PATH=/home/alice/.agentplex/bin:$$PATH agentplex doctor --role=server
         --bin-path=/home/alice/.agentplex/bin
         --server-identity-file=/home/alice/.agentplex/server.json

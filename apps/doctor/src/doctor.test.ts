@@ -10,7 +10,7 @@ import {
 import { createProviderRegistry } from '@agentplex/providers';
 
 /**
- * `agentplexd doctor`, against a configuration and a volume a test writes down.
+ * `agentplex doctor`, against a configuration and a volume a test writes down.
  *
  * The preflight is injected whole rather than driven through a fake PATH,
  * because it has its own tests and this file is about a different claim: that
@@ -20,7 +20,7 @@ import { createProviderRegistry } from '@agentplex/providers';
  */
 
 const HOST = '127.0.0.1';
-const IDENTITY_PATH = '/etc/agentplexd/server.json';
+const IDENTITY_PATH = '/etc/agentplex/server.json';
 
 function serverConfig(storePaths: readonly string[]): Config {
   return {

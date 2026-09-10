@@ -15,7 +15,7 @@ import { createNodeProcessRunner } from './node-process-runner.js';
  * executable certain to exist on a developer's mac and inside
  * `node:24-bookworm-slim`, which ships neither `ps` nor much else — a suite
  * built on `sh` or `echo` would pass locally and be quietly meaningless in the
- * image agentplexd actually deploys as.
+ * image agentplex actually deploys as.
  *
  * `-e` is a code string, which is exactly what nothing else in this codebase is
  * allowed to build. It is legitimate here for the same reason a crash test uses
@@ -77,7 +77,7 @@ describe('createNodeProcessRunner', () => {
     expect(outcome).toMatchObject({ kind: 'exited', stdout: 'yes:unset' });
   });
 
-  it('starts the child in agentplexd own directory, never one a caller chose', async () => {
+  it('starts the child in agentplex own directory, never one a caller chose', async () => {
     const outcome = await runner.run({
       file: node,
       args: ['-e', 'process.stdout.write(process.cwd())'],
@@ -149,7 +149,7 @@ describe('createNodeProcessRunner', () => {
 describe('createNodeProcessRunner with a configured binPath', () => {
   const probe = createProbeProgram();
   // A second directory, holding a second program: what the machine already had
-  // on its PATH before agentplexd recorded anything.
+  // on its PATH before agentplex recorded anything.
   const tool = createProbeProgram('agentplex-tool');
   afterAll(() => {
     probe.remove();

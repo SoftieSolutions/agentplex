@@ -170,7 +170,7 @@ describe('parseStoreFile', () => {
   });
 
   it('ignores fields a later version may add, so an old server can still read', () => {
-    expect(parseStoreFile('{"storeId":"store-a","mintedBy":"a later agentplexd"}')).toEqual({
+    expect(parseStoreFile('{"storeId":"store-a","mintedBy":"a later agentplex"}')).toEqual({
       ok: true,
       storeId: 'store-a',
     });

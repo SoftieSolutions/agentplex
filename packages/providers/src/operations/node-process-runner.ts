@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import type { ProcessOutcome, ProcessRequest, ProcessRunner } from './process-runner.js';
 
 /**
- * The real one-shot spawn, and the only place in agentplexd that imports
+ * The real one-shot spawn, and the only place in agentplex that imports
  * `node:child_process`. Lint enforces the "only": see `eslint.config.js`.
  *
  * Everything dangerous about starting a process is decided here, once, where
@@ -12,7 +12,7 @@ import type { ProcessOutcome, ProcessRequest, ProcessRunner } from './process-ru
  *   defaults to it, but a default is a thing that changes and a thing readers
  *   have to remember; with it spelled out, turning it on is a visible edit to
  *   this file rather than an option someone passes from somewhere else.
- * - No `cwd`, ever. The child inherits agentplexd's own directory and every
+ * - No `cwd`, ever. The child inherits agentplex's own directory and every
  *   directory an operation cares about is in its argv. A caller therefore
  *   cannot relocate a child, and `git -C` is the only reason git looks anywhere
  *   but here.

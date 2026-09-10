@@ -11,7 +11,7 @@
  * Two decisions are worth naming.
  *
  * **The input ending is a value, not an exception.** A pipe that ran out, a `^D`,
- * `agentplexd setup < /dev/null`: all of them mean there is nobody there to
+ * `agentplex setup < /dev/null`: all of them mean there is nobody there to
  * answer the next question, and the honest response is to stop having asked
  * nothing rather than to take a default on the operator's behalf. Every helper
  * below propagates it, and the wizard turns it into "there is nobody to ask" and

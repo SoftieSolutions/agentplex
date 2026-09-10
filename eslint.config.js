@@ -13,7 +13,7 @@ import tseslint from 'typescript-eslint';
  * being discovered when someone tries to split the packages apart.
  */
 const forbidAppInternals = {
-  group: ['**/apps/*/src/**', 'agentplexd/*', '@agentplex/web*'],
+  group: ['**/apps/*/src/**', 'agentplex/*', '@agentplex/web*'],
   message: 'Apps do not import each other. Share through @agentplex/protocol instead.',
 };
 
@@ -21,9 +21,9 @@ const restrictedImports = (extra) => ['error', { patterns: [forbidAppInternals, 
 
 export default tseslint.config(
   {
-    // `apps/agentplexd/release` is the staged package: every file in it is a
+    // `apps/install/release` is the staged package: every file in it is a
     // copy of something already linted where it was written.
-    ignores: ['**/dist/**', '**/coverage/**', '**/*.d.ts', 'apps/agentplexd/release/**'],
+    ignores: ['**/dist/**', '**/coverage/**', '**/*.d.ts', 'apps/install/release/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -164,8 +164,8 @@ export default tseslint.config(
   },
   {
     files: [
-      'apps/agentplexd/**/*.ts',
       'apps/hub/**/*.ts',
+      'apps/install/**/*.ts',
       'apps/server/**/*.ts',
       'apps/setup/**/*.ts',
     ],
@@ -219,7 +219,7 @@ export default tseslint.config(
     // machine that does not have it yet -- so starting a child is the only way
     // to have a subject. The rule above is about what the daemon may do, and
     // nothing here is reachable from a socket, a frame or a running process.
-    files: ['apps/agentplexd/packaging/install.sh.integration.test.ts'],
+    files: ['apps/install/packaging/install.sh.integration.test.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {

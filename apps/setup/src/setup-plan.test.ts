@@ -93,7 +93,7 @@ describe('the setup plan parser', () => {
     });
   });
 
-  it('expresses every role agentplexd can be started in', () => {
+  it('expresses every role agentplex can be started in', () => {
     // The two lists have to stay one list. A plan that can describe a role the
     // daemon does not have — or cannot describe one it does — is an artifact
     // that provisions a machine nobody can start, and the failure would land on

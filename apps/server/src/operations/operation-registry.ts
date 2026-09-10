@@ -9,7 +9,7 @@ import {
 } from '@agentplex/providers';
 
 /**
- * The operation registry: every program agentplexd can run, by name, and no
+ * The operation registry: every program agentplex can run, by name, and no
  * way to run one that is not here.
  *
  * "Closed" is the whole design. The list below is a module constant, and

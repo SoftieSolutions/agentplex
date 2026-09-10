@@ -8,8 +8,9 @@
 #   curl -fsSL <url> | bash -s -- --no-setup     # stop after the binary lands
 #
 # Deliberately ignorant. It ensures a Node runtime and the build toolchain,
-# installs the published package, writes a systemd unit it does not start, and
-# hands over to `agentplexd setup`. It knows nothing about providers, stores or
+# installs the published package, writes the systemd units it does not start --
+# one for `agentplex server`, one for `agentplex hub`, both for --role=both --
+# and hands over to `agentplex setup`. It knows nothing about providers, stores or
 # databases: everything provider-specific lives in TypeScript beside the adapter
 # that knows the provider, so a new provider is a new file rather than an edit
 # to a shell script nobody tests.
@@ -52,15 +53,19 @@ readonly INSTALL_SH_VERSION='1'
 # invitation for somebody else to register it, and the day that happens the
 # instruction still looks exactly right.
 #
-# `apps/agentplexd/README.md` prints this string and a test holds the two
+# `apps/install/README.md` prints this string and a test holds the two
 # together, so
 # there is one place to change when the alias exists.
-readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/<tag>/apps/agentplexd/packaging/install.sh'
+readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/<tag>/apps/install/packaging/install.sh'
 
-readonly PACKAGE_NAME='agentplexd'
+readonly PACKAGE_NAME='agentplex'
+# The name this package was installed under before the split. A machine that
+# has it is upgraded in place: the old unit goes, the old package goes, and the
+# settings, identity and prefix are found where they were.
+readonly OLD_PACKAGE_NAME='agentplexd'
 
 # The dist-tag npm resolves when nothing is pinned. Named, because the spec
-# always carries a `@` suffix: `agentplexd` and `agentplexd@latest` mean the
+# always carries a `@` suffix: `agentplex` and `agentplex@latest` mean the
 # same thing to npm, and one shape is one shape to read in a log line and one
 # shape a test asserts on. This is the same choice `claude-provisioning.ts`
 # makes for the same reason.
@@ -89,11 +94,11 @@ readonly SYSTEM_STATE_DIR='/var/lib/agentplex'
 readonly SYSTEM_CONFIG_DIR='/etc/agentplex'
 readonly SYSTEM_UNIT_DIR='/etc/systemd/system'
 
-readonly DOCS_URL='https://github.com/SoftieSolutions/agentplex/blob/master/apps/agentplexd/README.md'
+readonly DOCS_URL='https://github.com/SoftieSolutions/agentplex/blob/master/apps/install/README.md'
 
 # The PATH this script was started with, kept because the script changes its own
 # further down. What the summary has to answer is whether the operator's shell
-# will find `agentplexd` tomorrow, and asking that of a PATH this run has
+# will find `agentplex` tomorrow, and asking that of a PATH this run has
 # already prepended the prefix to would answer yes every time.
 readonly ORIGINAL_PATH="${PATH:-}"
 
@@ -108,8 +113,10 @@ VERSION=''
 PREFIX=''
 BIN_DIR=''
 ENV_FILE=''
-UNIT_FILE=''
+UNIT_DIR=''
 UNIT_SCOPE=''
+# The daemons this role runs, one unit each. Set by resolve_layout.
+DAEMONS=''
 SERVICE_USER=''
 STATE_DIR=''
 PACKAGE_SPEC=''
@@ -130,7 +137,7 @@ Usage: bash install.sh [options]
   --version=<version>       the ${PACKAGE_NAME} version to install (default: ${NPM_LATEST_TAG})
   --prefix=<directory>      install somewhere other than the default prefix
   --dry-run                 print what this would do and change nothing
-  --print-unit              print the systemd unit this would write, and stop
+  --print-unit              print the systemd units this would write, and stop
   --help                    this
 
   --role pre-seeds setup rather than replacing it. --no-setup is for a machine
@@ -146,7 +153,10 @@ main() {
   resolve_layout
 
   if [ "$PRINT_UNIT" = 'yes' ]; then
-    render_unit
+    local daemon
+    for daemon in $DAEMONS; do
+      render_unit "$daemon"
+    done
     return 0
   fi
 
@@ -162,7 +172,8 @@ main() {
   ensure_service_account
   install_package
   write_environment_file
-  write_unit
+  retire_old_unit
+  write_units
   run_setup
   summary
 }
@@ -197,7 +208,9 @@ parse_arguments() {
   done
 
   case "$ROLE" in
-    hub | server | both) ;;
+    hub) DAEMONS='hub' ;;
+    server) DAEMONS='server' ;;
+    both) DAEMONS='hub server' ;;
     *) die "unknown role $(quote "$ROLE"): expected one of hub, server, both" ;;
   esac
 
@@ -224,8 +237,10 @@ resolve_layout() {
     SERVICE_USER="$SYSTEM_ACCOUNT"
     [ -n "$PREFIX" ] || PREFIX="$SYSTEM_PREFIX"
     STATE_DIR="$SYSTEM_STATE_DIR"
+    # The settings file keeps the name it had before the split, so a machine
+    # installed as agentplexd and upgraded through this finds it where it was.
     ENV_FILE="$SYSTEM_CONFIG_DIR/agentplexd.env"
-    UNIT_FILE="$SYSTEM_UNIT_DIR/agentplexd.service"
+    UNIT_DIR="$SYSTEM_UNIT_DIR"
     UNIT_SCOPE='system'
     # The fleet tier is the one with no human to answer a wizard. Its
     # configuration arrives as a plan file, replayed as the service account, so
@@ -239,7 +254,7 @@ resolve_layout() {
     [ -n "$PREFIX" ] || PREFIX="$HOME/.agentplex"
     STATE_DIR="$PREFIX"
     ENV_FILE="$PREFIX/agentplexd.env"
-    UNIT_FILE="$HOME/.config/systemd/user/agentplexd.service"
+    UNIT_DIR="$HOME/.config/systemd/user"
     UNIT_SCOPE='user'
   fi
 
@@ -402,7 +417,7 @@ ensure_node() {
   # happens.
   #
   # Every program this script starts from here down is a script whose first line
-  # is `#!/usr/bin/env node` -- npm, and then agentplexd itself. A Node unpacked
+  # is `#!/usr/bin/env node` -- npm, and then agentplex itself. A Node unpacked
   # into the prefix is on nobody's PATH yet, so `$PREFIX/bin/npm` would resolve
   # `node` to whatever the machine had, which is the runtime this install exists
   # because of: too old, or absent, and in the first case it compiles a native
@@ -505,7 +520,7 @@ install_package() {
   npm="$(npm_command)"
 
   # --ignore-scripts=false rather than whatever the operator's npmrc says.
-  # node-pty's install scripts are what compile the addon, and agentplexd's
+  # node-pty's install scripts are what compile the addon, and agentplex's
   # postinstall restores the executable bit the npm tarball drops from node-pty's
   # spawn-helper. An npmrc carrying ignore-scripts=true produces an install that
   # reports success and a service that cannot start, and our own postinstall
@@ -513,6 +528,15 @@ install_package() {
   "$npm" install --global --prefix "$PREFIX" --ignore-scripts=false "$PACKAGE_SPEC"
 
   [ -x "$BIN_DIR/$PACKAGE_NAME" ] || die "npm reported success and there is no $BIN_DIR/$PACKAGE_NAME"
+
+  # The package this replaced, if the machine had it. Left in place it would
+  # keep a second copy of every program on the disk and a stale `agentplexd`
+  # on the PATH beside the new bin; npm's uninstall removes exactly what its
+  # install put there and nothing of ours.
+  if [ -x "$BIN_DIR/$OLD_PACKAGE_NAME" ]; then
+    report 'upgrade' "remove the $OLD_PACKAGE_NAME package this replaces"
+    "$npm" uninstall --global --prefix "$PREFIX" "$OLD_PACKAGE_NAME" || true
+  fi
 
   # The prefix belongs to whoever runs the service, which for a user install is
   # already true and for a --system one has to be said. It is the prefix agentplex
@@ -548,7 +572,7 @@ npm_command() {
 # Written once, and never again.
 #
 # Everything in this file is a decision somebody made -- by hand, or through
-# `agentplexd setup` -- and an installer that rewrote it on every upgrade would
+# `agentplex setup` -- and an installer that rewrote it on every upgrade would
 # undo them. So an existing file is left exactly as it is, and this says so
 # rather than silently doing nothing.
 write_environment_file() {
@@ -564,7 +588,8 @@ write_environment_file() {
   # 0600 before anything is written into it: the client token lives here, and a
   # file that is briefly world-readable is world-readable.
   ( umask 077 && cat >"$ENV_FILE" <<ENVIRONMENT
-# agentplexd settings, read by the systemd unit as an EnvironmentFile.
+# agentplex settings, read by the systemd units as an EnvironmentFile. Both
+# daemons read this one file, and each reads only the keys it needs.
 #
 # install.sh wrote this file once and will not touch it again. Two lines are
 # uncommented because they are the two facts the installer had: the role you
@@ -611,38 +636,96 @@ ENVIRONMENT
   fi
 }
 
-write_unit() {
-  if [ "$PLATFORM" != 'linux' ]; then
-    report 'unit' 'skipped: macOS has no systemd, hand the process to launchd'
-    return 0
-  fi
-
-  if ! have systemctl; then
-    report 'unit' 'skipped: no systemctl on this machine'
-    return 0
-  fi
-
-  if [ -e "$UNIT_FILE" ]; then
-    # Same argument as the settings file: a unit somebody edited is a decision,
-    # and `--print-unit` shows what this version would have written, so an
-    # operator can diff the two rather than have one silently replaced.
-    report 'unit' "$UNIT_FILE (already there, left alone; --print-unit shows this version)"
-    return 0
-  fi
-
-  report 'unit' "$UNIT_FILE (write, not enabled)"
-  [ "$DRY_RUN" = 'no' ] || return 0
-
-  mkdir -p "$(dirname "$UNIT_FILE")"
-  render_unit >"$UNIT_FILE"
+# The unit file a daemon gets: agentplex-hub.service, agentplex-server.service.
+unit_file() {
+  echo "$UNIT_DIR/${PACKAGE_NAME}-$1.service"
 }
 
-# The unit, as text, from the paths this run resolved.
+# Whether this machine can hold a systemd unit at all. macOS has no systemd,
+# and a container may have none.
+can_write_units() {
+  if [ "$PLATFORM" != 'linux' ]; then
+    report 'unit' 'skipped: macOS has no systemd, hand the process to launchd'
+    return 1
+  fi
+  if ! have systemctl; then
+    report 'unit' 'skipped: no systemctl on this machine'
+    return 1
+  fi
+  return 0
+}
+
+# The unit a pre-split install wrote, which started one program in every role.
+#
+# It is retired rather than left beside the new ones: two units starting the
+# same daemons on one machine is two hubs on one database. What it decided is
+# kept -- the settings file it read is the settings file the new units read --
+# and its enablement is carried over, so a machine whose service came up at boot
+# still does after the upgrade. This is the one place the installer enables a
+# unit: a fresh install leaves its units for the operator, who has a client
+# token to write first.
+retire_old_unit() {
+  can_write_units || return 0
+  local old="$UNIT_DIR/${OLD_PACKAGE_NAME}.service"
+  [ -e "$old" ] || return 0
+
+  local ctl='systemctl --user'
+  [ "$UNIT_SCOPE" = 'user' ] || ctl='systemctl'
+  local was_enabled='no'
+  if $ctl is-enabled --quiet "${OLD_PACKAGE_NAME}.service" 2>/dev/null; then
+    was_enabled='yes'
+  fi
+
+  local daemon units=''
+  for daemon in $DAEMONS; do
+    units="$units ${PACKAGE_NAME}-${daemon}.service"
+  done
+  report 'upgrade' "retire $old and enable$units"
+  [ "$DRY_RUN" = 'no' ] || return 0
+
+  $ctl disable --now "${OLD_PACKAGE_NAME}.service" 2>/dev/null || true
+  rm -f "$old"
+  ENABLE_NEW_UNITS="$was_enabled"
+}
+ENABLE_NEW_UNITS='no'
+
+write_units() {
+  can_write_units || return 0
+  local daemon file
+  for daemon in $DAEMONS; do
+    file="$(unit_file "$daemon")"
+    if [ -e "$file" ]; then
+      # Same argument as the settings file: a unit somebody edited is a decision,
+      # and `--print-unit` shows what this version would have written, so an
+      # operator can diff the two rather than have one silently replaced.
+      report 'unit' "$file (already there, left alone; --print-unit shows this version)"
+      continue
+    fi
+    report 'unit' "$file (write, not enabled)"
+    [ "$DRY_RUN" = 'no' ] || continue
+    mkdir -p "$UNIT_DIR"
+    render_unit "$daemon" >"$file"
+  done
+
+  [ "$ENABLE_NEW_UNITS" = 'yes' ] || return 0
+  local ctl='systemctl --user'
+  [ "$UNIT_SCOPE" = 'user' ] || ctl='systemctl'
+  $ctl daemon-reload || true
+  for daemon in $DAEMONS; do
+    $ctl enable --now "${PACKAGE_NAME}-${daemon}.service" || true
+  done
+}
+
+# One unit, as text, from the paths this run resolved. Both daemons read the
+# one settings file; each reads only the keys it needs, so a setting the other
+# owns is not an error. Order does not matter: the hub dials the server and
+# retries, so whichever comes up second is dialled when it is there.
 #
 # It is a here-doc and not a file beside this script on purpose: this script is
 # fetched on its own over HTTPS and run, so anything it cannot carry inside
 # itself is a second download and a second thing to get wrong.
 render_unit() {
+  local daemon="$1"
   local install_target='default.target'
   local identity=''
   if [ "$UNIT_SCOPE" = 'system' ]; then
@@ -654,7 +737,7 @@ Group=$SERVICE_USER
 
   cat <<UNIT
 [Unit]
-Description=agentplex daemon
+Description=agentplex $daemon
 Documentation=$DOCS_URL
 After=network-online.target
 Wants=network-online.target
@@ -670,10 +753,10 @@ EnvironmentFile=$ENV_FILE
 # instead of it: a session is not only the agent, it shells out to git, rg and
 # whatever else the project needs.
 Environment=PATH=$(unit_search_path)
-ExecStart=$BIN_DIR/$PACKAGE_NAME
+ExecStart=$BIN_DIR/$PACKAGE_NAME $daemon
 Restart=on-failure
 RestartSec=5s
-# Exit 2 is agentplexd saying the configuration is wrong. Restarting will not
+# Exit 2 is the daemon saying the configuration is wrong. Restarting will not
 # help and the operator has to act, so the unit stops instead of hiding the
 # message in a restart loop.
 RestartPreventExitStatus=2
@@ -820,17 +903,21 @@ summary() {
       ;;
   esac
 
-  if [ -e "$UNIT_FILE" ]; then
+  local units='' daemon
+  for daemon in $DAEMONS; do
+    [ -e "$(unit_file "$daemon")" ] && units="$units ${PACKAGE_NAME}-$daemon"
+  done
+  if [ -n "$units" ] && [ "$ENABLE_NEW_UNITS" = 'no' ]; then
     say ''
-    say 'The unit is written and deliberately not started: it has no database file, no'
+    say 'The units are written and deliberately not started: there is no database file, no'
     say "client token and no store paths until $ENV_FILE has them."
     say 'When it does:'
     if [ "$UNIT_SCOPE" = 'system' ]; then
       say '  systemctl daemon-reload'
-      say "  systemctl enable --now $PACKAGE_NAME"
+      say "  systemctl enable --now$units"
     else
       say '  systemctl --user daemon-reload'
-      say "  systemctl --user enable --now $PACKAGE_NAME"
+      say "  systemctl --user enable --now$units"
       say "  loginctl enable-linger $SERVICE_USER   # so it runs when you are not logged in"
     fi
   fi

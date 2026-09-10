@@ -3,7 +3,7 @@ import { createFakeStoreFiles } from './fake-store-files.js';
 import { ensureServerIdentity } from './server-identity.js';
 import { randomTokenMinter } from '@agentplex/node-shared';
 
-const PATH = '/etc/agentplexd/server.json';
+const PATH = '/etc/agentplex/server.json';
 
 const ids = { newId: () => 'server-under-test' };
 const tokens = { newToken: () => 'token-under-test' };

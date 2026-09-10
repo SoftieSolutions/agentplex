@@ -6,7 +6,7 @@
 # right way to run a hosted hub — one image, one restart policy, one process
 # supervised by something that already knows how to restart it, and TLS in
 # front. What it is not is the price of entry. The hub's database is a file, so
-# a single machine can run agentplexd natively and never build an image, which
+# a single machine can run agentplex natively and never build an image, which
 # is what the installer does. This file is for the deployment that wants a
 # container.
 #
@@ -22,9 +22,9 @@ services:
       context: .
       target: runtime
     restart: unless-stopped
-    # The hub program, which has no role flag: which daemon runs is which
-    # program was started. AGX-99 folds this into `agentplex hub`.
-    entrypoint: ['node', 'apps/hub/dist/main.js']
+    # Which daemon runs is which command was given: the image's entrypoint is
+    # the agentplex bin, and this service is the hub.
+    command: ['hub']
     environment:
       AGENTPLEX_HUB_PORT: 8080
       # Inside the volume below, and not settable from .env: a path is only

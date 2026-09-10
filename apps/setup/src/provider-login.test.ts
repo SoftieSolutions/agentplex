@@ -295,7 +295,7 @@ describe('offerProviderLogin', () => {
   });
 
   it('says so rather than hanging a login on an input that is not a terminal', async () => {
-    // `printf '\\n\\n' | agentplexd setup`. There is a wizard, because its
+    // `printf '\\n\\n' | agentplex setup`. There is a wizard, because its
     // answers arrived on stdin, and there is nobody to answer an OAuth prompt.
     const attempt = await offer({ notATerminal: 'this input is not a terminal' });
 

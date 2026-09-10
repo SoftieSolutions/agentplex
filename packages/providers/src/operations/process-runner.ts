@@ -82,7 +82,7 @@ export interface CompletedProcess {
 /**
  * A request as one line, for a log message or a test's lookup table.
  *
- * It is a description and never an instruction: nothing in agentplexd parses
+ * It is a description and never an instruction: nothing in agentplex parses
  * this back into a request or hands it to anything that could run it. The
  * elements are joined by spaces and not quoted, which is precisely why it must
  * not be re-executed — the string is lossy about the argv it came from, and the

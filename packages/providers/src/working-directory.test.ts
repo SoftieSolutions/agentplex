@@ -24,7 +24,7 @@ describe('parseWorkingDirectory', () => {
 
   it('refuses a session that has no working directory at all', () => {
     // What discovery reports for a session whose provider never wrote one down.
-    // A guess — the store, the home directory, wherever agentplexd was started
+    // A guess — the store, the home directory, wherever agentplex was started
     // — would resume the session somewhere it has never run.
     expect(parseWorkingDirectory(null, STORE).ok).toBe(false);
     expect(parseWorkingDirectory('   ', STORE).ok).toBe(false);

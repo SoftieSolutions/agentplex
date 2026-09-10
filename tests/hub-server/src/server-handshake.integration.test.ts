@@ -35,7 +35,7 @@ const logger = createLogger('error', () => {});
 const clock = { now: () => 1_756_000_000_000 };
 const ids = { newId: () => 'server-under-test' };
 const TOKEN = 'the-token-the-operator-pasted';
-const IDENTITY_PATH = '/etc/agentplexd/server.json';
+const IDENTITY_PATH = '/etc/agentplex/server.json';
 const hubId = 'hub-under-test' as HubId;
 
 let server: SessionServer | undefined;

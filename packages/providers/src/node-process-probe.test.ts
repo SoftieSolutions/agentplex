@@ -9,7 +9,7 @@ import { createNodeProcessRunner } from './operations/node-process-runner.js';
  * That is the point. Every other test in this area drives the seam with a fake
  * process table, which proves the judgement and nothing about the platform; the
  * one claim a fake cannot check is that `/proc` arithmetic and `ps` output
- * really do date a process on the machine agentplexd runs on. This suite runs
+ * really do date a process on the machine agentplex runs on. This suite runs
  * on macOS locally and on Linux in the container, which is exactly the two
  * implementations below the seam.
  *

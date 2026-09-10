@@ -4,7 +4,7 @@ import { parseWorkingDirectory } from './working-directory.js';
 
 /**
  * Everything about starting a `claude` that is true of every `claude`
- * agentplexd starts.
+ * agentplex starts.
  *
  * It is its own file because there are now two callers with nothing else in
  * common: the session adapter, which spawns and resumes work, and provisioning,
@@ -20,7 +20,7 @@ export const CLAUDE_COMMAND = 'claude';
  * The variables that must not reach a Claude Code child.
  *
  * `CLAUDE` catches `CLAUDECODE` and the `CLAUDE_CODE_*` family, which is the
- * set an agentplexd started *from inside* a Claude Code session inherits. A
+ * set an agentplex started *from inside* a Claude Code session inherits. A
  * child that sees them concludes it is a nested run and stops writing a
  * transcript — and a transcript is the only thing discovery reads, so the
  * session runs perfectly and agentplex never sees it again. Nothing errors,
@@ -42,7 +42,7 @@ export const CLAUDE_SCRUB_PREFIXES: readonly string[] = ['CLAUDE', 'AI_AGENT'];
  * The store *is* the config directory — `<store>/projects` and
  * `<store>/sessions` are exactly the layout of a `~/.claude` — so a child that
  * is not told about it writes its transcript into whichever home directory
- * agentplexd is running as, and the store the session was started in never
+ * agentplex is running as, and the store the session was started in never
  * hears about it. Set after the scrub, deliberately: `CLAUDE_CONFIG_DIR` is
  * inside a scrubbed prefix, and the supervisor applying a plan's variables
  * last is what makes an adapter able to state one on purpose.

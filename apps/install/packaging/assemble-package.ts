@@ -5,11 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /**
- * Assemble the tree that gets published as `agentplexd`.
+ * Assemble the tree that gets published as `agentplex`.
  *
  * A bare machine must not need pnpm, vite or a checkout, so the package carries
- * the compiled service, the compiled protocol, the built PWA and the migrations
- * inside it, and installation is `npm install --global agentplexd`.
+ * the five compiled programs, the compiled packages they import, the built PWA
+ * and the migrations inside it, and installation is `npm install --global
+ * agentplex`.
  *
  * ## The layout is the workspace's, on purpose
  *
@@ -32,7 +33,10 @@ import { z } from 'zod';
  */
 
 /** Where the assembled tree is written, relative to the workspace root. */
-export const OUTPUT_DIRECTORY = 'apps/agentplexd/release';
+export const OUTPUT_DIRECTORY = 'apps/install/release';
+
+/** The manifest the bin belongs to: this app's. */
+export const BIN_APP = 'apps/install';
 
 /**
  * The apps in the package besides the one that owns the bin, and where each
@@ -47,12 +51,15 @@ export const OTHER_APPS: readonly BundledPackage[] = [
   { name: '@agentplex/doctor', directory: 'apps/doctor' },
 ];
 
+/** What the bin dispatches to, by name; what `main.ts` in this app imports by path. */
+export const PROGRAMS = ['hub', 'server', 'setup', 'doctor'] as const;
+
 /**
  * The workspace packages the compiled service imports, and where each lives.
  *
  * Every one is published under no name of its own, so each travels inside the
  * tarball as a bundled dependency, at the one path Node's resolver reaches from
- * `apps/agentplexd/dist/main.js`. The list is the whole of what gets bundled: a
+ * `apps/install/dist/main.js`. The list is the whole of what gets bundled: a
  * package the service imports that is not here stops the assembly by name,
  * rather than shipping a tarball whose first import fails.
  */
@@ -78,7 +85,7 @@ export interface BundledPackage {
  * statement as a command name -- and nothing in this repository would notice,
  * because every other way of starting the service says `node` out loud.
  */
-export const ENTRYPOINT = 'apps/agentplexd/dist/main.js';
+export const ENTRYPOINT = 'apps/install/dist/main.js';
 
 /**
  * The one install script, at the workspace path, in the package and in the
@@ -149,40 +156,19 @@ export interface PackageEntry {
 export function packageEntries(): readonly PackageEntry[] {
   return [
     {
-      from: 'apps/agentplexd/dist',
-      to: 'apps/agentplexd/dist',
+      from: 'apps/install/dist',
+      to: 'apps/install/dist',
       kind: 'directory',
       proof: 'main.js',
-      reason: 'the compiled service',
+      reason: 'the agentplex bin, dispatching to the four programs below by path',
     },
-    {
-      from: 'apps/hub/dist',
-      to: 'apps/hub/dist',
+    ...PROGRAMS.map((program): PackageEntry => ({
+      from: `apps/${program}/dist`,
+      to: `apps/${program}/dist`,
       kind: 'directory',
       proof: 'main.js',
-      reason: 'the compiled hub',
-    },
-    {
-      from: 'apps/server/dist',
-      to: 'apps/server/dist',
-      kind: 'directory',
-      proof: 'main.js',
-      reason: 'the compiled server',
-    },
-    {
-      from: 'apps/setup/dist',
-      to: 'apps/setup/dist',
-      kind: 'directory',
-      proof: 'main.js',
-      reason: 'the compiled setup wizard and plan replay',
-    },
-    {
-      from: 'apps/doctor/dist',
-      to: 'apps/doctor/dist',
-      kind: 'directory',
-      proof: 'main.js',
-      reason: 'the compiled doctor',
-    },
+      reason: `the compiled ${program}`,
+    })),
     {
       from: 'apps/hub/migrations',
       to: 'apps/hub/migrations',
@@ -217,7 +203,7 @@ export function packageEntries(): readonly PackageEntry[] {
       reason: 'Apache-2.0, which npm shows on the package page',
     },
     {
-      from: 'apps/agentplexd/README.md',
+      from: 'apps/install/README.md',
       to: 'README.md',
       kind: 'file',
       reason: 'the package page: what this is, and what installing it needs',
@@ -244,7 +230,7 @@ export function packageEntries(): readonly PackageEntry[] {
  * is published under a name of its own, so a range pointing at a registry
  * entry would be a dependency on a package that does not exist. Each one
  * travels inside the tarball instead, at the one path Node's resolver reaches
- * from `apps/agentplexd/dist/main.js`, and a bundled package's own workspace
+ * from `apps/install/dist/main.js`, and a bundled package's own workspace
  * dependencies have to be bundled too, since the resolver walks up out of one
  * bundled directory into the next.
  *
@@ -333,7 +319,7 @@ export function publishedManifest(input: {
     ...(input.root.repository === undefined ? {} : { repository: input.root.repository }),
     type: 'module',
     engines: { node },
-    bin: { agentplexd: `./${ENTRYPOINT}` },
+    bin: { agentplex: `./${ENTRYPOINT}` },
     // The staging directory holds only what belongs in the package, so this
     // changes nothing about what npm packs. It is here so that the contents are
     // legible from the manifest -- and reviewable in a diff to it -- without
@@ -464,8 +450,8 @@ export async function assemblePackage(options: {
     await readFile(join(workspaceRoot, path), 'utf8');
   const rootManifest = parseManifest('package.json', await read('package.json'));
   const serviceManifest = parseManifest(
-    'apps/agentplexd/package.json',
-    await read('apps/agentplexd/package.json'),
+    `${BIN_APP}/package.json`,
+    await read(`${BIN_APP}/package.json`),
   );
   const bundled = await Promise.all(
     BUNDLED_PACKAGES.map(async (item) => {
@@ -533,7 +519,7 @@ async function main(): Promise<void> {
   process.stdout.write(`assembled ${relative(workspaceRoot, assembled.directory)}\n`);
 }
 
-// Imported by its test; executed by `pnpm --filter agentplexd package`.
+// Imported by its test; executed by `pnpm --filter agentplex package`.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await main();
 }

@@ -2,7 +2,7 @@ import type { ZodType } from 'zod';
 import type { CompletedProcess, ProcessRequest, ProcessRunner } from './process-runner.js';
 
 /**
- * An operation: the only shape in which agentplexd knows how to run a program.
+ * An operation: the only shape in which agentplex knows how to run a program.
  *
  * The spec states the rule and the reason together — "every spawn goes through
  * the operation registry: name to typed parser to argv builder, `shell: false`

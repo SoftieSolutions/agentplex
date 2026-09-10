@@ -199,7 +199,7 @@ describe('createClaudeProvisioning.install', () => {
     // that refuses outright, and it refuses loudly -- ESTRICTALLOWSCRIPTS on
     // stdout under --json, naming the package, the script and three ways to
     // proceed. Setup passes that through verbatim, which is a better outcome
-    // than agentplexd quietly deciding on the operator's behalf that their
+    // than agentplex quietly deciding on the operator's behalf that their
     // hardening does not apply to it.
     const plan = planned(createClaudeProvisioning().install({ prefix: PREFIX, version: VERSION }));
 
@@ -373,7 +373,7 @@ describe('createClaudeProvisioning.login', () => {
         command: 'claude',
         args: ['auth', 'login'],
         cwd: CWD,
-        // Without this the login lands in whichever home directory agentplexd
+        // Without this the login lands in whichever home directory agentplex
         // runs as, and the store the sessions will use is exactly as logged out
         // as it was, with nothing saying so.
         env: { CLAUDE_CONFIG_DIR: STORE.path },

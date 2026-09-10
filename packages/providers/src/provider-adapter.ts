@@ -333,7 +333,7 @@ export interface ProviderProvisioning {
    *
    * It takes a store because the credentials have to land in the store the
    * sessions will run against. A login that writes into whichever home
-   * directory agentplexd happens to run as leaves that store exactly as logged
+   * directory agentplex happens to run as leaves that store exactly as logged
    * out as it was, and nothing says so.
    */
   login(request: LoginRequest): Launch;
