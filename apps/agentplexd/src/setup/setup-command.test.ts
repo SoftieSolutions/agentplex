@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   createFakeProcessProbe,
   createFakeStoreFiles,
@@ -16,9 +16,8 @@ import {
 } from '@agentplex/providers';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
-import { createFakeHubDatabase, type FakeHubDatabase } from './fake-hub-database.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
-import { createFakeSetupMachine } from './fake-setup-machine.js';
+import { createFakeSetupMachine, type FakeSetupMachine } from './fake-setup-machine.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
 import { runSetupCommand, type SetupCommandDependencies } from './setup-command.js';
 import { SETUP_PLAN_VERSION } from './setup-plan.js';
@@ -74,15 +73,8 @@ interface Run {
   readonly files: FakeStoreFiles;
   readonly binPaths: readonly (readonly string[])[];
   readonly terminal: FakeTerminal;
-  readonly hubDatabase: FakeHubDatabase;
+  readonly setupMachine: FakeSetupMachine;
 }
-
-/** Every in-memory hub database a case opened, released when the case is over. */
-const openedDatabases: FakeHubDatabase[] = [];
-
-afterEach(async () => {
-  for (const database of openedDatabases.splice(0)) await database.close();
-});
 
 async function run(
   argv: readonly string[],
@@ -92,12 +84,15 @@ async function run(
     readonly files?: FakeStoreFiles;
     /** What the operator types, when the invocation is the interactive one. */
     readonly answers?: readonly string[];
-    readonly hubDatabase?: FakeHubDatabase;
   } = {},
 ): Promise<Run> {
   const machine = options.machine ?? machineWithClaude();
-  const hubDatabase = options.hubDatabase ?? createFakeHubDatabase();
-  if (!openedDatabases.includes(hubDatabase)) openedDatabases.push(hubDatabase);
+  const setupMachine = createFakeSetupMachine({
+    home: '/home/dev',
+    pathDirectories: ['/opt/homebrew/bin'],
+    directories: ['/home/dev/.claude'],
+    executables: ['/opt/homebrew/bin/claude'],
+  });
   const files =
     options.files ??
     createFakeStoreFiles({
@@ -110,12 +105,7 @@ async function run(
 
   const dependencies: SetupCommandDependencies = {
     terminal,
-    machine: createFakeSetupMachine({
-      home: '/home/dev',
-      pathDirectories: ['/opt/homebrew/bin'],
-      directories: ['/home/dev/.claude'],
-      executables: ['/opt/homebrew/bin/claude'],
-    }),
+    machine: setupMachine,
     runnerFor: (binPath): ProcessRunner => {
       binPaths.push(binPath);
       return machine;
@@ -138,7 +128,6 @@ async function run(
         }),
       ]),
     files,
-    hubDatabase,
     ids: { newId: () => 'id-under-test' },
     tokens: { newToken: () => 'minted-on-the-machine' },
     clock: { now: () => 1_700_000_000_000 },
@@ -154,7 +143,7 @@ async function run(
     files,
     binPaths,
     terminal,
-    hubDatabase,
+    setupMachine,
   };
 }
 
@@ -202,15 +191,16 @@ describe('agentplexd setup --plan', () => {
     expect(replayed.files.contents.get(IDENTITY)).toContain(PRE_MINTED);
   });
 
-  it('pairs nothing, even in --role=both, and even with a database in reach', async () => {
-    // The bound the local-pairing exception is drawn at. This run is
-    // `--role=both`, so a hub and a server end up on one host, and the command
-    // is holding a hub database seam the wizard would have used. It writes no
-    // row: a machine the plan named and nobody was present for is not a machine
-    // a hub may decide to trust.
+  it('records no local server, even in --role=both', async () => {
+    // The bound the local-server exception is drawn at on this front end. This
+    // run is `--role=both`, so a hub and a server end up on one host, and the
+    // command is holding the machine seam the wizard writes settings through.
+    // It writes none: a machine the plan named and nobody was present for is
+    // not a machine a hub may decide to trust, and the plan does not name the
+    // settings file either.
     const replayed = await run(['--plan', PLAN_FILE], { plan: PLAN });
 
-    expect(replayed.hubDatabase.opened).toEqual([]);
+    expect(replayed.setupMachine.writes).toEqual([]);
     expect(replayed.code).toBe(0);
   });
 
@@ -232,7 +222,7 @@ describe('agentplexd setup --plan', () => {
     plan.server.pairingToken = null;
     const replayed = await run(['--plan', PLAN_FILE], { plan: JSON.stringify(plan) });
 
-    expect(replayed.hubDatabase.opened).toEqual([]);
+    expect(replayed.setupMachine.writes).toEqual([]);
     expect(replayed.out).toContain(`pairing: a token was minted into ${IDENTITY}`);
     expect(replayed.out).not.toContain('minted-on-the-machine');
   });

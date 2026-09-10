@@ -9,7 +9,7 @@ import {
 } from '@agentplex/protocol';
 import { serveHubConnection } from '../../server/hub-connection.js';
 import { readyProvider } from '@agentplex/providers/testing';
-import type { ServerIdentity } from '../../server/server-identity.js';
+import type { ServerIdentity } from '@agentplex/providers';
 import {
   createFakeDialer,
   createFakeMessageSocket,

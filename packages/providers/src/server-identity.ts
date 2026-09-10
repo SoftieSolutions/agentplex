@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { serverIdSchema, type ServerId } from '@agentplex/protocol';
 import type { IdGenerator, TokenMinter } from '@agentplex/node-shared';
-import type { StoreFileSystem } from '@agentplex/providers';
+import type { StoreFileSystem } from './store-identity.js';
 
 /**
  * Who this server is, and the one secret that proves it.

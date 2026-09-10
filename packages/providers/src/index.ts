@@ -85,6 +85,13 @@ export type {
 } from './store-identity.js';
 export { nodeStoreFileSystem } from './node-store-files.js';
 
+export { ensureServerIdentity, readServerIdentity } from './server-identity.js';
+export type {
+  ServerIdentity,
+  ServerIdentityDependencies,
+  ServerIdentityResult,
+} from './server-identity.js';
+
 export type { ProcessProbe } from './process-probe.js';
 export { createNodeProcessProbe } from './node-process-probe.js';
 export type { NodeProcessProbeDependencies } from './node-process-probe.js';

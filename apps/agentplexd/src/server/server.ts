@@ -25,7 +25,7 @@ import {
   type StoreFileSystem,
 } from '@agentplex/providers';
 import { announceServer, type BeaconNetwork } from './server-beacon.js';
-import { ensureServerIdentity } from './server-identity.js';
+import { ensureServerIdentity } from '@agentplex/providers';
 import { createSessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
 

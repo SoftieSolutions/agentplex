@@ -1,4 +1,5 @@
-import type { DirectoryMade, SetupMachine } from './setup-machine.js';
+import type { FileRead } from '@agentplex/providers';
+import type { DirectoryMade, FileWritten, SetupMachine } from './setup-machine.js';
 
 /**
  * A machine written down: a home directory, a PATH, and what is on it.
@@ -21,23 +22,36 @@ export interface FakeSetupMachineOptions {
   readonly executables?: readonly string[];
   /** Paths a directory cannot be made at: a read-only home, a full disk. */
   readonly unmakeable?: readonly string[];
+  /** Files that exist, by path, with their contents: the settings file an installer left. */
+  readonly files?: Readonly<Record<string, string>>;
+  /** Paths a file cannot be written at: a read-only home, a directory owned by root. */
+  readonly unwritable?: readonly string[];
 }
 
 export interface FakeSetupMachine extends SetupMachine {
   /** Every directory a caller asked for, in order. */
   readonly made: readonly string[];
+  /** Every path a caller wrote, in order. Empty means nothing was written. */
+  readonly writes: readonly string[];
+  /** What is on the disk now, for reading a written file back. */
+  readonly contents: ReadonlyMap<string, string>;
 }
 
 export function createFakeSetupMachine(options: FakeSetupMachineOptions = {}): FakeSetupMachine {
   const directories = new Set(options.directories ?? []);
   const executables = new Set(options.executables ?? []);
   const unmakeable = new Set(options.unmakeable ?? []);
+  const unwritable = new Set(options.unwritable ?? []);
+  const contents = new Map(Object.entries(options.files ?? {}));
   const made: string[] = [];
+  const writes: string[] = [];
 
   return {
     home: options.home ?? '/home/dev',
     pathDirectories: options.pathDirectories ?? [],
     made,
+    writes,
+    contents,
 
     isDirectory: async (path) => directories.has(path),
     isExecutable: async (path) => executables.has(path),
@@ -46,6 +60,18 @@ export function createFakeSetupMachine(options: FakeSetupMachineOptions = {}): F
       made.push(path);
       if (unmakeable.has(path)) return { ok: false, problem: `EROFS: ${path}` };
       directories.add(path);
+      return { ok: true };
+    },
+
+    async readFile(path: string): Promise<FileRead> {
+      const existing = contents.get(path);
+      return existing === undefined ? { kind: 'missing' } : { kind: 'read', contents: existing };
+    },
+
+    async writeFile(path: string, text: string): Promise<FileWritten> {
+      writes.push(path);
+      if (unwritable.has(path)) return { ok: false, problem: `EACCES: ${path}` };
+      contents.set(path, text);
       return { ok: true };
     },
   };

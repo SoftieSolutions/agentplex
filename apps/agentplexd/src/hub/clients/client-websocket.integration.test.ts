@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createFakeStoreFiles } from '@agentplex/providers/testing';
 import {
   parseHubFrame,
   parseTextFrame,
@@ -82,6 +83,8 @@ async function startTestHub(clock = movableClock()): Promise<Hub> {
     webAssets: createFakeWebAssets(),
     host: HOST,
     port: 0,
+    localServer: null,
+    files: createFakeStoreFiles(),
   });
   return hub;
 }

@@ -587,6 +587,12 @@ AGENTPLEX_BIN_PATH=$BIN_DIR
 #AGENTPLEX_DATABASE_FILE=$STATE_DIR/hub.sqlite
 #AGENTPLEX_CLIENT_TOKEN=
 
+# The server beside the hub, for role=both: the hub pairs it at boot from the
+# token in that identity file, so nobody types one. \`$PACKAGE_NAME setup\`
+# fills these in.
+#AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=$STATE_DIR/server.json
+#AGENTPLEX_LOCAL_SERVER_PORT=8081
+
 # The server's half. The identity file is required for role=server and
 # role=both, and holds the pairing token; store paths are absolute and
 # ':'-separated.

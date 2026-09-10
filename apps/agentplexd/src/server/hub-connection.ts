@@ -18,7 +18,7 @@ import {
   type Logger,
   tokenMatches,
 } from '@agentplex/node-shared';
-import type { ServerIdentity } from './server-identity.js';
+import type { ServerIdentity } from '@agentplex/providers';
 import type { SessionController } from './session-control.js';
 
 /**

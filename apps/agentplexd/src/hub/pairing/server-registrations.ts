@@ -7,7 +7,11 @@ import {
 } from '@agentplex/protocol';
 import type { Queryable } from '../db/database.js';
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
-import { serverAddressSchema, storedServerAddressSchema } from './server-address.js';
+import {
+  serverAddressSchema,
+  storedServerAddressSchema,
+  type ServerAddress,
+} from './server-address.js';
 
 /**
  * Pairing, as rows: which servers this hub may dial, and with what token.
@@ -200,6 +204,39 @@ export async function revokeServer(
   );
   const row = result.rows[0];
   return row === undefined ? null : revokedServerRegistrationSchema.parse(row);
+}
+
+/** What a boot may bring a local server's row to: the three facts that can drift. */
+export interface ReconciledRegistration {
+  readonly address: ServerAddress;
+  readonly token: string;
+  readonly serverId: ServerId;
+}
+
+/**
+ * Brings a live pairing to what the hub's own settings and the server's own
+ * identity file say, in one statement.
+ *
+ * For the local server and nothing else: no form submits this, no frame
+ * carries it, and the one caller is the boot step in `local-server.ts`, which
+ * has already read the token off a file and built the address from a port. It
+ * takes a `ServerAddress` for that reason -- the brand is the proof the parser
+ * ran -- and it never touches a revoked row, because a revocation is a fact
+ * about the past and the past does not acquire new tokens.
+ */
+export async function reconcileServerRegistration(
+  database: Queryable,
+  id: ServerRegistrationId,
+  facts: ReconciledRegistration,
+): Promise<LiveServerRegistration | null> {
+  const result = await database.query(
+    `UPDATE servers SET address = ?, token = ?, server_id = ?
+     WHERE id = ? AND revoked_at IS NULL
+     RETURNING ${COLUMNS}`,
+    [facts.address, serverTokenSchema.parse(facts.token), facts.serverId, id],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : liveServerRegistrationSchema.parse(row);
 }
 
 /**

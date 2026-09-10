@@ -33,7 +33,6 @@ import {
 import { nodePtyFactory, createPtySupervisor } from '@agentplex/pty';
 import { createOperationRegistry } from './server/operations/operation-registry.js';
 import { createTerminalManager } from './server/terminal-manager.js';
-import { createNodeHubDatabase } from './setup/node-hub-database.js';
 import { createNodeSetupMachine } from './setup/node-setup-machine.js';
 import { createNodeSetupTerminal } from './setup/node-setup-terminal.js';
 import { runSetupCommand, setupUsage } from './setup/setup-command.js';
@@ -97,13 +96,12 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
 
   // `setup` is a different program that happens to share a binary: it reads a
-  // plan rather than a configuration, binds no port, and exits when it is done.
-  // The one file it opens is the hub's database, in `--role=both`, for as long
-  // as it takes to write the pairing the hub will dial its own server with — a
-  // database the operator names in that run and nothing else can. It is
-  // dispatched before `loadConfig` because the daemon's flags are not its flags,
-  // and because the settings a run of setup produces are the ones the daemon
-  // will later be started with.
+  // plan rather than a configuration, binds no port, opens no database, and
+  // exits when it is done. It writes files -- an identity, store files, the
+  // settings -- and the hub reads them at its next boot. It is dispatched
+  // before `loadConfig` because the daemon's flags are not its flags, and
+  // because the settings a run of setup produces are the ones the daemon will
+  // later be started with.
   if (argv[0] === 'setup') {
     process.exitCode = await setUp(argv.slice(1), write);
     return;
@@ -332,26 +330,11 @@ async function setUp(argv: readonly string[], write: (line: string) => void): Pr
           }),
         ]),
       files: nodeStoreFileSystem,
-      // The hub's database, opened only where the wizard asks for it and closed
-      // again before setup writes its next line. The migrations are the same
-      // files a hub start applies, from the same directory, because this is the
-      // same binary — so a hub started against that database afterwards finds
-      // its schema already there.
-      //
-      // The logger is deliberately quiet: the migration runner's account of what
-      // it applied is a log line, and setup's output goes to a person reading a
-      // terminal. An error still surfaces.
-      hubDatabase: createNodeHubDatabase({
-        migrationsDirectory: MIGRATIONS_DIRECTORY,
-        migrationFileSystem: nodeMigrationFileSystem,
-        logger: createLogger('error', jsonLineSink(write, systemClock)),
-        clock: systemClock,
-      }),
       ids: randomIdGenerator,
       // A plan that brought no pairing token gets one minted here, from the same
       // CSPRNG a server's first start would have used. It is also the token the
-      // local pairing is made with in `--role=both`, read back off the identity
-      // file: setup has one place a secret comes from, and this is it.
+      // hub pairs the local server with at its next boot, read back off the
+      // identity file: setup has one place a secret comes from, and this is it.
       tokens: randomTokenMinter,
       clock: systemClock,
       write,
