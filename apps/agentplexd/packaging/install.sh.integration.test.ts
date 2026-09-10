@@ -32,7 +32,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const packagingDirectory = dirname(fileURLToPath(import.meta.url));
 const scriptPath = join(packagingDirectory, 'install.sh');
-const documentation = join(packagingDirectory, '..', '..', '..', 'docs', 'install.md');
+const documentation = join(packagingDirectory, '..', 'README.md');
 
 const suiteIsRoot = process.getuid?.() === 0;
 

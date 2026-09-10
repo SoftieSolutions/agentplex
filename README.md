@@ -7,9 +7,9 @@ is first class) wherever they belong — a homelab box, a mac mini, an EC2
 instance — and gives you one installable web app that sees all of them, tells
 you which ones are waiting on you, and lets you answer from wherever you are.
 
-> Status: early. Milestone 1 of the [v2 design](docs/specs/2026-09-01-agentplex-v2-design.md)
-> — the scaffold, protocol package, service skeleton and database — is what
-> exists so far. It does not yet run sessions.
+> Status: early. Milestone 1 of the v2 design — the scaffold, protocol
+> package, service skeleton and database — is what exists so far. It does not
+> yet run sessions.
 
 ## How it fits together
 
@@ -39,7 +39,6 @@ single-machine case.
 apps/agentplexd/     the service: src/hub/, src/server/, src/shared/
 apps/web/            the PWA
 packages/protocol/   frame types and parsers, shared by both
-docs/specs/          design documents
 ```
 
 `packages/protocol` is a package because two apps share it, and neither app may
@@ -68,9 +67,6 @@ natively and never build an image.
 Running the server role bare metal — `node` on a mac mini or a laptop, no
 container — is equally supported, and often the better arrangement: the role
 spawns sessions against the machine's real filesystem and credentials.
-
-[docs/install.md](docs/install.md) covers all of it: every setting, the two
-ways to drop Caddy, the bare-metal role, and upgrading.
 
 For working on the code, Node 24 and pnpm 11:
 
@@ -136,9 +132,6 @@ and a session outlives the tab that opened it — except stopping the server.
 A store is identified by an `agentplex-store.json` file at its root, minted the
 first time a server mounts it. Two servers mounting the same volume report the
 same store, and moving the volume takes its sessions with it.
-
-[docs/install.md](docs/install.md) has these in full, along with the settings
-the compose file reads.
 
 ## Contributing
 

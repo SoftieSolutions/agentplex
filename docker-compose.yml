@@ -12,7 +12,7 @@
 #
 # Caddy is optional and dropping it is a supported path, not a hypothetical:
 # `docker compose up -d hub` starts the hub and nothing else, and the hub's own
-# port is published on the host either way. See docs/install.md.
+# port is published on the host either way.
 
 name: agentplex
 

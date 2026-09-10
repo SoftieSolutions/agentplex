@@ -23,9 +23,6 @@ app and the migrations, so a machine needs Node and nothing else from this
 project: no pnpm, no vite, no checkout. Upgrading is installing a later version,
 and pinning one is `agentplexd@<version>`.
 
-Full documentation, including every flag and environment variable, is in
-[docs/install.md](https://github.com/SoftieSolutions/agentplex/blob/master/docs/install.md).
-
 ## Installing needs a C++ toolchain on Linux
 
 This is the one thing that will stop a clean install, so it is first.

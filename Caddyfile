@@ -4,7 +4,7 @@
 #
 # If TLS already exists in front of this machine - Tailscale HTTPS, or a
 # reverse proxy already running here - this file and the caddy service both go
-# away. docs/install.md says what to change.
+# away.
 
 {$AGENTPLEX_DOMAIN} {
 	encode zstd gzip
