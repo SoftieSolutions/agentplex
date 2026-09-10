@@ -1,6 +1,6 @@
 import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig, usage, type ConfigResult } from './config.js';
+import { loadDoctorConfig, doctorUsage, type ConfigResult } from './config.js';
 
 const IDENTITY_FILE = '/etc/agentplexd/server.json';
 
@@ -13,8 +13,8 @@ const IDENTITY_FILE = '/etc/agentplexd/server.json';
  * settings calls `loadConfig` directly so it can leave it out.
  */
 function load(argv: string[], env: Record<string, string | undefined> = {}): ConfigResult {
-  return loadConfig({
-    argv: ['doctor', ...argv],
+  return loadDoctorConfig({
+    argv,
     env: {
       AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE,
       ...env,
@@ -27,7 +27,7 @@ function expectProblems(result: ConfigResult): readonly string[] {
   return result.ok ? [] : result.problems;
 }
 
-describe('loadConfig roles', () => {
+describe('loadDoctorConfig roles', () => {
   it('reads the role from a flag', () => {
     const result = load(['--role=server']);
     expect(result).toMatchObject({ ok: true, config: { role: 'server' } });
@@ -39,7 +39,7 @@ describe('loadConfig roles', () => {
   });
 
   it('lets a flag override the environment, because a flag was just typed', () => {
-    const result = load(['--role=server'], { AGENTPLEX_ROLE: 'both' });
+    const result = load(['--role=server'], { AGENTPLEX_ROLE: 'hub' });
     expect(result).toMatchObject({ ok: true, config: { role: 'server' } });
   });
 
@@ -52,18 +52,19 @@ describe('loadConfig roles', () => {
     expect(problems[0]).toContain('hub, server, both');
   });
 
-  it('refuses the hub and both roles, and names the program that runs the hub', () => {
-    // Still words setup and the installer know, so the refusal is not "unknown
-    // role": the operator who typed one is not confused about roles; the layout
-    // changed under them.
-    for (const role of ['hub', 'both']) {
-      const problems = expectProblems(load([`--role=${role}`]));
-      expect(problems[0]).toContain('apps/hub');
-    }
+  it('inspects a hub-only machine as one with no server half', () => {
+    const result = load(['--role=hub']);
+    expect(result).toMatchObject({ ok: true, config: { role: 'hub' } });
+    expect(result.ok && 'server' in result.config).toBe(false);
+  });
+
+  it('gives the both role a server half to inspect', () => {
+    const result = load(['--role=both']);
+    expect(result).toMatchObject({ ok: true, config: { role: 'both', server: { port: 8081 } } });
   });
 });
 
-describe('loadConfig ports', () => {
+describe('loadDoctorConfig ports', () => {
   it('defaults the port so a first run needs no port decision', () => {
     const result = load(['--role=server']);
     expect(result).toMatchObject({ ok: true, config: { server: { port: 8081 } } });
@@ -85,7 +86,7 @@ describe('loadConfig ports', () => {
   });
 });
 
-describe('loadConfig failure reporting', () => {
+describe('loadDoctorConfig failure reporting', () => {
   it('reports every problem at once rather than one env var per restart', () => {
     const problems = expectProblems(
       load(['--role=server', '--server-port=abc', '--log-level=loud', '--announce=maybe']),
@@ -109,7 +110,7 @@ describe('loadConfig failure reporting', () => {
   });
 });
 
-describe('loadConfig store paths', () => {
+describe('loadDoctorConfig store paths', () => {
   function storePaths(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);
     expect(result.ok).toBe(true);
@@ -169,7 +170,7 @@ describe('loadConfig store paths', () => {
   });
 });
 
-describe('loadConfig bin path', () => {
+describe('loadDoctorConfig bin path', () => {
   function binPath(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);
     expect(result.ok).toBe(true);
@@ -225,12 +226,12 @@ describe('loadConfig bin path', () => {
   });
 
   it('is listed in the usage message like every other setting', () => {
-    expect(usage()).toContain('--bin-path');
-    expect(usage()).toContain('AGENTPLEX_BIN_PATH');
+    expect(doctorUsage()).toContain('--bin-path');
+    expect(doctorUsage()).toContain('AGENTPLEX_BIN_PATH');
   });
 });
 
-describe('loadConfig terminal cap', () => {
+describe('loadDoctorConfig terminal cap', () => {
   function terminalCap(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);
     expect(result.ok).toBe(true);
@@ -256,7 +257,7 @@ describe('loadConfig terminal cap', () => {
   });
 });
 
-describe('loadConfig announce', () => {
+describe('loadDoctorConfig announce', () => {
   function announce(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);
     expect(result.ok).toBe(true);
@@ -292,13 +293,13 @@ describe('loadConfig announce', () => {
   });
 });
 
-describe('loadConfig server identity file', () => {
+describe('loadDoctorConfig server identity file', () => {
   /**
    * Deliberately not the helper above: these cases are about the identity
    * file's absence, so it is the one setting left out.
    */
   function loadBare(argv: string[], env: Record<string, string | undefined> = {}): ConfigResult {
-    return loadConfig({ argv: ['doctor', ...argv], env });
+    return loadDoctorConfig({ argv, env });
   }
 
   function identityPath(argv: string[], env: Record<string, string | undefined> = {}) {
@@ -337,7 +338,7 @@ describe('loadConfig server identity file', () => {
   });
 });
 
-describe('loadConfig log level', () => {
+describe('loadDoctorConfig log level', () => {
   it('defaults to info', () => {
     expect(load(['--role=server'])).toMatchObject({ ok: true, config: { logLevel: 'info' } });
   });
@@ -353,7 +354,7 @@ describe('loadConfig log level', () => {
   });
 });
 
-describe('loadConfig host', () => {
+describe('loadDoctorConfig host', () => {
   it('defaults to every interface, because a container is reached from outside its loopback', () => {
     expect(load(['--role=server'])).toMatchObject({ ok: true, config: { host: '0.0.0.0' } });
   });
@@ -374,55 +375,7 @@ describe('loadConfig host', () => {
   });
 
   it('is listed in the usage message like every other setting', () => {
-    expect(usage()).toContain('--host');
-    expect(usage()).toContain('AGENTPLEX_HOST');
-  });
-});
-
-describe('loadConfig commands', () => {
-  it('refuses to serve, and names the program that does', () => {
-    // The bare invocation every unit file used to use. The server is its own
-    // program now, and a unit that still starts this one is told which to
-    // start rather than left running nothing.
-    const problems = expectProblems(
-      loadConfig({
-        argv: ['--role=server'],
-        env: { AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE },
-      }),
-    );
-
-    expect(problems[0]).toContain('apps/server');
-  });
-
-  it('reads a command word before the flags', () => {
-    const result = load(['--role=server']);
-
-    expect(result).toMatchObject({ ok: true, command: 'doctor', config: { role: 'server' } });
-  });
-
-  it('refuses a command nothing implements, rather than falling through to serving', () => {
-    // Falling through would start a long-running service for somebody who
-    // typed a word they expected to be read-only.
-    const problems = expectProblems(load(['doctro', '--role=server']));
-
-    expect(problems.join(' ')).toContain('doctro');
-  });
-
-  it('collects a bad command alongside every other problem', () => {
-    const problems = expectProblems(loadConfig({ argv: ['nonsense', '--role=nonsense'], env: {} }));
-
-    expect(problems.length).toBeGreaterThan(1);
-  });
-
-  it('reads a command only as the first argument, so a value is never one', () => {
-    // `--role server` puts a bare word in argv that is not a command, and a
-    // parser scanning for the first non-flag anywhere would take it as one.
-    const result = load(['--role', 'server']);
-
-    expect(result).toMatchObject({ ok: true, command: 'doctor', config: { role: 'server' } });
-  });
-
-  it('names the commands in the usage message', () => {
-    expect(usage()).toContain('doctor');
+    expect(doctorUsage()).toContain('--host');
+    expect(doctorUsage()).toContain('AGENTPLEX_HOST');
   });
 });

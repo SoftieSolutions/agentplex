@@ -38,7 +38,8 @@ that runs both starts one of each.
 apps/hub/              the hub: database, migrations, pairing, discovery, the PWA's bytes
 apps/server/           the server: terminals, session control, identity, beacon, the hub connection
 apps/setup/            the wizard and the plan replay
-apps/agentplexd/       doctor, until it is its own app
+apps/doctor/           the read-only check of a machine
+apps/agentplexd/       the installed name, dispatching doctor by path until AGX-99
 apps/web/              the PWA
 packages/protocol/     frame types and parsers, shared by the service and the PWA
 packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share

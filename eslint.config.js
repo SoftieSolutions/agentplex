@@ -187,6 +187,25 @@ export default tseslint.config(
     },
   },
   {
+    // The doctor reads a machine and must not be able to change it: a check is
+    // easier to trust when the program running it cannot open a pty or
+    // provision. Its manifest does not declare `pty`, and this is the rule
+    // made checkable rather than a dependency list somebody has to remember.
+    files: ['apps/doctor/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['@agentplex/pty', '@agentplex/pty/*'],
+          message: 'The doctor reads a machine and opens no pty. It may not import @agentplex/pty.',
+        },
+        {
+          group: ['node:child_process', 'child_process'],
+          message: 'Starting a child directly bypasses the operation registry.',
+        },
+      ]),
+    },
+  },
+  {
     // The one exception inside the service, and the reason the rule can be
     // absolute everywhere else in it: this file *is* the seam. It is where
     // `shell: false` is baked in and where the inherited environment is
