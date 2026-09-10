@@ -1,6 +1,6 @@
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { Provider, StoreDescriptor } from '@agentplex/protocol';
-import { DEFAULT_HUB_PORT, DEFAULT_SERVER_PORT, ROLES, type Role } from '../config/config.js';
+import { DEFAULT_HUB_PORT, DEFAULT_SERVER_PORT } from '@agentplex/node-shared';
 import type { ProcessRunner, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 import type { PtySupervisor } from '@agentplex/pty';
 import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
@@ -17,6 +17,8 @@ import {
   type PlannedProvider,
   type SetupPlan,
   SETUP_PLAN_VERSION,
+  ROLES,
+  type Role,
 } from './setup-plan.js';
 import {
   askChoice,

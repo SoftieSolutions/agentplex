@@ -1,5 +1,4 @@
 import type { Provider, ServerId } from '@agentplex/protocol';
-import type { Role } from '../config/config.js';
 import {
   runSetupOperation,
   providerAuthStateOperation,
@@ -20,6 +19,7 @@ import {
   type PlannedProvider,
   type PlannedServer,
   type SetupPlan,
+  type Role,
 } from './setup-plan.js';
 
 /**

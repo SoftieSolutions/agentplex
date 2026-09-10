@@ -45,7 +45,7 @@ import { nodePtyFactory, type Pty, type PtyExit } from '@agentplex/pty';
 const EXIT_TIMEOUT_MS = 15_000;
 const TEST_TIMEOUT_MS = 25_000;
 
-const ENTRYPOINT = fileURLToPath(new URL('../../dist/main.js', import.meta.url));
+const ENTRYPOINT = fileURLToPath(new URL('../dist/main.js', import.meta.url));
 
 /** Role, hub port, apply, save. Every one of them takes the offer. */
 const RETURN = '\r';
@@ -186,7 +186,7 @@ describe('a finished setup run', () => {
     async () => {
       const pty = nodePtyFactory.open({
         command: process.execPath,
-        args: [ENTRYPOINT, 'setup', '--role', 'hub'],
+        args: [ENTRYPOINT, '--role', 'hub'],
         cwd: home,
         // Everything the child is allowed to know about this machine. `PATH` holds
         // the directory node is in and nothing else, so the survey finds no
@@ -236,7 +236,7 @@ describe('a finished setup run', () => {
       // `--role server`: no hub port to answer, and every question that is left
       // is one the login step depends on.
       const driven = driveOnAPty(
-        ['setup', '--role', 'server'],
+        ['--role', 'server'],
         [
           // role, server port, stores, claude, apply, log in now
           ...Array<string>(6).fill(RETURN),

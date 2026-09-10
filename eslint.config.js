@@ -163,7 +163,12 @@ export default tseslint.config(
     },
   },
   {
-    files: ['apps/agentplexd/**/*.ts', 'apps/hub/**/*.ts', 'apps/server/**/*.ts'],
+    files: [
+      'apps/agentplexd/**/*.ts',
+      'apps/hub/**/*.ts',
+      'apps/server/**/*.ts',
+      'apps/setup/**/*.ts',
+    ],
     languageOptions: { globals: globals.node },
     rules: {
       // Every spawn goes through the operation registry (AGX-21), and a rule

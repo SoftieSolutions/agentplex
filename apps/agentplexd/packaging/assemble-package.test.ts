@@ -105,13 +105,15 @@ const serverAppManifest: Manifest = {
   },
 };
 
+const setupAppManifest: Manifest = { ...serverAppManifest, name: '@agentplex/setup' };
+
 const bundledManifests = [protocolManifest, nodeSharedManifest, providersManifest, ptyManifest];
 
 function derived(): Record<string, unknown> {
   return publishedManifest({
     root: rootManifest,
     service: serviceManifest,
-    apps: [hubManifest, serverAppManifest],
+    apps: [hubManifest, serverAppManifest, setupAppManifest],
     bundled: bundledManifests,
   });
 }
@@ -239,6 +241,7 @@ describe('packageEntries', () => {
     expect(sources).toContain('apps/agentplexd/dist');
     expect(sources).toContain('apps/hub/dist');
     expect(sources).toContain('apps/server/dist');
+    expect(sources).toContain('apps/setup/dist');
     expect(sources).toContain('apps/hub/migrations');
     expect(sources).toContain('packages/protocol/dist');
     expect(sources).toContain('packages/node-shared/dist');
@@ -335,6 +338,8 @@ describe('the assembled package', () => {
     await write('apps/hub/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
     await write('apps/server/package.json', JSON.stringify(serverAppManifest));
     await write('apps/server/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
+    await write('apps/setup/package.json', JSON.stringify(setupAppManifest));
+    await write('apps/setup/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
     await write('apps/hub/migrations/0001_hub_identity.sql', 'create table hub (id text);\n');
     await write('packages/protocol/package.json', JSON.stringify(protocolManifest));
     await write('packages/protocol/dist/index.js', 'export const version = 7;\n');

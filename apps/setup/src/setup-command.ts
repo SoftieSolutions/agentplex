@@ -1,11 +1,10 @@
-import { ROLES, type Role } from '../config/config.js';
 import type { ProcessRunner, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 import type { PtySupervisor } from '@agentplex/pty';
 import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
 import type { SetupMachine } from './setup-machine.js';
-import { parseSetupPlan, setupBinPath, type SetupPlan } from './setup-plan.js';
+import { parseSetupPlan, ROLES, setupBinPath, type Role, type SetupPlan } from './setup-plan.js';
 import type { SetupTerminal } from './setup-terminal.js';
 import { runSetupWizard } from './setup-wizard.js';
 
@@ -82,8 +81,8 @@ export interface SetupCommandDependencies {
 
 export function setupUsage(): string {
   return [
-    'Usage: agentplexd setup [--role <hub|server|both>]',
-    '       agentplexd setup --plan <file>',
+    'Usage: agentplex setup [--role <hub|server|both>]',
+    '       agentplex setup --plan <file>',
     '',
     '  With no plan, setup asks what it cannot discover. Which providers are',
     '  installed, which directory each is in, whether they are logged in and',
@@ -105,7 +104,7 @@ export async function runSetupCommand(
 ): Promise<number> {
   const { writeError } = dependencies;
   const report = (problems: readonly string[]): number => {
-    for (const problem of problems) writeError(`agentplexd setup: ${problem}`);
+    for (const problem of problems) writeError(`agentplex setup: ${problem}`);
     writeError(`\n${setupUsage()}`);
     return EXIT_BAD_PLAN;
   };
@@ -135,7 +134,7 @@ async function askAndProvision(
     // Nothing was asked and nothing was assumed. The other front end is the one
     // that works without a person, so it is what this points at.
     dependencies.writeError(
-      `agentplexd setup: there is nobody to ask. Run it in a terminal, or replay a plan with ${PLAN_FLAG} <file>.`,
+      `agentplex setup: there is nobody to ask. Run it in a terminal, or replay a plan with ${PLAN_FLAG} <file>.`,
     );
     return EXIT_BAD_PLAN;
   }
@@ -186,10 +185,10 @@ async function replayPlan(
     tokens: dependencies.tokens,
   });
 
-  write(`agentplexd setup: replayed ${file}`);
+  write(`agentplex setup: replayed ${file}`);
   for (const line of describeOutcome(outcome)) write(line);
   for (const line of describeUnattendedPairing(parsed.plan, outcome)) write(line);
-  for (const problem of outcome.problems) writeError(`agentplexd setup: ${problem}`);
+  for (const problem of outcome.problems) writeError(`agentplex setup: ${problem}`);
 
   return outcome.problems.length === 0 ? EXIT_OK : EXIT_PROBLEMS;
 }
