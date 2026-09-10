@@ -1,54 +1,30 @@
 import type { Config } from './config/config.js';
-import type { Database } from './hub/db/database.js';
-import type { MigrationFileSystem } from './hub/db/migration-files.js';
-import { startHub, type Hub } from './hub/hub.js';
 import type { OperationRegistry } from './server/operations/operation-registry.js';
 import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
-import type { BeaconSource } from './hub/discovery/beacon-listener.js';
-import type { WebAssetFileSystem } from './hub/web/web-assets.js';
 import type { BeaconNetwork } from './server/server-beacon.js';
 import { startSessionServer, type SessionServer } from './server/server.js';
 import type { TerminalManager } from './server/terminal-manager.js';
-import type {
-  Clock,
-  IdGenerator,
-  Logger,
-  SocketDialer,
-  Timers,
-  TokenMinter,
-} from '@agentplex/node-shared';
+import type { Clock, IdGenerator, Logger, Timers, TokenMinter } from '@agentplex/node-shared';
 
 /**
- * Composition of the roles a configuration asks for.
+ * Composition of the server from a configuration.
  *
- * Everything the process supplies — the database driver, the disk, the logger,
- * the id source — arrives as a dependency, so the whole runtime can be started
- * in a test against fakes and shut back down.
+ * Everything the process supplies -- the disk, the logger, the id source --
+ * arrives as a dependency, so the whole thing can be started in a test against
+ * fakes and shut back down.
  */
 export interface RuntimeDependencies {
   readonly logger: Logger;
   readonly ids: IdGenerator;
-  /** Named rather than imported, so no test path opens a real database by accident. */
-  readonly openDatabase: (path: string) => Database;
-  readonly migrationsDirectory: string;
-  readonly migrationFileSystem: MigrationFileSystem;
-  /**
-   * The built PWA the hub role serves, injected for the same reason the
-   * migrations are. Where it sits is a fact about the installation — a
-   * workspace build, a layer in the image, a published package — and `main` is
-   * the only place that has read one.
-   */
-  readonly webAssets: WebAssetFileSystem;
-  /** The store volumes, injected for the same reason the migrations directory is. */
+  /** The store volumes, injected so that a test runs on a volume it wrote down. */
   readonly storeFileSystem: StoreFileSystem;
   /**
-   * Where a secret comes from: the server role's pairing token on a first
-   * start, and every ticket the hub role issues to a client.
+   * Where a secret comes from: the pairing token on a first start.
    *
    * Injected rather than imported for the reason the id source is, and one
-   * more: a test that asserts on a handshake or redeems a ticket needs to know
-   * the value, and a seam is how it does that without the entropy being weaker
-   * in the build anyone actually runs.
+   * more: a test that asserts on a handshake needs to know the value, and a
+   * seam is how it does that without the entropy being weaker in the build
+   * anyone actually runs.
    */
   readonly tokens: TokenMinter;
   /**
@@ -61,8 +37,8 @@ export interface RuntimeDependencies {
    */
   readonly providers: ProviderRegistry;
   /**
-   * How the server role finds out at boot what those adapters can actually
-   * start on this machine.
+   * How the server finds out at boot what those adapters can actually start on
+   * this machine.
    *
    * Injected for the same reason the operations are, and it is the same
    * constraint underneath: it resolves programs against the search path a child
@@ -72,7 +48,7 @@ export interface RuntimeDependencies {
    */
   readonly preflight: ProviderPreflight;
   /**
-   * The terminal manager the server role starts sessions on, and the supervisor
+   * The terminal manager the server starts sessions on, and the supervisor
    * underneath it. Injected for the same reason the providers are: a test
    * starts the whole runtime without forking anything, and the one place a real
    * pty is opened stays visible in `main`. It is built there rather than here
@@ -80,7 +56,7 @@ export interface RuntimeDependencies {
    */
   readonly terminals: TerminalManager;
   /**
-   * The server role's operation registry: every child that is not a pty.
+   * The operation registry: every child that is not a pty.
    *
    * Injected for the same reason the terminals are. The runner underneath it
    * fixes the environment children inherit, and `main` is the only place
@@ -89,40 +65,20 @@ export interface RuntimeDependencies {
    */
   readonly operations: OperationRegistry;
   /**
-   * What the hub role dials paired servers with, and the deadlines it retries
-   * on. Injected for the same reason everything else here is: a test drives
-   * the whole runtime against fake sockets and a clock it controls, and the
-   * one place a real websocket is opened stays visible in `main`.
-   */
-  readonly dialer: SocketDialer;
-  /**
-   * What the server role would announce itself on, if it is configured to.
+   * What the server would announce itself on, if it is configured to.
    *
    * Supplied whatever the configuration says, and consulted only when it says
-   * `announce`: the process owns the one place a UDP socket can be opened, the
-   * same way it owns the one place a websocket is dialled, and whether that
-   * capability is used is a setting rather than a fact about the build. A test
-   * drives the whole runtime without a network on the machine.
+   * `announce`: the process owns the one place a UDP socket can be opened, and
+   * whether that capability is used is a setting rather than a fact about the
+   * build. A test drives the whole runtime without a network on the machine.
    */
   readonly beacon: BeaconNetwork;
-  /**
-   * Where the hub role hears the beacons other machines send.
-   *
-   * The other half of the same facility, and a separate dependency because the
-   * two are separate decisions. Announcing is a setting the operator turns on;
-   * listening is what a hub does whenever it runs. One object carrying both
-   * would put "may this process broadcast its address" and "does this hub
-   * listen" behind a single name, and the first of those is the one that must
-   * stay off until somebody says otherwise.
-   */
-  readonly discovery: BeaconSource;
   readonly timers: Timers;
   readonly clock: Clock;
 }
 
 export interface Runtime {
-  readonly hub: Hub | null;
-  readonly server: SessionServer | null;
+  readonly server: SessionServer;
   stop(): Promise<void>;
 }
 
@@ -133,126 +89,47 @@ export async function startRuntime(
   const {
     logger,
     ids,
-    openDatabase,
-    migrationsDirectory,
-    migrationFileSystem,
-    webAssets,
     storeFileSystem,
     tokens,
     providers,
     preflight,
     terminals,
     operations,
-    dialer,
     beacon,
-    discovery,
     timers,
     clock,
   } = dependencies;
-  // The interface to bind is a setting like any other, so it arrives with the
-  // rest of them rather than as a dependency the process reads for itself.
-  const host = config.host;
 
-  const database = 'hub' in config ? openDatabase(config.hub.databaseFile) : null;
-
-  // Started one at a time, and torn back down on failure: a half-started
-  // process that keeps a port open is harder to diagnose than one that exited.
-  let hub: Hub | null = null;
-  let server: SessionServer | null = null;
-
-  try {
-    if ('hub' in config && database !== null) {
-      hub = await startHub({
-        database,
-        logger,
-        ids,
-        clock,
-        dialer,
-        // No setting consulted: a hub listens whenever it runs.
-        discovery,
-        timers,
-        migrationsDirectory,
-        migrationFileSystem,
-        webAssets,
-        host,
-        port: config.hub.port,
-        clientToken: config.hub.clientToken,
-        tokens,
-        // The one pairing nobody types, and it arrives as configuration: a
-        // hub whose settings name no local server registers nothing.
-        localServer: config.hub.localServer,
-        files: storeFileSystem,
-      });
-    }
-    if ('server' in config) {
-      server = await startSessionServer({
-        logger,
-        ids,
-        host,
-        port: config.server.port,
-        storePaths: config.server.storePaths,
-        storeFileSystem,
-        identityPath: config.server.identityPath,
-        tokens,
-        providers,
-        preflight,
-        terminals,
-        operations,
-        clock,
-        timers,
-        // The setting decides, in the one place that has read it. A server
-        // that was not asked to announce is handed no socket to do it with.
-        announce: config.server.announce ? beacon : null,
-      });
-    }
-  } catch (error) {
-    await shutDown(hub, server, database, logger);
-    throw error;
-  }
+  const server = await startSessionServer({
+    logger,
+    ids,
+    host: config.host,
+    port: config.server.port,
+    storePaths: config.server.storePaths,
+    storeFileSystem,
+    identityPath: config.server.identityPath,
+    tokens,
+    providers,
+    preflight,
+    terminals,
+    operations,
+    clock,
+    timers,
+    // The setting decides, in the one place that has read it. A server that
+    // was not asked to announce is handed no socket to do it with.
+    announce: config.server.announce ? beacon : null,
+  });
 
   logger.info('agentplexd started', { role: config.role });
 
   let stopped = false;
   return {
-    hub,
     server,
     async stop() {
       if (stopped) return;
       stopped = true;
-      await shutDown(hub, server, database, logger);
+      await server.stop();
       logger.info('agentplexd stopped');
     },
   };
-}
-
-/**
- * Shuts every part down and reports the first failure at the end.
- *
- * One half failing to close must not leave the other half running: a listener
- * that outlives the shutdown holds the port against the next start.
- */
-async function shutDown(
-  hub: Hub | null,
-  server: SessionServer | null,
-  database: Database | null,
-  logger: Logger,
-): Promise<void> {
-  const failures: unknown[] = [];
-
-  for (const [what, close] of [
-    ['server', () => server?.stop()],
-    ['hub', () => hub?.stop()],
-    ['database', () => database?.close()],
-  ] as const) {
-    try {
-      await close();
-    } catch (error) {
-      failures.push(error);
-      logger.error('shutdown step failed', { what, error: String(error) });
-    }
-  }
-
-  if (failures.length > 0) {
-    throw new AggregateError(failures, 'agentplexd did not shut down cleanly');
-  }
 }

@@ -35,6 +35,16 @@ import { z } from 'zod';
 export const OUTPUT_DIRECTORY = 'apps/agentplexd/release';
 
 /**
+ * The apps in the package besides the one that owns the bin, and where each
+ * lives. Each is copied at its workspace path, so `apps/hub/dist/main.js`
+ * resolves its migrations and the client at the same distances it does in a
+ * checkout, and what each needs is declared by the published manifest.
+ */
+export const OTHER_APPS: readonly BundledPackage[] = [
+  { name: '@agentplex/hub', directory: 'apps/hub' },
+];
+
+/**
  * The workspace packages the compiled service imports, and where each lives.
  *
  * Every one is published under no name of its own, so each travels inside the
@@ -143,8 +153,15 @@ export function packageEntries(): readonly PackageEntry[] {
       reason: 'the compiled service',
     },
     {
-      from: 'apps/agentplexd/migrations',
-      to: 'apps/agentplexd/migrations',
+      from: 'apps/hub/dist',
+      to: 'apps/hub/dist',
+      kind: 'directory',
+      proof: 'main.js',
+      reason: 'the compiled hub',
+    },
+    {
+      from: 'apps/hub/migrations',
+      to: 'apps/hub/migrations',
       kind: 'directory',
       proof: '0001_hub_identity.sql',
       reason: 'the schema the hub applies before it listens',
@@ -230,6 +247,8 @@ export function packageEntries(): readonly PackageEntry[] {
 export function publishedManifest(input: {
   readonly root: Manifest;
   readonly service: Manifest;
+  /** The other apps in the package: what they need, the package declares too. */
+  readonly apps?: readonly Manifest[];
   readonly bundled: readonly Manifest[];
 }): Record<string, unknown> {
   const versions = new Map(input.bundled.map((manifest) => [manifest.name, manifest.version]));
@@ -237,9 +256,10 @@ export function publishedManifest(input: {
   const declaredBy = new Map<string, string>();
   const bundleDependencies = new Set<string>();
 
-  // The service first, then each bundled package: a range the service declares
-  // is the one its own imports were tested against, so it is the one that wins.
-  for (const manifest of [input.service, ...input.bundled]) {
+  // The service first, then the other apps, then each bundled package: a range
+  // the service declares is the one its own imports were tested against, so it
+  // is the one that wins.
+  for (const manifest of [input.service, ...(input.apps ?? []), ...input.bundled]) {
     for (const name of Object.keys(manifest.dependencies).sort()) {
       const range = manifest.dependencies[name] ?? '';
       if (range.startsWith('workspace:')) {
@@ -431,9 +451,17 @@ export async function assemblePackage(options: {
     }),
   );
 
+  const apps = await Promise.all(
+    OTHER_APPS.map(async (item) => {
+      const path = `${item.directory}/package.json`;
+      return parseManifest(path, await read(path));
+    }),
+  );
+
   const manifest = publishedManifest({
     root: rootManifest,
     service: serviceManifest,
+    apps,
     bundled: bundled.map((entry) => entry.manifest),
   });
 

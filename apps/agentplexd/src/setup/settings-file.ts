@@ -19,6 +19,23 @@
 /** Where the installer puts the settings, inside the prefix agentplex owns. */
 export const SETTINGS_FILE_NAME = 'agentplexd.env';
 
+/**
+ * The two settings setup writes when it records a local server, as the hub's
+ * config parser reads them.
+ *
+ * Setup's own copy of the names, because setup may not import the hub. The
+ * hub's `config.test.ts` asserts on the same literals, so two spellings of one
+ * setting -- a machine that provisions cleanly and then comes up unpaired --
+ * fail there rather than on somebody's box.
+ */
+export const LOCAL_SERVER_SETTINGS = {
+  identityFile: {
+    flag: '--local-server-identity-file',
+    env: 'AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE',
+  },
+  port: { flag: '--local-server-port', env: 'AGENTPLEX_LOCAL_SERVER_PORT' },
+} as const;
+
 export interface Setting {
   /** An environment variable name: what the daemon's config parser reads. */
   readonly key: string;

@@ -2,13 +2,10 @@ import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig, usage, type ConfigResult } from './config.js';
 
-const DATABASE_FILE = '/var/lib/agentplex/agentplex.db';
 const IDENTITY_FILE = '/etc/agentplexd/server.json';
-const CLIENT_TOKEN = 'a-client-token-long-enough-to-be-one';
 
 /**
- * Every server-role case needs an identity file, and every hub-role case needs
- * a database file and a client token.
+ * Every case needs an identity file.
  *
  * They are supplied through the environment rather than written into each argv
  * so that a test about the terminal cap stays a test about the terminal cap. A
@@ -20,7 +17,6 @@ function load(argv: string[], env: Record<string, string | undefined> = {}): Con
     argv,
     env: {
       AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE,
-      AGENTPLEX_CLIENT_TOKEN: CLIENT_TOKEN,
       ...env,
     },
   });
@@ -43,7 +39,7 @@ describe('loadConfig roles', () => {
   });
 
   it('lets a flag override the environment, because a flag was just typed', () => {
-    const result = load(['--role=server'], { AGENTPLEX_ROLE: 'hub' });
+    const result = load(['--role=server'], { AGENTPLEX_ROLE: 'both' });
     expect(result).toMatchObject({ ok: true, config: { role: 'server' } });
   });
 
@@ -56,144 +52,21 @@ describe('loadConfig roles', () => {
     expect(problems[0]).toContain('hub, server, both');
   });
 
-  it('gives the both role a hub and a server half', () => {
-    const result = load(['--role=both', `--database-file=${DATABASE_FILE}`]);
-    expect(result).toMatchObject({
-      ok: true,
-      config: { role: 'both', hub: { databaseFile: DATABASE_FILE }, server: { port: 8081 } },
-    });
-  });
-});
-
-describe('loadConfig database file', () => {
-  function databaseFile(argv: string[], env: Record<string, string | undefined> = {}): unknown {
-    const result = load(argv, env);
-    expect(result.ok).toBe(true);
-    return result.ok && 'hub' in result.config ? result.config.hub.databaseFile : undefined;
-  }
-
-  it('requires one for the hub role', () => {
-    const problems = expectProblems(load(['--role=hub']));
-    expect(problems).toEqual([
-      'the hub role needs a database: set AGENTPLEX_DATABASE_FILE or pass --database-file',
-    ]);
-  });
-
-  it('requires one for the both role', () => {
-    expect(expectProblems(load(['--role=both']))).toHaveLength(1);
-  });
-
-  it('does not require one for the server role, which owns no database', () => {
-    const result = load(['--role=server']);
-    expect(result.ok).toBe(true);
-  });
-
-  it('reads the file from the environment, which is all a container is configured with', () => {
-    expect(databaseFile(['--role=hub'], { AGENTPLEX_DATABASE_FILE: DATABASE_FILE })).toBe(
-      DATABASE_FILE,
-    );
-  });
-
-  it('lets a flag override the environment, because a flag was just typed', () => {
-    expect(
-      databaseFile(['--role=hub', `--database-file=${DATABASE_FILE}`], {
-        AGENTPLEX_DATABASE_FILE: '/somewhere/else.db',
-      }),
-    ).toBe(DATABASE_FILE);
-  });
-
-  it('refuses a relative path, which names a different file per working directory', () => {
-    const problems = expectProblems(load(['--role=hub', '--database-file=agentplex.db']));
-    expect(problems[0]).toContain('absolute');
-  });
-
-  it('normalizes the path, so one file is not two names in a log line', () => {
-    expect(databaseFile(['--role=hub', '--database-file=/var/lib/other/../agentplex/hub.db'])).toBe(
-      '/var/lib/agentplex/hub.db',
-    );
-  });
-});
-
-describe('loadConfig client token', () => {
-  const bare = (argv: string[], env: Record<string, string | undefined> = {}): ConfigResult =>
-    loadConfig({ argv, env: { AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE, ...env } });
-
-  function clientToken(argv: string[], env: Record<string, string | undefined> = {}): unknown {
-    const result = load(argv, env);
-    expect(result.ok).toBe(true);
-    return result.ok && 'hub' in result.config ? result.config.hub.clientToken : undefined;
-  }
-
-  it('requires one for the hub role rather than serving to anybody who asks', () => {
-    const problems = expectProblems(bare(['--role=hub', `--database-file=${DATABASE_FILE}`]));
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain('AGENTPLEX_CLIENT_TOKEN');
-  });
-
-  it('requires one for the both role', () => {
-    const problems = expectProblems(bare(['--role=both', `--database-file=${DATABASE_FILE}`]));
-    expect(problems).toHaveLength(1);
-  });
-
-  it('does not require one for the server role, which serves no client', () => {
-    expect(bare(['--role=server']).ok).toBe(true);
-  });
-
-  /**
-   * A short token is refused rather than accepted with a warning. The one
-   * credential between the internet and every paired machine is not a place for
-   * a setting that works but is weak.
-   */
-  it('refuses a token short enough to guess, and says so the same way', () => {
-    const problems = expectProblems(
-      bare(['--role=hub', `--database-file=${DATABASE_FILE}`, '--client-token=hunter2']),
-    );
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain('32 characters');
-  });
-
-  it('accepts what the documented command generates', () => {
-    // 32 bytes, base64: what `openssl rand -base64 32` prints.
-    const generated = Buffer.alloc(32, 7).toString('base64');
-    expect(
-      clientToken(['--role=hub', `--database-file=${DATABASE_FILE}`], {
-        AGENTPLEX_CLIENT_TOKEN: generated,
-      }),
-    ).toBe(generated);
-  });
-
-  it('reads it from the environment, which is all a container is configured with', () => {
-    expect(clientToken(['--role=hub', `--database-file=${DATABASE_FILE}`])).toBe(CLIENT_TOKEN);
-  });
-
-  it('lets a flag override the environment, because a flag was just typed', () => {
-    const typed = 'typed-on-the-command-line-just-now-x';
-    expect(
-      clientToken(['--role=hub', `--database-file=${DATABASE_FILE}`, `--client-token=${typed}`]),
-    ).toBe(typed);
-  });
-
-  /**
-   * An env file leaves whitespace around values, and a credential that differs
-   * from what the user typed by a trailing newline fails a comparison that
-   * nothing can explain.
-   */
-  it('trims the surrounding whitespace an env file leaves behind', () => {
-    expect(
-      clientToken(['--role=hub', `--database-file=${DATABASE_FILE}`], {
-        AGENTPLEX_CLIENT_TOKEN: `  ${CLIENT_TOKEN}\n`,
-      }),
-    ).toBe(CLIENT_TOKEN);
+  it('refuses the hub and both roles, and names the program that runs the hub', () => {
+    // Still words setup and the installer know, so the refusal is not "unknown
+    // role": the operator who typed one is not confused about roles; the layout
+    // changed under them.
+    for (const role of ['hub', 'both']) {
+      const problems = expectProblems(load([`--role=${role}`]));
+      expect(problems[0]).toContain('apps/hub');
+    }
   });
 });
 
 describe('loadConfig ports', () => {
-  it('defaults the two ports so a first run needs no port decision', () => {
-    const result = load(['--role=both', `--database-file=${DATABASE_FILE}`]);
-    expect(result).toMatchObject({
-      ok: true,
-      config: { hub: { port: 8080 }, server: { port: 8081 } },
-    });
+  it('defaults the port so a first run needs no port decision', () => {
+    const result = load(['--role=server']);
+    expect(result).toMatchObject({ ok: true, config: { server: { port: 8081 } } });
   });
 
   it('accepts a flag value given as a separate argument', () => {
@@ -214,7 +87,9 @@ describe('loadConfig ports', () => {
 
 describe('loadConfig failure reporting', () => {
   it('reports every problem at once rather than one env var per restart', () => {
-    const problems = expectProblems(load(['--role=hub', '--hub-port=abc', '--log-level=loud']));
+    const problems = expectProblems(
+      load(['--role=server', '--server-port=abc', '--log-level=loud', '--announce=maybe']),
+    );
     expect(problems).toHaveLength(3);
   });
 
@@ -292,14 +167,6 @@ describe('loadConfig store paths', () => {
       ]),
     ).toEqual(['/volumes/claude']);
   });
-
-  it('gives the both role its stores on the server half', () => {
-    const result = load(['--role=both', `--database-file=${DATABASE_FILE}`, '--store-path=/store']);
-    expect(result).toMatchObject({
-      ok: true,
-      config: { role: 'both', server: { storePaths: ['/store'] } },
-    });
-  });
 });
 
 describe('loadConfig bin path', () => {
@@ -355,14 +222,6 @@ describe('loadConfig bin path', () => {
     expect(
       binPath(['--role=server', '--bin-path=/opt/bin/', '--bin-path=/opt/other/../bin']),
     ).toEqual(['/opt/bin']);
-  });
-
-  it('gives the both role its directories on the server half', () => {
-    const result = load(['--role=both', `--database-file=${DATABASE_FILE}`, '--bin-path=/opt/bin']);
-    expect(result).toMatchObject({
-      ok: true,
-      config: { role: 'both', server: { binPath: ['/opt/bin'] } },
-    });
   });
 
   it('is listed in the usage message like every other setting', () => {
@@ -431,22 +290,15 @@ describe('loadConfig announce', () => {
     const problems = expectProblems(load(['--role=server', '--announce=yes']));
     expect(problems[0]).toContain('true or false');
   });
-
-  it('is not a setting the hub role has, because only a server announces', () => {
-    const result = load(['--role=hub', `--database-file=${DATABASE_FILE}`, '--announce=true']);
-    expect(result).toMatchObject({ ok: true, config: { role: 'hub' } });
-    expect(result.ok && 'server' in result.config).toBe(false);
-  });
 });
 
 describe('loadConfig server identity file', () => {
   /**
    * Deliberately not the helper above: these cases are about the identity
-   * file's absence, so it is the one setting left out. The client token stays,
-   * or a hub-role case here would be failing for the other reason.
+   * file's absence, so it is the one setting left out.
    */
   function loadBare(argv: string[], env: Record<string, string | undefined> = {}): ConfigResult {
-    return loadConfig({ argv, env: { AGENTPLEX_CLIENT_TOKEN: CLIENT_TOKEN, ...env } });
+    return loadConfig({ argv, env });
   }
 
   function identityPath(argv: string[], env: Record<string, string | undefined> = {}) {
@@ -458,16 +310,6 @@ describe('loadConfig server identity file', () => {
   it('requires one for the server role', () => {
     const problems = expectProblems(loadBare(['--role=server']));
     expect(problems[0]).toContain('AGENTPLEX_SERVER_IDENTITY_FILE');
-  });
-
-  it('requires one for the both role, which runs a server half', () => {
-    const problems = expectProblems(loadBare(['--role=both', `--database-file=${DATABASE_FILE}`]));
-    expect(problems[0]).toContain('AGENTPLEX_SERVER_IDENTITY_FILE');
-  });
-
-  it('does not ask the hub role for one, because a hub has no identity file', () => {
-    const result = loadBare(['--role=hub', `--database-file=${DATABASE_FILE}`]);
-    expect(result).toMatchObject({ ok: true, config: { role: 'hub' } });
   });
 
   it('reads it from a flag', () => {
@@ -576,101 +418,5 @@ describe('loadConfig commands', () => {
 
   it('names the commands in the usage message', () => {
     expect(usage()).toContain('doctor');
-  });
-});
-
-describe('loadConfig local server', () => {
-  const hub = ['--role', 'hub', '--database-file', DATABASE_FILE, '--client-token', CLIENT_TOKEN];
-  const IDENTITY = '/var/lib/agentplex/server.json';
-
-  function localServer(argv: readonly string[], env: Record<string, string> = {}) {
-    const loaded = loadConfig({ argv: [...hub, ...argv], env });
-    if (!loaded.ok) throw new Error(loaded.problems.join('; '));
-    return 'hub' in loaded.config ? loaded.config.hub.localServer : null;
-  }
-
-  it('names none by default: a hub does not go looking for a server beside it', () => {
-    expect(localServer([])).toBeNull();
-  });
-
-  it('is an entry once the identity file is named, on the server default port', () => {
-    // Configuration, not discovery: the setting is what makes the entry, and
-    // the port takes the default the server beside this hub binds when it is
-    // not told otherwise either.
-    expect(localServer(['--local-server-identity-file', IDENTITY])).toEqual({
-      identityPath: IDENTITY,
-      port: 8081,
-    });
-  });
-
-  it('takes the port the settings name', () => {
-    expect(
-      localServer(['--local-server-identity-file', IDENTITY, '--local-server-port', '9091']),
-    ).toEqual({ identityPath: IDENTITY, port: 9091 });
-  });
-
-  it('reads both from the environment, which is what a settings file is', () => {
-    expect(
-      localServer([], {
-        AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE: IDENTITY,
-        AGENTPLEX_LOCAL_SERVER_PORT: '9091',
-      }),
-    ).toEqual({ identityPath: IDENTITY, port: 9091 });
-  });
-
-  it('refuses a port with no identity file, which names nothing to pair', () => {
-    const loaded = loadConfig({ argv: [...hub, '--local-server-port', '9091'], env: {} });
-
-    expect(loaded.ok).toBe(false);
-    expect(loaded.ok ? [] : loaded.problems).toEqual([
-      expect.stringContaining('--local-server-identity-file'),
-    ]);
-  });
-
-  it('refuses a relative identity file, which names a different token per working directory', () => {
-    const loaded = loadConfig({
-      argv: [...hub, '--local-server-identity-file', 'server.json'],
-      env: {},
-    });
-
-    expect(loaded.ok).toBe(false);
-    expect(loaded.ok ? [] : loaded.problems).toEqual([expect.stringContaining('absolute')]);
-  });
-
-  it('refuses a port that is not one', () => {
-    const loaded = loadConfig({
-      argv: [...hub, '--local-server-identity-file', IDENTITY, '--local-server-port', '70000'],
-      env: {},
-    });
-
-    expect(loaded.ok).toBe(false);
-  });
-
-  it('reaches the both role too, where the server it names is in this process', () => {
-    const loaded = loadConfig({
-      argv: [
-        '--role',
-        'both',
-        '--database-file',
-        DATABASE_FILE,
-        '--client-token',
-        CLIENT_TOKEN,
-        '--server-identity-file',
-        IDENTITY,
-        '--local-server-identity-file',
-        IDENTITY,
-      ],
-      env: {},
-    });
-
-    expect(loaded.ok && 'hub' in loaded.config ? loaded.config.hub.localServer : null).toEqual({
-      identityPath: IDENTITY,
-      port: 8081,
-    });
-  });
-
-  it('is listed in the usage message like every other setting', () => {
-    expect(usage()).toContain('--local-server-identity-file');
-    expect(usage()).toContain('AGENTPLEX_LOCAL_SERVER_PORT');
   });
 });

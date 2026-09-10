@@ -145,7 +145,25 @@ export default tseslint.config(
     },
   },
   {
-    files: ['apps/agentplexd/**/*.ts'],
+    // The one place both apps are loaded into one process: the hub driven
+    // against the real server end of its protocol. `tests/hub-server/README.md`
+    // carries the argument. The crossing is allowed here and nowhere else, and
+    // it is tests only: nothing in this directory ships.
+    files: ['tests/hub-server/**/*.ts'],
+    languageOptions: { globals: globals.node },
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['node:child_process', 'child_process'],
+          message: 'Starting a child directly bypasses the operation registry.',
+        },
+      ]).map((entry) =>
+        typeof entry === 'object' ? { patterns: entry.patterns.slice(1) } : entry,
+      ),
+    },
+  },
+  {
+    files: ['apps/agentplexd/**/*.ts', 'apps/hub/**/*.ts'],
     languageOptions: { globals: globals.node },
     rules: {
       // Every spawn goes through the operation registry (AGX-21), and a rule

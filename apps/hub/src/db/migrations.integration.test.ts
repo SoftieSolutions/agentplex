@@ -20,7 +20,7 @@ import { createLogger, randomIdGenerator } from '@agentplex/node-shared';
  * a file in a temporary directory, so this suite runs on a laptop, in CI and in
  * the image, always.
  */
-const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../../../migrations', import.meta.url));
+const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../../migrations', import.meta.url));
 
 const directory = await mkdtemp(join(tmpdir(), 'agentplex-migrations-'));
 const logger = createLogger('error', () => {});

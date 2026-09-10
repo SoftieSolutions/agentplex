@@ -24,7 +24,7 @@ import {
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
-import { serveHubConnection } from '../../server/hub-connection.js';
+import { serveHubConnection } from '../../../apps/agentplexd/src/server/hub-connection.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
@@ -34,19 +34,34 @@ import {
   createFakeProviderFiles,
 } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
-import { createSessionController } from '../../server/session-control.js';
-import { createTerminalManager, type TerminalManager } from '../../server/terminal-manager.js';
-import { startClientBroadcast, type ClientBroadcast } from '../clients/client-broadcast.js';
-import { toMachineState } from '../clients/machine-state.js';
-import { createExponentialBackoff } from '../connections/backoff.js';
+import { createSessionController } from '../../../apps/agentplexd/src/server/session-control.js';
+import {
+  createTerminalManager,
+  type TerminalManager,
+} from '../../../apps/agentplexd/src/server/terminal-manager.js';
+import {
+  startClientBroadcast,
+  type ClientBroadcast,
+} from '../../../apps/hub/src/clients/client-broadcast.js';
+import { toMachineState } from '../../../apps/hub/src/clients/machine-state.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/connections/backoff.js';
 import {
   startConnectionSupervisor,
   type ConnectionSupervisor,
-} from '../connections/connection-supervisor.js';
-import { newServerRegistrationSchema, registerServer } from '../pairing/server-registrations.js';
-import { openMigratedSchema, type MigratedSchema } from '../pairing/test-migrated-schema.js';
-import { createReducer, type Reducer } from '../state/reducer.js';
-import { createSessionControl, type SessionControl } from './session-control.js';
+} from '../../../apps/hub/src/connections/connection-supervisor.js';
+import {
+  newServerRegistrationSchema,
+  registerServer,
+} from '../../../apps/hub/src/pairing/server-registrations.js';
+import {
+  openMigratedSchema,
+  type MigratedSchema,
+} from '../../../apps/hub/src/pairing/test-migrated-schema.js';
+import { createReducer, type Reducer } from '../../../apps/hub/src/state/reducer.js';
+import {
+  createSessionControl,
+  type SessionControl,
+} from '../../../apps/hub/src/sessions/session-control.js';
 
 /**
  * A start, from a client's frame to a process on another machine and back.

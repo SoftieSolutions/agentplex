@@ -23,7 +23,7 @@ import { createSqliteDatabase, type SqliteDatabase } from '../db/sqlite.js';
  * Test support: `tsconfig.build.json` excludes `test-*.ts`, so this never ships.
  */
 
-const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../../../migrations', import.meta.url));
+const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../../migrations', import.meta.url));
 
 export interface MigratedSchema {
   readonly database: SqliteDatabase;

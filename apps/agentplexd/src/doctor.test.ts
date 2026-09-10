@@ -21,7 +21,6 @@ import { createProviderRegistry } from '@agentplex/providers';
 
 const HOST = '127.0.0.1';
 const IDENTITY_PATH = '/etc/agentplexd/server.json';
-const CLIENT_TOKEN = 'a-client-token-long-enough-to-be-one';
 
 function serverConfig(storePaths: readonly string[]): Config {
   return {
@@ -38,18 +37,6 @@ function serverConfig(storePaths: readonly string[]): Config {
     },
   };
 }
-
-const hubConfig: Config = {
-  role: 'hub',
-  logLevel: 'error',
-  host: HOST,
-  hub: {
-    port: 8080,
-    databaseFile: '/var/lib/agentplex/agentplex.db',
-    clientToken: CLIENT_TOKEN,
-    localServer: null,
-  },
-};
 
 const providers = createProviderRegistry([createFakeProviderAdapter({ provider: 'claude' })]);
 
@@ -112,20 +99,6 @@ describe('inspectMachine', () => {
     });
 
     expect(files.creates).toEqual([]);
-  });
-
-  it('reports a hub-only process as one that starts no sessions', async () => {
-    const report = await inspectMachine(hubConfig, {
-      providers,
-      preflight: {
-        run: async () => {
-          throw new Error('a hub-only process has no providers to probe');
-        },
-      },
-      files: createFakeStoreFiles(),
-    });
-
-    expect(report).toMatchObject({ role: 'hub', providers: [], stores: [] });
   });
 
   it('is usable when everything it checked is', async () => {
@@ -200,17 +173,5 @@ describe('formatDoctorReport', () => {
     expect(printed).toContain('/volumes/work');
     expect(printed).toContain('/volumes/gone');
     expect(printed).toContain('there is nothing at that path');
-  });
-
-  it('says so plainly when a role has nothing of its own to check', () => {
-    const printed = formatDoctorReport({
-      role: 'hub',
-      usable: true,
-      providers: [],
-      stores: [],
-    }).join('\n');
-
-    // An empty section reads as a listing that failed. Words say which it is.
-    expect(printed).toContain('no server role');
   });
 });
