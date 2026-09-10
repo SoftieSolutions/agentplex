@@ -12,7 +12,7 @@ import {
   type StoreFileSystem,
   type StoreIdentity,
 } from '@agentplex/providers';
-import { ensureServerIdentity } from '../server/server-identity.js';
+import { ensureServerIdentity } from '@agentplex/providers';
 import { type IdGenerator, tokenMatches, type TokenMinter } from '@agentplex/node-shared';
 import {
   setupBinPath,

@@ -578,3 +578,99 @@ describe('loadConfig commands', () => {
     expect(usage()).toContain('doctor');
   });
 });
+
+describe('loadConfig local server', () => {
+  const hub = ['--role', 'hub', '--database-file', DATABASE_FILE, '--client-token', CLIENT_TOKEN];
+  const IDENTITY = '/var/lib/agentplex/server.json';
+
+  function localServer(argv: readonly string[], env: Record<string, string> = {}) {
+    const loaded = loadConfig({ argv: [...hub, ...argv], env });
+    if (!loaded.ok) throw new Error(loaded.problems.join('; '));
+    return 'hub' in loaded.config ? loaded.config.hub.localServer : null;
+  }
+
+  it('names none by default: a hub does not go looking for a server beside it', () => {
+    expect(localServer([])).toBeNull();
+  });
+
+  it('is an entry once the identity file is named, on the server default port', () => {
+    // Configuration, not discovery: the setting is what makes the entry, and
+    // the port takes the default the server beside this hub binds when it is
+    // not told otherwise either.
+    expect(localServer(['--local-server-identity-file', IDENTITY])).toEqual({
+      identityPath: IDENTITY,
+      port: 8081,
+    });
+  });
+
+  it('takes the port the settings name', () => {
+    expect(
+      localServer(['--local-server-identity-file', IDENTITY, '--local-server-port', '9091']),
+    ).toEqual({ identityPath: IDENTITY, port: 9091 });
+  });
+
+  it('reads both from the environment, which is what a settings file is', () => {
+    expect(
+      localServer([], {
+        AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE: IDENTITY,
+        AGENTPLEX_LOCAL_SERVER_PORT: '9091',
+      }),
+    ).toEqual({ identityPath: IDENTITY, port: 9091 });
+  });
+
+  it('refuses a port with no identity file, which names nothing to pair', () => {
+    const loaded = loadConfig({ argv: [...hub, '--local-server-port', '9091'], env: {} });
+
+    expect(loaded.ok).toBe(false);
+    expect(loaded.ok ? [] : loaded.problems).toEqual([
+      expect.stringContaining('--local-server-identity-file'),
+    ]);
+  });
+
+  it('refuses a relative identity file, which names a different token per working directory', () => {
+    const loaded = loadConfig({
+      argv: [...hub, '--local-server-identity-file', 'server.json'],
+      env: {},
+    });
+
+    expect(loaded.ok).toBe(false);
+    expect(loaded.ok ? [] : loaded.problems).toEqual([expect.stringContaining('absolute')]);
+  });
+
+  it('refuses a port that is not one', () => {
+    const loaded = loadConfig({
+      argv: [...hub, '--local-server-identity-file', IDENTITY, '--local-server-port', '70000'],
+      env: {},
+    });
+
+    expect(loaded.ok).toBe(false);
+  });
+
+  it('reaches the both role too, where the server it names is in this process', () => {
+    const loaded = loadConfig({
+      argv: [
+        '--role',
+        'both',
+        '--database-file',
+        DATABASE_FILE,
+        '--client-token',
+        CLIENT_TOKEN,
+        '--server-identity-file',
+        IDENTITY,
+        '--local-server-identity-file',
+        IDENTITY,
+      ],
+      env: {},
+    });
+
+    expect(loaded.ok && 'hub' in loaded.config ? loaded.config.hub.localServer : null).toEqual({
+      identityPath: IDENTITY,
+      port: 8081,
+    });
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(usage()).toContain('--local-server-identity-file');
+    expect(usage()).toContain('AGENTPLEX_LOCAL_SERVER_PORT');
+  });
+});

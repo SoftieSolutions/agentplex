@@ -1,7 +1,8 @@
-import { access, mkdir, stat } from 'node:fs/promises';
+import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter } from 'node:path';
-import type { DirectoryMade, SetupMachine } from './setup-machine.js';
+import type { FileRead } from '@agentplex/providers';
+import type { DirectoryMade, FileWritten, SetupMachine } from './setup-machine.js';
 
 /**
  * The real machine, named in one place so nothing else has to reach for a disk.
@@ -65,5 +66,35 @@ export function createNodeSetupMachine({ home, path }: NodeSetupMachineSources):
         return { ok: false, problem: String(error) };
       }
     },
+
+    async readFile(path: string): Promise<FileRead> {
+      try {
+        return { kind: 'read', contents: await readFile(path, 'utf8') };
+      } catch (error) {
+        if (isErrno(error, 'ENOENT')) return { kind: 'missing' };
+        return { kind: 'failed', reason: String(error) };
+      }
+    },
+
+    async writeFile(path: string, contents: string): Promise<FileWritten> {
+      try {
+        // 0600 on creation: the settings file holds the client token. A file
+        // that is already there keeps the mode the installer gave it, which is
+        // the same one.
+        await writeFile(path, contents, { encoding: 'utf8', mode: 0o600 });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, problem: String(error) };
+      }
+    },
   };
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === code
+  );
 }

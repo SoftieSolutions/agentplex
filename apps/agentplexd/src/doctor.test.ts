@@ -43,7 +43,12 @@ const hubConfig: Config = {
   role: 'hub',
   logLevel: 'error',
   host: HOST,
-  hub: { port: 8080, databaseFile: '/var/lib/agentplex/agentplex.db', clientToken: CLIENT_TOKEN },
+  hub: {
+    port: 8080,
+    databaseFile: '/var/lib/agentplex/agentplex.db',
+    clientToken: CLIENT_TOKEN,
+    localServer: null,
+  },
 };
 
 const providers = createProviderRegistry([createFakeProviderAdapter({ provider: 'claude' })]);

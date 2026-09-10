@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -71,5 +71,44 @@ describe('the real setup machine', () => {
       createNodeSetupMachine({ home: root, path: `${delimiter}/usr/bin${delimiter}` })
         .pathDirectories,
     ).toEqual(['/usr/bin']);
+  });
+});
+
+describe('the real setup machine and the settings file', () => {
+  it('reads a file that is there, and says so when one is not', async () => {
+    const machine = createNodeSetupMachine({ home: root, path: undefined });
+    await mkdir(join(root, 'settings'), { recursive: true });
+    await writeFile(join(root, 'settings', 'agentplexd.env'), 'AGENTPLEX_ROLE=both\n', 'utf8');
+
+    expect(await machine.readFile(join(root, 'settings', 'agentplexd.env'))).toEqual({
+      kind: 'read',
+      contents: 'AGENTPLEX_ROLE=both\n',
+    });
+    expect(await machine.readFile(join(root, 'settings', 'nothing.env'))).toEqual({
+      kind: 'missing',
+    });
+  });
+
+  it('writes a file whole, readable by this user alone, and over one that is there', async () => {
+    // The settings file holds the client token, so a file this creates is 0600.
+    // One the installer made keeps the mode it was given, which is the same.
+    const machine = createNodeSetupMachine({ home: root, path: undefined });
+    const path = join(root, 'settings', 'written.env');
+    await mkdir(join(root, 'settings'), { recursive: true });
+
+    expect(await machine.writeFile(path, 'A=1\n')).toEqual({ ok: true });
+    expect(await machine.writeFile(path, 'A=2\n')).toEqual({ ok: true });
+
+    expect(await machine.readFile(path)).toEqual({ kind: 'read', contents: 'A=2\n' });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it('reports a file it cannot write rather than throwing out of the wizard', async () => {
+    const machine = createNodeSetupMachine({ home: root, path: undefined });
+
+    const written = await machine.writeFile(join(root, 'no-such-directory', 'x.env'), 'A=1\n');
+
+    expect(written.ok).toBe(false);
+    expect(written.ok ? '' : written.problem).toContain('ENOENT');
   });
 });

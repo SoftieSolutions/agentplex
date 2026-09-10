@@ -178,6 +178,10 @@ export async function startRuntime(
         port: config.hub.port,
         clientToken: config.hub.clientToken,
         tokens,
+        // The one pairing nobody types, and it arrives as configuration: a
+        // hub whose settings name no local server registers nothing.
+        localServer: config.hub.localServer,
+        files: storeFileSystem,
       });
     }
     if ('server' in config) {

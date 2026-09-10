@@ -18,7 +18,7 @@ import {
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import { createFakeSessionController } from '../../server/fake-session-controller.js';
-import { missingProvider, readyProvider } from '@agentplex/providers/testing';
+import { missingProvider, readyProvider, createFakeStoreFiles } from '@agentplex/providers/testing';
 import { createFakeBeaconSource, type FakeBeaconSource } from '../discovery/fake-beacon-source.js';
 import { createFakeWebAssets } from '../web/fake-web-assets.js';
 import { serveHubConnection } from '../../server/hub-connection.js';
@@ -283,6 +283,8 @@ async function startFleetHub(
     webAssets: createFakeWebAssets(),
     host: HOST,
     port: 0,
+    localServer: null,
+    files: createFakeStoreFiles(),
   });
   return {
     hub,
@@ -332,6 +334,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       webAssets: createFakeWebAssets(),
       host: HOST,
       port: 0,
+      localServer: null,
+      files: createFakeStoreFiles(),
     };
     const hub = await startHub({
       ...dependencies,
@@ -425,6 +429,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       webAssets: createFakeWebAssets(),
       host: HOST,
       port: 0,
+      localServer: null,
+      files: createFakeStoreFiles(),
     });
     const third = await openClient(pairedHub);
     third.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });

@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import type { FileRead } from '@agentplex/providers';
 
 /**
  * The machine setup is standing on, as the few facts a wizard needs from it.
@@ -43,19 +44,41 @@ export interface SetupMachine {
    * Creates a directory and its parents. A directory that is already there is
    * success, because what is being asked for is the directory, not the creating.
    *
-   * The one thing on this seam that writes, and it is here rather than on the
-   * store filesystem for a reason worth stating: `createFile` there is exclusive
-   * in the kernel and refuses to clobber, which is what makes "mint once" true,
-   * and a seam that can also make directories is a seam somebody can be tempted
-   * to make one *with*. What this creates is the prefix agentplex owns, which
-   * the wizard chose the location of two screens earlier — nothing in a
-   * provider's state directory, and nothing in a store.
+   * Here rather than on the store filesystem for a reason worth stating:
+   * `createFile` there is exclusive in the kernel and refuses to clobber, which
+   * is what makes "mint once" true, and a seam that can also make directories
+   * is a seam somebody can be tempted to make one *with*. What this creates is
+   * the prefix agentplex owns, which the wizard chose the location of two
+   * screens earlier — nothing in a provider's state directory, and nothing in a
+   * store.
    */
   makeDirectory(path: string): Promise<DirectoryMade>;
+  /**
+   * The contents of a file, or that there is none.
+   *
+   * The same shape the store filesystem answers with, because it is the same
+   * question. What is read through this seam is the settings file the installer
+   * wrote, which setup fills in rather than creates -- see `writeFile`.
+   */
+  readFile(path: string): Promise<FileRead>;
+  /**
+   * Writes a file whole, creating it readable by this user alone if it is not
+   * there.
+   *
+   * The second thing on this seam that writes, and the one the store filesystem
+   * cannot do: `createFile` there refuses a file that exists, and the settings
+   * file usually does, with the installer's lines in it and an operator's edits
+   * beside them. What setup writes through this is that file and nothing else
+   * -- an identity, a store file and a plan all go through the exclusive
+   * create, so that a token or an id is never written over.
+   */
+  writeFile(path: string, contents: string): Promise<FileWritten>;
 }
 
 export type DirectoryMade =
   { readonly ok: true } | { readonly ok: false; readonly problem: string };
+
+export type FileWritten = { readonly ok: true } | { readonly ok: false; readonly problem: string };
 
 /**
  * Every directory on the operator's PATH holding a program of this name, in

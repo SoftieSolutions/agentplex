@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
-import { listServers } from '../hub/pairing/server-registrations.js';
+import { describe, expect, it } from 'vitest';
 import {
   createFakeProcessProbe,
   createFakeStoreFiles,
@@ -13,7 +12,6 @@ import {
 import { createClaudeAdapter, createProviderRegistry } from '@agentplex/providers';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
-import { createFakeHubDatabase, type FakeHubDatabase } from './fake-hub-database.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine, type FakeSetupMachine } from './fake-setup-machine.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
@@ -47,7 +45,7 @@ const PREFIX = `${HOME}/.agentplex`;
 const IDENTITY = `${PREFIX}/server.json`;
 const STORE = `${HOME}/.claude`;
 const PLAN_FILE = `${PREFIX}/setup-plan.json`;
-const HUB_DATABASE = `${PREFIX}/hub.db`;
+const SETTINGS = `${PREFIX}/agentplexd.env`;
 
 const INSTALL_ARGV =
   `npm install --global --prefix ${PREFIX} --json --no-ignore-scripts ` +
@@ -97,20 +95,11 @@ interface Run {
   /** The directories every pty the wizard opened would have resolved through. */
   readonly ptyBinPaths: readonly (readonly string[])[];
   readonly ptys: FakePtyFactory;
-  readonly hubDatabase: FakeHubDatabase;
 }
 
-/** Every in-memory hub database a case opened, released when the case is over. */
-const openedDatabases: FakeHubDatabase[] = [];
-
-afterEach(async () => {
-  for (const database of openedDatabases.splice(0)) await database.close();
-});
-
-/** The live pairings the hub at `path` holds, as the hub itself reads them. */
-async function pairings(hubDatabase: FakeHubDatabase, path = HUB_DATABASE) {
-  const database = hubDatabase.at(path);
-  return database === null ? [] : await listServers(database);
+/** The settings file as setup left it, line by line, or nothing if it never wrote one. */
+function settings(machine: FakeSetupMachine, path = SETTINGS): readonly string[] {
+  return machine.contents.get(path)?.split('\n') ?? [];
 }
 
 async function run(
@@ -121,7 +110,6 @@ async function run(
     readonly files?: FakeStoreFiles;
     readonly role?: 'hub' | 'server' | 'both';
     readonly terminal?: FakeTerminal;
-    readonly hubDatabase?: FakeHubDatabase;
   } = {},
 ): Promise<Run> {
   const terminal = options.terminal ?? createFakeTerminal({ answers });
@@ -135,8 +123,6 @@ async function run(
     });
   const runner = options.runner ?? createFakeMachine({ programs: loggedIn() });
   const files = options.files ?? createFakeStoreFiles();
-  const hubDatabase = options.hubDatabase ?? createFakeHubDatabase();
-  if (!openedDatabases.includes(hubDatabase)) openedDatabases.push(hubDatabase);
   const binPaths: (readonly string[])[] = [];
   const ptyBinPaths: (readonly string[])[] = [];
   // A login that prints something and ends, which is what one the operator
@@ -174,7 +160,6 @@ async function run(
           }),
         ]),
       files,
-      hubDatabase,
       ids: { newId: () => 'id-under-test' },
       tokens: { newToken: () => 'minted-on-the-machine' },
       clock: { now: () => 1_700_000_000_000 },
@@ -190,7 +175,6 @@ async function run(
     binPaths,
     ptyBinPaths,
     ptys,
-    hubDatabase,
   };
 }
 
@@ -508,87 +492,134 @@ describe('the setup wizard', () => {
     expect(wizard.terminal.transcript).toContain('did not report its authentication state');
   });
 
-  it('pairs the server on this machine with the hub on it, and nobody types a token', async () => {
+  it('records the server on this machine for the hub on it, and nobody types a token', async () => {
     // The exception, exercised: one operator, one host, one interactive run, and
-    // a server the hub reaches over the loopback. Making somebody hand-pair
-    // their own box would be ceremony with no security value.
+    // a server the hub reaches over the loopback. Setup writes the two settings
+    // that name it; the hub pairs it at boot from the token in the file.
     const wizard = await run(STRAIGHT_THROUGH);
 
-    const rows = await pairings(wizard.hubDatabase);
-    expect(rows).toEqual([
-      expect.objectContaining({ address: 'ws://127.0.0.1:8081', token: 'minted-on-the-machine' }),
-    ]);
+    expect(settings(wizard.machine)).toEqual(
+      expect.arrayContaining([
+        `AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=${IDENTITY}`,
+        'AGENTPLEX_LOCAL_SERVER_PORT=8081',
+      ]),
+    );
     // The token is the one the identity file holds, which is the one the server
-    // will present. Nothing minted a second.
+    // will present and the hub will read. Nothing minted a second, and nothing
+    // put it in the settings.
     expect(wizard.files.contents.get(IDENTITY)).toContain('minted-on-the-machine');
+    expect(wizard.machine.contents.get(SETTINGS)).not.toContain('minted-on-the-machine');
     expect(wizard.terminal.questions.some((question) => question.includes('token'))).toBe(false);
   });
 
-  it('names the database the hub has to be started against, and never the token', async () => {
-    // The one way this arrangement fails silently: a row in a file the hub is
-    // never pointed at reads, from the hub, as a machine that is not there.
+  it('fills in the lines the installer left for it rather than adding a second copy', async () => {
+    const machine = createFakeSetupMachine({
+      home: HOME,
+      pathDirectories: ['/usr/bin', HOMEBREW],
+      directories: [STORE],
+      executables: [`${HOMEBREW}/claude`],
+      files: {
+        [SETTINGS]: [
+          'AGENTPLEX_ROLE=both',
+          '#AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=/var/lib/agentplex/server.json',
+          '#AGENTPLEX_LOCAL_SERVER_PORT=8081',
+          '',
+        ].join('\n'),
+      },
+    });
+
+    const wizard = await run(STRAIGHT_THROUGH, { machine });
+
+    expect(settings(wizard.machine)).toEqual([
+      'AGENTPLEX_ROLE=both',
+      `AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=${IDENTITY}`,
+      'AGENTPLEX_LOCAL_SERVER_PORT=8081',
+      '',
+    ]);
+  });
+
+  it('names the settings the hub has to be started from, and never the token', async () => {
+    // The one way this arrangement fails silently: a hub started without these
+    // settings reads, from the hub, as a machine that is not there.
     const wizard = await run(STRAIGHT_THROUGH);
 
-    expect(wizard.terminal.transcript).toContain('the hub will dial ws://127.0.0.1:8081');
-    expect(wizard.terminal.transcript).toContain(`--database-file ${HUB_DATABASE}`);
+    expect(wizard.terminal.transcript).toContain('dialling ws://127.0.0.1:8081');
+    expect(wizard.terminal.transcript).toContain(`--local-server-identity-file ${IDENTITY}`);
+    expect(wizard.terminal.transcript).toContain(
+      `Recorded the server on this machine in ${SETTINGS}`,
+    );
     expect(wizard.terminal.transcript).not.toContain('minted-on-the-machine');
-    // The directory the operator named, made before anything tried to open a
-    // file in it: `createFile` is exclusive and creates no parents.
+    // The directory the operator named, made before anything tried to write a
+    // file in it.
     expect(wizard.machine.made).toContain(PREFIX);
   });
 
-  it('leaves one pairing behind when setup is run twice against the same hub', async () => {
-    const hubDatabase = createFakeHubDatabase();
+  it('leaves one line per setting when setup is run twice on the same machine', async () => {
+    const machine = createFakeSetupMachine({
+      home: HOME,
+      pathDirectories: ['/usr/bin', HOMEBREW],
+      directories: [STORE],
+      executables: [`${HOMEBREW}/claude`],
+    });
     const files = createFakeStoreFiles();
 
-    await run(STRAIGHT_THROUGH, { hubDatabase, files });
-    const again = await run(STRAIGHT_THROUGH, { hubDatabase, files });
+    await run(STRAIGHT_THROUGH, { machine, files });
+    await run(STRAIGHT_THROUGH, { machine, files });
 
-    expect(await pairings(hubDatabase)).toHaveLength(1);
-    expect(again.terminal.transcript).toContain('is already paired with the server on it');
+    const lines = settings(machine);
+    expect(lines.filter((line) => line.startsWith('AGENTPLEX_LOCAL_SERVER_PORT='))).toHaveLength(1);
+    expect(
+      lines.filter((line) => line.startsWith('AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=')),
+    ).toHaveLength(1);
   });
 
-  it('writes no pairing when the operator does not name a hub database', async () => {
+  it('writes no settings when the operator does not name a file', async () => {
     // Declining is a legitimate answer, and what it gets is the sentence that
     // was true before this step existed: the token is in that file, and typing
     // it into a hub is how this machine gets paired.
     const wizard = await run(['', '', '', '', '', '', 'none', '']);
 
-    expect(wizard.hubDatabase.opened).toEqual([]);
+    expect(wizard.machine.writes).toEqual([]);
     expect(wizard.terminal.transcript).toContain(`paired: the pairing token is in ${IDENTITY}`);
   });
 
-  it('pairs nothing in --role=server, and does not ask about a database', async () => {
+  it('records nothing in --role=server, and does not ask about settings', async () => {
     // The bound that matters most. A `--role=server` machine is one a hub
     // elsewhere has to be told about by a person, which is the rule the
     // loopback case is the exception to.
     const wizard = await run(['', '', '', '', '', ''], { role: 'server' });
 
-    expect(wizard.hubDatabase.opened).toEqual([]);
-    expect(wizard.terminal.questions.some((question) => question.startsWith('Hub database'))).toBe(
-      false,
-    );
+    expect(wizard.machine.writes).toEqual([]);
+    expect(
+      wizard.terminal.questions.some((question) => question.startsWith('Hub settings file')),
+    ).toBe(false);
   });
 
-  it('pairs nothing in --role=hub: there is no server on this machine', async () => {
+  it('records nothing in --role=hub: there is no server on this machine', async () => {
     const wizard = await run(['hub', '', '', ''], {});
 
-    expect(wizard.hubDatabase.opened).toEqual([]);
+    expect(wizard.machine.writes).toEqual([]);
     expect(wizard.terminal.transcript).toContain(
       'The hub needs a database file and a client token to start.',
     );
   });
 
-  it('says what it could not pair rather than failing the run', async () => {
+  it('says what it could not record rather than failing the run', async () => {
     const wizard = await run(STRAIGHT_THROUGH, {
-      hubDatabase: createFakeHubDatabase({ unopenable: [HUB_DATABASE] }),
+      machine: createFakeSetupMachine({
+        home: HOME,
+        pathDirectories: ['/usr/bin', HOMEBREW],
+        directories: [STORE],
+        executables: [`${HOMEBREW}/claude`],
+        unwritable: [SETTINGS],
+      }),
     });
 
-    // A machine that is provisioned and unpaired is a machine somebody can
+    // A machine that is provisioned and unrecorded is a machine somebody can
     // finish by hand; a run that exited over it would have thrown away the
     // providers it installed.
     expect(wizard.outcome).toEqual({ kind: 'applied', problems: [] });
-    expect(wizard.terminal.transcript).toContain('This machine was not paired');
+    expect(wizard.terminal.transcript).toContain('This machine was not recorded');
   });
 
   it('asks again rather than taking a port it could not read', async () => {

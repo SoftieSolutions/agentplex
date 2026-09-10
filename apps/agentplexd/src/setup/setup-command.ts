@@ -4,7 +4,6 @@ import type { PtySupervisor } from '@agentplex/pty';
 import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
-import type { HubDatabase } from './hub-database.js';
 import type { SetupMachine } from './setup-machine.js';
 import { parseSetupPlan, setupBinPath, type SetupPlan } from './setup-plan.js';
 import type { SetupTerminal } from './setup-terminal.js';
@@ -74,18 +73,6 @@ export interface SetupCommandDependencies {
   readonly providersFor: (runner: ProcessRunner) => ProviderRegistry;
   /** Where the plan is read from, and where the identity and store files are written. */
   readonly files: StoreFileSystem;
-  /**
-   * The hub's own database. Reached from the wizard, and from nowhere else.
-   *
-   * It is in this list rather than composed inside the wizard for the reason the
-   * runner factories are: opening a SQLite file is a thing the process does, and
-   * the entrypoint owns those. That it is *here* and still unused by
-   * `replayPlan` below is the point — the capability is in reach of the
-   * unattended front end, and the unattended front end does not take it, because
-   * a pairing minted and then trusted with nobody present is the hub choosing
-   * rather than the operator.
-   */
-  readonly hubDatabase: HubDatabase;
   readonly ids: IdGenerator;
   readonly tokens: TokenMinter;
   readonly clock: Clock;

@@ -28,6 +28,7 @@ import {
   startConnectionSupervisor,
   type ConnectionSupervisor,
 } from './connections/connection-supervisor.js';
+import type { StoreFileSystem } from '@agentplex/providers';
 import type { InstructionOutcome, SessionInstruction } from './connections/server-connection.js';
 import { startBeaconListener, type BeaconSource } from './discovery/beacon-listener.js';
 import { createSessionControl } from './sessions/session-control.js';
@@ -35,6 +36,7 @@ import type { Database } from './db/database.js';
 import { loadMigrations, type MigrationFileSystem } from './db/migration-files.js';
 import { migrate } from './db/migrations.js';
 import { ensureHubIdentity } from './hub-identity.js';
+import { registerLocalServer, type LocalServerEntry } from './pairing/local-server.js';
 import { readLayout } from './layout/node-tree.js';
 import { readPaneLayout, writePaneLayout } from './layout/pane-layout.js';
 import { createReducer, type Reducer } from './state/reducer.js';
@@ -125,6 +127,19 @@ export interface HubDependencies {
   readonly webAssets: WebAssetFileSystem;
   readonly host: string;
   readonly port: number;
+  /**
+   * The server on this machine, if the hub's settings name one, paired at boot
+   * from the token in its identity file. `null` is most hubs: nothing is
+   * registered and nothing is said. See `pairing/local-server.ts` for the
+   * bounds of the one pairing nobody types.
+   */
+  readonly localServer: LocalServerEntry | null;
+  /**
+   * The disk the identity file is read from, through the same seam the server
+   * reads it with. Injected for the reason the migrations directory is, and for
+   * one more: a test pairs a local server from a file it wrote down.
+   */
+  readonly files: StoreFileSystem;
 }
 
 export interface Hub {
@@ -167,6 +182,8 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     webAssets,
     host,
     port,
+    localServer,
+    files,
   } = dependencies;
   const logger = dependencies.logger.child({ role: 'hub' });
 
@@ -180,6 +197,11 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   });
 
   const hubId = await ensureHubIdentity(database, ids, clock);
+
+  // Before the supervisor reads the pairing table, so that the row a first boot
+  // writes is dialled on that boot and not the next one. After the migrations,
+  // because it is a row in a table they make.
+  await registerLocalServer(localServer, { database, files, ids, clock, logger });
 
   // Started before the port is opened, and not awaited past its first read of
   // the pairing table. A server that is switched off must not delay the hub

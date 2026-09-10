@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createFakeStoreFiles } from '@agentplex/providers/testing';
 import { createFakeDatabase } from '../db/fake-database.js';
 import type { MigrationFileSystem } from '../db/migration-files.js';
 import { createFakeBeaconSource } from '../discovery/fake-beacon-source.js';
@@ -60,6 +61,8 @@ async function startTestHub(
     webAssets: createFakeWebAssets(assets),
     host: HOST,
     port: 0,
+    localServer: null,
+    files: createFakeStoreFiles(),
   });
   return hub;
 }

@@ -11,7 +11,7 @@ import {
 import { createFakeMessageSocket, PEER_GONE } from '@agentplex/node-shared/testing';
 import { createLogger, CLOSE_POLICY } from '@agentplex/node-shared';
 import { serveHubConnection } from './hub-connection.js';
-import type { ServerIdentity } from './server-identity.js';
+import type { ServerIdentity } from '@agentplex/providers';
 import { createFakeSessionController } from './fake-session-controller.js';
 import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 

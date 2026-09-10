@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeStoreFiles } from '@agentplex/providers/testing';
+import { createFakeStoreFiles } from './fake-store-files.js';
 import { ensureServerIdentity } from './server-identity.js';
 import { randomTokenMinter } from '@agentplex/node-shared';
 

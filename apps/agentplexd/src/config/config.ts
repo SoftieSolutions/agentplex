@@ -1,5 +1,6 @@
 import { delimiter, isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
+import type { LocalServerEntry } from '../hub/pairing/local-server.js';
 import { DEFAULT_TERMINAL_CAP } from '../server/terminal-manager.js';
 import { LOG_LEVELS, type LogLevel } from '@agentplex/node-shared';
 
@@ -56,6 +57,17 @@ export interface HubConfig {
    * `MIN_CLIENT_TOKEN_LENGTH`.
    */
   readonly clientToken: string;
+  /**
+   * The server on this same machine, which the hub pairs at boot from the
+   * token in its identity file, or `null` for a hub that has none.
+   *
+   * Configuration and not discovery, deliberately: this is the setting the
+   * operator's setup run wrote, and it is the only way a pairing gets made
+   * without somebody typing a token. A hub does not look for an identity file
+   * on the chance that a server lives beside it; it is told. See
+   * `hub/pairing/local-server.ts` for the rest of the bounds.
+   */
+  readonly localServer: LocalServerEntry | null;
 }
 
 export interface ServerConfig {
@@ -228,6 +240,17 @@ const SETTINGS = {
   },
   terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
   /**
+   * The local server, as two settings: where its identity file is, and the
+   * port it binds. The file is what makes an entry; the port takes the
+   * server's default when it is not given, because that is the port the server
+   * beside this hub binds when it is not told otherwise either.
+   */
+  localServerIdentityFile: {
+    flag: '--local-server-identity-file',
+    env: 'AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE',
+  },
+  localServerPort: { flag: '--local-server-port', env: 'AGENTPLEX_LOCAL_SERVER_PORT' },
+  /**
    * Takes `true` or `false` rather than being a bare presence flag, which
    * `readFlags` would refuse anyway: every setting here has one value, and a
    * flag with none is a typo. It earns its keep beyond consistency, too — an
@@ -235,6 +258,17 @@ const SETTINGS = {
    * `--announce=false`, which a presence flag could never express.
    */
   announce: { flag: '--announce', env: 'AGENTPLEX_ANNOUNCE' },
+} as const;
+
+/**
+ * The two settings setup writes when it records a local server, exported so
+ * that the file setup writes and the file this parser reads name the same
+ * variables. Two spellings of one setting is a machine that provisions
+ * cleanly and then comes up unpaired.
+ */
+export const LOCAL_SERVER_SETTINGS = {
+  identityFile: SETTINGS.localServerIdentityFile,
+  port: SETTINGS.localServerPort,
 } as const;
 
 /**
@@ -326,6 +360,12 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), role, problems);
 
+  const localServer = readLocalServer(
+    read(SETTINGS.localServerIdentityFile),
+    read(SETTINGS.localServerPort),
+    problems,
+  );
+
   if (role === undefined || problems.length > 0) return { ok: false, problems };
 
   // Each role is assembled from exactly the settings it has, which is what the
@@ -337,7 +377,12 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
     return {
       ok: true,
       command,
-      config: { role, logLevel, host, hub: { port: hubPort, databaseFile, clientToken } },
+      config: {
+        role,
+        logLevel,
+        host,
+        hub: { port: hubPort, databaseFile, clientToken, localServer },
+      },
     };
   }
 
@@ -354,8 +399,44 @@ export function loadConfig({ argv, env }: ConfigSources): ConfigResult {
 
   if (databaseFile === undefined) return { ok: false, problems: [MISSING_DATABASE_FILE] };
   if (clientToken === undefined) return { ok: false, problems: [BAD_CLIENT_TOKEN] };
-  const hub: HubConfig = { port: hubPort, databaseFile, clientToken };
+  const hub: HubConfig = { port: hubPort, databaseFile, clientToken, localServer };
   return { ok: true, command, config: { role, logLevel, host, hub, server } };
+}
+
+/**
+ * The local server the hub pairs at boot, or `null` when the settings name
+ * none.
+ *
+ * The identity file is what makes an entry. A port on its own names nothing --
+ * there is no file to read a token from -- and is refused rather than ignored,
+ * because a setting that is read and does nothing is the shape of a typo that
+ * costs somebody an afternoon. The path is absolute for the reason the server's
+ * own identity path is: a relative one names a different file per working
+ * directory, and a hub that read a different token than the server holds would
+ * dial its own machine and be refused, with nothing pointing at the cause.
+ */
+function readLocalServer(
+  rawPath: string | undefined,
+  rawPort: string | undefined,
+  problems: string[],
+): LocalServerEntry | null {
+  if (rawPath === undefined) {
+    if (rawPort !== undefined) {
+      problems.push(
+        `${SETTINGS.localServerPort.flag} names a port for a local server, but no ` +
+          `${SETTINGS.localServerIdentityFile.flag} names its identity file`,
+      );
+    }
+    return null;
+  }
+  if (!isAbsolute(rawPath)) {
+    problems.push(
+      `${SETTINGS.localServerIdentityFile.flag} must be an absolute path, not ${JSON.stringify(rawPath)}`,
+    );
+    return null;
+  }
+  const port = readPort(rawPort, SETTINGS.localServerPort.flag, DEFAULT_SERVER_PORT, problems);
+  return { identityPath: resolve(rawPath), port };
 }
 
 /**
