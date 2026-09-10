@@ -1,9 +1,9 @@
-import type { Config } from './config/config.js';
-import type { OperationRegistry } from './server/operations/operation-registry.js';
+import type { ServerConfig } from './config.js';
+import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
-import type { BeaconNetwork } from './server/server-beacon.js';
-import { startSessionServer, type SessionServer } from './server/server.js';
-import type { TerminalManager } from './server/terminal-manager.js';
+import type { BeaconNetwork } from './server-beacon.js';
+import { startSessionServer, type SessionServer } from './server.js';
+import type { TerminalManager } from './terminal-manager.js';
 import type { Clock, IdGenerator, Logger, Timers, TokenMinter } from '@agentplex/node-shared';
 
 /**
@@ -83,7 +83,7 @@ export interface Runtime {
 }
 
 export async function startRuntime(
-  config: Config,
+  config: ServerConfig,
   dependencies: RuntimeDependencies,
 ): Promise<Runtime> {
   const {
@@ -104,10 +104,10 @@ export async function startRuntime(
     logger,
     ids,
     host: config.host,
-    port: config.server.port,
-    storePaths: config.server.storePaths,
+    port: config.port,
+    storePaths: config.storePaths,
     storeFileSystem,
-    identityPath: config.server.identityPath,
+    identityPath: config.identityPath,
     tokens,
     providers,
     preflight,
@@ -117,10 +117,10 @@ export async function startRuntime(
     timers,
     // The setting decides, in the one place that has read it. A server that
     // was not asked to announce is handed no socket to do it with.
-    announce: config.server.announce ? beacon : null,
+    announce: config.announce ? beacon : null,
   });
 
-  logger.info('agentplexd started', { role: config.role });
+  logger.info('agentplex server started');
 
   let stopped = false;
   return {
@@ -129,7 +129,7 @@ export async function startRuntime(
       if (stopped) return;
       stopped = true;
       await server.stop();
-      logger.info('agentplexd stopped');
+      logger.info('agentplex server stopped');
     },
   };
 }

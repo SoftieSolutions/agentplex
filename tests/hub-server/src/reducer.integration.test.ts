@@ -9,7 +9,7 @@ import {
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { serveHubConnection } from '../../../apps/agentplexd/src/server/hub-connection.js';
+import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import {
   createSocketPair,
@@ -42,7 +42,7 @@ import {
   type Reducer,
   type StoreView,
 } from '../../../apps/hub/src/state/reducer.js';
-import { createFakeSessionController } from '../../../apps/agentplexd/src/server/fake-session-controller.js';
+import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 
 /**
  * The reducer against the real supervisor, over real handshakes.
