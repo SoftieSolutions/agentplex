@@ -9,6 +9,7 @@ import {
   randomTokenMinter,
   systemClock,
   systemTimers,
+  wantsHelp,
 } from '@agentplex/node-shared';
 import {
   createClaudeAdapter,
@@ -20,11 +21,12 @@ import {
   nodeProviderFiles,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
-import { createPtySupervisor, nodePtyFactory } from '@agentplex/pty';
+import { checkNodePty, createPtySupervisor, nodePtyFactory } from '@agentplex/pty';
 import { startRuntime } from './boot.js';
 import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
+import { refuseWithoutTerminals } from './terminal-support.js';
 import { createTerminalManager } from './terminal-manager.js';
 
 /**
@@ -44,6 +46,35 @@ const EXIT_STARTUP_FAILED = 1;
 
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
+
+  // First of all, ahead even of the question below about what this machine can
+  // do. What this program's flags are is a fact about the program: an operator
+  // whose server will not start is exactly the one who needs to read them, and
+  // a `--help` that answered with the pty refusal on an installation whose
+  // addon did not build would be answering a question nobody asked. It is also
+  // before the settings, whose reader refuses any argument that is not one of
+  // them -- which is what made the flag the bin advertises a refusal. An answer
+  // goes to stdout and exits 0; the two refusals below keep stderr and the code
+  // `RestartPreventExitStatus=2` tells the unit not to retry.
+  if (wantsHelp(process.argv.slice(2))) {
+    write(serverUsage());
+    return;
+  }
+
+  // Then, and before the configuration, because this is a fact about the
+  // installation rather than about the deployment: no setting fixes it, and a
+  // server that got as far as opening a port and announcing itself before
+  // discovering it cannot run a session has already over-claimed. node-pty is
+  // loaded lazily precisely so that this line is reachable -- a static import
+  // would have failed while this module was being linked, with a resolver stack
+  // instead of a sentence.
+  const terminals = refuseWithoutTerminals(checkNodePty());
+  if (terminals !== null) {
+    for (const line of terminals.lines) process.stderr.write(`${line}\n`);
+    process.exitCode = terminals.exitCode;
+    return;
+  }
+
   const loaded = loadServerConfig({ argv: process.argv.slice(2), env: process.env });
 
   if (!loaded.ok) {

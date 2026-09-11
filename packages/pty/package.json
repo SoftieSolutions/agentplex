@@ -26,7 +26,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
-    "postinstall": "node scripts/fix-node-pty-permissions.js"
+    "postinstall": "node scripts/node-pty-postinstall.js"
   },
   "dependencies": {
     "@agentplex/node-shared": "workspace:*",

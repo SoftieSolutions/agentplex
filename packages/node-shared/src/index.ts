@@ -51,5 +51,6 @@ export {
   readSetting,
   settingValue,
   usageLines,
+  wantsHelp,
 } from './settings.js';
 export type { FlagsResult, Setting } from './settings.js';

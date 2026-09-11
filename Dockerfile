@@ -63,7 +63,7 @@ RUN pnpm build
 # run here rather than on a laptop because the thing being tested is what a
 # stranger gets, and a laptop with a warm pnpm store cannot tell you that.
 FROM build AS package
-RUN pnpm --filter agentplex package \
+RUN pnpm --filter ./apps/install package \
     && mkdir -p /package \
     && cd apps/install/release \
     && npm pack --pack-destination /package
@@ -94,7 +94,7 @@ COPY --from=package /package/ /package/
 # covered by allowScripts" and runs them anyway; an npm that starts enforcing
 # that gate turns this line red, which is the whole reason for testing an
 # install rather than reasoning about one.
-RUN npm install --global /package/agentplex-*.tgz
+RUN npm install --global /package/softiesolutions-agentplex-*.tgz
 
 # Four assertions. `doctor` reaches its report only by the bin dispatching to
 # it by path and the doctor loading every package it imports, so a report on
@@ -111,8 +111,8 @@ RUN agentplex server --role=server 2>&1 | grep -q 'Usage: agentplex server'
 # The client and the schema travel inside the package or the hub has nothing to
 # serve and no database to open. Read back out of the installed tree, at the
 # paths `main.js` resolves rather than the paths packaging wrote.
-RUN test -f "$(npm root -g)/agentplex/apps/web/dist/index.html" \
-    && test -f "$(npm root -g)/agentplex/apps/hub/migrations/0001_hub_identity.sql"
+RUN test -f "$(npm root -g)/@softiesolutions/agentplex/apps/web/dist/index.html" \
+    && test -f "$(npm root -g)/@softiesolutions/agentplex/apps/hub/migrations/0001_hub_identity.sql"
 
 # The bootstrap check: `install.sh` against the machine it was written for.
 #
@@ -170,24 +170,34 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # AGENTPLEX_PACKAGE is the seam. It points the install at the tarball the
 # `package` stage just built, which is the only way to run this against a build
 # that has never been published.
-RUN AGENTPLEX_PACKAGE="$(echo /package/agentplex-*.tgz)" \
+RUN AGENTPLEX_PACKAGE="$(echo /package/softiesolutions-agentplex-*.tgz)" \
     bash /install.sh --role=server --no-setup | tee /tmp/install.log
 
 # What the script said it would do, read back off the machine.
 #
 # node first: nothing put one here, so an executable at this path is proof the
-# download, the checksum and the unpack all happened. agentplex second, which
-# is proof npm ran under that node and node-gyp found the toolchain sudo
-# installed -- the failure the whole toolchain decision exists to prevent.
-RUN test -x "$HOME/.agentplex/bin/node" && test -x "$HOME/.agentplex/bin/agentplex"
+# download, the checksum and the unpack all happened. It is under `node/` and
+# not in the prefix's own `bin/`, and the two absences beside it are the rest of
+# that split: `include/` and `share/` are the tarball's, and a prefix that has
+# them is a prefix the runtime was unpacked over. agentplex second, which is
+# proof npm ran under that node and node-gyp found the toolchain sudo installed
+# -- the failure the whole toolchain decision exists to prevent.
+RUN test -x "$HOME/.agentplex/node/bin/node" \
+    && test -x "$HOME/.agentplex/bin/agentplex" \
+    && ! test -e "$HOME/.agentplex/include" \
+    && ! test -e "$HOME/.agentplex/share"
 # The prefix is not put on a PATH for anybody, so the script has to say so.
 RUN grep -q "export PATH=\"$HOME/.agentplex/bin:" /tmp/install.log
 
-# The settings file: two facts the installer had, and 0600 because the client
-# token belongs in this file.
-RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplexd.env")" = 600 \
-    && grep -qx 'AGENTPLEX_ROLE=server' "$HOME/.agentplex/agentplexd.env" \
-    && grep -qx "AGENTPLEX_BIN_PATH=$HOME/.agentplex/bin" "$HOME/.agentplex/agentplexd.env"
+# The settings file: the three facts the installer had, and 0600 because the
+# client token belongs in this file. The prefix is one of them because a setup
+# run later on this machine has no other way to find the one that was chosen --
+# asserted here rather than in a second install into a custom prefix, which
+# would download and compile everything above a second time for one line.
+RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplex.env")" = 600 \
+    && grep -qx 'AGENTPLEX_ROLE=server' "$HOME/.agentplex/agentplex.env" \
+    && grep -qx "AGENTPLEX_PREFIX=$HOME/.agentplex" "$HOME/.agentplex/agentplex.env" \
+    && grep -qx "AGENTPLEX_BIN_PATH=$HOME/.agentplex/bin" "$HOME/.agentplex/agentplex.env"
 
 # The unit, and then systemd's own reading of it. `verify` resolves ExecStart,
 # so it is also an assertion that the unit points at a program that is really
@@ -197,6 +207,7 @@ RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! test -e "$HOME/.config/systemd/user/agentplex-hub.service" \
     && grep -qx "ExecStart=$HOME/.agentplex/bin/agentplex server" "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! grep -q '^User=' "$HOME/.config/systemd/user/agentplex-server.service" \
+    && grep -qx "Environment=PATH=$HOME/.agentplex/bin:$HOME/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$HOME/.config/systemd/user/agentplex-server.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-server.service"
 
 # The ticket's own verification: a stock container, and `doctor` at the end of
@@ -206,7 +217,10 @@ RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
 # ticket that installs providers and is not on this branch. It goes into the
 # prefix the script created, through the npm that came with the Node the script
 # installed, which is exactly what setup's install plan does.
-ENV PATH=/home/alice/.agentplex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Both directories, in the order the unit gets them: the binary and the
+# providers are linked into the prefix's bin, and the runtime their shebangs
+# resolve now lives in a directory of its own.
+ENV PATH=/home/alice/.agentplex/bin:/home/alice/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN npm install --global --prefix "$HOME/.agentplex" @anthropic-ai/claude-code
 
 # What is asserted is the directory: the provider resolved out of the prefix
@@ -233,6 +247,33 @@ RUN agentplex doctor --role=server \
 RUN cat /tmp/doctor.log \
     && grep -Eq '^  claude +(ready|unauthenticated|unknown) +.*/home/alice/\.agentplex/bin$' /tmp/doctor.log
 
+# Undoing it, which is the only place an uninstall can be exercised against
+# something that was really installed. A dry run can be asserted in the suite
+# and the removals cannot: there is no machine to throw away anywhere else, and
+# this stage is a machine to throw away with a real install on it.
+#
+# It runs last in this stage on purpose. Everything above has already been
+# asserted, so nothing after this depends on the tree it takes apart -- and the
+# root stage below deliberately starts from a machine with no Node, which is now
+# doubly true.
+RUN bash /install.sh --uninstall | tee /tmp/uninstall.log
+
+# The runtime, the package and the units are gone.
+RUN ! test -e "$HOME/.agentplex/node" \
+    && ! test -e "$HOME/.agentplex/bin/agentplex" \
+    && ! test -e "$HOME/.agentplex/lib/node_modules/@softiesolutions" \
+    && ! test -e "$HOME/.config/systemd/user/agentplex-server.service"
+
+# And what it deliberately did not take with them. The settings file is state
+# and comes back from nowhere; `claude` was installed into this prefix by
+# something that is not this script, and a prefix swept clean would have taken
+# it. Both are named in the log rather than only left behind, because an
+# operator who wants this machine empty has no other list.
+RUN test -f "$HOME/.agentplex/agentplex.env" \
+    && test -x "$HOME/.agentplex/bin/claude" \
+    && grep -q 'Left in place' /tmp/uninstall.log \
+    && grep -q "$HOME/.agentplex/agentplex.env" /tmp/uninstall.log
+
 # The fleet path, which is a different account, a different prefix and a
 # different unit scope. It runs as root because that is what it is for: it
 # creates a service account and writes a system unit, and it still runs nothing
@@ -246,29 +287,179 @@ USER root
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # No --no-setup here: --system declines a wizard on its own, and the run has to
 # say so rather than be told to.
-RUN AGENTPLEX_PACKAGE="$(echo /package/agentplex-*.tgz)" \
+RUN AGENTPLEX_PACKAGE="$(echo /package/softiesolutions-agentplex-*.tgz)" \
     bash /install.sh --system --role=hub | tee /tmp/system-install.log
 RUN grep -q 'not run: --system machines take a plan' /tmp/system-install.log
 RUN id agentplex \
-    && test -x /opt/agentplex/bin/node \
+    && test -x /opt/agentplex/node/bin/node \
     && test -x /opt/agentplex/bin/agentplex \
-    && test "$(stat -c '%U' /etc/agentplex/agentplexd.env)" = agentplex \
     && grep -qx 'User=agentplex' /etc/systemd/system/agentplex-hub.service \
     && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex hub' /etc/systemd/system/agentplex-hub.service \
     && ! test -e /etc/systemd/system/agentplex-server.service \
     && grep -qx 'WantedBy=multi-user.target' /etc/systemd/system/agentplex-hub.service \
     && systemd-analyze verify /etc/systemd/system/agentplex-hub.service
+# Who owns what, which on this machine is a security boundary and not
+# bookkeeping. The service account runs coding agents, so everything it owns is
+# within reach of a session that gets out of one.
+#
+# The runtime is the assertion that matters: `node` under /opt/agentplex/node is
+# the interpreter this unit's ExecStart resolves through, and an account that
+# owned it could replace the interpreter and be re-executed on every restart
+# after that. The prefix root and lib/ are root's for the same reason -- so
+# nothing new can be dropped beside them -- and bin/, lib/node_modules/ and
+# share/ are the account's because `agentplex setup` installs providers into
+# them as that account.
+#
+# It says what it found before it decides. A chain of silent `test`s fails with
+# "exit code 1" and does not say which of nine paths was wrong, which is one bit
+# per build of a machine that takes six minutes to make; this prints the owner
+# of every path and fails at the end on the ones that disagreed. MISSING is a
+# path that is not there at all -- `stat` exits 2 and prints nothing, which a
+# chain would have reported as the same one bit.
+RUN wrong=''; \
+    printf '%-10s %-10s %s\n' FOUND EXPECTED PATH; \
+    for pair in /opt/agentplex/node:root \
+        /opt/agentplex/node/bin/node:root \
+        /opt/agentplex:root \
+        /opt/agentplex/lib:root \
+        /opt/agentplex/bin:agentplex \
+        /opt/agentplex/lib/node_modules:agentplex \
+        /opt/agentplex/lib/node_modules/@softiesolutions/agentplex:agentplex \
+        /opt/agentplex/share:agentplex \
+        /var/lib/agentplex:agentplex; do \
+      path="${pair%:*}"; expected="${pair##*:}"; \
+      owner="$(stat -c '%U' "$path" 2>/dev/null || echo MISSING)"; \
+      printf '%-10s %-10s %s\n' "$owner" "$expected" "$path"; \
+      [ "$owner" = "$expected" ] || wrong="$wrong $path"; \
+    done; \
+    [ -z "$wrong" ] || { echo "owner is not what this install should produce:$wrong" >&2; exit 1; }
+# The whole runtime, not the two paths above. A nodejs.org tarball's entries are
+# owned by the account that built the release, so a `tar -x` as root restored a
+# uid no machine has for every file under it -- the interpreter included. The
+# claim is about the tree, so the assertion is about the tree.
+RUN find /opt/agentplex/node ! -user root -printf '%u %p\n' | tee /tmp/node-foreign.log \
+    && test ! -s /tmp/node-foreign.log
+
+# The settings file, which holds the client token: root's, group-readable by the
+# account so the daemon can read its own configuration, and 0640 so it cannot
+# rewrite it and nobody else on the machine can read it.
+RUN test "$(stat -c '%U:%G' /etc/agentplex/agentplex.env)" = root:agentplex \
+    && test "$(stat -c '%a' /etc/agentplex/agentplex.env)" = 640
+
+# The same boundary as the account itself sees it, which is the form a provider
+# install and a compromised session both arrive in. Writing is what setup does
+# and has to keep working; the refusals are the whole point of the split. The
+# probes are removed again so that the uninstall below still meets the tree it
+# expects.
+RUN su agentplex -s /bin/sh -c 'touch /opt/agentplex/bin/probe /opt/agentplex/lib/node_modules/probe /opt/agentplex/share/probe /var/lib/agentplex/probe' \
+    && ! su agentplex -s /bin/sh -c 'touch /opt/agentplex/node/bin/probe' \
+    && ! su agentplex -s /bin/sh -c 'touch /opt/agentplex/probe' \
+    && ! su agentplex -s /bin/sh -c 'echo x >>/etc/agentplex/agentplex.env' \
+    && su agentplex -s /bin/sh -c 'grep -q AGENTPLEX_ROLE /etc/agentplex/agentplex.env' \
+    && rm -f /opt/agentplex/bin/probe /opt/agentplex/lib/node_modules/probe /opt/agentplex/share/probe /var/lib/agentplex/probe
+
 # The two-unit shape, which is the one this epic exists for on a single box:
 # `--role=both` renders both units, and each starts one daemon.
 RUN bash /install.sh --system --role=both --print-unit >/tmp/both-units.txt \
     && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex hub' /tmp/both-units.txt \
     && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex server' /tmp/both-units.txt
 
+# The fleet uninstall, which is a different scope, a different prefix and a
+# different set of things to leave alone. The service account stays: it owns
+# /var/lib/agentplex and the database in it, and an account removed out from
+# under a directory it owns is a state directory nobody can read.
+RUN bash /install.sh --system --uninstall | tee /tmp/system-uninstall.log
+RUN ! test -e /etc/systemd/system/agentplex-hub.service \
+    && ! test -e /opt/agentplex/node \
+    && ! test -e /opt/agentplex/lib/node_modules/@softiesolutions \
+    && test -f /etc/agentplex/agentplex.env \
+    && id agentplex \
+    && grep -q '/etc/agentplex/agentplex.env' /tmp/system-uninstall.log
+
+# The hub bootstrap: the claim this ticket is actually about, on the only
+# machine that can prove it.
+#
+# A separate stage rather than another `RUN` in the one above, and that is the
+# whole reason it exists: `bootstrap-check` installs python3, make and g++
+# through sudo on its first line of real work, so every hub install after that
+# point runs on a machine that already has a compiler and proves nothing. The
+# claim is that a hub needs none, and the only way to state it is a container
+# where none was ever installed.
+#
+# It costs a second Debian layer, a second Node download and a second npm
+# install -- and no compile, because there is nothing here to compile, which is
+# the point. It is the cheaper of the two bootstrap stages for exactly the
+# reason it is being added.
+#
+# systemd is here for the same reason it is above: `systemd-analyze verify`
+# resolves ExecStart, so it is systemd's own word that the unit points at a hub
+# that is really there.
+FROM debian:bookworm-slim AS hub-bootstrap-check
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes ca-certificates curl sudo systemd \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home alice \
+    && echo 'alice ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/alice \
+    && chmod 0440 /etc/sudoers.d/alice
+
+COPY --from=package /package/ /package/
+COPY apps/install/packaging/install.sh /install.sh
+
+USER alice
+ENV HOME=/home/alice
+WORKDIR /home/alice
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# alice has passwordless sudo, exactly as above, so a script that wanted to
+# install a toolchain could. This asserts that it did not want to.
+RUN AGENTPLEX_PACKAGE="$(echo /package/softiesolutions-agentplex-*.tgz)" \
+    bash /install.sh --role=hub --no-setup | tee /tmp/hub-install.log
+
+# No compiler on the machine, before or after. `cc`, `c++` and `g++` are all
+# absent from a stock bookworm-slim, so finding one here would mean this install
+# put it here -- which is the regression this stage exists to catch. The log
+# line beside it is the other half: the step was skipped as a decision and said
+# so, rather than being quietly dropped.
+RUN ! command -v g++ \
+    && ! command -v c++ \
+    && ! command -v cc \
+    && grep -q 'toolchain  not needed' /tmp/hub-install.log
+
+# And the install worked anyway. node-pty is an optional dependency, so npm
+# exits 0 having skipped or dropped it; the bin, the runtime and the unit all
+# arrived, and no server unit came with them.
+RUN test -x "$HOME/.agentplex/node/bin/node" \
+    && test -x "$HOME/.agentplex/bin/agentplex" \
+    && test -f "$HOME/.config/systemd/user/agentplex-hub.service" \
+    && ! test -e "$HOME/.config/systemd/user/agentplex-server.service" \
+    && grep -qx "ExecStart=$HOME/.agentplex/bin/agentplex hub" "$HOME/.config/systemd/user/agentplex-hub.service" \
+    && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-hub.service"
+
+ENV PATH=/home/alice/.agentplex/bin:/home/alice/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The hub's own doctor, which is the end-to-end statement: a program that loads
+# every bundled package, reports a machine that opens no terminals, and exits 0
+# on a box with no compiler on it. Exit 0 is the assertion here, unlike the
+# server stage above, because on a hub there is nothing left that could be
+# unusable.
+RUN agentplex doctor --role=hub | tee /tmp/hub-doctor.log
+RUN grep -q 'opens no terminals' /tmp/hub-doctor.log
+
+# The other half of the same decision is deliberately not asserted here. A
+# `--role=server` run on this machine would install the toolchain through the
+# same passwordless sudo alice has above and then compile node-pty perfectly
+# well -- which is the correct behaviour and no evidence at all about a machine
+# that cannot compile. What happens on a server when node-pty will not load is
+# the postinstall's own test in `packages/pty`, where the failure can be
+# arranged rather than hoped for.
+
 # Runtime dependencies only, resolved on their own rather than pruned out of
 # the build stage: a prune leaves whatever it failed to notice.
 FROM manifests AS runtime-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter agentplex... --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
+    pnpm install --frozen-lockfile --prod --filter "{./apps/install}..." --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production

@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from 'node:path';
 import type { ProcessRunner, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 import type { PtySupervisor } from '@agentplex/pty';
 import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
@@ -39,6 +40,7 @@ const EXIT_BAD_PLAN = 2;
 
 const PLAN_FLAG = '--plan';
 const ROLE_FLAG = '--role';
+const PREFIX_FLAG = '--prefix';
 
 export interface SetupCommandDependencies {
   /** Where the wizard asks its questions. Unused on the `--plan` path. */
@@ -81,7 +83,7 @@ export interface SetupCommandDependencies {
 
 export function setupUsage(): string {
   return [
-    'Usage: agentplex setup [--role <hub|server|both>]',
+    'Usage: agentplex setup [--role <hub|server|both>] [--prefix <directory>]',
     '       agentplex setup --plan <file>',
     '',
     '  With no plan, setup asks what it cannot discover. Which providers are',
@@ -90,6 +92,13 @@ export function setupUsage(): string {
     '  offers to save the plan the answers produced.',
     '',
     '  --role pre-seeds the first question rather than replacing it.',
+    '',
+    '  --prefix is the directory agentplex owns on this machine: the providers',
+    '  it installs, the identity file it mints, and the settings file it offers',
+    '  to record the pairing in all hang off it. install.sh passes the prefix it',
+    '  created, and records it as AGENTPLEX_PREFIX in the settings file it wrote',
+    '  so that a later setup by hand can be given the same one. It must be an',
+    '  absolute path, and defaults to $HOME/.agentplex.',
     '',
     '  --plan replays one of those files: the providers to have, the stores to',
     '  identify, the ports, the directories a server resolves programs in, and',
@@ -113,7 +122,7 @@ export async function runSetupCommand(
   if (!flags.ok) return report(flags.problems);
 
   return flags.plan === null
-    ? askAndProvision(flags.role, dependencies)
+    ? askAndProvision(flags.role, flags.prefix, dependencies)
     : replayPlan(flags.plan, dependencies, report);
 }
 
@@ -126,9 +135,10 @@ export async function runSetupCommand(
  */
 async function askAndProvision(
   role: Role | null,
+  prefix: string | null,
   dependencies: SetupCommandDependencies,
 ): Promise<number> {
-  const outcome = await runSetupWizard({ role }, dependencies);
+  const outcome = await runSetupWizard({ role, prefix }, dependencies);
 
   if (outcome.kind === 'no-input') {
     // Nothing was asked and nothing was assumed. The other front end is the one
@@ -237,11 +247,16 @@ type SetupFlags =
       readonly plan: string | null;
       /** The role the wizard starts on, or `null` to offer the usual one. */
       readonly role: Role | null;
+      /**
+       * The prefix the wizard owns, absolute, or `null` for the one under
+       * `$HOME` it has always chosen for itself.
+       */
+      readonly prefix: string | null;
     }
   | { readonly ok: false; readonly problems: readonly string[] };
 
 /**
- * The two flags this command takes.
+ * The three flags this command takes.
  *
  * An unknown argument is a refusal rather than a shrug, for the reason
  * `readFlags` gives: silently ignoring `--pln` would replay nothing and report
@@ -249,26 +264,39 @@ type SetupFlags =
  * one wins, because that is the convention every other flag in this binary
  * follows and a second convention is a thing to remember.
  *
- * The two together are refused. `--role` pre-seeds a question, and a plan
- * already states its role — so an invocation carrying both is somebody expecting
- * one of them to win, and the one they expected is not knowable from here.
+ * `--plan` with either of the others is refused. `--role` pre-seeds a question
+ * and `--prefix` says where the wizard owns a prefix; a plan already states its
+ * role and its `installPrefix` — so an invocation carrying both is somebody
+ * expecting one of them to win, and the one they expected is not knowable from
+ * here.
  *
  * A plan path is used exactly as it was typed. A relative one resolves against
  * the directory the operator was standing in when they typed it, which is what
  * they meant; the paths *inside* a plan are a different question, and the plan
  * parser refuses those unless they are absolute.
+ *
+ * A prefix is one of those other paths, and is refused unless it is absolute
+ * for the reason the wizard refuses a relative settings file: what is being
+ * named is a directory a systemd unit will read from, started from a working
+ * directory nobody chose, so a prefix that moves with `cd` is a service that
+ * comes up pointed at a directory nothing wrote. There is no environment
+ * fallback either — `AGENTPLEX_PREFIX` is a line `install.sh` records for a
+ * person to read and pass back, and a prefix taken from the ambient environment
+ * would be a second opinion about where this machine's files live, which is the
+ * failure this flag exists to end.
  */
 function readSetupFlags(argv: readonly string[]): SetupFlags {
   const problems: string[] = [];
   let plan: string | null = null;
   let role: Role | null = null;
+  let prefix: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index] ?? '';
     const separator = argument.indexOf('=');
     const flag = separator === -1 ? argument : argument.slice(0, separator);
 
-    if (flag !== PLAN_FLAG && flag !== ROLE_FLAG) {
+    if (flag !== PLAN_FLAG && flag !== ROLE_FLAG && flag !== PREFIX_FLAG) {
       problems.push(`unknown argument: ${argument}`);
       continue;
     }
@@ -296,6 +324,15 @@ function readSetupFlags(argv: readonly string[]): SetupFlags {
       continue;
     }
 
+    if (flag === PREFIX_FLAG) {
+      if (!isAbsolute(value)) {
+        problems.push(`${PREFIX_FLAG} has to be an absolute path: ${value}`);
+        continue;
+      }
+      prefix = resolve(value);
+      continue;
+    }
+
     const named = ROLES.find((one) => one === value);
     if (named === undefined) {
       problems.push(`${ROLE_FLAG} takes one of: ${ROLES.join(', ')}`);
@@ -308,5 +345,12 @@ function readSetupFlags(argv: readonly string[]): SetupFlags {
     problems.push(`${ROLE_FLAG} pre-seeds the wizard, and a plan states its own role: pass one`);
   }
 
-  return problems.length > 0 ? { ok: false, problems } : { ok: true, plan, role };
+  if (plan !== null && prefix !== null) {
+    problems.push(
+      `${PREFIX_FLAG} tells the wizard where to own a prefix, and a plan states its own ` +
+        'installPrefix: pass one',
+    );
+  }
+
+  return problems.length > 0 ? { ok: false, problems } : { ok: true, plan, role, prefix };
 }

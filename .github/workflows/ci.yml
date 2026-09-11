@@ -178,3 +178,16 @@ jobs:
           context: .
           target: bootstrap-check
           cache-from: type=gha
+
+      # The other role, on a container where no compiler was ever installed.
+      # It has to be its own stage: the one above installs a toolchain through
+      # sudo on its first real step, so every hub install after that point runs
+      # on a machine that already has one and proves nothing. This is the only
+      # place the claim -- a hub-only machine needs no C++ toolchain -- can be
+      # stated. It compiles nothing, so it is the cheaper of the two.
+      - name: Bootstrap a hub on a container with no compiler
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: hub-bootstrap-check
+          cache-from: type=gha
