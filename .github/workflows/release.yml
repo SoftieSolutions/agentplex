@@ -12,13 +12,13 @@
 # meant.
 #
 # **The package name is not written here.** The unscoped `agentplex` on npm
-# belongs to somebody else, so this publishes under a scope, and the rename is
-# a separate ticket that may land before or after this file. Every step below
-# reads the name out of the manifest that was assembled, so the workflow is
-# correct on both sides of that change and there is nowhere for a second copy
-# of the name to be wrong. `--access public` is what a scoped package's first
-# publish needs and is a no-op for an unscoped one, so it is passed
-# unconditionally rather than made to depend on which name is current.
+# belongs to somebody else, so this publishes as `@softiesolutions/agentplex`.
+# Every step below reads the name out of the manifest that was assembled rather
+# than repeating it, so there is nowhere for a second copy of the name to be
+# wrong. `--access public` is what a scoped package's first publish needs, and
+# this is the only place it is stated: the assembled manifest deliberately
+# carries no `publishConfig`, because the same fact in two files is one that can
+# disagree.
 #
 # **Publishing is not a side effect of merging.** There is no npm token yet and
 # the questions behind one -- who may publish, what the 2FA policy is -- are
@@ -171,11 +171,11 @@ jobs:
       # the fact and the manifest that was assembled is the manifest that gets
       # packed.
       - name: Assemble the package at the version the tag names
-        run: pnpm --filter agentplex package "$GITHUB_REF_NAME"
+        run: pnpm --filter ./apps/install package "$GITHUB_REF_NAME"
 
       # Name and version are read back out of the assembled manifest rather
-      # than written here, because the name is about to change and a copy of it
-      # in this file would be the half of the rename somebody forgets.
+      # than written here: a copy of either in this file is the half of a rename
+      # somebody forgets.
       - name: Pack the package
         id: package
         working-directory: apps/install/release

@@ -27,7 +27,7 @@ const rootManifest: Manifest = {
 
 /** The bin's own manifest: no runtime dependency, because it only dispatches. */
 const serviceManifest: Manifest = {
-  name: 'agentplex',
+  name: '@softiesolutions/agentplex',
   version: '1.2.3',
   license: 'Apache-2.0',
   type: 'module',
@@ -218,6 +218,29 @@ describe('publishedManifest', () => {
     expect(manifest['private']).toBeUndefined();
     expect(manifest['devDependencies']).toBeUndefined();
     expect(manifest['bin']).toEqual({ agentplex: './apps/install/dist/main.js' });
+  });
+
+  /**
+   * The unscoped `agentplex` on npm is somebody else's package, so this
+   * publishes under the scope. A package name and a command name are separate
+   * things -- `bin` maps one to a path -- so the registry entry moves and the
+   * word an operator types does not.
+   */
+  it('publishes under the scope and still installs the `agentplex` command', () => {
+    const manifest = derived();
+
+    expect(manifest['name']).toBe('@softiesolutions/agentplex');
+    expect(Object.keys(manifest['bin'] as Record<string, string>)).toEqual(['agentplex']);
+  });
+
+  /**
+   * `--access public` is passed by the release workflow, which is the only
+   * thing that publishes this package, and the first publish is the only one
+   * the flag decides anything for. A `publishConfig` here would be the same
+   * fact written twice.
+   */
+  it('leaves access to the publishing command rather than restating it', () => {
+    expect(derived()['publishConfig']).toBeUndefined();
   });
 
   it('keeps the node-pty permission repair as its only install script', () => {
