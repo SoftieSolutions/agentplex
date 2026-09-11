@@ -44,20 +44,37 @@ readonly INSTALL_SH_VERSION='1'
 #
 # The constraints, which are the settled part: HTTPS, a path the project
 # controls, and a version in that path so a pinned command keeps fetching the
-# same bytes. The value below satisfies all three today -- a tag names an
-# immutable tree, and GitHub serves it over TLS.
+# same bytes. The value below satisfies all three -- the repository is public,
+# GitHub serves raw content over TLS, and the major is a path component.
 #
-# A short alias in front of it (get.<domain>/v1/install.sh) is the part that is
-# pending, and it is pending on a registration rather than on a decision. No
+# `v1` is a branch of this repository rather than a tag, and
+# `.github/workflows/release.yml` is what puts a script on it: its `v1` job
+# fast-forwards `refs/heads/v1` to the released commit, after the publish
+# succeeded and only for a `1.` version that is not a prerelease. So the
+# one-liner hands out the installer from a release somebody can actually
+# install, and a release candidate does not become what every new machine runs.
+# A branch rather than a tag because the command a reader copies has to keep
+# meaning the current 1.x installer: a tag in the path would freeze whoever
+# copied it on the release they happened to read about, and the fast-forward is
+# what makes the same string keep working.
+#
+# The `v1` here and INSTALL_SH_VERSION above are the same number on purpose,
+# and the second path that comment names is a `v2` branch: a change that breaks
+# a documented invocation gets a branch of its own rather than an edit to this
+# one, so a command written today keeps fetching a script it still works with.
+#
+# A short alias in front of it (get.<domain>/v1/install.sh) is still deferred,
+# and it is deferred on a registration rather than on a decision. No
 # unregistered domain is printed anywhere in this repository as a command to
 # run: publishing `curl | bash` against a name nobody has registered is an
 # invitation for somebody else to register it, and the day that happens the
-# instruction still looks exactly right.
+# instruction still looks exactly right. Deferring it costs a reader nothing --
+# the URL below is long, but it resolves -- and the alias, when the name is
+# registered, redirects to this same path.
 #
 # `apps/install/README.md` prints this string and a test holds the two
-# together, so
-# there is one place to change when the alias exists.
-readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/<tag>/apps/install/packaging/install.sh'
+# together, so there is one place to change when the alias exists.
+readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/apps/install/packaging/install.sh'
 
 readonly PACKAGE_NAME='agentplex'
 

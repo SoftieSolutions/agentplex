@@ -37,6 +37,15 @@ const packagingDirectory = dirname(fileURLToPath(import.meta.url));
 const scriptPath = join(packagingDirectory, 'install.sh');
 const documentation = join(packagingDirectory, '..', 'README.md');
 const rootManifest = join(packagingDirectory, '..', '..', '..', 'package.json');
+const releaseWorkflow = join(
+  packagingDirectory,
+  '..',
+  '..',
+  '..',
+  '.github',
+  'workflows',
+  'release.yml',
+);
 
 /**
  * Only `engines`. The rest of the root manifest is somebody else's to change --
@@ -920,24 +929,67 @@ describe('the summary on a machine that can hold no unit', () => {
 
 describe('where the script says it is served from', () => {
   /**
+   * The one constant, read out of the script rather than restated here: a copy
+   * of the URL in this file would pass whatever the script said.
+   */
+  function declaredUrl(): string {
+    const source = readFileSync(scriptPath, 'utf8');
+    const declared = /^readonly INSTALL_SH_URL='([^']+)'$/m.exec(source)?.[1];
+    expect(declared).toBeDefined();
+    return declared ?? '';
+  }
+
+  /**
    * The open decision this ticket had to settle. The value is one constant in
    * the script; this is what makes it one constant rather than one constant and
    * three copies in prose that drift away from it.
    */
   it('prints the same URL the documentation tells people to fetch', () => {
-    const source = readFileSync(scriptPath, 'utf8');
-    const declared = /^readonly INSTALL_SH_URL='([^']+)'$/m.exec(source)?.[1];
-    expect(declared).toBeDefined();
+    const declared = declaredUrl();
     expect(declared).toMatch(/^https:\/\//);
     expect(readFileSync(documentation, 'utf8')).toContain(declared);
   });
 
-  it('pins a version in the path it is served from', () => {
+  /**
+   * The failure this is here to stop is the one the documented entry point
+   * actually had: a placeholder nobody substituted, served to every reader as a
+   * command to run and answered by a 404. Nothing is fetched -- the branch is
+   * created by the first release, the check container has no network, and a
+   * test that needs either would be red for reasons that are not about this
+   * constant. What can be asserted without the world in any particular state is
+   * that the string is a location and not a template.
+   */
+  it('names a location rather than a template to fill in', () => {
+    const declared = declaredUrl();
+    expect(declared).not.toMatch(/[<>]/);
+    const url = new URL(declared);
+    expect(url.protocol).toBe('https:');
+    expect(url.hostname).not.toBe('');
+    expect(url.pathname.split('/').slice(1)).not.toContain('');
+    expect(url.pathname).toMatch(/install\.sh$/);
+  });
+
+  it('pins the version the script calls itself in the path it is served from', () => {
     const source = readFileSync(scriptPath, 'utf8');
-    const declared = /^readonly INSTALL_SH_URL='([^']+)'$/m.exec(source)?.[1] ?? '';
-    // A tag today, a /v1/ path behind an alias later. What must not happen is a
-    // URL that means different bytes on different days.
-    expect(declared).toMatch(/<tag>|\/v\d+\//);
+    const version = /^readonly INSTALL_SH_VERSION='([^']+)'$/m.exec(source)?.[1];
+    expect(version).toBeDefined();
+    // A URL that means different bytes on different days is the thing being
+    // ruled out, and the major in the path is what rules it out. It is the
+    // script's own version because a change that breaks a documented
+    // invocation is a second path rather than an edit to this one.
+    expect(new URL(declaredUrl()).pathname).toContain(`/v${version}/`);
+  });
+
+  /**
+   * The other half of a URL that resolves: something has to put the script at
+   * it. The release workflow's `v1` job is that something, so the ref the URL
+   * names and the ref that job pushes are held together here rather than left
+   * to agree by memory across two directories.
+   */
+  it('is served from the ref the release workflow moves', () => {
+    const [, , ref] = new URL(declaredUrl()).pathname.split('/').slice(1);
+    expect(ref).toBeDefined();
+    expect(readFileSync(releaseWorkflow, 'utf8')).toContain(`refs/heads/${ref}`);
   });
 });
 
