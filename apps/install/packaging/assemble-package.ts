@@ -167,6 +167,35 @@ function isWorkspaceOnly(name: string): boolean {
   );
 }
 
+/**
+ * The one name `apps/web/dist` carries for a development build and for nothing
+ * on an installed machine: the client's source map.
+ *
+ * `vite.config.ts` asks for it deliberately, and it is worth asking for. Vite
+ * writes `sourcesContent` into it, so unlike every compiled map above it
+ * resolves with no checkout beside it, and somebody wanted the deployed PWA
+ * debuggable. What that cost is the reason it stops here rather than at the
+ * build: the map is 3437 KB against the 834 KB bundle it describes -- 57
+ * percent of the whole unpacked package -- and every installed machine paid it,
+ * including a `--role=server` machine that never serves a page. Emitting it and
+ * not publishing it keeps the intent where it is exercised, which is a
+ * developer running the hub against a local build, and takes it off the wire
+ * for everybody else.
+ *
+ * The bundle keeps its `sourceMappingURL` comment, and that is a decision.
+ * `sourcemap: 'hidden'` would strip the comment at the build, which is the same
+ * saving and a worse trade: it would also unhook the map from the local build
+ * that is the only reason the map is still emitted. So the comment stays and
+ * one request misses. `answerWebAssetRequest` falls back to the shell only for
+ * an extensionless path -- the app owns paths, the build owns filenames -- so a
+ * `.map` that is not there is a 404 with `text/plain` on it, never `index.html`
+ * under a JSON content type, and devtools note the 404 and go on showing the
+ * bundle. `web-assets.test.ts` holds that at the origin.
+ */
+function isClientSourceMap(name: string): boolean {
+  return name.endsWith('.map');
+}
+
 /** One thing copied into the package, and the path that proves it arrived. */
 export interface PackageEntry {
   /** Relative to the workspace root. */
@@ -245,11 +274,10 @@ export function packageEntries(): readonly PackageEntry[] {
       to: 'apps/web/dist',
       kind: 'directory',
       proof: 'index.html',
-      // Whole, map included, unlike every compiled directory above. Vite
-      // writes `sourcesContent` into it, so it is the one map in the package
-      // that resolves without a checkout, and a browser is the thing that
-      // fetches it -- only when devtools are open, and from a machine that is
-      // already reading the bundle beside it.
+      // Everything the browser loads, and not the map beside it: see
+      // `isClientSourceMap`. One name, so the fonts, the icons, the manifest
+      // and the service worker are all still here.
+      exclude: isClientSourceMap,
       reason: 'the built PWA the hub serves',
     },
     ...BUNDLED_PACKAGES.map((bundled): PackageEntry => ({

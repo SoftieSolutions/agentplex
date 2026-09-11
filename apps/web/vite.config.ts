@@ -59,6 +59,13 @@ const DEV_HUB = 'http://127.0.0.1:8080';
  */
 export default defineConfig({
   plugins: [react(), webManifest()],
+  // `sourcemap: true` and not `'hidden'`: the map is emitted with its
+  // `sourceMappingURL` comment so that a developer running the hub against this
+  // build gets it associated automatically. It is 3437 KB against an 834 KB
+  // bundle, so it is left out of the published package instead of out of the
+  // build -- see `isClientSourceMap` in `apps/install/packaging`. Turning this
+  // off, or to `'hidden'`, would take the map away from the one place it is
+  // used to save nothing the packaging does not already save.
   build: { outDir: 'dist', sourcemap: true },
   server: {
     port: 5173,

@@ -505,9 +505,23 @@ describe('the assembled package', () => {
     await compiled('packages/pty/dist', 'index', 'export const pty = 10;');
     await write('packages/pty/scripts/fix-node-pty-permissions.js', 'main();\n');
     if (options.client) {
+      // What vite leaves in `apps/web/dist`: the shell, the fingerprinted
+      // bundle and the map it points at, the stylesheet, a font, and the three
+      // unfingerprinted files the PWA is installed from. All of it but the map
+      // ships, so the fixture holds all of it -- a client fixture that were
+      // only a bundle and a map would pass under a filter that took the fonts
+      // and the icons with it.
       await write('apps/web/dist/index.html', '<!doctype html>\n');
-      await write('apps/web/dist/assets/index-abc123.js', 'export {};\n');
+      await write(
+        'apps/web/dist/assets/index-abc123.js',
+        'export {};\n//# sourceMappingURL=index-abc123.js.map\n',
+      );
       await write('apps/web/dist/assets/index-abc123.js.map', '{"sourcesContent":["x"]}\n');
+      await write('apps/web/dist/assets/index-abc123.css', 'body{}\n');
+      await write('apps/web/dist/assets/manrope-latin-400-normal-abc123.woff2', 'woff2\n');
+      await write('apps/web/dist/manifest.webmanifest', '{"name":"agentplex"}\n');
+      await write('apps/web/dist/sw.js', 'self.addEventListener();\n');
+      await write('apps/web/dist/icons/icon-192.png', 'png\n');
     }
     return root;
   }
@@ -641,19 +655,65 @@ describe('the assembled package', () => {
   });
 
   /**
-   * The one map in the package that resolves. Vite writes `sourcesContent` into
-   * it, so it needs no checkout to be read and a browser is the thing that
-   * fetches it; the compiled maps name `../src/*.ts` and carry no content, so
-   * they resolve to nothing wherever the package is installed.
+   * The client's map is the largest file the build produces -- 3437 KB against
+   * an 834 KB bundle, 57 percent of the unpacked package -- and every installed
+   * machine carried it, a `--role=server` one that never serves a page
+   * included. It is emitted on purpose and kept in the build; it is left out of
+   * the package here.
    */
-  it('keeps the client build whole, source map included', async () => {
+  it('leaves the client source map out of the package', async () => {
+    const root = await workspace({ client: true });
+
+    const assembled = await assemblePackage({ workspaceRoot: root });
+
+    const client = (await tree(assembled.directory)).filter((path) =>
+      path.startsWith(join('apps', 'web')),
+    );
+    expect(client.filter((path) => path.endsWith('.map'))).toEqual([]);
+  });
+
+  /**
+   * The other half of the exclusion, and the half a test of what is gone cannot
+   * fail on: the filter is one name, so everything the browser actually loads
+   * is still there. A client that installs without its fonts, its manifest or
+   * its icons is a PWA nobody can install, and the symptom is on a stranger's
+   * machine.
+   */
+  it('keeps every file of the client build the browser loads', async () => {
+    const root = await workspace({ client: true });
+
+    const assembled = await assemblePackage({ workspaceRoot: root });
+
+    const client = (await tree(assembled.directory)).filter((path) =>
+      path.startsWith(join('apps', 'web')),
+    );
+    expect(client).toEqual([
+      join('apps', 'web', 'dist', 'assets', 'index-abc123.css'),
+      join('apps', 'web', 'dist', 'assets', 'index-abc123.js'),
+      join('apps', 'web', 'dist', 'assets', 'manrope-latin-400-normal-abc123.woff2'),
+      join('apps', 'web', 'dist', 'icons', 'icon-192.png'),
+      join('apps', 'web', 'dist', 'index.html'),
+      join('apps', 'web', 'dist', 'manifest.webmanifest'),
+      join('apps', 'web', 'dist', 'sw.js'),
+    ]);
+  });
+
+  /**
+   * The `sourceMappingURL` comment stays in the shipped bundle, and that is the
+   * decision rather than an oversight. `sourcemap: 'hidden'` would drop it at
+   * the build and take the map's association away from the development build
+   * the map is kept for; the comment costs one request from a browser with
+   * devtools open, and the hub answers a missing `.map` with a 404 -- see
+   * `web-assets.test.ts`, which holds that at the origin.
+   */
+  it('leaves the bundle pointing at the map it no longer ships', async () => {
     const root = await workspace({ client: true });
 
     const assembled = await assemblePackage({ workspaceRoot: root });
 
     await expect(
-      readFile(join(assembled.directory, 'apps/web/dist/assets/index-abc123.js.map'), 'utf8'),
-    ).resolves.toContain('sourcesContent');
+      readFile(join(assembled.directory, 'apps/web/dist/assets/index-abc123.js'), 'utf8'),
+    ).resolves.toContain('sourceMappingURL=index-abc123.js.map');
   });
 
   it('carries the postinstall at the path the published manifest names', async () => {

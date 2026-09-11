@@ -88,7 +88,12 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   css: 'text/css; charset=utf-8',
   json: 'application/json; charset=utf-8',
   // Vite emits `.js.map` beside the bundle. It is JSON, and a browser only
-  // fetches it when devtools are open.
+  // fetches it when devtools are open. In a published package there is no map
+  // to serve -- it is excluded at package time, see `isClientSourceMap` in
+  // `assemble-package.ts` -- and this entry stays for the build a developer
+  // runs the hub against, which still has one. The miss the published case
+  // makes is a 404, because a `.map` has an extension and only an
+  // extensionless path reaches the shell.
   map: 'application/json; charset=utf-8',
   webmanifest: 'application/manifest+json',
   svg: 'image/svg+xml',
