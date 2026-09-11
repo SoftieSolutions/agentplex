@@ -33,7 +33,7 @@ import process from 'node:process';
  * Without it this warns and exits 0. A hand-typed `npm install --global` on a
  * machine with no compiler is a hub install as far as anything here can tell,
  * and the two programs that need a pty refuse to pretend otherwise on their
- * own: `agentplex server` will not start, and `agentplex doctor` reports the
+ * own: an agentplex server will not start, and `agentplex doctor` reports the
  * seam as unusable.
  *
  * Loading and not resolving, which is the distinction the whole check turns on.
@@ -139,7 +139,7 @@ function main() {
     // A hub, or an install nobody told. Both are machines this package has no
     // reason to stop, and the two programs that need a pty refuse on their own.
     console.warn(
-      `node-pty: not usable here (${problem}), so this machine cannot run \`agentplex server\`. ` +
+      `node-pty: not usable here (${problem}), so this machine cannot run an agentplex server. ` +
         `${advice} A hub needs none of it.`,
     );
     return;
@@ -147,7 +147,7 @@ function main() {
 
   console.error(`node-pty: not usable here: ${problem}`);
   console.error(
-    `${REQUIRED} is set, so this machine is meant to run \`agentplex server\`, and every ` +
+    `${REQUIRED} is set, so this machine is meant to run an agentplex server, and every ` +
       'session a server runs is driven through a pseudoterminal. ' +
       advice,
   );

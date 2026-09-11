@@ -1,28 +1,14 @@
 /**
  * What the `agentplex` bin answers to, by name.
  *
- * Three kinds, and the kinds are an architectural boundary written down rather
- * than a dispatch convenience.
- *
- * A **dispatched** program is another app's build artifact, reached by path and
- * never by import. Nothing imports an app, so `entry` is a URL and not a
- * specifier, and TypeScript is deliberately told nothing about what is at the
- * far end of it: the two daemons are separate programs that compose in the
- * package, where their `dist/` directories sit next to one another, and a
- * checked import would make them one program in four files. The paths are the
- * workspace's, so they are correct from a checkout, in the image and in the
- * published tarball alike. They are relative to this directory, which is the
- * one `main.js` is emitted into too.
+ * Two kinds of command, and a third table beside them that is not commands at
+ * all.
  *
  * An **in-app command** is ordinary code in this app, reached by a real import
  * that the compiler checks like any other. `setup` and `doctor` live under
  * `src/commands/`, so there is no boundary to cross and nothing to be careful
- * about: renaming an export breaks the build here, where a dispatched entry
- * would have broken at runtime on somebody's machine. What it buys over
- * flattening the whole table into imports is nothing -- it costs, in that this
- * app now carries what those two commands need -- and what it buys over leaving
- * them as separate apps is that the two things that were only ever reached
- * through this bin stop pretending to be deployables.
+ * about: renaming an export breaks the build here rather than at runtime on
+ * somebody's machine.
  *
  * `load` is a thunk returning a dynamic `import()` of a static specifier, which
  * is both: lazy, so `agentplex doctor` never evaluates the wizard's module graph
@@ -35,23 +21,32 @@
  * beside it so that `agentplex --help` lists it, and a command nothing lists is
  * a command nobody finds.
  *
+ * ## There was a third kind, and it is gone
+ *
+ * A **dispatched** program was another app's build artifact, reached by path and
+ * never by import: `hub` and `server` were `../../hub/dist/main.js` and
+ * `../../server/dist/main.js`, handed to `import()` with TypeScript deliberately
+ * told nothing about what was at the far end. That kind is not narrowed here, it
+ * is deleted, because its whole membership left the table at once -- and the
+ * consequence is worth more than the lines it takes away.
+ *
+ * A daemon is not a command. Nobody types `agentplex hub`, in any form: systemd
+ * starts the two daemons from their units in production and `pnpm start` does it
+ * in development, and neither route comes through this bin. So this app no
+ * longer reaches into another app's build output at all, and AGENTS.md's
+ * "nothing imports an app" holds here by construction rather than by discipline
+ * -- there is no untypechecked `import()` of a sibling `dist/` left for a later
+ * edit to point somewhere new. What remains is a table of modules this app owns,
+ * every one of them resolved by the compiler.
+ *
+ * `DAEMONS` below is what is left of the two names, and it is deliberately not
+ * `PROGRAMS`: the bin keeps the words so that it can say what they are rather
+ * than shrug at them, which is a different job from running something.
+ *
  * It is its own module so that a test can read it: `main.ts` dispatches at
- * module top level, and importing that file is running the bin. The list of
- * dispatched names exists a second time in `scripts/assemble-package.ts`,
- * deciding whose `dist/` travels in the tarball; `programs.test.ts` is what
- * keeps the two from drifting apart, and `kind` is what tells it which names
- * are that list's business.
+ * module top level, and importing that file is running the bin.
  */
-export type Program = DispatchedProgram | InAppCommand | BuiltinCommand;
-
-/** A separate program, reached by path once the command word is consumed. */
-export interface DispatchedProgram {
-  readonly kind: 'dispatched';
-  /** The program's built entry, relative to this file. */
-  readonly entry: string;
-  /** One line, as `agentplex --help` lists it. */
-  readonly summary: string;
-}
+export type Program = InAppCommand | BuiltinCommand;
 
 /**
  * A command this app holds, loaded on demand and then called.
@@ -81,8 +76,6 @@ export interface BuiltinCommand {
 }
 
 export const PROGRAMS: Readonly<Record<string, Program>> = {
-  hub: { kind: 'dispatched', entry: '../../hub/dist/main.js', summary: 'the hub daemon' },
-  server: { kind: 'dispatched', entry: '../../server/dist/main.js', summary: 'the server daemon' },
   setup: {
     kind: 'command',
     load: () => import('./commands/setup/main.js'),
@@ -94,4 +87,32 @@ export const PROGRAMS: Readonly<Record<string, Program>> = {
     summary: 'read-only check of this machine',
   },
   help: { kind: 'builtin', summary: 'this usage, or help <command> for one command' },
+};
+
+/**
+ * The two daemons, by the word somebody will type at this bin, and the unit that
+ * actually runs each one.
+ *
+ * Every document, every unit file and every habit says `agentplex hub`, so
+ * somebody is going to type it, and `unknown command "hub"` would be the one
+ * answer that is both true and useless: it says the word is meaningless when the
+ * word names the most important process on the machine. These two entries are
+ * what turns that into a sentence with a next step in it.
+ *
+ * They are not in `PROGRAMS` and must not drift into it. `PROGRAMS` is the set
+ * of words that do something, which is exactly what `--help` lists; a name in
+ * both tables would be a command again, which is the decision this table is the
+ * record of. `programs.test.ts` asserts the two stay disjoint, and that this one
+ * holds exactly the daemons the package carries.
+ *
+ * The unit file name is the same in both scopes -- a per-user install writes
+ * `~/.config/systemd/user/agentplex-hub.service`, a `--system` install writes
+ * `/etc/systemd/system/agentplex-hub.service` -- so naming it is a claim this
+ * can make without knowing which install it was reached from. Which `systemctl`
+ * reaches it is the part that differs, and `main.ts` says so rather than
+ * guessing.
+ */
+export const DAEMONS: Readonly<Record<string, string>> = {
+  hub: 'agentplex-hub.service',
+  server: 'agentplex-server.service',
 };

@@ -10,8 +10,8 @@
 #
 # Deliberately ignorant. It ensures a Node runtime and the build toolchain,
 # installs the published package, writes the systemd units it does not start --
-# one for `agentplex server`, one for `agentplex hub`, both for --role=both --
-# and hands over to `agentplex setup`. It knows nothing about providers, stores or
+# one per daemon the role runs, both for --role=both -- and hands over to
+# `agentplex setup`. It knows nothing about providers, stores or
 # databases: everything provider-specific lives in TypeScript beside the adapter
 # that knows the provider, so a new provider is a new file rather than an edit
 # to a shell script nobody tests.
@@ -547,10 +547,14 @@ escalate() {
 # years ago never used to get.
 #
 # The answer is also the unit's, which is the whole reason this is resolved
-# rather than merely done. A version manager keeps its Node in a directory a
-# systemd unit has never heard of, so a service started with a minimal PATH
-# would fail on the `#!/usr/bin/env node` line of the program it was pointed at
-# -- the spec's opening problem, one level below the one it was written about.
+# rather than merely done -- and it is now the unit's literally: ExecStart names
+# "$NODE_DIR/node", so whatever this function decides is the interpreter systemd
+# starts. That used to be an indirect claim, through a PATH the unit set so that
+# a `#!/usr/bin/env node` line could find something; the failure it was written
+# about was a version manager keeping its Node somewhere systemd has never heard
+# of. Naming the answer instead of arranging for it to be found is the same
+# decision reaching further, and the wrong answer here is now visibly wrong
+# rather than a service that dies looking for an interpreter.
 resolve_node_directory() {
   NODE_HOME="$PREFIX/node"
 
@@ -712,8 +716,8 @@ ensure_node() {
   # the account on the release builder, and no machine this runs on has that
   # name -- so tar falls back to the numeric uid and a --system install unpacked
   # $PREFIX/node/bin/node as uid 1001, which on a machine with a first human
-  # account is that person. That is the interpreter the unit's ExecStart
-  # resolves through: root-owned is the whole point of keeping it out of the
+  # account is that person. That is the interpreter the unit's ExecStart names
+  # outright: root-owned is the whole point of keeping it out of the
   # chown below, and an unrelated local user owning it instead is the same hole
   # with a stranger in it. Captured, not reasoned about: the --system block
   # asserts root over the whole of $PREFIX/node, and read UNKNOWN there until
@@ -1021,6 +1025,35 @@ write_units() {
   done
 }
 
+# How a daemon is started, as one command line: the interpreter this install
+# settled on, and the daemon's compiled entry inside the package npm wrote.
+#
+# It used to be "$BIN_DIR/$PACKAGE_NAME $daemon", and that stopped being true
+# rather than stopped being tidy. A daemon is not a command: there is no
+# `agentplex hub` to type, no hub bin on anybody's PATH, and the one binary this
+# package installs answers `hub` by explaining what a hub is. So the unit has to
+# name the program it starts, and the only name a program has here is its file.
+#
+# Both halves are constants this script already carries, which is the whole
+# argument for the shape. $NODE_DIR is the runtime it adopted or unpacked --
+# already the thing it asserts is executable before it declares the runtime
+# ready. $PREFIX/lib/node_modules/$NPM_PACKAGE is already the marker
+# `uninstall_package` uses to decide whether a prefix is one of ours, so this
+# learns nothing new about npm's layout; it reads the layout this script already
+# bets on. Inside it the path is the workspace's, the same in a checkout, in the
+# image and in the tarball, because packaging keeps that layout on purpose.
+#
+# It is strictly better than what it replaces, and not only equivalent. The old
+# ExecStart named a script whose first line is #!/usr/bin/env node, so systemd
+# started a program that then went looking for its own interpreter on a PATH the
+# unit had to be careful to set -- a service that dies before `main` on a machine
+# where that lookup lands somewhere else, with an error about `node` and nothing
+# about agentplex. Naming the interpreter deletes that failure rather than
+# guarding against it: this unit starts this Node, and no search decides.
+daemon_command() {
+  printf '%s %s' "$NODE_DIR/node" "$PREFIX/lib/node_modules/$NPM_PACKAGE/apps/$1/dist/main.js"
+}
+
 # One unit, as text, from the paths this run resolved. Both daemons read the
 # one settings file; each reads only the keys it needs, so a setting the other
 # owns is not an error. Order does not matter: the hub dials the server and
@@ -1060,12 +1093,19 @@ ${identity}WorkingDirectory=$STATE_DIR
 EnvironmentFile=$ENV_FILE
 # The prefix goes first, and the directory holding the node this install
 # settled on comes with it when that is somewhere a service would never look --
-# $PREFIX/node/bin, or a version manager's shims -- because ExecStart is a
-# script whose first line is #!/usr/bin/env node. In front of the rest of the
-# machine rather than instead of it: a session is not only the agent, it shells
-# out to git, rg and whatever else the project needs.
+# $PREFIX/node/bin, or a version manager's shims.
+#
+# The reason is no longer ExecStart. That line names the interpreter and the
+# script outright, so it resolves nothing through this PATH and cannot be the
+# #!/usr/bin/env node failure it used to be. What is left is everything the
+# daemon starts afterwards, and it is reason enough on its own: a session is not
+# only the agent, it shells out to git, rg and whatever else the project needs,
+# and the coding agents agentplex setup installs into the prefix's bin are
+# themselves scripts whose first line is #!/usr/bin/env node, which finds
+# nothing unless the runtime's own directory is named here. In front of the rest
+# of the machine rather than instead of it.
 Environment=PATH=$(unit_search_path)
-ExecStart=$BIN_DIR/$PACKAGE_NAME $daemon
+ExecStart=$(daemon_command "$daemon")
 Restart=on-failure
 RestartSec=5s
 # Exit 2 is the daemon saying the configuration is wrong. Restarting will not
@@ -1092,14 +1132,23 @@ UNIT
 # What the unit's PATH is, in order.
 #
 # The prefix, then the Node directory when it is neither the prefix nor
-# somewhere a service already searches, then the machine. The middle clause used
-# to be the interesting case and is now the ordinary one: the runtime lives in
-# $PREFIX/node rather than in the prefix itself, so the directory holding this
-# install's own Node needs naming here exactly as an adopted one under ~/.nvm or
-# ~/.local/share/fnm does. Either way it is invisible to systemd, and naming it
-# is what stops the unit from being a service that dies on the
-# `#!/usr/bin/env node` line of the program it was pointed at. One mechanism for
-# both, so that a Node in an unexpected place has only ever had one answer.
+# somewhere a service already searches, then the machine.
+#
+# What this is for changed when ExecStart started naming the interpreter. It is
+# no longer what stops the unit dying on the `#!/usr/bin/env node` line of the
+# program it was pointed at -- nothing is pointed at any more, systemd starts a
+# node this script names in full -- and keeping the old sentence would be
+# defending a line with a reason it no longer has.
+#
+# It is still needed, for the processes the daemon starts rather than for the
+# daemon. $BIN_DIR is where `agentplex setup` installs the coding agents, and
+# every one of them is a script looking for `node`; a session then shells out to
+# git, rg and whatever else the project needs, which is what the machine's own
+# directories at the end are for. The Node directory is named for the agents and
+# not for us: it is $PREFIX/node/bin, or a version manager's shims under ~/.nvm
+# or ~/.local/share/fnm, and either way it is somewhere systemd would never look.
+# One mechanism for both, so that a Node in an unexpected place has only ever had
+# one answer.
 unit_search_path() {
   local standard='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
   local path="$BIN_DIR"
@@ -1417,7 +1466,12 @@ summary() {
     say "Nothing will start ${PACKAGE_NAME} for you, so run a daemon yourself once"
     say "$ENV_FILE is complete:"
     for daemon in $DAEMONS; do
-      say "  $BIN_DIR/$PACKAGE_NAME $daemon"
+      # The same line the unit would have carried, and long for the same reason:
+      # there is no command for a daemon, so there is nothing shorter to print
+      # that would start one. An operator handing this to launchd needs the
+      # literal argv anyway, and a short form they had to expand themselves is
+      # where a wrong interpreter gets chosen.
+      say "  $(daemon_command "$daemon")"
     done
     say 'What to hand it to instead -- launchd on macOS -- is in the documentation below.'
   else

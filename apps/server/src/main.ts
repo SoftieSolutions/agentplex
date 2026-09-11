@@ -34,9 +34,15 @@ import { createTerminalManager } from './terminal-manager.js';
  * stdout, signals, exit codes. Every rule lives in a sibling module a test can
  * reach without opening a port.
  *
- * The shebang above is what makes this file a command once the `agentplex`
- * bin dispatches to it. `tsc` copies a leading shebang into the emitted file,
- * so the built `dist/main.js` carries it too.
+ * The shebang above buys nothing any longer and stays anyway. Nothing dispatches
+ * to this file: the `agentplex` bin has no daemon in its table, the systemd unit
+ * names an interpreter and this path, and the image's entrypoint is `node`. The
+ * one caller that would have needed the `#!` line is the one that no longer
+ * exists. It costs a line, it keeps `./dist/main.js` from a shell working the
+ * way somebody debugging will expect, and removing it would be the kind of edit
+ * that is noticed only by whatever turns out to have relied on it. `tsc` copies
+ * a leading shebang into the emitted file, so the built `dist/main.js` carries
+ * it too.
  */
 
 /** Configuration was wrong. Restarting will not help; the operator must act. */

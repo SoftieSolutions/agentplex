@@ -1,9 +1,10 @@
 # REPOSITORY DESCRIPTION
 
 agentplex watches and drives coding-agent sessions across machines. One
-package and one bin, `agentplex`, with four subcommands: `hub` and `server`
-are separate daemons the bin dispatches to by path; `setup` (the wizard) and
-`doctor` (the read-only check) are commands inside the bin itself.
+package and one bin, `agentplex`, whose subcommands are `setup` (the wizard),
+`doctor` (the read-only check) and `help`. `hub` and `server` are daemons and
+not commands: nobody types either, systemd starts them from their units and
+`pnpm start` does in development, so the bin reaches no app's build output.
 `install.sh --role=hub|server|both` decides which units a machine gets. `web`
 is a React PWA the hub serves.
 
@@ -15,9 +16,8 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 ## FOLDER STRUCTURE
 
 - `apps/` holds deployables: `hub`, `server`, `cli`, `web`. An app is a thing
-  that runs. Nothing imports an app; `apps/cli` is where the one bin comes
-  from, and `apps/cli/src/commands/` is where a subcommand with no deployable
-  of its own lives — reached by a checked import, not by a path into a `dist`.
+  that runs. `apps/cli` owns the bin and `apps/cli/src/commands/` holds a
+  subcommand. Nothing imports an app, and nothing reaches into one by path.
 - `scripts/` holds the repository's own tooling — the bootstrap an operator
   curls, the packaging step that composes the apps' built output by path, never
   by import. Nothing ships from it, and it is a workspace member because

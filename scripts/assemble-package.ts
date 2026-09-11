@@ -40,28 +40,44 @@ export const OUTPUT_DIRECTORY = 'apps/cli/release';
 export const BIN_APP = 'apps/cli';
 
 /**
+ * The daemons the package carries, by name.
+ *
+ * The list used to say "what the bin dispatches to by path", and it no longer
+ * does: nobody types `agentplex hub`, so nothing in `apps/cli` resolves either
+ * of these directories. What travels in the tarball is unchanged, because what
+ * starts a daemon is a systemd unit naming `<prefix>/lib/node_modules/
+ * <package>/apps/<daemon>/dist/main.js`, or the image running the same file --
+ * so the package has to carry it exactly as before, for a different reader.
+ *
+ * The two, and only they. `setup` and `doctor` were here while each was its own
+ * app with its own `dist/main.js`; they are commands inside `apps/cli/dist` now,
+ * so there is no directory of theirs to copy and no manifest of theirs to read
+ * ranges out of -- `apps/cli` declares what they need, and it is read above as
+ * the service.
+ *
+ * `apps/cli/src/programs.test.ts` reads this list and asserts that the bin holds
+ * no command by any of these names, and that it can say what each one is. The
+ * old tie -- these are exactly the names the bin dispatches -- is the thing this
+ * change deleted, and the two assertions replacing it are the ones that still
+ * mean something.
+ */
+export const DAEMONS: readonly string[] = ['hub', 'server'];
+
+/**
  * The apps in the package besides the one that owns the bin, and where each
  * lives. Each is copied at its workspace path, so `apps/hub/dist/main.js`
  * resolves its migrations and the client at the same distances it does in a
  * checkout, and what each needs is declared by the published manifest.
- */
-export const OTHER_APPS: readonly BundledPackage[] = [
-  { name: '@agentplex/hub', directory: 'apps/hub' },
-  { name: '@agentplex/server', directory: 'apps/server' },
-];
-
-/**
- * What the bin dispatches to by path, by name.
  *
- * The two daemons, and only they. `setup` and `doctor` were here while each was
- * its own app with its own `dist/main.js`; they are commands inside
- * `apps/cli/dist` now, so there is no directory of theirs to copy and no
- * manifest of theirs to read ranges out of -- `apps/cli` declares what they
- * need, and it is read above as the service. A name in this list that the bin
- * does not dispatch, or the other way round, is what `apps/cli/src/
- * programs.test.ts` exists to catch.
+ * Derived from the list above rather than written beside it: it was the same
+ * two names twice, and the pair only stayed in step because nobody had added a
+ * third daemon. An app here with no `dist` entry below is a manifest whose
+ * dependencies the package declares and whose code it does not ship.
  */
-export const PROGRAMS = ['hub', 'server'] as const;
+export const OTHER_APPS: readonly BundledPackage[] = DAEMONS.map((daemon) => ({
+  name: `@agentplex/${daemon}`,
+  directory: `apps/${daemon}`,
+}));
 
 /**
  * The workspace packages the compiled service imports, and where each lives.
@@ -116,16 +132,16 @@ export const ENTRYPOINT = 'apps/cli/dist/main.js';
  * paying that bill: `apps/hub` depends on node-shared, protocol, providers and
  * zod, and on nothing that touches a pty. Optional is what lets npm finish
  * without it -- and the bin's own dependency on `@agentplex/pty` does not
- * change that, because an optional dependency is optional per package and
- * `agentplex hub` evaluates no module that loads the addon.
+ * change that, because an optional dependency is optional per package and the
+ * hub evaluates no module that loads the addon.
  *
  * What optional costs, and what pays it back. npm exits 0 when an optional
  * dependency's build fails and removes the package from the tree without
  * printing an error -- verified against npm 11.19 -- so a server installed on a
  * machine with no compiler would otherwise report a clean install and then fail
  * to open a session. Three things close that, and none of them may be dropped
- * while this list has an entry in it: `agentplex server` refuses to start and
- * says what to install, `agentplex doctor` reports the seam as unusable, and
+ * while this list has an entry in it: the server refuses to start and says what
+ * to install, `agentplex doctor` reports the seam as unusable, and
  * the package's own postinstall fails the install outright when
  * AGENTPLEX_REQUIRE_PTY says the machine is one that runs a server.
  */
@@ -290,15 +306,15 @@ export function packageEntries(): readonly PackageEntry[] {
       kind: 'directory',
       proof: 'main.js',
       exclude: isWorkspaceOnly,
-      reason: 'the agentplex bin, its setup and doctor commands, and the two programs below',
+      reason: 'the agentplex bin, its setup and doctor commands; the daemons are below',
     },
-    ...PROGRAMS.map((program): PackageEntry => ({
-      from: `apps/${program}/dist`,
-      to: `apps/${program}/dist`,
+    ...DAEMONS.map((daemon): PackageEntry => ({
+      from: `apps/${daemon}/dist`,
+      to: `apps/${daemon}/dist`,
       kind: 'directory',
       proof: 'main.js',
       exclude: isWorkspaceOnly,
-      reason: `the compiled ${program}`,
+      reason: `the compiled ${daemon}`,
     })),
     {
       from: 'apps/hub/migrations',

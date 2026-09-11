@@ -1,8 +1,10 @@
 # agentplex
 
 Watch and drive coding-agent sessions across machines. One package and one
-bin, `agentplex`, with four subcommands: `hub` and `server` are separate
-daemons, `setup` is the wizard, `doctor` is the read-only check.
+bin, `agentplex`: `setup` is the wizard, `doctor` is the read-only check. The
+hub and the server are daemons rather than subcommands -- nothing but
+`agentplex` is installed onto your PATH, and the units `install.sh` writes are
+what start them.
 
 ```sh
 npm install --global @softiesolutions/agentplex
@@ -64,8 +66,8 @@ and prints nothing about it. On a hub that is exactly right. On a server it
 would be a clean install and a session that never starts, so three things stand
 between the two:
 
-- `agentplex server` refuses to start, naming node-pty and saying what to
-  install, rather than dying inside a native addon before `main` runs.
+- the server refuses to start, naming node-pty and saying what to install,
+  rather than dying inside a native addon before `main` runs.
 - `agentplex doctor` reports the seam as `unusable` for any role that runs a
   server, and exits `1`.
 - `install.sh` sets `AGENTPLEX_REQUIRE_PTY=1` for `--role=server` and
@@ -79,8 +81,8 @@ between the two:
 node-pty needs its own install scripts to run: they are what compile the addon.
 An npmrc with `ignore-scripts=true`, a reasonable hardening setting and not an
 unusual one, produces an install that reports success and leaves node-pty as
-source that cannot load, and then `agentplex server` fails to start with a
-module error rather than anything about a pty.
+source that cannot load, and then the server fails to start with a module
+error rather than anything about a pty.
 
 Override it for this package:
 
