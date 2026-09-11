@@ -338,6 +338,43 @@ export function publishedManifest(input: {
 }
 
 /**
+ * What `exports` is allowed to hold.
+ *
+ * Node resolves a subpath to a string, to a `null` that refuses it, to an array
+ * of alternatives, or to a map of conditions holding more of the same, nested
+ * as deep as a package cares to nest it. This is carried across untouched, so
+ * the schema describes that shape and flattens nothing: a type that stopped one
+ * level down would either reject the conditional exports every package here
+ * writes or quietly drop what it could not name, and either way the bundled
+ * directory is one the resolver cannot enter.
+ */
+export type ExportsEntry =
+  string | null | readonly ExportsEntry[] | { readonly [condition: string]: ExportsEntry };
+
+const exportsSchema: z.ZodType<ExportsEntry> = z.lazy(() =>
+  z.union([z.string(), z.null(), z.array(exportsSchema), z.record(z.string(), exportsSchema)]),
+);
+
+/**
+ * Exactly the fields a bundled package is extracted with. Everything else a
+ * workspace manifest carries is dropped by parsing it away, and an optional
+ * field the source never declared is absent from the result rather than present
+ * and undefined, so the object and the JSON written from it say the same thing.
+ */
+const bundledManifestSchema = z.object({
+  name: z.string(),
+  version: z.string(),
+  license: z.string(),
+  type: z.literal('module'),
+  sideEffects: z.union([z.boolean(), z.array(z.string())]).optional(),
+  exports: exportsSchema.optional(),
+  main: z.string().optional(),
+  types: z.string().optional(),
+});
+
+export type BundledManifest = z.infer<typeof bundledManifestSchema>;
+
+/**
  * The manifest the bundled protocol is extracted with.
  *
  * Its `exports` is what makes the bundled directory resolvable, so that is
@@ -353,27 +390,18 @@ export function publishedManifest(input: {
  * protocol's needs are declared by the package that carries it -- see the guard
  * in `publishedManifest` -- and Node's resolver walks up out of the bundled
  * directory to find them, which is the same walk it does in the workspace.
+ *
+ * `bundledManifestSchema` is the whole of what survives, so what a bundled package
+ * declares is decided here rather than inherited: an unreadable source stops
+ * the assembly with its path named, and a field nobody listed cannot reach a
+ * consumer's npm by accident.
  */
-export function bundledManifest(source: string, text: string): Record<string, unknown> {
-  const parsed: Record<string, unknown> = JSON.parse(text);
-  // Parsed for the same reason the others are: this one is copied field for
-  // field, so an unreadable source has to stop the assembly rather than produce
-  // a bundled package whose name or version is missing.
-  parseManifest(source, text);
-  const kept: Record<string, unknown> = {};
-  for (const field of [
-    'name',
-    'version',
-    'license',
-    'type',
-    'sideEffects',
-    'exports',
-    'main',
-    'types',
-  ]) {
-    if (field in parsed) kept[field] = parsed[field];
+export function bundledManifest(source: string, text: string): BundledManifest {
+  const parsed = bundledManifestSchema.safeParse(JSON.parse(text));
+  if (!parsed.success) {
+    throw new Error(`${source} is not a manifest this can bundle: ${parsed.error.message}`);
   }
-  return kept;
+  return parsed.data;
 }
 
 /** A source the assembly needs and did not find. */
