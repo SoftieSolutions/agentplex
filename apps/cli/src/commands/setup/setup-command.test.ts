@@ -6,6 +6,7 @@ import {
   createFakeStoreFiles,
   type FakeStoreFiles,
   printed,
+  refused,
   createFakeProviderFiles,
   providerFixturePath,
 } from '@agentplex/providers/testing';
@@ -19,6 +20,7 @@ import { createPtySupervisor } from '@agentplex/pty';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine, type FakeSetupMachine } from './fake-setup-machine.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
+import { createFakeUnitsAfterSetup, type FakeUnitsAfterSetup } from './fake-units-after-setup.js';
 import { runSetupCommand, type SetupCommandDependencies } from './setup-command.js';
 import { SETUP_PLAN_VERSION } from './setup-plan.js';
 
@@ -80,6 +82,7 @@ interface Run {
   readonly binPaths: readonly (readonly string[])[];
   readonly terminal: FakeTerminal;
   readonly setupMachine: FakeSetupMachine;
+  readonly units: FakeUnitsAfterSetup;
 }
 
 async function run(
@@ -108,6 +111,7 @@ async function run(
   const errors: string[] = [];
   const binPaths: (readonly string[])[] = [];
   const terminal = createFakeTerminal({ answers: options.answers ?? [] });
+  const units = createFakeUnitsAfterSetup();
 
   const dependencies: SetupCommandDependencies = {
     terminal,
@@ -134,6 +138,7 @@ async function run(
         }),
       ]),
     files,
+    units,
     ids: { newId: () => 'id-under-test' },
     tokens: { newToken: () => 'minted-on-the-machine' },
     clock: { now: () => 1_700_000_000_000 },
@@ -150,6 +155,7 @@ async function run(
     binPaths,
     terminal,
     setupMachine,
+    units,
   };
 }
 
@@ -470,5 +476,68 @@ describe('agentplex setup', () => {
     expect(asked.code).toBe(0);
     expect(asked.terminal.transcript).toContain('install into: /home/dev/.agentplex');
     expect(asked.setupMachine.writes).toEqual(['/home/dev/.agentplex/agentplex.env']);
+  });
+});
+
+/**
+ * The step that ends a setup run, and the one condition it runs under.
+ *
+ * `install.sh` writes the units and deliberately does not start them: at the
+ * moment it runs there is no database file, no client token and no store path,
+ * so a unit it started would be a service that fails on its first line. Setup
+ * is the step that just filled that file in, which is what makes this its job.
+ *
+ * What is asserted here is only *whether* the step was reached, because that is
+ * the whole of the decision this file owns. What the step does when it is
+ * reached -- which scope, which units, the foreground command instead -- is
+ * `start-after-setup.test.ts`.
+ */
+describe('starting the units when setup finishes', () => {
+  it('starts them after a replay that had nothing to report', async () => {
+    const replayed = await run(['--plan', PLAN_FILE], { plan: PLAN });
+
+    expect(replayed.code).toBe(0);
+    expect(replayed.units.calls()).toBe(1);
+    expect(replayed.out).toContain('The units are running:');
+  });
+
+  it('starts them after a wizard run that provisioned the machine', async () => {
+    const asked = await run([], { answers: ['', '', '', '', '', '', ''] });
+
+    expect(asked.code).toBe(0);
+    expect(asked.units.calls()).toBe(1);
+  });
+
+  it('starts nothing when the plan file does not parse', async () => {
+    const replayed = await run(['--plan', PLAN_FILE], { plan: '{ "version": 1 }' });
+
+    expect(replayed.code).toBe(2);
+    // Nothing on this machine changed, so there is nothing to start and no
+    // standing to start what an earlier run left.
+    expect(replayed.units.calls()).toBe(0);
+  });
+
+  it('starts nothing when there is no plan file at all', async () => {
+    const replayed = await run(['--plan', '/no/such/plan.json']);
+
+    expect(replayed.code).toBe(2);
+    expect(replayed.units.calls()).toBe(0);
+  });
+
+  it('starts nothing when the run finished with problems', async () => {
+    // A machine that is half provisioned. Starting the daemons on it is the
+    // restart loop `install.sh` refuses to create, arrived at from the other
+    // end -- and the operator has just been told the run did not entirely work.
+    const machine = createFakeMachine({
+      programs: {
+        'claude --version': refused(1, 'claude: command not found'),
+        'npm install --global @anthropic-ai/claude-code': refused(1, 'EACCES'),
+      },
+    });
+
+    const replayed = await run(['--plan', PLAN_FILE], { plan: PLAN, machine });
+
+    expect(replayed.code).toBe(1);
+    expect(replayed.units.calls()).toBe(0);
   });
 });

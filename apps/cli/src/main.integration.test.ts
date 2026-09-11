@@ -109,7 +109,7 @@ describe('the agentplex bin', () => {
     expect(result.stdout).toContain('Usage: agentplex <command> [options]');
     // The table is the words that do something, and `hub` and `server` are not
     // among them.
-    for (const name of ['setup', 'doctor', 'help']) {
+    for (const name of ['setup', 'start', 'stop', 'status', 'doctor', 'help']) {
       expect(result.stdout).toMatch(new RegExp(`^ {2}${name} {2,}\\S`, 'm'));
     }
     for (const daemon of ['hub', 'server']) {
@@ -119,6 +119,9 @@ describe('the agentplex bin', () => {
     // out entirely would make the one place an operator looks silent about the
     // word every unit file and every document still says.
     expect(result.stdout).toContain('hub and server are daemons rather than commands');
+    // And the three words that reach them, because a daemon nobody can start is
+    // a sentence that stops one step short of useful.
+    expect(result.stdout).toContain('agentplex start, stop and status');
     expect(result.stdout).toContain('agentplex-hub.service');
     expect(result.stdout).toContain('agentplex-server.service');
     // A flag nothing lists is a flag nobody finds.
@@ -224,7 +227,14 @@ describe('the agentplex bin', () => {
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain(`the ${daemon} is a daemon, not a command`);
       expect(result.stderr).toContain(`agentplex-${daemon}.service`);
-      expect(result.stderr).toContain('systemctl');
+      // It used to be two spellings of `systemctl status`, with a clause about
+      // which one applied. That was the best available answer while `agentplex
+      // start` did not exist, and it was still the operator being handed a
+      // decision -- user manager or system one -- that this program can make
+      // out of the file the installer wrote.
+      expect(result.stderr).toContain('agentplex start');
+      expect(result.stderr).toContain('agentplex status');
+      expect(result.stderr).not.toContain('systemctl');
       // Not an unknown command, and not the usage either: the answer is complete,
       // and the usage is for when the next step is to pick a different word.
       expect(result.stderr).not.toContain('unknown command');

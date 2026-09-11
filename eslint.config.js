@@ -271,7 +271,17 @@ export default tseslint.config(
     // code was. For both, starting a child is the only way to have a subject.
     // The rule above is about what the daemon may do, and nothing here is
     // reachable from a socket, a frame or a running process.
-    files: ['scripts/install.sh.integration.test.ts', 'apps/cli/src/main.integration.test.ts'],
+    //
+    // The third file is the same kind of subject seen from the other side: the
+    // installation commands read a real prefix off a real disk and the paths
+    // they walk are the installer's, so what is under test is a directory laid
+    // out by hand and a built bin finding what is in it. In process it would
+    // confirm paths the published bin never uses.
+    files: [
+      'scripts/install.sh.integration.test.ts',
+      'apps/cli/src/main.integration.test.ts',
+      'apps/cli/src/installation/installation.integration.test.ts',
+    ],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {

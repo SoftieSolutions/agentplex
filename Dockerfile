@@ -345,6 +345,41 @@ RUN agentplex doctor --role=server \
 RUN cat /tmp/doctor.log \
     && grep -Eq '^  claude +(ready|unauthenticated|unknown) +.*/home/alice/\.agentplex/bin$' /tmp/doctor.log
 
+# The other command that reads this machine, and the other question. `doctor`
+# asked whether this box can do the work; `status` asks what is installed on it,
+# at what version, and whether it is running -- and every one of those is a fact
+# only a machine somebody really installed onto can produce. The manifests it
+# reports were written by `assemble-package.ts`, npm put them where it looks,
+# and the runtime line is the stamp install.sh wrote when it unpacked a Node.
+#
+# It is `--role=server`, so the hub and web packages are genuinely absent: the
+# report has to say so without calling a correctly installed machine broken.
+#
+# systemd is installed in this stage and is not running, so nothing answers on
+# the bus. That is a machine state worth reaching -- it is what the degrade path
+# is for -- and it is also why the exit code is not the assertion here: `|| true`
+# is the same narrow use the doctor line above makes of it, under `pipefail`.
+RUN agentplex status >/tmp/status.log 2>&1 || true
+RUN cat /tmp/status.log \
+    && grep -q 'prefix=/home/alice/.agentplex' /tmp/status.log \
+    && grep -q 'role=server' /tmp/status.log \
+    && grep -Eq '^  cli +[0-9]+\.[0-9]+\.[0-9]+ +protocol [0-9]+$' /tmp/status.log \
+    && grep -Eq '^  server +[0-9]+\.[0-9]+\.[0-9]+ +protocol [0-9]+$' /tmp/status.log \
+    && grep -Eq '^  hub +absent' /tmp/status.log \
+    && grep -q 'agentplex-server.service' /tmp/status.log \
+    && grep -q 'installed by install.sh' /tmp/status.log \
+    && ! grep -q 'do not agree' /tmp/status.log
+
+# `agentplex start`, on a box whose manager is not up. What is asserted is the
+# honesty: it says what systemd said, and it does not claim to have started
+# anything. A container that really ran systemd would be a different stage; this
+# is the failure an operator meets far more often, and the one that must not be
+# reported as success.
+RUN agentplex start >/tmp/start.log 2>&1 || true
+RUN cat /tmp/start.log \
+    && grep -q 'scope=user' /tmp/start.log \
+    && ! grep -q 'enabled and started' /tmp/start.log
+
 # Undoing it, which is the only place an uninstall can be exercised against
 # something that was really installed. A dry run can be asserted in the suite
 # and the removals cannot: there is no machine to throw away anywhere else, and

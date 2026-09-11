@@ -1,6 +1,7 @@
 import process from 'node:process';
 import {
   childEnvironment,
+  childSearchPath,
   randomIdGenerator,
   randomTokenMinter,
   systemClock,
@@ -10,12 +11,16 @@ import {
   createClaudeAdapter,
   createNodeProcessProbe,
   createNodeProcessRunner,
+  createNodeProgramResolver,
   createProviderRegistry,
   nodeProviderFiles,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
 import { createPtySupervisor, nodePtyFactory } from '@agentplex/pty';
+import { nodeInstallationFiles } from '../../installation/node-installation-files.js';
+import { createSystemd } from '../../installation/systemd.js';
 import { createNodeSetupMachine } from './node-setup-machine.js';
+import { createUnitsAfterSetup } from './start-after-setup.js';
 import { createNodeSetupTerminal } from './node-setup-terminal.js';
 import { runSetupCommand, setupUsage } from './setup-command.js';
 
@@ -69,6 +74,12 @@ export async function main(): Promise<void> {
 
   const terminal = createNodeSetupTerminal({ input: process.stdin, output: process.stdout });
 
+  // What a child that is not a provider inherits: this process's environment
+  // with no `binPath` in front of it. `systemctl` is the machine's own program
+  // and must resolve as the machine resolves it, where a provider is looked for
+  // in the directories the plan named first.
+  const machineEnvironment = childEnvironment({ inherited: process.env, binPath: [] });
+
   try {
     process.exitCode = await runSetupCommand(process.argv.slice(2), {
       terminal,
@@ -109,6 +120,20 @@ export async function main(): Promise<void> {
           }),
         ]),
       files: nodeStoreFileSystem,
+      // The one step that runs after everything else, and the reason it is
+      // setup's rather than the installer's is in `start-after-setup.ts`. It is
+      // composed here with the same runner and resolver `doctor` and `status`
+      // get, because "where would a bare `systemctl` come from" has one answer
+      // per machine and should not have two per program.
+      units: createUnitsAfterSetup({
+        home: process.env['HOME'] ?? '',
+        files: nodeInstallationFiles,
+        systemd: createSystemd({
+          runner: createNodeProcessRunner({ environment: machineEnvironment }),
+          programs: createNodeProgramResolver(childSearchPath(machineEnvironment)),
+        }),
+        interpreter: process.execPath,
+      }),
       ids: randomIdGenerator,
       // A plan that brought no pairing token gets one minted here, from the
       // same CSPRNG a server's first start would have used. It is also the

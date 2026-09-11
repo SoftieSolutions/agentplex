@@ -230,7 +230,42 @@ function readLocalServer(
   return identityPath === undefined ? null : { identityPath, port };
 }
 
-/** The flags this program understands, for a usage message. */
+/**
+ * The flags this program understands, and the first line, which had to change.
+ *
+ * It said `Usage: agentplex <daemon> [options]`, and that was a command line
+ * nobody can type any more: the daemons stopped being subcommands, no
+ * `agentplex-<daemon>` reaches anybody's PATH, and the one bin there is answers
+ * the word by explaining what a daemon is. A usage naming an invocation that
+ * does not exist is worse than no usage -- it is the one line an operator would
+ * copy.
+ *
+ * So it names the invocation that does exist, which is the one systemd uses:
+ * an interpreter and this program's compiled entry, by path. `apps/<daemon>/
+ * dist/main.js` is that path relative to wherever the package is, and it is the
+ * same expression in a checkout, in the runtime image and under
+ * `<prefix>/lib/node_modules` alike, because packaging keeps the workspace
+ * layout on purpose. The absolute prefix is not guessed at: this process knows
+ * where it was started from and an operator reading a usage message does not
+ * need it restated.
+ *
+ * The three lines above the usage are what somebody who typed `--help` at this
+ * file was actually asking. They wanted to run it, and the answer is that
+ * something else runs it: `agentplex start` on an installed machine, `pnpm -C
+ * apps/<daemon> start` in a checkout.
+ */
 export function hubUsage(): string {
-  return ['Usage: agentplex hub [options]', '', ...usageLines(Object.values(SETTINGS))].join('\n');
+  return [
+    'agentplex hub is a daemon, not a command: nothing puts it on a PATH.',
+    'On an installed machine systemd runs it from agentplex-hub.service, and',
+    '`agentplex start` is what enables and starts that unit; `agentplex status` says',
+    'whether it is running. In a checkout, `pnpm -C apps/hub start`.',
+    '',
+    'Usage: <node> apps/hub/dist/main.js [options]',
+    '',
+    '  Each option below is also a setting, and the unit reads every one of them',
+    '  from the EnvironmentFile the installer wrote.',
+    '',
+    ...usageLines(Object.values(SETTINGS)),
+  ].join('\n');
 }

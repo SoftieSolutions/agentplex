@@ -2166,15 +2166,26 @@ summary() {
       say ''
       say 'The units are written and deliberately not started: there is no database file, no'
       say "client token and no store paths until $ENV_FILE has them."
-      say 'When it does:'
-      if [ "$UNIT_SCOPE" = 'system' ]; then
-        say '  systemctl daemon-reload'
-        say "  systemctl enable --now$units"
-      else
-        say '  systemctl --user daemon-reload'
-        say "  systemctl --user enable --now$units"
+      say ''
+      # One command, and not the two spellings of systemctl this used to print.
+      #
+      # The instructions were correct and they made the operator carry a fact
+      # this machine already knows: whether their units belong to the user
+      # manager or the system one, and therefore which systemctl reaches them.
+      # `agentplex start` reads that off the settings file written above -- the
+      # same file, the same branch that chose the unit directory -- and does
+      # both steps. `agentplex setup` runs it at the end of a successful run, so
+      # on the ordinary path nobody types this at all; it is here for the
+      # machine that took --no-setup, and for the second time.
+      say "  $BIN_DIR/$PACKAGE_NAME start"
+      if [ "$UNIT_SCOPE" = 'user' ]; then
+        # Not something `agentplex start` can do for anybody: lingering is a
+        # property of the account rather than of a unit, and enabling it is a
+        # decision about whether this user's processes outlive their session.
         say "  loginctl enable-linger $SERVICE_USER   # so it runs when you are not logged in"
       fi
+      say ''
+      say "$PACKAGE_NAME status says what is installed here and whether it is running."
     fi
   fi
 

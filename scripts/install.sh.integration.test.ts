@@ -380,6 +380,50 @@ function summaryWithNoUnitWritten(reason: string): {
 }
 
 /**
+ * The summary on a machine that *did* get its units, which is the other half of
+ * the same function and the half nothing reached before.
+ *
+ * The same `source` trick: the script with `main` removed, driven by a file
+ * that sets up the state the summary reads and calls it. Reaching it through a
+ * real install would mean a download and a compile for four lines of output.
+ *
+ * The unit files are made by hand, because `summary` names a daemon only when
+ * its file is there -- the same "act only on what exists" rule the commands it
+ * now points at follow.
+ */
+function summaryWithUnits(role: string): { readonly home: string; readonly result: RunResult } {
+  const { script, home } = scratch();
+
+  const units = join(home, '.config', 'systemd', 'user');
+  mkdirSync(units, { recursive: true });
+  for (const daemon of role === 'both' ? ['hub', 'server'] : [role]) {
+    writeFileSync(join(units, `agentplex-${daemon}.service`), '');
+  }
+
+  const library = `${script}.lib`;
+  writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
+  chmodSync(library, 0o644);
+
+  const driver = `${script}.summary`;
+  writeFileSync(
+    driver,
+    [
+      `source ${quote(library)}`,
+      `parse_arguments --role=${role}`,
+      'resolve_layout',
+      'detect_platform',
+      `UNIT_SKIP_REASON=''`,
+      `DRY_RUN='no'`,
+      'summary',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(driver, 0o755);
+
+  return { home, result: run(driver, home, []) };
+}
+
+/**
  * `write_environment_file` alone, with the file it wrote read back.
  *
  * A dry run reports the settings file it would create and creates none, and the
@@ -1259,6 +1303,40 @@ describe('the systemd unit', () => {
       expect(unit).toContain('Wants=network-online.target');
     },
   );
+});
+
+describe('the summary on a machine that got its units', () => {
+  /**
+   * What replaced two lines of `systemctl`.
+   *
+   * The instructions were correct and they made the operator carry a fact the
+   * machine already knows: whether their units belong to the user manager or
+   * the system one, and therefore which of the two spellings reaches them.
+   * `agentplex start` reads that off the settings file this same run wrote, in
+   * the same branch that chose the unit directory, and does both steps.
+   */
+  it('tells the operator to run agentplex start rather than two systemctl lines', () => {
+    const { home, result } = summaryWithUnits('both');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('deliberately not started');
+    expect(result.stdout).toContain(`${home}/.agentplex/bin/agentplex start`);
+    expect(result.stdout).toContain('agentplex status says what is installed here');
+    // The whole vocabulary that moved into the command, gone from the summary.
+    expect(result.stdout).not.toContain('systemctl --user daemon-reload');
+    expect(result.stdout).not.toContain('enable --now');
+  });
+
+  /**
+   * Lingering stays, and it is not an oversight that `agentplex start` does not
+   * do it: it is a property of the account rather than of a unit, and enabling
+   * it is a decision about whether this user's processes outlive their session.
+   */
+  it('keeps the linger line, which is the one thing agentplex start cannot do', () => {
+    const { result } = summaryWithUnits('server');
+
+    expect(result.stdout).toContain('loginctl enable-linger');
+  });
 });
 
 describe('the summary on a machine that can hold no unit', () => {

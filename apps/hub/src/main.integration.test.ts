@@ -52,6 +52,19 @@ describe('agentplex hub', () => {
    * so on stderr. Usage has to be reachable before any of that: the operator
    * asking what the flags are is the operator who has not set them yet.
    */
+  it('says how it is actually started, since nobody can type its name', () => {
+    const result = run('--help');
+
+    // The two loose ends this closes: the usage named an invocation that does
+    // not exist, and the one that does -- systemd, from a unit -- was nowhere
+    // in it. `agentplex start` is what enables and starts that unit, and it is
+    // the answer to what somebody typing `--help` at this file wanted.
+    expect(result.stdout).toContain('agentplex hub is a daemon, not a command');
+    expect(result.stdout).toContain('agentplex-hub.service');
+    expect(result.stdout).toContain('agentplex start');
+    expect(result.stdout).toContain('pnpm -C apps/hub start');
+  });
+
   it('answers --help without the settings it cannot start without', () => {
     const result = run('--help');
 
@@ -64,7 +77,11 @@ describe('agentplex hub', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('unknown argument: --databse-file=/var/lib/agentplex/hub.db');
-    expect(result.stderr).toContain('Usage: agentplex hub');
+    // The usage names the invocation that exists -- an interpreter and this
+    // program's compiled entry -- rather than `agentplex hub`, which is a
+    // command line nobody can type since the daemons stopped being subcommands.
+    expect(result.stderr).toContain('Usage: <node> apps/hub/dist/main.js');
+    expect(result.stderr).not.toContain('Usage: agentplex hub');
     expect(result.status).toBe(2);
   });
 });

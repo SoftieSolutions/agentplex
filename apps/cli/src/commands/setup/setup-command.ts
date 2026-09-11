@@ -5,6 +5,7 @@ import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
 import type { SetupMachine } from './setup-machine.js';
+import type { UnitsAfterSetup } from './start-after-setup.js';
 import { parseSetupPlan, ROLES, setupBinPath, type Role, type SetupPlan } from './setup-plan.js';
 import type { SetupTerminal } from './setup-terminal.js';
 import { runSetupWizard } from './setup-wizard.js';
@@ -77,6 +78,17 @@ export interface SetupCommandDependencies {
   readonly ids: IdGenerator;
   readonly tokens: TokenMinter;
   readonly clock: Clock;
+  /**
+   * What to do about the systemd units once the machine is provisioned.
+   *
+   * A seam rather than a call, because starting a service is the one thing in
+   * this command that a test must not be able to do by accident, and because
+   * the decision it makes -- which scope, which units, or the foreground
+   * command instead -- is worth reading in a test as a value rather than as a
+   * container. `start-after-setup.ts` carries the argument for why this step is
+   * setup's at all.
+   */
+  readonly units: UnitsAfterSetup;
   readonly write: (line: string) => void;
   readonly writeError: (line: string) => void;
 }
@@ -111,7 +123,7 @@ export async function runSetupCommand(
   argv: readonly string[],
   dependencies: SetupCommandDependencies,
 ): Promise<number> {
-  const { writeError } = dependencies;
+  const { write, writeError } = dependencies;
   const report = (problems: readonly string[]): number => {
     for (const problem of problems) writeError(`agentplex setup: ${problem}`);
     writeError(`\n${setupUsage()}`);
@@ -121,9 +133,42 @@ export async function runSetupCommand(
   const flags = readSetupFlags(argv);
   if (!flags.ok) return report(flags.problems);
 
-  return flags.plan === null
-    ? askAndProvision(flags.role, flags.prefix, dependencies)
-    : replayPlan(flags.plan, dependencies, report);
+  const run =
+    flags.plan === null
+      ? await askAndProvision(flags.role, flags.prefix, dependencies)
+      : await replayPlan(flags.plan, dependencies, report);
+
+  // The last step, and the one condition it runs under: this machine was
+  // provisioned and there was nothing to report about it.
+  //
+  // Both halves matter. A run that changed nothing -- a plan that would not
+  // parse, an operator who declined -- has nothing to start and no standing to
+  // start what an earlier run left. A run that provisioned and had problems is
+  // the machine `install.sh` refused to start units on for the same reason:
+  // starting a service whose settings are incomplete produces a restart loop
+  // over a configuration error, and the person who would have to read it has
+  // just been told the setup did not entirely work.
+  if (run.provisioned && run.code === EXIT_OK) {
+    write('');
+    for (const line of await dependencies.units.start()) write(line);
+  }
+
+  return run.code;
+}
+
+/**
+ * What a front end leaves behind: the exit code, and whether this run is the
+ * one that put something on the machine.
+ *
+ * The second is not derivable from the first. `EXIT_OK` is also what an
+ * operator who read the plan and said no gets, because declining is a run that
+ * did what it was asked -- and a command that started daemons after somebody
+ * declined to provision would be acting on a decision they had just refused to
+ * make.
+ */
+interface SetupRun {
+  readonly code: number;
+  readonly provisioned: boolean;
 }
 
 /**
@@ -137,7 +182,7 @@ async function askAndProvision(
   role: Role | null,
   prefix: string | null,
   dependencies: SetupCommandDependencies,
-): Promise<number> {
+): Promise<SetupRun> {
   const outcome = await runSetupWizard({ role, prefix }, dependencies);
 
   if (outcome.kind === 'no-input') {
@@ -146,32 +191,39 @@ async function askAndProvision(
     dependencies.writeError(
       `agentplex setup: there is nobody to ask. Run it in a terminal, or replay a plan with ${PLAN_FLAG} <file>.`,
     );
-    return EXIT_BAD_PLAN;
+    return { code: EXIT_BAD_PLAN, provisioned: false };
   }
 
   // The same code a plan file that does not parse gets, because it is the same
   // fact: these answers will not provision a machine however many times they are
   // given. The wizard has already named which field.
-  if (outcome.kind === 'unusable') return EXIT_BAD_PLAN;
+  if (outcome.kind === 'unusable') return { code: EXIT_BAD_PLAN, provisioned: false };
 
   // A plan the operator declined is a run that did what it was asked. Nothing on
   // the machine was changed and nothing failed, and an installer that treated
   // that as an error would be wrong about it.
-  if (outcome.kind === 'abandoned') return EXIT_OK;
+  if (outcome.kind === 'abandoned') return { code: EXIT_OK, provisioned: false };
 
-  return outcome.problems.length === 0 ? EXIT_OK : EXIT_PROBLEMS;
+  return {
+    code: outcome.problems.length === 0 ? EXIT_OK : EXIT_PROBLEMS,
+    provisioned: true,
+  };
 }
 
 async function replayPlan(
   file: string,
   dependencies: SetupCommandDependencies,
   report: (problems: readonly string[]) => number,
-): Promise<number> {
+): Promise<SetupRun> {
   const { write, writeError } = dependencies;
+  const refused = (problems: readonly string[]): SetupRun => ({
+    code: report(problems),
+    provisioned: false,
+  });
 
   const contents = await dependencies.files.readFile(file);
   if (contents.kind !== 'read') {
-    return report([
+    return refused([
       contents.kind === 'missing'
         ? `there is no plan at ${file}`
         : `cannot read ${file}: ${contents.reason}`,
@@ -183,7 +235,7 @@ async function replayPlan(
     // Every problem in the file, not the first. A plan replayed on a machine
     // that boots to run it fails whole, and fixing one field per boot is the
     // loop this shape exists to avoid.
-    return report(parsed.problems.map((problem) => `${file}: ${problem}`));
+    return refused(parsed.problems.map((problem) => `${file}: ${problem}`));
   }
 
   const runner = dependencies.runnerFor(setupBinPath(parsed.plan));
@@ -200,7 +252,10 @@ async function replayPlan(
   for (const line of describeUnattendedPairing(parsed.plan, outcome)) write(line);
   for (const problem of outcome.problems) writeError(`agentplex setup: ${problem}`);
 
-  return outcome.problems.length === 0 ? EXIT_OK : EXIT_PROBLEMS;
+  return {
+    code: outcome.problems.length === 0 ? EXIT_OK : EXIT_PROBLEMS,
+    provisioned: true,
+  };
 }
 
 /**
