@@ -14,9 +14,12 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 ## FOLDER STRUCTURE
 
 - `apps/` holds deployables: `hub`, `server`, `setup`, `doctor`, `install`,
-  `web`. An app is a thing that runs. Nothing imports an app. `apps/install` composes
-  the others' built output by path, never by import; that is where the one
-  bin comes from.
+  `web`. An app is a thing that runs. Nothing imports an app; `apps/install` is
+  where the one bin comes from.
+- `scripts/` holds the repository's own tooling — the bootstrap an operator
+  curls, the packaging step that composes the apps' built output by path, never
+  by import. Nothing ships from it, and it is a workspace member because
+  `pnpm test` is `pnpm -r test`: a suite outside a member runs nowhere.
 - `packages/` holds seams with at least two consumers: `protocol`,
   `node-shared`, `providers`, `pty`. A package's dependency list is its
   allowed import set. One consumer means a folder, not a package. `pnpm lint`
@@ -24,8 +27,8 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 - `packages/protocol` is bundled into a browser as well as loaded by a service,
   so it may use neither Node builtins nor another workspace package.
 - `tests/hub-server` is the one place both apps load into one process: the hub
-  driven against the real server end of its protocol. Nothing ships from it,
-  and no other directory may cross an app boundary.
+  driven against the real server end of its protocol. No other directory may
+  cross an app boundary.
 - Setup opens no database. It writes files; the hub imports the local pairing
   at boot.
 - A package exports its fakes from a `testing` entry. A fake is never copied.

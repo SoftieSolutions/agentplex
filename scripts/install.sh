@@ -74,7 +74,7 @@ readonly INSTALL_SH_VERSION='1'
 #
 # `apps/install/README.md` prints this string and a test holds the two
 # together, so there is one place to change when the alias exists.
-readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/apps/install/packaging/install.sh'
+readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh'
 
 # Two names, because a package name and a command name are different things and
 # this project's are not the same word.

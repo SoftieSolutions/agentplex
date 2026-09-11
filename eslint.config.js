@@ -163,6 +163,25 @@ export default tseslint.config(
     },
   },
   {
+    // The repository's own tooling, which is not service code and ships
+    // nowhere. It gets the same spawn rule as an app anyway: the assembler
+    // copies files and the bootstrap is a shell script, so nothing here has a
+    // reason to start a child, and a rule that holds everywhere is cheaper to
+    // trust than one with a tooling-shaped hole in it. The one suite that does
+    // start a child is excepted below, by name.
+    files: ['scripts/**/*.ts'],
+    languageOptions: { globals: globals.node },
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['node:child_process', 'child_process'],
+          message:
+            'Starting a child directly bypasses the operation registry. Add an operation and run it through the injected ProcessRunner.',
+        },
+      ]),
+    },
+  },
+  {
     // The one place both apps are loaded into one process: the hub driven
     // against the real server end of its protocol. `tests/hub-server/README.md`
     // carries the argument. The crossing is allowed here and nowhere else, and
@@ -244,10 +263,7 @@ export default tseslint.config(
     // code was. For both, starting a child is the only way to have a subject.
     // The rule above is about what the daemon may do, and nothing here is
     // reachable from a socket, a frame or a running process.
-    files: [
-      'apps/install/packaging/install.sh.integration.test.ts',
-      'apps/install/src/main.integration.test.ts',
-    ],
+    files: ['scripts/install.sh.integration.test.ts', 'apps/install/src/main.integration.test.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {

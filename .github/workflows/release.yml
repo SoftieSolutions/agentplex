@@ -171,7 +171,7 @@ jobs:
       # the fact and the manifest that was assembled is the manifest that gets
       # packed.
       - name: Assemble the package at the version the tag names
-        run: pnpm --filter ./apps/install package "$GITHUB_REF_NAME"
+        run: pnpm --filter ./scripts package "$GITHUB_REF_NAME"
 
       # Name and version are read back out of the assembled manifest rather
       # than written here: a copy of either in this file is the half of a rename
