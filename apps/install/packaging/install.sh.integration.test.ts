@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -288,6 +289,79 @@ function installedMachine(
     writeFileSync(join(unitDirectory, `agentplex-${daemon}.service`), '[Unit]\n');
   }
   return { prefix, unitDirectory };
+}
+
+/**
+ * An account to stand in for the one a `--system` install creates.
+ *
+ * A suite that made an `agentplex` account to chown to would be a suite that
+ * left a service account behind on the machine that ran it, so it borrows one
+ * that is already there. It has to be an account whose group is named after it,
+ * because that is the shape `useradd --system` gives the real one and the shape
+ * the chown under test is written in -- `nobody` is precisely the account that
+ * is not that, since Debian puts it in `nogroup`. Undefined on a machine with
+ * none of them, which skips the tests that need one rather than having them
+ * assert something about `chown` argument parsing.
+ */
+const standInAccount = ['daemon', 'bin', 'sys'].find((name) => {
+  const group = spawnSync('id', ['-gn', name], { encoding: 'utf8' });
+  return group.status === 0 && group.stdout.trim() === name;
+});
+
+function accountId(flag: '-u' | '-g'): number {
+  return Number(spawnSync('id', [flag, standInAccount ?? ''], { encoding: 'utf8' }).stdout.trim());
+}
+
+/**
+ * One step of a `--system` run, called against a prefix in a temporary
+ * directory rather than against `/opt` and `/etc`.
+ *
+ * The layout is set by hand instead of through `resolve_layout`, which is the
+ * only way to ask what the step does without writing to the paths a real fleet
+ * install owns on the machine running the suite. Root-only, because the whole
+ * of what these steps do is a chown and a chmod.
+ */
+function systemStep(
+  step: string,
+  layout: (root: string) => readonly string[],
+): { readonly root: string; readonly result: RunResult } {
+  const { script, home } = scratch();
+  const root = mkdtempSync(join(tmpdir(), 'agentplex-system-'));
+  temporaries.push(root);
+
+  const library = `${script}.lib`;
+  writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
+  chmodSync(library, 0o644);
+
+  const driver = `${script}.${step}`;
+  writeFileSync(
+    driver,
+    [
+      `source ${quote(library)}`,
+      `UNIT_SCOPE='system'`,
+      `SERVICE_USER=${quote(standInAccount ?? '')}`,
+      `ROLE='hub'`,
+      `DRY_RUN='no'`,
+      ...layout(root),
+      step,
+      '',
+    ].join('\n'),
+  );
+  chmodSync(driver, 0o755);
+
+  return { root, result: run(driver, home, [], { asRoot: true }) };
+}
+
+/** The paths a `--system` step is pointed at, under one temporary directory. */
+function systemLayout(root: string): readonly string[] {
+  const prefix = join(root, 'prefix');
+  return [
+    `PREFIX=${quote(prefix)}`,
+    `BIN_DIR=${quote(join(prefix, 'bin'))}`,
+    `NODE_HOME=${quote(join(prefix, 'node'))}`,
+    `STATE_DIR=${quote(join(root, 'state'))}`,
+    `ENV_FILE=${quote(join(root, 'etc', 'agentplex.env'))}`,
+  ];
 }
 
 describe('the options', () => {
@@ -592,6 +666,94 @@ describe('installing as the wrong user', () => {
       const result = run(script, home, ['--dry-run', '--system'], { asRoot: true });
       expect(result.status).toBe(0);
       expect(planned(result.stdout, 'setup')).toContain('take a plan');
+    },
+  );
+});
+
+/**
+ * What a `--system` install hands to the service account.
+ *
+ * That account runs coding agents, which is the most exposed program on the
+ * machine, so what it owns is the whole of what a compromised session can
+ * rewrite. It used to own the prefix, which included the interpreter its own
+ * unit is started through and the file holding the client token; it now owns
+ * the directories npm writes into and the state directory, and nothing else.
+ */
+describe('what a --system install hands to the service account', () => {
+  it.skipIf(!suiteIsRoot)('says in the plan what the account will own and what root keeps', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--system'], { asRoot: true });
+
+    const ownership = planned(result.stdout, 'ownership');
+    expect(ownership).toContain('agentplex owns /opt/agentplex/bin');
+    expect(ownership).toContain('/opt/agentplex/lib/node_modules');
+    // Not obvious, and therefore worth saying out loud: npm links a package's
+    // man pages into `<prefix>/share/man`, so a provider install by this
+    // account creates that directory or fails at the end.
+    expect(ownership).toContain('/opt/agentplex/share');
+    expect(ownership).toContain('/var/lib/agentplex');
+    expect(ownership).toContain('root keeps /opt/agentplex/node and /etc/agentplex/agentplex.env');
+  });
+
+  it('hands nothing over on a user install, where the prefix is the account already', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=server']);
+    expect(planned(result.stdout, 'ownership')).toBeUndefined();
+  });
+
+  it.skipIf(!suiteIsRoot || standInAccount === undefined)(
+    'owns the directories npm writes and leaves the runtime and the prefix to root',
+    () => {
+      const { root, result } = systemStep('grant_service_account_ownership', (where) => {
+        const prefix = join(where, 'prefix');
+        // What npm leaves behind by the time this step runs, and no more:
+        // `bin`, `share` and the state directory are deliberately absent, which
+        // is the case a chown alone would die on.
+        mkdirSync(join(prefix, 'lib', 'node_modules', 'agentplex'), { recursive: true });
+        nodeShim(join(prefix, 'node', 'bin'), 'v24.9.0');
+        return systemLayout(where);
+      });
+
+      expect(result.status).toBe(0);
+
+      const prefix = join(root, 'prefix');
+      const owner = (path: string): readonly [number, number] => {
+        const stats = statSync(path);
+        return [stats.uid, stats.gid];
+      };
+      const account = [accountId('-u'), accountId('-g')];
+
+      expect(owner(join(prefix, 'bin'))).toEqual(account);
+      expect(owner(join(prefix, 'lib', 'node_modules'))).toEqual(account);
+      // Recursive: the package tree npm already wrote is inside the tree setup
+      // has to be able to replace on an upgrade.
+      expect(owner(join(prefix, 'lib', 'node_modules', 'agentplex'))).toEqual(account);
+      expect(owner(join(prefix, 'share'))).toEqual(account);
+      expect(owner(join(root, 'state'))).toEqual(account);
+
+      // The point of the ticket. A session that gets out of the account it runs
+      // as cannot rewrite the interpreter its own service is started through,
+      // and cannot put anything new at the top of the prefix either.
+      expect(owner(join(prefix, 'node'))).toEqual([0, 0]);
+      expect(owner(join(prefix, 'node', 'bin', 'node'))).toEqual([0, 0]);
+      expect(owner(prefix)).toEqual([0, 0]);
+      expect(owner(join(prefix, 'lib'))).toEqual([0, 0]);
+    },
+  );
+
+  it.skipIf(!suiteIsRoot || standInAccount === undefined)(
+    'writes the settings file for the daemon to read and not to write',
+    () => {
+      const { root, result } = systemStep('write_environment_file', systemLayout);
+
+      expect(result.status).toBe(0);
+      const stats = statSync(join(root, 'etc', 'agentplex.env'));
+      // 0640 root:account, and each third of that is load-bearing: the token in
+      // this file is why nothing but root writes it, the daemon runs as the
+      // account and has to read it, and nobody else on the machine is either.
+      expect(stats.mode & 0o777).toBe(0o640);
+      expect(stats.uid).toBe(0);
+      expect(stats.gid).toBe(accountId('-g'));
     },
   );
 });
