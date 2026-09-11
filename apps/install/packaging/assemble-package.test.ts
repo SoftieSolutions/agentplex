@@ -14,8 +14,10 @@ import {
   type Manifest,
 } from './assemble-package.js';
 
+// The workspace root, named so that a `--filter` cannot match it beside the
+// app it would otherwise be a homonym of. Nothing publishes under this name.
 const rootManifest: Manifest = {
-  name: 'agentplex',
+  name: 'agentplex-workspace',
   version: '1.2.3',
   description: 'Watch and drive coding-agent sessions across machines',
   license: 'Apache-2.0',
@@ -283,6 +285,17 @@ describe('publishedManifest', () => {
    */
   it('leaves access to the publishing command rather than restating it', () => {
     expect(derived()['publishConfig']).toBeUndefined();
+  });
+
+  /**
+   * The published name is the service's and the description is the workspace
+   * root's. The two manifests are named differently now, so which one each
+   * field is taken from is observable rather than a coincidence of them
+   * agreeing.
+   */
+  it('takes its description from the workspace root, not its name', () => {
+    expect(derived()['description']).toBe(rootManifest.description);
+    expect(derived()['name']).not.toBe(rootManifest.name);
   });
 
   it('keeps the node-pty postinstall as its only install script', () => {
