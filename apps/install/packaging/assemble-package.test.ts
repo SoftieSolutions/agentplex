@@ -278,12 +278,68 @@ describe('bundledManifest', () => {
       }),
     );
 
-    expect(kept['exports']).toEqual({
+    expect(kept.exports).toEqual({
       '.': { types: './dist/index.d.ts', default: './dist/index.js' },
     });
-    expect(kept['private']).toBeUndefined();
-    expect(kept['devDependencies']).toBeUndefined();
-    expect(kept['scripts']).toBeUndefined();
+    expect(kept).not.toHaveProperty('private');
+    expect(kept).not.toHaveProperty('devDependencies');
+    expect(kept).not.toHaveProperty('scripts');
+  });
+
+  /**
+   * A nested condition is the shape `exports` actually takes, and the bundled
+   * copy is only resolvable if it arrives the same way it left.
+   */
+  it('carries a nested exports block across unchanged', () => {
+    const exports = {
+      '.': {
+        import: { types: './dist/index.d.ts', default: './dist/index.js' },
+        require: null,
+      },
+      './testing': ['./dist/testing.js'],
+    };
+    const kept = bundledManifest(
+      'packages/node-shared/package.json',
+      JSON.stringify({
+        name: '@agentplex/node-shared',
+        version: '1.2.3',
+        license: 'Apache-2.0',
+        type: 'module',
+        exports,
+      }),
+    );
+
+    expect(JSON.stringify(kept.exports)).toBe(JSON.stringify(exports));
+  });
+
+  /**
+   * An optional field the source never declared has to be absent, not present
+   * and undefined: the result is both written out as JSON and compared field by
+   * field, and only one of those two notices the difference.
+   */
+  it('omits an optional field the source does not declare', () => {
+    const kept = bundledManifest(
+      'packages/protocol/package.json',
+      JSON.stringify({
+        name: '@agentplex/protocol',
+        version: '1.2.3',
+        license: 'Apache-2.0',
+        type: 'module',
+      }),
+    );
+
+    expect(Object.keys(kept)).toEqual(['name', 'version', 'license', 'type']);
+    expect(kept).not.toHaveProperty('exports');
+    expect(kept).not.toHaveProperty('sideEffects');
+    expect(kept).not.toHaveProperty('main');
+    expect(kept).not.toHaveProperty('types');
+  });
+
+  /** The assembly stops with the file named, the way `parseManifest` does. */
+  it('names the source it could not read', () => {
+    expect(() => bundledManifest('packages/pty/package.json', '{"name":"@agentplex/pty"}')).toThrow(
+      'packages/pty/package.json',
+    );
   });
 
   /**
@@ -303,7 +359,7 @@ describe('bundledManifest', () => {
       }),
     );
 
-    expect(kept['dependencies']).toBeUndefined();
+    expect(kept).not.toHaveProperty('dependencies');
   });
 });
 
