@@ -178,7 +178,7 @@ jobs:
       # somebody forgets.
       - name: Pack the package
         id: package
-        working-directory: apps/install/release
+        working-directory: apps/cli/release
         run: |
           set -euo pipefail
           name="$(node -p "require('./package.json').name")"

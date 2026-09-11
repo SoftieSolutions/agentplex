@@ -32,7 +32,7 @@ RUN apt-get update \
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/doctor/package.json ./apps/doctor/
 COPY apps/hub/package.json ./apps/hub/
-COPY apps/install/package.json ./apps/install/
+COPY apps/cli/package.json ./apps/cli/
 COPY apps/server/package.json ./apps/server/
 COPY apps/setup/package.json ./apps/setup/
 COPY apps/web/package.json ./apps/web/
@@ -66,7 +66,7 @@ RUN pnpm build
 FROM build AS package
 RUN pnpm --filter ./scripts package \
     && mkdir -p /package \
-    && cd apps/install/release \
+    && cd apps/cli/release \
     && npm pack --pack-destination /package
 
 # The clean-install check. Stock `debian:bookworm-slim` with nothing but Node
@@ -97,7 +97,7 @@ COPY --from=package /package/ /package/
 # install rather than reasoning about one.
 RUN npm install --global /package/softiesolutions-agentplex-*.tgz
 
-# Four assertions. `doctor` reaches its report only by the bin dispatching to
+# Five assertions. `doctor` reaches its report only by the bin dispatching to
 # it by path and the doctor loading every package it imports, so a report on
 # stdout is proof the dispatch and the bundled packages both resolve from the
 # installed tree. It exits 1 on this machine because no coding agent is
@@ -114,6 +114,17 @@ RUN agentplex server --role=server 2>&1 | grep -q 'Usage: agentplex server'
 # paths `main.js` resolves rather than the paths packaging wrote.
 RUN test -f "$(npm root -g)/@softiesolutions/agentplex/apps/web/dist/index.html" \
     && test -f "$(npm root -g)/@softiesolutions/agentplex/apps/hub/migrations/0001_hub_identity.sql"
+# `--version`, against what the installed manifest declares rather than against
+# an exit code. The bin reads that manifest at a path it resolves from its own
+# URL, and the manifest the workspace keeps beside the bin is not in the package
+# at all -- so the version this prints is the whole of the evidence that it read
+# the right file, and asserting only that the command exits 0 would have been
+# green for the release where it printed an ENOENT instead. It is here rather
+# than in a suite because a suite runs in a checkout, where both files exist.
+RUN declared="$(node -p "require('$(npm root -g)/@softiesolutions/agentplex/package.json').version")" \
+    && printed="$(agentplex --version)" \
+    && test "$printed" = "$declared" \
+    || { echo "agentplex --version printed '$printed', manifest declares '$declared'" >&2; exit 1; }
 
 # The bootstrap check: `install.sh` against the machine it was written for.
 #
@@ -461,13 +472,13 @@ RUN grep -q 'opens no terminals' /tmp/hub-doctor.log
 #
 # The bin app is selected by path, because its directory is the only name it
 # has that a filter cannot confuse with another manifest. The braces are load
-# bearing: `--filter ./apps/install...` reads the trailing `...` as part of the
+# bearing: `--filter ./apps/cli...` reads the trailing `...` as part of the
 # path and silently selects the one package without its dependencies, where
-# `--filter {./apps/install}...` is the directory plus what it needs. Verified
+# `--filter {./apps/cli}...` is the directory plus what it needs. Verified
 # against pnpm 11.17.
 FROM manifests AS runtime-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter "{./apps/install}..." --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
+    pnpm install --frozen-lockfile --prod --filter "{./apps/cli}..." --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -488,7 +499,13 @@ COPY --from=runtime-deps /app/packages/node-shared/node_modules ./packages/node-
 COPY --from=runtime-deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
 COPY --from=runtime-deps /app/packages/providers/node_modules ./packages/providers/node_modules
 COPY --from=runtime-deps /app/packages/pty/node_modules ./packages/pty/node_modules
-COPY apps/install/package.json ./apps/install/
+# The workspace manifest, which in this image is the package root's: the bin
+# resolves `--version` three levels up from its own `dist`, the same expression
+# that finds the published manifest in the tarball. Without this file here that
+# one command is an ENOENT in an image where every other one works, which is
+# exactly the shape of failure the expression exists to avoid.
+COPY package.json ./
+COPY apps/cli/package.json ./apps/cli/
 COPY apps/hub/package.json ./apps/hub/
 COPY apps/server/package.json ./apps/server/
 COPY apps/setup/package.json ./apps/setup/
@@ -497,7 +514,7 @@ COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
 COPY packages/pty/package.json ./packages/pty/
-COPY --from=build /app/apps/install/dist ./apps/install/dist
+COPY --from=build /app/apps/cli/dist ./apps/cli/dist
 COPY --from=build /app/apps/hub/dist ./apps/hub/dist
 COPY --from=build /app/apps/server/dist ./apps/server/dist
 COPY --from=build /app/apps/setup/dist ./apps/setup/dist
@@ -541,5 +558,5 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 CMD ["nod
 # Exec form, so node is pid 1 and Docker's SIGTERM reaches the handler in the
 # daemon's main.ts directly. The command picks the daemon; anything appended to
 # `docker run` after it lands as that daemon's flags.
-ENTRYPOINT ["node", "apps/install/dist/main.js"]
+ENTRYPOINT ["node", "apps/cli/dist/main.js"]
 CMD ["hub"]

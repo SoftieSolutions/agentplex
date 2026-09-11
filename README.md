@@ -40,7 +40,7 @@ apps/hub/              the hub: database, migrations, pairing, discovery, the PW
 apps/server/           the server: terminals, session control, identity, beacon, the hub connection
 apps/setup/            the wizard and the plan replay
 apps/doctor/           the read-only check of a machine
-apps/install/          the agentplex bin: one command, four subcommands
+apps/cli/              the agentplex bin: one command, four subcommands
 apps/web/              the PWA
 packages/protocol/     frame types and parsers, shared by the service and the PWA
 packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share

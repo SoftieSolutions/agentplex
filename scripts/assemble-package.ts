@@ -34,10 +34,10 @@ import { z } from 'zod';
  */
 
 /** Where the assembled tree is written, relative to the workspace root. */
-export const OUTPUT_DIRECTORY = 'apps/install/release';
+export const OUTPUT_DIRECTORY = 'apps/cli/release';
 
 /** The manifest the bin belongs to: this app's. */
-export const BIN_APP = 'apps/install';
+export const BIN_APP = 'apps/cli';
 
 /**
  * The apps in the package besides the one that owns the bin, and where each
@@ -60,7 +60,7 @@ export const PROGRAMS = ['hub', 'server', 'setup', 'doctor'] as const;
  *
  * Every one is published under no name of its own, so each travels inside the
  * tarball as a bundled dependency, at the one path Node's resolver reaches from
- * `apps/install/dist/main.js`. The list is the whole of what gets bundled: a
+ * `apps/cli/dist/main.js`. The list is the whole of what gets bundled: a
  * package the service imports that is not here stops the assembly by name,
  * rather than shipping a tarball whose first import fails.
  */
@@ -86,7 +86,7 @@ export interface BundledPackage {
  * statement as a command name -- and nothing in this repository would notice,
  * because every other way of starting the service says `node` out loud.
  */
-export const ENTRYPOINT = 'apps/install/dist/main.js';
+export const ENTRYPOINT = 'apps/cli/dist/main.js';
 
 /**
  * Dependencies the published package declares optional, by name.
@@ -273,8 +273,8 @@ function copyFilter(exclude: (name: string) => boolean): (source: string) => Pro
 export function packageEntries(): readonly PackageEntry[] {
   return [
     {
-      from: 'apps/install/dist',
-      to: 'apps/install/dist',
+      from: 'apps/cli/dist',
+      to: 'apps/cli/dist',
       kind: 'directory',
       proof: 'main.js',
       exclude: isWorkspaceOnly,
@@ -327,7 +327,7 @@ export function packageEntries(): readonly PackageEntry[] {
       reason: 'Apache-2.0, which npm shows on the package page',
     },
     {
-      from: 'apps/install/README.md',
+      from: 'apps/cli/README.md',
       to: 'README.md',
       kind: 'file',
       reason: 'the package page: what this is, and what installing it needs',
@@ -392,7 +392,7 @@ export function versionFromTag(tag: string): string {
  * is published under a name of its own, so a range pointing at a registry
  * entry would be a dependency on a package that does not exist. Each one
  * travels inside the tarball instead, at the one path Node's resolver reaches
- * from `apps/install/dist/main.js`, and a bundled package's own workspace
+ * from `apps/cli/dist/main.js`, and a bundled package's own workspace
  * dependencies have to be bundled too, since the resolver walks up out of one
  * bundled directory into the next.
  *
@@ -416,7 +416,7 @@ export function versionFromTag(tag: string): string {
  * contributor assembling locally wants: the same `0.0.0` the workspace says.
  *
  * **The name is the service manifest's, and there is no `publishConfig`.** The
- * unscoped `agentplex` on npm is an unrelated placeholder, so `apps/install`
+ * unscoped `agentplex` on npm is an unrelated placeholder, so `apps/cli`
  * is named `@softiesolutions/agentplex` and this reads that name rather than
  * holding a second copy of it -- `bin` is written below and stays `agentplex`,
  * because a command name and a package name are independent. A scoped

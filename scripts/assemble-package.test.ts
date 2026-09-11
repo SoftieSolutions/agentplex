@@ -5,7 +5,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assemblePackage,
+  BIN_APP,
   bundledManifest,
+  ENTRYPOINT,
   missingInputs,
   packageEntries,
   parseManifest,
@@ -261,7 +263,7 @@ describe('publishedManifest', () => {
 
     expect(manifest['private']).toBeUndefined();
     expect(manifest['devDependencies']).toBeUndefined();
-    expect(manifest['bin']).toEqual({ agentplex: './apps/install/dist/main.js' });
+    expect(manifest['bin']).toEqual({ agentplex: './apps/cli/dist/main.js' });
   });
 
   /**
@@ -357,7 +359,7 @@ describe('packageEntries', () => {
   it('carries the five programs, the client and the migrations', () => {
     const sources = packageEntries().map((entry) => entry.from);
 
-    expect(sources).toContain('apps/install/dist');
+    expect(sources).toContain('apps/cli/dist');
     expect(sources).toContain('apps/hub/dist');
     expect(sources).toContain('apps/server/dist');
     expect(sources).toContain('apps/setup/dist');
@@ -553,9 +555,9 @@ describe('the assembled package', () => {
 
     await write('package.json', JSON.stringify(rootManifest));
     await write('LICENSE', 'Apache License, Version 2.0\n');
-    await write('apps/install/package.json', JSON.stringify(serviceManifest));
-    await write('apps/install/README.md', '# agentplex\n');
-    await compiled('apps/install/dist', 'main', '#!/usr/bin/env node\nawait main();');
+    await write('apps/cli/package.json', JSON.stringify(serviceManifest));
+    await write('apps/cli/README.md', '# agentplex\n');
+    await compiled('apps/cli/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/hub/package.json', JSON.stringify(hubManifest));
     await compiled('apps/hub/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/server/package.json', JSON.stringify(serverAppManifest));
@@ -625,7 +627,7 @@ describe('the assembled package', () => {
 
     const held = async (path: string): Promise<string> =>
       await readFile(join(assembled.directory, path), 'utf8');
-    await expect(held('apps/install/dist/main.js')).resolves.toContain('main()');
+    await expect(held('apps/cli/dist/main.js')).resolves.toContain('main()');
     await expect(held('apps/hub/migrations/0001_hub_identity.sql')).resolves.toContain(
       'create table',
     );
@@ -656,6 +658,41 @@ describe('the assembled package', () => {
     expect(fileURLToPath(new URL('../../web/dist', main))).toBe(
       join(assembled.directory, 'apps/web/dist'),
     );
+  });
+
+  /**
+   * The same question for the bin, which had the same answer and got it wrong.
+   *
+   * `--version` is read out of a manifest resolved against `main.js`'s own URL,
+   * and there are two manifests it could mean. `apps/cli/package.json` is the
+   * one `bin` is declared in, and it is a workspace file: no entry copies it
+   * and `files` never names it, so in the package it is not there at all. The
+   * manifest that exists in every home of the bin is the package root's -- the
+   * one this module writes, carrying the version the release tag named, and the
+   * workspace's own `0.0.0` in a checkout.
+   *
+   * That distinction is invisible from a checkout, which is how the one-level
+   * expression shipped and turned `agentplex --version` into an ENOENT on every
+   * installed machine. It is visible from here, because here the assembled tree
+   * is the subject.
+   */
+  it('puts the manifest where main.js resolves the version it prints', async () => {
+    const root = await workspace({ client: true });
+
+    const assembled = await assemblePackage({ workspaceRoot: root, version: '4.5.6' });
+
+    const main = pathToFileURL(join(assembled.directory, ENTRYPOINT));
+    const manifest = fileURLToPath(new URL('../../../package.json', main));
+    expect(manifest).toBe(join(assembled.directory, 'package.json'));
+    expect(JSON.parse(await readFile(manifest, 'utf8'))).toMatchObject({
+      name: '@softiesolutions/agentplex',
+      version: '4.5.6',
+    });
+    // And the file the old expression named is absent, rather than present and
+    // stale: this is the whole of why that bug could only exist in the artifact.
+    await expect(
+      readFile(join(assembled.directory, BIN_APP, 'package.json'), 'utf8'),
+    ).rejects.toThrow();
   });
 
   it('bundles every workspace package at the path Node resolves it from', async () => {
@@ -812,7 +849,7 @@ describe('the assembled package', () => {
    */
   it('refuses a compiled entrypoint the kernel cannot start', async () => {
     const root = await workspace({ client: true });
-    await writeFile(join(root, 'apps/install/dist/main.js'), 'await main();\n', 'utf8');
+    await writeFile(join(root, 'apps/cli/dist/main.js'), 'await main();\n', 'utf8');
 
     await expect(assemblePackage({ workspaceRoot: root })).rejects.toThrow('shebang');
   });
@@ -854,12 +891,12 @@ describe('the assembled package', () => {
   it('replaces what was there rather than merging into it', async () => {
     const root = await workspace({ client: true });
     const first = await assemblePackage({ workspaceRoot: root });
-    await writeFile(join(first.directory, 'apps/install/dist/stale.js'), 'gone\n', 'utf8');
+    await writeFile(join(first.directory, 'apps/cli/dist/stale.js'), 'gone\n', 'utf8');
 
     const second = await assemblePackage({ workspaceRoot: root });
 
     await expect(
-      readFile(join(second.directory, 'apps/install/dist/stale.js'), 'utf8'),
+      readFile(join(second.directory, 'apps/cli/dist/stale.js'), 'utf8'),
     ).rejects.toThrow();
   });
 });
