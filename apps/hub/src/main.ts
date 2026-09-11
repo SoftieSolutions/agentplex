@@ -9,6 +9,7 @@ import {
   randomTokenMinter,
   systemClock,
   systemTimers,
+  wantsHelp,
 } from '@agentplex/node-shared';
 import { nodeStoreFileSystem } from '@agentplex/providers';
 import { startHubRuntime } from './boot.js';
@@ -52,6 +53,18 @@ const WEB_ROOT = fileURLToPath(new URL('../../web/dist', import.meta.url));
 
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
+
+  // Before the settings are read, because the reader under them accepts the
+  // flags in this program's table and refuses everything else -- so `--help`,
+  // the one flag the bin's usage tells an operator to type, would be an unknown
+  // argument. Answering it is not the same event as refusing a typo: an answer
+  // goes to stdout, where a pipe or a pager can take it, and exits 0, while the
+  // refusal below keeps stderr and the code the unit will not restart on.
+  if (wantsHelp(process.argv.slice(2))) {
+    write(hubUsage());
+    return;
+  }
+
   const loaded = loadHubConfig({ argv: process.argv.slice(2), env: process.env });
 
   if (!loaded.ok) {

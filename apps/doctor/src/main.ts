@@ -6,6 +6,7 @@ import {
   createLogger,
   jsonLineSink,
   systemClock,
+  wantsHelp,
 } from '@agentplex/node-shared';
 import {
   createClaudeAdapter,
@@ -48,6 +49,16 @@ const EXIT_NOT_READY = 1;
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
   const writeError = (line: string): void => void process.stderr.write(`${line}\n`);
+
+  // Before the settings, and before anything is inspected. The reader under
+  // them refuses a flag that is not a setting, `--help` is not one, and what
+  // this program's flags are is true of the program rather than of the machine
+  // -- so the question is answered without a probe, and with the exit code of a
+  // program that did what it was asked rather than a verdict on the machine.
+  if (wantsHelp(process.argv.slice(2))) {
+    write(doctorUsage());
+    return;
+  }
 
   const loaded = loadDoctorConfig({ argv: process.argv.slice(2), env: process.env });
   if (!loaded.ok) {

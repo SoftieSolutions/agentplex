@@ -83,6 +83,31 @@ export function readFlags(argv: readonly string[], known: Iterable<string>): Fla
 }
 
 /**
+ * Whether these arguments are a request for usage rather than a run.
+ *
+ * Asked by every program here, and asked *before* `readFlags`, because that
+ * reader accepts only the settings in the program's table and refuses anything
+ * else. That strictness is right — a mistyped flag must stop a run rather than
+ * be dropped — but it makes `--help` an unknown argument, which is how the one
+ * flag the bin's usage tells an operator to type came to be refused with the
+ * code a unit reads as a machine that needs fixing by hand.
+ *
+ * Here rather than in `readFlags` because it is a different answer, not another
+ * problem: what follows is printing on stdout and exiting 0, which is a process
+ * concern and belongs in an entrypoint. It is also what lets the one program
+ * that does not read its flags through `readFlags` ask the same question and
+ * get the same answer.
+ *
+ * Both spellings, because somebody who types `-h` everywhere else will type it
+ * here. Anywhere in the list, and ahead of whatever else was typed: a person
+ * who reached for `--help` halfway through a command line they were unsure of
+ * is asking what the flags are.
+ */
+export function wantsHelp(argv: readonly string[]): boolean {
+  return argv.some((argument) => argument === '--help' || argument === '-h');
+}
+
+/**
  * A setting's value: the last flag given, or the env var, or nothing. An env
  * var that is empty or whitespace is absent, not an empty value, because that
  * is what an env file with a blank line after the `=` means.

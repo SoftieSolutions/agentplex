@@ -19,6 +19,24 @@ const forbidAppInternals = {
 
 const restrictedImports = (extra) => ['error', { patterns: [forbidAppInternals, ...extra] }];
 
+/**
+ * The narrowing that keeps the doctor unable to open what it inspects, named
+ * here because two configurations below need exactly it: the program, and the
+ * one suite of its own that is allowed to start a child.
+ */
+const doctorOpensNoPty = [
+  {
+    group: ['@agentplex/pty/*'],
+    message: 'The doctor reads a machine and opens no pty. It may not import @agentplex/pty.',
+  },
+  {
+    group: ['@agentplex/pty'],
+    allowImportNames: ['checkNodePty', 'NODE_PTY_REMEDY', 'PtyAvailability'],
+    message:
+      'The doctor may ask whether a pty can be opened -- checkNodePty, NODE_PTY_REMEDY, PtyAvailability -- and may import nothing from @agentplex/pty that could open one.',
+  },
+];
+
 export default tseslint.config(
   {
     // `apps/install/release` is the staged package: every file in it is a
@@ -202,16 +220,7 @@ export default tseslint.config(
     files: ['apps/doctor/**/*.ts'],
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports([
-        {
-          group: ['@agentplex/pty/*'],
-          message: 'The doctor reads a machine and opens no pty. It may not import @agentplex/pty.',
-        },
-        {
-          group: ['@agentplex/pty'],
-          allowImportNames: ['checkNodePty', 'NODE_PTY_REMEDY', 'PtyAvailability'],
-          message:
-            'The doctor may ask whether a pty can be opened -- checkNodePty, NODE_PTY_REMEDY, PtyAvailability -- and may import nothing from @agentplex/pty that could open one.',
-        },
+        ...doctorOpensNoPty,
         {
           group: ['node:child_process', 'child_process'],
           message: 'Starting a child directly bypasses the operation registry.',
@@ -244,6 +253,29 @@ export default tseslint.config(
     // reachable from a socket, a frame or a running process.
     files: ['packages/pty/scripts/node-pty-postinstall.test.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
+  },
+  {
+    // The fourth, and the same argument again: these suites' subject is a
+    // program. Which stream a usage message came out on and which exit code the
+    // operator's shell saw are facts about a process, so starting one is the
+    // only way to have a subject at all -- and `--help` is the invocation that
+    // binds no port, opens no database and asks nobody anything. The rule this
+    // lifts is about what a daemon may spawn; nothing here is reachable from a
+    // socket, a frame or a running process.
+    files: [
+      'apps/hub/src/main.integration.test.ts',
+      'apps/server/src/main.integration.test.ts',
+      'apps/setup/src/main.integration.test.ts',
+    ],
+    rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
+  },
+  {
+    // The doctor's half of that exception, which keeps the half that is about
+    // the doctor: it may start the program under test, and it still may not
+    // reach anything that could open a pty. A suite that could would be
+    // asserting about a program other than the one that ships.
+    files: ['apps/doctor/src/main.integration.test.ts'],
+    rules: { '@typescript-eslint/no-restricted-imports': restrictedImports(doctorOpensNoPty) },
   },
   {
     files: ['apps/web/**/*.{ts,tsx}'],
