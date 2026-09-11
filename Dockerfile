@@ -529,8 +529,16 @@ RUN root="$HOME/.agentplex/lib/node_modules/@softiesolutions"; \
 # the hub's own `dist`, because that is where the program asks it -- Node gives
 # an evaluated module the URL `<cwd>/[eval1]`, so the walk up through
 # `node_modules` starts exactly where `main.js`'s does.
+#
+# The interpreter is named outright, the way every assertion above the `ENV
+# PATH` further down names its paths. This stage starts from a bare Debian, so
+# the only runtime on it is the one install.sh unpacked into the prefix, and
+# nothing puts that prefix on PATH until that line -- which is there so the
+# final `agentplex doctor` can be typed the way an operator types it. A bare
+# `node` here is `command not found`: a broken assertion rather than a true
+# statement about the machine.
 RUN cd "$HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist" \
-    && root="$(node --input-type=module --eval 'import {fileURLToPath} from "node:url"; process.stdout.write(fileURLToPath(new URL("./dist", import.meta.resolve("@softiesolutions/agentplex-web/package.json"))))')" \
+    && root="$("$HOME/.agentplex/node/bin/node" --input-type=module --eval 'import {fileURLToPath} from "node:url"; process.stdout.write(fileURLToPath(new URL("./dist", import.meta.resolve("@softiesolutions/agentplex-web/package.json"))))')" \
     && echo "resolved web root: $root" \
     && test -f "$root/index.html"
 
