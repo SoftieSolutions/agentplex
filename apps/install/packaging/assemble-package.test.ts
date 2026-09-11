@@ -192,7 +192,7 @@ describe('publishedManifest', () => {
     ).toThrow('zod');
   });
 
-  it('lets the service win over a bundled package that asks for the same thing', () => {
+  it('accepts a bundled package that agrees with the service', () => {
     const agreeing: Manifest = {
       ...nodeSharedManifest,
       dependencies: { zod: '^4.1.13' },
