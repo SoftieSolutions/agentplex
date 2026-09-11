@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 /**
  * `install.sh`, exercised the two ways it can be exercised without a machine to
@@ -34,6 +35,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 const packagingDirectory = dirname(fileURLToPath(import.meta.url));
 const scriptPath = join(packagingDirectory, 'install.sh');
 const documentation = join(packagingDirectory, '..', 'README.md');
+const rootManifest = join(packagingDirectory, '..', '..', '..', 'package.json');
+
+/**
+ * Only `engines`. The rest of the root manifest is somebody else's to change --
+ * the package is being renamed on another branch -- and a schema that read more
+ * than the one field this tie is about would fail on edits that have nothing to
+ * do with the Node major.
+ */
+const enginesSchema = z.object({ engines: z.object({ node: z.string() }) });
 
 const suiteIsRoot = process.getuid?.() === 0;
 
@@ -466,5 +476,42 @@ describe('how the script reaches the network', () => {
     const wget = lines.find((line) => line.startsWith('wget '));
     expect(wget).toContain('--https-only');
     expect(wget).toContain('--secure-protocol=TLSv1_2');
+  });
+});
+
+describe('the Node major the script installs', () => {
+  /**
+   * The major is named twice and cannot be named once: a shell script has no
+   * way to read a constant out of a package.json, and the manifest has no way
+   * to read one out of the script. So the tie is a test.
+   *
+   * Both directions fail quietly on a real machine rather than here. Raise the
+   * manifest floor alone and the script installs a runtime the published
+   * package then refuses. Raise the script alone and the package keeps
+   * accepting a runtime nobody installs onto a fresh machine or tests against.
+   */
+  it('matches the major the root manifest declares in engines.node', () => {
+    const source = readFileSync(scriptPath, 'utf8');
+    const script = /^readonly NODE_MAJOR='(\d+)'$/m.exec(source)?.[1];
+    expect(script, `no readonly NODE_MAJOR='<major>' line in ${scriptPath}`).toBeDefined();
+
+    const { engines } = enginesSchema.parse(JSON.parse(readFileSync(rootManifest, 'utf8')));
+    // A range, not a number: `>=24` is the only shape this tie knows how to
+    // read, and a different one is a decision to make deliberately rather than
+    // a case to guess at, so it fails instead of passing on a major it did not
+    // actually extract.
+    const manifest = /^>=(\d+)$/.exec(engines.node)?.[1];
+    expect(
+      manifest,
+      `engines.node in ${rootManifest} is '${engines.node}', which is not the '>=<major>' ` +
+        'shape this test reads; widen it deliberately if that shape has changed',
+    ).toBeDefined();
+
+    expect(
+      script,
+      `the Node major disagrees between two places that have to agree: ` +
+        `NODE_MAJOR='${script}' in ${scriptPath} and engines.node '${engines.node}' in ` +
+        `${rootManifest}. Raise both or neither.`,
+    ).toBe(manifest);
   });
 });
