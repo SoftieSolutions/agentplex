@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import process from 'node:process';
 import {
   childEnvironment,
@@ -34,6 +33,12 @@ import { formatDoctorReport, inspectMachine } from './doctor.js';
  * The report goes to stdout and this program's own log lines to stderr, so
  * that what an operator reads -- or pipes into an issue -- is the report and
  * not the report with a JSON line about a probe in the middle of it.
+ *
+ * `main` is exported and called by the bin's dispatcher rather than run by the
+ * act of importing this file. There is no shebang above and no `await main()`
+ * below because neither is true any more: this was its own bin, and it is now a
+ * command inside the one bin there is. The argument for a call over a module
+ * that runs itself is in `programs.ts`.
  */
 
 /** Configuration was wrong. The operator must act. */
@@ -46,7 +51,7 @@ const EXIT_BAD_CONFIGURATION = 2;
  */
 const EXIT_NOT_READY = 1;
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
   const writeError = (line: string): void => void process.stderr.write(`${line}\n`);
 
@@ -106,5 +111,3 @@ async function main(): Promise<void> {
   for (const line of formatDoctorReport(report)) write(line);
   if (!report.usable) process.exitCode = EXIT_NOT_READY;
 }
-
-await main();

@@ -18,10 +18,19 @@ import { nodePtyFactory, type Pty, type PtyExit } from '@agentplex/pty';
  * gets a finished wizard and a prompt that never comes back. That is a real pty,
  * a real child, and an exit code or nothing.
  *
- * It runs the built entrypoint because that is the artifact an operator runs.
- * The suite already requires a build — the workspace's own tests resolve
- * `@agentplex/protocol` through its built declarations — so this adds no
- * requirement that was not already there.
+ * It runs the built bin, with the command word, because that is the artifact an
+ * operator runs: there is no `apps/setup/dist/main.js` any more, and the wizard
+ * was never reachable except through `agentplex setup`. The suite already
+ * requires a build — the workspace's own tests resolve `@agentplex/protocol`
+ * through its built declarations — so this adds no requirement that was not
+ * already there.
+ *
+ * Nothing about what it proves moved with the entrypoint. The subject is still
+ * a real pty, a real child and an exit code or nothing, and the extra argv
+ * entry is consumed before the wizard reads argv at all. If anything the
+ * question got sharper: the dispatcher now `await`s the wizard's `main()`
+ * inside the bin's own process, so a handle the wizard failed to release holds
+ * the bin open, and this is what would notice.
  *
  * `--role hub` on purpose in the first case: it is the shortest way to the last
  * question, and a hub plan touches no store, mints no identity and starts no
@@ -45,7 +54,14 @@ import { nodePtyFactory, type Pty, type PtyExit } from '@agentplex/pty';
 const EXIT_TIMEOUT_MS = 15_000;
 const TEST_TIMEOUT_MS = 25_000;
 
-const ENTRYPOINT = fileURLToPath(new URL('../dist/main.js', import.meta.url));
+/**
+ * The built bin. Three levels up from this file is the app, and `dist` is
+ * beside `src` under it.
+ */
+const BIN = fileURLToPath(new URL('../../../dist/main.js', import.meta.url));
+
+/** The command word the bin consumes before the wizard reads argv. */
+const COMMAND = 'setup';
 
 /** Role, hub port, apply, save. Every one of them takes the offer. */
 const RETURN = '\r';
@@ -103,7 +119,7 @@ async function installFakeClaude(): Promise<void> {
 }
 
 /**
- * Runs the built entrypoint on a pty and answers it, one line at a time.
+ * Runs the built bin on a pty and answers the wizard, one line at a time.
  *
  * One at a time and never all at once, because a person types one line per
  * prompt and setup can tell the difference: answers that arrived ahead of the
@@ -122,7 +138,7 @@ function driveOnAPty(
 } {
   const pty = nodePtyFactory.open({
     command: process.execPath,
-    args: [ENTRYPOINT, ...args],
+    args: [BIN, COMMAND, ...args],
     cwd: home,
     // Everything the child is allowed to know about this machine, with this
     // test's own `claude` first on it.
@@ -186,7 +202,7 @@ describe('a finished setup run', () => {
     async () => {
       const pty = nodePtyFactory.open({
         command: process.execPath,
-        args: [ENTRYPOINT, '--role', 'hub'],
+        args: [BIN, COMMAND, '--role', 'hub'],
         cwd: home,
         // Everything the child is allowed to know about this machine. `PATH` holds
         // the directory node is in and nothing else, so the survey finds no

@@ -30,17 +30,16 @@ MCP agent  ─┘                │             SERVER ────────
   id within it, never the machine it happens to be running on.
 
 One package and one bin, `agentplex`, with four subcommands: `hub` and
-`server` are separate daemons, `setup` is the wizard, `doctor` is the
-read-only check. A machine that runs both daemons starts one of each.
+`server` are separate daemons the bin dispatches to by path, `setup` is the
+wizard and `doctor` the read-only check, both of them commands inside the bin
+itself. A machine that runs both daemons starts one of each.
 
 ## Repository layout
 
 ```
 apps/hub/              the hub: database, migrations, pairing, discovery, the PWA's bytes
 apps/server/           the server: terminals, session control, identity, beacon, the hub connection
-apps/setup/            the wizard and the plan replay
-apps/doctor/           the read-only check of a machine
-apps/cli/              the agentplex bin: one command, four subcommands
+apps/cli/              the agentplex bin, and the setup and doctor commands inside it
 apps/web/              the PWA
 packages/protocol/     frame types and parsers, shared by the service and the PWA
 packages/node-shared/  clock, ids, logger, sockets: what the hub and the server share

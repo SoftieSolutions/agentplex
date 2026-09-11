@@ -30,11 +30,9 @@ RUN apt-get update \
     && apt-get install --no-install-recommends --yes python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY apps/doctor/package.json ./apps/doctor/
 COPY apps/hub/package.json ./apps/hub/
 COPY apps/cli/package.json ./apps/cli/
 COPY apps/server/package.json ./apps/server/
-COPY apps/setup/package.json ./apps/setup/
 COPY apps/web/package.json ./apps/web/
 COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
@@ -97,10 +95,10 @@ COPY --from=package /package/ /package/
 # install rather than reasoning about one.
 RUN npm install --global /package/softiesolutions-agentplex-*.tgz
 
-# Five assertions. `doctor` reaches its report only by the bin dispatching to
-# it by path and the doctor loading every package it imports, so a report on
-# stdout is proof the dispatch and the bundled packages both resolve from the
-# installed tree. It exits 1 on this machine because no coding agent is
+# Five assertions. `doctor` reaches its report only by the bin consuming the
+# command word, loading the command's module out of its own `dist`, and that
+# module loading every package it imports, so a report on stdout is proof the
+# dispatch and the bundled packages both resolve from the installed tree. It exits 1 on this machine because no coding agent is
 # installed on it, which is a true statement about the container and not a
 # packaging failure, so the report is what gets asserted and not the code.
 RUN agentplex doctor --role=server --server-identity-file=/var/lib/agentplex/server.json \
@@ -478,7 +476,7 @@ RUN grep -q 'opens no terminals' /tmp/hub-doctor.log
 # against pnpm 11.17.
 FROM manifests AS runtime-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter "{./apps/cli}..." --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
+    pnpm install --frozen-lockfile --prod --filter "{./apps/cli}..." --filter @agentplex/hub... --filter @agentplex/server...
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -487,14 +485,17 @@ WORKDIR /app
 # The workspace layout is kept rather than flattened: the dependency tree that
 # pnpm linked is a web of relative symlinks, and it resolves only where it was
 # linked. `migrations/` sits beside the hub's `dist/` because its main.js
-# resolves it as ../migrations relative to itself, and the bin reaches the four
-# programs' `dist/` directories by the same relative paths it does in a
+# resolves it as ../migrations relative to itself, and the bin reaches the two
+# daemons' `dist/` directories by the same relative paths it does in a
 # checkout.
 COPY --from=runtime-deps /app/node_modules ./node_modules
+# The bin's own, which did not exist while this app declared no runtime
+# dependency: it holds the wizard and the doctor now, so the symlinks that
+# resolve `@agentplex/*` and `zod` from `apps/cli/dist/commands/**` are here and
+# nowhere a resolver walking up from that directory would otherwise find them.
+COPY --from=runtime-deps /app/apps/cli/node_modules ./apps/cli/node_modules
 COPY --from=runtime-deps /app/apps/hub/node_modules ./apps/hub/node_modules
 COPY --from=runtime-deps /app/apps/server/node_modules ./apps/server/node_modules
-COPY --from=runtime-deps /app/apps/setup/node_modules ./apps/setup/node_modules
-COPY --from=runtime-deps /app/apps/doctor/node_modules ./apps/doctor/node_modules
 COPY --from=runtime-deps /app/packages/node-shared/node_modules ./packages/node-shared/node_modules
 COPY --from=runtime-deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
 COPY --from=runtime-deps /app/packages/providers/node_modules ./packages/providers/node_modules
@@ -508,8 +509,6 @@ COPY package.json ./
 COPY apps/cli/package.json ./apps/cli/
 COPY apps/hub/package.json ./apps/hub/
 COPY apps/server/package.json ./apps/server/
-COPY apps/setup/package.json ./apps/setup/
-COPY apps/doctor/package.json ./apps/doctor/
 COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
@@ -517,8 +516,6 @@ COPY packages/pty/package.json ./packages/pty/
 COPY --from=build /app/apps/cli/dist ./apps/cli/dist
 COPY --from=build /app/apps/hub/dist ./apps/hub/dist
 COPY --from=build /app/apps/server/dist ./apps/server/dist
-COPY --from=build /app/apps/setup/dist ./apps/setup/dist
-COPY --from=build /app/apps/doctor/dist ./apps/doctor/dist
 COPY --from=build /app/packages/node-shared/dist ./packages/node-shared/dist
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY --from=build /app/packages/providers/dist ./packages/providers/dist

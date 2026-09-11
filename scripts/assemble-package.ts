@@ -8,7 +8,7 @@ import { z } from 'zod';
  * Assemble the tree that gets published as `@softiesolutions/agentplex`.
  *
  * A bare machine must not need pnpm, vite or a checkout, so the package carries
- * the five compiled programs, the compiled packages they import, the built PWA
+ * the compiled programs, the compiled packages they import, the built PWA
  * and the migrations inside it, and installation is `npm install --global
  * @softiesolutions/agentplex`. The command that arrives is `agentplex`: `bin`
  * maps a command name to a path and owes the package name nothing.
@@ -48,12 +48,20 @@ export const BIN_APP = 'apps/cli';
 export const OTHER_APPS: readonly BundledPackage[] = [
   { name: '@agentplex/hub', directory: 'apps/hub' },
   { name: '@agentplex/server', directory: 'apps/server' },
-  { name: '@agentplex/setup', directory: 'apps/setup' },
-  { name: '@agentplex/doctor', directory: 'apps/doctor' },
 ];
 
-/** What the bin dispatches to, by name; what `main.ts` in this app imports by path. */
-export const PROGRAMS = ['hub', 'server', 'setup', 'doctor'] as const;
+/**
+ * What the bin dispatches to by path, by name.
+ *
+ * The two daemons, and only they. `setup` and `doctor` were here while each was
+ * its own app with its own `dist/main.js`; they are commands inside
+ * `apps/cli/dist` now, so there is no directory of theirs to copy and no
+ * manifest of theirs to read ranges out of -- `apps/cli` declares what they
+ * need, and it is read above as the service. A name in this list that the bin
+ * does not dispatch, or the other way round, is what `apps/cli/src/
+ * programs.test.ts` exists to catch.
+ */
+export const PROGRAMS = ['hub', 'server'] as const;
 
 /**
  * The workspace packages the compiled service imports, and where each lives.
@@ -100,12 +108,16 @@ export const ENTRYPOINT = 'apps/cli/dist/main.js';
  * of which a stock `debian:bookworm-slim` has. It reaches this manifest as a
  * dependency of the bundled `@agentplex/pty`, carried up by the rule below
  * that a bundled package's needs are declared here -- and `@agentplex/pty`
- * reaches the package through the server and the wizard.
+ * reaches the package through the server, and through `apps/cli`, which holds
+ * the wizard that opens one and the doctor that asks whether one could be
+ * opened.
  *
  * The hub is the machine that never opens a pseudoterminal, and the hub was
  * paying that bill: `apps/hub` depends on node-shared, protocol, providers and
  * zod, and on nothing that touches a pty. Optional is what lets npm finish
- * without it.
+ * without it -- and the bin's own dependency on `@agentplex/pty` does not
+ * change that, because an optional dependency is optional per package and
+ * `agentplex hub` evaluates no module that loads the addon.
  *
  * What optional costs, and what pays it back. npm exits 0 when an optional
  * dependency's build fails and removes the package from the tree without
@@ -278,7 +290,7 @@ export function packageEntries(): readonly PackageEntry[] {
       kind: 'directory',
       proof: 'main.js',
       exclude: isWorkspaceOnly,
-      reason: 'the agentplex bin, dispatching to the four programs below by path',
+      reason: 'the agentplex bin, its setup and doctor commands, and the two programs below',
     },
     ...PROGRAMS.map((program): PackageEntry => ({
       from: `apps/${program}/dist`,

@@ -5,12 +5,20 @@ import { describe, expect, it } from 'vitest';
 import { doctorUsage } from './config.js';
 
 /**
- * The doctor's entrypoint as an operator meets it: the built program, spawned,
- * and asked what its flags are.
+ * The doctor as an operator meets it: `agentplex doctor`, spawned, and asked
+ * what its flags are.
  *
- * It runs the built entry because the question is about a process — which
- * stream the usage came out on, and what the exit code was — and nothing below
- * the process level can answer it. The suite already requires a build.
+ * It runs a child process because the question is about one — which stream the
+ * usage came out on, and what the exit code was — and nothing below the process
+ * level can answer it. The suite already requires a build.
+ *
+ * What it spawns is the bin with the command word, which is a change of
+ * entrypoint and not of subject: there is no `apps/doctor/dist/main.js` to run
+ * any more, and the doctor is now reached the only way an operator was ever
+ * able to reach it. The command word travelling through the dispatch is part of
+ * what this asserts as a result — a `--help` that came back on stdout is a
+ * `--help` that reached this program and not the bin's own usage, which the
+ * third case pins by name.
  *
  * Asking for usage and mistyping a flag are two events, and the difference is
  * asserted here rather than described. An answer goes to stdout and exits 0. A
@@ -25,7 +33,17 @@ import { doctorUsage } from './config.js';
  * failing.
  */
 
-const ENTRYPOINT = fileURLToPath(new URL('../dist/main.js', import.meta.url));
+/**
+ * The built bin. Three levels up from this file is the app, and `dist` is
+ * beside `src` under it. It has to be the built one: the bin resolves the
+ * daemons and its own manifest relative to `import.meta.url`, and those
+ * distances are `dist/`'s. `pnpm -C apps/cli build` first, which this suite
+ * already needed when it ran a `dist` of its own.
+ */
+const BIN = fileURLToPath(new URL('../../../dist/main.js', import.meta.url));
+
+/** The command word the bin consumes before this program reads argv. */
+const COMMAND = 'doctor';
 
 /**
  * A run with nothing inherited but a PATH: usage is a fact about the program,
@@ -33,7 +51,7 @@ const ENTRYPOINT = fileURLToPath(new URL('../dist/main.js', import.meta.url));
  * closed, because nothing on this path may ask anybody anything.
  */
 function run(...args: readonly string[]): SpawnSyncReturns<string> {
-  return spawnSync(process.execPath, [ENTRYPOINT, ...args], {
+  return spawnSync(process.execPath, [BIN, COMMAND, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { PATH: process.env['PATH'] ?? '' },
@@ -67,6 +85,9 @@ describe('agentplex doctor', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('unknown argument: --stores=/srv');
     expect(result.stderr).toContain('Usage: agentplex doctor');
+    // The doctor's usage and not the bin's: proof the word was consumed and
+    // this program refused the flag, rather than the dispatcher refusing it.
+    expect(result.stderr).not.toContain('Usage: agentplex <command>');
     expect(result.status).toBe(2);
   });
 });

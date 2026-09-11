@@ -22,9 +22,9 @@ the user who runs it:
 curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh | bash
 ```
 
-The package carries the five compiled programs, the compiled packages they
-share, the built web app and the migrations, so a machine needs Node and
-nothing else from this project: no pnpm, no vite, no checkout. Upgrading is
+The package carries the compiled programs, the compiled packages they share,
+the built web app and the migrations, so a machine needs Node and nothing else
+from this project: no pnpm, no vite, no checkout. Upgrading is
 installing a later version, and pinning one is
 `@softiesolutions/agentplex@<version>`.
 
