@@ -147,7 +147,7 @@ RUN agentplex doctor --role=server --server-identity-file=/var/lib/agentplex/ser
 # the path a systemd unit names resolves from an installed tree, with every
 # bundled package under it.
 RUN node "$(npm root -g)/@softiesolutions/agentplex-server/apps/server/dist/main.js" --role=server 2>&1 \
-    | grep -q 'Usage: agentplex server'
+    | grep -q 'Usage: <node> apps/server/dist/main.js'
 # The schema travels inside the hub package or the hub has no database to open.
 # Read back out of the installed tree, at the path `main.js` resolves rather
 # than the path packaging wrote.
