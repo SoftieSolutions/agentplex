@@ -588,16 +588,24 @@ write_environment_file() {
 # agentplex settings, read by the systemd units as an EnvironmentFile. Both
 # daemons read this one file, and each reads only the keys it needs.
 #
-# install.sh wrote this file once and will not touch it again. Two lines are
-# uncommented because they are the two facts the installer had: the role you
-# asked for, and the prefix it created. The rest is commented out because
-# guessing a database path or a store path is worse than leaving one absent --
-# fill them in, or let \`$PACKAGE_NAME setup\` do it.
+# install.sh wrote this file once and will not touch it again. Three lines are
+# uncommented because they are the three facts the installer had: the role you
+# asked for, the prefix it created, and the bin path inside it. The rest is
+# commented out because guessing a database path or a store path is worse than
+# leaving one absent -- fill them in, or let \`$PACKAGE_NAME setup\` do it.
 #
 # Every setting here has a flag as well, and the flag wins. The whole table is
 # at $DOCS_URL
 
 AGENTPLEX_ROLE=$ROLE
+
+# The prefix this install created, recorded so that it can be given back. No
+# daemon reads this line: it is here for the person who runs
+# \`$PACKAGE_NAME setup --prefix=\$AGENTPLEX_PREFIX\` on this machine later, and
+# for whoever is reading the file to find out where everything went. A setup run
+# that is not told owns \$HOME/.agentplex instead, which on a machine installed
+# anywhere else is a second prefix nothing points at.
+AGENTPLEX_PREFIX=$PREFIX
 
 # Where agent binaries are looked for, ahead of the PATH this service inherits.
 # A systemd unit gets a minimal PATH with no version-manager shims in it, so a
@@ -827,15 +835,15 @@ run_setup() {
   fi
 
   if [ "$DRY_RUN" = 'yes' ]; then
-    report 'setup' "would run $BIN_DIR/$PACKAGE_NAME setup --role=$ROLE"
+    report 'setup' "would run $BIN_DIR/$PACKAGE_NAME setup --role=$ROLE --prefix=$PREFIX"
     return 0
   fi
 
-  report 'setup' "$BIN_DIR/$PACKAGE_NAME setup --role=$ROLE"
+  report 'setup' "$BIN_DIR/$PACKAGE_NAME setup --role=$ROLE --prefix=$PREFIX"
   say ''
 
   local status='0'
-  "$BIN_DIR/$PACKAGE_NAME" setup --role="$ROLE" </dev/tty || status="$?"
+  "$BIN_DIR/$PACKAGE_NAME" setup --role="$ROLE" --prefix="$PREFIX" </dev/tty || status="$?"
 
   if [ "$status" != '0' ]; then
     say ''

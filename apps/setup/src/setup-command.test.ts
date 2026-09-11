@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createFakeProcessProbe,
   createFakeStoreFiles,
@@ -35,11 +35,17 @@ function fixture(name: string): string {
   return readFileSync(providerFixturePath(name), 'utf8');
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 const PLAN_FILE = '/etc/agentplex/plan.json';
 const PREFIX = '/var/lib/agentplex';
 const IDENTITY = '/var/lib/agentplex/server.json';
 const STORE = '/srv/work';
 const PRE_MINTED = 'x'.repeat(43);
+/** A prefix an installer chose, which is not the one the wizard would own by itself. */
+const HANDED_PREFIX = '/opt/agentplex';
 
 const PLAN = JSON.stringify({
   version: SETUP_PLAN_VERSION,
@@ -404,5 +410,65 @@ describe('agentplex setup', () => {
 
     expect(failed.code).toBe(1);
     expect(failed.terminal.transcript).toContain('provider: claude - not provisioned');
+  });
+
+  it('provisions the prefix the installer chose rather than one under the home directory', async () => {
+    // `install.sh --prefix=/opt/agentplex` hands that prefix over, and everything
+    // the wizard owns has to land in it: the unit the installer just wrote reads
+    // /opt/agentplex/agentplex.env and resolves programs in /opt/agentplex/bin.
+    const asked = await run(['--prefix', HANDED_PREFIX], { answers: ['', '', '', '', '', '', ''] });
+
+    expect(asked.code).toBe(0);
+    expect(asked.terminal.transcript).toContain(`install into: ${HANDED_PREFIX}`);
+    expect(asked.terminal.questions.join('\n')).toContain(`${HANDED_PREFIX}/agentplex.env`);
+    expect(asked.setupMachine.writes).toEqual([`${HANDED_PREFIX}/agentplex.env`]);
+  });
+
+  it('takes the prefix in either spelling of the flag', async () => {
+    const asked = await run([`--prefix=${HANDED_PREFIX}`], {
+      answers: ['', '', '', '', '', '', ''],
+    });
+
+    expect(asked.code).toBe(0);
+    expect(asked.terminal.transcript).toContain(`install into: ${HANDED_PREFIX}`);
+  });
+
+  it('refuses a relative prefix rather than resolving it against wherever setup was started', async () => {
+    // The same rule the settings file is held to, for the same reason: setup is
+    // started by an installer from a directory nobody chose, and a prefix that
+    // moves with the working directory is a service that comes up pointed at a
+    // directory nothing wrote.
+    const asked = await run(['--prefix', 'agentplex']);
+
+    expect(asked.code).toBe(2);
+    expect(asked.errors).toContain('--prefix has to be an absolute path: agentplex');
+    expect(asked.terminal.questions).toEqual([]);
+  });
+
+  it('refuses a plan and a prefix together rather than picking one', async () => {
+    // A plan states its own installPrefix, and `--prefix` says where the wizard
+    // owns one. An invocation carrying both is somebody expecting one of them to
+    // win, and which one they expected is not knowable from here.
+    const asked = await run(['--plan', PLAN_FILE, '--prefix', HANDED_PREFIX], { plan: PLAN });
+
+    expect(asked.code).toBe(2);
+    expect(asked.errors).toContain('--prefix tells the wizard where to own a prefix');
+    expect(asked.files.creates).toEqual([]);
+  });
+
+  it('owns a prefix under the home directory when no flag named one, and reads no environment for it', async () => {
+    // The decision this flag came with: `AGENTPLEX_PREFIX` in the settings file
+    // is a line for a person to read, never a fallback setup acts on. The units
+    // hand that file to the daemons and not to setup, so an ambient value here
+    // could only come from a shell nobody in this system exports it from -- and
+    // acting on it would recreate this ticket's bug with the environment as the
+    // second opinion instead of the home directory.
+    vi.stubEnv('AGENTPLEX_PREFIX', HANDED_PREFIX);
+
+    const asked = await run([], { answers: ['', '', '', '', '', '', ''] });
+
+    expect(asked.code).toBe(0);
+    expect(asked.terminal.transcript).toContain('install into: /home/dev/.agentplex');
+    expect(asked.setupMachine.writes).toEqual(['/home/dev/.agentplex/agentplex.env']);
   });
 });

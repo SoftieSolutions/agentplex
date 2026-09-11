@@ -60,7 +60,7 @@ import { isAdoptable, surveyMachine, type ProviderSurvey } from './survey-machin
  * operator: the answers go in, and a plan and a provisioned machine come out.
  */
 
-/** Where agentplex owns a prefix, under the operator's home. Never anywhere else. */
+/** Where agentplex owns a prefix when nobody named one: under the operator's home. */
 const OWNED_PREFIX_DIRECTORY = '.agentplex';
 /** The server's identity file inside that prefix, and the plan's default name for it. */
 const IDENTITY_FILE_NAME = 'server.json';
@@ -109,6 +109,18 @@ export interface SetupWizardSeed {
    * not somebody waiving the chance to see what setup found.
    */
   readonly role: Role | null;
+  /**
+   * `--prefix`, from an installer that already created one, or `null` to own
+   * one under the operator's home.
+   *
+   * Not a preference: the installer wrote a unit that reads
+   * `<prefix>/agentplex.env` and resolves programs in `<prefix>/bin`, so a
+   * wizard that installed providers and recorded a pairing somewhere else would
+   * leave a service starting from a settings file nothing had filled in, with
+   * nothing on its bin path -- unpaired, unable to launch an agent, and silent
+   * about both. Every path this wizard owns hangs off this one value.
+   */
+  readonly prefix: string | null;
 }
 
 export type WizardOutcome =
@@ -157,13 +169,18 @@ export async function runSetupWizard(
   for (const line of describeSurvey(survey.stores, survey.providers)) terminal.write(line);
   terminal.write('');
 
-  const answered = await askForPlan(seed, survey.stores, survey.providers, dependencies);
+  // The one place the prefix is decided, so that the plan, the identity file,
+  // the settings file and the saved plan cannot end up naming two of them.
+  const prefix = seed.prefix ?? join(machine.home, OWNED_PREFIX_DIRECTORY);
+
+  const answered = await askForPlan(seed, prefix, survey.stores, survey.providers, dependencies);
   if (answered.kind === 'ended') return { kind: 'no-input' };
 
   // The answers, through the parser a plan file goes through.
   //
   // Everything in the value above came from outside this program — an operator's
-  // typing, and this machine's `$HOME` — so it is a claim like any other, and
+  // typing, an installer's `--prefix`, and this machine's `$HOME` — so it is a
+  // claim like any other, and
   // "the wizard built it, so it must be well-formed" is exactly the reasoning
   // that lets a setup started with no home directory provision `/.agentplex`.
   // Round-tripping it also settles the other half: what the last screen offers to
@@ -191,7 +208,7 @@ export async function runSetupWizard(
     // The plan is still worth keeping: an operator who answered every question
     // and then decided to provision somewhere else has built exactly the
     // artifact the other front end takes.
-    await offerToSave(written, dependencies);
+    await offerToSave(written, prefix, dependencies);
     return { kind: 'abandoned' };
   }
 
@@ -238,7 +255,7 @@ export async function runSetupWizard(
   // The other step that can only be taken after the plan has been applied: the
   // token to pair with is the one the apply path just wrote, and this reads it
   // back rather than minting a second.
-  const recorded = await recordLocalServer(outcome, dependencies);
+  const recorded = await recordLocalServer(outcome, prefix, dependencies);
   if (recorded.kind === 'ended') return { kind: 'no-input' };
 
   terminal.write('');
@@ -247,7 +264,7 @@ export async function runSetupWizard(
   }
 
   terminal.write('');
-  await offerToSave(written, dependencies);
+  await offerToSave(written, prefix, dependencies);
 
   return { kind: 'applied', problems: outcome.problems };
 }
@@ -262,6 +279,7 @@ export async function runSetupWizard(
  */
 async function askForPlan(
   seed: SetupWizardSeed,
+  prefix: string,
   stores: readonly string[],
   surveyed: readonly ProviderSurvey[],
   { terminal, machine }: SetupWizardDependencies,
@@ -303,7 +321,6 @@ async function askForPlan(
   const chosen = await askProviders(surveyed, terminal);
   if (chosen.kind === 'ended') return chosen;
 
-  const prefix = join(machine.home, OWNED_PREFIX_DIRECTORY);
   // Copied into arrays the plan type owns: a `SetupPlan` is the shape the parser
   // produces, and the parser produces one nobody else is holding a view onto.
   const server = {
@@ -690,6 +707,7 @@ interface LocalServerStep {
  */
 async function recordLocalServer(
   outcome: SetupOutcome,
+  prefix: string,
   dependencies: SetupWizardDependencies,
 ): Promise<Asked<LocalServerStep>> {
   const { terminal, machine } = dependencies;
@@ -717,7 +735,7 @@ async function recordLocalServer(
       'hand-pair their own box.',
   );
 
-  const path = await askForSettingsFile(machine.home, terminal);
+  const path = await askForSettingsFile(prefix, terminal);
   if (path.kind === 'ended') return path;
   if (path.value === null) {
     return { kind: 'answered', value: { lines: [notRecorded(identity.path)], recorded: false } };
@@ -766,10 +784,10 @@ async function recordLocalServer(
 
 /** The settings file to record the server in, or `null` for a machine to leave unpaired. */
 async function askForSettingsFile(
-  home: string,
+  prefix: string,
   terminal: SetupTerminal,
 ): Promise<Asked<string | null>> {
-  let offer = join(home, OWNED_PREFIX_DIRECTORY, SETTINGS_FILE_NAME);
+  let offer = join(prefix, SETTINGS_FILE_NAME);
 
   for (;;) {
     const answered = await askText(
@@ -853,6 +871,7 @@ function whatIsLeft(outcome: SetupOutcome): readonly string[] {
  */
 async function offerToSave(
   plan: string,
+  prefix: string,
   { terminal, machine, files }: SetupWizardDependencies,
 ): Promise<void> {
   terminal.write(
@@ -863,7 +882,7 @@ async function offerToSave(
   const wanted = await askYesNo(terminal, 'Save this plan to a file?', false);
   if (wanted.kind === 'ended' || !wanted.value) return;
 
-  let offer = join(machine.home, OWNED_PREFIX_DIRECTORY, PLAN_FILE_NAME);
+  let offer = join(prefix, PLAN_FILE_NAME);
   for (;;) {
     const path = await askText(terminal, 'Save it as', offer);
     if (path.kind === 'ended') return;

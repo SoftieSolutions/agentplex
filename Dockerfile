@@ -183,10 +183,14 @@ RUN test -x "$HOME/.agentplex/bin/node" && test -x "$HOME/.agentplex/bin/agentpl
 # The prefix is not put on a PATH for anybody, so the script has to say so.
 RUN grep -q "export PATH=\"$HOME/.agentplex/bin:" /tmp/install.log
 
-# The settings file: two facts the installer had, and 0600 because the client
-# token belongs in this file.
+# The settings file: the three facts the installer had, and 0600 because the
+# client token belongs in this file. The prefix is one of them because a setup
+# run later on this machine has no other way to find the one that was chosen --
+# asserted here rather than in a second install into a custom prefix, which
+# would download and compile everything above a second time for one line.
 RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplex.env")" = 600 \
     && grep -qx 'AGENTPLEX_ROLE=server' "$HOME/.agentplex/agentplex.env" \
+    && grep -qx "AGENTPLEX_PREFIX=$HOME/.agentplex" "$HOME/.agentplex/agentplex.env" \
     && grep -qx "AGENTPLEX_BIN_PATH=$HOME/.agentplex/bin" "$HOME/.agentplex/agentplex.env"
 
 # The unit, and then systemd's own reading of it. `verify` resolves ExecStart,
