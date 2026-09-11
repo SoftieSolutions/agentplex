@@ -90,6 +90,7 @@ function usage(): string {
     '',
     `  ${Object.keys(DAEMONS).join(' and ')} are daemons rather than commands. Nobody types them:`,
     `  systemd runs them, from ${Object.values(DAEMONS).join(' and ')}.`,
+    '  agentplex start, stop and status are how you reach them.',
   ].join('\n');
 }
 
@@ -129,14 +130,22 @@ function parseVersion(source: string, text: string): string {
  * other than them, and which something. That answer is complete on its own, so
  * the usage does not follow it: the usage is printed when the next step is to
  * pick a different word, and here it is not.
+ *
+ * The second sentence used to be two spellings of `systemctl status`, with a
+ * clause about which one to use depending on how agentplex was installed. That
+ * was the best answer available while `agentplex start` did not exist, and it
+ * was still the operator being handed a decision -- user manager or system one
+ * -- that this program can make for them out of the file the installer wrote.
+ * Now it names the three commands that do it, and the scope stops being
+ * something anybody has to know.
  */
 function refuse(name: string): void {
   const unit = DAEMONS[name];
   if (unit !== undefined) {
     process.stderr.write(
       `agentplex: the ${name} is a daemon, not a command: this machine runs it under ${unit}.\n` +
-        `agentplex: systemctl status ${unit}, or systemctl --user status ${unit} where agentplex ` +
-        'was installed for one user.\n',
+        'agentplex: agentplex start enables and starts it, agentplex stop reverses that, and ' +
+        'agentplex status says whether it is running.\n',
     );
   } else {
     process.stderr.write(`agentplex: unknown command ${JSON.stringify(name)}\n\n`);
@@ -204,6 +213,12 @@ const command = process.argv[2];
 if (command === '--help' || command === '-h') {
   process.stdout.write(`${usage()}\n`);
 } else if (command === '--version') {
+  // `-v` is not here, and its absence is a decision rather than an omission: it
+  // is reserved for verbose, which is a flag several of these commands will
+  // want and none of them has yet. A `-v` that printed a version would be the
+  // hardest kind of thing to take back later -- somebody's script would be
+  // parsing it -- so the word is kept free while it still costs nothing.
+
   const path = fileURLToPath(MANIFEST);
   try {
     process.stdout.write(`${parseVersion(path, await readFile(MANIFEST, 'utf8'))}\n`);

@@ -77,12 +77,24 @@ describe('the program names', () => {
     }
   });
 
-  it('carry setup and doctor as commands this app holds', () => {
-    expect(namesOfKind('command')).toEqual(['doctor', 'setup']);
-    // And neither is packaged as a daemon: both are modules under the entry the
-    // package already carries, so there is no `apps/setup/dist` to pack.
-    expect([...PACKAGED]).not.toContain('setup');
-    expect([...PACKAGED]).not.toContain('doctor');
+  it('carry the five commands this app holds, and no daemon among them', () => {
+    expect(namesOfKind('command')).toEqual(['doctor', 'setup', 'start', 'status', 'stop']);
+    // None of them is packaged as a daemon: every one is a module under the
+    // entry the package already carries, so there is no `apps/setup/dist` to
+    // pack and no `apps/start/dist` either.
+    for (const name of namesOfKind('command')) expect([...PACKAGED]).not.toContain(name);
+  });
+
+  it('keep start, stop and status as commands, which is the point of them', () => {
+    // `agentplex start` exists so that nobody has to know whether their units
+    // belong to the user manager or the system one. That makes it the one
+    // command in this table whose whole subject is the daemons -- and the
+    // reason it is still not a way to *run* one: it asks systemd, and the
+    // disjointness assertion above is what keeps `hub` from creeping back in
+    // beside it.
+    for (const name of ['start', 'stop', 'status']) {
+      expect(Object.keys(PROGRAMS)).toContain(name);
+    }
   });
 
   it('carry help as the one command the bin answers itself', () => {

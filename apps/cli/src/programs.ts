@@ -81,6 +81,21 @@ export const PROGRAMS: Readonly<Record<string, Program>> = {
     load: () => import('./commands/setup/main.js'),
     summary: 'the wizard, or --plan <file> to replay',
   },
+  start: {
+    kind: 'command',
+    load: () => import('./commands/units/start-main.js'),
+    summary: "enable and start this machine's units",
+  },
+  stop: {
+    kind: 'command',
+    load: () => import('./commands/units/stop-main.js'),
+    summary: 'stop them and take them off boot',
+  },
+  status: {
+    kind: 'command',
+    load: () => import('./commands/status/main.js'),
+    summary: 'what is installed here, and whether it runs',
+  },
   doctor: {
     kind: 'command',
     load: () => import('./commands/doctor/main.js'),

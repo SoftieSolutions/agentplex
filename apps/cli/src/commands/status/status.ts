@@ -1,0 +1,161 @@
+import {
+  protocolDisagreement,
+  type Installation,
+  type InstalledPackage,
+} from '../../installation/installation.js';
+import { formatUnits } from '../../installation/units.js';
+import type { UnitState } from '../../installation/systemd.js';
+
+/**
+ * `agentplex status` as lines to print, and the verdict that goes with them.
+ *
+ * Pure, and separate from the gathering, for the reason `doctor`'s formatter is:
+ * what an operator reads is then a value a test can assert on rather than
+ * something only a terminal has ever seen.
+ *
+ * ## What this reports, and what it refuses to
+ *
+ * Installed versions, and nothing about what exists elsewhere. There is no "a
+ * newer version is available" column and no place one could be smuggled in,
+ * because answering that means a fetch, and a fetch means a cache, a timeout, a
+ * stale answer to label with its age, and a `status` that is slow or wrong when
+ * a registry is down. All of that belongs to the update command, which owns the
+ * version oracle. The seam it will add is the report itself: a column per
+ * package, filled from something this function is handed.
+ *
+ * What it does report is the protocol, because that is a fact about the
+ * artifacts on this disk and needs nothing fetched to check. Four components on
+ * four release trains are safe exactly while they agree on it; a set that does
+ * not is a machine whose hub and server will connect and refuse each other's
+ * frames, with nothing in either log naming the cause. `install.sh` refuses to
+ * create that machine and this is what notices one that exists anyway.
+ */
+
+export interface StatusReport {
+  readonly lines: readonly string[];
+  /**
+   * Whether anything here is a failure, which is the exit code.
+   *
+   * One thing sets it: a unit systemd calls `failed`. That is a service that
+   * tried to run and could not, which is unambiguous and is the machine telling
+   * us so rather than us deciding.
+   *
+   * Enabled-but-inactive deliberately does not. It is suspicious -- a unit that
+   * is meant to come back at boot and is not running now -- and it is also
+   * exactly what a machine mid-maintenance looks like, and what a machine whose
+   * operator stopped one daemon on purpose this morning looks like. `status`
+   * cannot read intent, and a command that exited non-zero on a state somebody
+   * chose would be a command people learn to ignore the exit code of. It is
+   * reported, in the line, and the person reading decides.
+   *
+   * Nor does a protocol disagreement, which is the one that took an argument.
+   * It is a genuine fault and it is not a *unit* failure: the exit code here is
+   * the answer to "did anything on this machine fail to run", and widening it
+   * to "is anything about this machine wrong" makes it the doctor's verdict
+   * under another name. The disagreement gets a paragraph of its own instead,
+   * which is more than an exit code could have said.
+   */
+  readonly failed: boolean;
+}
+
+/**
+ * `units` is `null` for a machine with no `systemctl` on it.
+ *
+ * A distinct value rather than a list of units with nothing in them, because
+ * they are different facts and the report says different things about each. An
+ * empty list is a machine whose installer wrote no unit; `null` is a machine
+ * that has units and nothing to ask about them, and its unit files are still
+ * listed -- they are files this machine has -- with nothing claimed about what
+ * they are doing, once, rather than the same sentence repeated under every row.
+ */
+export function formatStatus(
+  installation: Installation,
+  units: readonly UnitState[] | null,
+): StatusReport {
+  const { layout } = installation;
+  const lines = [
+    `agentplex status   prefix=${layout.prefix}   scope=${layout.scope}   role=${
+      installation.role ?? 'not recorded'
+    }`,
+    '',
+    'packages',
+    ...installation.packages.flatMap(packageLines),
+    '',
+    'units',
+    ...unitBlock(installation, units),
+    '',
+    'runtime',
+    ...runtimeLines(installation),
+  ];
+
+  const disagreement = protocolDisagreement(installation);
+  if (disagreement !== null) {
+    lines.push('', 'protocol', ...disagreementLines(disagreement));
+  }
+
+  return { lines, failed: (units ?? []).some((unit) => unit.active === 'failed') };
+}
+
+function unitBlock(
+  installation: Installation,
+  units: readonly UnitState[] | null,
+): readonly string[] {
+  if (units === null) {
+    return [
+      '  there is no systemctl on this machine, so nothing here supervises these:',
+      ...installation.units.map((unit) => `    ${unit.unit}`),
+    ];
+  }
+  return units.length === 0
+    ? [
+        `  none in ${installation.layout.unitDirectory}: install.sh writes one per daemon ` +
+          "this machine's role runs",
+      ]
+    : formatUnits(units);
+}
+
+/**
+ * One package: the component's word, the version, and what it speaks.
+ *
+ * The component's word rather than the package name, because that is what a tag
+ * carries, what `--role` pins and what the operator will type at the update
+ * command. The published name is on the line only when there is a problem with
+ * it, where it is the thing somebody has to go and look at.
+ */
+function packageLines(installed: InstalledPackage): readonly string[] {
+  const line = [
+    `  ${installed.component.padEnd(8)}`,
+    (installed.state === 'installed' ? (installed.version ?? '?') : installed.state).padEnd(12),
+    installed.protocol === null ? '' : `protocol ${installed.protocol}`,
+  ]
+    .join(' ')
+    .trimEnd();
+  return installed.problem === null
+    ? [line]
+    : [line, `    ${installed.name}: ${installed.problem}`];
+}
+
+function runtimeLines(installation: Installation): readonly string[] {
+  const runtime = installation.runtime;
+  return runtime.kind === 'installed'
+    ? [`  node ${runtime.version}   installed by install.sh, in ${installation.layout.prefix}/node`]
+    : [
+        // Not "no runtime". The daemons are started by a unit that names an
+        // interpreter outright, and install.sh records one only when it
+        // unpacked one -- so the honest statement is that this prefix does not
+        // own a Node, which is a different thing from there not being one.
+        '  not recorded here: install.sh stamps a runtime only when it installed one,',
+        "  so this install adopted a node the machine already had. The unit's ExecStart",
+        '  names the one the daemons are started with.',
+      ];
+}
+
+function disagreementLines(declared: readonly InstalledPackage[]): readonly string[] {
+  return [
+    '  these components do not agree, and two components that disagree about the',
+    '  protocol do not talk to each other:',
+    ...declared.map((one) => `    ${one.component.padEnd(8)} protocol ${one.protocol ?? '?'}`),
+    '  A protocol change releases every affected component together, so this is a',
+    '  machine that was upgraded in halves rather than a choice to make.',
+  ];
+}

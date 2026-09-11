@@ -56,6 +56,19 @@ describe('agentplex server', () => {
    * answered before the machine is asked anything about itself. An operator
    * staring at a server that will not start is exactly the one who needs it.
    */
+  it('says how it is actually started, since nobody can type its name', () => {
+    const result = run('--help');
+
+    // The two loose ends this closes: the usage named an invocation that does
+    // not exist, and the one that does -- systemd, from a unit -- was nowhere
+    // in it. `agentplex start` is what enables and starts that unit, and it is
+    // the answer to what somebody typing `--help` at this file wanted.
+    expect(result.stdout).toContain('agentplex server is a daemon, not a command');
+    expect(result.stdout).toContain('agentplex-server.service');
+    expect(result.stdout).toContain('agentplex start');
+    expect(result.stdout).toContain('pnpm -C apps/server start');
+  });
+
   it('answers --help ahead of every question it asks about the machine', () => {
     const result = run('--help');
 
@@ -68,7 +81,11 @@ describe('agentplex server', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('unknown argument: --role=server');
-    expect(result.stderr).toContain('Usage: agentplex server');
+    // The usage names the invocation that exists -- an interpreter and this
+    // program's compiled entry -- rather than `agentplex server`, which is a
+    // command line nobody can type since the daemons stopped being subcommands.
+    expect(result.stderr).toContain('Usage: <node> apps/server/dist/main.js');
+    expect(result.stderr).not.toContain('Usage: agentplex server');
     expect(result.status).toBe(2);
   });
 });

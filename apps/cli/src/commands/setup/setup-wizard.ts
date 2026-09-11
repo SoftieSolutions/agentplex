@@ -6,7 +6,8 @@ import type { PtySupervisor } from '@agentplex/pty';
 import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
-import { LOCAL_SERVER_SETTINGS, SETTINGS_FILE_NAME, upsertSettings } from './settings-file.js';
+import { SETTINGS_FILE_NAME } from '../../installation/layout.js';
+import { LOCAL_SERVER_SETTINGS, upsertSettings } from './settings-file.js';
 import { describeProviderLogin, offerProviderLogin } from './provider-login.js';
 import type { SetupMachine } from './setup-machine.js';
 import {
