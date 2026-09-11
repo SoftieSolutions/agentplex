@@ -80,6 +80,9 @@ async function run(
     readonly units?: readonly string[];
     readonly systemd?: boolean;
     readonly outcomes?: Readonly<Record<string, ReturnType<typeof printed>>>;
+    /** Where the version cache is, for the machine that has one. */
+    readonly cacheFile?: string | null;
+    readonly now?: number;
   } = {},
 ): Promise<Run> {
   const out: string[] = [];
@@ -97,6 +100,8 @@ async function run(
       present: (machine.units ?? []).map((unit) => `${UNITS}/${unit}`),
     }),
     systemd: createSystemd({ runner, programs }),
+    cacheFile: machine.cacheFile === undefined ? null : machine.cacheFile,
+    now: () => machine.now ?? 0,
     write: (line) => out.push(line),
     writeError: (line) => errors.push(line),
   });
@@ -258,6 +263,79 @@ describe('whether the components on this machine can talk to each other', () => 
 
   it('says nothing at all when they agree', async () => {
     expect((await run()).out).not.toContain('do not agree');
+  });
+});
+
+describe('what is available beside what is installed', () => {
+  const CACHE = `${HOME}/.cache/agentplex/versions.json`;
+  const CHECKED_AT = 1_800_000_000_000;
+
+  function cache(cliVersion: string): string {
+    return JSON.stringify({
+      checkedAt: CHECKED_AT,
+      source: 'https://example.invalid/versions.json',
+      manifest: {
+        cli: { version: cliVersion, protocol: 3 },
+        hub: { version: '1.2.0', protocol: 3 },
+      },
+    });
+  }
+
+  /**
+   * The column comes out of the cache `agentplex update --check` writes, which
+   * is a file on this disk. The boundary has not moved: nothing here fetches,
+   * and there is no reader of anything but the filesystem in this command's
+   * dependencies.
+   */
+  it('reports what is available, from the cache, labelled with its age', async () => {
+    const status = await run([], {
+      files: { ...wholeMachine(), [CACHE]: cache('1.5.0') },
+      cacheFile: CACHE,
+      now: CHECKED_AT + 3 * 24 * 60 * 60 * 1000,
+    });
+
+    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0 {8}1\.5\.0 available {2}protocol 3$/m);
+    expect(status.out).toMatch(/^ {2}hub {6}1\.2\.0 {8}current {10}protocol 3$/m);
+    expect(status.out).toContain('checked 3 days ago');
+    // Still nothing spawned but systemctl, and still no fetch.
+    expect(status.runner.requests.every((request) => request.file === 'systemctl')).toBe(true);
+  });
+
+  /**
+   * A component the cache does not name gets no column rather than a guess: a
+   * manifest written before a component existed says nothing about it, and an
+   * absent package has nothing to compare.
+   */
+  it('says nothing about a component the cache does not name', async () => {
+    const status = await run([], {
+      files: { ...wholeMachine(), [CACHE]: cache('1.5.0') },
+      cacheFile: CACHE,
+      now: CHECKED_AT,
+    });
+
+    expect(status.out).toMatch(/^ {2}server {3}1\.5\.0 {25}protocol 3$/m);
+  });
+
+  /**
+   * A machine that has never run a check reports exactly what it reported
+   * before this column existed, and is told which command makes one -- rather
+   * than a fixed-width gap an operator has to work out the meaning of.
+   */
+  it('leaves the column out entirely when there is no cache, and says which command makes one', async () => {
+    const status = await run([], { files: wholeMachine() });
+
+    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0 {8}protocol 3$/m);
+    expect(status.out).toContain('agentplex update --check');
+  });
+
+  /** A cache that is not readable as one is a machine with no cached answer. */
+  it('leaves it out when the cache is not a cache', async () => {
+    const status = await run([], {
+      files: { ...wholeMachine(), [CACHE]: 'not json' },
+      cacheFile: CACHE,
+    });
+
+    expect(status.out).toMatch(/^ {2}cli {6}1\.4\.0 {8}protocol 3$/m);
   });
 });
 

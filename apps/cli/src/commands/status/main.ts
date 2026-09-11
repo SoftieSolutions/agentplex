@@ -3,6 +3,7 @@ import { childEnvironment, childSearchPath, wantsHelp } from '@agentplex/node-sh
 import { createNodeProcessRunner, createNodeProgramResolver } from '@agentplex/providers';
 import { nodeInstallationFiles } from '../../installation/node-installation-files.js';
 import { createSystemd } from '../../installation/systemd.js';
+import { versionsCacheFile } from '../../versions/versions-cache.js';
 import { runStatusCommand, statusUsage } from './status-command.js';
 
 /**
@@ -12,8 +13,9 @@ import { runStatusCommand, statusUsage } from './status-command.js';
  * `systemctl` comes from is decided the same way where a bare `claude` comes
  * from is. Nothing that could reach a network is composed here, which is the
  * other half of the claim `status.ts` makes: this program depends on no dialer,
- * no HTTP client and no fetch, so the "a newer version exists" column cannot be
- * added to it by accident -- it would have to be wired in, here, deliberately.
+ * no HTTP client and no fetch. The "what is available" column arrives instead
+ * as a path to a cache file -- the one `agentplex update --check` writes -- read
+ * through the same read-only filesystem the rest of the report comes from.
  */
 export async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
@@ -33,6 +35,8 @@ export async function main(): Promise<void> {
       runner: createNodeProcessRunner({ environment }),
       programs: createNodeProgramResolver(childSearchPath(environment)),
     }),
+    cacheFile: versionsCacheFile(process.env),
+    now: () => Date.now(),
     write,
     writeError,
   });

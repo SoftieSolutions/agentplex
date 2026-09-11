@@ -326,11 +326,31 @@ jobs:
       - name: Install pnpm
         run: corepack enable && corepack install
 
-      # `scripts` alone, and not the workspace. `versions-manifest.ts` needs zod
-      # and nothing else -- it deliberately imports no workspace package, so
-      # that updating a manifest does not depend on a build having happened.
+      # `scripts` and what it depends on, and not the workspace.
+      #
+      # The manifest writer imports exactly one workspace package now:
+      # `@agentplex/release`, which holds the `versions.json` schema so that the
+      # job writing the file and `agentplex update` reading it off the network
+      # cannot disagree about what a manifest is. So this job builds one package
+      # where it used to build none.
+      #
+      # That package depends on zod and on nothing in the workspace, which is
+      # the property being protected rather than a coincidence: the job that
+      # publishes the version oracle still does not wait on the hub, the server
+      # or the protocol compiling, and a build failure anywhere else in the
+      # workspace cannot strand a released component with no line in the file
+      # that says it exists.
+      #
+      # The name form of the filter and not the path form: `./scripts...`
+      # selects that directory alone, and only `<name>...` walks the workspace
+      # dependency graph. Verified at the origin against a tree with no
+      # node_modules in it, because the difference is invisible until the
+      # manifest writer imports a package whose own zod was never installed.
       - name: Install what the manifest writer needs
-        run: pnpm install --frozen-lockfile --filter ./scripts
+        run: pnpm install --frozen-lockfile --filter '@agentplex/scripts...'
+
+      - name: Build the manifest schema
+        run: pnpm --filter @agentplex/release build
 
       # The branch is advanced rather than fast-forwarded, and the difference is
       # `versions.json`.

@@ -141,6 +141,12 @@ const NODE_SHARED: BundledPackage = {
   directory: 'packages/node-shared',
 };
 const PROVIDERS: BundledPackage = { name: '@agentplex/providers', directory: 'packages/providers' };
+/**
+ * The `versions.json` schema, which travels in the command's package and in no
+ * other. `agentplex update` is the only program that reads the manifest off the
+ * network, and the daemons have no version question to ask.
+ */
+const RELEASE: BundledPackage = { name: '@agentplex/release', directory: 'packages/release' };
 const PTY: BundledPackage = { name: '@agentplex/pty', directory: 'packages/pty' };
 
 /**
@@ -403,7 +409,7 @@ export const CLI: PackageTarget = {
   description: 'The agentplex command: the setup wizard and the read-only doctor',
   output: 'apps/cli/release',
   declares: [BIN_APP],
-  bundled: [...SHARED, PTY],
+  bundled: [...SHARED, PTY, RELEASE],
   optional: OPTIONAL_IN_THE_CLI,
   bin: { command: 'agentplex', entrypoint: ENTRYPOINT },
   entries: [
@@ -416,7 +422,7 @@ export const CLI: PackageTarget = {
       reason: 'the agentplex bin, and its setup and doctor commands',
     },
     POSTINSTALL_ENTRY,
-    ...bundledEntries([...SHARED, PTY]),
+    ...bundledEntries([...SHARED, PTY, RELEASE]),
     ...licenceAndReadme(`${BIN_APP}/README.md`),
   ],
 };

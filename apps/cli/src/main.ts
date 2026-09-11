@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { DAEMONS, PROGRAMS, type InAppCommand } from './programs.js';
+import { NO_UPDATE_CHECK_FLAG, noticeWanted } from './versions/notice-flags.js';
 
 /**
  * The `agentplex` bin: the one command an operator installs, dispatching to the
@@ -26,7 +27,54 @@ import { DAEMONS, PROGRAMS, type InAppCommand } from './programs.js';
  * The shebang above is the whole of what makes this file a command: `bin` in
  * a package.json is a path, not an interpreter, and a file without one is
  * handed to the shell. `tsc` copies it into the emitted file.
+ *
+ * ## The one thing this file does that no command asked for
+ *
+ * The passive update notice: one line on stderr, after the command has
+ * finished, when a newer agentplex exists than the one that just ran. It is
+ * here rather than in a command because it belongs to no command -- it is a
+ * property of the bin -- and three things about how it is wired are decisions.
+ *
+ * **It is loaded before the command runs and called after.** `agentplex update`
+ * replaces the package this file is running out of, so a module imported after
+ * it has finished is a module in a tree that moved. Resolving the notice first
+ * and only calling it afterwards is the same rule the update command follows
+ * internally, applied to the one caller above it.
+ *
+ * **It is loaded at all only when it could be printed.** `noticeWanted` is a
+ * pure function in a module with no imports, so the usual run -- a pipe, a CI
+ * job, `$(agentplex --version)` -- answers no and never evaluates the release
+ * schema, the provider seam or zod. The laziness argued in `programs.ts` is
+ * worth nothing if this file drags them in on every run.
+ *
+ * **`--version` never carries one.** It is answered above the dispatch and
+ * returns before the notice is reached, which is stronger than a condition
+ * somebody could later move.
  */
+
+/**
+ * Whether a notice could be printed, decided before anything is dispatched.
+ *
+ * Read here because it is a fact about this process -- a terminal, an
+ * environment, an argv -- and this file is where those are read.
+ */
+const NOTICE = noticeWanted({
+  stderrIsTty: process.stderr.isTTY === true,
+  environment: process.env,
+  argv: process.argv.slice(2),
+});
+
+/**
+ * The notice's flag, removed from `process.argv` itself.
+ *
+ * Every command reads `process.argv.slice(2)` and refuses an argument it does
+ * not know, so a flag this file handles has to be gone before a command is
+ * loaded -- exactly as the command word is. Removed in place rather than
+ * filtered into a copy, because the dispatch below splices the same array.
+ */
+for (let index = process.argv.length - 1; index >= 2; index -= 1) {
+  if (process.argv[index] === NO_UPDATE_CHECK_FLAG) process.argv.splice(index, 1);
+}
 
 /** The operator asked for a program that is not one. */
 const EXIT_BAD_COMMAND = 2;
@@ -208,6 +256,53 @@ async function help(subject: string | undefined): Promise<void> {
   }
 }
 
+/**
+ * The notice, resolved now and called later, or `null` when there will not be
+ * one.
+ *
+ * Everything it needs is composed here: the read-only filesystem, the detached
+ * spawner, this identity's cache and the two process facts a refresh would be
+ * re-run from. `process.argv[1]` is this file as the operator's shell resolved
+ * it, which is what the background refresh has to name to be the same program.
+ */
+async function loadNotice(): Promise<(() => Promise<readonly string[]>) | null> {
+  if (!NOTICE) return null;
+  try {
+    const [notice, files, providers, cache] = await Promise.all([
+      import('./versions/update-notice.js'),
+      import('./installation/node-installation-files.js'),
+      import('@agentplex/providers'),
+      import('./versions/versions-cache.js'),
+    ]);
+    const entrypoint = process.argv[1];
+    if (entrypoint === undefined) return null;
+    const dependencies = {
+      files: files.nodeInstallationFiles,
+      now: () => Date.now(),
+      spawner: providers.createNodeDetachedSpawner({ environment: process.env }),
+      cacheFile: cache.versionsCacheFile(process.env),
+      runningVersion: await ownVersion(),
+      interpreter: process.execPath,
+      entrypoint,
+    };
+    return () => notice.updateNotice(dependencies);
+  } catch {
+    // A notice nobody asked for is not worth a failure. The likeliest cause is
+    // the one this whole arrangement is about -- a package that moved under a
+    // running process -- and the right answer to it is no line.
+    return null;
+  }
+}
+
+/** This package's version, or `null` for a tree that cannot say. */
+async function ownVersion(): Promise<string | null> {
+  try {
+    return parseVersion(fileURLToPath(MANIFEST), await readFile(MANIFEST, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 const command = process.argv[2];
 
 if (command === '--help' || command === '-h') {
@@ -237,6 +332,9 @@ if (command === '--help' || command === '-h') {
   process.exitCode = EXIT_BAD_COMMAND;
 } else {
   const program = PROGRAMS[command];
+  // Loaded before the command, and called after it: see the note at the top.
+  const notice = await loadNotice();
+
   if (program === undefined) {
     refuse(command);
   } else if (program.kind === 'builtin') {
@@ -246,5 +344,10 @@ if (command === '--help' || command === '-h') {
   } else {
     process.argv.splice(2, 1);
     await run(program);
+  }
+
+  if (notice !== null) {
+    // stderr, always. On stdout this would end up inside somebody's `$(...)`.
+    for (const line of await notice()) process.stderr.write(`agentplex: ${line}\n`);
   }
 }

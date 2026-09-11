@@ -96,6 +96,11 @@ export const PROGRAMS: Readonly<Record<string, Program>> = {
     load: () => import('./commands/status/main.js'),
     summary: 'what is installed here, and whether it runs',
   },
+  update: {
+    kind: 'command',
+    load: () => import('./commands/update/main.js'),
+    summary: 'bring this machine to the versions that are current',
+  },
   doctor: {
     kind: 'command',
     load: () => import('./commands/doctor/main.js'),

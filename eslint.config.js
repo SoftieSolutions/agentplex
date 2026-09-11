@@ -97,6 +97,30 @@ export default tseslint.config(
     },
   },
   {
+    // The `versions.json` schema, shared by the release job that writes the
+    // file and the `agentplex update` that reads it back off the network. Two
+    // TypeScript parsers for one format are two ways to disagree about what a
+    // machine should install, and `apps/cli` may not import from `scripts`, so
+    // a package both may name is the only place one schema can live.
+    //
+    // A leaf, like `protocol`, and for a sharper reason than tidiness: the
+    // release job that advances `v1` installs and builds this package alone,
+    // before it writes the manifest. A workspace dependency here would put the
+    // hub, the server or the protocol between a released component and the file
+    // that says it exists.
+    files: ['packages/release/**/*.ts'],
+    languageOptions: { globals: globals.node },
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['@agentplex/*'],
+          message:
+            'packages/release is built on its own by the release job: it may import no workspace package.',
+        },
+      ]),
+    },
+  },
+  {
     // A package's dependency list is its allowed import set (AGX-91). This one
     // is the seam the hub and the server share -- clocks, ids, the logger, the
     // message socket -- and it may reach only `protocol` in the workspace: a
@@ -272,15 +296,19 @@ export default tseslint.config(
     // The rule above is about what the daemon may do, and nothing here is
     // reachable from a socket, a frame or a running process.
     //
-    // The third file is the same kind of subject seen from the other side: the
-    // installation commands read a real prefix off a real disk and the paths
-    // they walk are the installer's, so what is under test is a directory laid
-    // out by hand and a built bin finding what is in it. In process it would
-    // confirm paths the published bin never uses.
+    // The third and fourth files are the same kind of subject seen from the
+    // other side: the installation commands read a real prefix off a real disk
+    // and the paths they walk are the installer's, so what is under test is a
+    // directory laid out by hand and a built bin finding what is in it. In
+    // process it would confirm paths the published bin never uses. The update
+    // suite adds two paths only a process has -- `$XDG_CACHE_HOME` and
+    // `AGENTPLEX_VERSIONS` -- and it reaches no network to use them: the second
+    // is the installer's own seam for a release read off a disk.
     files: [
       'scripts/install.sh.integration.test.ts',
       'apps/cli/src/main.integration.test.ts',
       'apps/cli/src/installation/installation.integration.test.ts',
+      'apps/cli/src/commands/update/update.integration.test.ts',
     ],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },

@@ -55,6 +55,7 @@ const cliManifest: Manifest = {
     '@agentplex/protocol': 'workspace:*',
     '@agentplex/providers': 'workspace:*',
     '@agentplex/pty': 'workspace:*',
+    '@agentplex/release': 'workspace:*',
     zod: '^4.1.13',
   },
 };
@@ -85,6 +86,15 @@ const providersManifest: Manifest = {
     '@agentplex/protocol': 'workspace:*',
     zod: '^4.1.13',
   },
+};
+
+/** The `versions.json` schema, which only the command has a reason to read. */
+const releaseManifest: Manifest = {
+  name: '@agentplex/release',
+  version: '1.2.3',
+  license: 'Apache-2.0',
+  type: 'module',
+  dependencies: { zod: '^4.1.13' },
 };
 
 const ptyManifest: Manifest = {
@@ -142,10 +152,11 @@ const webManifest: Manifest = {
 
 const shared = [protocolManifest, nodeSharedManifest, providersManifest];
 const sharedWithPty = [...shared, ptyManifest];
+const cliBundled = [...sharedWithPty, releaseManifest];
 
 function manifestFor(target: PackageTarget, version?: string): Record<string, unknown> {
   const byTarget: Record<string, { manifests: Manifest[]; bundled: Manifest[] }> = {
-    [CLI.name]: { manifests: [cliManifest], bundled: sharedWithPty },
+    [CLI.name]: { manifests: [cliManifest], bundled: cliBundled },
     [HUB.name]: { manifests: [hubManifest], bundled: shared },
     [SERVER.name]: { manifests: [serverAppManifest], bundled: sharedWithPty },
     [WEB.name]: { manifests: [], bundled: [] },
@@ -303,6 +314,7 @@ describe('publishedManifest', () => {
       '@agentplex/protocol': '1.2.3',
       '@agentplex/providers': '1.2.3',
       '@agentplex/pty': '1.2.3',
+      '@agentplex/release': '1.2.3',
       'node-pty': undefined,
       ws: '^8.21.3',
       zod: '^4.1.13',
@@ -312,6 +324,7 @@ describe('publishedManifest', () => {
       '@agentplex/protocol',
       '@agentplex/providers',
       '@agentplex/pty',
+      '@agentplex/release',
     ]);
   });
 
@@ -375,7 +388,7 @@ describe('publishedManifest', () => {
         target: CLI,
         root: rootManifest,
         manifests: [cliManifest],
-        bundled: [protocolManifest, providersManifest, ptyManifest, dependent],
+        bundled: [protocolManifest, providersManifest, ptyManifest, releaseManifest, dependent],
       }),
     ).toThrow('@agentplex/unbundled is a workspace dependency of @agentplex/node-shared');
   });
@@ -398,7 +411,7 @@ describe('publishedManifest', () => {
         target: CLI,
         root: rootManifest,
         manifests: [cliManifest],
-        bundled: [protocolManifest, providersManifest, ptyManifest, conflicting],
+        bundled: [protocolManifest, providersManifest, ptyManifest, releaseManifest, conflicting],
       }),
     ).toThrow('zod');
   });
@@ -411,7 +424,7 @@ describe('publishedManifest', () => {
         target: CLI,
         root: rootManifest,
         manifests: [cliManifest],
-        bundled: [protocolManifest, providersManifest, ptyManifest, agreeing],
+        bundled: [protocolManifest, providersManifest, ptyManifest, releaseManifest, agreeing],
       })['dependencies'],
     ).toMatchObject({ zod: '^4.1.13' });
   });
@@ -803,6 +816,8 @@ describe('the assembled packages', () => {
     // whole subtree under a `false`, so this is the shape that turns a dropped
     // file into a dropped program.
     await compiled('packages/providers/dist/fake-parent', 'kept', 'export const kept = 13;');
+    await write('packages/release/package.json', JSON.stringify(releaseManifest));
+    await compiled('packages/release/dist', 'index', 'export const versions = 14;');
     await write('packages/pty/package.json', JSON.stringify(ptyManifest));
     await compiled('packages/pty/dist', 'index', 'export const pty = 10;');
     await write('packages/pty/scripts/node-pty-postinstall.js', 'main();\n');

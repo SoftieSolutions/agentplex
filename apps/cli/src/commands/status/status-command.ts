@@ -3,6 +3,7 @@ import type { InstallationFiles } from '../../installation/installation-files.js
 import { lookupFor, lookupUsageLines, readLookupFlags } from '../../installation/lookup-flags.js';
 import type { Systemd } from '../../installation/systemd.js';
 import { readUnitStates } from '../../installation/units.js';
+import { readCachedVersions } from '../../versions/versions-cache.js';
 import { formatStatus } from './status.js';
 
 /**
@@ -19,8 +20,10 @@ import { formatStatus } from './status.js';
  *
  * It changes nothing, and structurally so: the filesystem seam it is given can
  * read and cannot write, and the systemd seam is asked only `show`. It also
- * reaches no network, which is the boundary `status.ts` argues -- the version
- * oracle and the "a newer one exists" column belong to the update command.
+ * reaches no network, and that is still true now that it reports what is
+ * available: the column is read out of the cache `agentplex update --check`
+ * writes, which is a file on this disk, and there is no reader of anything else
+ * in this command's dependencies to fetch with.
  */
 
 /** Nothing on this machine is in a failed state. */
@@ -35,6 +38,10 @@ export interface StatusCommandDependencies {
   readonly home: string;
   readonly files: InstallationFiles;
   readonly systemd: Systemd;
+  /** Where this identity's version cache is, or `null` when it has nowhere. */
+  readonly cacheFile: string | null;
+  /** For the age the available column is labelled with. */
+  readonly now: () => number;
   readonly write: (line: string) => void;
   readonly writeError: (line: string) => void;
 }
@@ -44,8 +51,8 @@ export function statusUsage(): string {
     'Usage: agentplex status [options]',
     '',
     '  What is installed on this machine, at what version, and whether it is running.',
-    '  Packages, units, runtime. It reads this machine and reaches no network, so it',
-    '  reports the versions that are here and never whether a newer one exists.',
+    '  Packages, units, runtime. It reads this machine and reaches no network: what is',
+    '  available comes from the cache agentplex update --check writes, with its age.',
     '',
     '  agentplex doctor is the other question: whether this machine can do the work',
     '  -- a terminal, a provider, a store. Capability rather than installation.',
@@ -80,7 +87,14 @@ export async function runStatusCommand(
     ? await readUnitStates(installation, dependencies.systemd)
     : null;
 
-  const report = formatStatus(installation, units);
+  // Read, never fetched. `null` is a machine that has never run a check, and
+  // the report says so rather than leaving a blank column.
+  const cached = await readCachedVersions(dependencies.cacheFile, dependencies.files);
+  const report = formatStatus(
+    installation,
+    units,
+    cached === null ? null : { cached, now: dependencies.now() },
+  );
   for (const line of report.lines) write(line);
   return report.failed ? EXIT_FAILED : EXIT_OK;
 }

@@ -106,8 +106,18 @@ export type {
   ProcessRequest,
   ProcessRunner,
 } from './operations/process-runner.js';
-export { createNodeProcessRunner } from './operations/node-process-runner.js';
+export {
+  createNodeDetachedSpawner,
+  createNodeProcessRunner,
+} from './operations/node-process-runner.js';
 export type { NodeProcessRunnerDependencies } from './operations/node-process-runner.js';
+
+export { startDetached } from './operations/detached-spawn.js';
+export type {
+  DetachedOperation,
+  DetachedSpawner,
+  DetachedStart,
+} from './operations/detached-spawn.js';
 
 export { describeIssues, runOperation } from './operations/operation.js';
 export type {
