@@ -177,6 +177,37 @@ describe('the options', () => {
     expect(result.stdout).toContain('--no-setup');
     expect(readdirSync(home)).toEqual([]);
   });
+
+  /**
+   * `--version` is the flag every other command-line tool answers with its own
+   * version, so this one answers with its own version. The pin that used to
+   * live under this spelling is `--package-version` now.
+   */
+  it('answers --version with its own version, the line its usage leads with', () => {
+    const { script, home } = scratch();
+    const help = run(script, home, ['--help']).stdout;
+
+    const result = run(script, home, ['--version']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^agentplex install\.sh \S+\n$/);
+    // The same line the usage leads with, so the two cannot drift apart.
+    expect(help.startsWith(result.stdout)).toBe(true);
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  /**
+   * The old spelling of the package pin. Nothing was ever published under it
+   * and no alias was kept, so it has to land on the unknown-option refusal
+   * rather than quietly pinning something.
+   */
+  it('refuses the old --version=<version> pin rather than honouring it', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--version=1.2.3']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unknown option --version=1.2.3');
+    expect(result.stderr).toContain('--package-version=<version>');
+  });
 });
 
 describe('the plan a dry run prints', () => {
@@ -215,7 +246,7 @@ describe('the plan a dry run prints', () => {
 
   it('pins the version it was given, and says so as one spec', () => {
     const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--version=1.2.3']);
+    const result = run(script, home, ['--dry-run', '--package-version=1.2.3']);
     expect(planned(result.stdout, 'package')).toContain('agentplex@1.2.3');
   });
 
