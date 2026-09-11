@@ -1,42 +1,38 @@
 import { createRequire } from 'node:module';
 import { chmodSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import process from 'node:process';
 
 /**
  * Everything this package does to node-pty at install time: check that it can
  * be loaded, and restore the executable bit on its `spawn-helper`.
  *
- * ## The check
+ * ## The check, and what it stopped being
  *
- * node-pty is an optional dependency of the published package. It ships no
- * Linux prebuild, so npm compiles it from source on every Linux install, and
- * the hub -- which never opens a pseudoterminal -- was paying for a C++
- * toolchain and that compile to install a program it does not run.
+ * This used to be able to fail an install, and AGENTPLEX_REQUIRE_PTY was how
+ * `install.sh` asked it to. That existed because node-pty was an *optional*
+ * dependency of one tarball that every machine installed: npm exits 0 when an
+ * optional dependency's build fails, removes the package from the tree and
+ * prints nothing -- verified against npm 11.19 -- so a server could report a
+ * clean install and then fail to open a session. The variable was the last
+ * thing that could still turn that into a failure.
  *
- * The price of optional is that npm exits 0 when the build fails, removes the
- * package from the tree, and prints nothing about it. Verified against npm
- * 11.19: an optional dependency whose install script exits 1 leaves an install
- * that says `up to date` and a `node_modules` with no such directory in it. For
- * a hub that is exactly right. For a server it is the silent success this file
- * exists to prevent, so the machine that is going to run a server says so, and
- * this refuses the install rather than handing over a binary that cannot open a
- * session.
+ * The release is four packages now, and node-pty is a required dependency of
+ * `@softiesolutions/agentplex-server`. npm fails that install itself, at the
+ * compile, with node-gyp's own error naming the compiler -- so the silent
+ * success this file was guarding against cannot happen on the machine it
+ * mattered on, and a variable that arranged for a second way to fail the same
+ * install is machinery with no reason left. It is gone rather than left
+ * standing.
  *
- * It says so through AGENTPLEX_REQUIRE_PTY, which `install.sh` sets for
- * `--role=server` and `--role=both` and leaves unset for `--role=hub`. A
- * variable rather than AGENTPLEX_ROLE, which the same script writes into the
- * settings file: this one asks a single question with a single answer, and it
- * cannot be set by accident in a contributor's shell in a way that fails their
- * next `pnpm install`.
+ * What is left is a warning. `@softiesolutions/agentplex` -- the command, which
+ * every role installs -- keeps node-pty optional, because a hub-only machine
+ * may have no compiler and should still get `setup` and `doctor`. There, a
+ * node-pty that did not build is a true and survivable state: the wizard's
+ * provider login is what cannot run, `agentplex doctor` reports the seam as
+ * unusable, and an agentplex server refuses to start at all. So this says so
+ * and exits 0, on the machine where that is the honest answer.
  *
- * Without it this warns and exits 0. A hand-typed `npm install --global` on a
- * machine with no compiler is a hub install as far as anything here can tell,
- * and the two programs that need a pty refuse to pretend otherwise on their
- * own: an agentplex server will not start, and `agentplex doctor` reports the
- * seam as unusable.
- *
- * Loading and not resolving, which is the distinction the whole check turns on.
+ * Loading and not resolving, which is the distinction the check turns on.
  * `require.resolve` succeeds against a node-pty whose sources arrived and whose
  * addon was never built -- the shape an `ignore-scripts` install leaves behind
  * -- and the first thing that would notice is a session that never starts.
@@ -67,10 +63,6 @@ import process from 'node:process';
 
 const HELPER = 'spawn-helper';
 const EXECUTABLE = 0o755;
-/** Set by `install.sh` for a role that runs a server, and by nothing else. */
-const REQUIRED = 'AGENTPLEX_REQUIRE_PTY';
-/** node-pty is wanted here and is not usable. The install must not report success. */
-const EXIT_NO_PTY = 1;
 
 const require = createRequire(import.meta.url);
 
@@ -131,27 +123,16 @@ function main() {
     return;
   }
 
-  const advice =
-    'node-pty ships no Linux prebuild and is compiled at install time by python3, make and a ' +
-    'C++ compiler; an npm configured with ignore-scripts skips that build entirely.';
-
-  if (process.env[REQUIRED] === undefined || process.env[REQUIRED] === '') {
-    // A hub, or an install nobody told. Both are machines this package has no
-    // reason to stop, and the two programs that need a pty refuse on their own.
-    console.warn(
-      `node-pty: not usable here (${problem}), so this machine cannot run an agentplex server. ` +
-        `${advice} A hub needs none of it.`,
-    );
-    return;
-  }
-
-  console.error(`node-pty: not usable here: ${problem}`);
-  console.error(
-    `${REQUIRED} is set, so this machine is meant to run an agentplex server, and every ` +
-      'session a server runs is driven through a pseudoterminal. ' +
-      advice,
+  // Reachable from the command package, where node-pty is optional, and from a
+  // hand-typed install on a machine with no compiler. Both are machines this
+  // package has no business stopping: the programs that need a pty refuse on
+  // their own, and the server package is the one where npm has already refused.
+  console.warn(
+    `node-pty: not usable here (${problem}), so this machine cannot run an agentplex server ` +
+      'and `agentplex setup` cannot log a provider in through a terminal. node-pty ships no ' +
+      'Linux prebuild and is compiled at install time by python3, make and a C++ compiler; an ' +
+      'npm configured with ignore-scripts skips that build entirely. A hub needs none of it.',
   );
-  process.exit(EXIT_NO_PTY);
 }
 
 main();

@@ -11,14 +11,17 @@
 # got, rather than publishing a version nobody can install by the range they
 # meant.
 #
-# **The package name is not written here.** The unscoped `agentplex` on npm
-# belongs to somebody else, so this publishes as `@softiesolutions/agentplex`.
-# Every step below reads the name out of the manifest that was assembled rather
-# than repeating it, so there is nowhere for a second copy of the name to be
-# wrong. `--access public` is what a scoped package's first publish needs, and
-# this is the only place it is stated: the assembled manifest deliberately
-# carries no `publishConfig`, because the same fact in two files is one that can
-# disagree.
+# **The package names are not written here.** The release is four packages --
+# the command, the hub, the server and the client -- and every step below reads
+# each name out of the manifest that was assembled rather than repeating it, so
+# there is nowhere for a copy of a name to be wrong. `--access public` is what a
+# scoped package's first publish needs, and this is the only place it is stated:
+# the assembled manifests deliberately carry no `publishConfig`, because the
+# same fact in two files is one that can disagree.
+#
+# **One tag, one build, four packages at one version.** Per-component tags and a
+# published manifest of which versions go together are a later decision about
+# what a release is; this workflow cuts all four from the commit the tag names.
 #
 # **Publishing is not a side effect of merging.** There is no npm token yet and
 # the questions behind one -- who may publish, what the 2FA policy is -- are
@@ -87,14 +90,14 @@ jobs:
       - name: Build, lint, typecheck and test
         run: pnpm docker:check
 
-  # The acceptance criterion for the artifact, and the one thing the job above
+  # The acceptance criterion for the artifacts, and the one thing the job above
   # cannot tell you: it runs inside a workspace pnpm installed and built, while
-  # this assembles the package, packs it, and installs it with a bare npm on a
-  # stock `debian:bookworm-slim` with nothing but Node added. A native addon
-  # that will not compile, a bundled dependency npm declines to fetch, a `bin`
-  # the kernel hands to the shell -- every one of those is invisible until a
-  # stranger installs the tarball, and publishing is the worst moment to find
-  # out.
+  # this assembles the packages, packs them, and installs them with a bare npm
+  # on a stock `debian:bookworm-slim` with nothing but Node added. A native
+  # addon that will not compile, a bundled dependency npm declines to fetch, a
+  # `bin` the kernel hands to the shell, a hub that cannot resolve the client
+  # package beside it -- every one of those is invisible until a stranger
+  # installs the tarballs, and publishing is the worst moment to find out.
   install:
     name: install
     runs-on: ubuntu-latest
@@ -139,7 +142,7 @@ jobs:
       # that.
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     outputs:
-      name: ${{ steps.package.outputs.name }}
+      names: ${{ steps.package.outputs.names }}
       version: ${{ steps.package.outputs.version }}
       published: ${{ steps.publish.outcome == 'success' }}
     steps:
@@ -167,39 +170,53 @@ jobs:
         run: pnpm build
 
       # The tag is the argument. `assemble-package.ts` parses it and writes the
-      # version into the manifest as it builds it, so nothing edits JSON after
-      # the fact and the manifest that was assembled is the manifest that gets
-      # packed.
-      - name: Assemble the package at the version the tag names
+      # version into every manifest as it builds them, so nothing edits JSON
+      # after the fact and the manifests that were assembled are the manifests
+      # that get packed.
+      - name: Assemble the packages at the version the tag names
         run: pnpm --filter ./scripts package "$GITHUB_REF_NAME"
 
-      # Name and version are read back out of the assembled manifest rather
-      # than written here: a copy of either in this file is the half of a rename
-      # somebody forgets.
-      - name: Pack the package
+      # Each name and the one version are read back out of the assembled
+      # manifests rather than written here: a copy of a name in this file is the
+      # half of a rename somebody forgets. The staging directories are found by
+      # glob for the same reason -- a list of four apps here would be the
+      # assembler's list, kept a second time by hand.
+      - name: Pack the packages
         id: package
-        working-directory: apps/cli/release
         run: |
           set -euo pipefail
-          name="$(node -p "require('./package.json').name")"
-          version="$(node -p "require('./package.json').version")"
-          npm pack --pack-destination "$RUNNER_TEMP"
-          tarball="$(ls "$RUNNER_TEMP"/*.tgz)"
+          names=''
+          version=''
+          for release in apps/*/release; do
+            names="$names $(node -p "require('./$release/package.json').name")"
+            version="$(node -p "require('./$release/package.json').version")"
+            (cd "$release" && npm pack --pack-destination "$RUNNER_TEMP")
+          done
           {
-            echo "name=$name"
+            echo "names=${names# }"
             echo "version=$version"
-            echo "tarball=$tarball"
           } >> "$GITHUB_OUTPUT"
+          ls -1 "$RUNNER_TEMP"/*.tgz
 
-      # The tarball rather than the directory: what gets published is then
+      # The tarballs rather than the directories: what gets published is then
       # byte for byte what was packed and reported above, and the provenance
-      # attestation is about that file.
+      # attestation is about those files.
+      #
+      # One `npm publish` per tarball, because npm publishes one package at a
+      # time. There is no transaction here and there cannot be one: a failure
+      # partway through leaves the earlier packages published, which is a fact
+      # to read in the log rather than something this can undo. `set -e` stops
+      # at the first failure, so the log says which one.
       - name: Publish to npm
         id: publish
         if: env.NPM_TOKEN != ''
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish "${{ steps.package.outputs.tarball }}" --provenance --access public
+        run: |
+          set -euo pipefail
+          for tarball in "$RUNNER_TEMP"/*.tgz; do
+            npm publish "$tarball" --provenance --access public
+          done
 
       # So that a tag whose publish was skipped still says what it would have
       # published, in the place a person looks first.
@@ -208,7 +225,11 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "## ${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}"
+            echo "## ${{ steps.package.outputs.version }}"
+            echo
+            for name in ${{ steps.package.outputs.names }}; do
+              echo "- $name"
+            done
             echo
             if [ "${{ steps.publish.outcome }}" = 'success' ]; then
               echo "Published from ${GITHUB_REF_NAME}."
@@ -217,15 +238,15 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # `install.sh` is fetched over https from a branch, not from the package, so
-  # the script a machine runs and the package it installs are two different
-  # artifacts that have to agree. The installer points at `v1`, so `v1` has to
-  # name the commit of the released package -- otherwise the documented
-  # `curl | bash` fetches a script written against a version that is not what
-  # npm hands it.
+  # `install.sh` is fetched over https from a branch, not from a package, so the
+  # script a machine runs and the packages it installs are different artifacts
+  # that have to agree -- and the script is what knows which packages a role
+  # takes. The installer points at `v1`, so `v1` has to name the commit of the
+  # released packages -- otherwise the documented `curl | bash` fetches a script
+  # written against a release that is not what npm hands it.
   #
   # Conditional on the release actually happening, and on it being a `1.x`:
-  # moving `v1` to a commit whose package was never published would point every
+  # moving `v1` to a commit whose packages were never published would point every
   # `curl | bash` at a script for a version nobody can install, and a `v2.0.0`
   # must not silently retarget the branch that v1 users are following. A
   # prerelease is excluded for the same reason -- a release candidate is not

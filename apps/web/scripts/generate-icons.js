@@ -1,6 +1,6 @@
 /**
  * Generates the PWA icon PNGs into public/icons/. Run with
- * `pnpm --filter @agentplex/web icons`; the outputs are committed, so the
+ * `pnpm --filter @softiesolutions/agentplex-web icons`; the outputs are committed, so the
  * build does not depend on this script and CI never draws pixels.
  *
  * Written against nothing but node's own zlib so that icons do not cost the

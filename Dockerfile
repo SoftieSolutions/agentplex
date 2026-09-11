@@ -12,12 +12,13 @@
 # entrypoint is `node` and the command is the daemon's compiled entry.
 #
 # That is the same shape the systemd unit renders, and deliberately so: an
-# installed machine runs `<node> <prefix>/lib/node_modules/<package>/apps/hub/
-# dist/main.js` and this image runs `node apps/hub/dist/main.js`, which is the
-# same expression with the package root spelled differently. One way to start a
-# daemon rather than two -- and the property the old arrangement was actually
-# after survives untouched: the command still picks the daemon, and flags
-# appended to `docker run` still land as that daemon's.
+# installed machine runs `<node> <prefix>/lib/node_modules/@softiesolutions/
+# agentplex-hub/apps/hub/dist/main.js` and this image runs `node
+# apps/hub/dist/main.js`, which is the same expression with the package root
+# spelled differently. One way to start a daemon rather than two -- and the
+# property the old arrangement was actually after survives untouched: the
+# command still picks the daemon, and flags appended to `docker run` still land
+# as that daemon's.
 
 FROM node:24-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
@@ -69,17 +70,23 @@ COPY . .
 # declarations, so the build is a precondition for checking, not a step after.
 RUN pnpm build
 
-# The publishable package, and then the install nobody in this repository can
+# The publishable packages, and then the install nobody in this repository can
 # otherwise perform: a machine that has never seen this checkout.
 #
-# `pnpm package` stages the tarball's contents and `npm pack` seals them. Both
+# `pnpm package` stages each tarball's contents and `npm pack` seals them. Both
 # run here rather than on a laptop because the thing being tested is what a
 # stranger gets, and a laptop with a warm pnpm store cannot tell you that.
+#
+# Four now, into one directory: the command, the hub, the server and the client.
+# That directory is what AGENTPLEX_PACKAGE names further down -- the seam is a
+# directory rather than a spec precisely because there are four of them and a
+# check that installed three of ours beside one from a registry would be
+# reporting on a build it had not installed.
 FROM build AS package
 RUN pnpm --filter ./scripts package \
     && mkdir -p /package \
-    && cd apps/cli/release \
-    && npm pack --pack-destination /package
+    && for release in apps/*/release; do (cd "$release" && npm pack --pack-destination /package); done \
+    && ls -1 /package
 
 # The clean-install check. Stock `debian:bookworm-slim` with nothing but Node
 # added, which is the machine `install.sh` will meet.
@@ -102,14 +109,26 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=package /package/ /package/
 
-# Deliberately the ticket's own command, with no flags to help it along. npm
-# 11.19 warns that node-pty's and agentplex's install scripts are "not yet
-# covered by allowScripts" and runs them anyway; an npm that starts enforcing
-# that gate turns this line red, which is the whole reason for testing an
-# install rather than reasoning about one.
-RUN npm install --global /package/softiesolutions-agentplex-*.tgz
+# The command, the server and the hub's pair, as four tarballs a bare npm is
+# handed with no flags to help it along. npm 11.19 warns that node-pty's and the
+# pty package's install scripts are "not yet covered by allowScripts" and runs
+# them anyway; an npm that starts enforcing that gate turns this line red, which
+# is the whole reason for testing an install rather than reasoning about one.
+#
+# Each is named by the same pattern `install.sh` uses, and for the same reason:
+# `softiesolutions-agentplex-*.tgz` matches all four, because every other name
+# starts with the command's. npm's tarballs are `<flattened name>-<version>.tgz`
+# and a version starts with a digit, which is what tells the four apart without
+# writing a version into this file.
+RUN set -eu; \
+    specs=''; \
+    for name in agentplex agentplex-hub agentplex-server agentplex-web; do \
+      specs="$specs $(ls /package/softiesolutions-$name-[0-9]*.tgz)"; \
+    done; \
+    echo "installing:$specs"; \
+    npm install --global $specs
 
-# Five assertions. `doctor` reaches its report only by the bin consuming the
+# Six assertions. `doctor` reaches its report only by the bin consuming the
 # command word, loading the command's module out of its own `dist`, and that
 # module loading every package it imports, so a report on stdout is proof the
 # dispatch and the bundled packages both resolve from the installed tree. It exits 1 on this machine because no coding agent is
@@ -127,13 +146,35 @@ RUN agentplex doctor --role=server --server-identity-file=/var/lib/agentplex/ser
 # tarball preserves -- so it proves what it always did and one thing more: that
 # the path a systemd unit names resolves from an installed tree, with every
 # bundled package under it.
-RUN node "$(npm root -g)/@softiesolutions/agentplex/apps/server/dist/main.js" --role=server 2>&1 \
+RUN node "$(npm root -g)/@softiesolutions/agentplex-server/apps/server/dist/main.js" --role=server 2>&1 \
     | grep -q 'Usage: agentplex server'
-# The client and the schema travel inside the package or the hub has nothing to
-# serve and no database to open. Read back out of the installed tree, at the
-# paths `main.js` resolves rather than the paths packaging wrote.
-RUN test -f "$(npm root -g)/@softiesolutions/agentplex/apps/web/dist/index.html" \
-    && test -f "$(npm root -g)/@softiesolutions/agentplex/apps/hub/migrations/0001_hub_identity.sql"
+# The schema travels inside the hub package or the hub has no database to open.
+# Read back out of the installed tree, at the path `main.js` resolves rather
+# than the path packaging wrote.
+RUN test -f "$(npm root -g)/@softiesolutions/agentplex-hub/apps/hub/migrations/0001_hub_identity.sql"
+
+# The client, resolved rather than found: this is the claim the split rests on
+# and the one that cannot be made anywhere else in this repository.
+#
+# The hub no longer counts directories to the client -- `../../web/dist` from
+# its own dist would name a directory inside its own package -- it resolves
+# `@softiesolutions/agentplex-web`. Here the two are sibling directories under
+# one global root, which is the arrangement an installed machine has and no
+# checkout does: Node walks up out of the hub's package to `<prefix>/lib` and
+# finds `<prefix>/lib/node_modules` there.
+#
+# Asked from the hub's own `dist`, because that is where the question is asked
+# from in the program. `--input-type=module --eval` gives the evaluated module
+# the URL `<cwd>/[eval1]`, so the walk starts exactly where `main.js`'s does.
+#
+# The `index.html` at the end is the assertion that matters. The specifier
+# resolving proves the package is installed; only reading a file out of the
+# directory proves the build is where the hub expects it, which is the half that
+# was wrong the first time this was run against a real install.
+RUN cd "$(npm root -g)/@softiesolutions/agentplex-hub/apps/hub/dist" \
+    && root="$(node --input-type=module --eval 'import {fileURLToPath} from "node:url"; process.stdout.write(fileURLToPath(new URL("./dist", import.meta.resolve("@softiesolutions/agentplex-web/package.json"))))')" \
+    && echo "resolved web root: $root" \
+    && test -f "$root/index.html"
 # `--version`, against what the installed manifest declares rather than against
 # an exit code. The bin reads that manifest at a path it resolves from its own
 # URL, and the manifest the workspace keeps beside the bin is not in the package
@@ -199,10 +240,12 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # declines to open a wizard on one anyway, and asking for what is wanted beats
 # depending on that.
 #
-# AGENTPLEX_PACKAGE is the seam. It points the install at the tarball the
-# `package` stage just built, which is the only way to run this against a build
-# that has never been published.
-RUN AGENTPLEX_PACKAGE="$(echo /package/softiesolutions-agentplex-*.tgz)" \
+# AGENTPLEX_PACKAGE is the seam. It points the install at the directory of
+# tarballs the `package` stage just built, which is the only way to run this
+# against a build that has never been published. A directory rather than a spec,
+# because the release is four packages: the script picks out the ones this role
+# needs, and stops naming the missing one if the directory does not hold them.
+RUN AGENTPLEX_PACKAGE=/package \
     bash /install.sh --role=server --no-setup | tee /tmp/install.log
 
 # What the script said it would do, read back off the machine.
@@ -237,7 +280,7 @@ RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplex.env")" = 600 \
 # for `--role=server`, and no hub unit beside it.
 RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! test -e "$HOME/.config/systemd/user/agentplex-hub.service" \
-    && grep -qx "ExecStart=$HOME/.agentplex/node/bin/node $HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex/apps/server/dist/main.js" "$HOME/.config/systemd/user/agentplex-server.service" \
+    && grep -qx "ExecStart=$HOME/.agentplex/node/bin/node $HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex-server/apps/server/dist/main.js" "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! grep -q '^User=' "$HOME/.config/systemd/user/agentplex-server.service" \
     && grep -qx "Environment=PATH=$HOME/.agentplex/bin:$HOME/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$HOME/.config/systemd/user/agentplex-server.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-server.service"
@@ -319,14 +362,14 @@ USER root
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # No --no-setup here: --system declines a wizard on its own, and the run has to
 # say so rather than be told to.
-RUN AGENTPLEX_PACKAGE="$(echo /package/softiesolutions-agentplex-*.tgz)" \
+RUN AGENTPLEX_PACKAGE=/package \
     bash /install.sh --system --role=hub | tee /tmp/system-install.log
 RUN grep -q 'not run: --system machines take a plan' /tmp/system-install.log
 RUN id agentplex \
     && test -x /opt/agentplex/node/bin/node \
     && test -x /opt/agentplex/bin/agentplex \
     && grep -qx 'User=agentplex' /etc/systemd/system/agentplex-hub.service \
-    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex/apps/hub/dist/main.js' /etc/systemd/system/agentplex-hub.service \
+    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist/main.js' /etc/systemd/system/agentplex-hub.service \
     && ! test -e /etc/systemd/system/agentplex-server.service \
     && grep -qx 'WantedBy=multi-user.target' /etc/systemd/system/agentplex-hub.service \
     && systemd-analyze verify /etc/systemd/system/agentplex-hub.service
@@ -357,6 +400,8 @@ RUN wrong=''; \
         /opt/agentplex/bin:agentplex \
         /opt/agentplex/lib/node_modules:agentplex \
         /opt/agentplex/lib/node_modules/@softiesolutions/agentplex:agentplex \
+        /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-hub:agentplex \
+        /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-web:agentplex \
         /opt/agentplex/share:agentplex \
         /var/lib/agentplex:agentplex; do \
       path="${pair%:*}"; expected="${pair##*:}"; \
@@ -393,8 +438,8 @@ RUN su agentplex -s /bin/sh -c 'touch /opt/agentplex/bin/probe /opt/agentplex/li
 # The two-unit shape, which is the one this epic exists for on a single box:
 # `--role=both` renders both units, and each starts one daemon.
 RUN bash /install.sh --system --role=both --print-unit >/tmp/both-units.txt \
-    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex/apps/hub/dist/main.js' /tmp/both-units.txt \
-    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex/apps/server/dist/main.js' /tmp/both-units.txt
+    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist/main.js' /tmp/both-units.txt \
+    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-server/apps/server/dist/main.js' /tmp/both-units.txt
 
 # The fleet uninstall, which is a different scope, a different prefix and a
 # different set of things to leave alone. The service account stays: it owns
@@ -446,7 +491,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # alice has passwordless sudo, exactly as above, so a script that wanted to
 # install a toolchain could. This asserts that it did not want to.
-RUN AGENTPLEX_PACKAGE="$(echo /package/softiesolutions-agentplex-*.tgz)" \
+RUN AGENTPLEX_PACKAGE=/package \
     bash /install.sh --role=hub --no-setup | tee /tmp/hub-install.log
 
 # No compiler on the machine, before or after. `cc`, `c++` and `g++` are all
@@ -459,15 +504,69 @@ RUN ! command -v g++ \
     && ! command -v cc \
     && grep -q 'toolchain  not needed' /tmp/hub-install.log
 
-# And the install worked anyway. node-pty is an optional dependency, so npm
-# exits 0 having skipped or dropped it; the bin, the runtime and the unit all
-# arrived, and no server unit came with them.
+# And the install worked anyway: the bin, the runtime and the unit all arrived,
+# and no server unit came with them.
 RUN test -x "$HOME/.agentplex/node/bin/node" \
     && test -x "$HOME/.agentplex/bin/agentplex" \
     && test -f "$HOME/.config/systemd/user/agentplex-hub.service" \
     && ! test -e "$HOME/.config/systemd/user/agentplex-server.service" \
-    && grep -qx "ExecStart=$HOME/.agentplex/node/bin/node $HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex/apps/hub/dist/main.js" "$HOME/.config/systemd/user/agentplex-hub.service" \
+    && grep -qx "ExecStart=$HOME/.agentplex/node/bin/node $HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist/main.js" "$HOME/.config/systemd/user/agentplex-hub.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-hub.service"
+
+# The role table, read off the machine: this install took the command, the hub
+# and the client, and no server package came with them. `web` is not a role and
+# is not optional for a hub -- the hub finds the client by resolving that name,
+# and a hub without it serves 503.
+RUN root="$HOME/.agentplex/lib/node_modules/@softiesolutions"; \
+    ls -1 "$root" \
+    && test -d "$root/agentplex" \
+    && test -d "$root/agentplex-hub" \
+    && test -d "$root/agentplex-web" \
+    && ! test -e "$root/agentplex-server"
+
+# The hub finding the client, on a machine laid out the way an install lays one
+# out and no checkout does: two sibling packages under one prefix. Asked from
+# the hub's own `dist`, because that is where the program asks it -- Node gives
+# an evaluated module the URL `<cwd>/[eval1]`, so the walk up through
+# `node_modules` starts exactly where `main.js`'s does.
+#
+# The interpreter is named outright, the way every assertion above the `ENV
+# PATH` further down names its paths. This stage starts from a bare Debian, so
+# the only runtime on it is the one install.sh unpacked into the prefix, and
+# nothing puts that prefix on PATH until that line -- which is there so the
+# final `agentplex doctor` can be typed the way an operator types it. A bare
+# `node` here is `command not found`: a broken assertion rather than a true
+# statement about the machine.
+RUN cd "$HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist" \
+    && root="$("$HOME/.agentplex/node/bin/node" --input-type=module --eval 'import {fileURLToPath} from "node:url"; process.stdout.write(fileURLToPath(new URL("./dist", import.meta.resolve("@softiesolutions/agentplex-web/package.json"))))')" \
+    && echo "resolved web root: $root" \
+    && test -f "$root/index.html"
+
+# What this machine no longer carries, which is the whole reason the release is
+# four packages rather than one.
+#
+# node-pty is the native addon with no Linux prebuild, and the compile it needs
+# is the likeliest step of any install to fail. Under the single tarball it was
+# an optional dependency of a package every machine installed, so on a box like
+# this npm tried the compile, failed it and exited 0 having quietly removed it
+# -- an install that worked by being allowed to skip something.
+#
+# What is asserted is the packaging rather than what npm did with it: the hub's
+# package and the client's ask for node-pty nowhere, so on this machine there
+# was never anything for a compiler to be needed by. The command's manifest
+# still declares it optional, so whether npm left any of it behind is npm's
+# behaviour and not a claim this repository should make -- hence the whole tree
+# is printed and only those two are searched.
+#
+# `-name node-pty` exactly, not a prefix: the command package carries a
+# `node-pty-postinstall.js`, which is the script that repairs node-pty and not
+# node-pty. The two searches are of manifests and code, because the hub's README
+# explains at length what a hub does not carry.
+RUN root="$HOME/.agentplex/lib/node_modules"; \
+    echo 'anything named node-pty under the prefix:'; \
+    find "$root" -name node-pty -print; \
+    ! grep -rq --include='*.json' --include='*.js' 'node-pty' "$root/@softiesolutions/agentplex-hub" \
+    && ! grep -rq --include='*.json' --include='*.js' 'node-pty' "$root/@softiesolutions/agentplex-web"
 
 ENV PATH=/home/alice/.agentplex/bin:/home/alice/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -496,9 +595,19 @@ RUN grep -q 'opens no terminals' /tmp/hub-doctor.log
 # path and silently selects the one package without its dependencies, where
 # `--filter {./apps/cli}...` is the directory plus what it needs. Verified
 # against pnpm 11.17.
+#
+# The client is excluded, and the exclusion is what keeps the split honest here.
+# The hub declares it, so `@agentplex/hub...` now selects it and would install
+# react, mantine, xterm and the fonts into a store this image copies whole --
+# a browser framework in the runtime tree of a program that serves bytes. What
+# the hub actually needs from the client is the link, and pnpm creates that as
+# part of installing the hub rather than as part of installing the client: run
+# rather than reasoned about, `apps/hub/node_modules/@softiesolutions/
+# agentplex-web -> ../../../web` is there with the client excluded, and
+# `apps/web/node_modules` is not, and react is nowhere in the store.
 FROM manifests AS runtime-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter "{./apps/cli}..." --filter @agentplex/hub... --filter @agentplex/server...
+    pnpm install --frozen-lockfile --prod --filter "{./apps/cli}..." --filter @agentplex/hub... --filter @agentplex/server... --filter '!@softiesolutions/agentplex-web'
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -534,6 +643,10 @@ COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
 COPY packages/pty/package.json ./packages/pty/
+# The client's manifest, which is what the hub resolves to find the client: the
+# link in apps/hub/node_modules points here, and a package directory with no
+# manifest in it is a resolution that lands somewhere Node cannot name.
+COPY apps/web/package.json ./apps/web/
 COPY --from=build /app/apps/cli/dist ./apps/cli/dist
 COPY --from=build /app/apps/hub/dist ./apps/hub/dist
 COPY --from=build /app/apps/server/dist ./apps/server/dist
@@ -542,13 +655,16 @@ COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY --from=build /app/packages/providers/dist ./packages/providers/dist
 COPY --from=build /app/packages/pty/dist ./packages/pty/dist
 COPY apps/hub/migrations ./apps/hub/migrations
-# The client. The build stage already produced it and this image dropped it
-# until now, which made every image an installer could produce a hub with
-# nothing to serve. It is static files: the runtime needs the bytes and none of
-# the dependencies that made them, which is why this is a copy out of `build`
-# and not a second entry in `runtime-deps`. The path is the workspace's,
-# because main.js resolves it as ../../web/dist relative to itself, exactly the
-# way it resolves ../migrations.
+# The client. It is static files: the runtime needs the bytes and none of the
+# dependencies that made them, which is why this is a copy out of `build` and
+# not a second entry in `runtime-deps`.
+#
+# The path is the workspace's, as everything here is, but the hub no longer
+# reaches it by counting directories. It resolves `@softiesolutions/agentplex-
+# web`, which in this image means the link copied in with apps/hub/node_modules
+# above -- a relative link, so it still lands on /app/apps/web -- and then the
+# `dist` beside the manifest copied in above that. Three homes, one specifier:
+# see apps/hub/src/web/web-package.ts.
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 
 # Somewhere for the hub's database to live. The directory has to exist in the

@@ -18,6 +18,7 @@ import { nodeMigrationFileSystem } from './db/node-migration-files.js';
 import { createSqliteDatabase } from './db/sqlite.js';
 import { createNodeBeaconSource } from './discovery/node-beacon-listener.js';
 import { createNodeWebAssets } from './web/node-web-assets.js';
+import { missingWebPackage, resolveWebRoot } from './web/web-package.js';
 
 /**
  * The hub's entrypoint: wiring and process concerns only. argv, env, stdout,
@@ -47,15 +48,21 @@ const EXIT_STARTUP_FAILED = 1;
 const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../migrations', import.meta.url));
 
 /**
- * The built PWA the hub serves.
+ * The built PWA the hub serves, found by asking Node where its package is.
  *
- * One expression, correct everywhere this process runs, because every place
- * keeps the workspace layout: `apps/hub/src/main.ts` and `apps/hub/dist/main.js`
- * are the same distance from `apps/web/dist`, the runtime image copies the
- * build to that path, and the published package is the workspace laid out the
- * way the image lays it out. See `assemble-package.ts` for where that is argued.
+ * It was `../../web/dist` while the client was cargo inside the hub's own tree.
+ * It is a package of its own now -- a hub machine installs it beside the hub
+ * and a server machine installs neither -- so the client is somewhere the hub
+ * resolves rather than somewhere it counts directories to. `web-package.ts`
+ * carries the argument and the three homes that one specifier has to work in.
+ *
+ * `import.meta.resolve` is passed in rather than reached for, because it is
+ * meaningful only in the module it is evaluated in: it resolves against *this*
+ * file's URL, and a copy of it called from somewhere else would answer for
+ * somewhere else. That makes it exactly the kind of thing a test cannot supply,
+ * so it is injected at the one place that has the right URL to ask from.
  */
-const WEB_ROOT = fileURLToPath(new URL('../../web/dist', import.meta.url));
+const WEB_ROOT = resolveWebRoot((specifier) => import.meta.resolve(specifier));
 
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
@@ -92,8 +99,14 @@ async function main(): Promise<void> {
       openDatabase: (path) => createSqliteDatabase(path),
       migrationsDirectory: MIGRATIONS_DIRECTORY,
       migrationFileSystem: nodeMigrationFileSystem,
-      // The one place the client's files are read off a disk.
-      webAssets: createNodeWebAssets(WEB_ROOT),
+      // The one place the client's files are read off a disk -- and, when the
+      // client package is not installed here, the one place that is said out
+      // loud instead of guessed at. A hub with no client still owns the
+      // database, still pairs servers and still answers its health check; what
+      // it does not do is claim to serve a page it does not have.
+      webAssets: WEB_ROOT.ok
+        ? createNodeWebAssets(WEB_ROOT.root)
+        : missingWebPackage(WEB_ROOT.reason),
       // The one place the local server's identity file is read off a disk,
       // through the same seam the server reads it with.
       files: nodeStoreFileSystem,

@@ -12,8 +12,14 @@ import tseslint from 'typescript-eslint';
  * means a violation fails on the contributor's machine and in CI, rather than
  * being discovered when someone tries to split the packages apart.
  */
+// The client took its publishable name, `@softiesolutions/agentplex-web`, so
+// that the hub can name one specifier that resolves in a checkout, in the image
+// and on an installed machine alike. That is a file location and not an import:
+// the hub resolves the package's manifest to find the directory of bytes it
+// serves, and loads no module out of it. The boundary is unchanged, so the name
+// this refuses moved with the package.
 const forbidAppInternals = {
-  group: ['**/apps/*/src/**', 'agentplex/*', '@agentplex/web*'],
+  group: ['**/apps/*/src/**', 'agentplex/*', '@softiesolutions/agentplex-web*'],
   message: 'Apps do not import each other. Share through @agentplex/protocol instead.',
 };
 
@@ -39,9 +45,9 @@ const doctorOpensNoPty = [
 
 export default tseslint.config(
   {
-    // `apps/cli/release` is the staged package: every file in it is a copy of
+    // `apps/<app>/release` is a staged package: every file in one is a copy of
     // something already linted where it was written.
-    ignores: ['**/dist/**', '**/coverage/**', '**/*.d.ts', 'apps/cli/release/**'],
+    ignores: ['**/dist/**', '**/coverage/**', '**/*.d.ts', 'apps/*/release/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -285,8 +291,15 @@ export default tseslint.config(
     // binds no port, opens no database and asks nobody anything. The rule this
     // lifts is about what a daemon may spawn; nothing here is reachable from a
     // socket, a frame or a running process.
+    //
+    // The client-package suite is here for a narrower version of the same
+    // reason: `import.meta.resolve` is not a function under vite-node, so a
+    // suite that called it in process would be testing the transform. A spawned
+    // Node asking from the hub's own `dist` is the only way to have the real
+    // resolver as a subject.
     files: [
       'apps/hub/src/main.integration.test.ts',
+      'apps/hub/src/web/web-package.integration.test.ts',
       'apps/server/src/main.integration.test.ts',
       'apps/cli/src/commands/setup/main.integration.test.ts',
     ],

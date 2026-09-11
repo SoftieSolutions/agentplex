@@ -53,35 +53,33 @@ describe('the node-pty postinstall', () => {
   });
 
   /**
-   * A hub, or a hand-typed `npm install --global` on a machine nobody told.
-   * Neither is a machine this package has any business stopping, and the two
-   * programs that need a pty refuse on their own.
+   * The command package, where node-pty is optional so that a hub-only machine
+   * with no compiler still gets `setup` and `doctor`; or a hand-typed install
+   * on such a machine. Neither is one this script has any business stopping.
+   *
+   * It used to be able to stop one, when AGENTPLEX_REQUIRE_PTY said the machine
+   * was going to run a server. That is gone: node-pty is a required dependency
+   * of the server package, so npm fails that install at the compile and there
+   * is no longer a machine on which a skipped node-pty is a silent lie.
    */
-  it('warns and lets the install finish when nothing asked for a pty', () => {
+  it('warns and lets the install finish, because no install here turns on this exit code', () => {
     const result = run(withoutNodePty());
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('node-pty');
     expect(result.stderr).toContain('agentplex server');
-  });
-
-  /**
-   * The whole point of the variable. Optional in the manifest must not mean
-   * optional in practice for a machine that runs sessions: npm exits 0 with the
-   * package gone, and a non-zero exit here is the only thing left that can turn
-   * that back into a failed install.
-   */
-  it('fails the install when the machine is one that runs a server', () => {
-    const result = run(withoutNodePty(), { AGENTPLEX_REQUIRE_PTY: '1' });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('node-pty');
-    expect(result.stderr).toContain('pseudoterminal');
     // The reason alone is not something an operator can act on.
     expect(result.stderr).toContain('python3');
   });
 
-  it('treats an empty value as unset, which is what an unset shell variable expands to', () => {
-    expect(run(withoutNodePty(), { AGENTPLEX_REQUIRE_PTY: '' }).status).toBe(0);
+  /**
+   * There is no environment that makes this fail an install. Asserted rather
+   * than described, because the variable that used to do it was read from the
+   * environment and a re-introduced read would be invisible in a diff to
+   * anything else.
+   */
+  it('exits 0 whatever it is told, including by the variable that used to fail it', () => {
+    expect(run(withoutNodePty(), { AGENTPLEX_REQUIRE_PTY: '1' }).status).toBe(0);
+    expect(run(withoutNodePty(), { AGENTPLEX_ROLE: 'server' }).status).toBe(0);
   });
 });

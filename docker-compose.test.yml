@@ -47,10 +47,11 @@ services:
     command: ['pnpm', 'test']
 
   # The one check that is not about this tree. `install-check` assembles the
-  # publishable package, packs it, and installs it with a bare npm on a stock
-  # `debian:bookworm-slim` with nothing but Node added -- the machine a user
-  # actually has, and the only place the native addon, the bundled protocol and
-  # the `bin` shebang are exercised together.
+  # four publishable packages, packs them, and installs them with a bare npm on
+  # a stock `debian:bookworm-slim` with nothing but Node added -- the machine a
+  # user actually has, and the only place the native addon, the bundled
+  # protocol, the `bin` shebang and the hub resolving the client out of a
+  # sibling package are exercised together.
   #
   # The assertions are RUN lines inside that stage, so this passes or fails
   # during `--build`. The command below runs the report again for a person to
@@ -87,10 +88,11 @@ services:
         --server-identity-file=/home/alice/.agentplex/server.json
 
   # The same bootstrap for the other role, on the machine that makes it a claim:
-  # a stock `debian:bookworm-slim` where no compiler was ever installed. node-pty
-  # is an optional dependency precisely so that this install finishes, and the
-  # stage above cannot show it -- by the time it installs a hub, its own server
-  # install has already put a toolchain on the box.
+  # a stock `debian:bookworm-slim` where no compiler was ever installed. A hub
+  # installs the command, the hub package and the client, and none of the three
+  # reaches node-pty -- so there is nothing here to compile, and the stage above
+  # cannot show it, because by the time it installs a hub its own server install
+  # has already put a toolchain on the box.
   #
   # The assertions are RUN lines inside `hub-bootstrap-check`. The command below
   # prints the report a person wants to see: a hub that says it opens no
