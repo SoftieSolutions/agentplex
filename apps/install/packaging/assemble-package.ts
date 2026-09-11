@@ -237,9 +237,10 @@ export function packageEntries(): readonly PackageEntry[] {
  * **What a bundled package needs, the published package declares.** npm treats
  * every dependency of a bundled dependency as bundled too and never fetches it,
  * so `bundledManifest` drops the field and the ranges are carried up here
- * instead. The host's own range wins where it has one, and two bundled packages
- * asking for different ranges of the same thing stop the assembly: a tarball
- * cannot carry both, and picking one silently would ship a dependency that one
+ * instead. One range per dependency name, across every manifest that goes in:
+ * nothing takes precedence over anything, and two manifests asking for
+ * different ranges of the same thing stop the assembly, because a tarball
+ * cannot carry both and picking one silently would ship a dependency that one
  * of them was never tested against.
  *
  * **`engines` keeps node and drops pnpm.** The whole point of the artifact is a
@@ -266,9 +267,10 @@ export function publishedManifest(input: {
   const declaredBy = new Map<string, string>();
   const bundleDependencies = new Set<string>();
 
-  // The service first, then the other apps, then each bundled package: a range
-  // the service declares is the one its own imports were tested against, so it
-  // is the one that wins.
+  // The service first, then the other apps, then each bundled package. The
+  // order decides nothing but which manifest an error names as the incumbent:
+  // there is one range per dependency name across all of them, and a
+  // disagreement stops the assembly rather than resolving to a winner.
   for (const manifest of [input.service, ...(input.apps ?? []), ...input.bundled]) {
     for (const name of Object.keys(manifest.dependencies).sort()) {
       const range = manifest.dependencies[name] ?? '';
