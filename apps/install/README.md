@@ -14,7 +14,7 @@ the Node runtime, the toolchain below, this package, and the systemd units, for
 the user who runs it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/<tag>/apps/install/packaging/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/apps/install/packaging/install.sh | bash
 ```
 
 The package carries the five compiled programs, the compiled packages they
