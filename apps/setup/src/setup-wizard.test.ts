@@ -46,6 +46,8 @@ const IDENTITY = `${PREFIX}/server.json`;
 const STORE = `${HOME}/.claude`;
 const PLAN_FILE = `${PREFIX}/setup-plan.json`;
 const SETTINGS = `${PREFIX}/agentplex.env`;
+/** A prefix an installer chose, which is not the one this wizard would own by itself. */
+const HANDED_PREFIX = '/opt/agentplex';
 
 const INSTALL_ARGV =
   `npm install --global --prefix ${PREFIX} --json --no-ignore-scripts ` +
@@ -109,6 +111,8 @@ async function run(
     readonly runner?: FakeMachine;
     readonly files?: FakeStoreFiles;
     readonly role?: 'hub' | 'server' | 'both';
+    /** The prefix an installer created, as `--prefix` hands it over. */
+    readonly prefix?: string;
     readonly terminal?: FakeTerminal;
   } = {},
 ): Promise<Run> {
@@ -135,7 +139,7 @@ async function run(
   });
 
   const outcome = await runSetupWizard(
-    { role: options.role ?? null },
+    { role: options.role ?? null, prefix: options.prefix ?? null },
     {
       terminal,
       machine,
@@ -216,6 +220,49 @@ describe('the setup wizard', () => {
     // A machine that has never run setup has no prefix, and `createFile` makes
     // no parents: without this the identity file is an ENOENT in a report.
     expect(wizard.machine.made).toContain(PREFIX);
+  });
+
+  it('owns the prefix it was handed, and nothing under the home directory', async () => {
+    // The installer's own `--prefix`, arriving. Before it did, an
+    // `install.sh --prefix=/opt/agentplex` wrote a unit that reads
+    // /opt/agentplex/agentplex.env and resolves programs in /opt/agentplex/bin,
+    // while this wizard installed the provider into ~/.agentplex and recorded
+    // the pairing in ~/.agentplex/agentplex.env: a service that comes up
+    // unpaired with no provider on its bin path, and nothing anywhere saying so.
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', ''], {
+      prefix: HANDED_PREFIX,
+    });
+
+    const plan = savedPlan(wizard.files, `${HANDED_PREFIX}/setup-plan.json`);
+    expect('server' in plan && plan.server.installPrefix).toBe(HANDED_PREFIX);
+    expect('server' in plan && plan.server.identityPath).toBe(`${HANDED_PREFIX}/server.json`);
+    expect(wizard.machine.made).toContain(HANDED_PREFIX);
+    expect(wizard.binPaths).toContainEqual([HOMEBREW, `${HANDED_PREFIX}/bin`]);
+    expect(wizard.files.contents.get(`${HANDED_PREFIX}/server.json`)).toContain(
+      'minted-on-the-machine',
+    );
+    expect(settings(wizard.machine, `${HANDED_PREFIX}/agentplex.env`)).toEqual(
+      expect.arrayContaining([
+        `AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=${HANDED_PREFIX}/server.json`,
+        'AGENTPLEX_LOCAL_SERVER_PORT=8081',
+      ]),
+    );
+    // The home directory is where the wizard would have put all of that on its
+    // own, and the whole of this ticket is that it no longer does.
+    expect(wizard.machine.contents.has(SETTINGS)).toBe(false);
+    expect(wizard.files.contents.has(PLAN_FILE)).toBe(false);
+    expect(wizard.files.contents.has(IDENTITY)).toBe(false);
+  });
+
+  it('owns a prefix under the home directory when it was handed none', async () => {
+    // The hand-run `agentplex setup`, unchanged: no installer told it anything,
+    // so the prefix is the one it has always chosen for itself.
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', '']);
+
+    const plan = savedPlan(wizard.files);
+    expect('server' in plan && plan.server.installPrefix).toBe(PREFIX);
+    expect('server' in plan && plan.server.identityPath).toBe(IDENTITY);
+    expect(wizard.machine.contents.has(SETTINGS)).toBe(true);
   });
 
   it('installs into the prefix it owns when there is nothing to adopt', async () => {

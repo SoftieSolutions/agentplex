@@ -144,6 +144,11 @@ function planned(stdout: string, key: string): string | undefined {
   return line?.slice(key.length).trim();
 }
 
+/** A literal path, as a fragment of a regular expression. */
+function escaped(value: string): string {
+  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+}
+
 /** Every line of the plan the unit step printed. */
 function unitLines(stdout: string): readonly string[] {
   return stdout.split('\n').filter((line) => line.startsWith('unit '));
@@ -189,6 +194,47 @@ function summaryWithNoUnitWritten(reason: string): {
   chmodSync(driver, 0o755);
 
   return { home, result: run(driver, home, []) };
+}
+
+/**
+ * `write_environment_file` alone, with the file it wrote read back.
+ *
+ * A dry run reports the settings file it would create and creates none, and the
+ * contents are the point here: the installer records what it decided so that a
+ * setup run later can be given the same prefix instead of guessing the default.
+ * Loading the script's functions and calling the one under test is the same
+ * trick the summary uses, and for the same reason.
+ */
+function environmentFileWritten(options: (home: string) => readonly string[]): {
+  readonly home: string;
+  readonly result: RunResult;
+  readonly contents: (path: string) => string;
+} {
+  const { script, home } = scratch();
+
+  const library = `${script}.lib`;
+  writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
+  chmodSync(library, 0o644);
+
+  const driver = `${script}.settings`;
+  writeFileSync(
+    driver,
+    [
+      `source ${quote(library)}`,
+      `parse_arguments ${options(home).map(quote).join(' ')}`,
+      'resolve_layout',
+      `DRY_RUN='no'`,
+      'write_environment_file',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(driver, 0o755);
+
+  return {
+    home,
+    result: run(driver, home, []),
+    contents: (path) => readFileSync(path, 'utf8'),
+  };
 }
 
 describe('the options', () => {
@@ -334,10 +380,97 @@ describe('the plan a dry run prints', () => {
     );
   });
 
+  it('would hand the prefix it installed into over to setup, and not only the role', () => {
+    // The split brain this closed: the unit reads `<prefix>/agentplex.env` and
+    // resolves programs in `<prefix>/bin`, and a wizard that was told only the
+    // role installed the provider under `$HOME/.agentplex` and recorded the
+    // pairing there -- so the service came up unpaired, with nothing on its bin
+    // path, and nothing reported a problem.
+    const { script, home } = scratch();
+    const prefix = join(home, 'custom');
+
+    const result = run(script, home, ['--dry-run', '--role=hub', `--prefix=${prefix}`]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(
+      new RegExp(
+        `setup\\s+(would run ${escaped(prefix)}/bin/agentplex setup --role=hub ` +
+          `--prefix=${escaped(prefix)}|not run: no terminal)`,
+      ),
+    );
+    // The file that handover has to agree with, named in the same plan.
+    expect(planned(result.stdout, 'settings')).toContain(`${prefix}/agentplex.env`);
+  });
+
+  /**
+   * The same handover, asserted on a machine with no tty -- which is every
+   * machine this suite runs on, including the check container. The test above
+   * has to allow "not run: no terminal", so it cannot fail if the prefix stops
+   * being passed; this loads the script's functions, says there is a terminal,
+   * and reads the one line the step would print.
+   */
+  it('names the prefix in the handover it would make where there is a terminal', () => {
+    const { script, home } = scratch();
+
+    const library = `${script}.lib`;
+    writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
+    chmodSync(library, 0o644);
+
+    const driver = `${script}.setup`;
+    writeFileSync(
+      driver,
+      [
+        `source ${quote(library)}`,
+        'parse_arguments --dry-run --role=hub',
+        'resolve_layout',
+        'have_terminal() { return 0; }',
+        'run_setup',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(driver, 0o755);
+
+    const result = run(driver, home, []);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'setup')).toBe(
+      `would run ${home}/.agentplex/bin/agentplex setup --role=hub --prefix=${home}/.agentplex`,
+    );
+  });
+
   it('does not hand over to setup when told not to', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--no-setup']);
     expect(planned(result.stdout, 'setup')).toBe('not run: --no-setup');
+  });
+});
+
+describe('the settings file it writes once', () => {
+  it('records the prefix it chose, uncommented, beside the role and the bin path', () => {
+    // The third fact the installer has, and the one a `agentplex setup` run by
+    // hand on this machine months later cannot otherwise know: without it that
+    // run owns `$HOME/.agentplex` while everything else on the machine points at
+    // the prefix this install created.
+    const { home, result, contents } = environmentFileWritten(() => ['--role=server']);
+    const prefix = `${home}/.agentplex`;
+
+    expect(result.status).toBe(0);
+    const lines = contents(`${prefix}/agentplex.env`).split('\n');
+    expect(lines).toContain(`AGENTPLEX_PREFIX=${prefix}`);
+    expect(lines).toContain('AGENTPLEX_ROLE=server');
+    expect(lines).toContain(`AGENTPLEX_BIN_PATH=${prefix}/bin`);
+  });
+
+  it('records the prefix it was given rather than the one it would have chosen', () => {
+    const { home, result, contents } = environmentFileWritten((where) => [
+      '--role=server',
+      `--prefix=${where}/custom`,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(contents(`${home}/custom/agentplex.env`).split('\n')).toContain(
+      `AGENTPLEX_PREFIX=${home}/custom`,
+    );
   });
 });
 
