@@ -23,7 +23,7 @@
     "lint:shell": "shellcheck apps/install/packaging/install.sh",
     "format": "prettier --write .",
     "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm test",
-    "package": "pnpm build && pnpm --filter agentplex package",
+    "package": "pnpm build && pnpm --filter ./apps/install package",
     "docker:check": "docker compose -f docker-compose.test.yml run --rm --build check",
     "docker:bootstrap": "docker compose -f docker-compose.test.yml run --rm --build bootstrap",
     "docker:install": "docker compose -f docker-compose.test.yml run --rm --build install",

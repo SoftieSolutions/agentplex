@@ -109,6 +109,18 @@ function scratch(): { readonly script: string; readonly home: string } {
   return { script, home };
 }
 
+/**
+ * A fixture tree whoever the script runs as can write to, which where the suite
+ * is root is not the user that made it. Only a test that removes for real needs
+ * this: every other one reads a plan.
+ */
+function openToEveryone(directory: string): void {
+  chmodSync(directory, 0o777);
+  for (const entry of readdirSync(directory, { recursive: true, withFileTypes: true })) {
+    chmodSync(join(entry.parentPath, entry.name), entry.isDirectory() ? 0o777 : 0o666);
+  }
+}
+
 function run(
   script: string,
   home: string,
@@ -287,7 +299,9 @@ function installedMachine(
   if (options.recordTheNodeVersion !== false) {
     writeFileSync(join(prefix, 'node', '.agentplex-node-version'), 'v24.9.0\n');
   }
-  mkdirSync(join(prefix, 'lib', 'node_modules', 'agentplex'), { recursive: true });
+  mkdirSync(join(prefix, 'lib', 'node_modules', '@softiesolutions', 'agentplex'), {
+    recursive: true,
+  });
   mkdirSync(join(prefix, 'bin'), { recursive: true });
   writeFileSync(join(prefix, 'bin', 'agentplex'), '#!/bin/sh\n');
   writeFileSync(join(prefix, 'agentplex.env'), 'AGENTPLEX_ROLE=both\n');
@@ -444,7 +458,9 @@ describe('the plan a dry run prints', () => {
     const result = run(script, home, ['--dry-run', '--role=server']);
 
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(`agentplex@latest into ${home}/.agentplex`);
+    expect(planned(result.stdout, 'package')).toBe(
+      `@softiesolutions/agentplex@latest into ${home}/.agentplex`,
+    );
     expect(planned(result.stdout, 'settings')).toContain(`${home}/.agentplex/agentplex.env`);
   });
 
@@ -494,7 +510,29 @@ describe('the plan a dry run prints', () => {
   it('pins the version it was given, and says so as one spec', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--package-version=1.2.3']);
-    expect(planned(result.stdout, 'package')).toContain('agentplex@1.2.3');
+    expect(planned(result.stdout, 'package')).toContain('@softiesolutions/agentplex@1.2.3');
+  });
+
+  /**
+   * The two halves of what used to be one constant, asserted together because
+   * the failure this guards against is one of them moving without the other.
+   * The unscoped `agentplex` on npm is somebody else's, so the registry entry
+   * is scoped; a `bin` key is not a package name, so the binary in the prefix,
+   * the stem of the unit file names and every word an operator reads stay
+   * `agentplex`.
+   */
+  it('names the scoped package to npm and the plain command to the operator', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=both']);
+
+    expect(planned(result.stdout, 'package')).toContain('@softiesolutions/agentplex@');
+
+    const units = run(script, home, ['--print-unit', '--role=both']).stdout;
+    expect(units).toContain(`ExecStart=${home}/.agentplex/bin/agentplex hub`);
+    expect(units).toContain(`ExecStart=${home}/.agentplex/bin/agentplex server`);
+    // Nothing an operator reads carries the scope: not the binary, not the
+    // unit, not a message.
+    expect(units).not.toContain('softiesolutions');
   });
 
   it('installs whatever AGENTPLEX_PACKAGE names, which is how the container check reaches an unpublished build', () => {
@@ -718,7 +756,9 @@ describe('what a --system install hands to the service account', () => {
         // What npm leaves behind by the time this step runs, and no more:
         // `bin`, `share` and the state directory are deliberately absent, which
         // is the case a chown alone would die on.
-        mkdirSync(join(prefix, 'lib', 'node_modules', 'agentplex'), { recursive: true });
+        mkdirSync(join(prefix, 'lib', 'node_modules', '@softiesolutions', 'agentplex'), {
+          recursive: true,
+        });
         nodeShim(join(prefix, 'node', 'bin'), 'v24.9.0');
         return systemLayout(where);
       });
@@ -736,7 +776,9 @@ describe('what a --system install hands to the service account', () => {
       expect(owner(join(prefix, 'lib', 'node_modules'))).toEqual(account);
       // Recursive: the package tree npm already wrote is inside the tree setup
       // has to be able to replace on an upgrade.
-      expect(owner(join(prefix, 'lib', 'node_modules', 'agentplex'))).toEqual(account);
+      expect(owner(join(prefix, 'lib', 'node_modules', '@softiesolutions', 'agentplex'))).toEqual(
+        account,
+      );
       expect(owner(join(prefix, 'share'))).toEqual(account);
       expect(owner(join(root, 'state'))).toEqual(account);
 
@@ -1038,7 +1080,9 @@ describe('where the runtime goes', () => {
     // The prefix is still where npm links globals, because that is where the
     // binary and any provider the wizard installs appear, and it is what
     // AGENTPLEX_BIN_PATH and the unit's PATH already name.
-    expect(planned(result.stdout, 'package')).toBe(`agentplex@latest into ${home}/.agentplex`);
+    expect(planned(result.stdout, 'package')).toBe(
+      `@softiesolutions/agentplex@latest into ${home}/.agentplex`,
+    );
   });
 
   it('gives the unit the bin directory and the Node directory, once each', () => {
@@ -1117,10 +1161,14 @@ describe('undoing an install', () => {
     expect(units).toContain(`${unitDirectory}/agentplex-hub.service`);
     expect(units).toContain(`${unitDirectory}/agentplex-server.service`);
     expect(planned(result.stdout, 'node')).toContain(`${prefix}/node`);
-    expect(planned(result.stdout, 'package')).toContain(`${prefix}/lib/node_modules/agentplex`);
+    expect(planned(result.stdout, 'package')).toContain(
+      `${prefix}/lib/node_modules/@softiesolutions/agentplex`,
+    );
 
     expect(existsSync(join(prefix, 'node', 'bin', 'node'))).toBe(true);
-    expect(existsSync(join(prefix, 'lib', 'node_modules', 'agentplex'))).toBe(true);
+    expect(existsSync(join(prefix, 'lib', 'node_modules', '@softiesolutions', 'agentplex'))).toBe(
+      true,
+    );
     expect(existsSync(join(unitDirectory, 'agentplex-hub.service'))).toBe(true);
   });
 
@@ -1154,7 +1202,35 @@ describe('undoing an install', () => {
     );
     // The package it did install still goes, so this is a line about the
     // runtime and not a run that gave up.
-    expect(planned(result.stdout, 'package')).toContain(`${prefix}/lib/node_modules/agentplex`);
+    expect(planned(result.stdout, 'package')).toContain(
+      `${prefix}/lib/node_modules/@softiesolutions/agentplex`,
+    );
+  });
+
+  /**
+   * npm puts a scoped package under a directory named for the scope, and that
+   * directory is npm's rather than this package's -- nothing above removes it
+   * by name. Left behind it would make `lib/node_modules` non-empty, the
+   * `rmdir` sweep would decline every directory above it, and an uninstall
+   * that reported success would leave the prefix standing.
+   */
+  it('takes the scope directory with the package, so the prefix can go', () => {
+    const { script, home } = scratch();
+    const { prefix, unitDirectory } = installedMachine(home);
+    // The one file in the prefix that is state rather than installation, so
+    // that what is asserted below is the sweep and not an empty directory.
+    rmSync(join(prefix, 'agentplex.env'));
+    // This is the suite's only removal that actually removes, and where the
+    // suite is root it runs the script as `nobody` -- so the tree the test
+    // process just made has to be one that user can take apart.
+    openToEveryone(prefix);
+    openToEveryone(unitDirectory);
+
+    const result = run(script, home, ['--uninstall']);
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(prefix, 'lib', 'node_modules', '@softiesolutions'))).toBe(false);
+    expect(existsSync(prefix)).toBe(false);
   });
 
   it('says there is nothing to remove rather than reporting removals it did not make', () => {
@@ -1217,7 +1293,9 @@ describe('the shape a prefix has to have, because --uninstall takes one', () => 
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--role=server', `--prefix=${home}/custom/`]);
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(`agentplex@latest into ${home}/custom`);
+    expect(planned(result.stdout, 'package')).toBe(
+      `@softiesolutions/agentplex@latest into ${home}/custom`,
+    );
   });
 });
 

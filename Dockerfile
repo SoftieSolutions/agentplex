@@ -63,7 +63,7 @@ RUN pnpm build
 # run here rather than on a laptop because the thing being tested is what a
 # stranger gets, and a laptop with a warm pnpm store cannot tell you that.
 FROM build AS package
-RUN pnpm --filter agentplex package \
+RUN pnpm --filter ./apps/install package \
     && mkdir -p /package \
     && cd apps/install/release \
     && npm pack --pack-destination /package
@@ -94,7 +94,7 @@ COPY --from=package /package/ /package/
 # covered by allowScripts" and runs them anyway; an npm that starts enforcing
 # that gate turns this line red, which is the whole reason for testing an
 # install rather than reasoning about one.
-RUN npm install --global /package/agentplex-*.tgz
+RUN npm install --global /package/softiesolutions-agentplex-*.tgz
 
 # Four assertions. `doctor` reaches its report only by the bin dispatching to
 # it by path and the doctor loading every package it imports, so a report on
@@ -111,8 +111,8 @@ RUN agentplex server --role=server 2>&1 | grep -q 'Usage: agentplex server'
 # The client and the schema travel inside the package or the hub has nothing to
 # serve and no database to open. Read back out of the installed tree, at the
 # paths `main.js` resolves rather than the paths packaging wrote.
-RUN test -f "$(npm root -g)/agentplex/apps/web/dist/index.html" \
-    && test -f "$(npm root -g)/agentplex/apps/hub/migrations/0001_hub_identity.sql"
+RUN test -f "$(npm root -g)/@softiesolutions/agentplex/apps/web/dist/index.html" \
+    && test -f "$(npm root -g)/@softiesolutions/agentplex/apps/hub/migrations/0001_hub_identity.sql"
 
 # The bootstrap check: `install.sh` against the machine it was written for.
 #
@@ -170,7 +170,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # AGENTPLEX_PACKAGE is the seam. It points the install at the tarball the
 # `package` stage just built, which is the only way to run this against a build
 # that has never been published.
-RUN AGENTPLEX_PACKAGE="$(echo /package/agentplex-*.tgz)" \
+RUN AGENTPLEX_PACKAGE="$(echo /package/softiesolutions-agentplex-*.tgz)" \
     bash /install.sh --role=server --no-setup | tee /tmp/install.log
 
 # What the script said it would do, read back off the machine.
@@ -261,7 +261,7 @@ RUN bash /install.sh --uninstall | tee /tmp/uninstall.log
 # The runtime, the package and the units are gone.
 RUN ! test -e "$HOME/.agentplex/node" \
     && ! test -e "$HOME/.agentplex/bin/agentplex" \
-    && ! test -e "$HOME/.agentplex/lib/node_modules/agentplex" \
+    && ! test -e "$HOME/.agentplex/lib/node_modules/@softiesolutions" \
     && ! test -e "$HOME/.config/systemd/user/agentplex-server.service"
 
 # And what it deliberately did not take with them. The settings file is state
@@ -287,7 +287,7 @@ USER root
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # No --no-setup here: --system declines a wizard on its own, and the run has to
 # say so rather than be told to.
-RUN AGENTPLEX_PACKAGE="$(echo /package/agentplex-*.tgz)" \
+RUN AGENTPLEX_PACKAGE="$(echo /package/softiesolutions-agentplex-*.tgz)" \
     bash /install.sh --system --role=hub | tee /tmp/system-install.log
 RUN grep -q 'not run: --system machines take a plan' /tmp/system-install.log
 RUN id agentplex \
@@ -324,7 +324,7 @@ RUN wrong=''; \
         /opt/agentplex/lib:root \
         /opt/agentplex/bin:agentplex \
         /opt/agentplex/lib/node_modules:agentplex \
-        /opt/agentplex/lib/node_modules/agentplex:agentplex \
+        /opt/agentplex/lib/node_modules/@softiesolutions/agentplex:agentplex \
         /opt/agentplex/share:agentplex \
         /var/lib/agentplex:agentplex; do \
       path="${pair%:*}"; expected="${pair##*:}"; \
@@ -371,7 +371,7 @@ RUN bash /install.sh --system --role=both --print-unit >/tmp/both-units.txt \
 RUN bash /install.sh --system --uninstall | tee /tmp/system-uninstall.log
 RUN ! test -e /etc/systemd/system/agentplex-hub.service \
     && ! test -e /opt/agentplex/node \
-    && ! test -e /opt/agentplex/lib/node_modules/agentplex \
+    && ! test -e /opt/agentplex/lib/node_modules/@softiesolutions \
     && test -f /etc/agentplex/agentplex.env \
     && id agentplex \
     && grep -q '/etc/agentplex/agentplex.env' /tmp/system-uninstall.log
@@ -380,7 +380,7 @@ RUN ! test -e /etc/systemd/system/agentplex-hub.service \
 # the build stage: a prune leaves whatever it failed to notice.
 FROM manifests AS runtime-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter agentplex... --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
+    pnpm install --frozen-lockfile --prod --filter "{./apps/install}..." --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production

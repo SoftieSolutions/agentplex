@@ -5,12 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /**
- * Assemble the tree that gets published as `agentplex`.
+ * Assemble the tree that gets published as `@softiesolutions/agentplex`.
  *
  * A bare machine must not need pnpm, vite or a checkout, so the package carries
  * the five compiled programs, the compiled packages they import, the built PWA
  * and the migrations inside it, and installation is `npm install --global
- * agentplex`.
+ * @softiesolutions/agentplex`. The command that arrives is `agentplex`: `bin`
+ * maps a command name to a path and owes the package name nothing.
  *
  * ## The layout is the workspace's, on purpose
  *
@@ -355,6 +356,16 @@ export function versionFromTag(tag: string): string {
  * Without an override this falls back to the service manifest, which is what a
  * contributor assembling locally wants: the same `0.0.0` the workspace says.
  *
+ * **The name is the service manifest's, and there is no `publishConfig`.** The
+ * unscoped `agentplex` on npm is an unrelated placeholder, so `apps/install`
+ * is named `@softiesolutions/agentplex` and this reads that name rather than
+ * holding a second copy of it -- `bin` is written below and stays `agentplex`,
+ * because a command name and a package name are independent. A scoped
+ * package's first publish needs `--access public`, and the release workflow
+ * passes it unconditionally on the command line; declaring it here as well
+ * would be the same fact in two places, and the only place it is ever read
+ * from is the one that runs the publish.
+ *
  * **`engines` keeps node and drops pnpm.** The whole point of the artifact is a
  * machine with Node and nothing else; declaring pnpm would make the package
  * refuse the machine it was built for.
@@ -659,7 +670,7 @@ async function writeJson(path: string, value: unknown): Promise<void> {
  * this leaves behind.
  *
  * The one argument is the release tag, which the workflow passes as
- * `pnpm --filter agentplex package "$GITHUB_REF_NAME"` and a contributor
+ * `pnpm --filter ./apps/install package "$GITHUB_REF_NAME"` and a contributor
  * passes never. Without it the package is assembled at the workspace's own
  * `0.0.0`, which is assembleable, installable from a tarball, and not
  * publishable -- exactly the distinction between a local check and a release.
@@ -675,7 +686,7 @@ async function main(): Promise<void> {
   process.stdout.write(`assembled ${relative(workspaceRoot, assembled.directory)}\n`);
 }
 
-// Imported by its test; executed by `pnpm --filter agentplex package`.
+// Imported by its test; executed by `pnpm --filter ./apps/install package`.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await main();
 }

@@ -76,13 +76,29 @@ readonly INSTALL_SH_VERSION='1'
 # together, so there is one place to change when the alias exists.
 readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/apps/install/packaging/install.sh'
 
+# Two names, because a package name and a command name are different things and
+# this project's are not the same word.
+#
+# The unscoped `agentplex` on npm belongs to somebody else -- a placeholder
+# published in 2026 by an unrelated maintainer -- so this project publishes
+# under its own scope. `bin` maps a command name to a path, and nothing about
+# that mapping has to match the package it arrives in, so the rename stops at
+# the registry.
+#
+# NPM_PACKAGE is what `npm install` is handed and the directory npm then writes
+# under `lib/node_modules`. PACKAGE_NAME is everything else: the binary in the
+# prefix, the stem of the unit file names, and the word in every line an
+# operator reads. Splitting them is the whole of this: passing the scoped name
+# where the plain one belongs renames the units and the binary, which is a
+# machine an upgrade no longer recognises.
+readonly NPM_PACKAGE='@softiesolutions/agentplex'
 readonly PACKAGE_NAME='agentplex'
 
 # The dist-tag npm resolves when nothing is pinned. Named, because the spec
-# always carries a `@` suffix: `agentplex` and `agentplex@latest` mean the
-# same thing to npm, and one shape is one shape to read in a log line and one
-# shape a test asserts on. This is the same choice `claude-provisioning.ts`
-# makes for the same reason.
+# always carries a `@` suffix: `@softiesolutions/agentplex` and
+# `@softiesolutions/agentplex@latest` mean the same thing to npm, and one shape
+# is one shape to read in a log line and one shape a test asserts on. This is
+# the same choice `claude-provisioning.ts` makes for the same reason.
 readonly NPM_LATEST_TAG='latest'
 
 # The Node major this service declares in `engines`. No `.npmrc` ships in the
@@ -356,7 +372,7 @@ resolve_layout() {
   if [ -n "${AGENTPLEX_PACKAGE:-}" ]; then
     PACKAGE_SPEC="$AGENTPLEX_PACKAGE"
   else
-    PACKAGE_SPEC="${PACKAGE_NAME}@${PACKAGE_VERSION:-$NPM_LATEST_TAG}"
+    PACKAGE_SPEC="${NPM_PACKAGE}@${PACKAGE_VERSION:-$NPM_LATEST_TAG}"
   fi
 }
 
@@ -1147,11 +1163,11 @@ have_terminal() {
 # confirmation nobody is there to answer is a hang rather than a safeguard. What
 # stands in for one is that nothing is removed because a flag named it. Every
 # directory below is removed because a marker this script wrote is in it:
-# `$NODE_HOME/$NODE_STAMP` for the runtime, `lib/node_modules/agentplex` for the
-# package. `--dry-run` prints the whole list first, `validate_prefix` has
-# already refused the prefix shapes a removal must not be handed, and the
-# directories that are left over are cleared with `rmdir`, which cannot take
-# anything with it.
+# `$NODE_HOME/$NODE_STAMP` for the runtime, and
+# `lib/node_modules/@softiesolutions/agentplex` for the package. `--dry-run`
+# prints the whole list first, `validate_prefix` has already refused the prefix
+# shapes a removal must not be handed, and the directories that are left over
+# are cleared with `rmdir`, which cannot take anything with it.
 uninstall() {
   local found='no'
 
@@ -1253,23 +1269,29 @@ uninstall_node() {
 
 # The package npm installed, and the link it made in the prefix's bin.
 #
-# $PREFIX/lib/node_modules/agentplex is the marker as much as the target: it is
-# there because this script ran `npm install --global --prefix $PREFIX`, and a
-# prefix without it is not a prefix this script installed into. That is what
-# keeps a mistyped `--uninstall --prefix=/usr/local` from being a command that
-# empties /usr/local/bin.
+# $PREFIX/lib/node_modules/@softiesolutions/agentplex is the marker as much as
+# the target: it is there because this script ran `npm install --global --prefix
+# $PREFIX`, and a prefix without it is not a prefix this script installed into.
+# That is what keeps a mistyped `--uninstall --prefix=/usr/local` from being a
+# command that empties /usr/local/bin.
 #
 # It takes the package and not the tree around it. A provider `agentplex setup`
 # installed into the same prefix was put there by something else, and what it
 # leaves behind is a directory the rmdir sweep then declines to remove and the
 # notice below names.
 uninstall_package() {
-  local tree="$PREFIX/lib/node_modules/$PACKAGE_NAME"
+  local tree="$PREFIX/lib/node_modules/$NPM_PACKAGE"
   [ -e "$tree" ] || return 1
 
   report 'package' "remove $tree and $BIN_DIR/$PACKAGE_NAME"
   [ "$DRY_RUN" = 'no' ] || return 0
   rm -rf "$tree"
+  # The scope directory is npm's rather than this package's, so it goes only
+  # when it is empty: `rmdir` takes it when this was the only package published
+  # under the scope in this prefix and leaves it, and says nothing, when it was
+  # not. Without this the sweep below finds a `lib/node_modules` that is not
+  # empty and the whole prefix stays behind.
+  rmdir "$(dirname "$tree")" 2>/dev/null || true
   rm -f "$BIN_DIR/$PACKAGE_NAME"
 }
 

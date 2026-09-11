@@ -5,9 +5,14 @@ bin, `agentplex`, with four subcommands: `hub` and `server` are separate
 daemons, `setup` is the wizard, `doctor` is the read-only check.
 
 ```sh
-npm install --global agentplex
+npm install --global @softiesolutions/agentplex
 agentplex doctor --role=server --server-identity-file="$HOME/.agentplex/server.json"
 ```
+
+The package is `@softiesolutions/agentplex` and the command is `agentplex`. The
+unscoped name on npm is an unrelated placeholder somebody else registered, and a
+`bin` key is not a package name, so the registry entry is scoped and nothing you
+type is.
 
 On a machine that has nothing on it yet, `install.sh` does the whole of that:
 the Node runtime, the toolchain below, this package, and the systemd units, for
@@ -20,7 +25,8 @@ curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/apps/i
 The package carries the five compiled programs, the compiled packages they
 share, the built web app and the migrations, so a machine needs Node and
 nothing else from this project: no pnpm, no vite, no checkout. Upgrading is
-installing a later version, and pinning one is `agentplex@<version>`.
+installing a later version, and pinning one is
+`@softiesolutions/agentplex@<version>`.
 
 ## Installing needs a C++ toolchain on Linux
 
@@ -56,7 +62,7 @@ module error rather than anything about a pty.
 Override it for this package:
 
 ```sh
-npm install --global --ignore-scripts=false agentplex
+npm install --global --ignore-scripts=false @softiesolutions/agentplex
 ```
 
 Two scripts run under that flag, and they are the whole of what this package
