@@ -121,6 +121,9 @@ PLATFORM=''
 ARCH=''
 NODE_DIR=''
 NODE_ACTION=''
+# Why this machine can hold no systemd unit, and empty when it can hold one.
+# Set by resolve_unit_support, read by the unit step and by the summary.
+UNIT_SKIP_REASON=''
 
 usage() {
   cat <<USAGE
@@ -159,6 +162,7 @@ main() {
   fi
 
   detect_platform
+  resolve_unit_support
   say "agentplex install.sh ${INSTALL_SH_VERSION}"
   say ''
 
@@ -636,16 +640,21 @@ unit_file() {
 
 # Whether this machine can hold a systemd unit at all. macOS has no systemd,
 # and a container may have none.
-can_write_units() {
+#
+# The answer is a reason rather than a yes or a no, and the two reasons stay
+# apart because they send the operator to different places: macOS wants
+# launchd, and a Linux box without systemctl wants systemd installed or the
+# daemon started by hand.
+#
+# It answers and says nothing. A predicate that reports prints its line once
+# per caller, which is how a question two steps asked ended up in the plan
+# twice; the step that needs the answer reports it instead.
+resolve_unit_support() {
   if [ "$PLATFORM" != 'linux' ]; then
-    report 'unit' 'skipped: macOS has no systemd, hand the process to launchd'
-    return 1
+    UNIT_SKIP_REASON='macOS has no systemd, hand the process to launchd'
+  elif ! have systemctl; then
+    UNIT_SKIP_REASON='no systemctl on this machine'
   fi
-  if ! have systemctl; then
-    report 'unit' 'skipped: no systemctl on this machine'
-    return 1
-  fi
-  return 0
 }
 
 # The units, written and never started. There is no client token, no database
@@ -653,7 +662,11 @@ can_write_units() {
 # file in, so a unit this script started would be a service that fails on its
 # first line. The summary says what to run once the file is complete.
 write_units() {
-  can_write_units || return 0
+  if [ -n "$UNIT_SKIP_REASON" ]; then
+    report 'unit' "skipped: $UNIT_SKIP_REASON"
+    return 0
+  fi
+
   local daemon file
   for daemon in $DAEMONS; do
     file="$(unit_file "$daemon")"
@@ -866,21 +879,36 @@ summary() {
   esac
 
   local units='' daemon
-  for daemon in $DAEMONS; do
-    [ -e "$(unit_file "$daemon")" ] && units="$units ${PACKAGE_NAME}-$daemon"
-  done
-  if [ -n "$units" ]; then
+  # The machine that got no unit is the machine with nothing to start what was
+  # just installed, so it is the one that most needs telling. The reason is
+  # asked before the files are, because a unit left behind by an earlier run is
+  # not a systemctl to enable it with.
+  if [ -n "$UNIT_SKIP_REASON" ]; then
     say ''
-    say 'The units are written and deliberately not started: there is no database file, no'
-    say "client token and no store paths until $ENV_FILE has them."
-    say 'When it does:'
-    if [ "$UNIT_SCOPE" = 'system' ]; then
-      say '  systemctl daemon-reload'
-      say "  systemctl enable --now$units"
-    else
-      say '  systemctl --user daemon-reload'
-      say "  systemctl --user enable --now$units"
-      say "  loginctl enable-linger $SERVICE_USER   # so it runs when you are not logged in"
+    say "No unit was written: $UNIT_SKIP_REASON."
+    say "Nothing will start ${PACKAGE_NAME} for you, so run a daemon yourself once"
+    say "$ENV_FILE is complete:"
+    for daemon in $DAEMONS; do
+      say "  $BIN_DIR/$PACKAGE_NAME $daemon"
+    done
+    say 'What to hand it to instead -- launchd on macOS -- is in the documentation below.'
+  else
+    for daemon in $DAEMONS; do
+      [ -e "$(unit_file "$daemon")" ] && units="$units ${PACKAGE_NAME}-$daemon"
+    done
+    if [ -n "$units" ]; then
+      say ''
+      say 'The units are written and deliberately not started: there is no database file, no'
+      say "client token and no store paths until $ENV_FILE has them."
+      say 'When it does:'
+      if [ "$UNIT_SCOPE" = 'system' ]; then
+        say '  systemctl daemon-reload'
+        say "  systemctl enable --now$units"
+      else
+        say '  systemctl --user daemon-reload'
+        say "  systemctl --user enable --now$units"
+        say "  loginctl enable-linger $SERVICE_USER   # so it runs when you are not logged in"
+      fi
     fi
   fi
 
