@@ -6,6 +6,7 @@
 #   curl -fsSL <url> | bash -s -- --role=server  # server only
 #   curl -fsSL <url> | bash -s -- --role=hub     # hub only
 #   curl -fsSL <url> | bash -s -- --no-setup     # stop after the binary lands
+#   curl -fsSL <url> | bash -s -- --uninstall    # take the runtime back off
 #
 # Deliberately ignorant. It ensures a Node runtime and the build toolchain,
 # installs the published package, writes the systemd units it does not start --
@@ -74,6 +75,13 @@ readonly NPM_LATEST_TAG='latest'
 readonly NODE_MAJOR='24'
 readonly NODE_DIST_URL="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x"
 
+# The version this script wrote the last time it unpacked a runtime, kept inside
+# the runtime directory it unpacked. It carries two facts and both are needed:
+# which release is installed, so a newer one can be noticed, and that this
+# script is what installed it, so a Node an operator put there themselves is
+# never replaced and never removed.
+readonly NODE_STAMP='.agentplex-node-version'
+
 # What node-gyp needs to build node-pty on Linux. node-pty ships prebuilt
 # binaries for macOS and Windows only, so on Linux the addon is compiled at
 # install time; without these the very first command of the very first install
@@ -106,6 +114,7 @@ RUN_SETUP='yes'
 SYSTEM='no'
 DRY_RUN='no'
 PRINT_UNIT='no'
+UNINSTALL='no'
 PACKAGE_VERSION=''
 PREFIX=''
 BIN_DIR=''
@@ -119,8 +128,14 @@ STATE_DIR=''
 PACKAGE_SPEC=''
 PLATFORM=''
 ARCH=''
+# The directory the runtime tarball unpacks into whole, and the directory inside
+# it (or elsewhere, for an adopted Node) that holds the executable.
+NODE_HOME=''
 NODE_DIR=''
 NODE_ACTION=''
+# The release recorded in NODE_HOME, and empty for every Node this script did
+# not install.
+NODE_INSTALLED_VERSION=''
 # Why this machine can hold no systemd unit, and empty when it can hold one.
 # Set by resolve_unit_support, read by the unit step and by the summary.
 UNIT_SKIP_REASON=''
@@ -138,6 +153,7 @@ Usage: bash install.sh [options]
   --prefix=<directory>         install somewhere other than the default prefix
   --dry-run                    print what this would do and change nothing
   --print-unit                 print the systemd units this would write, and stop
+  --uninstall                  remove the units, the runtime and the package; keep the state
   --version                    print this script's own version, and stop
   --help                       this
 
@@ -166,6 +182,11 @@ main() {
   say "agentplex install.sh ${INSTALL_SH_VERSION}"
   say ''
 
+  if [ "$UNINSTALL" = 'yes' ]; then
+    uninstall
+    return 0
+  fi
+
   ensure_toolchain
   ensure_node
   # Before anything is written, because the environment file below is chowned to
@@ -191,11 +212,19 @@ parse_arguments() {
     case "$1" in
       --role=*) ROLE="${1#*=}" ;;
       --package-version=*) PACKAGE_VERSION="${1#*=}" ;;
-      --prefix=*) PREFIX="${1#*=}" ;;
+      --prefix=*)
+        PREFIX="${1#*=}"
+        # An empty value is almost always an unset variable in the command that
+        # produced it, and the default prefix is not what that command meant.
+        # It matters most for --uninstall, where a flag that falls back to a
+        # default is a removal nobody typed.
+        [ -n "$PREFIX" ] || die '--prefix was given with nothing after it, which is usually an unset variable: name the directory, or leave the flag off to take the default'
+        ;;
       --no-setup) RUN_SETUP='no' ;;
       --system) SYSTEM='yes' ;;
       --dry-run) DRY_RUN='yes' ;;
       --print-unit) PRINT_UNIT='yes' ;;
+      --uninstall) UNINSTALL='yes' ;;
       --version)
         say "agentplex install.sh ${INSTALL_SH_VERSION}"
         exit 0
@@ -219,9 +248,47 @@ parse_arguments() {
     *) die "unknown role $(quote "$ROLE"): expected one of hub, server, both" ;;
   esac
 
-  if [ -n "$PREFIX" ] && [ "${PREFIX#/}" = "$PREFIX" ]; then
-    die "--prefix must be an absolute path, not $(quote "$PREFIX")"
+  if [ "$UNINSTALL" = 'yes' ] && [ "$PRINT_UNIT" = 'yes' ]; then
+    die '--uninstall removes the units and --print-unit prints them: ask for one or the other'
   fi
+
+  validate_prefix
+}
+
+# The shape a prefix has to have before anything is done with it.
+#
+# This runs for every invocation and not only for --uninstall, and that is the
+# point rather than tidiness: --uninstall is a removal driven by a flag, and the
+# way to keep a mistyped one from removing something else is for the install
+# that created the directory to have refused the same spelling. A prefix this
+# accepts is one --uninstall can be handed back.
+#
+# The refusals, and what each is for. Not absolute: a relative prefix resolves
+# against whatever directory the run happened to start in, which for a piped
+# install is nobody's decision. A `..` in it: the path a person read is not the
+# path that would be removed. Top level: /usr and /opt are the machine's own
+# directories, and this script creates, fills and empties the one it is given.
+#
+# A trailing slash is trimmed rather than refused -- it is a spelling and not a
+# mistake -- but trimmed before anything is built out of it, so that the paths
+# this prints and the paths it removes are the ones a reader can compare.
+validate_prefix() {
+  [ -n "$PREFIX" ] || return 0
+
+  case "$PREFIX" in
+    /*) ;;
+    *) die "--prefix must be an absolute path, not $(quote "$PREFIX")" ;;
+  esac
+
+  case "/$PREFIX/" in
+    *'/../'*) die "--prefix must name a directory outright, and $(quote "$PREFIX") walks through .." ;;
+  esac
+
+  while [ "$PREFIX" != '/' ] && [ "$PREFIX" != "${PREFIX%/}" ]; do
+    PREFIX="${PREFIX%/}"
+  done
+
+  [ -n "${PREFIX%/*}" ] || die "--prefix must be at least two directories deep, and $(quote "$PREFIX") is not: this is the directory an install fills and --uninstall empties"
 }
 
 # Who this installs for, and where.
@@ -397,22 +464,73 @@ escalate() {
 # is not on anybody's PATH, so a PATH-first check would decide every time that
 # there is no Node here.
 #
+# What it looks at inside the prefix is $PREFIX/node, a directory that holds the
+# runtime and nothing else. "Already here" and "already here and current" are
+# then two different questions, and the second one has somewhere to keep its
+# answer: `ensure_node` re-reads what `latest-v<major>.x` names and replaces a
+# release that has been superseded, which a machine that adopted 24.0.0 two
+# years ago never used to get.
+#
 # The answer is also the unit's, which is the whole reason this is resolved
 # rather than merely done. A version manager keeps its Node in a directory a
 # systemd unit has never heard of, so a service started with a minimal PATH
 # would fail on the `#!/usr/bin/env node` line of the program it was pointed at
 # -- the spec's opening problem, one level below the one it was written about.
 resolve_node_directory() {
-  if [ -x "$BIN_DIR/node" ] && node_major_is_recent "$BIN_DIR/node"; then
-    NODE_ACTION='adopt'
-    NODE_DIR="$BIN_DIR"
+  NODE_HOME="$PREFIX/node"
+
+  if [ -x "$NODE_HOME/bin/node" ] && node_major_is_recent "$NODE_HOME/bin/node"; then
+    NODE_DIR="$NODE_HOME/bin"
+    NODE_INSTALLED_VERSION="$(node_recorded_version)"
+    # The record is what makes a runtime this script's, and the directory is
+    # not. A Node an operator unpacked under this prefix themselves is their
+    # decision, and the paragraph above is as much an argument against
+    # overwriting a working runtime as against installing in front of one.
+    if [ -n "$NODE_INSTALLED_VERSION" ]; then
+      NODE_ACTION='refresh'
+    else
+      NODE_ACTION='adopt'
+    fi
   elif have node && node_major_is_recent "$(command -v node)"; then
     NODE_ACTION='adopt'
     NODE_DIR="$(dirname "$(command -v node)")"
   else
     NODE_ACTION='install'
-    NODE_DIR="$BIN_DIR"
+    NODE_DIR="$NODE_HOME/bin"
   fi
+}
+
+# The release this script last unpacked into NODE_HOME, or nothing at all.
+#
+# Parsed and not read: the file is a word off a disk and a claim like any other.
+# A line this refuses costs one unnecessary download and nothing else, which is
+# the cheaper of the two ways to be wrong about it.
+node_recorded_version() {
+  local recorded
+  [ -f "$NODE_HOME/$NODE_STAMP" ] || return 0
+  recorded="$(head -n 1 "$NODE_HOME/$NODE_STAMP" 2>/dev/null || true)"
+  case "$recorded" in
+    v[0-9]*.[0-9]*.[0-9]*) printf '%s' "$recorded" ;;
+  esac
+}
+
+# `node-v24.9.0-linux-x64.tar.gz` -> `v24.9.0`, which is the string
+# `node --version` prints, so the two compare without either being reshaped.
+node_version_of() {
+  local name="${1#node-}"
+  printf '%s' "${name%%-*}"
+}
+
+# The checksum file for `latest-v<major>.x`, into $1, or a non-zero this run can
+# carry on from.
+#
+# `fetch` dies when there is nothing here that can download at all, which is the
+# right answer for a machine with no runtime and the wrong one for a machine
+# that already has ours -- so the downloader is asked about first and a machine
+# with neither reads as "could not check" rather than as a dead install.
+node_release_sums() {
+  have curl || have wget || return 1
+  fetch "$NODE_DIST_URL/SHASUMS256.txt" "$1"
 }
 
 ensure_node() {
@@ -435,42 +553,94 @@ ensure_node() {
     return 0
   fi
 
-  report 'node' "install the latest v${NODE_MAJOR}.x into $PREFIX"
-  [ "$DRY_RUN" = 'no' ] || return 0
+  if [ "$DRY_RUN" = 'yes' ]; then
+    # What a dry run can say about the refresh is the whole of what it can say.
+    # Which release `latest-v<major>.x` names lives in a file on nodejs.org, and
+    # reading it is a download -- so the plan names the runtime that is here and
+    # states that the question went unasked. "Would keep" and "would replace"
+    # are both claims this run has no way to make.
+    if [ "$NODE_ACTION" = 'refresh' ]; then
+      report 'node' "keep or replace $NODE_INSTALLED_VERSION in $NODE_HOME, whichever $NODE_DIST_URL names (not checked: a dry run downloads nothing, and the answer is a download)"
+    else
+      report 'node' "install the latest v${NODE_MAJOR}.x into $NODE_HOME"
+    fi
+    return 0
+  fi
 
-  local work sums file url expected
+  local work sums file expected version
   work="$(mktemp -d)"
   # shellcheck disable=SC2064
-  trap "rm -rf '$work'" EXIT
+  trap "rm -rf '$work' '$NODE_HOME.new'" EXIT
 
   sums="$work/SHASUMS256.txt"
-  fetch "$NODE_DIST_URL/SHASUMS256.txt" "$sums"
+  if ! node_release_sums "$sums"; then
+    if [ "$NODE_ACTION" = 'refresh' ]; then
+      # Degrade in the direction that does not over-claim. The runtime here is
+      # the one that was here, and whether a newer one exists is unknown rather
+      # than no -- so the line says unknown. Failing the install over a check
+      # that could not be made would be the worse answer: the machine has a
+      # runtime of the right major, which is all the install actually needs.
+      report 'node' "keep $NODE_INSTALLED_VERSION in $NODE_HOME: $NODE_DIST_URL could not be reached, so whether a newer v${NODE_MAJOR}.x exists is unknown"
+      rm -rf "$work"
+      trap - EXIT
+      return 0
+    fi
+    die "could not reach $NODE_DIST_URL, and there is no Node of v${NODE_MAJOR} or better here to fall back on"
+  fi
 
-  # The checksum file names the release, so one fetch answers both "which
-  # version is current" and "what should this archive hash to". .tar.gz and not
-  # .tar.xz on purpose: a stock debian:bookworm-slim has tar and no xz, and an
-  # installer that needs a package installed before it can install anything is
-  # an installer with a second prerequisite nobody documented.
+  # The checksum file names the release, so one fetch answers all three of which
+  # version is current, whether that is the one already here, and what the
+  # archive should hash to. .tar.gz and not .tar.xz on purpose: a stock
+  # debian:bookworm-slim has tar and no xz, and an installer that needs a
+  # package installed before it can install anything is an installer with a
+  # second prerequisite nobody documented.
   file="$(awk -v suffix="-${PLATFORM}-${ARCH}.tar.gz" '$2 ~ suffix"$" { print $2 }' "$sums" | head -n 1)"
   [ -n "$file" ] || die "nothing at $NODE_DIST_URL builds for ${PLATFORM}-${ARCH}"
   expected="$(awk -v name="$file" '$2 == name { print $1 }' "$sums")"
+  version="$(node_version_of "$file")"
 
-  url="$NODE_DIST_URL/$file"
+  if [ "$NODE_ACTION" = 'refresh' ]; then
+    if [ "$version" = "$NODE_INSTALLED_VERSION" ]; then
+      report 'node' "keep $NODE_INSTALLED_VERSION in $NODE_HOME, which is what $NODE_DIST_URL names"
+      rm -rf "$work"
+      trap - EXIT
+      return 0
+    fi
+    # The whole reason the record exists. A machine that adopted 24.0.0 two
+    # years ago used to keep it through every reinstall, security releases
+    # included, because "a Node of the right major is here" was the only
+    # question anybody asked.
+    report 'node' "replace $NODE_INSTALLED_VERSION in $NODE_HOME with $version"
+  else
+    report 'node' "install $version into $NODE_HOME"
+  fi
+
   say "downloading $file"
-  fetch "$url" "$work/$file"
+  fetch "$NODE_DIST_URL/$file" "$work/$file"
   verify_checksum "$work/$file" "$expected"
 
-  # The Node tarball is laid out as a prefix -- bin/, include/, lib/, share/ --
-  # so it unpacks straight into one, and the npm that arrives with it then
-  # installs globally into the same tree. That is what makes a single directory
-  # the whole of what this script owns and the whole of what an uninstall
-  # removes.
-  mkdir -p "$PREFIX"
-  tar -xzf "$work/$file" -C "$PREFIX" --strip-components=1
+  # The tarball is laid out as a prefix -- bin/, include/, lib/, share/ -- so it
+  # unpacks whole into one directory of its own. That directory is not $PREFIX:
+  # npm still installs globally into $PREFIX, and the prefix root also holds the
+  # settings file, the server identity and, for --system, the hub database. A
+  # runtime spread over those is a directory with two lifetimes in it, and
+  # neither "what did this install put here" nor "what is safe to delete" has an
+  # answer while they share one.
+  #
+  # Unpacked beside the old runtime and moved into place rather than over it.
+  # The archive is verified by the time this line runs, so a failure here is a
+  # full disk or a signal -- and the window where this machine has no runtime at
+  # all should be a rename rather than an unpack.
+  rm -rf "$NODE_HOME.new"
+  mkdir -p "$NODE_HOME.new"
+  tar -xzf "$work/$file" -C "$NODE_HOME.new" --strip-components=1
+  printf '%s\n' "$version" >"$NODE_HOME.new/$NODE_STAMP"
+  rm -rf "$NODE_HOME"
+  mv "$NODE_HOME.new" "$NODE_HOME"
   rm -rf "$work"
   trap - EXIT
 
-  [ -x "$BIN_DIR/node" ] || die "unpacked Node but $BIN_DIR/node is not executable"
+  [ -x "$NODE_DIR/node" ] || die "unpacked Node but $NODE_DIR/node is not executable"
 }
 
 node_major_is_recent() {
@@ -547,11 +717,13 @@ install_package() {
 
 # The npm that belongs to the Node this run settled on, taken from beside it.
 #
-# A Node installed into the prefix is not on PATH yet, so `npm` there would be
+# A Node unpacked into $PREFIX/node is not on PATH yet, so `npm` there would be
 # the machine's own -- an older one, or none at all -- compiling a native addon
-# against a runtime this service refuses. Beside-it is right for an adopted Node
-# too: whatever version manager put that node there put its npm in the same
-# directory.
+# against a runtime this service refuses. The tarball carries npm in its own
+# bin/ beside node, which is NODE_DIR, so this keeps working unchanged now that
+# NODE_DIR is $PREFIX/node/bin rather than $PREFIX/bin. Beside-it is right for
+# an adopted Node too: whatever version manager put that node there put its npm
+# in the same directory.
 npm_command() {
   if [ -x "$NODE_DIR/npm" ]; then
     echo "$NODE_DIR/npm"
@@ -731,10 +903,10 @@ ${identity}WorkingDirectory=$STATE_DIR
 EnvironmentFile=$ENV_FILE
 # The prefix goes first, and the directory holding the node this install
 # settled on comes with it when that is somewhere a service would never look --
-# a version manager's shims, say -- because ExecStart is a script whose first
-# line is #!/usr/bin/env node. In front of the rest of the machine rather than
-# instead of it: a session is not only the agent, it shells out to git, rg and
-# whatever else the project needs.
+# $PREFIX/node/bin, or a version manager's shims -- because ExecStart is a
+# script whose first line is #!/usr/bin/env node. In front of the rest of the
+# machine rather than instead of it: a session is not only the agent, it shells
+# out to git, rg and whatever else the project needs.
 Environment=PATH=$(unit_search_path)
 ExecStart=$BIN_DIR/$PACKAGE_NAME $daemon
 Restart=on-failure
@@ -763,10 +935,14 @@ UNIT
 # What the unit's PATH is, in order.
 #
 # The prefix, then the Node directory when it is neither the prefix nor
-# somewhere a service already searches, then the machine. The middle case is the
-# only interesting one and it is the common one on a developer's box: an adopted
-# Node under ~/.nvm or ~/.local/share/fnm is invisible to systemd, and naming it
-# here is what stops that from being a service that will not start.
+# somewhere a service already searches, then the machine. The middle clause used
+# to be the interesting case and is now the ordinary one: the runtime lives in
+# $PREFIX/node rather than in the prefix itself, so the directory holding this
+# install's own Node needs naming here exactly as an adopted one under ~/.nvm or
+# ~/.local/share/fnm does. Either way it is invisible to systemd, and naming it
+# is what stops the unit from being a service that dies on the
+# `#!/usr/bin/env node` line of the program it was pointed at. One mechanism for
+# both, so that a Node in an unexpected place has only ever had one answer.
 unit_search_path() {
   local standard='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
   local path="$BIN_DIR"
@@ -862,6 +1038,187 @@ run_setup() {
 # "No such device or address".
 have_terminal() {
   (exec 3</dev/tty) 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Undoing an install
+# ---------------------------------------------------------------------------
+
+# What --uninstall removes, and the line it draws.
+#
+# Everything this script creates is a runtime artifact -- a Node it downloaded,
+# a package npm installed, two unit files it rendered -- and every one of them
+# comes back from one more run of this script. Nothing it creates is a decision.
+# The settings file, the server identity, the hub database and every store are
+# decisions or data, none of them comes back from a network, and a script that
+# deleted them would be one nobody could run twice. So the runtime goes and the
+# state stays -- and the state is printed rather than quietly skipped, because
+# the operator who wants this machine actually empty has no other list and the
+# operator who is reinstalling needs to know those files survived.
+#
+# It asks nothing. A prompt here would read the rest of this script off stdin
+# under `curl | bash` -- the hazard `run_setup` documents at length -- and a
+# confirmation nobody is there to answer is a hang rather than a safeguard. What
+# stands in for one is that nothing is removed because a flag named it. Every
+# directory below is removed because a marker this script wrote is in it:
+# `$NODE_HOME/$NODE_STAMP` for the runtime, `lib/node_modules/agentplex` for the
+# package. `--dry-run` prints the whole list first, `validate_prefix` has
+# already refused the prefix shapes a removal must not be handed, and the
+# directories that are left over are cleared with `rmdir`, which cannot take
+# anything with it.
+uninstall() {
+  local found='no'
+
+  if uninstall_units; then found='yes'; fi
+  if uninstall_node; then found='yes'; fi
+  if uninstall_package; then found='yes'; fi
+
+  if [ "$found" = 'no' ]; then
+    say "Nothing of $PACKAGE_NAME's is here to remove: no unit in $UNIT_DIR, no runtime"
+    say "in $NODE_HOME, no package under $PREFIX/lib/node_modules."
+    say ''
+    say 'An install made somewhere else needs the same --prefix it was given, and one made'
+    say 'with --system needs --system.'
+    return 0
+  fi
+
+  # Only what is empty, and only with rmdir. A prefix that still holds a
+  # provider `agentplex setup` installed, or a settings file, or a database,
+  # keeps all of it and stays exactly where it is.
+  if [ "$DRY_RUN" = 'no' ]; then
+    rmdir "$PREFIX/lib/node_modules" "$PREFIX/lib" "$BIN_DIR" "$PREFIX" 2>/dev/null || true
+  fi
+
+  uninstall_state_notice
+}
+
+# The units, stopped and disabled before they are removed: a unit file deleted
+# from under a running service leaves a service running with nothing behind it,
+# and systemd still listing a job for a file that is gone.
+#
+# Both daemons, whatever --role says. --role decides what an install writes;
+# an uninstall is about what is on the disk, and a hub unit left behind because
+# the operator typed --role=server the second time is exactly the thing they
+# asked to be rid of.
+uninstall_units() {
+  local daemon file found='no'
+
+  for daemon in hub server; do
+    file="$(unit_file "$daemon")"
+    [ -e "$file" ] || continue
+    found='yes'
+
+    if [ -n "$UNIT_SKIP_REASON" ]; then
+      report 'unit' "remove $file (nothing here to stop it with: $UNIT_SKIP_REASON)"
+    else
+      report 'unit' "stop, disable and remove $file"
+    fi
+    [ "$DRY_RUN" = 'no' ] || continue
+
+    if [ -z "$UNIT_SKIP_REASON" ]; then
+      # A unit that was written and never enabled -- which is every unit this
+      # script writes, until somebody enables it -- makes both of these exit
+      # non-zero, as does a user manager that is not running. That is the
+      # expected case here and not a failure to stop the run over.
+      unit_systemctl stop "${PACKAGE_NAME}-${daemon}.service" >/dev/null 2>&1 || true
+      unit_systemctl disable "${PACKAGE_NAME}-${daemon}.service" >/dev/null 2>&1 || true
+    fi
+    rm -f "$file"
+  done
+
+  if [ "$found" = 'yes' ] && [ "$DRY_RUN" = 'no' ] && [ -z "$UNIT_SKIP_REASON" ]; then
+    unit_systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  [ "$found" = 'yes' ]
+}
+
+# systemctl in the scope this run resolved, which is the scope the unit files
+# were written into.
+unit_systemctl() {
+  if [ "$UNIT_SCOPE" = 'system' ]; then
+    systemctl "$@"
+  else
+    systemctl --user "$@"
+  fi
+}
+
+# The runtime directory, removed only when the record this script writes into it
+# is there.
+#
+# Without that record the directory is somebody else's, and removing it would be
+# the one thing `resolve_node_directory` refuses to do everywhere else. The
+# reply is a line rather than silence: an operator who expected this directory
+# to go needs to know why it did not.
+uninstall_node() {
+  local recorded
+  [ -d "$NODE_HOME" ] || return 1
+
+  recorded="$(node_recorded_version)"
+  if [ -z "$recorded" ]; then
+    report 'node' "$NODE_HOME left alone: no record here that this script installed it"
+    return 0
+  fi
+
+  report 'node' "remove $NODE_HOME ($recorded)"
+  [ "$DRY_RUN" = 'no' ] || return 0
+  rm -rf "$NODE_HOME"
+}
+
+# The package npm installed, and the link it made in the prefix's bin.
+#
+# $PREFIX/lib/node_modules/agentplex is the marker as much as the target: it is
+# there because this script ran `npm install --global --prefix $PREFIX`, and a
+# prefix without it is not a prefix this script installed into. That is what
+# keeps a mistyped `--uninstall --prefix=/usr/local` from being a command that
+# empties /usr/local/bin.
+#
+# It takes the package and not the tree around it. A provider `agentplex setup`
+# installed into the same prefix was put there by something else, and what it
+# leaves behind is a directory the rmdir sweep then declines to remove and the
+# notice below names.
+uninstall_package() {
+  local tree="$PREFIX/lib/node_modules/$PACKAGE_NAME"
+  [ -e "$tree" ] || return 1
+
+  report 'package' "remove $tree and $BIN_DIR/$PACKAGE_NAME"
+  [ "$DRY_RUN" = 'no' ] || return 0
+  rm -rf "$tree"
+  rm -f "$BIN_DIR/$PACKAGE_NAME"
+}
+
+# What is still here, said out loud rather than left for somebody to find.
+uninstall_state_notice() {
+  local -a kept=()
+  local path
+
+  for path in "$ENV_FILE" "$STATE_DIR" "$PREFIX"; do
+    [ -e "$path" ] || continue
+    case " ${kept[*]-} " in
+      *" $path "*) continue ;;
+    esac
+    kept+=("$path")
+  done
+
+  say ''
+  if [ "${#kept[@]}" -eq 0 ]; then
+    say 'Nothing was left behind: there was no settings file and no state directory here.'
+  else
+    say 'Left in place, because none of it comes back from a download:'
+    for path in "${kept[@]}"; do
+      say "  $path"
+    done
+    if [ "$UNIT_SCOPE" = 'system' ]; then
+      say "  the $SERVICE_USER account, which owns them"
+    fi
+    say ''
+    say 'Every store is left too, wherever it is: this script has never known a store path,'
+    say "and $ENV_FILE is where the ones this machine had are named."
+    say 'Remove what you want gone by hand.'
+  fi
+
+  say ''
+  say "Documentation: $DOCS_URL"
 }
 
 # ---------------------------------------------------------------------------
