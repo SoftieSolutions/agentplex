@@ -732,10 +732,19 @@ render_unit() {
   local daemon="$1"
   local install_target='default.target'
   local identity=''
+  # network-online.target belongs to the system manager. A user manager has its
+  # own much smaller set of targets and no such unit, so naming it in a user
+  # unit orders against nothing at all -- a line that reads as a guarantee and
+  # is not one. Nothing replaces it: both daemons dial out and retry, so there
+  # is nothing here for an ordering to buy.
+  local network_ordering=''
   if [ "$UNIT_SCOPE" = 'system' ]; then
     install_target='multi-user.target'
     identity="User=$SERVICE_USER
 Group=$SERVICE_USER
+"
+    network_ordering="After=network-online.target
+Wants=network-online.target
 "
   fi
 
@@ -743,9 +752,7 @@ Group=$SERVICE_USER
 [Unit]
 Description=agentplex $daemon
 Documentation=$DOCS_URL
-After=network-online.target
-Wants=network-online.target
-
+${network_ordering}
 [Service]
 Type=simple
 ${identity}WorkingDirectory=$STATE_DIR

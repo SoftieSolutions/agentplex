@@ -363,6 +363,19 @@ describe('the systemd unit', () => {
     expect(unit).toContain('WantedBy=default.target');
   });
 
+  it('orders against no network-online.target in user scope, where that target does not exist', () => {
+    const { script, home } = scratch();
+    const unit = run(script, home, ['--print-unit']).stdout;
+
+    // network-online.target is a unit of the system manager. The user
+    // manager's search paths hold no such file, so these two lines in a user
+    // unit name a unit that cannot be loaded: systemd orders against nothing
+    // and the reader is told a guarantee that is not one.
+    expect(unit).not.toContain('network-online.target');
+    expect(unit.split('\n').filter((line) => line.startsWith('After='))).toEqual([]);
+    expect(unit.split('\n').filter((line) => line.startsWith('Wants='))).toEqual([]);
+  });
+
   it('puts the prefix in front of the PATH the unit gets', () => {
     const { script, home } = scratch();
     const unit = run(script, home, ['--print-unit']).stdout;
@@ -434,6 +447,20 @@ describe('the systemd unit', () => {
     expect(unit).toContain('EnvironmentFile=/etc/agentplex/agentplexd.env');
     expect(unit).toContain('WantedBy=multi-user.target');
   });
+
+  it.skipIf(!suiteIsRoot)(
+    'waits for the network in system scope, where that target is real',
+    () => {
+      const { script, home } = scratch();
+      const unit = run(script, home, ['--print-unit', '--system', '--role=both'], {
+        asRoot: true,
+      }).stdout;
+      // The system manager has network-online.target, so here the ordering is
+      // one systemd can actually honour.
+      expect(unit).toContain('After=network-online.target');
+      expect(unit).toContain('Wants=network-online.target');
+    },
+  );
 });
 
 describe('where the script says it is served from', () => {
