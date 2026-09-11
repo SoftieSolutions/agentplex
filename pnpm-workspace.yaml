@@ -1,6 +1,11 @@
 packages:
   - apps/*
   - packages/*
+  # The repository's own tooling: the bootstrap an operator curls and the
+  # packaging step. Nothing ships from it, and it is a member rather than a
+  # plain directory because `pnpm test` is `pnpm -r test`: a suite outside a
+  # member is run by nobody and reported by nobody.
+  - scripts
   # Suites that load more than one app into one process. See tests/hub-server/README.md.
   - tests/*
 

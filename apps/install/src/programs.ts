@@ -11,7 +11,7 @@
  *
  * It is its own module so that a test can read it: `main.ts` dispatches at
  * module top level, and importing that file is running the bin. The same list
- * of names exists a second time in `packaging/assemble-package.ts`, deciding
+ * of names exists a second time in `scripts/assemble-package.ts`, deciding
  * whose `dist/` travels in the tarball; `programs.test.ts` is what keeps the
  * two from drifting apart.
  */

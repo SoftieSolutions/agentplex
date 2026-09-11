@@ -40,6 +40,7 @@ COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
 COPY packages/pty/package.json ./packages/pty/
+COPY scripts/package.json ./scripts/
 COPY tests/hub-server/package.json ./tests/hub-server/
 # The install runs the pty package's postinstall, which repairs the executable
 # bit on node-pty's spawn helper, so the script has to be here before the
@@ -63,7 +64,7 @@ RUN pnpm build
 # run here rather than on a laptop because the thing being tested is what a
 # stranger gets, and a laptop with a warm pnpm store cannot tell you that.
 FROM build AS package
-RUN pnpm --filter ./apps/install package \
+RUN pnpm --filter ./scripts package \
     && mkdir -p /package \
     && cd apps/install/release \
     && npm pack --pack-destination /package
@@ -152,7 +153,7 @@ RUN useradd --create-home alice \
     && chmod 0440 /etc/sudoers.d/alice
 
 COPY --from=package /package/ /package/
-COPY apps/install/packaging/install.sh /install.sh
+COPY scripts/install.sh /install.sh
 
 USER alice
 ENV HOME=/home/alice
@@ -405,7 +406,7 @@ RUN useradd --create-home alice \
     && chmod 0440 /etc/sudoers.d/alice
 
 COPY --from=package /package/ /package/
-COPY apps/install/packaging/install.sh /install.sh
+COPY scripts/install.sh /install.sh
 
 USER alice
 ENV HOME=/home/alice

@@ -744,13 +744,13 @@ async function writeJson(path: string, value: unknown): Promise<void> {
  * this leaves behind.
  *
  * The one argument is the release tag, which the workflow passes as
- * `pnpm --filter ./apps/install package "$GITHUB_REF_NAME"` and a contributor
+ * `pnpm --filter ./scripts package "$GITHUB_REF_NAME"` and a contributor
  * passes never. Without it the package is assembled at the workspace's own
  * `0.0.0`, which is assembleable, installable from a tarball, and not
  * publishable -- exactly the distinction between a local check and a release.
  */
 async function main(): Promise<void> {
-  const workspaceRoot = fileURLToPath(new URL('../../..', import.meta.url));
+  const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
   const tag = process.argv[2];
   const assembled = await assemblePackage({
     workspaceRoot,
@@ -760,7 +760,7 @@ async function main(): Promise<void> {
   process.stdout.write(`assembled ${relative(workspaceRoot, assembled.directory)}\n`);
 }
 
-// Imported by its test; executed by `pnpm --filter ./apps/install package`.
+// Imported by its test; executed by `pnpm --filter ./scripts package`.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await main();
 }

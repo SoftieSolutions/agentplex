@@ -33,19 +33,15 @@ import { z } from 'zod';
  * could otherwise only ever test the refusal.
  */
 
-const packagingDirectory = dirname(fileURLToPath(import.meta.url));
-const scriptPath = join(packagingDirectory, 'install.sh');
-const documentation = join(packagingDirectory, '..', 'README.md');
-const rootManifest = join(packagingDirectory, '..', '..', '..', 'package.json');
-const releaseWorkflow = join(
-  packagingDirectory,
-  '..',
-  '..',
-  '..',
-  '.github',
-  'workflows',
-  'release.yml',
-);
+const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = join(scriptsDirectory, '..');
+const scriptPath = join(scriptsDirectory, 'install.sh');
+// The script lives here and the page that tells people to fetch it lives with
+// the package it installs, so the two are a directory apart rather than
+// siblings. The assertions below are what keeps them saying the same thing.
+const documentation = join(workspaceRoot, 'apps', 'install', 'README.md');
+const rootManifest = join(workspaceRoot, 'package.json');
+const releaseWorkflow = join(workspaceRoot, '.github', 'workflows', 'release.yml');
 
 /**
  * Only `engines`. The rest of the root manifest is somebody else's to change --
