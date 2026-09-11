@@ -276,6 +276,44 @@ export function packageEntries(): readonly PackageEntry[] {
 }
 
 /**
+ * Every version this can publish, as semver.org writes it: three numeric parts
+ * with no leading zeroes, an optional prerelease, an optional build.
+ *
+ * Written out rather than pulled from a package, because it is read once per
+ * release and a dependency whose install script runs on a machine holding a
+ * publish token is a worse trade than a regular expression with a citation.
+ */
+const SEMVER =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+
+/**
+ * The version a release tag names.
+ *
+ * Nothing in this workspace carries a version: every manifest says `0.0.0` and
+ * no script bumps one, because a version in a manifest is a second place the
+ * release lives and the day it disagrees with the tag, the tarball on npm and
+ * the commit it claims to come from are different things. The tag is the
+ * single statement of what is being released, and this is the one reader of
+ * it.
+ *
+ * The tag is an argument out of another program, so it is parsed rather than
+ * trusted: a tag the workflow's `v*` filter admits but semver does not -- a
+ * `v1.2`, a `vlatest`, a branch somebody tagged -- stops the release with the
+ * tag named, instead of publishing a version npm will happily accept and
+ * nobody can install by the range they meant.
+ */
+export function versionFromTag(tag: string): string {
+  if (!tag.startsWith('v')) {
+    throw new Error(`a release tag is \`v<semver>\`, and this one is ${tag}`);
+  }
+  const version = tag.slice(1);
+  if (!SEMVER.test(version)) {
+    throw new Error(`a release tag is \`v<semver>\`, and this one is ${tag}`);
+  }
+  return version;
+}
+
+/**
  * The manifest the package is published with.
  *
  * Derived from the workspace's rather than written twice: a hand-kept copy is a
@@ -307,6 +345,16 @@ export function packageEntries(): readonly PackageEntry[] {
  * cannot carry both and picking one silently would ship a dependency that one
  * of them was never tested against.
  *
+ * **The version comes from the release, not from the manifest.** Every manifest
+ * in the workspace says `0.0.0`, deliberately: the tag is the single statement
+ * of what is being released, and a version kept in a file as well is a second
+ * statement that drifts. `version` is the seam the release writes through, so
+ * the manifest is built with the released version rather than assembled and
+ * then edited -- an edit is a step between what was checked and what is
+ * published, and there is nowhere for one to go wrong if it does not exist.
+ * Without an override this falls back to the service manifest, which is what a
+ * contributor assembling locally wants: the same `0.0.0` the workspace says.
+ *
  * **`engines` keeps node and drops pnpm.** The whole point of the artifact is a
  * machine with Node and nothing else; declaring pnpm would make the package
  * refuse the machine it was built for.
@@ -325,6 +373,8 @@ export function publishedManifest(input: {
   /** The other apps in the package: what they need, the package declares too. */
   readonly apps?: readonly Manifest[];
   readonly bundled: readonly Manifest[];
+  /** The version the release names. Absent outside a release. */
+  readonly version?: string;
 }): Record<string, unknown> {
   const versions = new Map(input.bundled.map((manifest) => [manifest.name, manifest.version]));
   const dependencies: Record<string, string> = {};
@@ -379,7 +429,7 @@ export function publishedManifest(input: {
 
   return {
     name: input.service.name,
-    version: input.service.version,
+    version: input.version ?? input.service.version,
     description: input.root.description ?? '',
     license: input.service.license,
     ...(input.root.repository === undefined ? {} : { repository: input.root.repository }),
@@ -522,6 +572,8 @@ export interface AssembledPackage {
  */
 export async function assemblePackage(options: {
   readonly workspaceRoot: string;
+  /** The version the release names; see `publishedManifest`. Absent outside a release. */
+  readonly version?: string;
   readonly log?: (line: string) => void;
 }): Promise<AssembledPackage> {
   const { workspaceRoot } = options;
@@ -567,6 +619,7 @@ export async function assemblePackage(options: {
     service: serviceManifest,
     apps,
     bundled: bundled.map((entry) => entry.manifest),
+    ...(options.version === undefined ? {} : { version: options.version }),
   });
 
   const directory = join(workspaceRoot, OUTPUT_DIRECTORY);
@@ -604,11 +657,19 @@ async function writeJson(path: string, value: unknown): Promise<void> {
  * Run from the workspace root, after `pnpm build`. It writes a directory and
  * nothing more: publishing is a separate, deliberate command aimed at the tree
  * this leaves behind.
+ *
+ * The one argument is the release tag, which the workflow passes as
+ * `pnpm --filter agentplex package "$GITHUB_REF_NAME"` and a contributor
+ * passes never. Without it the package is assembled at the workspace's own
+ * `0.0.0`, which is assembleable, installable from a tarball, and not
+ * publishable -- exactly the distinction between a local check and a release.
  */
 async function main(): Promise<void> {
   const workspaceRoot = fileURLToPath(new URL('../../..', import.meta.url));
+  const tag = process.argv[2];
   const assembled = await assemblePackage({
     workspaceRoot,
+    ...(tag === undefined ? {} : { version: versionFromTag(tag) }),
     log: (line) => void process.stdout.write(`${line}\n`),
   });
   process.stdout.write(`assembled ${relative(workspaceRoot, assembled.directory)}\n`);

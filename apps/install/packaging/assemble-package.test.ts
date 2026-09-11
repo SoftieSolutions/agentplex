@@ -10,6 +10,7 @@ import {
   packageEntries,
   parseManifest,
   publishedManifest,
+  versionFromTag,
   type Manifest,
 } from './assemble-package.js';
 
@@ -225,6 +226,45 @@ describe('publishedManifest', () => {
     });
   });
 
+  /**
+   * Nothing in the workspace carries a version: every manifest is `0.0.0` and
+   * the release workflow is what knows which version is being cut. The
+   * override is the seam it writes through, so the manifest that gets
+   * published is built with the version rather than edited after the fact.
+   */
+  it('takes the version from the override when the release names one', () => {
+    const manifest = publishedManifest({
+      root: rootManifest,
+      service: { ...serviceManifest, version: '0.0.0' },
+      apps: [hubManifest],
+      bundled: bundledManifests,
+      version: '2.0.1',
+    });
+
+    expect(manifest['version']).toBe('2.0.1');
+  });
+
+  it('falls back to the service manifest when no release names one', () => {
+    expect(derived()['version']).toBe('1.2.3');
+  });
+
+  /**
+   * A bundled package's version is what the published manifest depends on by
+   * exact version, and the two are written from different sources. An override
+   * that moved one and not the other would produce a manifest asking for a
+   * version of itself that the tarball does not carry.
+   */
+  it('leaves the bundled versions where they are', () => {
+    const manifest = publishedManifest({
+      root: rootManifest,
+      service: serviceManifest,
+      bundled: bundledManifests,
+      version: '2.0.1',
+    });
+
+    expect(manifest['dependencies']).toMatchObject({ '@agentplex/protocol': '1.2.3' });
+  });
+
   it('lists every copied path in files, and no bundled one', () => {
     const files = derived()['files'];
 
@@ -360,6 +400,39 @@ describe('bundledManifest', () => {
     );
 
     expect(kept).not.toHaveProperty('dependencies');
+  });
+});
+
+describe('versionFromTag', () => {
+  it('takes the version out of a release tag', () => {
+    expect(versionFromTag('v1.2.3')).toBe('1.2.3');
+  });
+
+  /**
+   * A prerelease is the tag somebody reaches for first, because the first real
+   * publish of a package nobody has installed is exactly where one wants a
+   * version npm will not hand to `@latest`. Refusing it would make the
+   * cautious path the unsupported one.
+   */
+  it('keeps a prerelease and its build metadata', () => {
+    expect(versionFromTag('v1.2.3-rc.1')).toBe('1.2.3-rc.1');
+    expect(versionFromTag('v1.2.3-rc.1+build.5')).toBe('1.2.3-rc.1+build.5');
+  });
+
+  /**
+   * The workflow triggers on `v*`, so the `v` is what makes a tag a release
+   * tag rather than a branch name somebody tagged. A bare `1.2.3` never
+   * triggers the workflow at all; if it somehow arrives here it is not the
+   * thing this publishes.
+   */
+  it('refuses a tag without the v, naming what it got', () => {
+    expect(() => versionFromTag('1.2.3')).toThrow('1.2.3');
+  });
+
+  it('refuses a tag that is not a version', () => {
+    expect(() => versionFromTag('vlatest')).toThrow('vlatest');
+    expect(() => versionFromTag('v1.2')).toThrow('v1.2');
+    expect(() => versionFromTag('v01.2.3')).toThrow('v01.2.3');
   });
 });
 
@@ -622,6 +695,25 @@ describe('the assembled package', () => {
     const missing = await missingInputs(root, packageEntries());
 
     expect(missing.map((item) => item.path)).toEqual(packageEntries().map((entry) => entry.from));
+  });
+
+  /**
+   * The whole of what the release workflow does to the version: it assembles
+   * with the version it parsed out of the tag, and the manifest on disk is the
+   * one npm packs. Nothing edits the JSON afterwards, so nothing can disagree
+   * with what was assembled.
+   */
+  it('writes the release version into the manifest it leaves on disk', async () => {
+    const root = await workspace({ client: true });
+
+    const assembled = await assemblePackage({ workspaceRoot: root, version: '3.1.0-rc.2' });
+
+    expect(assembled.manifest['version']).toBe('3.1.0-rc.2');
+    await expect(
+      readFile(join(assembled.directory, 'package.json'), 'utf8').then(
+        (text) => (JSON.parse(text) as { version: string }).version,
+      ),
+    ).resolves.toBe('3.1.0-rc.2');
   });
 
   it('replaces what was there rather than merging into it', async () => {

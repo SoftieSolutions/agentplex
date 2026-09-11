@@ -1,0 +1,254 @@
+# The release: a tag, and everything that has to be true before it becomes a
+# package.
+#
+# Three facts shape this workflow.
+#
+# **Nothing in the workspace has a version.** Every manifest says `0.0.0` and no
+# script bumps one, because a version kept in a file is a second statement of
+# what is being released and it drifts from the tag the day somebody forgets.
+# The tag is the statement; `assemble-package.ts` parses it -- a `v1.2`, a
+# `vlatest`, a branch somebody tagged -- and fails the job naming the tag it
+# got, rather than publishing a version nobody can install by the range they
+# meant.
+#
+# **The package name is not written here.** The unscoped `agentplex` on npm
+# belongs to somebody else, so this publishes under a scope, and the rename is
+# a separate ticket that may land before or after this file. Every step below
+# reads the name out of the manifest that was assembled, so the workflow is
+# correct on both sides of that change and there is nowhere for a second copy
+# of the name to be wrong. `--access public` is what a scoped package's first
+# publish needs and is a no-op for an unscoped one, so it is passed
+# unconditionally rather than made to depend on which name is current.
+#
+# **Publishing is not a side effect of merging.** There is no npm token yet and
+# the questions behind one -- who may publish, what the 2FA policy is -- are
+# not settled. So the publish step alone is gated on a secret that does not
+# exist, and nothing else is: a tag runs the checks, assembles the package at
+# the tag's version and packs it, so the answer to "would this release have
+# worked" is available before anybody hands this workflow a credential. The day
+# the secret arrives, the step that was skipping starts publishing and nothing
+# else changes.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+# A tag is a release, and two tags pushed together are two releases. Nothing
+# here cancels anything: a superseded run of CI is noise, a superseded release
+# is a version that silently never happened.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# Read-only by default. The one job that writes a branch asks for the
+# permission itself, so the token that runs the checks and the publish cannot
+# push anything.
+permissions:
+  contents: read
+
+jobs:
+  # The same checks a contributor runs, by the same commands. A release is a
+  # worse place than a pull request to discover that the workspace does not
+  # compile, so the tag runs the set again on the exact commit being published
+  # rather than trusting that the CI run on the branch is still what is here.
+  #
+  # One container for the four checks rather than CI's matrix: a pull request
+  # wants three separate answers so a lint failure does not hide a test
+  # failure, and a release wants one answer to one question -- is this
+  # publishable -- so `pnpm check` in a single container is the shorter way to
+  # get it.
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # corepack stops to ask before fetching pnpm, and a runner has nobody to
+      # answer.
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+    steps:
+      - uses: actions/checkout@v7
+
+      # The runner's default Node is older than the one this workspace
+      # declares, and .npmrc sets engine-strict, so pnpm has grounds to refuse
+      # before it ever reaches Docker.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - uses: docker/setup-buildx-action@v4
+
+      # corepack reads the pinned pnpm out of packageManager, the same way the
+      # image does, so the runner cannot end up on a different one.
+      - name: Install pnpm
+        run: corepack enable && corepack install
+
+      - name: Build, lint, typecheck and test
+        run: pnpm docker:check
+
+  # The acceptance criterion for the artifact, and the one thing the job above
+  # cannot tell you: it runs inside a workspace pnpm installed and built, while
+  # this assembles the package, packs it, and installs it with a bare npm on a
+  # stock `debian:bookworm-slim` with nothing but Node added. A native addon
+  # that will not compile, a bundled dependency npm declines to fetch, a `bin`
+  # the kernel hands to the shell -- every one of those is invisible until a
+  # stranger installs the tarball, and publishing is the worst moment to find
+  # out.
+  install:
+    name: install
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Install pnpm
+        run: corepack enable && corepack install
+
+      # The assertions are RUN lines inside the `install-check` stage, so
+      # building it is running them; the command the service then runs is
+      # `doctor` reporting out of the installed package.
+      - name: Install the published package on a bare machine
+        run: pnpm docker:install
+
+  publish:
+    name: publish
+    needs: [check, install]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # What `npm publish --provenance` signs with: npm exchanges this job's
+      # OIDC token for an attestation tying the tarball to this workflow, this
+      # commit and this runner. Without the permission the publish fails rather
+      # than quietly publishing something unattested.
+      id-token: write
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+      # The gate. A secret that is not set reads as the empty string, which is
+      # how a step can ask whether it exists -- the `secrets` context is not
+      # available to a job-level `if`, and this is the documented way round
+      # that.
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    outputs:
+      name: ${{ steps.package.outputs.name }}
+      version: ${{ steps.package.outputs.version }}
+      published: ${{ steps.publish.outcome == 'success' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          # Where the publish goes, and where setup-node writes the auth line
+          # that NODE_AUTH_TOKEN fills in. Without a registry configured, npm
+          # has nowhere to send the token and the publish fails on
+          # authentication rather than on anything true.
+          registry-url: https://registry.npmjs.org
+
+      - name: Install pnpm
+        run: corepack enable && corepack install
+
+      # Not the container this time: the tarball has to be packed on a machine
+      # the publish can also run from, and `--frozen-lockfile` is what keeps
+      # this install the same one the checks above ran against.
+      - name: Install the workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the workspace
+        run: pnpm build
+
+      # The tag is the argument. `assemble-package.ts` parses it and writes the
+      # version into the manifest as it builds it, so nothing edits JSON after
+      # the fact and the manifest that was assembled is the manifest that gets
+      # packed.
+      - name: Assemble the package at the version the tag names
+        run: pnpm --filter agentplex package "$GITHUB_REF_NAME"
+
+      # Name and version are read back out of the assembled manifest rather
+      # than written here, because the name is about to change and a copy of it
+      # in this file would be the half of the rename somebody forgets.
+      - name: Pack the package
+        id: package
+        working-directory: apps/install/release
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          npm pack --pack-destination "$RUNNER_TEMP"
+          tarball="$(ls "$RUNNER_TEMP"/*.tgz)"
+          {
+            echo "name=$name"
+            echo "version=$version"
+            echo "tarball=$tarball"
+          } >> "$GITHUB_OUTPUT"
+
+      # The tarball rather than the directory: what gets published is then
+      # byte for byte what was packed and reported above, and the provenance
+      # attestation is about that file.
+      - name: Publish to npm
+        id: publish
+        if: env.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "${{ steps.package.outputs.tarball }}" --provenance --access public
+
+      # So that a tag whose publish was skipped still says what it would have
+      # published, in the place a person looks first.
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## ${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}"
+            echo
+            if [ "${{ steps.publish.outcome }}" = 'success' ]; then
+              echo "Published from ${GITHUB_REF_NAME}."
+            else
+              echo "Packed but not published: no NPM_TOKEN secret is set."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # `install.sh` is fetched over https from a branch, not from the package, so
+  # the script a machine runs and the package it installs are two different
+  # artifacts that have to agree. The installer points at `v1`, so `v1` has to
+  # name the commit of the released package -- otherwise the documented
+  # `curl | bash` fetches a script written against a version that is not what
+  # npm hands it.
+  #
+  # Conditional on the release actually happening, and on it being a `1.x`:
+  # moving `v1` to a commit whose package was never published would point every
+  # `curl | bash` at a script for a version nobody can install, and a `v2.0.0`
+  # must not silently retarget the branch that v1 users are following. A
+  # prerelease is excluded for the same reason -- a release candidate is not
+  # what the documented one-liner should start handing out.
+  v1:
+    name: v1
+    needs: publish
+    if: >-
+      needs.publish.outputs.published == 'true'
+      && startsWith(needs.publish.outputs.version, '1.')
+      && !contains(needs.publish.outputs.version, '-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The only write in the workflow, and it is one branch in one job. The
+    # checks and the publish run with a token that cannot push.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # No `--force`: a push that is not a fast-forward is refused by the
+      # server, which is the guard rather than something this script has to
+      # check. A `v1` that has moved ahead of the tag is a fact somebody needs
+      # to look at, not something a release job should overwrite.
+      - name: Fast-forward v1 to the released commit
+        run: git push origin "${GITHUB_SHA}:refs/heads/v1"
