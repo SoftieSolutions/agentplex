@@ -5,17 +5,22 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assemblePackage,
+  assemblePackages,
   BIN_APP,
   bundledManifest,
+  CLI,
   DAEMONS,
   ENTRYPOINT,
+  HUB,
   missingInputs,
-  OTHER_APPS,
-  packageEntries,
+  PACKAGES,
   parseManifest,
   publishedManifest,
+  SERVER,
   versionFromTag,
+  WEB,
   type Manifest,
+  type PackageTarget,
 } from './assemble-package.js';
 
 // The workspace root, named so that a `--filter` cannot match it beside the
@@ -35,9 +40,9 @@ const rootManifest: Manifest = {
  * The bin's own manifest. It holds `setup` and `doctor` itself, so what those
  * two commands import is what this app declares -- `pty` included, for the
  * wizard that opens a terminal and the doctor that asks whether one could be
- * opened. The daemons are in the package beside it and declare their own.
+ * opened. The daemons are packages of their own and declare their own.
  */
-const serviceManifest: Manifest = {
+const cliManifest: Manifest = {
   name: '@softiesolutions/agentplex',
   version: '1.2.3',
   license: 'Apache-2.0',
@@ -91,6 +96,7 @@ const ptyManifest: Manifest = {
   },
 };
 
+/** The hub, which depends on the client and bundles no pty. */
 const hubManifest: Manifest = {
   name: '@agentplex/hub',
   version: '1.2.3',
@@ -100,6 +106,7 @@ const hubManifest: Manifest = {
     '@agentplex/node-shared': 'workspace:*',
     '@agentplex/protocol': 'workspace:*',
     '@agentplex/providers': 'workspace:*',
+    '@softiesolutions/agentplex-web': 'workspace:*',
     zod: '^4.1.13',
   },
 };
@@ -118,26 +125,182 @@ const serverAppManifest: Manifest = {
   },
 };
 
-const bundledManifests = [protocolManifest, nodeSharedManifest, providersManifest, ptyManifest];
+/** The client: a vite app, whose build-time tree must reach no published manifest. */
+const webManifest: Manifest = {
+  name: '@softiesolutions/agentplex-web',
+  version: '1.2.3',
+  license: 'Apache-2.0',
+  type: 'module',
+  dependencies: {
+    '@agentplex/protocol': 'workspace:*',
+    react: '^19.2.0',
+  },
+};
 
-function derived(): Record<string, unknown> {
+const shared = [protocolManifest, nodeSharedManifest, providersManifest];
+const sharedWithPty = [...shared, ptyManifest];
+
+function manifestFor(target: PackageTarget, version?: string): Record<string, unknown> {
+  const byTarget: Record<string, { manifests: Manifest[]; bundled: Manifest[] }> = {
+    [CLI.name]: { manifests: [cliManifest], bundled: sharedWithPty },
+    [HUB.name]: { manifests: [hubManifest], bundled: shared },
+    [SERVER.name]: { manifests: [serverAppManifest], bundled: sharedWithPty },
+    [WEB.name]: { manifests: [], bundled: [] },
+  };
+  const input = byTarget[target.name] ?? { manifests: [], bundled: [] };
   return publishedManifest({
+    target,
     root: rootManifest,
-    service: serviceManifest,
-    apps: [hubManifest, serverAppManifest],
-    bundled: bundledManifests,
+    manifests: input.manifests,
+    bundled: input.bundled,
+    ...(version === undefined ? {} : { version }),
   });
 }
 
+describe('the four packages', () => {
+  it('publishes a command, two daemons and the client, each under its own name', () => {
+    expect(PACKAGES.map((target) => target.name)).toEqual([
+      '@softiesolutions/agentplex',
+      '@softiesolutions/agentplex-hub',
+      '@softiesolutions/agentplex-server',
+      '@softiesolutions/agentplex-web',
+    ]);
+  });
+
+  /**
+   * The whole point of the split, asserted where it can be asserted cheaply.
+   * node-pty has no Linux prebuild, so any dependency set containing it makes a
+   * C++ toolchain a prerequisite of the install -- and a hub opens no
+   * pseudoterminal. It reaches a manifest only through `@agentplex/pty`, so the
+   * claim is about what the hub bundles as much as about what it declares.
+   */
+  it('leaves node-pty out of the hub entirely, which is what a hub stops paying for', () => {
+    const manifest = manifestFor(HUB);
+
+    expect(HUB.bundled.map((item) => item.name)).not.toContain('@agentplex/pty');
+    expect(manifest['dependencies']).not.toHaveProperty('node-pty');
+    expect(manifest['optionalDependencies']).toEqual({});
+    expect(JSON.stringify(manifest)).not.toContain('node-pty');
+  });
+
+  /**
+   * The other half. A server without a pseudoterminal is not a degraded server,
+   * and npm exits 0 when an *optional* dependency's build fails -- so required
+   * is what turns a silent success into node-gyp's own error at install time.
+   */
+  it('requires node-pty in the server, rather than declaring it optional', () => {
+    const manifest = manifestFor(SERVER);
+
+    expect(manifest['dependencies']).toMatchObject({ 'node-pty': '1.1.0' });
+    expect(manifest['optionalDependencies']).toEqual({});
+  });
+
+  /**
+   * And the one package where optional is still right: every machine installs
+   * the command, hub-only ones included, and a hub-only machine is exactly the
+   * one that may have no compiler. What it costs is the wizard's provider
+   * login, which `agentplex doctor` reports as unusable in so many words.
+   */
+  it('declares node-pty optional in the command, so a hub machine installs it', () => {
+    const manifest = manifestFor(CLI);
+
+    expect(manifest['optionalDependencies']).toEqual({ 'node-pty': '1.1.0' });
+    // In one field, not both: npm reads `dependencies` first, and a name in
+    // both is a required dependency wearing an optional label.
+    expect(manifest['dependencies']).not.toHaveProperty('node-pty');
+  });
+
+  it('installs one command, from the one package that has one', () => {
+    expect(CLI.bin).toEqual({ command: 'agentplex', entrypoint: ENTRYPOINT });
+    for (const target of [HUB, SERVER, WEB]) {
+      expect(target.bin, target.name).toBeUndefined();
+      expect(manifestFor(target)['bin'], target.name).toBeUndefined();
+    }
+  });
+
+  /**
+   * The daemons are packages and not commands. Written out in `DAEMONS` and
+   * derived here, which is the drift the two forms exist to catch between them:
+   * a daemon this list names and no package carries is an ExecStart pointing at
+   * a file that is not there, and nothing in this repository would meet it
+   * before an operator did.
+   */
+  it('ships each daemon in a package of its own, at its workspace path', () => {
+    for (const daemon of DAEMONS) {
+      const target = PACKAGES.find((candidate) => candidate.name.endsWith(`-${daemon}`));
+      expect(target, daemon).toBeDefined();
+      expect(target?.entries.map((entry) => entry.to)).toContain(`apps/${daemon}/dist`);
+    }
+    // And no package carries another's program.
+    expect(HUB.entries.map((entry) => entry.from)).not.toContain('apps/server/dist');
+    expect(SERVER.entries.map((entry) => entry.from)).not.toContain('apps/hub/dist');
+    expect(CLI.entries.map((entry) => entry.from)).not.toContain('apps/hub/dist');
+  });
+
+  /** The client goes in one package, and the hub's is not it. */
+  it('ships the client on its own, and not inside the hub', () => {
+    expect(WEB.entries.map((entry) => entry.from)).toContain('apps/web/dist');
+    expect(HUB.entries.map((entry) => entry.from)).not.toContain('apps/web/dist');
+  });
+
+  /**
+   * The one package laid out as its app rather than as the workspace, and the
+   * reason: the hub asks for the build *beside* the client's manifest, which is
+   * `apps/web/dist` beside `apps/web/package.json` in a checkout and `dist`
+   * beside `package.json` at the published root. Staged at `apps/web/dist` the
+   * two sit at different distances in the package and nowhere else, which is
+   * how it resolved to an empty directory on an installed machine.
+   */
+  it('puts the client build beside the manifest that finds it', () => {
+    expect(WEB.entries.find((entry) => entry.from === 'apps/web/dist')?.to).toBe('dist');
+  });
+
+  it('writes nothing outside a package root', () => {
+    for (const target of PACKAGES) {
+      for (const entry of target.entries) {
+        expect(entry.to.startsWith('/'), `${target.name} ${entry.to}`).toBe(false);
+        expect(entry.to.split('/')).not.toContain('..');
+      }
+    }
+  });
+
+  /** Four registry entries that all said the same thing would tell a reader nothing. */
+  it('gives every package a page and a description of its own', () => {
+    const readmes = PACKAGES.map(
+      (target) => target.entries.find((entry) => entry.to === 'README.md')?.from,
+    );
+    expect(new Set(readmes).size).toBe(PACKAGES.length);
+    expect(new Set(PACKAGES.map((target) => target.description)).size).toBe(PACKAGES.length);
+  });
+
+  /**
+   * The postinstall repairs node-pty's spawn helper, so it travels with
+   * node-pty and nowhere else: a package with no addon to repair that ran it
+   * anyway would warn on every install about something that is correctly
+   * absent.
+   */
+  it('carries the postinstall in exactly the packages that carry node-pty', () => {
+    for (const target of PACKAGES) {
+      const carriesPty = target.bundled.some((item) => item.name === '@agentplex/pty');
+      expect(manifestFor(target)['scripts'], target.name).toEqual(
+        carriesPty
+          ? { postinstall: 'node packages/pty/scripts/node-pty-postinstall.js' }
+          : undefined,
+      );
+    }
+  });
+});
+
 describe('publishedManifest', () => {
   it('resolves every workspace package to an exact version and bundles it', () => {
-    const manifest = derived();
+    const manifest = manifestFor(CLI);
 
     expect(manifest['dependencies']).toEqual({
       '@agentplex/node-shared': '1.2.3',
       '@agentplex/protocol': '1.2.3',
       '@agentplex/providers': '1.2.3',
       '@agentplex/pty': '1.2.3',
+      'node-pty': undefined,
       ws: '^8.21.3',
       zod: '^4.1.13',
     });
@@ -150,54 +313,43 @@ describe('publishedManifest', () => {
   });
 
   /**
-   * node-pty is the one dependency npm is allowed to fail to install.
-   *
-   * It has no Linux prebuild, so npm compiles it from source, and that compile
-   * is the likeliest step of the whole install to fail -- on a hub, which never
-   * opens a pseudoterminal, for a program the hub does not run. It reaches this
-   * manifest from the bundled `@agentplex/pty`, which the server and the wizard
-   * depend on and the hub does not.
+   * The hub depends on the client in the workspace, so that pnpm links it and
+   * the hub's one specifier resolves from a checkout. In the published world
+   * the client is a sibling package that `install.sh --role=hub` installs
+   * beside the hub: bundling it would put the client back inside the hub and
+   * undo the split, and declaring it would name a registry entry that does not
+   * exist yet.
    */
-  it('declares node-pty optional, so a hub installs without a C++ toolchain', () => {
-    const manifest = derived();
+  it('drops a workspace dependency on another published package rather than bundling it', () => {
+    const manifest = manifestFor(HUB);
 
-    expect(manifest['optionalDependencies']).toEqual({ 'node-pty': '1.1.0' });
-    // In one field, not both: npm reads `dependencies` first, and a name in
-    // both is a required dependency wearing an optional label.
-    expect(manifest['dependencies']).not.toHaveProperty('node-pty');
-  });
-
-  /**
-   * The bundled packages are what Node's resolver walks into from the installed
-   * tree, and that is decided by `workspace:` ranges rather than by this list.
-   * Moving a name into `optionalDependencies` must not move it out of the
-   * tarball, or the published package carries a hole where a compiled package
-   * used to be.
-   */
-  it('leaves the bundled workspace packages exactly where they were', () => {
-    const manifest = derived();
-
+    expect(manifest['dependencies']).not.toHaveProperty('@softiesolutions/agentplex-web');
     expect(manifest['bundleDependencies']).toEqual([
       '@agentplex/node-shared',
       '@agentplex/protocol',
       '@agentplex/providers',
-      '@agentplex/pty',
     ]);
-    expect(manifest['dependencies']).toMatchObject({
-      '@agentplex/node-shared': '1.2.3',
-      '@agentplex/protocol': '1.2.3',
-      '@agentplex/providers': '1.2.3',
-      '@agentplex/pty': '1.2.3',
-    });
-    expect(manifest['optionalDependencies']).not.toHaveProperty('@agentplex/pty');
   });
 
-  it('refuses a workspace dependency nothing bundles', () => {
+  /**
+   * The client is a vite application, and none of that may reach the package.
+   * Declaring it a dependency of the hub is what makes the resolution work in a
+   * checkout; if that also dragged react into the hub's runtime set, the hub
+   * would install a browser framework it never loads.
+   */
+  it('keeps the client build tree out of the hub and out of the client package', () => {
+    expect(manifestFor(HUB)['dependencies']).not.toHaveProperty('react');
+    expect(manifestFor(WEB)['dependencies']).toEqual({});
+    expect(manifestFor(WEB)['bundleDependencies']).toEqual([]);
+    expect(webManifest.dependencies['react']).toBeDefined();
+  });
+
+  it('refuses a workspace dependency nothing bundles, naming the package that would ship it', () => {
     expect(() =>
       publishedManifest({
+        target: HUB,
         root: rootManifest,
-        service: serviceManifest,
-        apps: [hubManifest],
+        manifests: [hubManifest],
         bundled: [],
       }),
     ).toThrow('@agentplex/node-shared');
@@ -217,8 +369,9 @@ describe('publishedManifest', () => {
 
     expect(() =>
       publishedManifest({
+        target: CLI,
         root: rootManifest,
-        service: serviceManifest,
+        manifests: [cliManifest],
         bundled: [protocolManifest, providersManifest, ptyManifest, dependent],
       }),
     ).toThrow('@agentplex/unbundled is a workspace dependency of @agentplex/node-shared');
@@ -231,111 +384,104 @@ describe('publishedManifest', () => {
    * bundled package tested against.
    */
   it('declares what a bundled package needs, at the range it declares', () => {
-    expect(derived()['dependencies']).toMatchObject({ ws: '^8.21.3' });
+    expect(manifestFor(CLI)['dependencies']).toMatchObject({ ws: '^8.21.3' });
   });
 
   it('refuses two ranges for one dependency', () => {
-    const conflicting: Manifest = {
-      ...nodeSharedManifest,
-      dependencies: { zod: '^3.0.0' },
-    };
+    const conflicting: Manifest = { ...nodeSharedManifest, dependencies: { zod: '^3.0.0' } };
 
     expect(() =>
       publishedManifest({
+        target: CLI,
         root: rootManifest,
-        service: serviceManifest,
+        manifests: [cliManifest],
         bundled: [protocolManifest, providersManifest, ptyManifest, conflicting],
       }),
     ).toThrow('zod');
   });
 
-  it('accepts a bundled package that agrees with the service', () => {
-    const agreeing: Manifest = {
-      ...nodeSharedManifest,
-      dependencies: { zod: '^4.1.13' },
-    };
+  it('accepts a bundled package that agrees with the app above it', () => {
+    const agreeing: Manifest = { ...nodeSharedManifest, dependencies: { zod: '^4.1.13' } };
 
     expect(
       publishedManifest({
+        target: CLI,
         root: rootManifest,
-        service: serviceManifest,
+        manifests: [cliManifest],
         bundled: [protocolManifest, providersManifest, ptyManifest, agreeing],
       })['dependencies'],
     ).toMatchObject({ zod: '^4.1.13' });
   });
 
   it('declares node and not pnpm, because the target machine has only node', () => {
-    expect(derived()['engines']).toEqual({ node: '>=24' });
+    for (const target of PACKAGES) {
+      expect(manifestFor(target)['engines'], target.name).toEqual({ node: '>=24' });
+    }
   });
 
-  it('is publishable: no private flag, no dev dependencies, one bin', () => {
-    const manifest = derived();
-
-    expect(manifest['private']).toBeUndefined();
-    expect(manifest['devDependencies']).toBeUndefined();
-    expect(manifest['bin']).toEqual({ agentplex: './apps/cli/dist/main.js' });
+  it('is publishable: no private flag, no dev dependencies', () => {
+    for (const target of PACKAGES) {
+      const manifest = manifestFor(target);
+      expect(manifest['private'], target.name).toBeUndefined();
+      expect(manifest['devDependencies'], target.name).toBeUndefined();
+    }
+    expect(manifestFor(CLI)['bin']).toEqual({ agentplex: './apps/cli/dist/main.js' });
   });
 
   /**
-   * The unscoped `agentplex` on npm is somebody else's package, so this
-   * publishes under the scope. A package name and a command name are separate
-   * things -- `bin` maps one to a path -- so the registry entry moves and the
-   * word an operator types does not.
+   * The unscoped `agentplex` on npm is somebody else's package, so everything
+   * here publishes under the scope. A package name and a command name are
+   * separate things -- `bin` maps one to a path -- so the registry entries are
+   * scoped and the word an operator types is not.
    */
   it('publishes under the scope and still installs the `agentplex` command', () => {
-    const manifest = derived();
-
-    expect(manifest['name']).toBe('@softiesolutions/agentplex');
-    expect(Object.keys(manifest['bin'] as Record<string, string>)).toEqual(['agentplex']);
+    for (const target of PACKAGES) {
+      expect(manifestFor(target)['name'], target.name).toMatch(/^@softiesolutions\//);
+    }
+    expect(Object.keys(manifestFor(CLI)['bin'] as Record<string, string>)).toEqual(['agentplex']);
   });
 
   /**
    * `--access public` is passed by the release workflow, which is the only
-   * thing that publishes this package, and the first publish is the only one
+   * thing that publishes these packages, and the first publish is the only one
    * the flag decides anything for. A `publishConfig` here would be the same
    * fact written twice.
    */
   it('leaves access to the publishing command rather than restating it', () => {
-    expect(derived()['publishConfig']).toBeUndefined();
+    expect(manifestFor(CLI)['publishConfig']).toBeUndefined();
   });
 
   /**
-   * The published name is the service's and the description is the workspace
-   * root's. The two manifests are named differently now, so which one each
-   * field is taken from is observable rather than a coincidence of them
-   * agreeing.
+   * Four packages need four descriptions, so they are stated per target rather
+   * than taken from the workspace root, which has one. The licence and the
+   * repository still come from the root, which is where they are true of
+   * everything.
    */
-  it('takes its description from the workspace root, not its name', () => {
-    expect(derived()['description']).toBe(rootManifest.description);
-    expect(derived()['name']).not.toBe(rootManifest.name);
-  });
-
-  it('keeps the node-pty postinstall as its only install script', () => {
-    expect(derived()['scripts']).toEqual({
-      postinstall: 'node packages/pty/scripts/node-pty-postinstall.js',
-    });
+  it('takes its description from the target and its repository from the root', () => {
+    expect(manifestFor(HUB)['description']).toBe(HUB.description);
+    expect(manifestFor(HUB)['description']).not.toBe(rootManifest.description);
+    expect(manifestFor(HUB)['repository']).toEqual(rootManifest.repository);
+    expect(manifestFor(HUB)['license']).toBe('Apache-2.0');
   });
 
   /**
    * Nothing in the workspace carries a version: every manifest is `0.0.0` and
-   * the release workflow is what knows which version is being cut. The
-   * override is the seam it writes through, so the manifest that gets
-   * published is built with the version rather than edited after the fact.
+   * the release workflow is what knows which version is being cut. The override
+   * is the seam it writes through, so the manifest that gets published is built
+   * with the version rather than edited after the fact -- and all four take the
+   * same one, because this release is one build.
    */
   it('takes the version from the override when the release names one', () => {
-    const manifest = publishedManifest({
-      root: rootManifest,
-      service: { ...serviceManifest, version: '0.0.0' },
-      apps: [hubManifest],
-      bundled: bundledManifests,
-      version: '2.0.1',
-    });
-
-    expect(manifest['version']).toBe('2.0.1');
+    for (const target of PACKAGES) {
+      expect(manifestFor(target, '2.0.1')['version'], target.name).toBe('2.0.1');
+    }
   });
 
-  it('falls back to the service manifest when no release names one', () => {
-    expect(derived()['version']).toBe('1.2.3');
+  it('falls back to the workspace when no release names a version', () => {
+    expect(manifestFor(CLI)['version']).toBe('1.2.3');
+    // The client declares no manifest of its own to the assembly, so its
+    // fallback is the workspace root's rather than nothing at all.
+    expect(manifestFor(WEB)['version']).toBe('1.2.3');
   });
 
   /**
@@ -345,61 +491,20 @@ describe('publishedManifest', () => {
    * version of itself that the tarball does not carry.
    */
   it('leaves the bundled versions where they are', () => {
-    const manifest = publishedManifest({
-      root: rootManifest,
-      service: serviceManifest,
-      bundled: bundledManifests,
-      version: '2.0.1',
+    expect(manifestFor(CLI, '2.0.1')['dependencies']).toMatchObject({
+      '@agentplex/protocol': '1.2.3',
     });
-
-    expect(manifest['dependencies']).toMatchObject({ '@agentplex/protocol': '1.2.3' });
   });
 
   it('lists every copied path in files, and no bundled one', () => {
-    const files = derived()['files'];
-
-    expect(files).toContain('apps/web/dist');
-    expect(files).toContain('apps/hub/dist');
-    expect(files).toContain('apps/hub/migrations');
-    expect(files).not.toContain('node_modules/@agentplex/protocol/dist');
-  });
-});
-
-describe('packageEntries', () => {
-  it('carries the bin, the two daemons, the client and the migrations', () => {
-    const sources = packageEntries().map((entry) => entry.from);
-
-    // The bin's own `dist` is `setup` and `doctor` as well: both are commands
-    // inside this app now, so neither has an entry of its own to name.
-    expect(sources).toContain('apps/cli/dist');
-    expect(sources).toContain('apps/hub/dist');
-    expect(sources).toContain('apps/server/dist');
-    // Written out above and derived here, which is the drift the two forms
-    // exist to catch between them. Nothing in `apps/cli` resolves either of
-    // these directories any more -- a systemd unit and the image do, from
-    // outside the tarball -- so a daemon this list names and the package does
-    // not carry is an ExecStart pointing at a file that is not there, and
-    // nothing in this repository would meet it before an operator did.
-    for (const daemon of DAEMONS) {
-      expect(sources).toContain(`apps/${daemon}/dist`);
-      expect(OTHER_APPS.map((app) => app.directory)).toContain(`apps/${daemon}`);
-    }
-    expect(sources).not.toContain('apps/setup/dist');
-    expect(sources).not.toContain('apps/doctor/dist');
-    expect(sources).toContain('apps/hub/migrations');
-    expect(sources).toContain('packages/protocol/dist');
-    expect(sources).toContain('packages/node-shared/dist');
-    expect(sources).toContain('packages/providers/dist');
-    expect(sources).toContain('packages/pty/dist');
-    expect(sources).toContain('packages/pty/scripts/node-pty-postinstall.js');
-    expect(sources).toContain('apps/web/dist');
-  });
-
-  it('writes nothing outside the package root', () => {
-    for (const entry of packageEntries()) {
-      expect(entry.to.startsWith('/')).toBe(false);
-      expect(entry.to.split('/')).not.toContain('..');
-    }
+    expect(manifestFor(HUB)['files']).toEqual([
+      'apps/hub/dist',
+      'apps/hub/migrations',
+      'LICENSE',
+      'README.md',
+    ]);
+    expect(manifestFor(WEB)['files']).toEqual(['dist', 'LICENSE', 'README.md']);
+    expect(manifestFor(CLI)['files']).not.toContain('node_modules/@agentplex/protocol/dist');
   });
 });
 
@@ -544,7 +649,7 @@ describe('parseManifest', () => {
   });
 });
 
-describe('the assembled package', () => {
+describe('the assembled packages', () => {
   const temporary: string[] = [];
 
   afterEach(async () => {
@@ -577,12 +682,14 @@ describe('the assembled package', () => {
 
     await write('package.json', JSON.stringify(rootManifest));
     await write('LICENSE', 'Apache License, Version 2.0\n');
-    await write('apps/cli/package.json', JSON.stringify(serviceManifest));
+    await write('apps/cli/package.json', JSON.stringify(cliManifest));
     await write('apps/cli/README.md', '# agentplex\n');
     await compiled('apps/cli/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/hub/package.json', JSON.stringify(hubManifest));
+    await write('apps/hub/README.md', '# agentplex-hub\n');
     await compiled('apps/hub/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/server/package.json', JSON.stringify(serverAppManifest));
+    await write('apps/server/README.md', '# agentplex-server\n');
     await compiled('apps/server/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/hub/migrations/0001_hub_identity.sql', 'create table hub (id text);\n');
     await write('packages/protocol/package.json', JSON.stringify(protocolManifest));
@@ -602,6 +709,8 @@ describe('the assembled package', () => {
     await write('packages/pty/package.json', JSON.stringify(ptyManifest));
     await compiled('packages/pty/dist', 'index', 'export const pty = 10;');
     await write('packages/pty/scripts/node-pty-postinstall.js', 'main();\n');
+    await write('apps/web/package.json', JSON.stringify(webManifest));
+    await write('apps/web/README.md', '# agentplex-web\n');
     if (options.client) {
       // What vite leaves in `apps/web/dist`: the shell, the fingerprinted
       // bundle and the map it points at, the stylesheet, a font, and the three
@@ -638,44 +747,107 @@ describe('the assembled package', () => {
     return found.sort();
   }
 
-  it('holds the compiled service, the protocol, the client and the migrations', async () => {
+  /** All four, by published name, from one workspace. */
+  async function assembleAll(root: string, version?: string): Promise<ReadonlyMap<string, string>> {
+    const assembled = await assemblePackages({
+      workspaceRoot: root,
+      ...(version === undefined ? {} : { version }),
+    });
+    return new Map(assembled.map((item) => [item.target.name, item.directory]));
+  }
+
+  it('writes one tree per package, each into its own app', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root });
+    const directories = await assembleAll(root);
 
-    const held = async (path: string): Promise<string> =>
-      await readFile(join(assembled.directory, path), 'utf8');
-    await expect(held('apps/cli/dist/main.js')).resolves.toContain('main()');
-    await expect(held('apps/hub/migrations/0001_hub_identity.sql')).resolves.toContain(
+    expect([...directories.values()].map((path) => relative(root, path)).sort()).toEqual([
+      'apps/cli/release',
+      'apps/hub/release',
+      'apps/server/release',
+      'apps/web/release',
+    ]);
+  });
+
+  it('holds the compiled program, the bundled packages and what each reads off a disk', async () => {
+    const root = await workspace({ client: true });
+
+    const directories = await assembleAll(root);
+    const held = async (target: PackageTarget, path: string): Promise<string> =>
+      await readFile(join(directories.get(target.name) ?? '', path), 'utf8');
+
+    await expect(held(CLI, 'apps/cli/dist/main.js')).resolves.toContain('main()');
+    await expect(held(CLI, 'node_modules/@agentplex/pty/dist/index.js')).resolves.toContain('pty');
+    await expect(held(HUB, 'apps/hub/dist/main.js')).resolves.toContain('main()');
+    await expect(held(HUB, 'apps/hub/migrations/0001_hub_identity.sql')).resolves.toContain(
       'create table',
     );
-    await expect(held('apps/hub/dist/main.js')).resolves.toContain('main()');
-    await expect(held('apps/web/dist/assets/index-abc123.js')).resolves.toContain('export');
-    await expect(held('node_modules/@agentplex/protocol/dist/index.js')).resolves.toContain(
-      'version',
-    );
-    await expect(held('LICENSE')).resolves.toContain('Apache');
-    await expect(held('README.md')).resolves.toContain('agentplex');
+    await expect(held(SERVER, 'apps/server/dist/main.js')).resolves.toContain('main()');
+    await expect(held(WEB, 'dist/assets/index-abc123.js')).resolves.toContain('export');
+    for (const target of PACKAGES) {
+      await expect(held(target, 'LICENSE'), target.name).resolves.toContain('Apache');
+      await expect(held(target, 'README.md'), target.name).resolves.toContain('agentplex');
+    }
   });
 
   /**
-   * The reason the package keeps the workspace layout. `main.ts` resolves both
-   * of these against its own URL and has no idea a package exists; if packaging
-   * ever moves a directory, this fails here rather than on a stranger's machine
-   * after an install.
+   * The claim the whole split rests on, read off a real tree rather than off a
+   * manifest: nothing anywhere under the hub package mentions node-pty, so
+   * there is nothing for npm to compile and nothing for a toolchain to be
+   * needed by.
    */
-  it('puts the migrations and the client where main.js resolves them', async () => {
+  it('puts no node-pty anywhere in the hub package', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root });
+    const directories = await assembleAll(root);
+    const hub = directories.get(HUB.name) ?? '';
 
-    const main = pathToFileURL(join(assembled.directory, 'apps/hub/dist/main.js'));
-    expect(fileURLToPath(new URL('../migrations', main))).toBe(
-      join(assembled.directory, 'apps/hub/migrations'),
-    );
-    expect(fileURLToPath(new URL('../../web/dist', main))).toBe(
-      join(assembled.directory, 'apps/web/dist'),
-    );
+    const files = await tree(hub);
+    expect(files.filter((path) => path.includes('pty'))).toEqual([]);
+    for (const path of files.filter((name) => name.endsWith('.json'))) {
+      expect(await readFile(join(hub, path), 'utf8'), path).not.toContain('node-pty');
+    }
+  });
+
+  /**
+   * The reason a package keeps the workspace layout. `main.js` resolves the
+   * migrations against its own URL and has no idea a package exists; if
+   * packaging ever moves that directory, this fails here rather than on a
+   * stranger's machine after an install.
+   */
+  it('puts the migrations where the hub main.js resolves them', async () => {
+    const root = await workspace({ client: true });
+
+    const directories = await assembleAll(root);
+    const hub = directories.get(HUB.name) ?? '';
+
+    const main = pathToFileURL(join(hub, 'apps/hub/dist/main.js'));
+    expect(fileURLToPath(new URL('../migrations', main))).toBe(join(hub, 'apps/hub/migrations'));
+  });
+
+  /**
+   * The client is what stopped being a relative path, and this is the shape of
+   * why: `../../web/dist` from the hub's main.js now names a directory inside
+   * the hub's own package that nothing puts anything in. The hub resolves the
+   * client's package instead -- see `apps/hub/src/web/web-package.ts` -- and
+   * the two trees below are the two packages that arrangement assumes.
+   */
+  it('leaves the client where the hub cannot reach it by counting directories', async () => {
+    const root = await workspace({ client: true });
+
+    const directories = await assembleAll(root);
+    const hub = directories.get(HUB.name) ?? '';
+
+    const main = pathToFileURL(join(hub, 'apps/hub/dist/main.js'));
+    await expect(
+      readFile(fileURLToPath(new URL('../../web/dist/index.html', main))),
+    ).rejects.toThrow();
+    // And the expression that replaced it, spelled the way the hub spells it:
+    // the build beside the client package's manifest.
+    const manifest = pathToFileURL(join(directories.get(WEB.name) ?? '', 'package.json'));
+    await expect(
+      readFile(fileURLToPath(new URL('./dist/index.html', manifest)), 'utf8'),
+    ).resolves.toContain('doctype');
   });
 
   /**
@@ -697,75 +869,71 @@ describe('the assembled package', () => {
   it('puts the manifest where main.js resolves the version it prints', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root, version: '4.5.6' });
+    const directory = (await assembleAll(root, '4.5.6')).get(CLI.name) ?? '';
 
-    const main = pathToFileURL(join(assembled.directory, ENTRYPOINT));
+    const main = pathToFileURL(join(directory, ENTRYPOINT));
     const manifest = fileURLToPath(new URL('../../../package.json', main));
-    expect(manifest).toBe(join(assembled.directory, 'package.json'));
+    expect(manifest).toBe(join(directory, 'package.json'));
     expect(JSON.parse(await readFile(manifest, 'utf8'))).toMatchObject({
       name: '@softiesolutions/agentplex',
       version: '4.5.6',
     });
     // And the file the old expression named is absent, rather than present and
     // stale: this is the whole of why that bug could only exist in the artifact.
-    await expect(
-      readFile(join(assembled.directory, BIN_APP, 'package.json'), 'utf8'),
-    ).rejects.toThrow();
+    await expect(readFile(join(directory, BIN_APP, 'package.json'), 'utf8')).rejects.toThrow();
   });
 
   it('bundles every workspace package at the path Node resolves it from', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root });
+    const directory = (await assembleAll(root)).get(CLI.name) ?? '';
 
     const manifestOf = async (name: string): Promise<unknown> =>
-      JSON.parse(
-        await readFile(join(assembled.directory, `node_modules/${name}/package.json`), 'utf8'),
-      );
+      JSON.parse(await readFile(join(directory, `node_modules/${name}/package.json`), 'utf8'));
     await expect(manifestOf('@agentplex/protocol')).resolves.toMatchObject({
       name: '@agentplex/protocol',
       version: '1.2.3',
     });
-    await expect(manifestOf('@agentplex/node-shared')).resolves.toMatchObject({
-      name: '@agentplex/node-shared',
-      version: '1.2.3',
-    });
     await expect(
-      readFile(
-        join(assembled.directory, 'node_modules/@agentplex/node-shared/dist/index.js'),
-        'utf8',
-      ),
+      readFile(join(directory, 'node_modules/@agentplex/node-shared/dist/index.js'), 'utf8'),
     ).resolves.toContain('clock');
-    expect(assembled.manifest['bundleDependencies']).toEqual([
-      '@agentplex/node-shared',
-      '@agentplex/protocol',
-      '@agentplex/providers',
-      '@agentplex/pty',
-    ]);
   });
 
   /**
    * The three categories a compiled `dist` carries for the workspace and for
-   * nothing on an installed machine. Asserted over the whole tree rather than
-   * file by file, so a fifth program added to the package is covered the day it
-   * arrives instead of the day somebody remembers this test.
+   * nothing on an installed machine. Asserted over every package's whole tree
+   * rather than file by file, so a fifth package is covered the day it arrives
+   * instead of the day somebody remembers this test.
    */
   it('leaves maps, declarations and the testing entries out of the compiled output', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root });
+    const directories = await assembleAll(root);
 
-    const compiled = (await tree(assembled.directory)).filter(
-      (path) => !path.startsWith(join('apps', 'web')),
+    for (const target of [CLI, HUB, SERVER]) {
+      const compiled = await tree(directories.get(target.name) ?? '');
+      expect(
+        compiled.filter((path) => path.endsWith('.map')),
+        target.name,
+      ).toEqual([]);
+      expect(
+        compiled.filter((path) => path.endsWith('.d.ts')),
+        target.name,
+      ).toEqual([]);
+      // By file name: the fixture holds a `fake-parent` directory on purpose,
+      // and a path test would call keeping it a failure.
+      expect(
+        compiled.filter((path) => /^(testing\.|fake-)/.test(basename(path))),
+        target.name,
+      ).toEqual([]);
+    }
+    // The same trees still hold what they are for.
+    expect(await tree(directories.get(HUB.name) ?? '')).toContain(
+      join('apps', 'hub', 'dist', 'main.js'),
     );
-    expect(compiled.filter((path) => path.endsWith('.map'))).toEqual([]);
-    expect(compiled.filter((path) => path.endsWith('.d.ts'))).toEqual([]);
-    // By file name: the fixture holds a `fake-parent` directory on purpose, and
-    // a path test would call keeping it a failure.
-    expect(compiled.filter((path) => /^(testing\.|fake-)/.test(basename(path)))).toEqual([]);
-    // The same tree still holds what it is for.
-    expect(compiled).toContain(join('apps', 'hub', 'dist', 'main.js'));
-    expect(compiled).toContain(join('node_modules', '@agentplex', 'providers', 'dist', 'index.js'));
+    expect(await tree(directories.get(SERVER.name) ?? '')).toContain(
+      join('node_modules', '@agentplex', 'providers', 'dist', 'index.js'),
+    );
   });
 
   /**
@@ -777,11 +945,11 @@ describe('the assembled package', () => {
   it('drops a file whose name is excluded, not a directory that shares it', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root });
+    const directory = (await assembleAll(root)).get(SERVER.name) ?? '';
 
     await expect(
       readFile(
-        join(assembled.directory, 'node_modules/@agentplex/providers/dist/fake-parent/kept.js'),
+        join(directory, 'node_modules/@agentplex/providers/dist/fake-parent/kept.js'),
         'utf8',
       ),
     ).resolves.toContain('kept');
@@ -789,20 +957,16 @@ describe('the assembled package', () => {
 
   /**
    * The client's map is the largest file the build produces -- 3437 KB against
-   * an 834 KB bundle, 57 percent of the unpacked package -- and every installed
-   * machine carried it, a `--role=server` one that never serves a page
-   * included. It is emitted on purpose and kept in the build; it is left out of
-   * the package here.
+   * an 834 KB bundle -- and it resolves to nothing on a machine that installed
+   * the package. It is emitted on purpose and kept in the build; it is left out
+   * of the package here.
    */
-  it('leaves the client source map out of the package', async () => {
+  it('leaves the client source map out of the client package', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root });
+    const directory = (await assembleAll(root)).get(WEB.name) ?? '';
 
-    const client = (await tree(assembled.directory)).filter((path) =>
-      path.startsWith(join('apps', 'web')),
-    );
-    expect(client.filter((path) => path.endsWith('.map'))).toEqual([]);
+    expect((await tree(directory)).filter((path) => path.endsWith('.map'))).toEqual([]);
   });
 
   /**
@@ -815,19 +979,16 @@ describe('the assembled package', () => {
   it('keeps every file of the client build the browser loads', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root });
+    const directory = (await assembleAll(root)).get(WEB.name) ?? '';
 
-    const client = (await tree(assembled.directory)).filter((path) =>
-      path.startsWith(join('apps', 'web')),
-    );
-    expect(client).toEqual([
-      join('apps', 'web', 'dist', 'assets', 'index-abc123.css'),
-      join('apps', 'web', 'dist', 'assets', 'index-abc123.js'),
-      join('apps', 'web', 'dist', 'assets', 'manrope-latin-400-normal-abc123.woff2'),
-      join('apps', 'web', 'dist', 'icons', 'icon-192.png'),
-      join('apps', 'web', 'dist', 'index.html'),
-      join('apps', 'web', 'dist', 'manifest.webmanifest'),
-      join('apps', 'web', 'dist', 'sw.js'),
+    expect((await tree(directory)).filter((path) => path.startsWith('dist'))).toEqual([
+      join('dist', 'assets', 'index-abc123.css'),
+      join('dist', 'assets', 'index-abc123.js'),
+      join('dist', 'assets', 'manrope-latin-400-normal-abc123.woff2'),
+      join('dist', 'icons', 'icon-192.png'),
+      join('dist', 'index.html'),
+      join('dist', 'manifest.webmanifest'),
+      join('dist', 'sw.js'),
     ]);
   });
 
@@ -842,21 +1003,35 @@ describe('the assembled package', () => {
   it('leaves the bundle pointing at the map it no longer ships', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root });
+    const directory = (await assembleAll(root)).get(WEB.name) ?? '';
 
     await expect(
-      readFile(join(assembled.directory, 'apps/web/dist/assets/index-abc123.js'), 'utf8'),
+      readFile(join(directory, 'dist/assets/index-abc123.js'), 'utf8'),
     ).resolves.toContain('sourceMappingURL=index-abc123.js.map');
   });
 
   it('carries the postinstall at the path the published manifest names', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root });
+    const directories = await assembleAll(root);
 
-    await expect(
-      readFile(join(assembled.directory, 'packages/pty/scripts/node-pty-postinstall.js'), 'utf8'),
-    ).resolves.toContain('main()');
+    for (const target of [CLI, SERVER]) {
+      await expect(
+        readFile(
+          join(directories.get(target.name) ?? '', 'packages/pty/scripts/node-pty-postinstall.js'),
+          'utf8',
+        ),
+        target.name,
+      ).resolves.toContain('main()');
+    }
+    for (const target of [HUB, WEB]) {
+      await expect(
+        readFile(
+          join(directories.get(target.name) ?? '', 'packages/pty/scripts/node-pty-postinstall.js'),
+          'utf8',
+        ),
+      ).rejects.toThrow();
+    }
   });
 
   /**
@@ -869,49 +1044,76 @@ describe('the assembled package', () => {
     const root = await workspace({ client: true });
     await writeFile(join(root, 'apps/cli/dist/main.js'), 'await main();\n', 'utf8');
 
-    await expect(assemblePackage({ workspaceRoot: root })).rejects.toThrow('shebang');
+    await expect(assemblePackage({ target: CLI, workspaceRoot: root })).rejects.toThrow('shebang');
   });
 
-  it('refuses to package a workspace whose client was never built', async () => {
+  /**
+   * The daemons have no `bin`, so nothing checks their entries for a shebang
+   * and nothing needs to: a unit names an interpreter and a path, and the
+   * kernel is never asked to start one of these files on its own.
+   */
+  it('does not ask a daemon package for a shebang it has no bin to link', async () => {
+    const root = await workspace({ client: true });
+    await writeFile(join(root, 'apps/hub/dist/main.js'), 'await main();\n', 'utf8');
+
+    await expect(assemblePackage({ target: HUB, workspaceRoot: root })).resolves.toBeDefined();
+  });
+
+  it('refuses to package a client that was never built, naming the package', async () => {
     const root = await workspace({ client: false });
 
-    await expect(assemblePackage({ workspaceRoot: root })).rejects.toThrow('apps/web/dist');
+    await expect(assemblePackage({ target: WEB, workspaceRoot: root })).rejects.toThrow(
+      '@softiesolutions/agentplex-web',
+    );
+    await expect(assemblePackage({ target: WEB, workspaceRoot: root })).rejects.toThrow(
+      'apps/web/dist',
+    );
+  });
+
+  /** A hub does not carry the client, so a client that was never built is not its problem. */
+  it('assembles the hub from a workspace whose client was never built', async () => {
+    const root = await workspace({ client: false });
+
+    await expect(assemblePackage({ target: HUB, workspaceRoot: root })).resolves.toBeDefined();
   });
 
   it('names every missing input rather than the first', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agentplex-package-'));
     temporary.push(root);
 
-    const missing = await missingInputs(root, packageEntries());
+    const missing = await missingInputs(root, CLI.entries);
 
-    expect(missing.map((item) => item.path)).toEqual(packageEntries().map((entry) => entry.from));
+    expect(missing.map((item) => item.path)).toEqual(CLI.entries.map((entry) => entry.from));
   });
 
   /**
    * The whole of what the release workflow does to the version: it assembles
    * with the version it parsed out of the tag, and the manifest on disk is the
    * one npm packs. Nothing edits the JSON afterwards, so nothing can disagree
-   * with what was assembled.
+   * with what was assembled -- and all four carry the same version, because
+   * this release is one build.
    */
-  it('writes the release version into the manifest it leaves on disk', async () => {
+  it('writes the release version into every manifest it leaves on disk', async () => {
     const root = await workspace({ client: true });
 
-    const assembled = await assemblePackage({ workspaceRoot: root, version: '3.1.0-rc.2' });
+    const directories = await assembleAll(root, '3.1.0-rc.2');
 
-    expect(assembled.manifest['version']).toBe('3.1.0-rc.2');
-    await expect(
-      readFile(join(assembled.directory, 'package.json'), 'utf8').then(
-        (text) => (JSON.parse(text) as { version: string }).version,
-      ),
-    ).resolves.toBe('3.1.0-rc.2');
+    for (const [name, directory] of directories) {
+      const manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as {
+        name: string;
+        version: string;
+      };
+      expect(manifest.name).toBe(name);
+      expect(manifest.version, name).toBe('3.1.0-rc.2');
+    }
   });
 
   it('replaces what was there rather than merging into it', async () => {
     const root = await workspace({ client: true });
-    const first = await assemblePackage({ workspaceRoot: root });
+    const first = await assemblePackage({ target: CLI, workspaceRoot: root });
     await writeFile(join(first.directory, 'apps/cli/dist/stale.js'), 'gone\n', 'utf8');
 
-    const second = await assemblePackage({ workspaceRoot: root });
+    const second = await assemblePackage({ target: CLI, workspaceRoot: root });
 
     await expect(
       readFile(join(second.directory, 'apps/cli/dist/stale.js'), 'utf8'),

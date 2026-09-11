@@ -176,9 +176,26 @@ function escaped(value: string): string {
  * workspace's inside the directory npm wrote, which is the same layout a
  * checkout, the image and the tarball all keep -- so this expression is the
  * whole of what packaging has to preserve for a unit to work.
+ *
+ * The directory is the daemon's *own* package. Each daemon is published
+ * separately, so a hub machine has no server package to point into and a server
+ * machine has no hub package -- naming the command's package here, as this did
+ * while there was one, would be an ExecStart at a path that does not exist on
+ * the machine the split was for.
  */
 function daemonEntry(prefix: string, daemon: string): string {
-  return `${prefix}/lib/node_modules/@softiesolutions/agentplex/apps/${daemon}/dist/main.js`;
+  return `${prefix}/lib/node_modules/@softiesolutions/agentplex-${daemon}/apps/${daemon}/dist/main.js`;
+}
+
+/** The specs a role hands npm, in the order the script builds them. */
+function packageSpecs(role: string, version = 'latest'): string {
+  const at = (name: string): string => `${name}@${version}`;
+  const command = at('@softiesolutions/agentplex');
+  const hub = `${at('@softiesolutions/agentplex-hub')} ${at('@softiesolutions/agentplex-web')}`;
+  const server = at('@softiesolutions/agentplex-server');
+  if (role === 'hub') return `${command} ${hub}`;
+  if (role === 'server') return `${command} ${server}`;
+  return `${command} ${hub} ${server}`;
 }
 
 /**
@@ -493,7 +510,7 @@ describe('the plan a dry run prints', () => {
 
     expect(result.status).toBe(0);
     expect(planned(result.stdout, 'package')).toBe(
-      `@softiesolutions/agentplex@latest into ${home}/.agentplex`,
+      `${packageSpecs('server')} into ${home}/.agentplex`,
     );
     expect(planned(result.stdout, 'settings')).toContain(`${home}/.agentplex/agentplex.env`);
   });
@@ -567,8 +584,8 @@ describe('the plan a dry run prints', () => {
       daemonEntry(`${home}/.agentplex`, 'server'),
     ]);
 
-    // The scope reaches the unit now, and only there, and only because npm put
-    // it in a directory name. There is no `agentplex hub` to run, so ExecStart
+    // The scope reaches the unit, and only there, and only because npm put it
+    // in a directory name. There is no `agentplex hub` to run, so ExecStart
     // names the daemon's file, and that file is inside the tree npm wrote at
     // the name it was installed under. It is npm's spelling of where a package
     // lives rather than a word this script chose -- so every word this script
@@ -583,12 +600,79 @@ describe('the plan a dry run prints', () => {
     expect(units).toContain('Description=agentplex server');
   });
 
-  it('installs whatever AGENTPLEX_PACKAGE names, which is how the container check reaches an unpublished build', () => {
+  /**
+   * The one role table, asserted as a table. `web` is not a role: it is part of
+   * being a hub, because the hub finds the client by resolving that package
+   * name and a hub without it serves 503. The command is in every row, because
+   * `setup` and `doctor` belong on every machine whatever it runs.
+   */
+  it.each([
+    ['hub', ['agentplex@', 'agentplex-hub@', 'agentplex-web@'], ['agentplex-server@']],
+    ['server', ['agentplex@', 'agentplex-server@'], ['agentplex-hub@', 'agentplex-web@']],
+    ['both', ['agentplex@', 'agentplex-hub@', 'agentplex-web@', 'agentplex-server@'], []],
+  ])('installs the packages --role=%s runs, and no others', (role, wanted, unwanted) => {
     const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run'], {
-      environment: { AGENTPLEX_PACKAGE: '/package/agentplex-0.0.0.tgz' },
+    const line =
+      planned(run(script, home, ['--dry-run', `--role=${role}`]).stdout, 'package') ?? '';
+
+    for (const name of wanted) expect(line, name).toContain(`@softiesolutions/${name}`);
+    for (const name of unwanted) expect(line, name).not.toContain(`@softiesolutions/${name}`);
+  });
+
+  /**
+   * AGENTPLEX_PACKAGE is how the container check installs a build that has
+   * never been published, and with four packages it names a directory of packed
+   * tarballs rather than one spec.
+   *
+   * A directory rather than four variables, because four variables can be half
+   * set: a machine that pinned the hub and let the command fall through to a
+   * registry would report a green check of a build it had not installed. A
+   * directory either holds what the role needs or the run stops.
+   */
+  it('installs the tarballs in the directory AGENTPLEX_PACKAGE names', () => {
+    const { script, home } = scratch();
+    const packages = join(home, 'package');
+    mkdirSync(packages, { recursive: true });
+    for (const name of ['agentplex', 'agentplex-hub', 'agentplex-server', 'agentplex-web']) {
+      writeFileSync(join(packages, `softiesolutions-${name}-0.0.0.tgz`), '');
+    }
+
+    const line =
+      planned(
+        run(script, home, ['--dry-run', '--role=hub'], {
+          environment: { AGENTPLEX_PACKAGE: packages },
+        }).stdout,
+        'package',
+      ) ?? '';
+
+    // The hub's three, by file. The `[0-9]` in the script's pattern is what
+    // keeps the command's own tarball from also matching the hub, the server
+    // and the client: every one of those names starts with the command's.
+    expect(line).toContain(`${packages}/softiesolutions-agentplex-0.0.0.tgz`);
+    expect(line).toContain(`${packages}/softiesolutions-agentplex-hub-0.0.0.tgz`);
+    expect(line).toContain(`${packages}/softiesolutions-agentplex-web-0.0.0.tgz`);
+    expect(line).not.toContain('softiesolutions-agentplex-server-0.0.0.tgz');
+    // Nothing fell through to a registry.
+    expect(line).not.toContain('@latest');
+  });
+
+  /**
+   * Half a directory is the failure this seam has to name rather than paper
+   * over: installing the rest and leaving one package to a registry would be a
+   * check reporting on a build it did not install.
+   */
+  it('stops when the directory does not hold a package the role needs', () => {
+    const { script, home } = scratch();
+    const packages = join(home, 'package');
+    mkdirSync(packages, { recursive: true });
+    writeFileSync(join(packages, 'softiesolutions-agentplex-0.0.0.tgz'), '');
+
+    const result = run(script, home, ['--dry-run', '--role=hub'], {
+      environment: { AGENTPLEX_PACKAGE: packages },
     });
-    expect(planned(result.stdout, 'package')).toContain('/package/agentplex-0.0.0.tgz');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('softiesolutions-agentplex-hub');
   });
 
   it('would hand over to setup, with the role it was given', () => {
@@ -706,23 +790,28 @@ describe('the toolchain, which only one role needs', () => {
   });
 
   /**
-   * The plan says it, and the install does it: a server role runs npm with
-   * AGENTPLEX_REQUIRE_PTY set, which is what the package's postinstall reads to
-   * decide whether a node-pty it cannot load should fail the install. A hub
-   * runs the same npm without it, because a hub with no node-pty is a working
-   * hub.
+   * What replaced AGENTPLEX_REQUIRE_PTY, which is nothing, on purpose.
+   *
+   * The variable existed because node-pty was optional in one tarball every
+   * machine installed: npm exits 0 when an optional build fails, so a server
+   * could report a clean install and then fail to open a session, and the
+   * package's postinstall read the variable and turned that back into a failed
+   * install. node-pty is a required dependency of the server package now, so
+   * npm fails that install itself at the compile. The second mechanism has
+   * nothing left to do, and machinery whose reason has gone is removed rather
+   * than kept.
    */
-  it('asks npm to require a working node-pty for a server and not for a hub', () => {
+  it('sets no environment variable to make npm require what npm already requires', () => {
     const source = readFileSync(scriptPath, 'utf8');
-    const requireLine = source
+    // Executable lines only. The script still explains what that variable was
+    // for and why it went, which is exactly where that argument belongs.
+    const runs = source
       .split('\n')
-      .filter(
-        (line) => line.includes('AGENTPLEX_REQUIRE_PTY') && !line.trimStart().startsWith('#'),
-      );
+      .filter((line) => line.trim() !== '' && !line.trimStart().startsWith('#'));
 
-    // One place sets it, and it is guarded by the same question the toolchain
-    // step asks. Two places would be two answers to drift apart.
-    expect(requireLine).toHaveLength(1);
+    expect(runs.filter((line) => line.includes('AGENTPLEX_REQUIRE_PTY'))).toEqual([]);
+    // The question the toolchain step asks is still asked, and is still asked
+    // of the daemons this machine runs rather than of the role word.
     expect(source).toContain('runs_a_server');
   });
 });
@@ -1196,7 +1285,7 @@ describe('where the runtime goes', () => {
     // binary and any provider the wizard installs appear, and it is what
     // AGENTPLEX_BIN_PATH and the unit's PATH already name.
     expect(planned(result.stdout, 'package')).toBe(
-      `@softiesolutions/agentplex@latest into ${home}/.agentplex`,
+      `${packageSpecs('server')} into ${home}/.agentplex`,
     );
   });
 
@@ -1410,9 +1499,7 @@ describe('the shape a prefix has to have, because --uninstall takes one', () => 
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--role=server', `--prefix=${home}/custom/`]);
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'package')).toBe(
-      `@softiesolutions/agentplex@latest into ${home}/custom`,
-    );
+    expect(planned(result.stdout, 'package')).toBe(`${packageSpecs('server')} into ${home}/custom`);
   });
 });
 

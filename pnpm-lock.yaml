@@ -72,6 +72,9 @@ importers:
       '@agentplex/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      '@softiesolutions/agentplex-web':
+        specifier: workspace:*
+        version: link:../web
       zod:
         specifier: ^4.1.13
         version: 4.5.4

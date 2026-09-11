@@ -2,9 +2,10 @@ node_modules/
 dist/
 coverage/
 
-# The staged publishable package. `pnpm package` rebuilds it from dist/ and
-# apps/web/dist, so a checked-in copy could only ever be a stale one.
-apps/cli/release/
+# The staged publishable packages, one per app that publishes one. `pnpm
+# package` rebuilds each from that app's dist/, so a checked-in copy could only
+# ever be a stale one.
+apps/*/release/
 *.tsbuildinfo
 .env
 .env.local

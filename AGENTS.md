@@ -1,12 +1,19 @@
 # REPOSITORY DESCRIPTION
 
-agentplex watches and drives coding-agent sessions across machines. One
-package and one bin, `agentplex`, whose subcommands are `setup` (the wizard),
-`doctor` (the read-only check) and `help`. `hub` and `server` are daemons and
-not commands: nobody types either, systemd starts them from their units and
-`pnpm start` does in development, so the bin reaches no app's build output.
-`install.sh --role=hub|server|both` decides which units a machine gets. `web`
-is a React PWA the hub serves.
+agentplex watches and drives coding-agent sessions across machines. One bin,
+`agentplex`, whose subcommands are `setup` (the wizard), `doctor` (the
+read-only check) and `help`. `hub` and `server` are daemons and not commands:
+nobody types either, systemd starts them from their units and `pnpm start` does
+in development, so the bin reaches no app's build output. `web` is a React PWA
+the hub serves.
+
+Four published packages, one per app: `@softiesolutions/agentplex` (the bin),
+`-hub`, `-server`, `-web`. `install.sh --role=hub|server|both` decides which a
+machine installs and which units it gets; the bin goes on every machine and
+`web` is part of being a hub. The point is what a hub stops carrying: the hub
+and web packages reach node-pty nowhere and the bin's declares it optional, so
+no package a hub installs can fail for want of a C++ compiler. Only the server
+package requires it.
 
 The hub owns the database, serves the client, and merges what every paired
 server reports. A server runs sessions through a PTY and watches a store on
@@ -18,6 +25,10 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 - `apps/` holds deployables: `hub`, `server`, `cli`, `web`. An app is a thing
   that runs. `apps/cli` owns the bin and `apps/cli/src/commands/` holds a
   subcommand. Nothing imports an app, and nothing reaches into one by path.
+- `apps/web` carries its published name in the workspace, because the hub finds
+  the client by resolving that one specifier — the same in a checkout, the image
+  and `lib/node_modules`. A file location, not an import: the hub loads no
+  module out of it, and with no client package it warns once and serves 503.
 - `scripts/` holds the repository's own tooling — the bootstrap an operator
   curls, the packaging step that composes the apps' built output by path, never
   by import. Nothing ships from it, and it is a workspace member because
@@ -34,8 +45,6 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 - Setup opens no database. It writes files; the hub imports the local pairing
   at boot.
 - A package exports its fakes from a `testing` entry. A fake is never copied.
-- Every CI/CD workflow lives in `.github/workflows`, the only directory GitHub
-  reads them from.
 - Test files sit next to the file under test: `config.test.ts` beside
   `config.ts`. No `__tests__` directory. Tests are linted and typechecked like
   any other source.
@@ -46,7 +55,6 @@ session's identity is `{ storeId, sessionId }`, never the machine.
   jobs: `build`, then `lint`, `typecheck` and `test` in parallel.
 - `pnpm docker:check` — the same in a container; `docker:lint` /
   `docker:typecheck` / `docker:test` run one check alone.
-- `pnpm docker:up` / `pnpm docker:down` — the hub and Caddy.
 - Docker is the primary path for the checks and for a hosted hub, not the price
   of entry: the database is a file, so one machine runs both daemons natively.
 
@@ -54,8 +62,8 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 
 - pnpm, always. The version is pinned in `packageManager` and read by corepack,
   so the runner and the image cannot end up on different ones.
-- Install the latest version of a new dependency and pin it deliberately.
-- Install `@types/<package>` when a package ships no types.
+- Install the latest version of a new dependency and pin it deliberately, and
+  `@types/<package>` with it when the package ships no types.
 - Root dependencies are dev tooling only. Anything an app or package imports is
   declared in that app or package.
 - A postinstall script runs only for packages listed in `allowBuilds` in

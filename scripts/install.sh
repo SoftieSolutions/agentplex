@@ -9,9 +9,9 @@
 #   curl -fsSL <url> | bash -s -- --uninstall    # take the runtime back off
 #
 # Deliberately ignorant. It ensures a Node runtime and the build toolchain,
-# installs the published package, writes the systemd units it does not start --
-# one per daemon the role runs, both for --role=both -- and hands over to
-# `agentplex setup`. It knows nothing about providers, stores or
+# installs the published packages the role needs, writes the systemd units it
+# does not start -- one per daemon the role runs, both for --role=both -- and
+# hands over to `agentplex setup`. It knows nothing about providers, stores or
 # databases: everything provider-specific lives in TypeScript beside the adapter
 # that knows the provider, so a new provider is a new file rather than an edit
 # to a shell script nobody tests.
@@ -94,6 +94,29 @@ readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agent
 readonly NPM_PACKAGE='@softiesolutions/agentplex'
 readonly PACKAGE_NAME='agentplex'
 
+# The other three, because the release is four packages and a machine installs
+# only what its role runs.
+#
+# The command above goes on every machine: `setup` configures one and `doctor`
+# checks one, whatever it runs. Each daemon is a package of its own, and the
+# client is a package of its own beside the hub -- so a hub machine carries no
+# server code, and nothing it installs can fail for want of a C++ compiler. The
+# hub package and the client reach node-pty nowhere at all, and the command
+# declares it optional, which npm is allowed to skip. node-pty is the native
+# addon with no Linux prebuild and the one thing here that needs a compiler; a
+# server is the only role with a package that requires it.
+#
+# `web` is not a role. It is part of being a hub: the hub finds the client by
+# resolving this name, and installs the two as siblings under
+# lib/node_modules.
+readonly NPM_PACKAGE_HUB='@softiesolutions/agentplex-hub'
+readonly NPM_PACKAGE_SERVER='@softiesolutions/agentplex-server'
+readonly NPM_PACKAGE_WEB='@softiesolutions/agentplex-web'
+
+# The scope all four are published under, which is the one directory npm makes
+# under lib/node_modules for the lot of them.
+readonly NPM_SCOPE='@softiesolutions'
+
 # The dist-tag npm resolves when nothing is pinned. Named, because the spec
 # always carries a `@` suffix: `@softiesolutions/agentplex` and
 # `@softiesolutions/agentplex@latest` mean the same thing to npm, and one shape
@@ -123,11 +146,10 @@ readonly TOOLCHAIN_APT='python3 make g++'
 readonly TOOLCHAIN_DNF='python3 make gcc-c++'
 readonly TOOLCHAIN_APK='python3 make g++'
 # The half of the toolchain line a server always gets, whether the compiler was
-# already here or had to be installed. node-pty is optional in the published
-# package so that a hub can install without any of this; for a server, optional
-# in the manifest must not read as optional in practice, and the plan says so
-# before the install proves it.
-readonly TOOLCHAIN_NOTE='node-pty must build and load or this install fails'
+# already here or had to be installed. node-pty is a required dependency of the
+# server package, so npm fails the install at the compile rather than finishing
+# without it -- the plan says so before the install proves it.
+readonly TOOLCHAIN_NOTE='node-pty must build or npm fails this install'
 
 # The fleet layout: a dedicated service account, a prefix under /opt, state
 # under /var/lib and configuration under /etc, which is where an operator looks
@@ -160,11 +182,15 @@ BIN_DIR=''
 ENV_FILE=''
 UNIT_DIR=''
 UNIT_SCOPE=''
-# The daemons this role runs, one unit each. Set by resolve_layout.
+# The daemons this role runs, one unit each, and the packages this role
+# installs. Both set by parse_arguments from --role.
 DAEMONS=''
+PACKAGE_NAMES=''
 SERVICE_USER=''
 STATE_DIR=''
-PACKAGE_SPEC=''
+# What npm is handed, one spec per package in PACKAGE_NAMES. Set by
+# resolve_layout.
+PACKAGE_SPECS=''
 PLATFORM=''
 ARCH=''
 # The directory the runtime tarball unpacks into whole, and the directory inside
@@ -281,10 +307,23 @@ parse_arguments() {
     shift
   done
 
+  # What the role decides, in one place: the daemons that get a unit, and the
+  # packages that get installed. The command is in every row because `setup` and
+  # `doctor` belong on every machine; the client is in every row a hub is in,
+  # because a hub with no client serves 503 and says so at startup.
   case "$ROLE" in
-    hub) DAEMONS='hub' ;;
-    server) DAEMONS='server' ;;
-    both) DAEMONS='hub server' ;;
+    hub)
+      DAEMONS='hub'
+      PACKAGE_NAMES="$NPM_PACKAGE $NPM_PACKAGE_HUB $NPM_PACKAGE_WEB"
+      ;;
+    server)
+      DAEMONS='server'
+      PACKAGE_NAMES="$NPM_PACKAGE $NPM_PACKAGE_SERVER"
+      ;;
+    both)
+      DAEMONS='hub server'
+      PACKAGE_NAMES="$NPM_PACKAGE $NPM_PACKAGE_HUB $NPM_PACKAGE_WEB $NPM_PACKAGE_SERVER"
+      ;;
     *) die "unknown role $(quote "$ROLE"): expected one of hub, server, both" ;;
   esac
 
@@ -371,15 +410,66 @@ resolve_layout() {
   BIN_DIR="$PREFIX/bin"
   resolve_node_directory
 
-  # AGENTPLEX_PACKAGE is the seam this repository's own container check installs
-  # through: it points the install at a tarball built from a checkout, which is
-  # the only way to exercise this script against a package that is not published
-  # yet. It takes anything `npm install` takes.
-  if [ -n "${AGENTPLEX_PACKAGE:-}" ]; then
-    PACKAGE_SPEC="$AGENTPLEX_PACKAGE"
-  else
-    PACKAGE_SPEC="${NPM_PACKAGE}@${PACKAGE_VERSION:-$NPM_LATEST_TAG}"
+  resolve_package_specs
+}
+
+# What npm is handed, one spec per package this role installs.
+#
+# AGENTPLEX_PACKAGE is the seam this repository's own container check installs
+# through, and it names a directory of packed tarballs rather than one spec.
+# That is the whole of the change the split forced on it, and a directory is the
+# shape that cannot be half-set: there are four packages now, and four variables
+# would let a machine install a local hub beside a registry command and call it
+# a test of this build. A directory either holds the package a role needs or the
+# run stops naming it.
+#
+# Without it, every package is `<name>@<version>`, one version for all of them,
+# because a release is one build. Per-component versions -- installing a
+# `hub@1.3` beside a `server@1.2` -- are a later decision about what a release
+# is, not something this can decide on its own.
+resolve_package_specs() {
+  local package
+  PACKAGE_SPECS=''
+  for package in $PACKAGE_NAMES; do
+    PACKAGE_SPECS="$PACKAGE_SPECS $(package_spec "$package")"
+  done
+  PACKAGE_SPECS="${PACKAGE_SPECS# }"
+}
+
+package_spec() {
+  if [ -z "${AGENTPLEX_PACKAGE:-}" ]; then
+    printf '%s@%s' "$1" "${PACKAGE_VERSION:-$NPM_LATEST_TAG}"
+    return 0
   fi
+  [ -d "$AGENTPLEX_PACKAGE" ] || die "AGENTPLEX_PACKAGE names $(quote "$AGENTPLEX_PACKAGE"), which is not a directory: it is the directory holding the packed tarballs to install, one per package"
+  package_tarball "$1"
+}
+
+# The tarball in that directory that holds one package.
+#
+# npm names a pack after the package with the scope flattened -- the `@` goes
+# and the `/` becomes a `-` -- followed by `-<version>.tgz`. That version is
+# what makes this unambiguous and is the reason for the `[0-9]` in the pattern:
+# `softiesolutions-agentplex-*.tgz` matches the hub, the server and the client
+# as well as the command, and a glob that matched four files where one was
+# wanted is how the old single-tarball line would have broken silently here.
+package_tarball() {
+  local flat file base
+  flat="${1#@}"
+  flat="${flat//\//-}"
+
+  for file in "$AGENTPLEX_PACKAGE"/*.tgz; do
+    [ -e "$file" ] || continue
+    base="$(basename "$file" .tgz)"
+    case "$base" in
+      "$flat"-[0-9]*)
+        printf '%s' "$file"
+        return 0
+        ;;
+    esac
+  done
+
+  die "no ${flat}-<version>.tgz in $AGENTPLEX_PACKAGE, and --role=$ROLE installs $1. A directory missing one of the packages a role needs would install the rest and quietly leave that one to a registry"
 }
 
 detect_platform() {
@@ -426,21 +516,25 @@ runs_a_server() {
 # Linux prebuild, so npm compiles it from source, and node-gyp needs python3,
 # make and a C++ compiler -- none of which a stock debian:bookworm-slim has.
 #
-# Only a server opens a pseudoterminal. The hub depends on node-shared, the
-# protocol, the providers and zod, and on nothing that touches a pty, so a
-# hub-only machine was installing a toolchain and running the single most
-# failure-prone step of the whole install for a program it does not run.
-# node-pty is an optional dependency of the published package, which is what
-# lets npm finish without it here.
+# Only a server opens a pseudoterminal, and the packaging is what makes that a
+# fact about the machine rather than a hope. The hub package and the client
+# reach node-pty nowhere, and the command -- which every role installs, for
+# `setup` and `doctor` -- declares it optional. So no package a hub installs can
+# fail for want of a compiler: npm builds node-pty for the command where there
+# is one and skips it where there is not, and either way the hub runs.
 #
-# The other side of optional is that npm exits 0 when that build fails and
-# removes the package without saying so, which on a server would be a clean
-# install and a session that never starts. So for a server this step is still
-# required, and `install_package` sets AGENTPLEX_REQUIRE_PTY, which the
-# package's own postinstall reads and fails the install over.
+# For a server it is still required, and now in the strongest sense: node-pty is
+# a *required* dependency of the server package, so an npm that cannot compile
+# it fails the install itself, at the compile, with node-gyp's own error. That
+# is what retired AGENTPLEX_REQUIRE_PTY. The variable existed because node-pty
+# was optional in one tarball every machine installed and npm exits 0 when an
+# optional build fails, so a server could report a clean install and then fail
+# to open a session; the postinstall read the variable and turned that back into
+# a failure. There is no longer a machine where that can happen, so the variable
+# is gone rather than left standing with nothing to do.
 ensure_toolchain() {
   if ! runs_a_server; then
-    report 'toolchain' 'not needed: a hub opens no pseudoterminal, so node-pty may be skipped'
+    report 'toolchain' 'not needed: a hub opens no pseudoterminal, and no package it installs carries node-pty'
     return 0
   fi
 
@@ -780,33 +874,29 @@ fetch() {
 # ---------------------------------------------------------------------------
 
 install_package() {
-  report 'package' "$PACKAGE_SPEC into $PREFIX"
+  report 'package' "$PACKAGE_SPECS into $PREFIX"
   [ "$DRY_RUN" = 'no' ] || return 0
 
   local npm
   npm="$(npm_command)"
 
   # --ignore-scripts=false rather than whatever the operator's npmrc says.
-  # node-pty's install scripts are what compile the addon, and agentplex's
+  # node-pty's install scripts are what compile the addon, and the pty package's
   # postinstall restores the executable bit the npm tarball drops from node-pty's
   # spawn-helper. An npmrc carrying ignore-scripts=true produces an install that
-  # reports success and a service that cannot start, and our own postinstall
-  # cannot warn about it because it is disabled by the same setting.
+  # reports success and a service that cannot start, and that postinstall cannot
+  # warn about it because it is disabled by the same setting.
   #
-  # AGENTPLEX_REQUIRE_PTY is the other half of node-pty being optional. npm
-  # exits 0 when an optional dependency's build fails, removes it from the tree
-  # and prints nothing; on a hub that is the whole point, and on a server it
-  # would be a clean install and a session that never starts. The variable is
-  # what tells the package's postinstall which machine this is, and a postinstall
-  # that exits non-zero is the last thing that can still fail the install --
-  # after which npm rolls the package back rather than leaving a binary that
-  # cannot open a terminal. `--ignore-scripts=false` above is what makes it run
-  # at all; the two settings are one decision.
-  if runs_a_server; then
-    AGENTPLEX_REQUIRE_PTY=1 "$npm" install --global --prefix "$PREFIX" --ignore-scripts=false "$PACKAGE_SPEC"
-  else
-    "$npm" install --global --prefix "$PREFIX" --ignore-scripts=false "$PACKAGE_SPEC"
-  fi
+  # One npm invocation for every package this role needs, rather than one each.
+  # npm resolves them together, so a machine ends up with the set or with none of
+  # it -- and a hub whose client package failed to install is a hub serving 503,
+  # which is a worse thing to arrive at halfway through a loop than at a failed
+  # command.
+  #
+  # PACKAGE_SPECS is deliberately unquoted: it is a list of specs and npm wants
+  # them as separate arguments.
+  # shellcheck disable=SC2086
+  "$npm" install --global --prefix "$PREFIX" --ignore-scripts=false $PACKAGE_SPECS
 
   [ -x "$BIN_DIR/$PACKAGE_NAME" ] || die "npm reported success and there is no $BIN_DIR/$PACKAGE_NAME"
 }
@@ -1037,11 +1127,15 @@ write_units() {
 # Both halves are constants this script already carries, which is the whole
 # argument for the shape. $NODE_DIR is the runtime it adopted or unpacked --
 # already the thing it asserts is executable before it declares the runtime
-# ready. $PREFIX/lib/node_modules/$NPM_PACKAGE is already the marker
-# `uninstall_package` uses to decide whether a prefix is one of ours, so this
-# learns nothing new about npm's layout; it reads the layout this script already
-# bets on. Inside it the path is the workspace's, the same in a checkout, in the
-# image and in the tarball, because packaging keeps that layout on purpose.
+# ready. The package directory is npm's own layout, which `uninstall_package`
+# already bets on. Inside it the path is the workspace's, the same in a
+# checkout, in the image and in the tarball, because packaging keeps that layout
+# on purpose.
+#
+# The package is the daemon's own now, not the one package there used to be: a
+# hub machine has no `.../agentplex-server` directory to point at, and naming
+# the wrong one would be a unit that starts nothing on exactly the machine the
+# split was for.
 #
 # It is strictly better than what it replaces, and not only equivalent. The old
 # ExecStart named a script whose first line is #!/usr/bin/env node, so systemd
@@ -1051,7 +1145,21 @@ write_units() {
 # about agentplex. Naming the interpreter deletes that failure rather than
 # guarding against it: this unit starts this Node, and no search decides.
 daemon_command() {
-  printf '%s %s' "$NODE_DIR/node" "$PREFIX/lib/node_modules/$NPM_PACKAGE/apps/$1/dist/main.js"
+  printf '%s %s' "$NODE_DIR/node" \
+    "$PREFIX/lib/node_modules/$(daemon_package "$1")/apps/$1/dist/main.js"
+}
+
+# The package that holds one daemon's compiled entry.
+#
+# A case rather than a string built out of the daemon name. The published names
+# happen to end in the daemon's word today, and a machine's ExecStart is the
+# wrong thing to have depend on that continuing to be true.
+daemon_package() {
+  case "$1" in
+    hub) printf '%s' "$NPM_PACKAGE_HUB" ;;
+    server) printf '%s' "$NPM_PACKAGE_SERVER" ;;
+    *) die "no package holds a $1 daemon" ;;
+  esac
 }
 
 # One unit, as text, from the paths this run resolved. Both daemons read the
@@ -1267,8 +1375,8 @@ have_terminal() {
 # confirmation nobody is there to answer is a hang rather than a safeguard. What
 # stands in for one is that nothing is removed because a flag named it. Every
 # directory below is removed because a marker this script wrote is in it:
-# `$NODE_HOME/$NODE_STAMP` for the runtime, and
-# `lib/node_modules/@softiesolutions/agentplex` for the package. `--dry-run`
+# `$NODE_HOME/$NODE_STAMP` for the runtime, and a package directory under
+# `lib/node_modules/@softiesolutions` for the packages. `--dry-run`
 # prints the whole list first, `validate_prefix` has already refused the prefix
 # shapes a removal must not be handed, and the directories that are left over
 # are cleared with `rmdir`, which cannot take anything with it.
@@ -1371,32 +1479,48 @@ uninstall_node() {
   rm -rf "$NODE_HOME"
 }
 
-# The package npm installed, and the link it made in the prefix's bin.
+# The packages npm installed, and the link it made in the prefix's bin.
 #
-# $PREFIX/lib/node_modules/@softiesolutions/agentplex is the marker as much as
-# the target: it is there because this script ran `npm install --global --prefix
-# $PREFIX`, and a prefix without it is not a prefix this script installed into.
-# That is what keeps a mistyped `--uninstall --prefix=/usr/local` from being a
-# command that empties /usr/local/bin.
+# A package directory under $PREFIX/lib/node_modules is the marker as much as
+# the target: one is there because this script ran `npm install --global
+# --prefix $PREFIX`, and a prefix with none of them is not a prefix this script
+# installed into. That is what keeps a mistyped `--uninstall --prefix=/usr/local`
+# from being a command that empties /usr/local/bin, and splitting one package
+# into four does not weaken it: every one of the four is ours, so any one of
+# them answers the same question, and a prefix holding none answers it too.
 #
-# It takes the package and not the tree around it. A provider `agentplex setup`
-# installed into the same prefix was put there by something else, and what it
-# leaves behind is a directory the rmdir sweep then declines to remove and the
-# notice below names.
+# All four, whatever --role says, for the same reason the units are all removed:
+# --role decides what an install writes, and an uninstall is about what is on
+# the disk. A hub package left behind because the operator typed --role=server
+# the second time is exactly the thing they asked to be rid of.
+#
+# It takes the packages and not the tree around them. A provider `agentplex
+# setup` installed into the same prefix was put there by something else, and
+# what it leaves behind is a directory the rmdir sweep then declines to remove
+# and the notice below names.
 uninstall_package() {
-  local tree="$PREFIX/lib/node_modules/$NPM_PACKAGE"
-  [ -e "$tree" ] || return 1
+  local package tree found='no'
 
-  report 'package' "remove $tree and $BIN_DIR/$PACKAGE_NAME"
+  for package in "$NPM_PACKAGE" "$NPM_PACKAGE_HUB" "$NPM_PACKAGE_SERVER" "$NPM_PACKAGE_WEB"; do
+    tree="$PREFIX/lib/node_modules/$package"
+    [ -e "$tree" ] || continue
+    found='yes'
+    report 'package' "remove $tree"
+    [ "$DRY_RUN" = 'no' ] || continue
+    rm -rf "$tree"
+  done
+
+  [ "$found" = 'yes' ] || return 1
+
+  report 'package' "remove $BIN_DIR/$PACKAGE_NAME"
   [ "$DRY_RUN" = 'no' ] || return 0
-  rm -rf "$tree"
-  # The scope directory is npm's rather than this package's, so it goes only
-  # when it is empty: `rmdir` takes it when this was the only package published
-  # under the scope in this prefix and leaves it, and says nothing, when it was
-  # not. Without this the sweep below finds a `lib/node_modules` that is not
-  # empty and the whole prefix stays behind.
-  rmdir "$(dirname "$tree")" 2>/dev/null || true
   rm -f "$BIN_DIR/$PACKAGE_NAME"
+  # The scope directory is npm's rather than this project's, so it goes only
+  # when it is empty: `rmdir` takes it when these were the only packages
+  # published under the scope in this prefix and leaves it, and says nothing,
+  # when they were not. Without this the sweep below finds a `lib/node_modules`
+  # that is not empty and the whole prefix stays behind.
+  rmdir "$PREFIX/lib/node_modules/$NPM_SCOPE" 2>/dev/null || true
 }
 
 # What is still here, said out loud rather than left for somebody to find.

@@ -1,8 +1,8 @@
 # agentplex
 
-Watch and drive coding-agent sessions across machines. One package and one
-bin, `agentplex`: `setup` is the wizard, `doctor` is the read-only check. The
-hub and the server are daemons rather than subcommands -- nothing but
+Watch and drive coding-agent sessions across machines. This package is the
+command, `agentplex`: `setup` is the wizard, `doctor` is the read-only check.
+The hub and the server are daemons rather than subcommands -- nothing but
 `agentplex` is installed onto your PATH, and the units `install.sh` writes are
 what start them.
 
@@ -16,19 +16,32 @@ unscoped name on npm is an unrelated placeholder somebody else registered, and a
 `bin` key is not a package name, so the registry entry is scoped and nothing you
 type is.
 
-On a machine that has nothing on it yet, `install.sh` does the whole of that:
-the Node runtime, the toolchain below, this package, and the systemd units, for
-the user who runs it:
+On a machine that has nothing on it yet, `install.sh` does the whole of it: the
+Node runtime, the toolchain if this machine needs one, the packages the role
+needs, and the systemd units, for the user who runs it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh | bash
 ```
 
-The package carries the compiled programs, the compiled packages they share,
-the built web app and the migrations, so a machine needs Node and nothing else
-from this project: no pnpm, no vite, no checkout. Upgrading is
-installing a later version, and pinning one is
-`@softiesolutions/agentplex@<version>`.
+## Four packages, and what your machine installs
+
+A release is four packages, and a machine installs only what it runs.
+
+| package                             | what it is                                  | who installs it                |
+| ----------------------------------- | ------------------------------------------- | ------------------------------ |
+| `@softiesolutions/agentplex`        | this one: the command, `setup` and `doctor` | every machine                  |
+| `@softiesolutions/agentplex-hub`    | the hub daemon and its migrations           | `--role=hub`, `--role=both`    |
+| `@softiesolutions/agentplex-web`    | the built web app the hub serves            | with the hub                   |
+| `@softiesolutions/agentplex-server` | the server daemon                           | `--role=server`, `--role=both` |
+
+`web` is not a role. It is part of being a hub: the hub finds the client by
+resolving that package name, and the two are installed as siblings.
+
+Every package carries the compiled programs it runs and the compiled workspace
+packages those import, so a machine needs Node and nothing else from this
+project: no pnpm, no vite, no checkout. Upgrading is installing a later version,
+and pinning one is `@softiesolutions/agentplex@<version>`.
 
 ## Installing a server needs a C++ toolchain on Linux; a hub does not
 
@@ -41,12 +54,14 @@ prebuild, so npm compiles it from source at install time and node-gyp needs
 `python3`, `make` and a C++ compiler. On a stock `debian:bookworm-slim` with
 nothing but Node added, they are all absent.
 
-The hub opens no pseudoterminal. It owns the database, serves the client and
-merges what every paired server reports, and it depends on nothing that touches
-a pty -- so node-pty is an **optional dependency** of this package, and a
-hub-only machine installs with no compiler on it and nothing to compile. That
-matters more than it sounds: the source build was both the only reason a hub
-needed a toolchain and the step of the whole install most likely to fail.
+A hub opens no pseudoterminal. It owns the database, serves the client and
+merges what every paired server reports, and neither
+`@softiesolutions/agentplex-hub` nor `@softiesolutions/agentplex-web` has
+node-pty anywhere in its dependency set. This package declares it optional, so
+npm is allowed to skip it -- which means no package a hub-only machine installs
+can fail for want of a compiler. That matters more than it sounds: the source
+build was both the only reason a hub needed a toolchain and the step of the
+whole install most likely to fail.
 
 For a server, install the toolchain first:
 
@@ -59,22 +74,24 @@ xcode-select --install                                                # macOS, i
 `install.sh` does this for you on the Linux path, for `--role=server` and
 `--role=both` and not for `--role=hub`.
 
-### Optional does not mean optional for a server
+### Required in the server package, optional in this one
 
-npm exits `0` when an optional dependency's build fails: it removes the package
-and prints nothing about it. On a hub that is exactly right. On a server it
-would be a clean install and a session that never starts, so three things stand
-between the two:
+node-pty is a **required** dependency of `@softiesolutions/agentplex-server`.
+npm exits `0` when an _optional_ dependency's build fails -- it removes the
+package and prints nothing about it -- which on a server would be a clean
+install and a session that never starts. Required means npm fails that install
+itself, at the compile, with node-gyp's own error naming the compiler.
 
-- the server refuses to start, naming node-pty and saying what to install,
-  rather than dying inside a native addon before `main` runs.
-- `agentplex doctor` reports the seam as `unusable` for any role that runs a
-  server, and exits `1`.
-- `install.sh` sets `AGENTPLEX_REQUIRE_PTY=1` for `--role=server` and
-  `--role=both`. The package's `postinstall` reads it, and a node-pty it cannot
-  load fails the install -- after which npm rolls the package back, rather than
-  leaving behind a binary that cannot open a terminal. Without the variable the
-  same script warns and lets the install finish, which is what a hub wants.
+In this package it is **optional**, deliberately. Every machine installs the
+command, hub-only ones included, and a hub-only machine is exactly the one that
+may have no compiler. What a missing node-pty costs here is narrow and reported:
+
+- `agentplex doctor` reports the pty seam as `unusable` for any role that runs
+  a server, and exits `1`.
+- `agentplex setup` cannot log a provider in through a terminal. Everything
+  else it writes, it still writes.
+- an agentplex server refuses to start, naming node-pty and saying what to
+  install, rather than dying inside a native addon before `main` runs.
 
 ## If your npm is configured with `ignore-scripts`
 
@@ -84,7 +101,7 @@ unusual one, produces an install that reports success and leaves node-pty as
 source that cannot load, and then the server fails to start with a module
 error rather than anything about a pty.
 
-Override it for this package:
+Override it:
 
 ```sh
 npm install --global --ignore-scripts=false @softiesolutions/agentplex
@@ -94,14 +111,14 @@ Two scripts run under that flag, and they are the whole of what this package
 executes at install time:
 
 - node-pty's own, which compiles the addon.
-- agentplex's `postinstall`, which loads node-pty and then restores the
-  executable bit on its `spawn-helper`. The npm tarball drops that bit from the
-  prebuilt binaries, and the only symptom is `Error: posix_spawnp failed.` from
-  inside a native addon for a session that never starts. It loads rather than
-  resolves, because an `ignore-scripts` install leaves node-pty's sources in
-  place with no addon beside them and only a load can tell the difference. It
-  fails an install in exactly one case: `AGENTPLEX_REQUIRE_PTY` is set and
-  node-pty will not load. Otherwise it warns and exits `0`.
+- a `postinstall`, which loads node-pty and then restores the executable bit on
+  its `spawn-helper`. The npm tarball drops that bit from the prebuilt binaries,
+  and the only symptom is `Error: posix_spawnp failed.` from inside a native
+  addon for a session that never starts. It loads rather than resolves, because
+  an `ignore-scripts` install leaves node-pty's sources in place with no addon
+  beside them and only a load can tell the difference. It never fails an
+  install: it warns and exits `0`, and the machine where a missing node-pty is
+  not survivable is the one where npm has already refused.
 
 ## Checking a machine
 

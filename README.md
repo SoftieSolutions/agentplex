@@ -29,11 +29,36 @@ MCP agent  ─┘                │             SERVER ────────
   `agentplex-store.json` at its root. A session's identity is its store and its
   id within it, never the machine it happens to be running on.
 
-One package and one bin, `agentplex`. Its subcommands are `setup`, the wizard,
-and `doctor`, the read-only check. `hub` and `server` are daemons rather than
-subcommands, and nobody types either: `install.sh` writes a systemd unit per
-daemon the machine's role runs, and `pnpm -C apps/hub start` is the same thing
-in a checkout. A machine that runs both daemons starts one of each.
+One bin, `agentplex`. Its subcommands are `setup`, the wizard, and `doctor`,
+the read-only check. `hub` and `server` are daemons rather than subcommands, and
+nobody types either: `install.sh` writes a systemd unit per daemon the machine's
+role runs, and `pnpm -C apps/hub start` is the same thing in a checkout. A
+machine that runs both daemons starts one of each.
+
+## What gets published
+
+Four packages, one per app, so that a machine installs only what it runs.
+
+| package                             | what it is                         | installed by                   |
+| ----------------------------------- | ---------------------------------- | ------------------------------ |
+| `@softiesolutions/agentplex`        | the bin: `setup`, `doctor`, `help` | every role                     |
+| `@softiesolutions/agentplex-hub`    | the hub daemon and its migrations  | `--role=hub`, `--role=both`    |
+| `@softiesolutions/agentplex-web`    | the built web app the hub serves   | with the hub                   |
+| `@softiesolutions/agentplex-server` | the server daemon                  | `--role=server`, `--role=both` |
+
+`web` is not a role: it is part of being a hub, and the hub finds it by
+resolving that package name rather than by a path inside its own tree. A hub
+that is missing it still runs, warns once at startup and answers the client
+routes with `503`.
+
+What a hub-only machine stops carrying is the point.
+[node-pty](https://github.com/microsoft/node-pty), the native addon behind the
+server's pseudoterminals, has no Linux prebuild, so it is compiled at install
+time -- the step of any install most likely to fail. The hub and web packages
+reach it nowhere and the bin's declares it optional, so nothing a hub installs
+can fail for want of a compiler. It is a required dependency of the server
+package, where a machine that cannot compile it fails the install rather than
+reporting success and never opening a session.
 
 ## Repository layout
 

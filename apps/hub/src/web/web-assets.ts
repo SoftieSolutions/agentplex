@@ -109,17 +109,24 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 const NOT_FOUND = 'not found';
 const NOT_A_READ = 'the client is served on GET';
 /**
- * What a browser is told when the hub has no build beside it.
+ * What a browser is told when the hub has no client to serve.
  *
  * 503 rather than 404, which would claim the page does not exist, or 500,
  * which would claim a fault. Nothing is broken: this hub is running and has
- * nothing to hand anybody. The directory it looked in is in the startup log
- * and not in here — a hub is a thing on the internet, and where its files live
- * is between it and its operator.
+ * nothing to hand anybody. The API, the websocket and the health check all
+ * answer as usual, and only this costs itself.
+ *
+ * It names the package and not a path. The client is installed beside the hub
+ * now -- `@softiesolutions/agentplex-web`, which `install.sh --role=hub` takes
+ * with the hub -- so the package name is the one word that is true of an
+ * installed machine, of the image and of a checkout at once, and it is the word
+ * an operator can act on. Which directory this hub looked in is in the startup
+ * log and not in here: a hub is a thing on the internet, and where its files
+ * live is between it and its operator.
  */
 const NO_CLIENT =
   'agentplex: this hub has no client to serve.\n' +
-  'The built web application is not beside it. Build it, or run an image that ships it.\n';
+  'Install @softiesolutions/agentplex-web beside it, or build apps/web in a checkout.\n';
 
 export interface WebAssetRequest {
   readonly method: string | undefined;

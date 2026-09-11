@@ -16,6 +16,7 @@
     "@agentplex/node-shared": "workspace:*",
     "@agentplex/protocol": "workspace:*",
     "@agentplex/providers": "workspace:*",
+    "@softiesolutions/agentplex-web": "workspace:*",
     "zod": "^4.1.13"
   },
   "devDependencies": {
