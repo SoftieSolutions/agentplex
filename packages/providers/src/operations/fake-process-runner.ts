@@ -1,3 +1,5 @@
+import type { DetachedSpawner, DetachedStart } from './detached-spawn.js';
+import type { Argv } from './operation.js';
 import {
   describeProcessRequest,
   type ProcessOutcome,
@@ -67,4 +69,37 @@ export function printed(stdout: string): ProcessOutcome {
 /** A program that ran and said no: git's 128, ps's 1. */
 export function refused(exitCode: number, stderr: string): ProcessOutcome {
   return { kind: 'exited', exitCode, stdout: '', stderr };
+}
+
+/**
+ * A detached spawner that starts nothing and remembers every argv.
+ *
+ * The assertion this exists for is the one the notice's whole design rests on:
+ * that a stale cache asks for a refresh and the run it was asked from does no
+ * network I/O and waits for nothing. "A refresh was requested" is a value in
+ * this list; "a refresh happened" would need a process.
+ */
+export interface FakeDetachedSpawner extends DetachedSpawner {
+  /** Every argv started, in order. */
+  readonly started: readonly Argv[];
+}
+
+export interface FakeDetachedSpawnerOptions {
+  /** Why this machine cannot start anything, for the one caller that reports it. */
+  readonly problem?: string;
+}
+
+export function createFakeDetachedSpawner(
+  options: FakeDetachedSpawnerOptions = {},
+): FakeDetachedSpawner {
+  const started: Argv[] = [];
+  const problem = options.problem;
+
+  return {
+    started,
+    async start(argv: Argv): Promise<DetachedStart> {
+      started.push(argv);
+      return problem === undefined ? { ok: true } : { ok: false, problem };
+    },
+  };
 }

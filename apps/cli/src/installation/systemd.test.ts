@@ -127,6 +127,36 @@ describe('starting and stopping', () => {
     expect(runner.requests).toEqual([]);
   });
 
+  /**
+   * The pair `agentplex update` restarts through, and the reason they are not
+   * `enable` and `disable`: an update replaces bytes, and what an operator
+   * decided about boot is not its business. A restart through `disable --now`
+   * and `enable --now` would silently take a unit off boot that somebody had
+   * put on it, or the reverse.
+   */
+  it('stops and starts without touching what happens at boot', async () => {
+    const { systemd: control, runner } = systemd({
+      'systemctl --user stop agentplex-hub.service': printed(''),
+      'systemctl --user start agentplex-hub.service': printed(''),
+    });
+
+    expect(await control.stop('user', ['agentplex-hub.service'])).toEqual({ ok: true });
+    expect(await control.start('user', ['agentplex-hub.service'])).toEqual({ ok: true });
+
+    expect(runner.requests.map((request) => request.args)).toEqual([
+      ['--user', 'stop', 'agentplex-hub.service'],
+      ['--user', 'start', 'agentplex-hub.service'],
+    ]);
+  });
+
+  it('refuses a unit name that is not one of agentplex units on the update path too', async () => {
+    const { systemd: control, runner } = systemd();
+
+    expect((await control.stop('user', ['sshd.service'])).ok).toBe(false);
+    expect((await control.start('user', ['../../etc/passwd'])).ok).toBe(false);
+    expect(runner.requests).toEqual([]);
+  });
+
   it('says the program is missing rather than pretending it ran', async () => {
     const { systemd: control } = systemd({}, false);
 

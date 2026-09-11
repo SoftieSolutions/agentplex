@@ -26,7 +26,7 @@ import type { UnitScope } from './layout.js';
  *
  * ## Every spawn is an operation
  *
- * Four operations, through the registry's own `runOperation`: a parser that can
+ * Six operations, through the registry's own `runOperation`: a parser that can
  * say no, a pure argv builder, and a reader that gives the exit code its
  * meaning. Nothing here builds a command line by concatenating a string, and
  * there is no shell, because `ProcessRequest` has nowhere to put one.
@@ -181,6 +181,22 @@ export interface Systemd {
   enable(scope: UnitScope, units: readonly string[]): Promise<SystemdOutcome>;
   /** `disable --now`: the exact reverse. */
   disable(scope: UnitScope, units: readonly string[]): Promise<SystemdOutcome>;
+  /**
+   * `stop`, and `start`, without touching whether a unit comes back at boot.
+   *
+   * The pair `agentplex update` uses, and the reason they are not `enable` and
+   * `disable` is the whole of what an update is allowed to change. An update
+   * puts different bytes on the disk; what an operator decided about boot is
+   * not its business. A restart through `disable --now` and `enable --now`
+   * would silently turn off a unit somebody had deliberately taken off boot,
+   * and turn on one they had -- and neither is a decision this command was
+   * asked to make.
+   *
+   * They also start exactly the units they are given, which is what lets the
+   * update restart only what it found running.
+   */
+  stop(scope: UnitScope, units: readonly string[]): Promise<SystemdOutcome>;
+  start(scope: UnitScope, units: readonly string[]): Promise<SystemdOutcome>;
 }
 
 export interface SystemdDependencies {
@@ -262,6 +278,24 @@ const disableOperation: Operation<UnitsRequest, null> = {
   read: (completed) => acted(completed),
 };
 
+const stopOperation: Operation<UnitsRequest, null> = {
+  name: 'systemd.stop',
+  summary: 'stop agentplex units, leaving them enabled',
+  request: unitsRequestSchema,
+  timeoutMs: ACT_TIMEOUT_MS,
+  argv: (request) => systemctl(request.scope, ['stop', ...request.units]),
+  read: (completed) => acted(completed),
+};
+
+const startOperation: Operation<UnitsRequest, null> = {
+  name: 'systemd.start',
+  summary: 'start agentplex units, without changing what happens at boot',
+  request: unitsRequestSchema,
+  timeoutMs: ACT_TIMEOUT_MS,
+  argv: (request) => systemctl(request.scope, ['start', ...request.units]),
+  read: (completed) => acted(completed),
+};
+
 export function createSystemd({ runner, programs }: SystemdDependencies): Systemd {
   /**
    * One act, reduced to what a caller can do about it.
@@ -299,6 +333,8 @@ export function createSystemd({ runner, programs }: SystemdDependencies): System
     reload: (scope) => act(reloadOperation, { scope }),
     enable: (scope, units) => act(enableOperation, { scope, units }),
     disable: (scope, units) => act(disableOperation, { scope, units }),
+    stop: (scope, units) => act(stopOperation, { scope, units }),
+    start: (scope, units) => act(startOperation, { scope, units }),
   };
 }
 

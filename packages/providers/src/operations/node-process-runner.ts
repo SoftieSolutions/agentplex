@@ -1,4 +1,6 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import type { DetachedSpawner, DetachedStart } from './detached-spawn.js';
+import type { Argv } from './operation.js';
 import type { ProcessOutcome, ProcessRequest, ProcessRunner } from './process-runner.js';
 
 /**
@@ -24,6 +26,13 @@ import type { ProcessOutcome, ProcessRequest, ProcessRunner } from './process-ru
  * more than it is worth, and both end as a `failed` outcome rather than a
  * rejected promise: a program that hangs is a fact the caller has to report,
  * not an exception for it to unwind through.
+ *
+ * The detached spawner at the bottom of this file is the other way a child is
+ * started, and it is here rather than in a module of its own precisely so that
+ * the lint rule above can stay absolute: one file imports `node:child_process`,
+ * and a second exception would be the beginning of a list. It makes the same
+ * three decisions in the same place -- no shell, no cwd, the environment fixed
+ * at construction -- and differs only in what happens after the fork.
  */
 
 /**
@@ -116,4 +125,74 @@ function describeFailure(request: ProcessRequest, error: unknown): string {
     }
   }
   return `${request.file} could not be run: ${String(error)}`;
+}
+
+/**
+ * The real detached start: fork it, hand it nothing, and let go.
+ *
+ * Three things are deliberate, and each of them is what makes the update notice
+ * able to ask for a refresh without the command an operator typed paying for
+ * one.
+ *
+ * - **`detached: true`** puts the child in a process group of its own. Without
+ *   it a `^C` at the operator's terminal reaches the whole foreground group, so
+ *   the refresh this started would be killed by the keystroke that ended the
+ *   command it was started from -- which is the one moment somebody is most
+ *   likely to press it.
+ * - **`stdio: 'ignore'`** is what keeps the child's output out of the parent's
+ *   report and, less obviously, what keeps the parent from being held open: an
+ *   inherited pipe is a handle the event loop counts, so a child writing to one
+ *   would keep this process alive until it finished, which is exactly the wait
+ *   this exists to avoid. It is also why the child sees no terminal and prints
+ *   no notice of its own.
+ * - **`unref()`** releases the handle libuv keeps for the child itself. With
+ *   the two above and without this, the parent still waits.
+ *
+ * The error listener is not optional. A failure to spawn -- `ENOENT` for an
+ * interpreter that is not there -- is delivered as an `error` event on the
+ * child object, and an `error` event with no listener is thrown as an uncaught
+ * exception. The whole point of this call is that it cannot cost the command
+ * that made it anything, so the one failure mode it has must not be able to end
+ * the process.
+ *
+ * What comes back is whether the fork happened, and never what the child did.
+ * That is not a limitation of the implementation, it is the seam: nothing here
+ * waits, so nothing here can know.
+ */
+export function createNodeDetachedSpawner({
+  environment,
+}: NodeProcessRunnerDependencies): DetachedSpawner {
+  return {
+    async start(argv: Argv): Promise<DetachedStart> {
+      return new Promise<DetachedStart>((resolve) => {
+        let child;
+        try {
+          child = spawn(argv.file, [...argv.args], {
+            shell: false,
+            env: environment,
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+        } catch (error) {
+          // `spawn` itself throws for an argument it will not accept -- a file
+          // name with a NUL in it -- rather than emitting an error event.
+          resolve({ ok: false, problem: `${argv.file} could not be started: ${String(error)}` });
+          return;
+        }
+
+        child.once('error', (error: Error) => {
+          resolve({ ok: false, problem: `${argv.file} could not be started: ${String(error)}` });
+        });
+
+        // `spawn` is asynchronous, so a child that will fail with ENOENT has
+        // not failed yet at this point. `spawned` is emitted when the fork
+        // succeeded, which is the only moment this can honestly answer yes.
+        child.once('spawn', () => {
+          child.unref();
+          resolve({ ok: true });
+        });
+      });
+    },
+  };
 }

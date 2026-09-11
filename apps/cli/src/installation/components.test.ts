@@ -7,7 +7,14 @@ import {
   SERVER_PACKAGE,
   WEB_PACKAGE,
 } from '../../../../scripts/assemble-package.js';
-import { COMPONENTS, COMPONENT_PACKAGES, daemonEntrypoint, daemonPackage } from './components.js';
+import {
+  COMPONENTS,
+  COMPONENT_ASSETS,
+  COMPONENT_PACKAGES,
+  daemonEntrypoint,
+  daemonPackage,
+  releaseUrl,
+} from './components.js';
 
 /**
  * The component table, held against the assembler's own.
@@ -41,6 +48,24 @@ describe('the components', () => {
     for (const notADaemon of ['cli', 'web', 'hubb', '']) {
       expect(daemonPackage(notADaemon)).toBeNull();
     }
+  });
+
+  it('name the asset every release publishes each component under', () => {
+    // A rename here and not on the publishing side is an `agentplex update`
+    // that hands npm a URL nothing is served at -- and unlike the package
+    // names, nothing on the machine can notice: the 404 arrives at install
+    // time, after the units have been stopped.
+    expect(COMPONENT_ASSETS).toEqual(
+      Object.fromEntries(PACKAGES.map((target) => [target.component, target.asset])),
+    );
+  });
+
+  it('build the URL one release of one component is published at', () => {
+    // The same three parts `release_url` in the installer joins, in the same
+    // order: the download root, the tag, and the constant asset name.
+    expect(releaseUrl('hub', '1.2.0')).toBe(
+      'https://github.com/SoftieSolutions/agentplex/releases/download/hub-v1.2.0/agentplex-hub.tgz',
+    );
   });
 
   it('name the entry inside a package the way the unit files do', () => {

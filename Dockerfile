@@ -380,6 +380,48 @@ RUN cat /tmp/start.log \
     && grep -q 'scope=user' /tmp/start.log \
     && ! grep -q 'enabled and started' /tmp/start.log
 
+# `agentplex update`, on the one machine in this repository with a real install
+# on it to ask about.
+#
+# AGENTPLEX_VERSIONS is `install.sh`'s own seam and the command reads it for the
+# same reason the script does: a directory laid out as a release is, so what is
+# published can be stated by this build rather than fetched. That is what makes
+# this assertion worth having -- nothing here reaches a network, and what is
+# under test is the part only a real machine has: the cache lands in the running
+# user's own cache directory, where every identity on a --system box has one,
+# and `status` reports out of the file `update` wrote.
+#
+# `--check` and not a real update, deliberately. There is no published release
+# to install from, and the runtime question would go to nodejs.org; `--check` is
+# the invocation that asks only about the manifest, which is also why it is what
+# the passive notice refreshes with.
+RUN mkdir -p /tmp/mirror \
+    && printf '%s\n' '{"cli":{"version":"9.9.9","protocol":1},"server":{"version":"9.9.9","protocol":1}}' \
+      >/tmp/mirror/versions.json
+
+# Piped through `tee` rather than redirected to a file, because this one is
+# expected to exit 0: a redirected failure is a layer that fails with nothing on
+# the log to say why, and under this stage's `pipefail` the pipeline still
+# carries the exit code. The two below expect a non-zero and keep the redirect.
+RUN AGENTPLEX_VERSIONS=/tmp/mirror agentplex update --check 2>&1 | tee /tmp/check.log
+RUN cat /tmp/check.log \
+    && grep -Eq '^  cli +[0-9]+\.[0-9]+\.[0-9]+ +-> 9\.9\.9$' /tmp/check.log \
+    && grep -Eq '^  server +[0-9]+\.[0-9]+\.[0-9]+ +-> 9\.9\.9$' /tmp/check.log \
+    && grep -q '/tmp/mirror/versions.json' /tmp/check.log \
+    && test -f "$HOME/.cache/agentplex/versions.json"
+
+# The other end of that one file. `status` still reaches no network -- it reads
+# what `update --check` left -- and it labels the answer with the file's age.
+RUN agentplex status >/tmp/status-available.log 2>&1 || true
+RUN cat /tmp/status-available.log \
+    && grep -q '9.9.9 available' /tmp/status-available.log \
+    && grep -q 'checked just now' /tmp/status-available.log
+
+# A pin names a release tag, so it is exact. Refused at the flag, before the
+# manifest is read and long before anything is stopped.
+RUN ! AGENTPLEX_VERSIONS=/tmp/mirror agentplex update hub@1.3 2>&1 | tee /tmp/pin.log
+RUN grep -q '1.3.0 rather than 1.3' /tmp/pin.log
+
 # Undoing it, which is the only place an uninstall can be exercised against
 # something that was really installed. A dry run can be asserted in the suite
 # and the removals cannot: there is no machine to throw away anywhere else, and

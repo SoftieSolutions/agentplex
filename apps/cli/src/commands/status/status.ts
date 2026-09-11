@@ -5,6 +5,7 @@ import {
 } from '../../installation/installation.js';
 import { formatUnits } from '../../installation/units.js';
 import type { UnitState } from '../../installation/systemd.js';
+import { describeAge, type CachedVersions } from '../../versions/versions-cache.js';
 
 /**
  * `agentplex status` as lines to print, and the verdict that goes with them.
@@ -15,13 +16,18 @@ import type { UnitState } from '../../installation/systemd.js';
  *
  * ## What this reports, and what it refuses to
  *
- * Installed versions, and nothing about what exists elsewhere. There is no "a
- * newer version is available" column and no place one could be smuggled in,
- * because answering that means a fetch, and a fetch means a cache, a timeout, a
- * stale answer to label with its age, and a `status` that is slow or wrong when
- * a registry is down. All of that belongs to the update command, which owns the
- * version oracle. The seam it will add is the report itself: a column per
- * package, filled from something this function is handed.
+ * Installed versions, and -- since the update command exists -- what is
+ * available beside them. The refusal underneath that has not moved: **this
+ * reaches no network.** The available column is read out of the cache
+ * `agentplex update --check` writes, which is a file on this disk like any
+ * other, and it is labelled with that file's age. A machine that has never run
+ * a check has no column and is told which command makes one.
+ *
+ * That is the distinction worth keeping when somebody next edits this: the
+ * objection was never to reporting what is available, it was to a `status` that
+ * is slow or wrong when a registry is down. A cache read cannot be either. The
+ * column arrives as a value this function is handed, so there is still nowhere
+ * in here a fetch could be smuggled in.
  *
  * What it does report is the protocol, because that is a fact about the
  * artifacts on this disk and needs nothing fetched to check. Four components on
@@ -30,6 +36,18 @@ import type { UnitState } from '../../installation/systemd.js';
  * frames, with nothing in either log naming the cause. `install.sh` refuses to
  * create that machine and this is what notices one that exists anyway.
  */
+
+/**
+ * What `update --check` last wrote, and when this run is reading it.
+ *
+ * The clock arrives with it rather than being read here, because a formatter
+ * that called `Date.now()` would be a formatter whose output cannot be written
+ * down in a test.
+ */
+export interface AvailableVersions {
+  readonly cached: CachedVersions;
+  readonly now: number;
+}
 
 export interface StatusReport {
   readonly lines: readonly string[];
@@ -71,6 +89,7 @@ export interface StatusReport {
 export function formatStatus(
   installation: Installation,
   units: readonly UnitState[] | null,
+  available: AvailableVersions | null = null,
 ): StatusReport {
   const { layout } = installation;
   const lines = [
@@ -79,7 +98,8 @@ export function formatStatus(
     }`,
     '',
     'packages',
-    ...installation.packages.flatMap(packageLines),
+    ...installation.packages.flatMap((one) => packageLines(one, available)),
+    ...availableLines(available),
     '',
     'units',
     ...unitBlock(installation, units),
@@ -122,10 +142,18 @@ function unitBlock(
  * command. The published name is on the line only when there is a problem with
  * it, where it is the thing somebody has to go and look at.
  */
-function packageLines(installed: InstalledPackage): readonly string[] {
+function packageLines(
+  installed: InstalledPackage,
+  available: AvailableVersions | null,
+): readonly string[] {
+  // The column is there only when there is a cache to fill it from. A machine
+  // that has never run a check reports exactly what it reported before this
+  // column existed, rather than a fixed-width gap an operator has to work out
+  // the meaning of.
   const line = [
     `  ${installed.component.padEnd(8)}`,
     (installed.state === 'installed' ? (installed.version ?? '?') : installed.state).padEnd(12),
+    ...(available === null ? [] : [availableColumn(installed, available).padEnd(16)]),
     installed.protocol === null ? '' : `protocol ${installed.protocol}`,
   ]
     .join(' ')
@@ -133,6 +161,49 @@ function packageLines(installed: InstalledPackage): readonly string[] {
   return installed.problem === null
     ? [line]
     : [line, `    ${installed.name}: ${installed.problem}`];
+}
+
+/**
+ * What the cache says about this component, in one column.
+ *
+ * Empty for a component that is not installed and for one the cache does not
+ * name: a hub machine has no server to compare, and a manifest written before a
+ * component existed says nothing about it. Neither is a fault, and a column
+ * that printed something for them would be inventing a comparison.
+ */
+function availableColumn(installed: InstalledPackage, available: AvailableVersions | null): string {
+  if (available === null || installed.state !== 'installed' || installed.version === null) {
+    return '';
+  }
+  const published = available.cached.manifest[installed.component]?.version;
+  if (published === undefined) return '';
+  // Equality and not an ordering: what is being answered is "is this the one
+  // that is published", and a machine ahead of the manifest is reported with
+  // both versions rather than as up to date.
+  return published === installed.version ? 'current' : `${published} available`;
+}
+
+/**
+ * The line under the table saying where the other column came from.
+ *
+ * The age is the point. This is a cached answer, up to a day old even when it
+ * is fresh and older than that on a machine that has been offline, so a column
+ * with no date under it would be a claim about a registry this command never
+ * asked. A machine with no cache is told which command makes one, rather than
+ * being left with a blank column and no explanation.
+ */
+function availableLines(available: AvailableVersions | null): readonly string[] {
+  if (available === null) {
+    return [
+      '  what is available is not shown: agentplex update --check asks, and this reads',
+      '  what it last wrote rather than reaching a network of its own',
+    ];
+  }
+  return [
+    `  available from ${available.cached.source}, checked ${describeAge(
+      available.now - available.cached.checkedAt,
+    )}`,
+  ];
 }
 
 function runtimeLines(installation: Installation): readonly string[] {

@@ -77,8 +77,15 @@ describe('the program names', () => {
     }
   });
 
-  it('carry the five commands this app holds, and no daemon among them', () => {
-    expect(namesOfKind('command')).toEqual(['doctor', 'setup', 'start', 'status', 'stop']);
+  it('carry the six commands this app holds, and no daemon among them', () => {
+    expect(namesOfKind('command')).toEqual([
+      'doctor',
+      'setup',
+      'start',
+      'status',
+      'stop',
+      'update',
+    ]);
     // None of them is packaged as a daemon: every one is a module under the
     // entry the package already carries, so there is no `apps/setup/dist` to
     // pack and no `apps/start/dist` either.
