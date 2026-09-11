@@ -17,15 +17,18 @@ import {
   nodeProviderFiles,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
+import { checkNodePty } from '@agentplex/pty';
 import { doctorUsage, loadDoctorConfig } from './config.js';
 import { formatDoctorReport, inspectMachine } from './doctor.js';
 
 /**
  * `agentplex doctor`: read the settings, inspect the machine, print the
  * report, exit. It binds no port, opens no database, opens no pty and writes
- * nothing, and this program cannot: it depends on the provider seam and the
- * store files and not on `pty` or on anything that provisions. A check is
- * easier to trust when the program running it cannot change what it checks.
+ * nothing, and this program cannot: it depends on nothing that provisions, and
+ * the one thing it borrows from `pty` is the question of whether the addon
+ * loads -- `createPtySupervisor` is not reachable from here, so there is no
+ * expression in this program that could open one. A check is easier to trust
+ * when the program running it cannot change what it checks.
  *
  * The report goes to stdout and this program's own log lines to stderr, so
  * that what an operator reads -- or pipes into an issue -- is the report and
@@ -85,6 +88,9 @@ async function main(): Promise<void> {
     providers,
     preflight,
     files: nodeStoreFileSystem,
+    // The same call the server makes before it will start, so the two can never
+    // disagree about whether this machine can run a session at all.
+    terminals: checkNodePty,
   });
   for (const line of formatDoctorReport(report)) write(line);
   if (!report.usable) process.exitCode = EXIT_NOT_READY;

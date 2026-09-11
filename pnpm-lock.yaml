@@ -41,6 +41,9 @@ importers:
       '@agentplex/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      '@agentplex/pty':
+        specifier: workspace:*
+        version: link:../../packages/pty
       zod:
         specifier: ^4.1.13
         version: 4.5.4

@@ -189,14 +189,28 @@ export default tseslint.config(
   {
     // The doctor reads a machine and must not be able to change it: a check is
     // easier to trust when the program running it cannot open a pty or
-    // provision. Its manifest does not declare `pty`, and this is the rule
-    // made checkable rather than a dependency list somebody has to remember.
+    // provision. This is that rule made checkable rather than a dependency list
+    // somebody has to remember.
+    //
+    // It declares `pty` for exactly three names, and the narrowing is the rule
+    // rather than a hole in it. node-pty is an optional dependency of the
+    // published package, so a machine can have everything but it, and a doctor
+    // that could not ask would report a server as ready right up to the first
+    // session that would not start. `checkNodePty` loads the addon and answers a
+    // question; `createPtySupervisor` and `nodePtyFactory` are what could open
+    // one, and neither is reachable from this program.
     files: ['apps/doctor/**/*.ts'],
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports([
         {
-          group: ['@agentplex/pty', '@agentplex/pty/*'],
+          group: ['@agentplex/pty/*'],
           message: 'The doctor reads a machine and opens no pty. It may not import @agentplex/pty.',
+        },
+        {
+          group: ['@agentplex/pty'],
+          allowImportNames: ['checkNodePty', 'NODE_PTY_REMEDY', 'PtyAvailability'],
+          message:
+            'The doctor may ask whether a pty can be opened -- checkNodePty, NODE_PTY_REMEDY, PtyAvailability -- and may import nothing from @agentplex/pty that could open one.',
         },
         {
           group: ['node:child_process', 'child_process'],
@@ -220,6 +234,15 @@ export default tseslint.config(
     // to have a subject. The rule above is about what the daemon may do, and
     // nothing here is reachable from a socket, a frame or a running process.
     files: ['apps/install/packaging/install.sh.integration.test.ts'],
+    rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
+  },
+  {
+    // The third, for the same reason as the second. This suite's subject is an
+    // install script that npm runs as a program and reads an exit code from, so
+    // running it as a program is the only way to assert on the exit code. The
+    // rule it lifts is about what a daemon may spawn, and nothing here is
+    // reachable from a socket, a frame or a running process.
+    files: ['packages/pty/scripts/node-pty-postinstall.test.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {

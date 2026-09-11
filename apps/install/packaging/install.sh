@@ -122,6 +122,12 @@ readonly NODE_STAMP='.agentplex-node-version'
 readonly TOOLCHAIN_APT='python3 make g++'
 readonly TOOLCHAIN_DNF='python3 make gcc-c++'
 readonly TOOLCHAIN_APK='python3 make g++'
+# The half of the toolchain line a server always gets, whether the compiler was
+# already here or had to be installed. node-pty is optional in the published
+# package so that a hub can install without any of this; for a server, optional
+# in the manifest must not read as optional in practice, and the plan says so
+# before the install proves it.
+readonly TOOLCHAIN_NOTE='node-pty must build and load or this install fails'
 
 # The fleet layout: a dedicated service account, a prefix under /opt, state
 # under /var/lib and configuration under /etc, which is where an operator looks
@@ -402,7 +408,42 @@ detect_platform() {
 # The toolchain
 # ---------------------------------------------------------------------------
 
+# Whether this role runs a server, asked of $DAEMONS rather than of $ROLE.
+#
+# $DAEMONS is the role already resolved into what will actually be started on
+# this machine, and re-deriving the same fact from $ROLE a second time is how
+# the two answers end up disagreeing the day a fourth role is added.
+runs_a_server() {
+  case " $DAEMONS " in
+    *' server '*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# What node-pty costs, and who pays it.
+#
+# The compiler is here for node-pty and for nothing else. node-pty ships no
+# Linux prebuild, so npm compiles it from source, and node-gyp needs python3,
+# make and a C++ compiler -- none of which a stock debian:bookworm-slim has.
+#
+# Only a server opens a pseudoterminal. The hub depends on node-shared, the
+# protocol, the providers and zod, and on nothing that touches a pty, so a
+# hub-only machine was installing a toolchain and running the single most
+# failure-prone step of the whole install for a program it does not run.
+# node-pty is an optional dependency of the published package, which is what
+# lets npm finish without it here.
+#
+# The other side of optional is that npm exits 0 when that build fails and
+# removes the package without saying so, which on a server would be a clean
+# install and a session that never starts. So for a server this step is still
+# required, and `install_package` sets AGENTPLEX_REQUIRE_PTY, which the
+# package's own postinstall reads and fails the install over.
 ensure_toolchain() {
+  if ! runs_a_server; then
+    report 'toolchain' 'not needed: a hub opens no pseudoterminal, so node-pty may be skipped'
+    return 0
+  fi
+
   if [ "$PLATFORM" = 'darwin' ]; then
     # node-pty prebuilds cover macOS, so there is nothing to install. If the
     # prebuild is ever missing, `xcode-select --install` is the fix and npm's
@@ -412,7 +453,7 @@ ensure_toolchain() {
   fi
 
   if have python3 && have make && have_compiler; then
-    report 'toolchain' 'present'
+    report 'toolchain' "present; $TOOLCHAIN_NOTE"
     return 0
   fi
 
@@ -433,7 +474,7 @@ ensure_toolchain() {
     die "no package manager this script knows (apt-get, dnf, yum, apk), and node-pty needs python3, make and a C++ compiler to compile on Linux. Install them, then run this again"
   fi
 
-  report 'toolchain' "install $packages with $manager"
+  report 'toolchain' "install $packages with $manager; $TOOLCHAIN_NOTE"
   [ "$DRY_RUN" = 'no' ] || return 0
 
   case "$manager" in
@@ -747,7 +788,21 @@ install_package() {
   # spawn-helper. An npmrc carrying ignore-scripts=true produces an install that
   # reports success and a service that cannot start, and our own postinstall
   # cannot warn about it because it is disabled by the same setting.
-  "$npm" install --global --prefix "$PREFIX" --ignore-scripts=false "$PACKAGE_SPEC"
+  #
+  # AGENTPLEX_REQUIRE_PTY is the other half of node-pty being optional. npm
+  # exits 0 when an optional dependency's build fails, removes it from the tree
+  # and prints nothing; on a hub that is the whole point, and on a server it
+  # would be a clean install and a session that never starts. The variable is
+  # what tells the package's postinstall which machine this is, and a postinstall
+  # that exits non-zero is the last thing that can still fail the install --
+  # after which npm rolls the package back rather than leaving a binary that
+  # cannot open a terminal. `--ignore-scripts=false` above is what makes it run
+  # at all; the two settings are one decision.
+  if runs_a_server; then
+    AGENTPLEX_REQUIRE_PTY=1 "$npm" install --global --prefix "$PREFIX" --ignore-scripts=false "$PACKAGE_SPEC"
+  else
+    "$npm" install --global --prefix "$PREFIX" --ignore-scripts=false "$PACKAGE_SPEC"
+  fi
 
   [ -x "$BIN_DIR/$PACKAGE_NAME" ] || die "npm reported success and there is no $BIN_DIR/$PACKAGE_NAME"
 }

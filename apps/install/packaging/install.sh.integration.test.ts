@@ -619,6 +619,66 @@ describe('the plan a dry run prints', () => {
   });
 });
 
+/**
+ * node-pty is what needs a C++ compiler, and only a server opens a
+ * pseudoterminal. The hub was paying for both: the toolchain on every install,
+ * and the source build that is the likeliest step of the whole install to fail.
+ */
+describe('the toolchain, which only one role needs', () => {
+  it('plans no toolchain for a hub, and says why rather than going quiet', () => {
+    const { script, home } = scratch();
+    const planned_ = planned(run(script, home, ['--dry-run', '--role=hub']).stdout, 'toolchain');
+
+    expect(planned_).toContain('not needed');
+    // The reason, not just the verdict: an operator reading a plan that skipped
+    // a step it used to take needs to know it was a decision.
+    expect(planned_).toContain('hub');
+    expect(planned_).toContain('node-pty');
+    // Nothing that reads as a package install.
+    expect(planned_).not.toContain('g++');
+  });
+
+  /**
+   * The other half, and the reason this is not simply a deletion: for the two
+   * roles that run a server the compiler is still required, and so is a node-pty
+   * that actually builds. `optionalDependencies` lets npm exit 0 without it,
+   * which on a server is the silent success the whole ticket is about.
+   */
+  it('still plans a toolchain for a server and for both, and says the build must succeed', () => {
+    const { script, home } = scratch();
+
+    for (const role of ['server', 'both']) {
+      const line = planned(run(script, home, ['--dry-run', `--role=${role}`]).stdout, 'toolchain');
+      expect(line, role).not.toContain('not needed');
+      // Either it is already here or it is about to be installed; what the line
+      // must never say for these roles is that nothing needs it.
+      expect(line, role).toMatch(/present|install/);
+      expect(line, role).toContain('node-pty');
+    }
+  });
+
+  /**
+   * The plan says it, and the install does it: a server role runs npm with
+   * AGENTPLEX_REQUIRE_PTY set, which is what the package's postinstall reads to
+   * decide whether a node-pty it cannot load should fail the install. A hub
+   * runs the same npm without it, because a hub with no node-pty is a working
+   * hub.
+   */
+  it('asks npm to require a working node-pty for a server and not for a hub', () => {
+    const source = readFileSync(scriptPath, 'utf8');
+    const requireLine = source
+      .split('\n')
+      .filter(
+        (line) => line.includes('AGENTPLEX_REQUIRE_PTY') && !line.trimStart().startsWith('#'),
+      );
+
+    // One place sets it, and it is guarded by the same question the toolchain
+    // step asks. Two places would be two answers to drift apart.
+    expect(requireLine).toHaveLength(1);
+    expect(source).toContain('runs_a_server');
+  });
+});
+
 describe('the settings file it writes once', () => {
   it('records the prefix it chose, uncommented, beside the role and the bin path', () => {
     // The third fact the installer has, and the one a `agentplex setup` run by

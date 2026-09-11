@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PtyAvailability } from '@agentplex/pty';
 import type { Config } from './config.js';
 import { formatDoctorReport, inspectMachine } from './doctor.js';
 import {
@@ -42,6 +43,19 @@ const hubConfig: Config = { role: 'hub', logLevel: 'error', host: HOST };
 
 const providers = createProviderRegistry([createFakeProviderAdapter({ provider: 'claude' })]);
 
+/**
+ * A machine whose node-pty loads, and one whose does not.
+ *
+ * Injected rather than mocked: the interesting machine is one where npm dropped
+ * an optional dependency whose build failed, and what that machine produces is
+ * exactly the value handed in here.
+ */
+const workingPty = (): PtyAvailability => ({ usable: true });
+const brokenPty = (): PtyAvailability => ({
+  usable: false,
+  problem: "node-pty could not be loaded: Cannot find module 'node-pty'",
+});
+
 describe('inspectMachine', () => {
   it('reports each provider exactly as the preflight found it', async () => {
     const found = [readyProvider('claude')];
@@ -50,6 +64,7 @@ describe('inspectMachine', () => {
       providers,
       preflight: { run: async () => found },
       files: createFakeStoreFiles(),
+      terminals: workingPty,
     });
 
     // Carried, not restated. The version and the directory are the two facts an
@@ -65,6 +80,7 @@ describe('inspectMachine', () => {
       providers,
       preflight: { run: async () => [] },
       files,
+      terminals: workingPty,
     });
 
     expect(report.stores).toEqual([
@@ -82,6 +98,7 @@ describe('inspectMachine', () => {
       providers,
       preflight: { run: async () => [] },
       files,
+      terminals: workingPty,
     });
 
     expect(report.stores[0]).toMatchObject({ state: 'unusable' });
@@ -98,6 +115,7 @@ describe('inspectMachine', () => {
       providers,
       preflight: { run: async () => [] },
       files,
+      terminals: workingPty,
     });
 
     expect(files.creates).toEqual([]);
@@ -112,9 +130,44 @@ describe('inspectMachine', () => {
         },
       },
       files: createFakeStoreFiles(),
+      terminals: workingPty,
     });
 
-    expect(report).toMatchObject({ role: 'hub', providers: [], stores: [] });
+    expect(report).toMatchObject({ role: 'hub', providers: [], stores: [], terminals: null });
+  });
+
+  /**
+   * The failure the whole optional-dependency decision has to be worth: npm
+   * exits 0 with node-pty gone, every other check passes, and without this the
+   * machine reads as ready right up to the first session that will not start.
+   */
+  it('is not usable when node-pty will not load, on a role that runs sessions', async () => {
+    const report = await inspectMachine(serverConfig(['/volumes/work']), {
+      providers,
+      preflight: { run: async () => [readyProvider('claude')] },
+      files: createFakeStoreFiles({ directories: ['/volumes/work'] }),
+      terminals: brokenPty,
+    });
+
+    expect(report.terminals).toEqual({
+      state: 'unusable',
+      problem: expect.stringContaining('node-pty'),
+    });
+    expect(report.usable).toBe(false);
+  });
+
+  it('asks nothing about terminals on a hub, which opens none', async () => {
+    const report = await inspectMachine(hubConfig, {
+      providers,
+      preflight: { run: async () => [] },
+      files: createFakeStoreFiles(),
+      terminals: () => {
+        throw new Error('a hub-only machine has no pty to ask about');
+      },
+    });
+
+    expect(report.terminals).toBeNull();
+    expect(report.usable).toBe(true);
   });
 
   it('is usable when everything it checked is', async () => {
@@ -122,6 +175,7 @@ describe('inspectMachine', () => {
       providers,
       preflight: { run: async () => [readyProvider('claude')] },
       files: createFakeStoreFiles({ directories: ['/volumes/work'] }),
+      terminals: workingPty,
     });
 
     expect(report.usable).toBe(true);
@@ -132,6 +186,7 @@ describe('inspectMachine', () => {
       providers,
       preflight: { run: async () => [missingProvider('claude')] },
       files: createFakeStoreFiles(),
+      terminals: workingPty,
     });
 
     expect(report.usable).toBe(false);
@@ -142,6 +197,7 @@ describe('inspectMachine', () => {
       providers,
       preflight: { run: async () => [readyProvider('claude')] },
       files: createFakeStoreFiles(),
+      terminals: workingPty,
     });
 
     expect(report.usable).toBe(false);
@@ -155,6 +211,7 @@ describe('formatDoctorReport', () => {
       usable: true,
       providers: [readyProvider('claude')],
       stores: [],
+      terminals: { state: 'ready', problem: null },
     }).join('\n');
 
     expect(printed).toContain('claude');
@@ -169,6 +226,7 @@ describe('formatDoctorReport', () => {
       usable: false,
       providers: [missingProvider('claude')],
       stores: [],
+      terminals: { state: 'ready', problem: null },
     }).join('\n');
 
     expect(printed).toContain('missing');
@@ -184,11 +242,28 @@ describe('formatDoctorReport', () => {
         { path: '/volumes/work', state: 'present', problem: null },
         { path: '/volumes/gone', state: 'missing', problem: 'there is nothing at that path' },
       ],
+      terminals: { state: 'ready', problem: null },
     }).join('\n');
 
     expect(printed).toContain('/volumes/work');
     expect(printed).toContain('/volumes/gone');
     expect(printed).toContain('there is nothing at that path');
+  });
+
+  it('prints the load failure and what to install beneath it', () => {
+    const printed = formatDoctorReport({
+      role: 'server',
+      usable: false,
+      providers: [],
+      stores: [],
+      terminals: { state: 'unusable', problem: 'node-pty could not be loaded: no such module' },
+    }).join('\n');
+
+    expect(printed).toContain('terminals');
+    expect(printed).toContain('unusable');
+    expect(printed).toContain('node-pty could not be loaded');
+    // The reason alone is not something an operator can act on.
+    expect(printed).toContain('python3');
   });
 
   it('says so plainly when a role has nothing of its own to check', () => {
@@ -197,9 +272,11 @@ describe('formatDoctorReport', () => {
       usable: true,
       providers: [],
       stores: [],
+      terminals: null,
     }).join('\n');
 
     // An empty section reads as a listing that failed. Words say which it is.
     expect(printed).toContain('runs no server');
+    expect(printed).toContain('opens no terminals');
   });
 });
