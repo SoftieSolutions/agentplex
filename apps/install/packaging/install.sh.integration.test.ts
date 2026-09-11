@@ -144,6 +144,53 @@ function planned(stdout: string, key: string): string | undefined {
   return line?.slice(key.length).trim();
 }
 
+/** Every line of the plan the unit step printed. */
+function unitLines(stdout: string): readonly string[] {
+  return stdout.split('\n').filter((line) => line.startsWith('unit '));
+}
+
+/**
+ * `summary` alone, on a machine that wrote no unit.
+ *
+ * The instruction block is the last thing a real install prints, and a dry run
+ * deliberately prints `dry run: nothing above was done.` in its place -- so the
+ * only way to read that block without an install to throw away is to load the
+ * script's functions and call the one under test. `main "$@"` being the last
+ * line is exactly what makes dropping it enough to load the rest.
+ *
+ * Everything but the one machine fact comes from the real resolvers. That fact
+ * is forced, because a suite that only asked this where systemctl is missing
+ * would never ask it on the machines most of these runs happen on.
+ */
+function summaryWithNoUnitWritten(reason: string): {
+  readonly home: string;
+  readonly result: RunResult;
+} {
+  const { script, home } = scratch();
+
+  const library = `${script}.lib`;
+  writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
+  chmodSync(library, 0o644);
+
+  const driver = `${script}.summary`;
+  writeFileSync(
+    driver,
+    [
+      `source ${quote(library)}`,
+      'parse_arguments --role=server',
+      'resolve_layout',
+      'detect_platform',
+      `UNIT_SKIP_REASON=${quote(reason)}`,
+      `DRY_RUN='no'`,
+      'summary',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(driver, 0o755);
+
+  return { home, result: run(driver, home, []) };
+}
+
 describe('the options', () => {
   it('refuses an option it does not know rather than ignoring it', () => {
     const { script, home } = scratch();
@@ -235,6 +282,25 @@ describe('the plan a dry run prints', () => {
         ? `${home}/.config/systemd/user/agentplex-server.service (write, not enabled)`
         : 'skipped: no systemctl on this machine',
     );
+  });
+
+  /**
+   * One line per step, which is the shape `report` exists to hold. The answer
+   * used to be reported by the predicate that gave it, so the line came out
+   * once per place that asked -- and a second place that asked was added, and
+   * the plan grew a duplicate nobody had written.
+   */
+  it('reports the unit step once, whichever answer this machine gives', () => {
+    const { script, home } = scratch();
+
+    const server = run(script, home, ['--dry-run', '--role=server']);
+    const both = run(script, home, ['--dry-run', '--role=both']);
+
+    expect(unitLines(server.stdout)).toHaveLength(1);
+    // A machine with systemd writes a file per daemon and names each file. A
+    // machine without one has a single answer to give, not one answer per
+    // daemon that will not be written.
+    expect(unitLines(both.stdout)).toHaveLength(machineHasSystemd ? 2 : 1);
   });
 
   it('changes nothing at all', () => {
@@ -469,6 +535,39 @@ describe('the systemd unit', () => {
       expect(unit).toContain('Wants=network-online.target');
     },
   );
+});
+
+describe('the summary on a machine that can hold no unit', () => {
+  /**
+   * The gap this closes: the instruction block was printed only when a unit
+   * file existed, and on a machine with no systemd none does -- so the one
+   * operator with nothing supervising the install was the one told nothing at
+   * all about how to start it.
+   */
+  it('says no unit was written, why, and what to run instead', () => {
+    const { home, result } = summaryWithNoUnitWritten('no systemctl on this machine');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('No unit was written: no systemctl on this machine.');
+    expect(result.stdout).toContain(`${home}/.agentplex/bin/agentplex server`);
+    // The systemd instructions belong to the machine that got a unit, and this
+    // one did not.
+    expect(result.stdout).not.toContain('systemctl --user enable --now');
+    expect(result.stdout).not.toContain('deliberately not started');
+  });
+
+  /**
+   * The two reasons stay apart all the way to the operator: one says reach for
+   * launchd, the other says install systemd or run the daemon yourself.
+   */
+  it('carries the macOS reason through rather than the systemctl one', () => {
+    const { result } = summaryWithNoUnitWritten(
+      'macOS has no systemd, hand the process to launchd',
+    );
+
+    expect(result.stdout).toContain('macOS has no systemd, hand the process to launchd');
+    expect(result.stdout).not.toContain('no systemctl on this machine');
+  });
 });
 
 describe('where the script says it is served from', () => {
