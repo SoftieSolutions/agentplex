@@ -214,12 +214,17 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
-    // The other exception, which is not service code at all. This suite's
+    // The other exceptions, which are not service code at all. One suite's
     // subject is a shell script -- the bootstrap that installs the package on a
-    // machine that does not have it yet -- so starting a child is the only way
-    // to have a subject. The rule above is about what the daemon may do, and
-    // nothing here is reachable from a socket, a frame or a running process.
-    files: ['apps/install/packaging/install.sh.integration.test.ts'],
+    // machine that does not have it yet -- and the other's is the `agentplex`
+    // bin, whose behaviour *is* which stream a line landed on and what the exit
+    // code was. For both, starting a child is the only way to have a subject.
+    // The rule above is about what the daemon may do, and nothing here is
+    // reachable from a socket, a frame or a running process.
+    files: [
+      'apps/install/packaging/install.sh.integration.test.ts',
+      'apps/install/src/main.integration.test.ts',
+    ],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
