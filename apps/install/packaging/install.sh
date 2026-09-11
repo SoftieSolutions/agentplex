@@ -495,6 +495,9 @@ verify_checksum() {
   [ "$actual" = "$expected" ] || die "checksum mismatch for $(basename "$path"): expected $expected, got $actual"
 }
 
+# Both downloaders carry the same floor: https only, TLS 1.2 or better. The
+# fallback is the one a machine reaches without choosing it, so it is the one
+# that must not quietly negotiate something weaker.
 fetch() {
   local url destination
   url="$1"
@@ -502,7 +505,7 @@ fetch() {
   if have curl; then
     curl -fsSL --proto '=https' --tlsv1.2 -o "$destination" "$url"
   elif have wget; then
-    wget -q -O "$destination" "$url"
+    wget -q --https-only --secure-protocol=TLSv1_2 -O "$destination" "$url"
   else
     die 'no curl and no wget, so there is nothing here that can download a runtime'
   fi

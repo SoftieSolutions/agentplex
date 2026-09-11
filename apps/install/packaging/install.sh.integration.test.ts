@@ -448,3 +448,23 @@ describe('where the script says it is served from', () => {
     expect(declared).toMatch(/<tag>|\/v\d+\//);
   });
 });
+
+describe('how the script reaches the network', () => {
+  /**
+   * Every path that can download the runtime, not just the one most machines
+   * take. A machine with wget and no curl falls through to the fallback, and a
+   * fallback that accepts whatever the other end offers is a floor set by
+   * accident rather than by choice.
+   */
+  it('pins https and TLS 1.2 on both downloaders', () => {
+    const source = readFileSync(scriptPath, 'utf8');
+    const body = /^fetch\(\) \{$([\s\S]*?)^\}$/m.exec(source)?.[1] ?? '';
+    const lines = body.split('\n').map((line) => line.trim());
+    const curl = lines.find((line) => line.startsWith('curl '));
+    expect(curl).toContain("--proto '=https'");
+    expect(curl).toContain('--tlsv1.2');
+    const wget = lines.find((line) => line.startsWith('wget '));
+    expect(wget).toContain('--https-only');
+    expect(wget).toContain('--secure-protocol=TLSv1_2');
+  });
+});
