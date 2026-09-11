@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -235,6 +236,58 @@ function environmentFileWritten(options: (home: string) => readonly string[]): {
     result: run(driver, home, []),
     contents: (path) => readFileSync(path, 'utf8'),
   };
+}
+
+/**
+ * A node that answers `--version` and nothing else, somewhere a PATH or a
+ * prefix can point at.
+ *
+ * A real runtime is not needed for any of this: every decision the script makes
+ * about Node it makes from the major that `node --version` prints, so the shim
+ * is the whole of the input. A shim that prints a major below the floor is how
+ * a machine with a node on it still reaches the install branch -- the check
+ * container is the only place a real download is exercised.
+ */
+function nodeShim(directory: string, version: string): void {
+  mkdirSync(directory, { recursive: true });
+  const executable = join(directory, 'node');
+  writeFileSync(executable, `#!/bin/sh\necho ${version}\n`);
+  chmodSync(executable, 0o755);
+}
+
+/**
+ * A machine this script has already installed on: the directories and the two
+ * marker files `--uninstall` and the refresh read, and none of the several
+ * hundred megabytes a real install would put in them.
+ *
+ * The markers are the point. The version record under the runtime directory is
+ * what says that Node is this script's to replace and to remove, and the
+ * package tree under `lib/node_modules` is what says the prefix is one this
+ * script installed into -- neither is inferred from the path.
+ */
+function installedMachine(
+  home: string,
+  options: { readonly recordTheNodeVersion?: boolean } = {},
+): {
+  readonly prefix: string;
+  readonly unitDirectory: string;
+} {
+  const prefix = join(home, '.agentplex');
+  nodeShim(join(prefix, 'node', 'bin'), 'v24.9.0');
+  if (options.recordTheNodeVersion !== false) {
+    writeFileSync(join(prefix, 'node', '.agentplex-node-version'), 'v24.9.0\n');
+  }
+  mkdirSync(join(prefix, 'lib', 'node_modules', 'agentplex'), { recursive: true });
+  mkdirSync(join(prefix, 'bin'), { recursive: true });
+  writeFileSync(join(prefix, 'bin', 'agentplex'), '#!/bin/sh\n');
+  writeFileSync(join(prefix, 'agentplex.env'), 'AGENTPLEX_ROLE=both\n');
+
+  const unitDirectory = join(home, '.config', 'systemd', 'user');
+  mkdirSync(unitDirectory, { recursive: true });
+  for (const daemon of ['hub', 'server']) {
+    writeFileSync(join(unitDirectory, `agentplex-${daemon}.service`), '[Unit]\n');
+  }
+  return { prefix, unitDirectory };
 }
 
 describe('the options', () => {
@@ -743,6 +796,214 @@ describe('how the script reaches the network', () => {
     const wget = lines.find((line) => line.startsWith('wget '));
     expect(wget).toContain('--https-only');
     expect(wget).toContain('--secure-protocol=TLSv1_2');
+  });
+});
+
+describe('where the runtime goes', () => {
+  /**
+   * The problem this closed: the tarball is laid out as a prefix of its own --
+   * bin/, include/, lib/, share/ -- and `--strip-components=1` into $PREFIX
+   * spread it over the directory that also holds the settings file, the server
+   * identity and, for a --system install, the hub database. Two lifetimes in
+   * one directory, and neither "what did this install put here" nor "what is
+   * safe to delete" had an answer.
+   */
+  it('unpacks Node into a directory of its own, not over the prefix', () => {
+    const { script, home } = scratch();
+    // A node too old for the floor, in front of whatever this machine has, so
+    // the run reaches the install branch wherever the suite happens to run.
+    const shims = join(home, 'shims');
+    nodeShim(shims, 'v20.11.0');
+
+    const result = run(script, home, ['--dry-run', '--role=server'], {
+      environment: { PATH: `${shims}:/usr/bin:/bin` },
+    });
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'node')).toContain(`into ${home}/.agentplex/node`);
+    // The prefix is still where npm links globals, because that is where the
+    // binary and any provider the wizard installs appear, and it is what
+    // AGENTPLEX_BIN_PATH and the unit's PATH already name.
+    expect(planned(result.stdout, 'package')).toBe(`agentplex@latest into ${home}/.agentplex`);
+  });
+
+  it('gives the unit the bin directory and the Node directory, once each', () => {
+    const { script, home } = scratch();
+    const shims = join(home, 'shims');
+    nodeShim(shims, 'v20.11.0');
+
+    const unit = run(script, home, ['--print-unit'], {
+      environment: { PATH: `${shims}:/usr/bin:/bin` },
+    }).stdout;
+
+    const searchPath = /^Environment=PATH=(.*)$/m.exec(unit)?.[1] ?? '';
+    // Node moving out of $PREFIX/bin means the unit needs both directories
+    // named rather than one: ExecStart is a script whose first line is
+    // #!/usr/bin/env node, and $PREFIX/bin no longer holds a node.
+    expect(searchPath).toBe(
+      `${home}/.agentplex/bin:${home}/.agentplex/node/bin:` +
+        '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    );
+    const directories = searchPath.split(':');
+    expect(new Set(directories).size).toBe(directories.length);
+  });
+});
+
+describe('refreshing a Node this script installed', () => {
+  /**
+   * A dry run downloads nothing, and the version that answers "is this current"
+   * is read out of a file on nodejs.org -- so the honest plan line is the
+   * runtime that is here plus the fact that the question went unasked. Claiming
+   * it would keep the runtime, or that it would replace it, would both be
+   * claims this run has no way to make.
+   */
+  it('says under --dry-run that it did not ask, because asking is a download', () => {
+    const { script, home } = scratch();
+    installedMachine(home);
+
+    const node = planned(
+      run(script, home, ['--dry-run', '--role=server'], {
+        environment: { PATH: '/usr/bin:/bin' },
+      }).stdout,
+      'node',
+    );
+
+    expect(node).toContain('v24.9.0');
+    expect(node).toContain(`${home}/.agentplex/node`);
+    expect(node).toContain('not checked');
+  });
+
+  /**
+   * The record, and not the directory, is what makes a runtime this script's to
+   * replace. A Node an operator unpacked there themselves is their decision,
+   * and silently installing over it is the failure `resolve_node_directory`'s
+   * own comment argues against one paragraph up.
+   */
+  it('adopts a Node under the prefix it has no record of installing', () => {
+    const { script, home } = scratch();
+    installedMachine(home, { recordTheNodeVersion: false });
+
+    const result = run(script, home, ['--dry-run', '--role=server'], {
+      environment: { PATH: '/usr/bin:/bin' },
+    });
+
+    expect(planned(result.stdout, 'node')).toBe(`adopt v24.9.0 from ${home}/.agentplex/node/bin`);
+  });
+});
+
+describe('undoing an install', () => {
+  it('names the units and the directories it would remove, and removes none of them', () => {
+    const { script, home } = scratch();
+    const { prefix, unitDirectory } = installedMachine(home);
+
+    const result = run(script, home, ['--uninstall', '--dry-run']);
+
+    expect(result.status).toBe(0);
+    const units = unitLines(result.stdout).join('\n');
+    expect(units).toContain(`${unitDirectory}/agentplex-hub.service`);
+    expect(units).toContain(`${unitDirectory}/agentplex-server.service`);
+    expect(planned(result.stdout, 'node')).toContain(`${prefix}/node`);
+    expect(planned(result.stdout, 'package')).toContain(`${prefix}/lib/node_modules/agentplex`);
+
+    expect(existsSync(join(prefix, 'node', 'bin', 'node'))).toBe(true);
+    expect(existsSync(join(prefix, 'lib', 'node_modules', 'agentplex'))).toBe(true);
+    expect(existsSync(join(unitDirectory, 'agentplex-hub.service'))).toBe(true);
+  });
+
+  /**
+   * The line the whole flag is drawn along: a runtime comes back from one more
+   * run of this script, and a settings file, an identity file and a database do
+   * not. So they stay -- and they are printed, because the operator who wants
+   * the machine actually empty has no other list.
+   */
+  it('names the state it is leaving, and where it is', () => {
+    const { script, home } = scratch();
+    const { prefix } = installedMachine(home);
+
+    const result = run(script, home, ['--uninstall', '--dry-run']);
+
+    expect(result.stdout).toContain('Left in place');
+    expect(result.stdout).toContain(`${prefix}/agentplex.env`);
+    // The one thing this script has never known, said rather than implied.
+    expect(result.stdout).toContain('store');
+  });
+
+  it('leaves a Node it has no record of installing, and says why', () => {
+    const { script, home } = scratch();
+    const { prefix } = installedMachine(home, { recordTheNodeVersion: false });
+
+    const result = run(script, home, ['--uninstall', '--dry-run']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'node')).toBe(
+      `${prefix}/node left alone: no record here that this script installed it`,
+    );
+    // The package it did install still goes, so this is a line about the
+    // runtime and not a run that gave up.
+    expect(planned(result.stdout, 'package')).toContain(`${prefix}/lib/node_modules/agentplex`);
+  });
+
+  it('says there is nothing to remove rather than reporting removals it did not make', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--uninstall', '--dry-run']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Nothing of');
+    expect(unitLines(result.stdout)).toEqual([]);
+  });
+
+  it.skipIf(!suiteIsRoot)('refuses root the way an install does, for the same reason', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--uninstall', '--dry-run'], { asRoot: true });
+    // root's HOME is not the operator's, so a root run would be looking in the
+    // wrong prefix -- the same fact that makes a root install wrong.
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('refusing to install as root');
+  });
+
+  it('refuses --uninstall --system without root, as an install does', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--uninstall', '--dry-run', '--system']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('must run as root');
+  });
+});
+
+describe('the shape a prefix has to have, because --uninstall takes one', () => {
+  /**
+   * `--uninstall --prefix=...` is a removal driven by a flag, so the flag is
+   * parsed rather than taken. These three are refused for every run and not
+   * only for the uninstall: an install that put a tree somewhere an uninstall
+   * would decline to touch is its own trap.
+   */
+  it('refuses a top-level prefix, which is a directory of the machine itself', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--uninstall', '--dry-run', '--prefix=/usr']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('at least two directories deep');
+  });
+
+  it('refuses a prefix with nothing after it, which is usually an unset variable', () => {
+    const { script, home } = scratch();
+    // Without --uninstall in it, so that the refusal is the prefix's and not
+    // the flag's: an empty value used to fall silently through to the default
+    // prefix, which is not the directory the command that produced it meant.
+    const result = run(script, home, ['--dry-run', '--prefix=']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('nothing after it');
+  });
+
+  it('refuses a prefix that walks through ..', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', `--prefix=${home}/.agentplex/../../etc`]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('..');
+  });
+
+  it('trims a trailing slash rather than carrying it into every path it prints', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=server', `--prefix=${home}/custom/`]);
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toBe(`agentplex@latest into ${home}/custom`);
   });
 });
 

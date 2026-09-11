@@ -176,10 +176,16 @@ RUN AGENTPLEX_PACKAGE="$(echo /package/agentplex-*.tgz)" \
 # What the script said it would do, read back off the machine.
 #
 # node first: nothing put one here, so an executable at this path is proof the
-# download, the checksum and the unpack all happened. agentplex second, which
-# is proof npm ran under that node and node-gyp found the toolchain sudo
-# installed -- the failure the whole toolchain decision exists to prevent.
-RUN test -x "$HOME/.agentplex/bin/node" && test -x "$HOME/.agentplex/bin/agentplex"
+# download, the checksum and the unpack all happened. It is under `node/` and
+# not in the prefix's own `bin/`, and the two absences beside it are the rest of
+# that split: `include/` and `share/` are the tarball's, and a prefix that has
+# them is a prefix the runtime was unpacked over. agentplex second, which is
+# proof npm ran under that node and node-gyp found the toolchain sudo installed
+# -- the failure the whole toolchain decision exists to prevent.
+RUN test -x "$HOME/.agentplex/node/bin/node" \
+    && test -x "$HOME/.agentplex/bin/agentplex" \
+    && ! test -e "$HOME/.agentplex/include" \
+    && ! test -e "$HOME/.agentplex/share"
 # The prefix is not put on a PATH for anybody, so the script has to say so.
 RUN grep -q "export PATH=\"$HOME/.agentplex/bin:" /tmp/install.log
 
@@ -201,6 +207,7 @@ RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! test -e "$HOME/.config/systemd/user/agentplex-hub.service" \
     && grep -qx "ExecStart=$HOME/.agentplex/bin/agentplex server" "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! grep -q '^User=' "$HOME/.config/systemd/user/agentplex-server.service" \
+    && grep -qx "Environment=PATH=$HOME/.agentplex/bin:$HOME/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$HOME/.config/systemd/user/agentplex-server.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-server.service"
 
 # The ticket's own verification: a stock container, and `doctor` at the end of
@@ -210,7 +217,10 @@ RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
 # ticket that installs providers and is not on this branch. It goes into the
 # prefix the script created, through the npm that came with the Node the script
 # installed, which is exactly what setup's install plan does.
-ENV PATH=/home/alice/.agentplex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Both directories, in the order the unit gets them: the binary and the
+# providers are linked into the prefix's bin, and the runtime their shebangs
+# resolve now lives in a directory of its own.
+ENV PATH=/home/alice/.agentplex/bin:/home/alice/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN npm install --global --prefix "$HOME/.agentplex" @anthropic-ai/claude-code
 
 # What is asserted is the directory: the provider resolved out of the prefix
@@ -237,6 +247,33 @@ RUN agentplex doctor --role=server \
 RUN cat /tmp/doctor.log \
     && grep -Eq '^  claude +(ready|unauthenticated|unknown) +.*/home/alice/\.agentplex/bin$' /tmp/doctor.log
 
+# Undoing it, which is the only place an uninstall can be exercised against
+# something that was really installed. A dry run can be asserted in the suite
+# and the removals cannot: there is no machine to throw away anywhere else, and
+# this stage is a machine to throw away with a real install on it.
+#
+# It runs last in this stage on purpose. Everything above has already been
+# asserted, so nothing after this depends on the tree it takes apart -- and the
+# root stage below deliberately starts from a machine with no Node, which is now
+# doubly true.
+RUN bash /install.sh --uninstall | tee /tmp/uninstall.log
+
+# The runtime, the package and the units are gone.
+RUN ! test -e "$HOME/.agentplex/node" \
+    && ! test -e "$HOME/.agentplex/bin/agentplex" \
+    && ! test -e "$HOME/.agentplex/lib/node_modules/agentplex" \
+    && ! test -e "$HOME/.config/systemd/user/agentplex-server.service"
+
+# And what it deliberately did not take with them. The settings file is state
+# and comes back from nowhere; `claude` was installed into this prefix by
+# something that is not this script, and a prefix swept clean would have taken
+# it. Both are named in the log rather than only left behind, because an
+# operator who wants this machine empty has no other list.
+RUN test -f "$HOME/.agentplex/agentplex.env" \
+    && test -x "$HOME/.agentplex/bin/claude" \
+    && grep -q 'Left in place' /tmp/uninstall.log \
+    && grep -q "$HOME/.agentplex/agentplex.env" /tmp/uninstall.log
+
 # The fleet path, which is a different account, a different prefix and a
 # different unit scope. It runs as root because that is what it is for: it
 # creates a service account and writes a system unit, and it still runs nothing
@@ -254,7 +291,7 @@ RUN AGENTPLEX_PACKAGE="$(echo /package/agentplex-*.tgz)" \
     bash /install.sh --system --role=hub | tee /tmp/system-install.log
 RUN grep -q 'not run: --system machines take a plan' /tmp/system-install.log
 RUN id agentplex \
-    && test -x /opt/agentplex/bin/node \
+    && test -x /opt/agentplex/node/bin/node \
     && test -x /opt/agentplex/bin/agentplex \
     && test "$(stat -c '%U' /etc/agentplex/agentplex.env)" = agentplex \
     && grep -qx 'User=agentplex' /etc/systemd/system/agentplex-hub.service \
@@ -267,6 +304,18 @@ RUN id agentplex \
 RUN bash /install.sh --system --role=both --print-unit >/tmp/both-units.txt \
     && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex hub' /tmp/both-units.txt \
     && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex server' /tmp/both-units.txt
+
+# The fleet uninstall, which is a different scope, a different prefix and a
+# different set of things to leave alone. The service account stays: it owns
+# /var/lib/agentplex and the database in it, and an account removed out from
+# under a directory it owns is a state directory nobody can read.
+RUN bash /install.sh --system --uninstall | tee /tmp/system-uninstall.log
+RUN ! test -e /etc/systemd/system/agentplex-hub.service \
+    && ! test -e /opt/agentplex/node \
+    && ! test -e /opt/agentplex/lib/node_modules/agentplex \
+    && test -f /etc/agentplex/agentplex.env \
+    && id agentplex \
+    && grep -q '/etc/agentplex/agentplex.env' /tmp/system-uninstall.log
 
 # Runtime dependencies only, resolved on their own rather than pruned out of
 # the build stage: a prune leaves whatever it failed to notice.
