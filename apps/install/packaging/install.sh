@@ -194,6 +194,7 @@ main() {
   # after the package has landed -- half an install, and the confusing half.
   ensure_service_account
   install_package
+  grant_service_account_ownership
   write_environment_file
   write_units
   run_setup
@@ -631,9 +632,21 @@ ensure_node() {
   # The archive is verified by the time this line runs, so a failure here is a
   # full disk or a signal -- and the window where this machine has no runtime at
   # all should be a rename rather than an unpack.
+  #
+  # --no-same-owner because the archive carries an owner and tar run by root
+  # honours it by default. Every entry in a nodejs.org tarball is `iojs:iojs`,
+  # the account on the release builder, and no machine this runs on has that
+  # name -- so tar falls back to the numeric uid and a --system install unpacked
+  # $PREFIX/node/bin/node as uid 1001, which on a machine with a first human
+  # account is that person. That is the interpreter the unit's ExecStart
+  # resolves through: root-owned is the whole point of keeping it out of the
+  # chown below, and an unrelated local user owning it instead is the same hole
+  # with a stranger in it. Captured, not reasoned about: the --system block
+  # asserts root over the whole of $PREFIX/node, and read UNKNOWN there until
+  # this flag was on the line.
   rm -rf "$NODE_HOME.new"
   mkdir -p "$NODE_HOME.new"
-  tar -xzf "$work/$file" -C "$NODE_HOME.new" --strip-components=1
+  tar -xzf "$work/$file" -C "$NODE_HOME.new" --strip-components=1 --no-same-owner
   printf '%s\n' "$version" >"$NODE_HOME.new/$NODE_STAMP"
   rm -rf "$NODE_HOME"
   mv "$NODE_HOME.new" "$NODE_HOME"
@@ -704,15 +717,57 @@ install_package() {
   "$npm" install --global --prefix "$PREFIX" --ignore-scripts=false "$PACKAGE_SPEC"
 
   [ -x "$BIN_DIR/$PACKAGE_NAME" ] || die "npm reported success and there is no $BIN_DIR/$PACKAGE_NAME"
+}
 
-  # The prefix belongs to whoever runs the service, which for a user install is
-  # already true and for a --system one has to be said. It is the prefix agentplex
-  # *owns*: setup installs providers into it, as the service account, so a
-  # root-owned tree here would turn the first provider install into a permission
-  # error nobody would connect to this line.
-  if [ "$UNIT_SCOPE" = 'system' ]; then
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$PREFIX"
-  fi
+# What the service account owns on a --system machine: its state and the trees
+# npm writes into, and not the interpreter it is started through.
+#
+# Something under the prefix has to be writable by that account. `agentplex
+# setup` installs providers with `npm install --global --prefix $PREFIX` as the
+# service account, so a wholly root-owned prefix would turn the first provider
+# install into a permission error nobody would connect to this script. The
+# question this answers is how much.
+#
+# `chown -R $PREFIX` was the old answer, and the blast radius was the whole
+# prefix. This account runs coding agents, which is the most exposed program on
+# the machine; owning the prefix meant owning $PREFIX/node/bin/node -- the
+# interpreter ExecStart resolves through -- so anything that got out of a
+# session could replace the runtime and be re-executed on every restart
+# thereafter, and could rewrite the settings file holding the client token.
+#
+# So: the two directories npm installs a global package into, $PREFIX/share
+# beside them, and the state directory. $PREFIX itself, $PREFIX/lib and
+# $PREFIX/node stay root's.
+#
+# $PREFIX/share is the one that is not obvious. npm links a package's man pages
+# into <prefix>/share/man and creates the directory on the way, so an account
+# that cannot write the prefix root ends a provider install with EACCES on
+# mkdir. Run rather than reasoned about: npm 11 installing a package with a
+# `man` field into a prefix whose root it did not own failed exactly there, and
+# succeeded once share/ existed and was its own.
+#
+# What this does not buy, and the comment must not be read as claiming: the
+# account still owns $PREFIX/lib/node_modules and $PREFIX/bin, so it can still
+# overwrite agentplex's own code and the link that is started. It cannot replace
+# the interpreter and it cannot rewrite its own settings. That is a reduction in
+# what one compromised session reaches, not isolation from it; isolating the
+# package tree as well means a second prefix for providers, which is not this.
+grant_service_account_ownership() {
+  [ "$UNIT_SCOPE" = 'system' ] || return 0
+
+  report 'ownership' "$SERVICE_USER owns $BIN_DIR, $PREFIX/lib/node_modules, $PREFIX/share and $STATE_DIR; root keeps $NODE_HOME and $ENV_FILE"
+  [ "$DRY_RUN" = 'no' ] || return 0
+
+  # Created rather than assumed to be there. npm makes bin/ and lib/node_modules
+  # on its way to installing the package but makes share/ only for a package
+  # with man pages, and useradd made the state directory only if this run was
+  # the one that created the account -- so a chown on its own would die on a
+  # path that is simply not there yet.
+  local path
+  for path in "$BIN_DIR" "$PREFIX/lib/node_modules" "$PREFIX/share" "$STATE_DIR"; do
+    mkdir -p "$path"
+    chown -R "$SERVICE_USER:$SERVICE_USER" "$path"
+  done
 }
 
 # The npm that belongs to the Node this run settled on, taken from beside it.
@@ -755,7 +810,9 @@ write_environment_file() {
 
   mkdir -p "$(dirname "$ENV_FILE")"
   # 0600 before anything is written into it: the client token lives here, and a
-  # file that is briefly world-readable is world-readable.
+  # file that is briefly world-readable is world-readable. A --system run widens
+  # it below by exactly the group-read bit, after the write and never before it,
+  # so the file is never wider than the mode it ends up with.
   ( umask 077 && cat >"$ENV_FILE" <<ENVIRONMENT
 # agentplex settings, read by the systemd units as an EnvironmentFile. Both
 # daemons read this one file, and each reads only the keys it needs.
@@ -808,8 +865,20 @@ AGENTPLEX_BIN_PATH=$BIN_DIR
 ENVIRONMENT
   )
 
+  # Root's file, read by the daemon and writable by nothing the daemon runs.
+  #
+  # The account needs what is in here -- the client token, the paths -- so it
+  # gets group read and nothing else. A daemon that can rewrite its own settings
+  # is a session that can point this machine's server at another hub on the next
+  # restart, and the file is written once by an installer anyway: there is no
+  # step after this one that has any business writing it as the account.
+  #
+  # The owner and the mode are one decision and are set together. 0640 owned by
+  # the account is the account writing it again, and root:account at 0600 is a
+  # daemon that cannot read its own settings.
   if [ "$UNIT_SCOPE" = 'system' ]; then
-    chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
+    chown "root:$SERVICE_USER" "$ENV_FILE"
+    chmod 0640 "$ENV_FILE"
   fi
 }
 
@@ -1086,7 +1155,7 @@ uninstall() {
   # provider `agentplex setup` installed, or a settings file, or a database,
   # keeps all of it and stays exactly where it is.
   if [ "$DRY_RUN" = 'no' ]; then
-    rmdir "$PREFIX/lib/node_modules" "$PREFIX/lib" "$BIN_DIR" "$PREFIX" 2>/dev/null || true
+    rmdir "$PREFIX/lib/node_modules" "$PREFIX/lib" "$BIN_DIR" "$PREFIX/share" "$PREFIX" 2>/dev/null || true
   fi
 
   uninstall_state_notice
@@ -1209,7 +1278,7 @@ uninstall_state_notice() {
       say "  $path"
     done
     if [ "$UNIT_SCOPE" = 'system' ]; then
-      say "  the $SERVICE_USER account, which owns them"
+      say "  the $SERVICE_USER account, which owns the state directory and what is in it"
     fi
     say ''
     say 'Every store is left too, wherever it is: this script has never known a store path,'

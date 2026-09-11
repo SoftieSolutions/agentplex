@@ -293,12 +293,71 @@ RUN grep -q 'not run: --system machines take a plan' /tmp/system-install.log
 RUN id agentplex \
     && test -x /opt/agentplex/node/bin/node \
     && test -x /opt/agentplex/bin/agentplex \
-    && test "$(stat -c '%U' /etc/agentplex/agentplex.env)" = agentplex \
     && grep -qx 'User=agentplex' /etc/systemd/system/agentplex-hub.service \
     && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex hub' /etc/systemd/system/agentplex-hub.service \
     && ! test -e /etc/systemd/system/agentplex-server.service \
     && grep -qx 'WantedBy=multi-user.target' /etc/systemd/system/agentplex-hub.service \
     && systemd-analyze verify /etc/systemd/system/agentplex-hub.service
+# Who owns what, which on this machine is a security boundary and not
+# bookkeeping. The service account runs coding agents, so everything it owns is
+# within reach of a session that gets out of one.
+#
+# The runtime is the assertion that matters: `node` under /opt/agentplex/node is
+# the interpreter this unit's ExecStart resolves through, and an account that
+# owned it could replace the interpreter and be re-executed on every restart
+# after that. The prefix root and lib/ are root's for the same reason -- so
+# nothing new can be dropped beside them -- and bin/, lib/node_modules/ and
+# share/ are the account's because `agentplex setup` installs providers into
+# them as that account.
+#
+# It says what it found before it decides. A chain of silent `test`s fails with
+# "exit code 1" and does not say which of nine paths was wrong, which is one bit
+# per build of a machine that takes six minutes to make; this prints the owner
+# of every path and fails at the end on the ones that disagreed. MISSING is a
+# path that is not there at all -- `stat` exits 2 and prints nothing, which a
+# chain would have reported as the same one bit.
+RUN wrong=''; \
+    printf '%-10s %-10s %s\n' FOUND EXPECTED PATH; \
+    for pair in /opt/agentplex/node:root \
+        /opt/agentplex/node/bin/node:root \
+        /opt/agentplex:root \
+        /opt/agentplex/lib:root \
+        /opt/agentplex/bin:agentplex \
+        /opt/agentplex/lib/node_modules:agentplex \
+        /opt/agentplex/lib/node_modules/agentplex:agentplex \
+        /opt/agentplex/share:agentplex \
+        /var/lib/agentplex:agentplex; do \
+      path="${pair%:*}"; expected="${pair##*:}"; \
+      owner="$(stat -c '%U' "$path" 2>/dev/null || echo MISSING)"; \
+      printf '%-10s %-10s %s\n' "$owner" "$expected" "$path"; \
+      [ "$owner" = "$expected" ] || wrong="$wrong $path"; \
+    done; \
+    [ -z "$wrong" ] || { echo "owner is not what this install should produce:$wrong" >&2; exit 1; }
+# The whole runtime, not the two paths above. A nodejs.org tarball's entries are
+# owned by the account that built the release, so a `tar -x` as root restored a
+# uid no machine has for every file under it -- the interpreter included. The
+# claim is about the tree, so the assertion is about the tree.
+RUN find /opt/agentplex/node ! -user root -printf '%u %p\n' | tee /tmp/node-foreign.log \
+    && test ! -s /tmp/node-foreign.log
+
+# The settings file, which holds the client token: root's, group-readable by the
+# account so the daemon can read its own configuration, and 0640 so it cannot
+# rewrite it and nobody else on the machine can read it.
+RUN test "$(stat -c '%U:%G' /etc/agentplex/agentplex.env)" = root:agentplex \
+    && test "$(stat -c '%a' /etc/agentplex/agentplex.env)" = 640
+
+# The same boundary as the account itself sees it, which is the form a provider
+# install and a compromised session both arrive in. Writing is what setup does
+# and has to keep working; the refusals are the whole point of the split. The
+# probes are removed again so that the uninstall below still meets the tree it
+# expects.
+RUN su agentplex -s /bin/sh -c 'touch /opt/agentplex/bin/probe /opt/agentplex/lib/node_modules/probe /opt/agentplex/share/probe /var/lib/agentplex/probe' \
+    && ! su agentplex -s /bin/sh -c 'touch /opt/agentplex/node/bin/probe' \
+    && ! su agentplex -s /bin/sh -c 'touch /opt/agentplex/probe' \
+    && ! su agentplex -s /bin/sh -c 'echo x >>/etc/agentplex/agentplex.env' \
+    && su agentplex -s /bin/sh -c 'grep -q AGENTPLEX_ROLE /etc/agentplex/agentplex.env' \
+    && rm -f /opt/agentplex/bin/probe /opt/agentplex/lib/node_modules/probe /opt/agentplex/share/probe /var/lib/agentplex/probe
+
 # The two-unit shape, which is the one this epic exists for on a single box:
 # `--role=both` renders both units, and each starts one daemon.
 RUN bash /install.sh --system --role=both --print-unit >/tmp/both-units.txt \
