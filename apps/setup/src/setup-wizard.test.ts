@@ -45,7 +45,7 @@ const PREFIX = `${HOME}/.agentplex`;
 const IDENTITY = `${PREFIX}/server.json`;
 const STORE = `${HOME}/.claude`;
 const PLAN_FILE = `${PREFIX}/setup-plan.json`;
-const SETTINGS = `${PREFIX}/agentplexd.env`;
+const SETTINGS = `${PREFIX}/agentplex.env`;
 
 const INSTALL_ARGV =
   `npm install --global --prefix ${PREFIX} --json --no-ignore-scripts ` +

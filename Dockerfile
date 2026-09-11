@@ -185,9 +185,9 @@ RUN grep -q "export PATH=\"$HOME/.agentplex/bin:" /tmp/install.log
 
 # The settings file: two facts the installer had, and 0600 because the client
 # token belongs in this file.
-RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplexd.env")" = 600 \
-    && grep -qx 'AGENTPLEX_ROLE=server' "$HOME/.agentplex/agentplexd.env" \
-    && grep -qx "AGENTPLEX_BIN_PATH=$HOME/.agentplex/bin" "$HOME/.agentplex/agentplexd.env"
+RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplex.env")" = 600 \
+    && grep -qx 'AGENTPLEX_ROLE=server' "$HOME/.agentplex/agentplex.env" \
+    && grep -qx "AGENTPLEX_BIN_PATH=$HOME/.agentplex/bin" "$HOME/.agentplex/agentplex.env"
 
 # The unit, and then systemd's own reading of it. `verify` resolves ExecStart,
 # so it is also an assertion that the unit points at a program that is really
@@ -252,7 +252,7 @@ RUN grep -q 'not run: --system machines take a plan' /tmp/system-install.log
 RUN id agentplex \
     && test -x /opt/agentplex/bin/node \
     && test -x /opt/agentplex/bin/agentplex \
-    && test "$(stat -c '%U' /etc/agentplex/agentplexd.env)" = agentplex \
+    && test "$(stat -c '%U' /etc/agentplex/agentplex.env)" = agentplex \
     && grep -qx 'User=agentplex' /etc/systemd/system/agentplex-hub.service \
     && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex hub' /etc/systemd/system/agentplex-hub.service \
     && ! test -e /etc/systemd/system/agentplex-server.service \

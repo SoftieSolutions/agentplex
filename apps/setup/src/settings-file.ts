@@ -17,7 +17,7 @@
  */
 
 /** Where the installer puts the settings, inside the prefix agentplex owns. */
-export const SETTINGS_FILE_NAME = 'agentplexd.env';
+export const SETTINGS_FILE_NAME = 'agentplex.env';
 
 /**
  * The two settings setup writes when it records a local server, as the hub's

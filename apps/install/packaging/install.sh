@@ -59,10 +59,6 @@ readonly INSTALL_SH_VERSION='1'
 readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/<tag>/apps/install/packaging/install.sh'
 
 readonly PACKAGE_NAME='agentplex'
-# The name this package was installed under before the split. A machine that
-# has it is upgraded in place: the old unit goes, the old package goes, and the
-# settings, identity and prefix are found where they were.
-readonly OLD_PACKAGE_NAME='agentplexd'
 
 # The dist-tag npm resolves when nothing is pinned. Named, because the spec
 # always carries a `@` suffix: `agentplex` and `agentplex@latest` mean the
@@ -174,7 +170,6 @@ main() {
   ensure_service_account
   install_package
   write_environment_file
-  retire_old_unit
   write_units
   run_setup
   summary
@@ -243,9 +238,7 @@ resolve_layout() {
     SERVICE_USER="$SYSTEM_ACCOUNT"
     [ -n "$PREFIX" ] || PREFIX="$SYSTEM_PREFIX"
     STATE_DIR="$SYSTEM_STATE_DIR"
-    # The settings file keeps the name it had before the split, so a machine
-    # installed as agentplexd and upgraded through this finds it where it was.
-    ENV_FILE="$SYSTEM_CONFIG_DIR/agentplexd.env"
+    ENV_FILE="$SYSTEM_CONFIG_DIR/agentplex.env"
     UNIT_DIR="$SYSTEM_UNIT_DIR"
     UNIT_SCOPE='system'
     # The fleet tier is the one with no human to answer a wizard. Its
@@ -259,7 +252,7 @@ resolve_layout() {
     SERVICE_USER="$(id -un)"
     [ -n "$PREFIX" ] || PREFIX="$HOME/.agentplex"
     STATE_DIR="$PREFIX"
-    ENV_FILE="$PREFIX/agentplexd.env"
+    ENV_FILE="$PREFIX/agentplex.env"
     UNIT_DIR="$HOME/.config/systemd/user"
     UNIT_SCOPE='user'
   fi
@@ -538,15 +531,6 @@ install_package() {
 
   [ -x "$BIN_DIR/$PACKAGE_NAME" ] || die "npm reported success and there is no $BIN_DIR/$PACKAGE_NAME"
 
-  # The package this replaced, if the machine had it. Left in place it would
-  # keep a second copy of every program on the disk and a stale `agentplexd`
-  # on the PATH beside the new bin; npm's uninstall removes exactly what its
-  # install put there and nothing of ours.
-  if [ -x "$BIN_DIR/$OLD_PACKAGE_NAME" ]; then
-    report 'upgrade' "remove the $OLD_PACKAGE_NAME package this replaces"
-    "$npm" uninstall --global --prefix "$PREFIX" "$OLD_PACKAGE_NAME" || true
-  fi
-
   # The prefix belongs to whoever runs the service, which for a user install is
   # already true and for a --system one has to be said. It is the prefix agentplex
   # *owns*: setup installs providers into it, as the service account, so a
@@ -664,40 +648,10 @@ can_write_units() {
   return 0
 }
 
-# The unit a pre-split install wrote, which started one program in every role.
-#
-# It is retired rather than left beside the new ones: two units starting the
-# same daemons on one machine is two hubs on one database. What it decided is
-# kept -- the settings file it read is the settings file the new units read --
-# and its enablement is carried over, so a machine whose service came up at boot
-# still does after the upgrade. This is the one place the installer enables a
-# unit: a fresh install leaves its units for the operator, who has a client
-# token to write first.
-retire_old_unit() {
-  can_write_units || return 0
-  local old="$UNIT_DIR/${OLD_PACKAGE_NAME}.service"
-  [ -e "$old" ] || return 0
-
-  local ctl='systemctl --user'
-  [ "$UNIT_SCOPE" = 'user' ] || ctl='systemctl'
-  local was_enabled='no'
-  if $ctl is-enabled --quiet "${OLD_PACKAGE_NAME}.service" 2>/dev/null; then
-    was_enabled='yes'
-  fi
-
-  local daemon units=''
-  for daemon in $DAEMONS; do
-    units="$units ${PACKAGE_NAME}-${daemon}.service"
-  done
-  report 'upgrade' "retire $old and enable$units"
-  [ "$DRY_RUN" = 'no' ] || return 0
-
-  $ctl disable --now "${OLD_PACKAGE_NAME}.service" 2>/dev/null || true
-  rm -f "$old"
-  ENABLE_NEW_UNITS="$was_enabled"
-}
-ENABLE_NEW_UNITS='no'
-
+# The units, written and never started. There is no client token, no database
+# file and no store path until setup or the operator has filled the settings
+# file in, so a unit this script started would be a service that fails on its
+# first line. The summary says what to run once the file is complete.
 write_units() {
   can_write_units || return 0
   local daemon file
@@ -714,14 +668,6 @@ write_units() {
     [ "$DRY_RUN" = 'no' ] || continue
     mkdir -p "$UNIT_DIR"
     render_unit "$daemon" >"$file"
-  done
-
-  [ "$ENABLE_NEW_UNITS" = 'yes' ] || return 0
-  local ctl='systemctl --user'
-  [ "$UNIT_SCOPE" = 'user' ] || ctl='systemctl'
-  $ctl daemon-reload || true
-  for daemon in $DAEMONS; do
-    $ctl enable --now "${PACKAGE_NAME}-${daemon}.service" || true
   done
 }
 
@@ -923,7 +869,7 @@ summary() {
   for daemon in $DAEMONS; do
     [ -e "$(unit_file "$daemon")" ] && units="$units ${PACKAGE_NAME}-$daemon"
   done
-  if [ -n "$units" ] && [ "$ENABLE_NEW_UNITS" = 'no' ]; then
+  if [ -n "$units" ]; then
     say ''
     say 'The units are written and deliberately not started: there is no database file, no'
     say "client token and no store paths until $ENV_FILE has them."
