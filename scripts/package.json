@@ -11,6 +11,7 @@
     "package": "node assemble-package.ts"
   },
   "devDependencies": {
+    "@agentplex/protocol": "workspace:*",
     "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^3.2.7",
     "typescript": "^5.9.3",

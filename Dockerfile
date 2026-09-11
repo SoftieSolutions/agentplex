@@ -175,6 +175,29 @@ RUN cd "$(npm root -g)/@softiesolutions/agentplex-hub/apps/hub/dist" \
     && root="$(node --input-type=module --eval 'import {fileURLToPath} from "node:url"; process.stdout.write(fileURLToPath(new URL("./dist", import.meta.resolve("@softiesolutions/agentplex-web/package.json"))))')" \
     && echo "resolved web root: $root" \
     && test -f "$root/index.html"
+# The protocol every published manifest carries, read back off an installed
+# machine.
+#
+# This is the fact four independent release trains rest on: `PROTOCOL_VERSION`
+# is the single compatibility constant, packaging writes it into each manifest
+# after `pnpm build`, and `versions.json` and `install.sh` both work from it. A
+# machine is where the claim has to be true, and a claim that only a workflow
+# makes is one nothing checks.
+#
+# All four are read and compared to each other rather than to a literal. The
+# number changes whenever a frame or an on-disk format does, so writing it here
+# would be a second place to bump it; what matters is that every package
+# declares one and that the four cut from one build say the same thing.
+RUN root="$(npm root -g)/@softiesolutions"; \
+    first=''; \
+    for name in agentplex agentplex-hub agentplex-server agentplex-web; do \
+      protocol="$(node -p "require('$root/$name/package.json').agentplex.protocol")"; \
+      printf '%-24s protocol %s\n' "$name" "$protocol"; \
+      case "$protocol" in ''|*[!0-9]*) echo "$name declares no protocol number" >&2; exit 1 ;; esac; \
+      [ -n "$first" ] || first="$protocol"; \
+      [ "$protocol" = "$first" ] || { echo "$name says $protocol and the first package said $first" >&2; exit 1; }; \
+    done
+
 # `--version`, against what the installed manifest declares rather than against
 # an exit code. The bin reads that manifest at a path it resolves from its own
 # URL, and the manifest the workspace keeps beside the bin is not in the package

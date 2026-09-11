@@ -2,6 +2,7 @@ import { cp, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import { basename, dirname, join, relative } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { PROTOCOL_VERSION } from '@agentplex/protocol';
 import { z } from 'zod';
 
 /**
@@ -41,12 +42,22 @@ import { z } from 'zod';
  * about four more registry entries and their versioning, and nobody has taken
  * it.
  *
- * ## One build, one version
+ * ## One build, four release trains
  *
- * All four are assembled from one build at one version, exactly as the single
- * tarball was. Per-component tags, a manifest of versions, and installing
- * `--role=hub@1.3` are a separate change: this one splits what is packed and
- * leaves what is delivered alone.
+ * A tag names one component and one version -- `hub-v1.2.0` -- and assembles
+ * that component alone. The point of the split was that a CLI fix should stop
+ * forcing every server on the fleet to recompile a native addon, and four
+ * packages cut at one version from one tag would have left exactly that
+ * coupling in place under four names.
+ *
+ * Without a tag all four are assembled at the workspace's own `0.0.0`, which is
+ * what a contributor and the container check want: a set of tarballs from one
+ * build, installable from a directory, publishable nowhere.
+ *
+ * What holds the trains together is `PROTOCOL_VERSION`, written into every
+ * published manifest below. Independent versions are safe exactly while the
+ * components agree on it, and a fact about the artifact is the only form of
+ * that claim an installed machine can check.
  *
  * ## The layout inside every package is the workspace's, on purpose
  *
@@ -73,6 +84,18 @@ import { z } from 'zod';
  * paths named, rather than shipping a package that installs and then serves 503
  * forever.
  */
+
+/**
+ * The four release trains, by the word a tag names them with.
+ *
+ * A component is not the package name and not the app directory, and it is
+ * worth its own word rather than being derived from either. It is what a tag
+ * carries (`hub-v1.2.0`), what `versions.json` keys on, what `install.sh`
+ * writes into a download URL, and what `--role=hub@1.3.0` pins -- four readers
+ * that have to agree, none of which should be parsing a scope off a package
+ * name to get there.
+ */
+export type Component = 'cli' | 'hub' | 'server' | 'web';
 
 /** The published names, in one place, because several things have to agree. */
 export const CLI_PACKAGE = '@softiesolutions/agentplex';
@@ -169,8 +192,25 @@ export interface PackageEntry {
 
 /** One published package: what it is called, what it holds, what it declares. */
 export interface PackageTarget {
+  /** The release train this package is on, and the word its tag carries. */
+  readonly component: Component;
   /** The name npm publishes it under. */
   readonly name: string;
+  /**
+   * The file name this package's tarball is published under, at every tag, for
+   * ever.
+   *
+   * Stable and not version-stamped, and that is a constraint rather than a
+   * preference. `npm pack` writes `softiesolutions-agentplex-hub-1.2.0.tgz`,
+   * and the release workflow renames it on the way up, because GitHub's
+   * `releases/latest/download/<asset>` redirect substitutes the tag into the
+   * path and copies the file name through verbatim -- so a name carrying a
+   * version is a name no unpinned URL can ever be written against. The
+   * redirect is not what `install.sh` resolves through any more (see
+   * `versions.json`), but a download URL built from a component and a version
+   * still needs the third part to be a constant.
+   */
+  readonly asset: string;
   /** What npm shows on the package page. One sentence, and each one differs. */
   readonly description: string;
   /** Where the assembled tree is written, relative to the workspace root. */
@@ -357,7 +397,9 @@ const POSTINSTALL_ENTRY: PackageEntry = {
  * `agentplex hub` to type, and the daemon packages are what a unit names.
  */
 export const CLI: PackageTarget = {
+  component: 'cli',
   name: CLI_PACKAGE,
+  asset: 'agentplex.tgz',
   description: 'The agentplex command: the setup wizard and the read-only doctor',
   output: 'apps/cli/release',
   declares: [BIN_APP],
@@ -392,7 +434,9 @@ export const CLI: PackageTarget = {
  * carried inside it -- see `publishedManifest` for what happens to that range.
  */
 export const HUB: PackageTarget = {
+  component: 'hub',
   name: HUB_PACKAGE,
+  asset: 'agentplex-hub.tgz',
   description:
     'The agentplex hub daemon: the database, the paired servers, and the client it serves',
   output: 'apps/hub/release',
@@ -422,7 +466,9 @@ export const HUB: PackageTarget = {
  * cleanly and cannot open a session.
  */
 export const SERVER: PackageTarget = {
+  component: 'server',
   name: SERVER_PACKAGE,
+  asset: 'agentplex-server.tgz',
   description:
     'The agentplex server daemon: sessions through a pty, and the stores on this machine',
   output: 'apps/server/release',
@@ -469,7 +515,9 @@ export const SERVER: PackageTarget = {
  * the files two directories further down.
  */
 export const WEB: PackageTarget = {
+  component: 'web',
   name: WEB_PACKAGE,
+  asset: 'agentplex-web.tgz',
   description: 'The agentplex web app, built: the files the hub serves',
   output: 'apps/web/release',
   declares: [],
@@ -503,11 +551,40 @@ export const PACKAGES: readonly PackageTarget[] = [CLI, HUB, SERVER, WEB];
  * the hub, and the hub degrades honestly -- one warning at startup, 503 on the
  * client routes, everything else untouched -- when it is not there.
  *
- * So the range is dropped rather than bundled or declared. Bundling it would
- * put the client inside the hub and undo the split. Declaring it would name a
- * registry entry at a version, and nothing is published yet: today the
- * relationship is stated by the role table in `install.sh`, and it becomes a
- * version-pinned dependency when there is a released version to pin.
+ * So the range is dropped rather than bundled or declared, and with
+ * per-component releases in place that is now a settled answer rather than a
+ * wait for one. It was left open on the grounds that it would become a
+ * version-pinned dependency once there was a released version to pin. There is
+ * one, and it still cannot be expressed. Three reasons, and the third is the
+ * one that matters:
+ *
+ * **Nothing is published to a registry.** Delivery is GitHub Releases, so
+ * `"@softiesolutions/agentplex-web": "1.1.0"` names an npm entry that does not
+ * exist, and `npm install <hub tarball url>` would fail resolving it -- on
+ * every machine, not only on the ones installing from a directory.
+ *
+ * **A URL dependency would work and is worse.** npm resolves a dependency whose
+ * range is an https tarball URL, so the hub *could* declare the client's
+ * release URL outright. It would also send the container check -- which
+ * installs from a directory of local tarballs precisely so that it tests this
+ * build -- out to the network for the client, and fail on a machine with no
+ * route to github.com.
+ *
+ * **The hub does not know which client is current, and must not.** A tag
+ * releases one component; `versions.json` is written afterwards, by a later
+ * job. So a version written in here would have to be one the hub was built
+ * against, frozen into every hub artifact for ever -- which is exactly the
+ * coupling the split removed. `agentplex update web` exists as an idea because
+ * a client can be replaced without a new hub, and a pinned dependency is the
+ * one way to make that impossible.
+ *
+ * The relationship stays stated by the role table in `install.sh`, and that
+ * statement is stronger than it was: the two are resolved from one manifest,
+ * checked against each other's protocol before either is downloaded, and
+ * installed in one npm invocation, so a machine ends up with the pair or with
+ * neither. The hub still degrades honestly if somebody removes the client
+ * afterwards -- one warning at startup, 503 on the client routes, health and
+ * the websocket untouched.
  */
 const PUBLISHED_NAMES: ReadonlySet<string> = new Set(PACKAGES.map((target) => target.name));
 
@@ -568,32 +645,58 @@ export function parseManifest(source: string, text: string): Manifest {
 const SEMVER =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
+/** What a release tag says: which component is being released, and at what. */
+export interface ReleaseTag {
+  readonly component: Component;
+  readonly version: string;
+}
+
 /**
- * The version a release tag names.
+ * The component and the version a release tag names.
+ *
+ * It was `versionFromTag` and it answered one question, because a release was
+ * one build of four packages at one version. A release is now one component's,
+ * so the tag has to say which -- `hub-v1.2.0` -- and the name moved with the
+ * second answer rather than leaving a function called `versionFromTag`
+ * returning a component.
  *
  * Nothing in this workspace carries a version: every manifest says `0.0.0` and
  * no script bumps one, because a version in a manifest is a second place the
- * release lives and the day it disagrees with the tag, the tarball on npm and
- * the commit it claims to come from are different things. The tag is the
- * single statement of what is being released, and this is the one reader of it
- * -- for all four packages, which this release cuts at one version from one
- * build.
+ * release lives and the day it disagrees with the tag, the tarball published
+ * and the commit it claims to come from are different things. The tag is the
+ * single statement of what is being released, and this is the one reader of it.
  *
  * The tag is an argument out of another program, so it is parsed rather than
- * trusted: a tag the workflow's `v*` filter admits but semver does not -- a
- * `v1.2`, a `vlatest`, a branch somebody tagged -- stops the release with the
- * tag named, instead of publishing a version npm will happily accept and
- * nobody can install by the range they meant.
+ * trusted, and both halves can say no. A tag the workflow's `*-v*` filter
+ * admits but this does not -- a `hub-v1.2`, a `cli-vlatest`, a
+ * `bogus-v1.0.0` -- stops the release with the tag quoted, instead of
+ * assembling a component nobody has and publishing it under a version nobody
+ * can install by the range they meant. The tag is quoted because the failures
+ * that reach here are the ones where the exact bytes matter: a trailing space
+ * and an empty component are both invisible in an unquoted message.
  */
-export function versionFromTag(tag: string): string {
-  if (!tag.startsWith('v')) {
-    throw new Error(`a release tag is \`v<semver>\`, and this one is ${tag}`);
+export function releaseFromTag(tag: string): ReleaseTag {
+  // The first `-v` and not the last. No component's name holds one, and a
+  // prerelease identifier may: `cli-v1.0.0-v.1` splits at the first and is a
+  // release of the CLI, where splitting at the last would name a component
+  // called `cli-v1.0.0` and refuse a tag that is perfectly well formed.
+  const marker = tag.indexOf('-v');
+  if (marker <= 0) {
+    throw new Error(`a release tag is \`<component>-v<semver>\`, and this one is "${tag}"`);
   }
-  const version = tag.slice(1);
+  const component = tag.slice(0, marker);
+  const version = tag.slice(marker + 2);
+  const target = PACKAGES.find((candidate) => candidate.component === component);
+  if (target === undefined) {
+    throw new Error(
+      `"${tag}" names no component of this release: expected one of ` +
+        `${PACKAGES.map((candidate) => candidate.component).join(', ')}`,
+    );
+  }
   if (!SEMVER.test(version)) {
-    throw new Error(`a release tag is \`v<semver>\`, and this one is ${tag}`);
+    throw new Error(`a release tag is \`<component>-v<semver>\`, and this one is "${tag}"`);
   }
-  return version;
+  return { component: target.component, version };
 }
 
 /**
@@ -652,6 +755,28 @@ export function versionFromTag(tag: string): string {
  * **`engines` keeps node and drops pnpm.** The whole point of these artifacts
  * is a machine with Node and nothing else; declaring pnpm would make a package
  * refuse the machine it was built for.
+ *
+ * **`agentplex.protocol` is the one field npm has no opinion about, and it is
+ * the point of the whole per-component release.** `PROTOCOL_VERSION` is the
+ * single compatibility constant in this repository, and this epic reads it as
+ * the version of everything `packages/protocol` declares -- the wire frames and
+ * the on-disk formats whose schemas live beside them alike. Four components on
+ * four release trains are safe exactly while they agree on it.
+ *
+ * Written here rather than asserted anywhere, because a machine cannot check a
+ * claim that exists only in a workflow. The assembly runs after `pnpm build`,
+ * so the constant it reads is the compiled one the programs in this very
+ * tarball import -- not a number copied into a YAML file that drifts the first
+ * time somebody bumps one and forgets the other. Once it is in the manifest it
+ * is a fact about the artifact: `install.sh` pre-checks it before a pinned
+ * install, the release publishes it into `versions.json`, and `status` and
+ * `doctor` can read it back off an installed machine and say that the hub and
+ * the server on it no longer speak.
+ *
+ * Under `agentplex` rather than at the top level, and not called
+ * `protocolVersion`. npm ignores unknown fields but the root of a manifest is
+ * shared with every tool that reads one, and one namespaced object is a place
+ * the next such fact can go without a second decision.
  *
  * **The `postinstall` follows node-pty.** It is declared by the two packages
  * that carry `@agentplex/pty` and by neither of the others. node-pty ships
@@ -738,6 +863,7 @@ export function publishedManifest(input: {
     ...(input.root.repository === undefined ? {} : { repository: input.root.repository }),
     type: 'module',
     engines: { node },
+    agentplex: { protocol: PROTOCOL_VERSION },
     ...(target.bin === undefined
       ? {}
       : { bin: { [target.bin.command]: `./${target.bin.entrypoint}` } }),
@@ -954,7 +1080,11 @@ export async function assemblePackage(options: {
 }
 
 /**
- * All four, from one build at one version.
+ * All four, from one build at the workspace's own version.
+ *
+ * This is the contributor's path and the container check's: a directory of
+ * tarballs from one build, which `AGENTPLEX_PACKAGE` installs and no tag
+ * names. A release assembles one component -- see `main`.
  *
  * Assembled in order rather than in parallel so that the log reads as a list of
  * packages: the work is a few hundred file copies and the wall clock is not
@@ -973,34 +1103,145 @@ export async function assemblePackages(options: {
   return assembled;
 }
 
+/**
+ * Where a release's loose files go: the metadata asset, and the description of
+ * the release the workflow reads back.
+ *
+ * Beside the staging directories rather than inside one. Everything in
+ * `apps/<app>/release` is packed into the tarball, and neither of these belongs
+ * inside the package they describe.
+ */
+export const RELEASE_ASSETS = 'release-assets';
+
+/**
+ * The small JSON published beside a tarball at every tag, carrying that
+ * release's protocol.
+ *
+ * It exists for one case, and it is the case the whole grammar is about:
+ * `install.sh --role=hub@1.3.0` has to know what protocol 1.3.0 speaks
+ * *before* it installs anything. `versions.json` cannot answer it -- that file
+ * describes what is current, and a pin is by definition a request for
+ * something else -- and reading the protocol out of the tarball means
+ * downloading and unpacking the tarball, which is the half-installed machine
+ * this is trying to prevent.
+ *
+ * The cost is one more small file per release. What it buys is that a pinned
+ * set that cannot talk to itself is refused with both numbers named and nothing
+ * written to the disk, rather than found when a hub and a server that are both
+ * installed and both running decline to pair.
+ */
+export interface ReleaseMetadata {
+  readonly component: Component;
+  readonly version: string;
+  readonly protocol: number;
+}
+
+/** The metadata asset's name, which is its tarball's with the suffix swapped. */
+export function metadataAsset(target: PackageTarget): string {
+  return `${target.asset.replace(/\.tgz$/, '')}.json`;
+}
+
+/**
+ * Everything the release workflow needs to know about what was just assembled,
+ * written to a file rather than printed.
+ *
+ * The workflow used to read the package name and the version back out of each
+ * assembled manifest, which was right when the only questions were "what is it
+ * called" and "at what version". A per-component release also has to know which
+ * directory to pack, what to rename the tarball to, and what to call the
+ * metadata beside it -- and every one of those is a fact this module already
+ * holds. A file the workflow reads with the same `node -p` it already uses
+ * keeps them here, where the tag was parsed, instead of turning the workflow
+ * into a second place that knows how a component maps to a directory.
+ */
+export interface ReleaseDescription extends ReleaseMetadata {
+  readonly package: string;
+  /** Relative to the workspace root. */
+  readonly directory: string;
+  readonly asset: string;
+  readonly metadataAsset: string;
+}
+
+export function releaseDescription(target: PackageTarget, version: string): ReleaseDescription {
+  return {
+    component: target.component,
+    version,
+    protocol: PROTOCOL_VERSION,
+    package: target.name,
+    directory: target.output,
+    asset: target.asset,
+    metadataAsset: metadataAsset(target),
+  };
+}
+
+/**
+ * One component, at the version its tag names, plus the loose files the release
+ * publishes beside its tarball.
+ */
+export async function assembleRelease(options: {
+  readonly workspaceRoot: string;
+  readonly tag: string;
+  readonly log?: (line: string) => void;
+}): Promise<{ readonly assembled: AssembledPackage; readonly release: ReleaseDescription }> {
+  const { component, version } = releaseFromTag(options.tag);
+  const target = PACKAGES.find((candidate) => candidate.component === component);
+  // `releaseFromTag` has already refused every component that is not one of
+  // these, so this is unreachable -- and it is here rather than as a `!`
+  // because the two lists agreeing is what makes it unreachable, and a cast
+  // would be the assertion that they always will.
+  if (target === undefined) throw new Error(`no package assembles the ${component} component`);
+
+  options.log?.(`${target.name}`);
+  const assembled = await assemblePackage({ ...options, target, version });
+  const release = releaseDescription(target, version);
+
+  const assets = join(options.workspaceRoot, RELEASE_ASSETS);
+  await rm(assets, { recursive: true, force: true });
+  const metadata: ReleaseMetadata = { component, version, protocol: release.protocol };
+  await writeJson(join(assets, release.metadataAsset), metadata);
+  await writeJson(join(assets, 'release.json'), release);
+
+  return { assembled, release };
+}
+
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
 /**
- * Run from the workspace root, after `pnpm build`. It writes four directories
- * and nothing more: publishing is a separate, deliberate command aimed at the
- * trees this leaves behind.
+ * Run from the workspace root, after `pnpm build`. It writes directories and
+ * nothing more: publishing is a separate, deliberate command aimed at the trees
+ * this leaves behind.
  *
  * The one argument is the release tag, which the workflow passes as
  * `pnpm --filter ./scripts package "$GITHUB_REF_NAME"` and a contributor passes
- * never. Without it the packages are assembled at the workspace's own `0.0.0`,
- * which is assembleable, installable from a tarball, and not publishable --
- * exactly the distinction between a local check and a release.
+ * never. With it, one component is assembled at the version the tag names and
+ * `release-assets/` is written beside it. Without it, all four are assembled at
+ * the workspace's own `0.0.0` -- assembleable, installable from a directory of
+ * tarballs, and publishable nowhere, which is exactly the distinction between a
+ * local check and a release.
  */
 async function main(): Promise<void> {
   const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
+  const log = (line: string): void => void process.stdout.write(`${line}\n`);
   const tag = process.argv[2];
-  const assembled = await assemblePackages({
-    workspaceRoot,
-    ...(tag === undefined ? {} : { version: versionFromTag(tag) }),
-    log: (line) => void process.stdout.write(`${line}\n`),
-  });
+
+  if (tag !== undefined) {
+    const { assembled, release } = await assembleRelease({ workspaceRoot, tag, log });
+    log(
+      `assembled the ${release.component} component, ${release.package}@${release.version}, ` +
+        `speaking protocol ${release.protocol}, into ${relative(workspaceRoot, assembled.directory)}`,
+    );
+    log(`wrote ${RELEASE_ASSETS}/${release.metadataAsset} and ${RELEASE_ASSETS}/release.json`);
+    return;
+  }
+
+  const assembled = await assemblePackages({ workspaceRoot, log });
   for (const item of assembled) {
-    process.stdout.write(
+    log(
       `assembled ${String(item.manifest['name'])}@${String(item.manifest['version'])} ` +
-        `into ${relative(workspaceRoot, item.directory)}\n`,
+        `into ${relative(workspaceRoot, item.directory)}`,
     );
   }
 }

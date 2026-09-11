@@ -1,53 +1,69 @@
 # The release: a tag, and everything that has to be true before it becomes a
-# package.
+# download.
 #
-# Three facts shape this workflow.
+# Four facts shape this workflow.
+#
+# **A tag names one component.** `hub-v1.2.0`, `cli-v1.4.0`, `server-v1.5.0`,
+# `web-v1.1.0`. Each has its own release train, because the whole point of
+# splitting one tarball into four was that a CLI fix should stop forcing every
+# server on the fleet to recompile a native addon -- and four packages cut at
+# one version from one tag would have left exactly that coupling in place under
+# four names. `assemble-package.ts` parses the tag and fails the job with it
+# quoted when it names something that is not a component or a version that is
+# not one.
 #
 # **Nothing in the workspace has a version.** Every manifest says `0.0.0` and no
 # script bumps one, because a version kept in a file is a second statement of
 # what is being released and it drifts from the tag the day somebody forgets.
-# The tag is the statement; `assemble-package.ts` parses it -- a `v1.2`, a
-# `vlatest`, a branch somebody tagged -- and fails the job naming the tag it
-# got, rather than publishing a version nobody can install by the range they
-# meant.
+# The tag is the statement.
 #
-# **The package names are not written here.** The release is four packages --
-# the command, the hub, the server and the client -- and every step below reads
-# each name out of the manifest that was assembled rather than repeating it, so
-# there is nowhere for a copy of a name to be wrong. `--access public` is what a
-# scoped package's first publish needs, and this is the only place it is stated:
-# the assembled manifests deliberately carry no `publishConfig`, because the
-# same fact in two files is one that can disagree.
+# **Delivery is GitHub Releases, not npm.** Verified rather than assumed: `npm
+# install <https tarball url>` unpacks the tarball and then resolves that
+# tarball's own registry dependencies from npm in the ordinary way. So npm is
+# still what installs agentplex on a machine, and nothing of ours is published
+# to a registry. What this bought, immediately, is that a release stopped being
+# blocked on an `NPM_TOKEN` secret that does not exist and on the questions
+# behind one -- who may publish, what the 2FA policy is. `GITHUB_TOKEN` is here
+# already.
 #
-# **One tag, one build, four packages at one version.** Per-component tags and a
-# published manifest of which versions go together are a later decision about
-# what a release is; this workflow cuts all four from the commit the tag names.
+# The asset names are constants -- `agentplex-hub.tgz`, never
+# `agentplex-hub-1.2.0.tgz` -- because GitHub's `releases/latest/download/<asset>`
+# redirect substitutes the tag into the path and copies the file name through
+# verbatim. `npm pack` produces the version-stamped name, so this renames on the
+# way up. That redirect is not what `install.sh` resolves through, but a URL
+# built from a component and a version still needs its third part to be a
+# constant.
 #
-# **Publishing is not a side effect of merging.** There is no npm token yet and
-# the questions behind one -- who may publish, what the 2FA policy is -- are
-# not settled. So the publish step alone is gated on a secret that does not
-# exist, and nothing else is: a tag runs the checks, assembles the package at
-# the tag's version and packs it, so the answer to "would this release have
-# worked" is available before anybody hands this workflow a credential. The day
-# the secret arrives, the step that was skipping starts publishing and nothing
-# else changes.
+# **`versions.json` is the version oracle, and it is published here.** With
+# per-component tags, `releases/latest/download/` cannot answer "the latest
+# cli": GitHub's "latest" is the most recently published release overall. So the
+# `v1` job writes a manifest of what is current for every component, on the same
+# branch and through the same raw.githubusercontent.com mechanism that already
+# serves `install.sh`. It carries each component's protocol beside its version,
+# so one unauthenticated fetch answers both what to install and whether the set
+# agrees -- before anything is downloaded.
 
 name: release
 
 on:
   push:
-    tags: ['v*']
+    # `<component>-v<semver>`. The old `v*` shape is deliberately not here: it
+    # names no component, so there is nothing it could release, and admitting
+    # it would mean a tag that starts a run and then fails at the parse.
+    tags: ['*-v*']
 
-# A tag is a release, and two tags pushed together are two releases. Nothing
-# here cancels anything: a superseded run of CI is noise, a superseded release
-# is a version that silently never happened.
+# A tag is a release, and two tags pushed together are two releases of two
+# components. Nothing here cancels anything: a superseded run of CI is noise, a
+# superseded release is a version that silently never happened. The group is the
+# ref, so a `hub-v1.2.0` and a `cli-v1.4.0` pushed together run side by side --
+# which is what independent trains means.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-# Read-only by default. The one job that writes a branch asks for the
-# permission itself, so the token that runs the checks and the publish cannot
-# push anything.
+# Read-only by default. The two jobs that write -- one creates a release, one
+# pushes a branch -- ask for the permission themselves, so the token that runs
+# the checks cannot do either.
 permissions:
   contents: read
 
@@ -56,6 +72,12 @@ jobs:
   # worse place than a pull request to discover that the workspace does not
   # compile, so the tag runs the set again on the exact commit being published
   # rather than trusting that the CI run on the branch is still what is here.
+  #
+  # The whole workspace, for a tag that releases one component. That is not an
+  # oversight: the components are cut from one build of one commit, and a hub
+  # release whose commit broke the server is a commit nobody should be tagging
+  # from. Checking the part that is being published would make the next
+  # component's release the place that discovers it.
   #
   # One container for the four checks rather than CI's matrix: a pull request
   # wants three separate answers so a lint failure does not hide a test
@@ -98,6 +120,10 @@ jobs:
   # `bin` the kernel hands to the shell, a hub that cannot resolve the client
   # package beside it -- every one of those is invisible until a stranger
   # installs the tarballs, and publishing is the worst moment to find out.
+  #
+  # All four, for a tag that releases one. The check installs them together
+  # because that is how a machine meets them, and the relationship it is really
+  # testing -- a hub resolving the client beside it -- needs two of them present.
   install:
     name: install
     runs-on: ubuntu-latest
@@ -122,154 +148,234 @@ jobs:
       - name: Install the published package on a bare machine
         run: pnpm docker:install
 
-  publish:
-    name: publish
+  release:
+    name: release
     needs: [check, install]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: read
-      # What `npm publish --provenance` signs with: npm exchanges this job's
-      # OIDC token for an attestation tying the tarball to this workflow, this
-      # commit and this runner. Without the permission the publish fails rather
-      # than quietly publishing something unattested.
+      # The release, its tarball and the metadata beside it.
+      contents: write
+      # What `actions/attest-build-provenance` signs with. It is the GitHub-side
+      # equivalent of what `npm publish --provenance` used to do here, and it is
+      # kept for the same reason that was worth having: a downloaded tarball is
+      # a file from the internet, and an attestation is what lets somebody run
+      # `gh attestation verify` and be told which workflow, which commit and
+      # which runner produced it. Dropping the registry should not quietly drop
+      # the claim.
       id-token: write
+      attestations: write
     env:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
-      # The gate. A secret that is not set reads as the empty string, which is
-      # how a step can ask whether it exists -- the `secrets` context is not
-      # available to a job-level `if`, and this is the documented way round
-      # that.
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     outputs:
-      names: ${{ steps.package.outputs.names }}
-      version: ${{ steps.package.outputs.version }}
-      published: ${{ steps.publish.outcome == 'success' }}
+      component: ${{ steps.assemble.outputs.component }}
+      version: ${{ steps.assemble.outputs.version }}
+      protocol: ${{ steps.assemble.outputs.protocol }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          # Where the publish goes, and where setup-node writes the auth line
-          # that NODE_AUTH_TOKEN fills in. Without a registry configured, npm
-          # has nowhere to send the token and the publish fails on
-          # authentication rather than on anything true.
-          registry-url: https://registry.npmjs.org
 
       - name: Install pnpm
         run: corepack enable && corepack install
 
       # Not the container this time: the tarball has to be packed on a machine
-      # the publish can also run from, and `--frozen-lockfile` is what keeps
-      # this install the same one the checks above ran against.
+      # the release can also be created from, and `--frozen-lockfile` is what
+      # keeps this install the same one the checks above ran against.
       - name: Install the workspace
         run: pnpm install --frozen-lockfile
 
       - name: Build the workspace
         run: pnpm build
 
-      # The tag is the argument. `assemble-package.ts` parses it and writes the
-      # version into every manifest as it builds them, so nothing edits JSON
-      # after the fact and the manifests that were assembled are the manifests
-      # that get packed.
-      - name: Assemble the packages at the version the tag names
-        run: pnpm --filter ./scripts package "$GITHUB_REF_NAME"
-
-      # Each name and the one version are read back out of the assembled
-      # manifests rather than written here: a copy of a name in this file is the
-      # half of a rename somebody forgets. The staging directories are found by
-      # glob for the same reason -- a list of four apps here would be the
-      # assembler's list, kept a second time by hand.
-      - name: Pack the packages
-        id: package
-        run: |
-          set -euo pipefail
-          names=''
-          version=''
-          for release in apps/*/release; do
-            names="$names $(node -p "require('./$release/package.json').name")"
-            version="$(node -p "require('./$release/package.json').version")"
-            (cd "$release" && npm pack --pack-destination "$RUNNER_TEMP")
-          done
-          {
-            echo "names=${names# }"
-            echo "version=$version"
-          } >> "$GITHUB_OUTPUT"
-          ls -1 "$RUNNER_TEMP"/*.tgz
-
-      # The tarballs rather than the directories: what gets published is then
-      # byte for byte what was packed and reported above, and the provenance
-      # attestation is about those files.
+      # The tag is the argument. `assemble-package.ts` parses it, assembles the
+      # one component it names at the version it names, and writes
+      # `release-assets/release.json` beside the staging directory -- which is
+      # every fact this workflow would otherwise have to repeat: which directory
+      # holds that component, what its tarball is called, what the metadata
+      # beside it is called, and what protocol the build it just packed speaks.
       #
-      # One `npm publish` per tarball, because npm publishes one package at a
-      # time. There is no transaction here and there cannot be one: a failure
-      # partway through leaves the earlier packages published, which is a fact
-      # to read in the log rather than something this can undo. `set -e` stops
-      # at the first failure, so the log says which one.
-      - name: Publish to npm
-        id: publish
-        if: env.NPM_TOKEN != ''
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # The protocol is read out of the assembled manifest rather than written
+      # here, and that is the point of putting it in the manifest at all: it is
+      # the compiled constant the tarball itself declares, so it cannot drift
+      # from what the code in the tarball does.
+      - name: Assemble the component the tag names
+        id: assemble
         run: |
           set -euo pipefail
-          for tarball in "$RUNNER_TEMP"/*.tgz; do
-            npm publish "$tarball" --provenance --access public
-          done
+          pnpm --filter ./scripts package "$GITHUB_REF_NAME"
+          field() { node -p "require('./release-assets/release.json').$1"; }
+          {
+            echo "component=$(field component)"
+            echo "version=$(field version)"
+            echo "protocol=$(field protocol)"
+            echo "package=$(field package)"
+            echo "directory=$(field directory)"
+            echo "asset=$(field asset)"
+            echo "metadata=$(field metadataAsset)"
+          } >> "$GITHUB_OUTPUT"
 
-      # So that a tag whose publish was skipped still says what it would have
-      # published, in the place a person looks first.
+      # Packed, then renamed to the constant this component's asset is always
+      # published under. `npm pack` names its output after the package and the
+      # version -- `softiesolutions-agentplex-hub-1.2.0.tgz` -- and a version in
+      # an asset name is a name no URL built from a component and a version
+      # could ever match.
+      #
+      # The metadata file was written by the assembler and is already at its
+      # published name; it is listed here so the log says what is about to be
+      # uploaded.
+      - name: Pack it under the name every release publishes it under
+        run: |
+          set -euo pipefail
+          (cd "${{ steps.assemble.outputs.directory }}" \
+            && npm pack --pack-destination "$RUNNER_TEMP")
+          mv "$RUNNER_TEMP"/*.tgz "release-assets/${{ steps.assemble.outputs.asset }}"
+          ls -l release-assets/
+
+      # Before the upload rather than after it, so that a tarball nothing can
+      # attest never becomes a release somebody can download.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: release-assets/${{ steps.assemble.outputs.asset }}
+
+      # The release itself. `--prerelease` for a version with a `-` in it, so
+      # that a release candidate is marked as one; nothing here passes
+      # `--latest`, because "latest" is a repository-wide idea and there are
+      # four trains -- `versions.json` is what answers "the latest hub", and the
+      # flag would only ever be misleading.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMPONENT: ${{ steps.assemble.outputs.component }}
+          VERSION: ${{ steps.assemble.outputs.version }}
+          PROTOCOL: ${{ steps.assemble.outputs.protocol }}
+          PACKAGE: ${{ steps.assemble.outputs.package }}
+        run: |
+          set -euo pipefail
+          prerelease=''
+          case "$VERSION" in *-*) prerelease='--prerelease' ;; esac
+          # shellcheck disable=SC2086
+          gh release create "$GITHUB_REF_NAME" $prerelease \
+            --title "$COMPONENT $VERSION" \
+            --notes "$PACKAGE at $VERSION, speaking protocol $PROTOCOL.
+
+          Install with \`install.sh\`, which resolves this component through
+          \`versions.json\` on the \`v1\` branch:
+
+              curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/v1/scripts/install.sh | bash
+
+          To pin this exact release, add \`--role=${COMPONENT}@${VERSION}\`." \
+            release-assets/${{ steps.assemble.outputs.asset }} \
+            release-assets/${{ steps.assemble.outputs.metadata }}
+
       - name: Report
         if: always()
         run: |
           set -euo pipefail
           {
-            echo "## ${{ steps.package.outputs.version }}"
+            echo "## ${{ steps.assemble.outputs.component }} ${{ steps.assemble.outputs.version }}"
             echo
-            for name in ${{ steps.package.outputs.names }}; do
-              echo "- $name"
-            done
-            echo
-            if [ "${{ steps.publish.outcome }}" = 'success' ]; then
-              echo "Published from ${GITHUB_REF_NAME}."
-            else
-              echo "Packed but not published: no NPM_TOKEN secret is set."
-            fi
+            echo "- ${{ steps.assemble.outputs.package }}"
+            echo "- protocol ${{ steps.assemble.outputs.protocol }}"
+            echo "- ${{ steps.assemble.outputs.asset }}, ${{ steps.assemble.outputs.metadata }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # `install.sh` is fetched over https from a branch, not from a package, so the
-  # script a machine runs and the packages it installs are different artifacts
-  # that have to agree -- and the script is what knows which packages a role
-  # takes. The installer points at `v1`, so `v1` has to name the commit of the
-  # released packages -- otherwise the documented `curl | bash` fetches a script
-  # written against a release that is not what npm hands it.
+  # The `v1` branch, which is two artifacts and one push.
   #
-  # Conditional on the release actually happening, and on it being a `1.x`:
-  # moving `v1` to a commit whose packages were never published would point every
-  # `curl | bash` at a script for a version nobody can install, and a `v2.0.0`
-  # must not silently retarget the branch that v1 users are following. A
-  # prerelease is excluded for the same reason -- a release candidate is not
-  # what the documented one-liner should start handing out.
+  # `install.sh` is fetched over https from this branch, not from a package, so
+  # the script a machine runs and the packages it installs are different
+  # artifacts that have to agree -- and the script is what knows which packages a
+  # role takes. `versions.json` is the other one: it is how an unpinned install
+  # finds out what is current, and this is the only place it is written.
+  #
+  # Conditional on the release having happened, and on it being a `1.x`: moving
+  # `v1` to a commit whose packages were never published would point every `curl
+  # | bash` at a script for a version nobody can install, and a `v2.0.0` must not
+  # silently retarget the branch that v1 users are following. A prerelease is
+  # excluded for the same reason -- a release candidate is not what the
+  # documented one-liner should start handing out, and it is not what
+  # `versions.json` should be calling current either.
+  #
+  # Any component's release advances the branch, not only the CLI's. The script
+  # and the packages have to agree, and the newest released commit is the one
+  # that agrees with the newest package.
   v1:
     name: v1
-    needs: publish
+    needs: release
     if: >-
-      needs.publish.outputs.published == 'true'
-      && startsWith(needs.publish.outputs.version, '1.')
-      && !contains(needs.publish.outputs.version, '-')
+      startsWith(needs.release.outputs.version, '1.')
+      && !contains(needs.release.outputs.version, '-')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # The only write in the workflow, and it is one branch in one job. The
-    # checks and the publish run with a token that cannot push.
     permissions:
       contents: write
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+      COMPONENT: ${{ needs.release.outputs.component }}
+      VERSION: ${{ needs.release.outputs.version }}
+      PROTOCOL: ${{ needs.release.outputs.protocol }}
     steps:
       - uses: actions/checkout@v7
 
-      # No `--force`: a push that is not a fast-forward is refused by the
-      # server, which is the guard rather than something this script has to
-      # check. A `v1` that has moved ahead of the tag is a fact somebody needs
-      # to look at, not something a release job should overwrite.
-      - name: Fast-forward v1 to the released commit
-        run: git push origin "${GITHUB_SHA}:refs/heads/v1"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        run: corepack enable && corepack install
+
+      # `scripts` alone, and not the workspace. `versions-manifest.ts` needs zod
+      # and nothing else -- it deliberately imports no workspace package, so
+      # that updating a manifest does not depend on a build having happened.
+      - name: Install what the manifest writer needs
+        run: pnpm install --frozen-lockfile --filter ./scripts
+
+      # The branch is advanced rather than fast-forwarded, and the difference is
+      # `versions.json`.
+      #
+      # This job used to push `$GITHUB_SHA` straight at `refs/heads/v1`, which
+      # worked while the branch held nothing but the released tree. It cannot
+      # now: the manifest is not in any commit on `master`, so a `v1` carrying
+      # one is never an ancestor of the next released commit and the push after
+      # that would be refused. So the released tree is taken wholesale on top of
+      # the previous `v1`, the manifest is merged into it, and the result is a
+      # commit whose parent is where the branch already was.
+      #
+      # Still no `--force`. The parent is the branch's own head, so a push that
+      # is not a fast-forward is refused by the server -- which is the guard,
+      # rather than something this script has to check. A `v1` that has moved
+      # ahead of the tag is a fact somebody needs to look at, not something a
+      # release job should overwrite.
+      - name: Publish versions.json and advance v1 to the released commit
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          previous="$RUNNER_TEMP/previous.json"
+          if git fetch --no-tags origin '+refs/heads/v1:refs/remotes/origin/v1'; then
+            git show 'origin/v1:versions.json' > "$previous" 2>/dev/null || : > "$previous"
+            git checkout -B v1 origin/v1
+            # The released tree wholesale, with HEAD left on v1: the commit this
+            # makes has the branch's head as its parent and the tag's content as
+            # its tree.
+            git read-tree -u --reset "$GITHUB_SHA"
+          else
+            : > "$previous"
+            git checkout -B v1 "$GITHUB_SHA"
+          fi
+
+          node scripts/versions-manifest.ts "$COMPONENT" "$VERSION" "$PROTOCOL" "$previous" \
+            > versions.json
+          cat versions.json
+
+          git add versions.json
+          git commit -m "$COMPONENT $VERSION: the installer and the manifest for the released commit
+
+          $GITHUB_REF_NAME published $COMPONENT at $VERSION, speaking protocol $PROTOCOL.
+          This branch is what \`curl | bash\` fetches install.sh from and what an
+          unpinned install reads versions.json from, so both move to the commit
+          the release was cut from."
+          git push origin v1
