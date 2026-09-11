@@ -2,15 +2,20 @@
 import { readFile } from 'node:fs/promises';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { PROGRAMS } from './programs.js';
+import { PROGRAMS, type DispatchedProgram, type InAppCommand } from './programs.js';
 
 /**
  * The `agentplex` bin: one command an operator installs, dispatching to the
- * program named by its first argument. Where each program lives, and why it is
- * reached by path rather than by import, is argued in `programs.ts`.
+ * program named by its first argument. Which of those are separate programs
+ * reached by path, which are commands this app holds and imports, and why the
+ * difference is worth a `kind` rather than a uniform table, is argued in
+ * `programs.ts`.
  *
- * The program reads `process.argv.slice(2)`, so the command word is removed
- * before it is loaded rather than passed along as a flag it would refuse.
+ * Every command reads `process.argv.slice(2)`, so the command word is removed
+ * before the program is loaded rather than passed along as a flag it would
+ * refuse. An in-app command is loaded the same way and for the same reason: it
+ * reads the process's argv, so it must not be able to tell whether it was
+ * reached through a path or through an import.
  *
  * `--help` is answered on stdout, and `--version` and the `help` command with
  * it. All three are questions this command was asked and answered, so they are
@@ -102,6 +107,34 @@ function refuse(name: string): void {
 }
 
 /**
+ * Load a command and start it, whichever kind it is.
+ *
+ * The two loads look alike and are not the same act, which is the whole of why
+ * they are written out here rather than hidden behind one field. A dispatched
+ * entry is a URL resolved against this file and handed to `import()` unchecked:
+ * the compiler knows nothing about the module at the far end, and cannot,
+ * because it is another app's build artifact. An in-app command is a call --
+ * the module is imported by a specifier TypeScript resolved at build time, and
+ * `main()` is a function this file can see the type of.
+ *
+ * Both are awaited, so a command that throws rejects here, at the bin's own top
+ * level, exactly as it did when each of these was its own process with a
+ * top-level `await main()` in it. Nothing is caught: the two of them set
+ * `process.exitCode` for every failure they have something to say about, and an
+ * exception that reaches this point is the kind neither of them anticipated,
+ * which wants a stack trace and a non-zero exit rather than a tidier message
+ * that hides where it came from.
+ */
+async function run(program: DispatchedProgram | InAppCommand): Promise<void> {
+  if (program.kind === 'dispatched') {
+    await import(new URL(program.entry, import.meta.url).href);
+    return;
+  }
+  const loaded = await program.load();
+  await loaded.main();
+}
+
+/**
  * `agentplex help [command]`: the same questions `--help` answers, in the word
  * order somebody who has met git types them in.
  *
@@ -125,9 +158,9 @@ async function help(subject: string | undefined): Promise<void> {
   const asked = subject === undefined ? undefined : PROGRAMS[subject];
   if (subject !== undefined && asked === undefined) {
     refuse(subject);
-  } else if (asked?.kind === 'dispatched') {
+  } else if (asked !== undefined && asked.kind !== 'builtin') {
     process.argv.splice(2, 2, '--help');
-    await import(new URL(asked.entry, import.meta.url).href);
+    await run(asked);
   } else {
     process.stdout.write(`${usage()}\n`);
   }
@@ -164,6 +197,6 @@ if (command === '--help' || command === '-h') {
     await help(process.argv[3]);
   } else {
     process.argv.splice(2, 1);
-    await import(new URL(program.entry, import.meta.url).href);
+    await run(program);
   }
 }

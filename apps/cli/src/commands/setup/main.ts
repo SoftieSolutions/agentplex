@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import process from 'node:process';
 import {
   childEnvironment,
@@ -23,6 +22,13 @@ import { runSetupCommand, setupUsage } from './setup-command.js';
 /**
  * `agentplex setup`, wired: the wizard and the plan replay both.
  *
+ * Exported and called by the bin's dispatcher rather than run by the act of
+ * importing this file. There is no shebang above and no `await main()` below
+ * because neither is true any more: this was its own bin, with its own
+ * `package.json` and its own `dist/main.js`, and it is now a command inside the
+ * one bin there is. The argument for a call over a module that runs itself is
+ * in `programs.ts`.
+ *
  * Setup reads a plan rather than a configuration, binds no port, opens no
  * database, and exits when it is done. It writes files -- an identity, store
  * files, the settings -- and the daemons read them when they start.
@@ -46,7 +52,7 @@ import { runSetupCommand, setupUsage } from './setup-command.js';
  * of them, so a serving process has no installer to be asked for over a socket
  * rather than one it declines to use.
  */
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
 
   // Before the terminal exists, and before the command reads a flag. Setup's
@@ -123,5 +129,3 @@ async function main(): Promise<void> {
     terminal.close();
   }
 }
-
-await main();

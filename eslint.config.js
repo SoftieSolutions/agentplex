@@ -200,7 +200,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['apps/cli/**/*.ts', 'apps/hub/**/*.ts', 'apps/server/**/*.ts', 'apps/setup/**/*.ts'],
+    files: ['apps/cli/**/*.ts', 'apps/hub/**/*.ts', 'apps/server/**/*.ts'],
     languageOptions: { globals: globals.node },
     rules: {
       // Every spawn goes through the operation registry (AGX-21), and a rule
@@ -224,6 +224,13 @@ export default tseslint.config(
     // provision. This is that rule made checkable rather than a dependency list
     // somebody has to remember.
     //
+    // The doctor is a directory inside `apps/cli` now rather than an app of its
+    // own, and this is the block that makes that costless: the boundary was
+    // never the package.json, it was this rule, and a path narrows exactly as
+    // well as a manifest did. `apps/cli` as a whole declares `pty` -- the
+    // wizard beside this directory opens terminals -- so nothing but this
+    // stops the doctor importing what could open one.
+    //
     // It declares `pty` for exactly three names, and the narrowing is the rule
     // rather than a hole in it. node-pty is an optional dependency of the
     // published package, so a machine can have everything but it, and a doctor
@@ -231,7 +238,7 @@ export default tseslint.config(
     // session that would not start. `checkNodePty` loads the addon and answers a
     // question; `createPtySupervisor` and `nodePtyFactory` are what could open
     // one, and neither is reachable from this program.
-    files: ['apps/doctor/**/*.ts'],
+    files: ['apps/cli/src/commands/doctor/**/*.ts'],
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports([
         ...doctorOpensNoPty,
@@ -281,7 +288,7 @@ export default tseslint.config(
     files: [
       'apps/hub/src/main.integration.test.ts',
       'apps/server/src/main.integration.test.ts',
-      'apps/setup/src/main.integration.test.ts',
+      'apps/cli/src/commands/setup/main.integration.test.ts',
     ],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
@@ -290,7 +297,7 @@ export default tseslint.config(
     // the doctor: it may start the program under test, and it still may not
     // reach anything that could open a pty. A suite that could would be
     // asserting about a program other than the one that ships.
-    files: ['apps/doctor/src/main.integration.test.ts'],
+    files: ['apps/cli/src/commands/doctor/main.integration.test.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports(doctorOpensNoPty) },
   },
   {

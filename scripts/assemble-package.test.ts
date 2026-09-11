@@ -29,13 +29,24 @@ const rootManifest: Manifest = {
   dependencies: {},
 };
 
-/** The bin's own manifest: no runtime dependency, because it only dispatches. */
+/**
+ * The bin's own manifest. It dispatches to the two daemons by path and holds
+ * `setup` and `doctor` itself, so what those two commands import is what this
+ * app declares -- `pty` included, for the wizard that opens a terminal and the
+ * doctor that asks whether one could be opened.
+ */
 const serviceManifest: Manifest = {
   name: '@softiesolutions/agentplex',
   version: '1.2.3',
   license: 'Apache-2.0',
   type: 'module',
-  dependencies: {},
+  dependencies: {
+    '@agentplex/node-shared': 'workspace:*',
+    '@agentplex/protocol': 'workspace:*',
+    '@agentplex/providers': 'workspace:*',
+    '@agentplex/pty': 'workspace:*',
+    zod: '^4.1.13',
+  },
 };
 
 const protocolManifest: Manifest = {
@@ -105,16 +116,13 @@ const serverAppManifest: Manifest = {
   },
 };
 
-const setupAppManifest: Manifest = { ...serverAppManifest, name: '@agentplex/setup' };
-const doctorAppManifest: Manifest = { ...hubManifest, name: '@agentplex/doctor' };
-
 const bundledManifests = [protocolManifest, nodeSharedManifest, providersManifest, ptyManifest];
 
 function derived(): Record<string, unknown> {
   return publishedManifest({
     root: rootManifest,
     service: serviceManifest,
-    apps: [hubManifest, serverAppManifest, setupAppManifest, doctorAppManifest],
+    apps: [hubManifest, serverAppManifest],
     bundled: bundledManifests,
   });
 }
@@ -356,14 +364,16 @@ describe('publishedManifest', () => {
 });
 
 describe('packageEntries', () => {
-  it('carries the five programs, the client and the migrations', () => {
+  it('carries the bin, the two daemons, the client and the migrations', () => {
     const sources = packageEntries().map((entry) => entry.from);
 
+    // The bin's own `dist` is `setup` and `doctor` as well: both are commands
+    // inside this app now, so neither has an entry of its own to name.
     expect(sources).toContain('apps/cli/dist');
     expect(sources).toContain('apps/hub/dist');
     expect(sources).toContain('apps/server/dist');
-    expect(sources).toContain('apps/setup/dist');
-    expect(sources).toContain('apps/doctor/dist');
+    expect(sources).not.toContain('apps/setup/dist');
+    expect(sources).not.toContain('apps/doctor/dist');
     expect(sources).toContain('apps/hub/migrations');
     expect(sources).toContain('packages/protocol/dist');
     expect(sources).toContain('packages/node-shared/dist');
@@ -562,10 +572,6 @@ describe('the assembled package', () => {
     await compiled('apps/hub/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/server/package.json', JSON.stringify(serverAppManifest));
     await compiled('apps/server/dist', 'main', '#!/usr/bin/env node\nawait main();');
-    await write('apps/setup/package.json', JSON.stringify(setupAppManifest));
-    await compiled('apps/setup/dist', 'main', '#!/usr/bin/env node\nawait main();');
-    await write('apps/doctor/package.json', JSON.stringify(doctorAppManifest));
-    await compiled('apps/doctor/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/hub/migrations/0001_hub_identity.sql', 'create table hub (id text);\n');
     await write('packages/protocol/package.json', JSON.stringify(protocolManifest));
     await compiled('packages/protocol/dist', 'index', 'export const version = 7;');
