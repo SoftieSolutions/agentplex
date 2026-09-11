@@ -71,9 +71,10 @@ readonly OLD_PACKAGE_NAME='agentplexd'
 # makes for the same reason.
 readonly NPM_LATEST_TAG='latest'
 
-# The Node major this service declares in `engines`. `.npmrc` sets
-# engine-strict, so an older runtime is refused by npm rather than discovered at
-# the first import.
+# The Node major this service declares in `engines`. No `.npmrc` ships in the
+# tarball -- engine-strict governs the workspace -- so a consumer's npm only
+# warns about that field. This script is what enforces the major: it adopts or
+# installs a runtime of it before npm is ever invoked.
 readonly NODE_MAJOR='24'
 readonly NODE_DIST_URL="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x"
 
