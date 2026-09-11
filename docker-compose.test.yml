@@ -85,3 +85,21 @@ services:
       - PATH=/home/alice/.agentplex/bin:$$PATH agentplex doctor --role=server
         --bin-path=/home/alice/.agentplex/bin
         --server-identity-file=/home/alice/.agentplex/server.json
+
+  # The same bootstrap for the other role, on the machine that makes it a claim:
+  # a stock `debian:bookworm-slim` where no compiler was ever installed. node-pty
+  # is an optional dependency precisely so that this install finishes, and the
+  # stage above cannot show it -- by the time it installs a hub, its own server
+  # install has already put a toolchain on the box.
+  #
+  # The assertions are RUN lines inside `hub-bootstrap-check`. The command below
+  # prints the report a person wants to see: a hub that says it opens no
+  # terminals and exits 0 on a machine that could not compile one.
+  bootstrap-hub:
+    build:
+      context: .
+      target: hub-bootstrap-check
+    command:
+      - bash
+      - -c
+      - PATH=/home/alice/.agentplex/bin:$$PATH agentplex doctor --role=hub

@@ -124,7 +124,6 @@ describe('publishedManifest', () => {
       '@agentplex/protocol': '1.2.3',
       '@agentplex/providers': '1.2.3',
       '@agentplex/pty': '1.2.3',
-      'node-pty': '1.1.0',
       ws: '^8.21.3',
       zod: '^4.1.13',
     });
@@ -134,6 +133,49 @@ describe('publishedManifest', () => {
       '@agentplex/providers',
       '@agentplex/pty',
     ]);
+  });
+
+  /**
+   * node-pty is the one dependency npm is allowed to fail to install.
+   *
+   * It has no Linux prebuild, so npm compiles it from source, and that compile
+   * is the likeliest step of the whole install to fail -- on a hub, which never
+   * opens a pseudoterminal, for a program the hub does not run. It reaches this
+   * manifest from the bundled `@agentplex/pty`, which the server and the wizard
+   * depend on and the hub does not.
+   */
+  it('declares node-pty optional, so a hub installs without a C++ toolchain', () => {
+    const manifest = derived();
+
+    expect(manifest['optionalDependencies']).toEqual({ 'node-pty': '1.1.0' });
+    // In one field, not both: npm reads `dependencies` first, and a name in
+    // both is a required dependency wearing an optional label.
+    expect(manifest['dependencies']).not.toHaveProperty('node-pty');
+  });
+
+  /**
+   * The bundled packages are what Node's resolver walks into from the installed
+   * tree, and that is decided by `workspace:` ranges rather than by this list.
+   * Moving a name into `optionalDependencies` must not move it out of the
+   * tarball, or the published package carries a hole where a compiled package
+   * used to be.
+   */
+  it('leaves the bundled workspace packages exactly where they were', () => {
+    const manifest = derived();
+
+    expect(manifest['bundleDependencies']).toEqual([
+      '@agentplex/node-shared',
+      '@agentplex/protocol',
+      '@agentplex/providers',
+      '@agentplex/pty',
+    ]);
+    expect(manifest['dependencies']).toMatchObject({
+      '@agentplex/node-shared': '1.2.3',
+      '@agentplex/protocol': '1.2.3',
+      '@agentplex/providers': '1.2.3',
+      '@agentplex/pty': '1.2.3',
+    });
+    expect(manifest['optionalDependencies']).not.toHaveProperty('@agentplex/pty');
   });
 
   it('refuses a workspace dependency nothing bundles', () => {
@@ -243,9 +285,9 @@ describe('publishedManifest', () => {
     expect(derived()['publishConfig']).toBeUndefined();
   });
 
-  it('keeps the node-pty permission repair as its only install script', () => {
+  it('keeps the node-pty postinstall as its only install script', () => {
     expect(derived()['scripts']).toEqual({
-      postinstall: 'node packages/pty/scripts/fix-node-pty-permissions.js',
+      postinstall: 'node packages/pty/scripts/node-pty-postinstall.js',
     });
   });
 
@@ -312,7 +354,7 @@ describe('packageEntries', () => {
     expect(sources).toContain('packages/node-shared/dist');
     expect(sources).toContain('packages/providers/dist');
     expect(sources).toContain('packages/pty/dist');
-    expect(sources).toContain('packages/pty/scripts/fix-node-pty-permissions.js');
+    expect(sources).toContain('packages/pty/scripts/node-pty-postinstall.js');
     expect(sources).toContain('apps/web/dist');
   });
 
@@ -526,7 +568,7 @@ describe('the assembled package', () => {
     await compiled('packages/providers/dist/fake-parent', 'kept', 'export const kept = 13;');
     await write('packages/pty/package.json', JSON.stringify(ptyManifest));
     await compiled('packages/pty/dist', 'index', 'export const pty = 10;');
-    await write('packages/pty/scripts/fix-node-pty-permissions.js', 'main();\n');
+    await write('packages/pty/scripts/node-pty-postinstall.js', 'main();\n');
     if (options.client) {
       await write('apps/web/dist/index.html', '<!doctype html>\n');
       await write('apps/web/dist/assets/index-abc123.js', 'export {};\n');
@@ -685,10 +727,7 @@ describe('the assembled package', () => {
     const assembled = await assemblePackage({ workspaceRoot: root });
 
     await expect(
-      readFile(
-        join(assembled.directory, 'packages/pty/scripts/fix-node-pty-permissions.js'),
-        'utf8',
-      ),
+      readFile(join(assembled.directory, 'packages/pty/scripts/node-pty-postinstall.js'), 'utf8'),
     ).resolves.toContain('main()');
   });
 

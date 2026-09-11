@@ -89,6 +89,37 @@ export interface BundledPackage {
 export const ENTRYPOINT = 'apps/install/dist/main.js';
 
 /**
+ * Dependencies the published package declares optional, by name.
+ *
+ * One entry, and the reason it is a list rather than a boolean on node-pty is
+ * that the question "why is this optional" has to be answerable from here.
+ *
+ * node-pty is a native addon with no Linux prebuild, so npm compiles it from
+ * source on every Linux install, and that compile is the single most likely
+ * step of an install to fail: it needs python3, make and a C++ compiler, none
+ * of which a stock `debian:bookworm-slim` has. It reaches this manifest as a
+ * dependency of the bundled `@agentplex/pty`, carried up by the rule below
+ * that a bundled package's needs are declared here -- and `@agentplex/pty`
+ * reaches the package through the server and the wizard.
+ *
+ * The hub is the machine that never opens a pseudoterminal, and the hub was
+ * paying that bill: `apps/hub` depends on node-shared, protocol, providers and
+ * zod, and on nothing that touches a pty. Optional is what lets npm finish
+ * without it.
+ *
+ * What optional costs, and what pays it back. npm exits 0 when an optional
+ * dependency's build fails and removes the package from the tree without
+ * printing an error -- verified against npm 11.19 -- so a server installed on a
+ * machine with no compiler would otherwise report a clean install and then fail
+ * to open a session. Three things close that, and none of them may be dropped
+ * while this list has an entry in it: `agentplex server` refuses to start and
+ * says what to install, `agentplex doctor` reports the seam as unusable, and
+ * the package's own postinstall fails the install outright when
+ * AGENTPLEX_REQUIRE_PTY says the machine is one that runs a server.
+ */
+export const OPTIONAL_DEPENDENCIES: readonly string[] = ['node-pty'];
+
+/**
  * The one install script, at the workspace path, in the package and in the
  * workspace alike. It lives in the pty package because the helper it repairs
  * is node-pty's, and node-pty is declared there and nowhere else. It resolves
@@ -96,7 +127,7 @@ export const ENTRYPOINT = 'apps/install/dist/main.js';
  * package's own `node_modules` in the published tree exactly as it walks up to
  * `packages/pty/node_modules` in a checkout.
  */
-export const POSTINSTALL_SCRIPT = 'packages/pty/scripts/fix-node-pty-permissions.js';
+export const POSTINSTALL_SCRIPT = 'packages/pty/scripts/node-pty-postinstall.js';
 
 /** Where a bundled dependency has to sit for Node's resolver to find it. */
 function bundledDirectory(name: string): string {
@@ -375,8 +406,13 @@ export function versionFromTag(tag: string): string {
  * the `spawn-helper` beside them, and the only symptom is `posix_spawnp
  * failed.` out of a native addon, for a session that never starts. On Linux
  * node-gyp compiles and sets the bit, so this artifact is the first one where
- * the prebuilt path is the common one. The script reads one file mode and may
- * chmod one file; it never fails an install.
+ * the prebuilt path is the common one. It is also the one place that can still
+ * turn a skipped optional build into a failed install, which is what
+ * AGENTPLEX_REQUIRE_PTY asks it for on a machine that runs a server.
+ *
+ * **`optionalDependencies` is a field, not an afterthought.** See
+ * `OPTIONAL_DEPENDENCIES`: one name goes there, npm is then allowed to finish
+ * without it, and three other things exist to stop that being a silent success.
  */
 export function publishedManifest(input: {
   readonly root: Manifest;
@@ -389,6 +425,7 @@ export function publishedManifest(input: {
 }): Record<string, unknown> {
   const versions = new Map(input.bundled.map((manifest) => [manifest.name, manifest.version]));
   const dependencies: Record<string, string> = {};
+  const optional: Record<string, string> = {};
   const declaredBy = new Map<string, string>();
   const bundleDependencies = new Set<string>();
 
@@ -413,9 +450,17 @@ export function publishedManifest(input: {
         bundleDependencies.add(name);
         continue;
       }
-      const existing = dependencies[name];
+      // An optional dependency is carried up the same way and lands in a
+      // different field. The name is what decides, not the manifest it came
+      // from: node-pty is an ordinary dependency of `packages/pty`, which is
+      // correct -- a checkout that cannot compile it cannot run its tests --
+      // and it is the published package, installed on machines that run only a
+      // hub, that has a reason to let npm continue without it.
+      const into = OPTIONAL_DEPENDENCIES.includes(name) ? optional : dependencies;
+
+      const existing = into[name];
       if (existing === undefined) {
-        dependencies[name] = range;
+        into[name] = range;
         declaredBy.set(name, manifest.name);
         continue;
       }
@@ -458,6 +503,7 @@ export function publishedManifest(input: {
       .filter((path) => !path.startsWith('node_modules/')),
     scripts: { postinstall: `node ${POSTINSTALL_SCRIPT}` },
     dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
+    optionalDependencies: Object.fromEntries(Object.entries(optional).sort()),
     bundleDependencies: [...bundleDependencies].sort(),
   };
 }

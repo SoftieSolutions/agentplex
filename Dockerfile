@@ -376,6 +376,85 @@ RUN ! test -e /etc/systemd/system/agentplex-hub.service \
     && id agentplex \
     && grep -q '/etc/agentplex/agentplex.env' /tmp/system-uninstall.log
 
+# The hub bootstrap: the claim this ticket is actually about, on the only
+# machine that can prove it.
+#
+# A separate stage rather than another `RUN` in the one above, and that is the
+# whole reason it exists: `bootstrap-check` installs python3, make and g++
+# through sudo on its first line of real work, so every hub install after that
+# point runs on a machine that already has a compiler and proves nothing. The
+# claim is that a hub needs none, and the only way to state it is a container
+# where none was ever installed.
+#
+# It costs a second Debian layer, a second Node download and a second npm
+# install -- and no compile, because there is nothing here to compile, which is
+# the point. It is the cheaper of the two bootstrap stages for exactly the
+# reason it is being added.
+#
+# systemd is here for the same reason it is above: `systemd-analyze verify`
+# resolves ExecStart, so it is systemd's own word that the unit points at a hub
+# that is really there.
+FROM debian:bookworm-slim AS hub-bootstrap-check
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes ca-certificates curl sudo systemd \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home alice \
+    && echo 'alice ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/alice \
+    && chmod 0440 /etc/sudoers.d/alice
+
+COPY --from=package /package/ /package/
+COPY apps/install/packaging/install.sh /install.sh
+
+USER alice
+ENV HOME=/home/alice
+WORKDIR /home/alice
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# alice has passwordless sudo, exactly as above, so a script that wanted to
+# install a toolchain could. This asserts that it did not want to.
+RUN AGENTPLEX_PACKAGE="$(echo /package/softiesolutions-agentplex-*.tgz)" \
+    bash /install.sh --role=hub --no-setup | tee /tmp/hub-install.log
+
+# No compiler on the machine, before or after. `cc`, `c++` and `g++` are all
+# absent from a stock bookworm-slim, so finding one here would mean this install
+# put it here -- which is the regression this stage exists to catch. The log
+# line beside it is the other half: the step was skipped as a decision and said
+# so, rather than being quietly dropped.
+RUN ! command -v g++ \
+    && ! command -v c++ \
+    && ! command -v cc \
+    && grep -q 'toolchain  not needed' /tmp/hub-install.log
+
+# And the install worked anyway. node-pty is an optional dependency, so npm
+# exits 0 having skipped or dropped it; the bin, the runtime and the unit all
+# arrived, and no server unit came with them.
+RUN test -x "$HOME/.agentplex/node/bin/node" \
+    && test -x "$HOME/.agentplex/bin/agentplex" \
+    && test -f "$HOME/.config/systemd/user/agentplex-hub.service" \
+    && ! test -e "$HOME/.config/systemd/user/agentplex-server.service" \
+    && grep -qx "ExecStart=$HOME/.agentplex/bin/agentplex hub" "$HOME/.config/systemd/user/agentplex-hub.service" \
+    && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-hub.service"
+
+ENV PATH=/home/alice/.agentplex/bin:/home/alice/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The hub's own doctor, which is the end-to-end statement: a program that loads
+# every bundled package, reports a machine that opens no terminals, and exits 0
+# on a box with no compiler on it. Exit 0 is the assertion here, unlike the
+# server stage above, because on a hub there is nothing left that could be
+# unusable.
+RUN agentplex doctor --role=hub | tee /tmp/hub-doctor.log
+RUN grep -q 'opens no terminals' /tmp/hub-doctor.log
+
+# The other half of the same decision is deliberately not asserted here. A
+# `--role=server` run on this machine would install the toolchain through the
+# same passwordless sudo alice has above and then compile node-pty perfectly
+# well -- which is the correct behaviour and no evidence at all about a machine
+# that cannot compile. What happens on a server when node-pty will not load is
+# the postinstall's own test in `packages/pty`, where the failure can be
+# arranged rather than hoped for.
+
 # Runtime dependencies only, resolved on their own rather than pruned out of
 # the build stage: a prune leaves whatever it failed to notice.
 FROM manifests AS runtime-deps

@@ -9,7 +9,8 @@ export type {
   PtySupervisorDependencies,
 } from './pty-supervisor.js';
 
-export { nodePtyFactory } from './node-pty-factory.js';
+export { checkNodePty, loadNodePty, NODE_PTY_REMEDY, nodePtyFactory } from './node-pty-factory.js';
+export type { NodePtyLoader, NodePtyModule, PtyAvailability } from './node-pty-factory.js';
 
 export { createScrollback } from './scrollback.js';
 export type { Scrollback, ScrollbackOptions } from './scrollback.js';

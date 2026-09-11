@@ -1,4 +1,5 @@
 import type { ProviderReadiness } from '@agentplex/protocol';
+import { NODE_PTY_REMEDY, type PtyAvailability } from '@agentplex/pty';
 import type { Config, Role } from './config.js';
 import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 
@@ -17,12 +18,29 @@ import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agen
  * is what mints, is not reachable from this file. A doctor that changed the
  * machine it was asked to describe would be worse than no doctor: it would make
  * "run doctor first" a thing you have to think about.
+ *
+ * It asks whether node-pty loads, which is not the same as opening one: the
+ * addon is a file the process maps, and mapping it changes nothing. The
+ * question has to be here because node-pty is an optional dependency of the
+ * published package -- a hub that never opens a pseudoterminal should not need
+ * a C++ toolchain to install a program it does not run -- and npm exits 0 when
+ * an optional dependency's build is skipped or fails. Without this, the machine
+ * where that happened looks healthy right up to the first session that will not
+ * start.
  */
 
 export interface DoctorDependencies {
   readonly providers: ProviderRegistry;
   readonly preflight: ProviderPreflight;
   readonly files: StoreFileSystem;
+  /**
+   * Whether a pseudoterminal can be opened here, asked exactly the way the
+   * server asks it at startup. Injected rather than called directly for the
+   * reason the preflight is: an addon that will not load is not a thing a test
+   * can arrange, and two implementations of this question would eventually
+   * disagree in front of somebody trying to work out why a session hangs.
+   */
+  readonly terminals: () => PtyAvailability;
 }
 
 export interface DoctorReport {
@@ -39,6 +57,23 @@ export interface DoctorReport {
   readonly providers: readonly ProviderReadiness[];
   /** One per configured store path, in the order they were configured. */
   readonly stores: readonly StoreCheck[];
+  /** The pty seam, or `null` on a role that opens none. */
+  readonly terminals: TerminalCheck | null;
+}
+
+/**
+ * Whether this installation can drive a session at all.
+ *
+ * `unusable` carries the load failure verbatim: the two shapes it takes -- npm
+ * removed the package after its build failed, or an `ignore-scripts` install
+ * left the sources with no addon beside them -- are different things to fix,
+ * and a doctor that flattened them into "broken" would have thrown away the
+ * only sentence that says which.
+ */
+export interface TerminalCheck {
+  readonly state: 'ready' | 'unusable';
+  /** What is wrong, in words, or `null` when nothing is. */
+  readonly problem: string | null;
 }
 
 export interface StoreCheck {
@@ -61,26 +96,35 @@ export type StoreState = 'present' | 'missing' | 'unusable';
 
 export async function inspectMachine(
   config: Config,
-  { providers, preflight, files }: DoctorDependencies,
+  { providers, preflight, files, terminals }: DoctorDependencies,
 ): Promise<DoctorReport> {
   // A hub-only machine starts no sessions, mounts no stores and drives no
   // providers. Probing them anyway would report on a machine this deployment
   // never touches.
   if (!('server' in config)) {
-    return { role: config.role, usable: true, providers: [], stores: [] };
+    return { role: config.role, usable: true, providers: [], stores: [], terminals: null };
   }
 
   const readiness = await preflight.run(providers);
   const stores = await Promise.all(config.server.storePaths.map((path) => checkStore(path, files)));
+  const pty = checkTerminals(terminals());
 
   return {
     role: config.role,
     usable:
       readiness.every((provider) => provider.state === 'ready') &&
-      stores.every((store) => store.state === 'present'),
+      stores.every((store) => store.state === 'present') &&
+      pty.state === 'ready',
     providers: readiness,
     stores,
+    terminals: pty,
   };
+}
+
+function checkTerminals(availability: PtyAvailability): TerminalCheck {
+  return availability.usable
+    ? { state: 'ready', problem: null }
+    : { state: 'unusable', problem: availability.problem };
 }
 
 async function checkStore(path: string, files: StoreFileSystem): Promise<StoreCheck> {
@@ -108,7 +152,16 @@ async function checkStore(path: string, files: StoreFileSystem): Promise<StoreCh
 export function formatDoctorReport(report: DoctorReport): readonly string[] {
   const lines = [`agentplex doctor  role=${report.role}`, ''];
 
-  lines.push('providers');
+  // First, because it gates the rest: a provider that is installed and logged
+  // in still starts nothing on a machine that cannot open a pseudoterminal.
+  lines.push('terminals');
+  if (report.terminals === null) {
+    lines.push('  this machine runs no server, so it opens no terminals');
+  } else {
+    lines.push(...terminalLines(report.terminals));
+  }
+
+  lines.push('', 'providers');
   if (report.providers.length === 0) {
     lines.push(
       report.role === 'hub'
@@ -149,6 +202,18 @@ function providerLine(provider: ProviderReadiness): string {
   ];
   const line = columns.join(' ').trimEnd();
   return provider.problem === null ? line : `${line}\n    ${provider.problem}`;
+}
+
+/**
+ * The pty seam, with what to do about it when there is something to do.
+ *
+ * The remedy comes from the package that declares node-pty rather than being
+ * written again here, so the operator who meets this in `doctor` and then in
+ * the server's refusal to start is reading the same advice both times.
+ */
+function terminalLines(terminals: TerminalCheck): readonly string[] {
+  if (terminals.problem === null) return [`  ${terminals.state}`];
+  return [`  ${terminals.state}`, `    ${terminals.problem}`, `    ${NODE_PTY_REMEDY}`];
 }
 
 function storeLine(store: StoreCheck): string {
