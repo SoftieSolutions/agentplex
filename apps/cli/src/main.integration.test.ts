@@ -40,7 +40,7 @@ const BIN = fileURLToPath(new URL('../dist/main.js', import.meta.url));
  */
 const MANIFEST = fileURLToPath(new URL('../../../package.json', import.meta.url));
 
-/** A dispatch into a program that refuses its configuration is still quick. */
+/** A command that loads its module and refuses its configuration is still quick. */
 const RUN_TIMEOUT_MS = 20_000;
 
 interface Run {
@@ -52,9 +52,10 @@ interface Run {
 /**
  * The environment minus everything a program under `AGENTPLEX_` could read.
  *
- * The dispatch case asserts that `hub` refused its configuration, and a machine
- * that happens to export `AGENTPLEX_DATABASE_FILE` would otherwise start a hub
- * from a test suite.
+ * Nothing this bin runs starts a daemon any more, so the hub this used to guard
+ * against cannot be reached from here at all. It stays because `setup` and
+ * `doctor` both read the same variables, and a suite whose answers depend on
+ * what the contributor happens to export is a suite about their shell.
  */
 function cleanEnvironment(): NodeJS.ProcessEnv {
   return Object.fromEntries(
@@ -106,9 +107,20 @@ describe('the agentplex bin', () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('Usage: agentplex <command> [options]');
-    for (const name of ['hub', 'server', 'setup', 'doctor']) {
-      expect(result.stdout).toContain(name);
+    // The table is the words that do something, and `hub` and `server` are not
+    // among them.
+    for (const name of ['setup', 'doctor', 'help']) {
+      expect(result.stdout).toMatch(new RegExp(`^ {2}${name} {2,}\\S`, 'm'));
     }
+    for (const daemon of ['hub', 'server']) {
+      expect(result.stdout).not.toMatch(new RegExp(`^ {2}${daemon} {2,}\\S`, 'm'));
+    }
+    // Named all the same, below the table and as what they are: leaving them
+    // out entirely would make the one place an operator looks silent about the
+    // word every unit file and every document still says.
+    expect(result.stdout).toContain('hub and server are daemons rather than commands');
+    expect(result.stdout).toContain('agentplex-hub.service');
+    expect(result.stdout).toContain('agentplex-server.service');
     // A flag nothing lists is a flag nobody finds.
     expect(result.stdout).toContain('--version');
   });
@@ -131,15 +143,15 @@ describe('the agentplex bin', () => {
   });
 
   it('hands help <command> to that command, which answers for itself', async () => {
-    const [viaWord, viaFlag] = await Promise.all([run('help', 'hub'), run('hub', '--help')]);
+    const [viaWord, viaFlag] = await Promise.all([run('help', 'doctor'), run('doctor', '--help')]);
 
-    // Identical because they are the same run: `help hub` rewrites argv to
-    // `hub --help` and dispatches, so there is one hub usage text and this bin
-    // holds no copy of it.
+    // Identical because they are the same run: `help doctor` rewrites argv to
+    // `doctor --help` and calls it, so there is one doctor usage text and this
+    // bin holds no copy of it.
     expect(viaWord).toEqual(viaFlag);
     expect(viaWord.code).toBe(0);
     expect(viaWord.stderr).toBe('');
-    expect(viaWord.stdout).toContain('Usage: agentplex hub');
+    expect(viaWord.stdout).toContain('Usage: agentplex doctor');
     expect(viaWord.stdout).not.toContain('Usage: agentplex <command>');
   });
 
@@ -180,17 +192,50 @@ describe('the agentplex bin', () => {
   });
 
   it(
-    'dispatches a known command, which then refuses its own configuration',
+    'runs a known command, which then refuses its own configuration',
     { timeout: RUN_TIMEOUT_MS },
     async () => {
-      const result = await run('hub');
+      const result = await run('doctor');
 
-      // The hub's refusal, not the bin's: proof the command word was consumed
-      // and the program at the far end of the path was loaded and ran.
+      // The doctor's refusal, not the bin's: proof the command word was
+      // consumed and the module behind it was loaded and called.
       expect(result.code).toBe(2);
-      expect(result.stderr).toContain('agentplex hub:');
-      expect(result.stderr).toContain('Usage: agentplex hub');
+      expect(result.stderr).toContain('agentplex doctor:');
+      expect(result.stderr).toContain('Usage: agentplex doctor');
       expect(result.stderr).not.toContain('Usage: agentplex <command>');
     },
   );
+
+  /**
+   * The word every unit file, every document and every habit still says, at a
+   * bin that no longer runs it.
+   *
+   * `unknown command "hub"` would be true and useless: it tells an operator the
+   * word means nothing, when the word names the process the machine exists to
+   * run. It is still a run that failed -- stderr, exit 2, exactly as an unknown
+   * command is -- and the sentence is the whole of the difference.
+   */
+  it.each(['hub', 'server'])(
+    'says what a %s is rather than shrugging at the word',
+    async (daemon) => {
+      const result = await run(daemon);
+
+      expect(result.code).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain(`the ${daemon} is a daemon, not a command`);
+      expect(result.stderr).toContain(`agentplex-${daemon}.service`);
+      expect(result.stderr).toContain('systemctl');
+      // Not an unknown command, and not the usage either: the answer is complete,
+      // and the usage is for when the next step is to pick a different word.
+      expect(result.stderr).not.toContain('unknown command');
+      expect(result.stderr).not.toContain('Usage: agentplex <command>');
+    },
+  );
+
+  /** The same answer through the other word order, because it is the same question. */
+  it('answers help hub the same way', async () => {
+    const [viaWord, alone] = await Promise.all([run('help', 'hub'), run('hub')]);
+
+    expect(viaWord).toEqual(alone);
+  });
 });

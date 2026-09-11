@@ -168,6 +168,44 @@ function escaped(value: string): string {
   return value.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
+/**
+ * The compiled entry a unit's ExecStart names, for one daemon under one prefix.
+ *
+ * There is no `agentplex hub` any more, so a unit cannot start a daemon by
+ * naming a command: it names the interpreter and this file. The path is the
+ * workspace's inside the directory npm wrote, which is the same layout a
+ * checkout, the image and the tarball all keep -- so this expression is the
+ * whole of what packaging has to preserve for a unit to work.
+ */
+function daemonEntry(prefix: string, daemon: string): string {
+  return `${prefix}/lib/node_modules/@softiesolutions/agentplex/apps/${daemon}/dist/main.js`;
+}
+
+/**
+ * The ExecStart lines of a rendered unit, split into the interpreter and the
+ * script.
+ *
+ * The interpreter is returned rather than asserted against a literal on
+ * purpose. Which node the script settles on is the machine's answer -- one
+ * already on PATH, or the one it unpacked into the prefix -- so writing a path
+ * here would make these tests about the machine the suite runs on. What every
+ * caller does assert is that it ends in `/node`: naming the interpreter rather
+ * than leaving a `#!/usr/bin/env node` line to find one is the change, and an
+ * ExecStart that had drifted back to a bare command word would fail this parse
+ * rather than pass a weaker assertion.
+ */
+function execStarts(unit: string): readonly { interpreter: string; script: string }[] {
+  return unit
+    .split('\n')
+    .filter((line) => line.startsWith('ExecStart='))
+    .map((line) => {
+      const match = /^ExecStart=(\S+) (\S+)$/.exec(line);
+      if (match === null) throw new Error(`not an interpreter and a script: ${line}`);
+      expect(match[1]).toMatch(/\/node$/);
+      return { interpreter: match[1] ?? '', script: match[2] ?? '' };
+    });
+}
+
 /** Every line of the plan the unit step printed. */
 function unitLines(stdout: string): readonly string[] {
   return stdout.split('\n').filter((line) => line.startsWith('unit '));
@@ -524,11 +562,25 @@ describe('the plan a dry run prints', () => {
     expect(planned(result.stdout, 'package')).toContain('@softiesolutions/agentplex@');
 
     const units = run(script, home, ['--print-unit', '--role=both']).stdout;
-    expect(units).toContain(`ExecStart=${home}/.agentplex/bin/agentplex hub`);
-    expect(units).toContain(`ExecStart=${home}/.agentplex/bin/agentplex server`);
-    // Nothing an operator reads carries the scope: not the binary, not the
-    // unit, not a message.
-    expect(units).not.toContain('softiesolutions');
+    expect(execStarts(units).map((line) => line.script)).toEqual([
+      daemonEntry(`${home}/.agentplex`, 'hub'),
+      daemonEntry(`${home}/.agentplex`, 'server'),
+    ]);
+
+    // The scope reaches the unit now, and only there, and only because npm put
+    // it in a directory name. There is no `agentplex hub` to run, so ExecStart
+    // names the daemon's file, and that file is inside the tree npm wrote at
+    // the name it was installed under. It is npm's spelling of where a package
+    // lives rather than a word this script chose -- so every word this script
+    // does choose is still unscoped: the binary, the unit file names, and
+    // every line an operator reads.
+    const scoped = units.split('\n').filter((line) => line.includes('softiesolutions'));
+    expect(scoped).toHaveLength(2);
+    expect(scoped.every((line) => line.startsWith('ExecStart='))).toBe(true);
+    // The two unscoped words in the same file, so this says what stayed as well
+    // as what moved.
+    expect(units).toContain('Description=agentplex hub');
+    expect(units).toContain('Description=agentplex server');
   });
 
   it('installs whatever AGENTPLEX_PACKAGE names, which is how the container check reaches an unpublished build', () => {
@@ -869,11 +921,10 @@ describe('the systemd unit', () => {
   it('writes one unit per daemon the role runs, and both for --role=both', () => {
     const { script, home } = scratch();
     const both = run(script, home, ['--print-unit', '--role=both']).stdout;
-    const units = both.split('\n').filter((line) => line.startsWith('ExecStart='));
 
-    expect(units).toEqual([
-      `ExecStart=${home}/.agentplex/bin/agentplex hub`,
-      `ExecStart=${home}/.agentplex/bin/agentplex server`,
+    expect(execStarts(both).map((line) => line.script)).toEqual([
+      daemonEntry(`${home}/.agentplex`, 'hub'),
+      daemonEntry(`${home}/.agentplex`, 'server'),
     ]);
     expect(both).toContain('Description=agentplex hub');
     expect(both).toContain('Description=agentplex server');
@@ -886,8 +937,10 @@ describe('the systemd unit', () => {
     // No User= directive at all: a user unit runs as its user, and a line
     // naming one would be a claim this scope cannot make.
     expect(unit.split('\n').filter((line) => line.startsWith('User='))).toEqual([]);
-    expect(unit).toContain(`ExecStart=${home}/.agentplex/bin/agentplex server`);
-    expect(unit).not.toContain('agentplex hub');
+    expect(execStarts(unit).map((line) => line.script)).toEqual([
+      daemonEntry(`${home}/.agentplex`, 'server'),
+    ]);
+    expect(unit).not.toContain('apps/hub');
     expect(unit).toContain(`EnvironmentFile=${home}/.agentplex/agentplex.env`);
     expect(unit).toContain('WantedBy=default.target');
   });
@@ -971,8 +1024,10 @@ describe('the systemd unit', () => {
     }).stdout;
     expect(unit).toContain('User=agentplex');
     expect(unit).toContain('Group=agentplex');
-    expect(unit).toContain('ExecStart=/opt/agentplex/bin/agentplex hub');
-    expect(unit).toContain('ExecStart=/opt/agentplex/bin/agentplex server');
+    expect(execStarts(unit).map((line) => line.script)).toEqual([
+      daemonEntry('/opt/agentplex', 'hub'),
+      daemonEntry('/opt/agentplex', 'server'),
+    ]);
     expect(unit).toContain('EnvironmentFile=/etc/agentplex/agentplex.env');
     expect(unit).toContain('WantedBy=multi-user.target');
   });
@@ -1004,7 +1059,11 @@ describe('the summary on a machine that can hold no unit', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('No unit was written: no systemctl on this machine.');
-    expect(result.stdout).toContain(`${home}/.agentplex/bin/agentplex server`);
+    // The same command line the unit would have carried. There is no shorter
+    // thing to tell this operator to type: a daemon is not a command, so what
+    // they get is the interpreter and the file, which is also exactly what
+    // launchd wants from them.
+    expect(result.stdout).toContain(daemonEntry(`${home}/.agentplex`, 'server'));
     // The systemd instructions belong to the machine that got a unit, and this
     // one did not.
     expect(result.stdout).not.toContain('systemctl --user enable --now');
@@ -1151,9 +1210,11 @@ describe('where the runtime goes', () => {
     }).stdout;
 
     const searchPath = /^Environment=PATH=(.*)$/m.exec(unit)?.[1] ?? '';
-    // Node moving out of $PREFIX/bin means the unit needs both directories
-    // named rather than one: ExecStart is a script whose first line is
-    // #!/usr/bin/env node, and $PREFIX/bin no longer holds a node.
+    // Both directories, and not for ExecStart: that line names the interpreter
+    // outright and resolves nothing through this. It is for what the daemon
+    // starts -- the coding agents setup installs into the prefix's bin, every
+    // one of them a script looking for a `node` that lives somewhere systemd
+    // would never search.
     expect(searchPath).toBe(
       `${home}/.agentplex/bin:${home}/.agentplex/node/bin:` +
         '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',

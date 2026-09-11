@@ -1,9 +1,23 @@
 # syntax=docker/dockerfile:1
 
-# One image, every program. The entrypoint is the agentplex bin and the command
-# picks the daemon -- `hub` or `server` -- because baking one in would give us
-# two images of the same package and a way for them to drift apart. A container
-# that wants both runs two services from the same image.
+# One image, every program. Baking one daemon in would give us two images of the
+# same package and a way for them to drift apart, so the image stays one and the
+# command picks the daemon; a container that wants both runs two services from
+# the same image.
+#
+# What changed is how the command names it. The entrypoint used to be the
+# agentplex bin and the command was the word `hub`, which worked because `hub`
+# was a subcommand of that bin. It is not one any more -- a daemon is not a
+# command, and `agentplex hub` now answers by explaining what a hub is -- so the
+# entrypoint is `node` and the command is the daemon's compiled entry.
+#
+# That is the same shape the systemd unit renders, and deliberately so: an
+# installed machine runs `<node> <prefix>/lib/node_modules/<package>/apps/hub/
+# dist/main.js` and this image runs `node apps/hub/dist/main.js`, which is the
+# same expression with the package root spelled differently. One way to start a
+# daemon rather than two -- and the property the old arrangement was actually
+# after survives untouched: the command still picks the daemon, and flags
+# appended to `docker run` still land as that daemon's.
 
 FROM node:24-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
@@ -106,7 +120,15 @@ RUN agentplex doctor --role=server --server-identity-file=/var/lib/agentplex/ser
 # The server is the program that loads node-pty, and a program that cannot
 # load it dies before it can refuse a flag: reaching its usage is proof the
 # addon compiled here and can be loaded.
-RUN agentplex server --role=server 2>&1 | grep -q 'Usage: agentplex server'
+#
+# Reached by its file rather than by a command word, because there is no
+# `agentplex server` to type any more. This is the literal ExecStart an install
+# on this machine would render -- npm's global root, then the workspace path the
+# tarball preserves -- so it proves what it always did and one thing more: that
+# the path a systemd unit names resolves from an installed tree, with every
+# bundled package under it.
+RUN node "$(npm root -g)/@softiesolutions/agentplex/apps/server/dist/main.js" --role=server 2>&1 \
+    | grep -q 'Usage: agentplex server'
 # The client and the schema travel inside the package or the hub has nothing to
 # serve and no database to open. Read back out of the installed tree, at the
 # paths `main.js` resolves rather than the paths packaging wrote.
@@ -215,7 +237,7 @@ RUN test "$(stat -c '%a' "$HOME/.agentplex/agentplex.env")" = 600 \
 # for `--role=server`, and no hub unit beside it.
 RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! test -e "$HOME/.config/systemd/user/agentplex-hub.service" \
-    && grep -qx "ExecStart=$HOME/.agentplex/bin/agentplex server" "$HOME/.config/systemd/user/agentplex-server.service" \
+    && grep -qx "ExecStart=$HOME/.agentplex/node/bin/node $HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex/apps/server/dist/main.js" "$HOME/.config/systemd/user/agentplex-server.service" \
     && ! grep -q '^User=' "$HOME/.config/systemd/user/agentplex-server.service" \
     && grep -qx "Environment=PATH=$HOME/.agentplex/bin:$HOME/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$HOME/.config/systemd/user/agentplex-server.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-server.service"
@@ -304,7 +326,7 @@ RUN id agentplex \
     && test -x /opt/agentplex/node/bin/node \
     && test -x /opt/agentplex/bin/agentplex \
     && grep -qx 'User=agentplex' /etc/systemd/system/agentplex-hub.service \
-    && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex hub' /etc/systemd/system/agentplex-hub.service \
+    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex/apps/hub/dist/main.js' /etc/systemd/system/agentplex-hub.service \
     && ! test -e /etc/systemd/system/agentplex-server.service \
     && grep -qx 'WantedBy=multi-user.target' /etc/systemd/system/agentplex-hub.service \
     && systemd-analyze verify /etc/systemd/system/agentplex-hub.service
@@ -371,8 +393,8 @@ RUN su agentplex -s /bin/sh -c 'touch /opt/agentplex/bin/probe /opt/agentplex/li
 # The two-unit shape, which is the one this epic exists for on a single box:
 # `--role=both` renders both units, and each starts one daemon.
 RUN bash /install.sh --system --role=both --print-unit >/tmp/both-units.txt \
-    && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex hub' /tmp/both-units.txt \
-    && grep -qx 'ExecStart=/opt/agentplex/bin/agentplex server' /tmp/both-units.txt
+    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex/apps/hub/dist/main.js' /tmp/both-units.txt \
+    && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex/apps/server/dist/main.js' /tmp/both-units.txt
 
 # The fleet uninstall, which is a different scope, a different prefix and a
 # different set of things to leave alone. The service account stays: it owns
@@ -444,7 +466,7 @@ RUN test -x "$HOME/.agentplex/node/bin/node" \
     && test -x "$HOME/.agentplex/bin/agentplex" \
     && test -f "$HOME/.config/systemd/user/agentplex-hub.service" \
     && ! test -e "$HOME/.config/systemd/user/agentplex-server.service" \
-    && grep -qx "ExecStart=$HOME/.agentplex/bin/agentplex hub" "$HOME/.config/systemd/user/agentplex-hub.service" \
+    && grep -qx "ExecStart=$HOME/.agentplex/node/bin/node $HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex/apps/hub/dist/main.js" "$HOME/.config/systemd/user/agentplex-hub.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-hub.service"
 
 ENV PATH=/home/alice/.agentplex/bin:/home/alice/.agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -485,9 +507,8 @@ WORKDIR /app
 # The workspace layout is kept rather than flattened: the dependency tree that
 # pnpm linked is a web of relative symlinks, and it resolves only where it was
 # linked. `migrations/` sits beside the hub's `dist/` because its main.js
-# resolves it as ../migrations relative to itself, and the bin reaches the two
-# daemons' `dist/` directories by the same relative paths it does in a
-# checkout.
+# resolves it as ../migrations relative to itself, and the entrypoint below
+# names a daemon's `dist/main.js` at the workspace path it has in a checkout.
 COPY --from=runtime-deps /app/node_modules ./node_modules
 # The bin's own, which did not exist while this app declared no runtime
 # dependency: it holds the wizard and the doctor now, so the symlinks that
@@ -547,13 +568,25 @@ USER node
 EXPOSE 8080 8081
 
 # The health check reads the command pid 1 was started with, so it probes the
-# port of the daemon that is actually running: `server` is the server's port,
-# anything else the hub's. Nothing here reads AGENTPLEX_ROLE, because the
-# daemons do not.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 CMD ["node", "-e", "const argv=require('node:fs').readFileSync('/proc/1/cmdline','utf8').split('\\0');const port=argv.includes('server')?(process.env.AGENTPLEX_SERVER_PORT||'8081'):(process.env.AGENTPLEX_HUB_PORT||'8080');fetch('http://127.0.0.1:'+port+'/health').then((r)=>{if(!r.ok)throw new Error(port+' answered '+r.status);process.exit(0);},(error)=>{console.error(String(error));process.exit(1);});"]
+# port of the daemon that is actually running: the server's entry means the
+# server's port, anything else the hub's. Nothing here reads AGENTPLEX_ROLE,
+# because the daemons do not.
+#
+# It matches `apps/server/` inside an argument rather than an argument equal to
+# `server`, which is what it did while the command was the word. The word is
+# gone; the path is what pid 1 is now started with, and a substring test over
+# the whole of it would say "server" of any argument that happened to contain
+# it.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 CMD ["node", "-e", "const argv=require('node:fs').readFileSync('/proc/1/cmdline','utf8').split('\\0');const port=argv.some((a)=>a.includes('apps/server/'))?(process.env.AGENTPLEX_SERVER_PORT||'8081'):(process.env.AGENTPLEX_HUB_PORT||'8080');fetch('http://127.0.0.1:'+port+'/health').then((r)=>{if(!r.ok)throw new Error(port+' answered '+r.status);process.exit(0);},(error)=>{console.error(String(error));process.exit(1);});"]
 
 # Exec form, so node is pid 1 and Docker's SIGTERM reaches the handler in the
-# daemon's main.ts directly. The command picks the daemon; anything appended to
-# `docker run` after it lands as that daemon's flags.
-ENTRYPOINT ["node", "apps/cli/dist/main.js"]
-CMD ["hub"]
+# daemon's main.ts directly -- which is now true more simply than it was, since
+# there is no bin process in front of it to have been pid 1 instead.
+#
+# The command is the daemon's entry, relative to the WORKDIR above. The hub is
+# the default because a bare `docker run` of this image is somebody trying the
+# thing the compose file brings up; `docker run <image> apps/server/dist/
+# main.js` is the other one, and anything appended after it lands as that
+# daemon's flags exactly as before.
+ENTRYPOINT ["node"]
+CMD ["apps/hub/dist/main.js"]

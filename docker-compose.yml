@@ -22,9 +22,17 @@ services:
       context: .
       target: runtime
     restart: unless-stopped
-    # Which daemon runs is which command was given: the image's entrypoint is
-    # the agentplex bin, and this service is the hub.
-    command: ['hub']
+    # Which daemon runs is which command was given, and the command is now the
+    # daemon's compiled entry rather than the word `hub`: the image's entrypoint
+    # is `node`, because there is no `agentplex hub` subcommand to hand a word
+    # to any more -- a daemon is not a command, it is a process systemd starts
+    # on a host and compose starts here.
+    #
+    # It is longer to read and it says which daemon this service runs in the one
+    # place that decides it, which is what the line was for. A server service
+    # beside this one is `apps/server/dist/main.js` and differs in exactly that
+    # path, the same way the two systemd units differ in exactly that path.
+    command: ['apps/hub/dist/main.js']
     environment:
       AGENTPLEX_HUB_PORT: 8080
       # Inside the volume below, and not settable from .env: a path is only

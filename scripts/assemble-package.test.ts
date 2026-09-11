@@ -7,8 +7,10 @@ import {
   assemblePackage,
   BIN_APP,
   bundledManifest,
+  DAEMONS,
   ENTRYPOINT,
   missingInputs,
+  OTHER_APPS,
   packageEntries,
   parseManifest,
   publishedManifest,
@@ -30,10 +32,10 @@ const rootManifest: Manifest = {
 };
 
 /**
- * The bin's own manifest. It dispatches to the two daemons by path and holds
- * `setup` and `doctor` itself, so what those two commands import is what this
- * app declares -- `pty` included, for the wizard that opens a terminal and the
- * doctor that asks whether one could be opened.
+ * The bin's own manifest. It holds `setup` and `doctor` itself, so what those
+ * two commands import is what this app declares -- `pty` included, for the
+ * wizard that opens a terminal and the doctor that asks whether one could be
+ * opened. The daemons are in the package beside it and declare their own.
  */
 const serviceManifest: Manifest = {
   name: '@softiesolutions/agentplex',
@@ -372,6 +374,16 @@ describe('packageEntries', () => {
     expect(sources).toContain('apps/cli/dist');
     expect(sources).toContain('apps/hub/dist');
     expect(sources).toContain('apps/server/dist');
+    // Written out above and derived here, which is the drift the two forms
+    // exist to catch between them. Nothing in `apps/cli` resolves either of
+    // these directories any more -- a systemd unit and the image do, from
+    // outside the tarball -- so a daemon this list names and the package does
+    // not carry is an ExecStart pointing at a file that is not there, and
+    // nothing in this repository would meet it before an operator did.
+    for (const daemon of DAEMONS) {
+      expect(sources).toContain(`apps/${daemon}/dist`);
+      expect(OTHER_APPS.map((app) => app.directory)).toContain(`apps/${daemon}`);
+    }
     expect(sources).not.toContain('apps/setup/dist');
     expect(sources).not.toContain('apps/doctor/dist');
     expect(sources).toContain('apps/hub/migrations');

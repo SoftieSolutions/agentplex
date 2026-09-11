@@ -29,10 +29,11 @@ MCP agent  ─┘                │             SERVER ────────
   `agentplex-store.json` at its root. A session's identity is its store and its
   id within it, never the machine it happens to be running on.
 
-One package and one bin, `agentplex`, with four subcommands: `hub` and
-`server` are separate daemons the bin dispatches to by path, `setup` is the
-wizard and `doctor` the read-only check, both of them commands inside the bin
-itself. A machine that runs both daemons starts one of each.
+One package and one bin, `agentplex`. Its subcommands are `setup`, the wizard,
+and `doctor`, the read-only check. `hub` and `server` are daemons rather than
+subcommands, and nobody types either: `install.sh` writes a systemd unit per
+daemon the machine's role runs, and `pnpm -C apps/hub start` is the same thing
+in a checkout. A machine that runs both daemons starts one of each.
 
 ## Repository layout
 
