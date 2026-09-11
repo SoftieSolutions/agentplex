@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -387,34 +387,70 @@ describe('the assembled package', () => {
       await writeFile(join(root, path), contents, 'utf8');
     };
 
+    /**
+     * What `tsc` leaves beside every emitted module: the map it points at, the
+     * declaration, and the map for that. The fixture carries them because the
+     * assembly is supposed to drop them, and a fixture that never held them
+     * would pass whether it dropped them or not.
+     */
+    const compiled = async (directory: string, name: string, body: string): Promise<void> => {
+      await write(`${directory}/${name}.js`, `${body}\n//# sourceMappingURL=${name}.js.map\n`);
+      await write(`${directory}/${name}.js.map`, '{"sources":["../src/x.ts"]}\n');
+      await write(`${directory}/${name}.d.ts`, 'export {};\n');
+      await write(`${directory}/${name}.d.ts.map`, '{"sources":["../src/x.ts"]}\n');
+    };
+
     await write('package.json', JSON.stringify(rootManifest));
     await write('LICENSE', 'Apache License, Version 2.0\n');
     await write('apps/install/package.json', JSON.stringify(serviceManifest));
     await write('apps/install/README.md', '# agentplex\n');
-    await write('apps/install/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
+    await compiled('apps/install/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/hub/package.json', JSON.stringify(hubManifest));
-    await write('apps/hub/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
+    await compiled('apps/hub/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/server/package.json', JSON.stringify(serverAppManifest));
-    await write('apps/server/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
+    await compiled('apps/server/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/setup/package.json', JSON.stringify(setupAppManifest));
-    await write('apps/setup/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
+    await compiled('apps/setup/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/doctor/package.json', JSON.stringify(doctorAppManifest));
-    await write('apps/doctor/dist/main.js', '#!/usr/bin/env node\nawait main();\n');
+    await compiled('apps/doctor/dist', 'main', '#!/usr/bin/env node\nawait main();');
     await write('apps/hub/migrations/0001_hub_identity.sql', 'create table hub (id text);\n');
     await write('packages/protocol/package.json', JSON.stringify(protocolManifest));
-    await write('packages/protocol/dist/index.js', 'export const version = 7;\n');
+    await compiled('packages/protocol/dist', 'index', 'export const version = 7;');
     await write('packages/node-shared/package.json', JSON.stringify(nodeSharedManifest));
-    await write('packages/node-shared/dist/index.js', 'export const clock = 8;\n');
+    await compiled('packages/node-shared/dist', 'index', 'export const clock = 8;');
+    await compiled('packages/node-shared/dist', 'testing', "export * from './fake-socket.js';");
+    await compiled('packages/node-shared/dist', 'fake-socket', 'export const socket = 11;');
     await write('packages/providers/package.json', JSON.stringify(providersManifest));
-    await write('packages/providers/dist/index.js', 'export const claude = 9;\n');
+    await compiled('packages/providers/dist', 'index', 'export const claude = 9;');
+    await compiled('packages/providers/dist', 'testing', "export * from './fake-files.js';");
+    await compiled('packages/providers/dist', 'fake-files', 'export const files = 12;');
+    // A directory whose name an exclusion matches. `cp`'s filter prunes the
+    // whole subtree under a `false`, so this is the shape that turns a dropped
+    // file into a dropped program.
+    await compiled('packages/providers/dist/fake-parent', 'kept', 'export const kept = 13;');
     await write('packages/pty/package.json', JSON.stringify(ptyManifest));
-    await write('packages/pty/dist/index.js', 'export const pty = 10;\n');
+    await compiled('packages/pty/dist', 'index', 'export const pty = 10;');
     await write('packages/pty/scripts/fix-node-pty-permissions.js', 'main();\n');
     if (options.client) {
       await write('apps/web/dist/index.html', '<!doctype html>\n');
       await write('apps/web/dist/assets/index-abc123.js', 'export {};\n');
+      await write('apps/web/dist/assets/index-abc123.js.map', '{"sourcesContent":["x"]}\n');
     }
     return root;
+  }
+
+  /** Every file under `directory`, relative to it, in a stable order. */
+  async function tree(directory: string): Promise<readonly string[]> {
+    const found: string[] = [];
+    const walk = async (at: string): Promise<void> => {
+      for (const entry of await readdir(at, { withFileTypes: true })) {
+        const path = join(at, entry.name);
+        if (entry.isDirectory()) await walk(path);
+        else found.push(relative(directory, path));
+      }
+    };
+    await walk(directory);
+    return found.sort();
   }
 
   it('holds the compiled service, the protocol, the client and the migrations', async () => {
@@ -486,6 +522,65 @@ describe('the assembled package', () => {
       '@agentplex/providers',
       '@agentplex/pty',
     ]);
+  });
+
+  /**
+   * The three categories a compiled `dist` carries for the workspace and for
+   * nothing on an installed machine. Asserted over the whole tree rather than
+   * file by file, so a fifth program added to the package is covered the day it
+   * arrives instead of the day somebody remembers this test.
+   */
+  it('leaves maps, declarations and the testing entries out of the compiled output', async () => {
+    const root = await workspace({ client: true });
+
+    const assembled = await assemblePackage({ workspaceRoot: root });
+
+    const compiled = (await tree(assembled.directory)).filter(
+      (path) => !path.startsWith(join('apps', 'web')),
+    );
+    expect(compiled.filter((path) => path.endsWith('.map'))).toEqual([]);
+    expect(compiled.filter((path) => path.endsWith('.d.ts'))).toEqual([]);
+    // By file name: the fixture holds a `fake-parent` directory on purpose, and
+    // a path test would call keeping it a failure.
+    expect(compiled.filter((path) => /^(testing\.|fake-)/.test(basename(path)))).toEqual([]);
+    // The same tree still holds what it is for.
+    expect(compiled).toContain(join('apps', 'hub', 'dist', 'main.js'));
+    expect(compiled).toContain(join('node_modules', '@agentplex', 'providers', 'dist', 'index.js'));
+  });
+
+  /**
+   * `cp`'s filter is asked about directories too and a `false` prunes
+   * everything beneath one, so an exclusion that matched by name alone would
+   * take `fake-parent/kept.js` with it and the failure would be an import that
+   * cannot be resolved on a stranger's machine.
+   */
+  it('drops a file whose name is excluded, not a directory that shares it', async () => {
+    const root = await workspace({ client: true });
+
+    const assembled = await assemblePackage({ workspaceRoot: root });
+
+    await expect(
+      readFile(
+        join(assembled.directory, 'node_modules/@agentplex/providers/dist/fake-parent/kept.js'),
+        'utf8',
+      ),
+    ).resolves.toContain('kept');
+  });
+
+  /**
+   * The one map in the package that resolves. Vite writes `sourcesContent` into
+   * it, so it needs no checkout to be read and a browser is the thing that
+   * fetches it; the compiled maps name `../src/*.ts` and carry no content, so
+   * they resolve to nothing wherever the package is installed.
+   */
+  it('keeps the client build whole, source map included', async () => {
+    const root = await workspace({ client: true });
+
+    const assembled = await assemblePackage({ workspaceRoot: root });
+
+    await expect(
+      readFile(join(assembled.directory, 'apps/web/dist/assets/index-abc123.js.map'), 'utf8'),
+    ).resolves.toContain('sourcesContent');
   });
 
   it('carries the postinstall at the path the published manifest names', async () => {

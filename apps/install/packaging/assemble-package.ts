@@ -1,5 +1,5 @@
-import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { cp, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, relative } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -132,6 +132,41 @@ export function parseManifest(source: string, text: string): Manifest {
   return parsed.data;
 }
 
+/**
+ * Names a compiled `dist` carries for the workspace and for nothing on a
+ * machine that installed the package.
+ *
+ * **`*.js.map` and `*.d.ts.map`.** `tsc` emits them with `sources` naming
+ * `../src/*.ts` and no `sourcesContent`, and the tarball carries no sources, so
+ * every one of them resolves to nothing wherever the package is installed. The
+ * `sourceMappingURL` comment left in the `.js` is read by nothing unless Node
+ * is started with `--enable-source-maps`, and a map it cannot find is a map it
+ * does not apply.
+ *
+ * **`*.d.ts`.** Nothing consumes types from this package. It is a bin and four
+ * daemons, installed to be run and imported by no one, and the `types`
+ * conditions the bundled manifests carry are read by TypeScript alone -- never
+ * by Node's resolver, which resolves through `import`, `require` and `default`.
+ *
+ * **`testing.js` and the `fake-*` modules it re-exports.** A package exports
+ * its fakes from a `testing` entry for the tests of the packages above it.
+ * Every import of one is in a `.test.ts`, which `tsconfig.build.json` excludes
+ * from the emit, so no compiled file in the package reaches `./testing` and no
+ * test file ships to reach it either. The `./testing` subpath the bundled
+ * manifests declare is left where it is: it can only be reached by an import
+ * naming it, the package contains none, and stripping it would be the first
+ * half of a job -- the `types` conditions dangle the same way for the same
+ * reason -- that buys nothing a resolver would ever notice.
+ */
+function isWorkspaceOnly(name: string): boolean {
+  return (
+    name.endsWith('.map') ||
+    name.endsWith('.d.ts') ||
+    name === 'testing.js' ||
+    name.startsWith('fake-')
+  );
+}
+
 /** One thing copied into the package, and the path that proves it arrived. */
 export interface PackageEntry {
   /** Relative to the workspace root. */
@@ -145,8 +180,29 @@ export interface PackageEntry {
    * leaves behind, and it is indistinguishable from a good one by `stat` alone.
    */
   readonly proof?: string;
+  /**
+   * Given the name of a file inside `from`, whether to leave it behind. It is
+   * asked about file names only: see `copyFilter`.
+   */
+  readonly exclude?: (name: string) => boolean;
   /** Why this is in the package. */
   readonly reason: string;
+}
+
+/**
+ * A `cp` filter that drops files by name and never prunes a directory.
+ *
+ * `cp` asks the filter about every entry it walks, directories included, and a
+ * `false` for a directory takes everything beneath it as well -- verified
+ * against Node 24.20. So a name test alone would turn a directory called
+ * `fake-parent` into a missing program, which is why the directory is
+ * established first and only files are ever refused.
+ */
+function copyFilter(exclude: (name: string) => boolean): (source: string) => Promise<boolean> {
+  return async (source: string): Promise<boolean> => {
+    if ((await lstat(source)).isDirectory()) return true;
+    return !exclude(basename(source));
+  };
 }
 
 /**
@@ -160,6 +216,7 @@ export function packageEntries(): readonly PackageEntry[] {
       to: 'apps/install/dist',
       kind: 'directory',
       proof: 'main.js',
+      exclude: isWorkspaceOnly,
       reason: 'the agentplex bin, dispatching to the four programs below by path',
     },
     ...PROGRAMS.map((program): PackageEntry => ({
@@ -167,6 +224,7 @@ export function packageEntries(): readonly PackageEntry[] {
       to: `apps/${program}/dist`,
       kind: 'directory',
       proof: 'main.js',
+      exclude: isWorkspaceOnly,
       reason: `the compiled ${program}`,
     })),
     {
@@ -187,6 +245,11 @@ export function packageEntries(): readonly PackageEntry[] {
       to: 'apps/web/dist',
       kind: 'directory',
       proof: 'index.html',
+      // Whole, map included, unlike every compiled directory above. Vite
+      // writes `sourcesContent` into it, so it is the one map in the package
+      // that resolves without a checkout, and a browser is the thing that
+      // fetches it -- only when devtools are open, and from a machine that is
+      // already reading the bundle beside it.
       reason: 'the built PWA the hub serves',
     },
     ...BUNDLED_PACKAGES.map((bundled): PackageEntry => ({
@@ -194,6 +257,7 @@ export function packageEntries(): readonly PackageEntry[] {
       to: `${bundledDirectory(bundled.name)}/dist`,
       kind: 'directory',
       proof: 'index.js',
+      exclude: isWorkspaceOnly,
       reason: `the compiled ${bundled.name}, bundled because it is published nowhere`,
     })),
     {
@@ -514,6 +578,7 @@ export async function assemblePackage(options: {
     await mkdir(dirname(destination), { recursive: true });
     await cp(join(workspaceRoot, entry.from), destination, {
       recursive: entry.kind === 'directory',
+      ...(entry.exclude === undefined ? {} : { filter: copyFilter(entry.exclude) }),
     });
     log(`  ${entry.to}  ${entry.reason}`);
   }
