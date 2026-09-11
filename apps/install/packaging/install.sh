@@ -110,7 +110,7 @@ RUN_SETUP='yes'
 SYSTEM='no'
 DRY_RUN='no'
 PRINT_UNIT='no'
-VERSION=''
+PACKAGE_VERSION=''
 PREFIX=''
 BIN_DIR=''
 ENV_FILE=''
@@ -132,14 +132,15 @@ agentplex install.sh ${INSTALL_SH_VERSION}
 
 Usage: bash install.sh [options]
 
-  --role=<hub|server|both>  which roles this machine runs (default: both)
-  --no-setup                stop once the binary lands; run setup yourself
-  --system                  install under a dedicated service account (needs root)
-  --version=<version>       the ${PACKAGE_NAME} version to install (default: ${NPM_LATEST_TAG})
-  --prefix=<directory>      install somewhere other than the default prefix
-  --dry-run                 print what this would do and change nothing
-  --print-unit              print the systemd units this would write, and stop
-  --help                    this
+  --role=<hub|server|both>     which roles this machine runs (default: both)
+  --no-setup                   stop once the binary lands; run setup yourself
+  --system                     install under a dedicated service account (needs root)
+  --package-version=<version>  the ${PACKAGE_NAME} version to install (default: ${NPM_LATEST_TAG})
+  --prefix=<directory>         install somewhere other than the default prefix
+  --dry-run                    print what this would do and change nothing
+  --print-unit                 print the systemd units this would write, and stop
+  --version                    print this script's own version, and stop
+  --help                       this
 
   --role pre-seeds setup rather than replacing it. --no-setup is for a machine
   that will receive a plan file and run \`${PACKAGE_NAME} setup --plan\` itself.
@@ -190,12 +191,16 @@ parse_arguments() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --role=*) ROLE="${1#*=}" ;;
-      --version=*) VERSION="${1#*=}" ;;
+      --package-version=*) PACKAGE_VERSION="${1#*=}" ;;
       --prefix=*) PREFIX="${1#*=}" ;;
       --no-setup) RUN_SETUP='no' ;;
       --system) SYSTEM='yes' ;;
       --dry-run) DRY_RUN='yes' ;;
       --print-unit) PRINT_UNIT='yes' ;;
+      --version)
+        say "agentplex install.sh ${INSTALL_SH_VERSION}"
+        exit 0
+        ;;
       --help | -h)
         usage
         exit 0
@@ -269,7 +274,7 @@ resolve_layout() {
   if [ -n "${AGENTPLEX_PACKAGE:-}" ]; then
     PACKAGE_SPEC="$AGENTPLEX_PACKAGE"
   else
-    PACKAGE_SPEC="${PACKAGE_NAME}@${VERSION:-$NPM_LATEST_TAG}"
+    PACKAGE_SPEC="${PACKAGE_NAME}@${PACKAGE_VERSION:-$NPM_LATEST_TAG}"
   fi
 }
 
