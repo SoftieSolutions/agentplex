@@ -1,6 +1,6 @@
 import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readAbsolutePaths, readFlags, readPort, settingValue } from './settings.js';
+import { readAbsolutePaths, readFlags, readPort, settingValue, wantsHelp } from './settings.js';
 
 const KNOWN = ['--port', '--store-path'];
 
@@ -37,6 +37,33 @@ describe('readFlags', () => {
       '--store-path needs a value',
       'unknown argument: --nope',
     ]);
+  });
+});
+
+describe('wantsHelp', () => {
+  it('knows both spellings a person types', () => {
+    expect(wantsHelp(['--help'])).toBe(true);
+    expect(wantsHelp(['-h'])).toBe(true);
+  });
+
+  it('is not fooled by a flag that merely starts the same way', () => {
+    expect(wantsHelp(['--helpful', '--host=h', '-hh'])).toBe(false);
+  });
+
+  /**
+   * Anywhere in the list, and ahead of whatever else was typed. Somebody who
+   * reached for `--help` halfway through a command line they were unsure of is
+   * asking what the flags are, and a run that refused them for the flag they
+   * had already got wrong would be answering a question nobody asked.
+   */
+  it('wins wherever it appears, including beside an argument that would be refused', () => {
+    expect(wantsHelp(['--database-file', '/var/lib/agentplex/hub.db', '--help'])).toBe(true);
+    expect(wantsHelp(['--databse-file=/x', '-h'])).toBe(true);
+  });
+
+  it('is absent from a command line that is a run rather than a question', () => {
+    expect(wantsHelp([])).toBe(false);
+    expect(wantsHelp(['--log-level', 'debug'])).toBe(false);
   });
 });
 

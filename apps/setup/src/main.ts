@@ -5,6 +5,7 @@ import {
   randomIdGenerator,
   randomTokenMinter,
   systemClock,
+  wantsHelp,
 } from '@agentplex/node-shared';
 import {
   createClaudeAdapter,
@@ -17,7 +18,7 @@ import {
 import { createPtySupervisor, nodePtyFactory } from '@agentplex/pty';
 import { createNodeSetupMachine } from './node-setup-machine.js';
 import { createNodeSetupTerminal } from './node-setup-terminal.js';
-import { runSetupCommand } from './setup-command.js';
+import { runSetupCommand, setupUsage } from './setup-command.js';
 
 /**
  * `agentplex setup`, wired: the wizard and the plan replay both.
@@ -47,6 +48,19 @@ import { runSetupCommand } from './setup-command.js';
  */
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
+
+  // Before the terminal exists, and before the command reads a flag. Setup's
+  // flag reader refuses an argument it does not know for the reason every other
+  // program's does, so `--help` was a refusal here too; and this is the one
+  // program whose no-flags path is to start asking, so an operator who asked
+  // what the flags are and got the wizard instead would be answering questions
+  // on a terminal that never ends. Nothing is opened and nothing is read: the
+  // usage is printed on stdout and the process is done.
+  if (wantsHelp(process.argv.slice(2))) {
+    write(setupUsage());
+    return;
+  }
+
   const terminal = createNodeSetupTerminal({ input: process.stdin, output: process.stdout });
 
   try {
