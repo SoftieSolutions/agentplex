@@ -72,7 +72,7 @@ readonly INSTALL_SH_VERSION='1'
 # the URL below is long, but it resolves -- and the alias, when the name is
 # registered, redirects to this same path.
 #
-# `apps/install/README.md` prints this string and a test holds the two
+# `apps/cli/README.md` prints this string and a test holds the two
 # together, so there is one place to change when the alias exists.
 readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh'
 
@@ -138,7 +138,7 @@ readonly SYSTEM_STATE_DIR='/var/lib/agentplex'
 readonly SYSTEM_CONFIG_DIR='/etc/agentplex'
 readonly SYSTEM_UNIT_DIR='/etc/systemd/system'
 
-readonly DOCS_URL='https://github.com/SoftieSolutions/agentplex/blob/master/apps/install/README.md'
+readonly DOCS_URL='https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md'
 
 # The PATH this script was started with, kept because the script changes its own
 # further down. What the summary has to answer is whether the operator's shell

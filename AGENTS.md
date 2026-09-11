@@ -13,9 +13,9 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 
 ## FOLDER STRUCTURE
 
-- `apps/` holds deployables: `hub`, `server`, `setup`, `doctor`, `install`,
-  `web`. An app is a thing that runs. Nothing imports an app; `apps/install` is
-  where the one bin comes from.
+- `apps/` holds deployables: `hub`, `server`, `setup`, `doctor`, `cli`, `web`.
+  An app is a thing that runs. Nothing imports an app; `apps/cli` is where the
+  one bin comes from.
 - `scripts/` holds the repository's own tooling — the bootstrap an operator
   curls, the packaging step that composes the apps' built output by path, never
   by import. Nothing ships from it, and it is a workspace member because

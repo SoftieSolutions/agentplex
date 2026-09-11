@@ -39,7 +39,7 @@ const scriptPath = join(scriptsDirectory, 'install.sh');
 // The script lives here and the page that tells people to fetch it lives with
 // the package it installs, so the two are a directory apart rather than
 // siblings. The assertions below are what keeps them saying the same thing.
-const documentation = join(workspaceRoot, 'apps', 'install', 'README.md');
+const documentation = join(workspaceRoot, 'apps', 'cli', 'README.md');
 const rootManifest = join(workspaceRoot, 'package.json');
 const releaseWorkflow = join(workspaceRoot, '.github', 'workflows', 'release.yml');
 

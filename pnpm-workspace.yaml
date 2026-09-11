@@ -16,7 +16,7 @@ allowBuilds:
   # node-pty compiles a native addon and a `spawn-helper` binary beside it, so
   # with its scripts blocked the package installs as source that cannot load.
   # Its own `postinstall` is also the upstream fix for the executable bit the
-  # npm tarball drops from that helper; `scripts/fix-node-pty-permissions.js`
+  # npm tarball drops from that helper; `packages/pty/scripts/node-pty-postinstall.js`
   # re-checks it, because when the bit is missing the only symptom is an opaque
   # posix_spawnp failure at the first spawn.
   node-pty: true

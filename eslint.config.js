@@ -39,9 +39,9 @@ const doctorOpensNoPty = [
 
 export default tseslint.config(
   {
-    // `apps/install/release` is the staged package: every file in it is a
-    // copy of something already linted where it was written.
-    ignores: ['**/dist/**', '**/coverage/**', '**/*.d.ts', 'apps/install/release/**'],
+    // `apps/cli/release` is the staged package: every file in it is a copy of
+    // something already linted where it was written.
+    ignores: ['**/dist/**', '**/coverage/**', '**/*.d.ts', 'apps/cli/release/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -200,12 +200,7 @@ export default tseslint.config(
     },
   },
   {
-    files: [
-      'apps/hub/**/*.ts',
-      'apps/install/**/*.ts',
-      'apps/server/**/*.ts',
-      'apps/setup/**/*.ts',
-    ],
+    files: ['apps/cli/**/*.ts', 'apps/hub/**/*.ts', 'apps/server/**/*.ts', 'apps/setup/**/*.ts'],
     languageOptions: { globals: globals.node },
     rules: {
       // Every spawn goes through the operation registry (AGX-21), and a rule
@@ -263,7 +258,7 @@ export default tseslint.config(
     // code was. For both, starting a child is the only way to have a subject.
     // The rule above is about what the daemon may do, and nothing here is
     // reachable from a socket, a frame or a running process.
-    files: ['scripts/install.sh.integration.test.ts', 'apps/install/src/main.integration.test.ts'],
+    files: ['scripts/install.sh.integration.test.ts', 'apps/cli/src/main.integration.test.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
