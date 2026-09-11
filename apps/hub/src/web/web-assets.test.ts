@@ -93,6 +93,20 @@ describe('answerWebAssetRequest', () => {
     expect(answer.cacheControl).toBe('no-store');
   });
 
+  it('refuses a missing source map rather than answering it with the shell', async () => {
+    // The package leaves the client's source map out and leaves the bundle's
+    // `sourceMappingURL` comment in, so a browser with devtools open asks for a
+    // file the hub does not have. This is what it gets: a 404, which devtools
+    // report quietly and go on showing the bundle. The rule that decides it is
+    // the extension -- a `.map` is a filename and never a route -- and if that
+    // ever stopped holding, the answer would be `index.html` with a JSON
+    // content type on it and devtools would report a corrupt map instead.
+    const answer = await get('/assets/index-abc123.js.map');
+
+    expect(answer.status).toBe(404);
+    expect(answer.contentType).toBe('text/plain; charset=utf-8');
+  });
+
   it('refuses a path that climbs out of the web root', async () => {
     const files = createFakeWebAssets({ files: built });
 
