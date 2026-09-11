@@ -78,9 +78,9 @@ describe('the real setup machine and the settings file', () => {
   it('reads a file that is there, and says so when one is not', async () => {
     const machine = createNodeSetupMachine({ home: root, path: undefined });
     await mkdir(join(root, 'settings'), { recursive: true });
-    await writeFile(join(root, 'settings', 'agentplexd.env'), 'AGENTPLEX_ROLE=both\n', 'utf8');
+    await writeFile(join(root, 'settings', 'agentplex.env'), 'AGENTPLEX_ROLE=both\n', 'utf8');
 
-    expect(await machine.readFile(join(root, 'settings', 'agentplexd.env'))).toEqual({
+    expect(await machine.readFile(join(root, 'settings', 'agentplex.env'))).toEqual({
       kind: 'read',
       contents: 'AGENTPLEX_ROLE=both\n',
     });

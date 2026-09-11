@@ -20,9 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/<tag>/app
 The package carries the five compiled programs, the compiled packages they
 share, the built web app and the migrations, so a machine needs Node and
 nothing else from this project: no pnpm, no vite, no checkout. Upgrading is
-installing a later version, and pinning one is `agentplex@<version>`. A machine
-that was installed as `agentplexd` finds its settings, identity and prefix at
-the same paths; the installer retires the old unit and package.
+installing a later version, and pinning one is `agentplex@<version>`.
 
 ## Installing needs a C++ toolchain on Linux
 
