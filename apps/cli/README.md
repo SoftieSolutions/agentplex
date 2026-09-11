@@ -1,10 +1,24 @@
 # agentplex
 
 Watch and drive coding-agent sessions across machines. This package is the
-command, `agentplex`: `setup` is the wizard, `doctor` is the read-only check.
-The hub and the server are daemons rather than subcommands -- nothing but
-`agentplex` is installed onto your PATH, and the units `install.sh` writes are
-what start them.
+command, `agentplex`. The hub and the server are daemons rather than
+subcommands -- nothing but `agentplex` is installed onto your PATH, and the
+units `install.sh` writes are what start them.
+
+|                            |                                                         |
+| -------------------------- | ------------------------------------------------------- |
+| `agentplex setup`          | the wizard, or `--plan <file>` to replay one            |
+| `agentplex doctor`         | the read-only check: can this machine do the work       |
+| `agentplex status`         | what is installed, at what version, and what is running |
+| `agentplex start` / `stop` | the units this machine has, through systemd             |
+| `agentplex update`         | bring the installed components to the current release   |
+| `agentplex help`           | this list, or `help <command>` for one of them          |
+
+`doctor` and `status` answer different questions and neither is the other.
+`doctor` asks whether this machine _can_ do the work -- providers, stores, a
+pseudoterminal -- and `status` asks what is installed and whether it is
+_running_. Each command takes its own options, and `agentplex <command> --help`
+lists them.
 
 ```sh
 npm install --global https://github.com/SoftieSolutions/agentplex/releases/download/cli-v1.0.0/agentplex.tgz
@@ -34,12 +48,12 @@ curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/script
 
 A release is four packages, and a machine installs only what it runs.
 
-| package                             | what it is                                  | who installs it                |
-| ----------------------------------- | ------------------------------------------- | ------------------------------ |
-| `@softiesolutions/agentplex`        | this one: the command, `setup` and `doctor` | every machine                  |
-| `@softiesolutions/agentplex-hub`    | the hub daemon and its migrations           | `--role=hub`, `--role=both`    |
-| `@softiesolutions/agentplex-web`    | the built web app the hub serves            | with the hub                   |
-| `@softiesolutions/agentplex-server` | the server daemon                           | `--role=server`, `--role=both` |
+| package                             | what it is                                | who installs it                |
+| ----------------------------------- | ----------------------------------------- | ------------------------------ |
+| `@softiesolutions/agentplex`        | this one: the command and its subcommands | every machine                  |
+| `@softiesolutions/agentplex-hub`    | the hub daemon and its migrations         | `--role=hub`, `--role=both`    |
+| `@softiesolutions/agentplex-web`    | the built web app the hub serves          | with the hub                   |
+| `@softiesolutions/agentplex-server` | the server daemon                         | `--role=server`, `--role=both` |
 
 `web` is not a role. It is part of being a hub: the hub finds the client by
 resolving that package name, and the two are installed as siblings.
