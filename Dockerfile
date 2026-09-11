@@ -457,6 +457,13 @@ RUN grep -q 'opens no terminals' /tmp/hub-doctor.log
 
 # Runtime dependencies only, resolved on their own rather than pruned out of
 # the build stage: a prune leaves whatever it failed to notice.
+#
+# The bin app is selected by path, because its directory is the only name it
+# has that a filter cannot confuse with another manifest. The braces are load
+# bearing: `--filter ./apps/install...` reads the trailing `...` as part of the
+# path and silently selects the one package without its dependencies, where
+# `--filter {./apps/install}...` is the directory plus what it needs. Verified
+# against pnpm 11.17.
 FROM manifests AS runtime-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter "{./apps/install}..." --filter @agentplex/hub... --filter @agentplex/server... --filter @agentplex/setup... --filter @agentplex/doctor...
