@@ -7,14 +7,20 @@ The hub and the server are daemons rather than subcommands -- nothing but
 what start them.
 
 ```sh
-npm install --global @softiesolutions/agentplex
+npm install --global https://github.com/SoftieSolutions/agentplex/releases/download/cli-v1.0.0/agentplex.tgz
 agentplex doctor --role=server --server-identity-file="$HOME/.agentplex/server.json"
 ```
 
 The package is `@softiesolutions/agentplex` and the command is `agentplex`. The
 unscoped name on npm is an unrelated placeholder somebody else registered, and a
-`bin` key is not a package name, so the registry entry is scoped and nothing you
-type is.
+`bin` key is not a package name, so the package is scoped and nothing you type
+is.
+
+**It is not on npm.** Every release is a GitHub Release carrying one tarball,
+and npm installs it from that URL -- unpacking it and then resolving its own
+registry dependencies from npm in the ordinary way. So npm is what installs
+this; nothing of this project is published to a registry. `install.sh` below is
+the way to do it without typing a URL.
 
 On a machine that has nothing on it yet, `install.sh` does the whole of it: the
 Node runtime, the toolchain if this machine needs one, the packages the role
@@ -40,8 +46,60 @@ resolving that package name, and the two are installed as siblings.
 
 Every package carries the compiled programs it runs and the compiled workspace
 packages those import, so a machine needs Node and nothing else from this
-project: no pnpm, no vite, no checkout. Upgrading is installing a later version,
-and pinning one is `@softiesolutions/agentplex@<version>`.
+project: no pnpm, no vite, no checkout.
+
+## Four release trains, and how a version is chosen
+
+Each package is released on its own, at its own version, under a tag shaped
+`<component>-v<semver>`: `cli-v1.4.0`, `hub-v1.2.0`, `server-v1.5.0`,
+`web-v1.1.0`. That is the point of the split rather than a consequence of it --
+a fix to this command should not force every server on the fleet to recompile a
+native addon.
+
+What is current for each of them is published as one small file on the `v1`
+branch, beside `install.sh`:
+
+```json
+{
+  "cli": { "version": "1.4.0", "protocol": 3 },
+  "hub": { "version": "1.2.0", "protocol": 3 },
+  "server": { "version": "1.5.0", "protocol": 3 },
+  "web": { "version": "1.1.0", "protocol": 3 }
+}
+```
+
+`install.sh` reads it before it downloads anything, so one unauthenticated fetch
+answers both what to install and whether the set agrees.
+
+**`protocol` is what makes independent versions safe.** It is the single
+compatibility constant -- the wire frames the hub and the server speak, and the
+on-disk formats they share -- and packaging writes it into every published
+manifest, so each component's protocol is a fact about the artifact rather than
+a claim about it. Components that do not agree on it do not talk to each other,
+so `install.sh` refuses the install, names both numbers, and writes nothing.
+A protocol change releases every affected component together, which is why this
+is a tripwire and not something you have to resolve.
+
+### Pinning
+
+```sh
+bash install.sh --role=both                          # hub and server, current
+bash install.sh --role=hub@1.3.0 --role=server@1.4.0 # each pinned on its own
+bash install.sh --role=hub@1.3.0                     # hub only, pinned
+bash install.sh --role=hub --package-version=1.4.0   # the command pinned
+```
+
+`--role` is repeatable and each may carry its own pin. `--role=both` takes no
+`@`: a version names one component and `both` names two, so pin them
+separately. Naming the same component twice stops the run rather than taking the
+last one. A version is exact -- `1.4.0`, not `1.4` -- because it names the
+release tag, and there is no registry here to resolve a range against.
+
+A pinned component is checked before anything is installed: every release
+publishes a small metadata file beside its tarball carrying that release's
+protocol, and `install.sh` reads it first. The failure it exists to prevent is a
+machine whose hub and server are both installed, both running, and unable to
+pair.
 
 ## Installing a server needs a C++ toolchain on Linux; a hub does not
 
@@ -104,7 +162,7 @@ error rather than anything about a pty.
 Override it:
 
 ```sh
-npm install --global --ignore-scripts=false @softiesolutions/agentplex
+npm install --global --ignore-scripts=false <the release URL above>
 ```
 
 Two scripts run under that flag, and they are the whole of what this package

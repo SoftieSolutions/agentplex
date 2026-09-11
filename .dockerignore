@@ -1,9 +1,11 @@
 **/node_modules
 **/dist
 **/coverage
-# The staged package. The `package` stage assembles its own from the build it
-# has just made; one carried in from a laptop could only be older than that.
+# The staged package, and the loose files a release would publish beside its
+# tarball. The `package` stage assembles its own from the build it has just
+# made; one carried in from a laptop could only be older than that.
 apps/cli/release
+release-assets
 .git
 .env
 .env.local

@@ -9,8 +9,14 @@ carrying the toolchain that made it -- no vite, no react, no typescript -- and
 so that the client can be replaced without replacing the hub.
 
 ```sh
-npm install --global @softiesolutions/agentplex-hub @softiesolutions/agentplex-web
+npm install --global \
+  https://github.com/SoftieSolutions/agentplex/releases/download/hub-v1.0.0/agentplex-hub.tgz \
+  https://github.com/SoftieSolutions/agentplex/releases/download/web-v1.0.0/agentplex-web.tgz
 ```
+
+Nothing here is on npm. Every release is a GitHub Release carrying one tarball,
+and npm installs it from that URL -- so the version in it is a release tag and
+not a range. `install.sh` is what resolves a version for you.
 
 `@softiesolutions/agentplex-hub` finds these files by resolving this package's
 name and reading the `dist` beside the manifest it lands on, so the two are

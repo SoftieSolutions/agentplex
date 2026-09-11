@@ -2,11 +2,12 @@
 #
 # The agentplex bootstrap.
 #
-#   curl -fsSL <url> | bash                      # role=both, then setup
-#   curl -fsSL <url> | bash -s -- --role=server  # server only
-#   curl -fsSL <url> | bash -s -- --role=hub     # hub only
-#   curl -fsSL <url> | bash -s -- --no-setup     # stop after the binary lands
-#   curl -fsSL <url> | bash -s -- --uninstall    # take the runtime back off
+#   curl -fsSL <url> | bash                              # role=both, then setup
+#   curl -fsSL <url> | bash -s -- --role=server          # server only
+#   curl -fsSL <url> | bash -s -- --role=hub@1.3.0       # hub only, pinned
+#   curl -fsSL <url> | bash -s -- --role=hub@1.3.0 --role=server@1.4.0
+#   curl -fsSL <url> | bash -s -- --no-setup             # stop after the binary lands
+#   curl -fsSL <url> | bash -s -- --uninstall            # take the runtime back off
 #
 # Deliberately ignorant. It ensures a Node runtime and the build toolchain,
 # installs the published packages the role needs, writes the systemd units it
@@ -21,6 +22,12 @@
 # AGENTPLEX_BIN_PATH, because the prefix is the directory it just made. It never
 # writes a database path, a store path or a token, because it has no way to know
 # one and a guessed value is worse than an absent one.
+#
+# AGENTPLEX_ROLE is the role and never the version pins that may have come with
+# it. A role is a property of the machine -- it is what the machine is for, and
+# it is still true a year later. A pin is a choice somebody made on one
+# afternoon, and a machine reinstalled from this file has to come back as the
+# same machine rather than at the versions that happened to be current then.
 #
 # Everything below is a function and `main` is the last line, so a download that
 # is cut short does nothing at all rather than half of something. That is not
@@ -117,12 +124,63 @@ readonly NPM_PACKAGE_WEB='@softiesolutions/agentplex-web'
 # under lib/node_modules for the lot of them.
 readonly NPM_SCOPE='@softiesolutions'
 
-# The dist-tag npm resolves when nothing is pinned. Named, because the spec
-# always carries a `@` suffix: `@softiesolutions/agentplex` and
-# `@softiesolutions/agentplex@latest` mean the same thing to npm, and one shape
-# is one shape to read in a log line and one shape a test asserts on. This is
-# the same choice `claude-provisioning.ts` makes for the same reason.
-readonly NPM_LATEST_TAG='latest'
+# ---------------------------------------------------------------------------
+# Where the packages come from
+# ---------------------------------------------------------------------------
+
+# Nothing this project builds is published to a registry, and that is a decision
+# rather than a gap.
+#
+# Each component has its own release train -- a CLI fix must stop forcing every
+# server on the fleet to recompile a native addon -- and a release is a GitHub
+# Release carrying one tarball. npm is still what installs it: `npm install
+# <https tarball url>` unpacks the tarball and then resolves that tarball's own
+# registry dependencies from npm in the ordinary way. Verified rather than
+# assumed. So npm is used on this machine, and nothing of ours is published
+# there.
+#
+# The asset name in that URL is a constant, per component, for ever. GitHub's
+# `releases/latest/download/<asset>` redirect substitutes the tag and copies the
+# file name through verbatim, so a version in the name is a name no unpinned URL
+# could ever be written against; `npm pack` produces the version-stamped name
+# and the release workflow renames it on the way up. That redirect is not what
+# this script resolves through -- see VERSIONS_URL -- but the constant is what
+# makes a URL buildable from a component and a version at all.
+readonly RELEASE_DOWNLOAD_URL='https://github.com/SoftieSolutions/agentplex/releases/download'
+
+# What is current, for every component at once.
+#
+# With one release train, `releases/latest/download/` answered "the current
+# one". With four it cannot: GitHub's "latest" is the most recently published
+# release *overall*, so on a day the server was released it would hand out the
+# server's tag to a machine asking about the CLI. There is no per-component
+# redirect, and the API call that would answer it is neither unauthenticated nor
+# one request.
+#
+# So the release publishes a manifest instead, on the same `v1` branch and
+# through the same raw.githubusercontent.com mechanism that already serves this
+# script, written by the same job that already advances that branch. One
+# unauthenticated fetch of a few hundred bytes answers what is current for every
+# component and whether the set agrees on a protocol -- before anything is
+# downloaded, which is the whole point of asking.
+#
+# It is read off the network, so `versions_entry` parses it and can say no.
+readonly VERSIONS_URL='https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/versions.json'
+
+# Every component, which is not every role. `cli` goes on every machine because
+# `setup` and `doctor` do; `web` comes with every hub because a hub without the
+# client serves 503. Neither is something --role can name.
+readonly COMPONENTS='cli hub server web'
+
+# The exact version a pin may name.
+#
+# Exact, and that is forced rather than chosen. A pin names a release tag --
+# `hub-v1.3.0` -- and a tag is a string that either exists or does not. There is
+# no registry here to resolve `1.3` against and no per-version history to
+# resolve it from, so accepting a range would mean either guessing which release
+# was meant or building a URL that 404s partway through an install. Refusing it
+# at the flag, with the tag grammar named, is the honest end of that.
+readonly RELEASE_VERSION='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 
 # The Node major this service declares in `engines`. No `.npmrc` ships in the
 # tarball -- engine-strict governs the workspace -- so a consumer's npm only
@@ -168,29 +226,48 @@ readonly DOCS_URL='https://github.com/SoftieSolutions/agentplex/blob/master/apps
 # already prepended the prefix to would answer yes every time.
 readonly ORIGINAL_PATH="${PATH:-}"
 
-# Options, and what the run resolved them to. Set once by the two functions
-# below and read everywhere else.
+# Options, and what the run resolved them to. Set once by the functions below
+# and read everywhere else.
+#
+# ROLE is still one of hub, server and both, and it is derived rather than
+# typed: --role is repeatable now, so `--role=hub --role=server` and
+# `--role=both` are the same machine and have to record the same word. It is
+# the word that goes into AGENTPLEX_ROLE and into the handover to `setup`.
 ROLE='both'
 RUN_SETUP='yes'
 SYSTEM='no'
 DRY_RUN='no'
 PRINT_UNIT='no'
 UNINSTALL='no'
-PACKAGE_VERSION=''
 PREFIX=''
 BIN_DIR=''
 ENV_FILE=''
 UNIT_DIR=''
 UNIT_SCOPE=''
-# The daemons this role runs, one unit each, and the packages this role
-# installs. Both set by parse_arguments from --role.
+# The components --role named, in the order they were named, and the pins that
+# came with them as `<component>=<version>` pairs. Both set by add_role, and
+# COMPONENT_PINS also by --package-version, which is the CLI's pin.
+ROLE_COMPONENTS=''
+COMPONENT_PINS=''
+# The daemons this role runs, one unit each, and the components this role
+# installs. Both set by resolve_role from ROLE_COMPONENTS.
 DAEMONS=''
-PACKAGE_NAMES=''
+INSTALL_COMPONENTS=''
 SERVICE_USER=''
 STATE_DIR=''
-# What npm is handed, one spec per package in PACKAGE_NAMES. Set by
-# resolve_layout.
+# What npm is handed, one spec per component in INSTALL_COMPONENTS, and empty
+# when a dry run could not resolve one. Set by resolve_release.
 PACKAGE_SPECS=''
+# The versions manifest as text, and where it was read from -- empty when it was
+# not read at all, which is every run whose components are all pinned and every
+# dry run that would have had to download it. Set by load_versions.
+VERSIONS_TEXT=''
+VERSIONS_SOURCE=''
+# `<component>=<version>` and `<component>=<protocol>` for what this run would
+# install. A component with no entry is one whose version this run has no way to
+# know, which is a dry run that declined to download and nothing else.
+COMPONENT_VERSIONS=''
+COMPONENT_PROTOCOLS=''
 PLATFORM=''
 ARCH=''
 # The directory the runtime tarball unpacks into whole, and the directory inside
@@ -211,10 +288,13 @@ agentplex install.sh ${INSTALL_SH_VERSION}
 
 Usage: bash install.sh [options]
 
-  --role=<hub|server|both>     which roles this machine runs (default: both)
+  --role=<hub|server|both>[@<version>]
+                               which roles this machine runs (default: both).
+                               Repeatable, and each may pin its own version;
+                               \`both\` names two components, so it takes no @
   --no-setup                   stop once the binary lands; run setup yourself
   --system                     install under a dedicated service account (needs root)
-  --package-version=<version>  the ${PACKAGE_NAME} version to install (default: ${NPM_LATEST_TAG})
+  --package-version=<version>  pin the ${PACKAGE_NAME} command, which every role installs
   --prefix=<directory>         install somewhere other than the default prefix
   --dry-run                    print what this would do and change nothing
   --print-unit                 print the systemd units this would write, and stop
@@ -224,6 +304,9 @@ Usage: bash install.sh [options]
 
   --role pre-seeds setup rather than replacing it. --no-setup is for a machine
   that will receive a plan file and run \`${PACKAGE_NAME} setup --plan\` itself.
+
+  A version is exact -- 1.4.0, not 1.4 -- because it names the release tag
+  <component>-v<version>. Anything left unpinned comes from ${VERSIONS_URL}
 
   Served from ${INSTALL_SH_URL}
   Documentation at ${DOCS_URL}
@@ -252,6 +335,10 @@ main() {
     return 0
   fi
 
+  # After the uninstall branch, because an uninstall is about what is on this
+  # disk and has no business asking a network what is current -- and after
+  # --print-unit returned above, for the same reason.
+  resolve_release
   ensure_toolchain
   ensure_node
   # Before anything is written, because the environment file below is chowned to
@@ -276,8 +363,8 @@ main() {
 parse_arguments() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --role=*) ROLE="${1#*=}" ;;
-      --package-version=*) PACKAGE_VERSION="${1#*=}" ;;
+      --role=*) add_role "${1#*=}" ;;
+      --package-version=*) set_pin 'cli' "${1#*=}" '--package-version=' ;;
       --prefix=*)
         PREFIX="${1#*=}"
         # An empty value is almost always an unset variable in the command that
@@ -307,25 +394,10 @@ parse_arguments() {
     shift
   done
 
-  # What the role decides, in one place: the daemons that get a unit, and the
-  # packages that get installed. The command is in every row because `setup` and
-  # `doctor` belong on every machine; the client is in every row a hub is in,
-  # because a hub with no client serves 503 and says so at startup.
-  case "$ROLE" in
-    hub)
-      DAEMONS='hub'
-      PACKAGE_NAMES="$NPM_PACKAGE $NPM_PACKAGE_HUB $NPM_PACKAGE_WEB"
-      ;;
-    server)
-      DAEMONS='server'
-      PACKAGE_NAMES="$NPM_PACKAGE $NPM_PACKAGE_SERVER"
-      ;;
-    both)
-      DAEMONS='hub server'
-      PACKAGE_NAMES="$NPM_PACKAGE $NPM_PACKAGE_HUB $NPM_PACKAGE_WEB $NPM_PACKAGE_SERVER"
-      ;;
-    *) die "unknown role $(quote "$ROLE"): expected one of hub, server, both" ;;
-  esac
+  # The default, applied here rather than as an initial value, so that `both`
+  # arrives through the one function that knows what `both` means.
+  [ -n "$ROLE_COMPONENTS" ] || add_role 'both'
+  resolve_role
 
   if [ "$UNINSTALL" = 'yes' ] && [ "$PRINT_UNIT" = 'yes' ]; then
     die '--uninstall removes the units and --print-unit prints them: ask for one or the other'
@@ -333,6 +405,171 @@ parse_arguments() {
 
   validate_prefix
 }
+
+# One --role, which may be given more than once and may carry a pin.
+#
+#   --role=both                        hub and server, whatever is current
+#   --role=hub@1.3.0 --role=server@1.4.0
+#   --role=hub@1.3.0                   hub only, pinned
+#
+# Repeatable because the components have separate release trains now, and a
+# machine running both may want them at different versions. `both` is kept
+# because it is what most machines are and `--role=hub --role=server` is a worse
+# way to say it.
+#
+# **`both` takes no `@`.** A version names one component and `both` names two,
+# so there is no version `--role=both@1.2` could be naming: it is either two
+# pins written once, which is a coincidence the grammar should not encourage, or
+# a single version for two independent trains, which is the coupling this whole
+# change exists to remove. Refusing it costs the caller one more flag and says
+# what a pin is.
+#
+# **A repeated component stops the run.** Not last-wins: `--role=hub@1.3.0
+# --role=hub@1.4.0` is two answers to one question, and a script that silently
+# took the second would install a version nobody asked for twice. It is the same
+# argument this script already makes about `--rle` -- installing the wrong thing
+# because something was quietly dropped is worse than not installing.
+#
+# **`cli` and `web` are not roles.** The command goes on every machine because
+# `setup` and `doctor` do, and the client is part of being a hub. Both are named
+# in the refusal rather than falling through to "unknown role", because somebody
+# typing `--role=web` has a reasonable idea and the wrong word for it.
+add_role() {
+  local value="$1" component pin='' pinned='no'
+
+  case "$value" in
+    *@*)
+      component="${value%%@*}"
+      pin="${value#*@}"
+      pinned='yes'
+      ;;
+    *) component="$value" ;;
+  esac
+
+  case "$component" in
+    hub | server) ;;
+    both)
+      [ "$pinned" = 'no' ] || die "--role=both names two components and a version names one: pin them separately, as --role=hub@<version> --role=server@<version>"
+      add_role 'hub'
+      add_role 'server'
+      return 0
+      ;;
+    cli | web) die "$(quote "$component") is not a role: the ${PACKAGE_NAME} command goes on every machine whatever it runs, and the client is part of being a hub. Pin the command with --package-version=<version>" ;;
+    *) die "unknown role $(quote "$component"): expected one of hub, server, both" ;;
+  esac
+
+  case " $ROLE_COMPONENTS " in
+    *" $component "*) die "--role names $component twice: two answers to one question is a contradiction rather than a last-one-wins, so nothing was installed" ;;
+  esac
+  ROLE_COMPONENTS="${ROLE_COMPONENTS:+$ROLE_COMPONENTS }$component"
+
+  [ "$pinned" = 'no' ] || set_pin "$component" "$pin" "--role=$component@"
+}
+
+# One component pinned to one released version.
+#
+# The flag is passed in so the refusal can print the thing that was typed. An
+# empty value is almost always an unset variable in the command that produced
+# it, which is the same argument --prefix makes: a pin that falls back to
+# whatever is current is an install nobody asked for.
+set_pin() {
+  local component="$1" pin="$2" flag="$3"
+
+  [ -n "$pin" ] || die "${flag} was given with nothing after it, which is usually an unset variable: name a version, as ${flag}1.4.0, or leave the pin off to take what is current"
+  [[ "$pin" =~ $RELEASE_VERSION ]] || die "$(quote "$pin") is not a version this can install: a pin names the release tag ${component}-v<version>, so it is an exact <major>.<minor>.<patch> and not a range"
+
+  case " $COMPONENT_PINS " in
+    *" $component="*) die "$component is pinned twice, and two versions of one component is a contradiction rather than a last-one-wins" ;;
+  esac
+  COMPONENT_PINS="${COMPONENT_PINS:+$COMPONENT_PINS }$component=$pin"
+}
+
+# What the role decides, in one place: the word this machine records, the
+# daemons that get a unit, and the components that get installed.
+#
+# The command is in every row because `setup` and `doctor` belong on every
+# machine; the client is in every row a hub is in, because a hub with no client
+# serves 503 and says so at startup.
+resolve_role() {
+  local has_hub='no' has_server='no' component
+  for component in $ROLE_COMPONENTS; do
+    case "$component" in
+      hub) has_hub='yes' ;;
+      server) has_server='yes' ;;
+    esac
+  done
+
+  if [ "$has_hub" = 'yes' ] && [ "$has_server" = 'yes' ]; then
+    ROLE='both'
+    DAEMONS='hub server'
+    INSTALL_COMPONENTS='cli hub web server'
+  elif [ "$has_hub" = 'yes' ]; then
+    ROLE='hub'
+    DAEMONS='hub'
+    INSTALL_COMPONENTS='cli hub web'
+  else
+    ROLE='server'
+    DAEMONS='server'
+    INSTALL_COMPONENTS='cli server'
+  fi
+}
+
+# The published name, the stable asset name and the metadata beside it, for one
+# component.
+#
+# Three cases rather than three strings built out of the component word. The
+# names happen to end in the component's word today, and what a machine
+# downloads is the wrong thing to have depend on that continuing to be true.
+# `scripts/install.sh.integration.test.ts` reads the assembler's own table and
+# holds these against it, so a rename there fails here rather than at a 404.
+component_package() {
+  case "$1" in
+    cli) printf '%s' "$NPM_PACKAGE" ;;
+    hub) printf '%s' "$NPM_PACKAGE_HUB" ;;
+    server) printf '%s' "$NPM_PACKAGE_SERVER" ;;
+    web) printf '%s' "$NPM_PACKAGE_WEB" ;;
+    *) die "no package holds the $1 component" ;;
+  esac
+}
+
+component_asset() {
+  case "$1" in
+    cli) printf 'agentplex.tgz' ;;
+    hub) printf 'agentplex-hub.tgz' ;;
+    server) printf 'agentplex-server.tgz' ;;
+    web) printf 'agentplex-web.tgz' ;;
+    *) die "no asset holds the $1 component" ;;
+  esac
+}
+
+component_metadata_asset() {
+  printf '%s.json' "$(basename "$(component_asset "$1")" .tgz)"
+}
+
+# One file published at one release tag.
+release_url() {
+  printf '%s/%s-v%s/%s' "$RELEASE_DOWNLOAD_URL" "$1" "$2" "$3"
+}
+
+# The value one of the `<component>=<value>` lists holds for a component, and
+# nothing at all when it holds none. Empty is an answer here rather than a
+# failure: an unpinned component has no pin, and a dry run that declined to
+# download has no version.
+lookup() {
+  local pair
+  for pair in $1; do
+    case "$pair" in
+      "$2"=*)
+        printf '%s' "${pair#*=}"
+        return 0
+        ;;
+    esac
+  done
+}
+
+component_pin() { lookup "$COMPONENT_PINS" "$1"; }
+component_version() { lookup "$COMPONENT_VERSIONS" "$1"; }
+component_protocol() { lookup "$COMPONENT_PROTOCOLS" "$1"; }
 
 # The shape a prefix has to have before anything is done with it.
 #
@@ -409,40 +646,354 @@ resolve_layout() {
 
   BIN_DIR="$PREFIX/bin"
   resolve_node_directory
-
-  resolve_package_specs
 }
 
-# What npm is handed, one spec per package this role installs.
+# ---------------------------------------------------------------------------
+# Which release this machine installs
+# ---------------------------------------------------------------------------
+
+# What npm is handed, one entry per component this role installs, and the one
+# check made before anything is downloaded.
 #
-# AGENTPLEX_PACKAGE is the seam this repository's own container check installs
-# through, and it names a directory of packed tarballs rather than one spec.
-# That is the whole of the change the split forced on it, and a directory is the
-# shape that cannot be half-set: there are four packages now, and four variables
-# would let a machine install a local hub beside a registry command and call it
-# a test of this build. A directory either holds the package a role needs or the
-# run stops naming it.
+# Three sources, and only one of them is a release.
 #
-# Without it, every package is `<name>@<version>`, one version for all of them,
-# because a release is one build. Per-component versions -- installing a
-# `hub@1.3` beside a `server@1.2` -- are a later decision about what a release
-# is, not something this can decide on its own.
-resolve_package_specs() {
-  local package
+# **AGENTPLEX_PACKAGE** is the seam this repository's own container check
+# installs through: a directory of packed tarballs from a build that has never
+# been published. A directory rather than four variables, because four variables
+# can be half set -- a machine that took a local hub beside a released command
+# would be a green check of a build it had not installed. Nothing here is a
+# release, so nothing is resolved and no protocol is checked, and this says so
+# rather than implying a version it does not have.
+#
+# **A pin** names a release tag outright, so the URL is known without asking
+# anything. What is not known is what that release speaks, which is why a pin
+# costs one small extra download -- see `pinned_protocol`.
+#
+# **versions.json** answers everything else, in one unauthenticated fetch,
+# before a byte of any tarball is downloaded.
+resolve_release() {
+  if [ -n "${AGENTPLEX_PACKAGE:-}" ]; then
+    [ -d "$AGENTPLEX_PACKAGE" ] || die "AGENTPLEX_PACKAGE names $(quote "$AGENTPLEX_PACKAGE"), which is not a directory: it is the directory holding the packed tarballs to install, one per package"
+    local component
+    PACKAGE_SPECS=''
+    for component in $INSTALL_COMPONENTS; do
+      PACKAGE_SPECS="$PACKAGE_SPECS $(package_tarball "$(component_package "$component")")"
+    done
+    PACKAGE_SPECS="${PACKAGE_SPECS# }"
+    report 'release' "the tarballs in $AGENTPLEX_PACKAGE; no version is resolved and no protocol is checked, because a directory of tarballs is one build and not a release"
+    return 0
+  fi
+
+  load_versions
+  resolve_component_versions
+  check_protocol_agreement
+  build_package_specs
+  report_release
+}
+
+# The versions manifest, off the network or off a disk, and only when something
+# is going to read it.
+#
+# Not fetched when every component this machine installs is pinned: the manifest
+# describes what is current, and a run that asked for something else has nothing
+# to learn from it.
+#
+# **A dry run downloads nothing**, which is the rule `ensure_node` already keeps
+# about the Node release file, and for the same reason: "would install 1.4.0" is
+# a claim a run that performed no download cannot make. So a dry run with
+# nothing to read the manifest from names the components and says the question
+# went unasked, rather than printing a version it guessed.
+#
+# AGENTPLEX_VERSIONS is what makes that testable and what an air-gapped mirror
+# would use. It names a directory laid out as the release is: `versions.json` at
+# its root, and `<component>-v<version>/<asset>.json` for each pinned release --
+# the same paths, at the same names, one origin further down. Reading a local
+# file is not a download, so a dry run reads it.
+load_versions() {
+  local component unpinned='no' file
+
+  for component in $INSTALL_COMPONENTS; do
+    [ -n "$(component_pin "$component")" ] || unpinned='yes'
+  done
+  [ "$unpinned" = 'yes' ] || return 0
+
+  if [ -n "${AGENTPLEX_VERSIONS:-}" ]; then
+    file="$AGENTPLEX_VERSIONS/versions.json"
+    [ -f "$file" ] || die "AGENTPLEX_VERSIONS names $(quote "$AGENTPLEX_VERSIONS"), which holds no versions.json: it is the directory holding the metadata a release publishes"
+    VERSIONS_TEXT="$(cat "$file")"
+    VERSIONS_SOURCE="$file"
+    return 0
+  fi
+
+  [ "$DRY_RUN" = 'no' ] || return 0
+
+  file="$(mktemp)"
+  if ! fetch "$VERSIONS_URL" "$file"; then
+    rm -f "$file"
+    die "could not reach $VERSIONS_URL, which is what says which version of each component is current. Pin every component with --role=<role>@<version> and --package-version=<version> to install without it"
+  fi
+  VERSIONS_TEXT="$(cat "$file")"
+  rm -f "$file"
+  VERSIONS_SOURCE="$VERSIONS_URL"
+}
+
+# A version and a protocol for every component this machine installs.
+resolve_component_versions() {
+  local component pin entry protocol
+  COMPONENT_VERSIONS=''
+  COMPONENT_PROTOCOLS=''
+
+  for component in $INSTALL_COMPONENTS; do
+    pin="$(component_pin "$component")"
+    if [ -n "$pin" ]; then
+      # Assigned and then passed, rather than substituted into the call. `die`
+      # inside `$(...)` exits the subshell, and the exit status of a command
+      # substitution used as an *argument* is thrown away -- so a pre-check that
+      # failed would print its refusal and the install would carry on. Captured
+      # here: a pin whose metadata was missing said so and then installed
+      # anyway. An assignment is what makes `set -e` see it.
+      protocol="$(pinned_protocol "$component" "$pin")"
+      record_component "$component" "$pin" "$protocol"
+      continue
+    fi
+    # Only a dry run reaches here with no manifest; a real run has already died
+    # trying to fetch one.
+    [ -n "$VERSIONS_SOURCE" ] || continue
+    entry="$(versions_entry "$component")"
+    record_component "$component" "${entry%% *}" "${entry##* }"
+  done
+}
+
+record_component() {
+  COMPONENT_VERSIONS="${COMPONENT_VERSIONS:+$COMPONENT_VERSIONS }$1=$2"
+  [ -z "$3" ] || COMPONENT_PROTOCOLS="${COMPONENT_PROTOCOLS:+$COMPONENT_PROTOCOLS }$1=$3"
+}
+
+# What a pinned release speaks, read before anything is installed.
+#
+# This is the judgement call in the delivery grammar, so it is written down.
+# `versions.json` only describes what is current, and a pin is by definition a
+# request for something else -- so the only place a pinned release's protocol
+# exists is at its own tag. The alternatives were to install first and check
+# afterwards, or not to check a pinned component at all, and both of them end at
+# the same machine: a hub and a server that are installed, running, and unable
+# to pair, which is exactly the failure this whole grammar exists to prevent.
+# Pre-checking costs one small extra artifact per release and one small extra
+# download per pin, and it turns that machine into a refusal with both numbers
+# named and nothing written.
+#
+# A dry run downloads nothing, so it leaves the protocol unknown rather than
+# claiming one -- and `check_protocol_agreement` skips what it does not know
+# instead of treating "unknown" as "agrees".
+pinned_protocol() {
+  local component="$1" version="$2" asset url file text protocol
+  asset="$(component_metadata_asset "$component")"
+
+  if [ -n "${AGENTPLEX_VERSIONS:-}" ]; then
+    # Laid out as the release is -- a directory per tag, holding the asset at
+    # the name it is published under -- rather than flattened to one file per
+    # pin. A seam whose paths are shaped differently from the thing it stands in
+    # for is a seam that agrees with the code and not with the world.
+    file="$AGENTPLEX_VERSIONS/${component}-v${version}/${asset}"
+    [ -f "$file" ] || die "AGENTPLEX_VERSIONS holds no ${component}-v${version}/${asset}, and $component is pinned to $version"
+    release_protocol "$(cat "$file")" "$file" "$component"
+    return 0
+  fi
+
+  [ "$DRY_RUN" = 'no' ] || return 0
+
+  url="$(release_url "$component" "$version" "$asset")"
+  file="$(mktemp)"
+  if ! fetch "$url" "$file"; then
+    rm -f "$file"
+    die "nothing is published at $url, so there is no ${component}-v${version} release to install -- or it predates the metadata every release now publishes beside its tarball"
+  fi
+  # Read, then removed, then parsed: the parse is what can die, and a file left
+  # in /tmp by every refusal is litter this run has no trap to sweep up.
+  text="$(cat "$file")"
+  rm -f "$file"
+  protocol="$(release_protocol "$text" "$url" "$component")"
+  printf '%s' "$protocol"
+}
+
+# Every component this machine would install, speaking one protocol.
+#
+# A tripwire and not a resolver, and the difference is the whole design. A
+# protocol change releases every affected component together, so the entries in
+# `versions.json` always agree; if they ever do not, that is a release process
+# that broke rather than a choice this script should be making. Working out "the
+# newest set of versions that happens to agree" would need per-version history
+# this has no way to read, one request per candidate, and it would quietly paper
+# over exactly the mistake the tripwire is there to report.
+#
+# Asked of the components this machine installs and not of the whole manifest. A
+# hub install refused because the `server` entry disagrees would be refusing over
+# a package this machine will never download.
+check_protocol_agreement() {
+  local component protocol first='' first_component=''
+
+  for component in $INSTALL_COMPONENTS; do
+    protocol="$(component_protocol "$component")"
+    [ -n "$protocol" ] || continue
+    if [ -z "$first" ]; then
+      first="$protocol"
+      first_component="$component"
+      continue
+    fi
+    [ "$protocol" = "$first" ] || die "this machine would install a $first_component speaking protocol $first and a $component speaking protocol $protocol, and two components that disagree about the protocol do not talk to each other. A protocol change releases every affected component together, so this is a broken release rather than a choice to make: nothing has been installed"
+  done
+}
+
+# The URL for each component, or nothing at all.
+#
+# All or none: a plan that named three URLs and left the fourth as a shrug would
+# be handed to npm as three packages, and a machine missing one of them is the
+# half-installed machine every check above exists to prevent.
+build_package_specs() {
+  local component version
   PACKAGE_SPECS=''
-  for package in $PACKAGE_NAMES; do
-    PACKAGE_SPECS="$PACKAGE_SPECS $(package_spec "$package")"
+
+  for component in $INSTALL_COMPONENTS; do
+    version="$(component_version "$component")"
+    if [ -z "$version" ]; then
+      PACKAGE_SPECS=''
+      return 0
+    fi
+    PACKAGE_SPECS="$PACKAGE_SPECS $(release_url "$component" "$version" "$(component_asset "$component")")"
   done
   PACKAGE_SPECS="${PACKAGE_SPECS# }"
 }
 
-package_spec() {
-  if [ -z "${AGENTPLEX_PACKAGE:-}" ]; then
-    printf '%s@%s' "$1" "${PACKAGE_VERSION:-$NPM_LATEST_TAG}"
-    return 0
+# The versions, the protocol they agree on, and where each of those came from.
+#
+# One line, and it says what it does not know. A component with no version is a
+# dry run that declined to download; a set with no protocol is the same run,
+# or every component pinned on a machine that could not be asked.
+report_release() {
+  local component line='' protocol='' version
+
+  for component in $INSTALL_COMPONENTS; do
+    version="$(component_version "$component")"
+    line="${line:+$line, }$component ${version:-(not resolved)}"
+    [ -n "$protocol" ] || protocol="$(component_protocol "$component")"
+  done
+
+  if [ -n "$VERSIONS_SOURCE" ]; then
+    line="$line (from $VERSIONS_SOURCE)"
+  elif [ -z "$PACKAGE_SPECS" ]; then
+    line="$line: a dry run downloads nothing, and $VERSIONS_URL is a download"
+  else
+    line="$line (every component pinned, so $VERSIONS_URL was not read)"
   fi
-  [ -d "$AGENTPLEX_PACKAGE" ] || die "AGENTPLEX_PACKAGE names $(quote "$AGENTPLEX_PACKAGE"), which is not a directory: it is the directory holding the packed tarballs to install, one per package"
-  package_tarball "$1"
+
+  report 'release' "$line"
+  if [ -n "$protocol" ]; then
+    report 'protocol' "$protocol, which every component above agrees on"
+  else
+    report 'protocol' "not checked: a dry run downloads nothing, and the protocol of a release is published with it"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Reading the JSON a release publishes
+# ---------------------------------------------------------------------------
+#
+# Two files, both small, both written by the release workflow out of the
+# assembled manifests, and both read off the network:
+#
+#   versions.json   {"cli":{"version":"1.4.0","protocol":3}, ...}
+#   <component>-v<version>.json
+#                   {"component":"hub","version":"1.2.0","protocol":3}
+#
+# Parsed and not read. Every one of them is a claim out of another program, and
+# the whole reason this script fetches them before it downloads anything is so
+# that a bad one costs a refusal rather than a half-installed machine. There is
+# no jq on a stock debian:bookworm-slim and no node either -- this runs before
+# `ensure_node` has put one there -- so the parser is bash, and it is written as
+# a grammar that refuses rather than as an extractor that guesses: a field that
+# is not there, a version that is not a version and a protocol that is not a
+# number each stop the run naming the file.
+#
+# Whitespace is deleted outright rather than skipped over, which is what makes
+# the field patterns below one-liners. Nothing these files hold can contain a
+# space: a component is one of four words, a version is a semver and a protocol
+# is an integer, and anything that did contain one would fail the checks that
+# follow rather than slip through reshaped.
+
+flatten_json() {
+  printf '%s' "$1" | tr -d ' \t\n\r'
+}
+
+# The value of one string field of a flat JSON object, or a non-zero.
+json_string() {
+  local text="$1" key="$2" value
+  case "$text" in
+    *"\"$key\":\""*) ;;
+    *) return 1 ;;
+  esac
+  value="${text#*\""$key"\":\"}"
+  printf '%s' "${value%%\"*}"
+}
+
+# The value of one integer field of a flat JSON object, or a non-zero. A field
+# whose value is quoted, negative or absent all fail here rather than later.
+json_number() {
+  local text="$1" key="$2" value
+  case "$text" in
+    *"\"$key\":"*) ;;
+    *) return 1 ;;
+  esac
+  value="${text#*\""$key"\":}"
+  value="${value%%,*}"
+  value="${value%%\}*}"
+  case "$value" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+# One component's entry out of the versions manifest, as `<version> <protocol>`.
+#
+# A component this run needs and the manifest does not name is a refusal and not
+# a fallback to anything: the manifest is what says which version is current,
+# and a machine that carried on would install three quarters of a set.
+versions_entry() {
+  local component="$1" flat entry version protocol
+
+  flat="$(flatten_json "$VERSIONS_TEXT")"
+  case "$flat" in
+    '{'*'}') ;;
+    *) die "$VERSIONS_SOURCE is not a versions manifest: it holds no JSON object" ;;
+  esac
+
+  case "$flat" in
+    *"\"$component\":{"*) ;;
+    *) die "$VERSIONS_SOURCE names no $component, and this machine installs one. It is the manifest of what is current for every component, so a missing entry is a release that did not finish rather than something to guess at" ;;
+  esac
+  entry="${flat#*\""$component"\":\{}"
+  entry="${entry%%\}*}"
+
+  version="$(json_string "$entry" 'version')" || die "$VERSIONS_SOURCE gives $component no version"
+  [[ "$version" =~ $RELEASE_VERSION ]] || die "$VERSIONS_SOURCE gives $component the version $(quote "$version"), which is not a version this can install"
+  protocol="$(json_number "$entry" 'protocol')" || die "$VERSIONS_SOURCE gives $component no protocol number, and the protocol is what says whether the components on this machine can talk to each other"
+
+  printf '%s %s' "$version" "$protocol"
+}
+
+# The protocol out of the metadata published beside one release's tarball.
+#
+# The component is checked as well as read: an asset served from the wrong tag
+# -- a redirect followed somewhere unexpected, a release edited by hand -- is a
+# file that parses perfectly and describes something else.
+release_protocol() {
+  local flat component protocol
+  flat="$(flatten_json "$1")"
+
+  component="$(json_string "$flat" 'component')" || die "$2 is not release metadata: it names no component"
+  [ "$component" = "$3" ] || die "$2 describes the $component component and this machine is asking about $3"
+  protocol="$(json_number "$flat" 'protocol')" || die "$2 states no protocol number for $3"
+
+  printf '%s' "$protocol"
 }
 
 # The tarball in that directory that holds one package.
@@ -874,6 +1425,14 @@ fetch() {
 # ---------------------------------------------------------------------------
 
 install_package() {
+  # The one shape the plan has two of, and the second one is a dry run that
+  # declined to download. It names what would be installed and where from, and
+  # not a URL it would have had to invent a version for.
+  if [ -z "$PACKAGE_SPECS" ]; then
+    report 'package' "$INSTALL_COMPONENTS from $RELEASE_DOWNLOAD_URL into $PREFIX, at whatever versions the line above resolves to"
+    return 0
+  fi
+
   report 'package' "$PACKAGE_SPECS into $PREFIX"
   [ "$DRY_RUN" = 'no' ] || return 0
 
@@ -1151,13 +1710,14 @@ daemon_command() {
 
 # The package that holds one daemon's compiled entry.
 #
-# A case rather than a string built out of the daemon name. The published names
-# happen to end in the daemon's word today, and a machine's ExecStart is the
-# wrong thing to have depend on that continuing to be true.
+# Every daemon is a component, so this is `component_package` with the two
+# components that are not daemons refused: `cli` holds no daemon and `web` is
+# static files. Going through the one table rather than a second copy of it is
+# what keeps a machine's ExecStart from depending on the published names
+# happening to end in the daemon's word.
 daemon_package() {
   case "$1" in
-    hub) printf '%s' "$NPM_PACKAGE_HUB" ;;
-    server) printf '%s' "$NPM_PACKAGE_SERVER" ;;
+    hub | server) component_package "$1" ;;
     *) die "no package holds a $1 daemon" ;;
   esac
 }
@@ -1499,10 +2059,10 @@ uninstall_node() {
 # what it leaves behind is a directory the rmdir sweep then declines to remove
 # and the notice below names.
 uninstall_package() {
-  local package tree found='no'
+  local component tree found='no'
 
-  for package in "$NPM_PACKAGE" "$NPM_PACKAGE_HUB" "$NPM_PACKAGE_SERVER" "$NPM_PACKAGE_WEB"; do
-    tree="$PREFIX/lib/node_modules/$package"
+  for component in $COMPONENTS; do
+    tree="$PREFIX/lib/node_modules/$(component_package "$component")"
     [ -e "$tree" ] || continue
     found='yes'
     report 'package' "remove $tree"

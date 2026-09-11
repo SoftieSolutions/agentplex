@@ -8,13 +8,25 @@ a compiled program, and what starts it is a systemd unit naming an interpreter
 and that file.
 
 ```sh
-npm install --global @softiesolutions/agentplex-hub @softiesolutions/agentplex-web
+npm install --global \
+  https://github.com/SoftieSolutions/agentplex/releases/download/hub-v1.0.0/agentplex-hub.tgz \
+  https://github.com/SoftieSolutions/agentplex/releases/download/web-v1.0.0/agentplex-web.tgz
 node "$(npm root -g)/@softiesolutions/agentplex-hub/apps/hub/dist/main.js" --help
 ```
 
-Install it with [`@softiesolutions/agentplex`](https://www.npmjs.com/package/@softiesolutions/agentplex),
-which is the command that configures and checks a machine, and let `install.sh
---role=hub` write the unit:
+Nothing here is on npm. Every release is a GitHub Release carrying one tarball,
+and npm installs it from that URL -- so the version in it is a release tag and
+not a range. `install.sh` is what resolves a version for you.
+
+The hub and the client are separate release trains, so their versions move
+independently; what is current for each is published as `versions.json` on the
+`v1` branch and is what an unpinned install reads. This package's manifest
+carries an `agentplex.protocol` number, and a hub only talks to a server and a
+client that declare the same one.
+
+Install it with [the `agentplex` command](https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md),
+which is what configures and checks a machine, and let `install.sh --role=hub`
+write the unit:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh | bash -s -- --role=hub

@@ -9,12 +9,19 @@ carries a compiled program, and what starts it is a systemd unit naming an
 interpreter and that file.
 
 ```sh
-npm install --global @softiesolutions/agentplex-server
+npm install --global https://github.com/SoftieSolutions/agentplex/releases/download/server-v1.0.0/agentplex-server.tgz
 node "$(npm root -g)/@softiesolutions/agentplex-server/apps/server/dist/main.js" --help
 ```
 
-Install it with [`@softiesolutions/agentplex`](https://www.npmjs.com/package/@softiesolutions/agentplex),
-which is the command that configures and checks a machine, and let `install.sh
+Nothing here is on npm. Every release is a GitHub Release carrying one tarball,
+and npm installs it from that URL -- so the version in it is a release tag and
+not a range. `install.sh` is what resolves a version for you.
+
+This package's manifest carries an `agentplex.protocol` number, and a server
+only pairs with a hub that declares the same one.
+
+Install it with [the `agentplex` command](https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md),
+which is what configures and checks a machine, and let `install.sh
 --role=server` write the unit:
 
 ```sh

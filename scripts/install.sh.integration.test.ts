@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { HUB, metadataAsset, PACKAGES } from './assemble-package.js';
 
 /**
  * `install.sh`, exercised the two ways it can be exercised without a machine to
@@ -85,24 +86,101 @@ afterEach(() => {
 });
 
 /**
- * A scratch machine: a copy of the script somewhere world-readable, and a home
- * directory to install into.
+ * A scratch machine: a copy of the script somewhere world-readable, a home
+ * directory to install into, and the metadata half of a release to resolve
+ * against.
  *
  * The copy is not caution about mutation -- nothing here writes to the script.
  * A checkout can live under a mode-0700 home, and `nobody` cannot read a script
  * it cannot traverse to.
+ *
+ * The versions directory is outside the home on purpose: several tests assert
+ * that a run which was told to change nothing left the home empty, and a
+ * fixture inside it would make every one of those assertions about the fixture.
  */
-function scratch(): { readonly script: string; readonly home: string } {
+function scratch(): {
+  readonly script: string;
+  readonly home: string;
+  readonly versions: string;
+} {
   const root = mkdtempSync(join(tmpdir(), 'agentplex-install-'));
   temporaries.push(root);
   const script = join(root, 'install.sh');
   const home = join(root, 'home');
+  const versions = join(root, 'versions');
   cpSync(scriptPath, script);
   mkdirSync(home);
+  mkdirSync(versions);
+  writeVersions(versions, CURRENT);
   chmodSync(root, 0o777);
   chmodSync(script, 0o755);
   chmodSync(home, 0o777);
-  return { script, home };
+  chmodSync(versions, 0o777);
+  return { script, home, versions };
+}
+
+/**
+ * What `versions.json` says is current, as a fixture.
+ *
+ * Four versions that differ from each other, because the failure worth catching
+ * is a component resolved through another component's entry, and four equal
+ * numbers would hide every one of those. The protocol is a number with no
+ * meaning here beyond "they agree": this script never compares it with
+ * `PROTOCOL_VERSION`, it only asks whether the components a machine installs
+ * say the same thing.
+ */
+const CURRENT: Readonly<Record<string, string>> = {
+  cli: '1.4.0',
+  hub: '1.2.0',
+  server: '1.5.0',
+  web: '1.1.0',
+};
+
+const FIXTURE_PROTOCOL = 3;
+
+/** The manifest the release publishes on the `v1` branch, as a fixture. */
+function writeVersions(
+  directory: string,
+  versions: Readonly<Record<string, string>>,
+  protocols: Readonly<Record<string, number>> = {},
+): void {
+  const entries = Object.entries(versions).map(([component, version]) => [
+    component,
+    { version, protocol: protocols[component] ?? FIXTURE_PROTOCOL },
+  ]);
+  writeFile(join(directory, 'versions.json'), JSON.stringify(Object.fromEntries(entries), null, 2));
+}
+
+/**
+ * The metadata published beside one release's tarball, as a fixture, at the
+ * path a release publishes it at: a directory per tag, holding the asset under
+ * the name the assembler gave it.
+ */
+function writeReleaseMetadata(
+  directory: string,
+  component: string,
+  version: string,
+  protocol = FIXTURE_PROTOCOL,
+): void {
+  writeFile(
+    releaseMetadataPath(directory, component, version),
+    JSON.stringify({ component, version, protocol }),
+  );
+}
+
+function releaseMetadataPath(directory: string, component: string, version: string): string {
+  const target = PACKAGES.find((candidate) => candidate.component === component);
+  if (target === undefined) throw new Error(`no package assembles ${component}`);
+  const tag = join(directory, `${component}-v${version}`);
+  mkdirSync(tag, { recursive: true });
+  chmodSync(tag, 0o777);
+  return join(tag, metadataAsset(target));
+}
+
+/** A fixture the script reads as `nobody`, so the mode is part of writing it. */
+function writeFile(path: string, contents: string): void {
+  writeFileSync(path, `${contents}\n`);
+  chmodSync(path, 0o666);
 }
 
 /**
@@ -129,6 +207,12 @@ function run(
     // this machine's node is found decides a line of the plan, and a test that
     // reads differently under `su` is a test about `su`.
     PATH: process.env['PATH'] ?? '/usr/bin:/bin',
+    // The metadata half of a release, off a disk. Nothing in a suite may reach
+    // the network, and what is current is a fact this script reads off one --
+    // so every run here is pointed at the fixture `scratch` wrote beside the
+    // script, and a test that wants the no-seam behaviour passes an empty
+    // string, which the script reads as unset.
+    AGENTPLEX_VERSIONS: join(dirname(script), 'versions'),
     ...options.environment,
   };
 
@@ -187,15 +271,40 @@ function daemonEntry(prefix: string, daemon: string): string {
   return `${prefix}/lib/node_modules/@softiesolutions/agentplex-${daemon}/apps/${daemon}/dist/main.js`;
 }
 
-/** The specs a role hands npm, in the order the script builds them. */
-function packageSpecs(role: string, version = 'latest'): string {
-  const at = (name: string): string => `${name}@${version}`;
-  const command = at('@softiesolutions/agentplex');
-  const hub = `${at('@softiesolutions/agentplex-hub')} ${at('@softiesolutions/agentplex-web')}`;
-  const server = at('@softiesolutions/agentplex-server');
-  if (role === 'hub') return `${command} ${hub}`;
-  if (role === 'server') return `${command} ${server}`;
-  return `${command} ${hub} ${server}`;
+/**
+ * The components a role installs, in the order the script builds them.
+ *
+ * The command is in every row because `setup` and `doctor` belong on every
+ * machine; the client is in every row a hub is in, because a hub without it
+ * serves 503.
+ */
+function roleComponents(role: string): readonly string[] {
+  if (role === 'hub') return ['cli', 'hub', 'web'];
+  if (role === 'server') return ['cli', 'server'];
+  return ['cli', 'hub', 'web', 'server'];
+}
+
+/**
+ * One published tarball's URL.
+ *
+ * Written out here rather than read from the script, because this is the one
+ * string a machine actually fetches and a test that derived it from the script
+ * would agree with whatever the script happened to say. The asset names are
+ * held against the assembler's own table separately, further down.
+ */
+function releaseUrl(component: string, version: string): string {
+  const asset = component === 'cli' ? 'agentplex' : `agentplex-${component}`;
+  return (
+    `https://github.com/SoftieSolutions/agentplex/releases/download/` +
+    `${component}-v${version}/${asset}.tgz`
+  );
+}
+
+/** The URLs a role hands npm, in the order the script builds them. */
+function packageSpecs(role: string, versions: Readonly<Record<string, string>> = CURRENT): string {
+  return roleComponents(role)
+    .map((component) => releaseUrl(component, versions[component] ?? ''))
+    .join(' ');
 }
 
 /**
@@ -558,10 +667,22 @@ describe('the plan a dry run prints', () => {
     expect(readdirSync(home)).toEqual([]);
   });
 
-  it('pins the version it was given, and says so as one spec', () => {
-    const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--package-version=1.2.3']);
-    expect(planned(result.stdout, 'package')).toContain('@softiesolutions/agentplex@1.2.3');
+  /**
+   * `--package-version` is the command's pin and the command alone, which is
+   * what it has always been: `setup` and `doctor` go on every machine whatever
+   * it runs, so the one package every role installs is the one a flag with no
+   * component in its name can mean. The daemons are pinned through --role now.
+   */
+  it('pins the command it was given a version for, and resolves the rest', () => {
+    const { script, home, versions } = scratch();
+    writeReleaseMetadata(versions, 'cli', '1.2.3');
+
+    const result = run(script, home, ['--dry-run', '--role=hub', '--package-version=1.2.3']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toBe(
+      `${packageSpecs('hub', { ...CURRENT, cli: '1.2.3' })} into ${home}/.agentplex`,
+    );
   });
 
   /**
@@ -576,7 +697,9 @@ describe('the plan a dry run prints', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--role=both']);
 
-    expect(planned(result.stdout, 'package')).toContain('@softiesolutions/agentplex@');
+    expect(planned(result.stdout, 'package')).toContain(
+      `/cli-v${CURRENT['cli'] ?? ''}/agentplex.tgz`,
+    );
 
     const units = run(script, home, ['--print-unit', '--role=both']).stdout;
     expect(execStarts(units).map((line) => line.script)).toEqual([
@@ -607,16 +730,18 @@ describe('the plan a dry run prints', () => {
    * `setup` and `doctor` belong on every machine whatever it runs.
    */
   it.each([
-    ['hub', ['agentplex@', 'agentplex-hub@', 'agentplex-web@'], ['agentplex-server@']],
-    ['server', ['agentplex@', 'agentplex-server@'], ['agentplex-hub@', 'agentplex-web@']],
-    ['both', ['agentplex@', 'agentplex-hub@', 'agentplex-web@', 'agentplex-server@'], []],
+    ['hub', ['cli', 'hub', 'web'], ['server']],
+    ['server', ['cli', 'server'], ['hub', 'web']],
+    ['both', ['cli', 'hub', 'web', 'server'], []],
   ])('installs the packages --role=%s runs, and no others', (role, wanted, unwanted) => {
     const { script, home } = scratch();
     const line =
       planned(run(script, home, ['--dry-run', `--role=${role}`]).stdout, 'package') ?? '';
 
-    for (const name of wanted) expect(line, name).toContain(`@softiesolutions/${name}`);
-    for (const name of unwanted) expect(line, name).not.toContain(`@softiesolutions/${name}`);
+    for (const component of wanted) {
+      expect(line, component).toContain(releaseUrl(component, CURRENT[component] ?? ''));
+    }
+    for (const component of unwanted) expect(line, component).not.toContain(`/${component}-v`);
   });
 
   /**
@@ -652,8 +777,8 @@ describe('the plan a dry run prints', () => {
     expect(line).toContain(`${packages}/softiesolutions-agentplex-hub-0.0.0.tgz`);
     expect(line).toContain(`${packages}/softiesolutions-agentplex-web-0.0.0.tgz`);
     expect(line).not.toContain('softiesolutions-agentplex-server-0.0.0.tgz');
-    // Nothing fell through to a registry.
-    expect(line).not.toContain('@latest');
+    // Nothing fell through to a release.
+    expect(line).not.toContain('https://');
   });
 
   /**
@@ -1461,6 +1586,402 @@ describe('undoing an install', () => {
     const result = run(script, home, ['--uninstall', '--dry-run', '--system']);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('must run as root');
+  });
+});
+
+describe('the --role grammar, which is repeatable and takes a pin', () => {
+  /**
+   * Every accepted form, read as the plan it produces rather than as an exit
+   * code: the thing that can go wrong here is a pin landing on the wrong
+   * component, and an exit code cannot see that.
+   */
+  it('installs hub and server at what is current for --role=both', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=both']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toBe(
+      `${packageSpecs('both')} into ${home}/.agentplex`,
+    );
+  });
+
+  it('pins each component independently when both are named', () => {
+    const { script, home, versions } = scratch();
+    writeReleaseMetadata(versions, 'hub', '1.3.0');
+    writeReleaseMetadata(versions, 'server', '1.4.0');
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0', '--role=server@1.4.0']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toBe(
+      `${packageSpecs('both', { ...CURRENT, hub: '1.3.0', server: '1.4.0' })} ` +
+        `into ${home}/.agentplex`,
+    );
+  });
+
+  /**
+   * A hub pinned alone still takes the client, and the client is still resolved
+   * rather than pinned with it. They are separate release trains: a version of
+   * the hub says nothing about which build of the client is current, which is
+   * the whole reason the protocol is checked across the set below.
+   */
+  it('pins one component and resolves the rest around it', () => {
+    const { script, home, versions } = scratch();
+    writeReleaseMetadata(versions, 'hub', '1.3.0');
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toBe(
+      `${packageSpecs('hub', { ...CURRENT, hub: '1.3.0' })} into ${home}/.agentplex`,
+    );
+  });
+
+  /**
+   * A version names one component and `both` names two, so there is nothing
+   * `--role=both@1.2.0` could mean that is not either two pins written once or
+   * one version imposed on two independent trains -- which is exactly the
+   * coupling per-component releases exist to remove.
+   */
+  it('refuses a version on --role=both, and says how to write what was meant', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=both@1.2.0']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--role=both names two components and a version names one');
+    expect(result.stderr).toContain('--role=hub@<version> --role=server@<version>');
+  });
+
+  /**
+   * Not last-wins. Two answers to one question is a contradiction, and the
+   * argument is the one this script already makes about `--rle`: installing the
+   * wrong thing because something was quietly dropped is worse than not
+   * installing.
+   */
+  it('refuses a component named twice rather than taking the last one', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0', '--role=hub@1.4.0']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--role names hub twice');
+  });
+
+  /** `both` is two components, so it collides with either of them by name. */
+  it('refuses a component --role=both already named', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=both', '--role=server']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--role names server twice');
+  });
+
+  it('refuses a component that is not a role, naming the three that are', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=worker@1.0.0']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unknown role "worker"');
+    expect(result.stderr).toContain('hub, server, both');
+  });
+
+  /**
+   * `cli` and `web` are components and neither is a role, and somebody typing
+   * one has a reasonable idea and the wrong word for it -- so they get their
+   * own answer rather than falling through to "unknown role".
+   */
+  it.each(['cli', 'web'])('says why --role=%s is not a role', (component) => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', `--role=${component}`]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`"${component}" is not a role`);
+    expect(result.stderr).toContain('--package-version=<version>');
+  });
+
+  it('refuses a pin with nothing after the @, which is usually an unset variable', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=hub@']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('nothing after it');
+    expect(result.stderr).toContain('--role=hub@1.4.0');
+  });
+
+  /**
+   * The one place this grammar is narrower than an npm range, and it is
+   * narrower because delivery changed. A pin names the release tag
+   * `hub-v1.3.0`; there is no registry to resolve `1.3` against and no
+   * per-version history to resolve it from, so accepting it would mean either
+   * guessing which release was meant or building a URL that 404s partway
+   * through an install.
+   */
+  it.each(['1.3', 'latest', '^1.3.0', '1.3.x'])('refuses the pin %s, which names no tag', (pin) => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', `--role=hub@${pin}`]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`"${pin}" is not a version this can install`);
+    expect(result.stderr).toContain('hub-v<version>');
+  });
+
+  it('refuses the same shape on --package-version', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--package-version=1.3']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('is not a version this can install');
+  });
+
+  /**
+   * The role is a property of the machine and the pins are a choice made at
+   * install time, so the settings file keeps recording the one and never the
+   * other. A machine reinstalled from this file has to come back as the same
+   * machine, not at the versions somebody happened to pin two years ago.
+   */
+  it('records the role in the settings file and never the pins', () => {
+    const { home, result, contents } = environmentFileWritten(() => [
+      '--role=hub@1.3.0',
+      '--role=server@1.4.0',
+    ]);
+
+    expect(result.status).toBe(0);
+    const written = contents(join(home, '.agentplex', 'agentplex.env'));
+    expect(written).toContain('AGENTPLEX_ROLE=both');
+    expect(written).not.toContain('1.3.0');
+    expect(written).not.toContain('1.4.0');
+  });
+
+  /** Two components named one at a time is the same machine as `both`. */
+  it('records both when hub and server were named separately', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=hub', '--role=server']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toBe(
+      `${packageSpecs('both')} into ${home}/.agentplex`,
+    );
+    expect(result.stdout).toMatch(/setup\s+(would run .*--role=both|not run: no terminal)/);
+  });
+});
+
+describe('the versions manifest, which is read off the network and parsed', () => {
+  it('names every component it resolved, its versions, and where they came from', () => {
+    const { script, home, versions } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(planned(result.stdout, 'release')).toBe(
+      `cli 1.4.0, hub 1.2.0, web 1.1.0 (from ${versions}/versions.json)`,
+    );
+    expect(planned(result.stdout, 'protocol')).toContain(`${FIXTURE_PROTOCOL},`);
+  });
+
+  it('refuses something that is not a JSON object at all', () => {
+    const { script, home, versions } = scratch();
+    writeFileSync(join(versions, 'versions.json'), 'not json\n');
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('is not a versions manifest');
+  });
+
+  /**
+   * A missing entry is a release that did not finish, and the machine that
+   * carried on would install three quarters of a set. `web` is the one to ask
+   * about: it is not a role, so nobody typed it, and it is exactly the entry a
+   * reader would be tempted to treat as optional.
+   */
+  it('refuses a manifest missing a component this machine installs', () => {
+    const { script, home, versions } = scratch();
+    const { web: _web, ...withoutWeb } = CURRENT;
+    writeVersions(versions, withoutWeb);
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('names no web');
+  });
+
+  it.each([
+    ['a version that is not one', { cli: 'latest', hub: '1.2.0', web: '1.1.0' }, 'not a version'],
+  ])('refuses %s', (_name, entries, message) => {
+    const { script, home, versions } = scratch();
+    writeVersions(versions, entries);
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+  });
+
+  it('refuses an entry with no protocol number', () => {
+    const { script, home, versions } = scratch();
+    writeFile(
+      join(versions, 'versions.json'),
+      JSON.stringify({
+        cli: { version: '1.4.0' },
+        hub: { version: '1.2.0', protocol: FIXTURE_PROTOCOL },
+        web: { version: '1.1.0', protocol: FIXTURE_PROTOCOL },
+      }),
+    );
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('no protocol number');
+  });
+
+  /**
+   * The tripwire, and the reason it is a tripwire rather than a resolver. A
+   * protocol change releases every affected component together, so the entries
+   * always agree; a set that does not is a release process that broke, and
+   * working out "the newest set that happens to agree" would paper over exactly
+   * the mistake this is here to report.
+   */
+  it('refuses a set whose components disagree, naming both numbers', () => {
+    const { script, home, versions } = scratch();
+    writeVersions(versions, CURRENT, { hub: FIXTURE_PROTOCOL + 1 });
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`cli speaking protocol ${FIXTURE_PROTOCOL}`);
+    expect(result.stderr).toContain(`hub speaking protocol ${FIXTURE_PROTOCOL + 1}`);
+    expect(result.stderr).toContain('nothing has been installed');
+  });
+
+  /**
+   * Asked of what this machine installs and not of the whole manifest. A hub
+   * install refused because the `server` entry disagrees would be refusing over
+   * a package this machine will never download.
+   */
+  it('ignores a disagreement in a component this machine does not install', () => {
+    const { script, home, versions } = scratch();
+    writeVersions(versions, CURRENT, { server: FIXTURE_PROTOCOL + 1 });
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(0);
+  });
+
+  /**
+   * The rule `ensure_node` already keeps about the Node release file. "Would
+   * install 1.4.0" is a claim a run that performed no download cannot make, so
+   * the plan says the question went unasked instead of printing a guess.
+   */
+  it('asks nothing at all in a dry run with nowhere local to read it from', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=hub'], {
+      environment: { AGENTPLEX_VERSIONS: '' },
+    });
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'release')).toContain('a dry run downloads nothing');
+    expect(planned(result.stdout, 'protocol')).toContain('not checked');
+    // No URL was invented for a version this run never learned.
+    // No URL was built for a version this run never learned: the download root
+    // is named, and no tag inside it is.
+    expect(planned(result.stdout, 'package')).not.toContain('-v');
+    expect(planned(result.stdout, 'package')).toContain('cli hub web from');
+  });
+
+  /**
+   * Nothing to resolve, so nothing is read. The manifest describes what is
+   * current, and a run that asked for something else has nothing to learn from
+   * it.
+   */
+  it('is not read when every component this machine installs is pinned', () => {
+    const { script, home, versions } = scratch();
+    writeReleaseMetadata(versions, 'cli', '1.2.3');
+    writeReleaseMetadata(versions, 'server', '1.4.0');
+    rmSync(join(versions, 'versions.json'));
+
+    const result = run(script, home, [
+      '--dry-run',
+      '--role=server@1.4.0',
+      '--package-version=1.2.3',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'release')).toContain('every component pinned');
+    expect(planned(result.stdout, 'package')).toBe(
+      `${packageSpecs('server', { cli: '1.2.3', server: '1.4.0' })} into ${home}/.agentplex`,
+    );
+  });
+});
+
+describe('the protocol a pinned release speaks, checked before anything is installed', () => {
+  /**
+   * The judgement call in this grammar. `versions.json` describes what is
+   * current and a pin is by definition a request for something else, so the
+   * only place a pinned release's protocol exists is at its own tag. Installing
+   * first and checking after ends at the machine this is trying to prevent: a
+   * hub and a server that are installed, running and unable to pair.
+   */
+  it('refuses a pinned component that speaks a different protocol', () => {
+    const { script, home, versions } = scratch();
+    writeReleaseMetadata(versions, 'hub', '1.3.0', FIXTURE_PROTOCOL + 1);
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`cli speaking protocol ${FIXTURE_PROTOCOL}`);
+    expect(result.stderr).toContain(`hub speaking protocol ${FIXTURE_PROTOCOL + 1}`);
+  });
+
+  /**
+   * A pin naming a release nobody published is the other thing this catches,
+   * and it catches it before the first tarball rather than at a 404 partway
+   * through an npm install.
+   */
+  it('stops when the pinned release has no metadata beside it', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=hub@9.9.9']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`hub-v9.9.9/${metadataAsset(HUB)}`);
+  });
+
+  /** Metadata served from the wrong tag parses perfectly and describes something else. */
+  it('refuses metadata describing another component', () => {
+    const { script, home, versions } = scratch();
+    writeFile(
+      releaseMetadataPath(versions, 'hub', '1.3.0'),
+      JSON.stringify({ component: 'server', version: '1.3.0', protocol: FIXTURE_PROTOCOL }),
+    );
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('describes the server component');
+  });
+});
+
+describe('the release assets, which two directories have to agree about', () => {
+  /**
+   * The script builds a download URL out of a component and an asset name, and
+   * the assembler decides what that asset is called. Neither can read the
+   * other, so the tie is a test: a rename in `assemble-package.ts` fails here
+   * rather than at a 404 on somebody's machine.
+   */
+  it.each(PACKAGES.map((target) => [target.component, target.asset] as const))(
+    'builds the %s URL against the asset the assembler names',
+    (component, asset) => {
+      expect(releaseUrl(component, '1.0.0')).toContain(`/${component}-v1.0.0/${asset}`);
+    },
+  );
+
+  it('reads the pinned metadata at the path the release publishes it at', () => {
+    const { script, home, versions } = scratch();
+    writeReleaseMetadata(versions, 'hub', '1.3.0');
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
+
+    expect(result.status).toBe(0);
+    // Written at the assembler's own name for the metadata asset, inside the
+    // tag directory -- which is the shape of the published URL with the host
+    // taken off the front.
+    expect(existsSync(join(versions, 'hub-v1.3.0', metadataAsset(HUB)))).toBe(true);
   });
 });
 

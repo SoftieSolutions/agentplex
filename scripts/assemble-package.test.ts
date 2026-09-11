@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { PROTOCOL_VERSION } from '@agentplex/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assemblePackage,
@@ -12,12 +13,14 @@ import {
   DAEMONS,
   ENTRYPOINT,
   HUB,
+  metadataAsset,
   missingInputs,
   PACKAGES,
   parseManifest,
   publishedManifest,
+  releaseDescription,
+  releaseFromTag,
   SERVER,
-  versionFromTag,
   WEB,
   type Manifest,
   type PackageTarget,
@@ -610,36 +613,130 @@ describe('bundledManifest', () => {
   });
 });
 
-describe('versionFromTag', () => {
-  it('takes the version out of a release tag', () => {
-    expect(versionFromTag('v1.2.3')).toBe('1.2.3');
+describe('releaseFromTag', () => {
+  it('takes the component and the version out of a release tag', () => {
+    expect(releaseFromTag('cli-v1.4.0')).toEqual({ component: 'cli', version: '1.4.0' });
+    expect(releaseFromTag('hub-v1.2.0')).toEqual({ component: 'hub', version: '1.2.0' });
+    expect(releaseFromTag('server-v1.5.0')).toEqual({ component: 'server', version: '1.5.0' });
+    expect(releaseFromTag('web-v1.1.0')).toEqual({ component: 'web', version: '1.1.0' });
   });
 
   /**
    * A prerelease is the tag somebody reaches for first, because the first real
    * publish of a package nobody has installed is exactly where one wants a
-   * version npm will not hand to `@latest`. Refusing it would make the
+   * version no unpinned install will resolve to. Refusing it would make the
    * cautious path the unsupported one.
    */
   it('keeps a prerelease and its build metadata', () => {
-    expect(versionFromTag('v1.2.3-rc.1')).toBe('1.2.3-rc.1');
-    expect(versionFromTag('v1.2.3-rc.1+build.5')).toBe('1.2.3-rc.1+build.5');
+    expect(releaseFromTag('cli-v1.2.3-rc.1')).toEqual({
+      component: 'cli',
+      version: '1.2.3-rc.1',
+    });
+    expect(releaseFromTag('cli-v1.2.3-rc.1+build.5')).toEqual({
+      component: 'cli',
+      version: '1.2.3-rc.1+build.5',
+    });
   });
 
   /**
-   * The workflow triggers on `v*`, so the `v` is what makes a tag a release
-   * tag rather than a branch name somebody tagged. A bare `1.2.3` never
-   * triggers the workflow at all; if it somehow arrives here it is not the
-   * thing this publishes.
+   * The split is at the first `-v` and not the last, so a prerelease
+   * identifier that happens to contain one is still a release of the component
+   * in front of it rather than a tag naming a component called `cli-v1.0.0`.
    */
-  it('refuses a tag without the v, naming what it got', () => {
-    expect(() => versionFromTag('1.2.3')).toThrow('1.2.3');
+  it('splits at the first -v, so a prerelease may carry another', () => {
+    expect(releaseFromTag('cli-v1.0.0-v.1')).toEqual({ component: 'cli', version: '1.0.0-v.1' });
   });
 
-  it('refuses a tag that is not a version', () => {
-    expect(() => versionFromTag('vlatest')).toThrow('vlatest');
-    expect(() => versionFromTag('v1.2')).toThrow('v1.2');
-    expect(() => versionFromTag('v01.2.3')).toThrow('v01.2.3');
+  /**
+   * The shape the previous release used, when a tag named a version and four
+   * packages were cut from it. It names no component, so it is not a release
+   * this can assemble -- and the workflow no longer triggers on it either.
+   */
+  it('refuses a tag that names only a version', () => {
+    expect(() => releaseFromTag('v1.4.0')).toThrow('"v1.4.0"');
+    expect(() => releaseFromTag('1.4.0')).toThrow('"1.4.0"');
+  });
+
+  it('refuses a tag naming something that is not a component, and quotes it', () => {
+    expect(() => releaseFromTag('bogus-v1.0.0')).toThrow('"bogus-v1.0.0"');
+    expect(() => releaseFromTag('bogus-v1.0.0')).toThrow('cli, hub, server, web');
+  });
+
+  it('refuses a component tagged at something that is not a version', () => {
+    expect(() => releaseFromTag('hub-vlatest')).toThrow('"hub-vlatest"');
+    expect(() => releaseFromTag('hub-v1.2')).toThrow('"hub-v1.2"');
+    expect(() => releaseFromTag('hub-v01.2.3')).toThrow('"hub-v01.2.3"');
+  });
+});
+
+describe('what a published manifest says about the protocol', () => {
+  /**
+   * The fact four release trains rest on. Every published manifest carries the
+   * compiled constant, so a component's protocol is a property of the artifact
+   * rather than of the workflow that built it -- which is what lets
+   * `install.sh` refuse a set that does not agree before it installs any of it.
+   */
+  it.each(PACKAGES.map((target) => [target.component, target] as const))(
+    'writes PROTOCOL_VERSION into the %s manifest',
+    (_component, target) => {
+      expect(manifestFor(target)['agentplex']).toEqual({ protocol: PROTOCOL_VERSION });
+    },
+  );
+
+  /**
+   * The client declares nothing at all and still declares this. It is the one
+   * package with no dependency set to carry the protocol in, and it is exactly
+   * the package a later `agentplex update web` would replace on its own -- so
+   * it is the one whose protocol most needs stating.
+   */
+  it('states it on the client too, which declares nothing else', () => {
+    const manifest = manifestFor(WEB);
+    expect(manifest['dependencies']).toEqual({});
+    expect(manifest['agentplex']).toEqual({ protocol: PROTOCOL_VERSION });
+  });
+});
+
+describe('the assets a release publishes', () => {
+  /**
+   * Stable names, which is the constraint GitHub imposes rather than a
+   * preference: `releases/latest/download/<asset>` substitutes the tag and
+   * copies the file name through verbatim, so a version in the name is a name
+   * no URL can be written against. `npm pack` produces the version-stamped
+   * name and the workflow renames on upload.
+   */
+  it('names one stable tarball per component', () => {
+    expect(PACKAGES.map((target) => [target.component, target.asset])).toEqual([
+      ['cli', 'agentplex.tgz'],
+      ['hub', 'agentplex-hub.tgz'],
+      ['server', 'agentplex-server.tgz'],
+      ['web', 'agentplex-web.tgz'],
+    ]);
+  });
+
+  it('names the metadata beside each tarball after it', () => {
+    expect(PACKAGES.map(metadataAsset)).toEqual([
+      'agentplex.json',
+      'agentplex-hub.json',
+      'agentplex-server.json',
+      'agentplex-web.json',
+    ]);
+  });
+
+  /**
+   * What the workflow reads instead of knowing which directory holds which
+   * component. Everything here is a fact this module already had, and a copy of
+   * any of it in a YAML file is a copy that can be wrong.
+   */
+  it('describes a release with everything the workflow would otherwise repeat', () => {
+    expect(releaseDescription(HUB, '1.2.0')).toEqual({
+      component: 'hub',
+      version: '1.2.0',
+      protocol: PROTOCOL_VERSION,
+      package: '@softiesolutions/agentplex-hub',
+      directory: 'apps/hub/release',
+      asset: 'agentplex-hub.tgz',
+      metadataAsset: 'agentplex-hub.json',
+    });
   });
 });
 

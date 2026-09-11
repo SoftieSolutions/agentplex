@@ -274,6 +274,9 @@ importers:
 
   scripts:
     devDependencies:
+      '@agentplex/protocol':
+        specifier: workspace:*
+        version: link:../packages/protocol
       '@types/node':
         specifier: ^24.10.1
         version: 24.13.3
