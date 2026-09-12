@@ -1,6 +1,9 @@
 export { createProviderRegistry } from './provider-registry.js';
 export type { ProviderLookup, ProviderRegistry } from './provider-registry.js';
 
+export { createRegisteredProviders } from './registered-providers.js';
+export type { RegisteredProvidersDependencies } from './registered-providers.js';
+
 export type {
   AuthProbe,
   AuthState,
