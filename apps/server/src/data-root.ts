@@ -31,7 +31,9 @@ import { DATA_PATH } from './config.js';
  * Scrollback spilled out of memory, and whatever a session accumulates per
  * project: both are this server's own, both have to survive a restart, and
  * nothing else on the machine reads them. They belong here, in a subdirectory
- * each names for itself.
+ * each names for itself. `project-files.ts` is the second of those, and it is
+ * left named here because it passes both questions without amending either: it
+ * is the case this rule was written expecting.
  *
  * This file once listed a third -- the record of which hubs this server has
  * authorized -- and that one turned out to fail the second question rather than
