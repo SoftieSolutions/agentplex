@@ -30,6 +30,8 @@ import {
 import { createFakeTerminals } from './fake-terminals.js';
 import type { TerminalManager } from './terminal-manager.js';
 import { createFakeMachineLoadReader } from './fake-machine-probe.js';
+import { createFakeProjectFiles } from './fake-project-files.js';
+import { createProjectDocs } from './project-docs.js';
 
 /**
  * The terminal frames, end to end against the real server.
@@ -102,6 +104,11 @@ function harness(scrollbackBytes?: number, socketOptions?: FakeMessageSocketOpti
     sessions,
     terminals,
     machineLoad: createFakeMachineLoadReader(),
+    docs: createProjectDocs({
+      dataRoot: '/var/lib/agentplex',
+      files: createFakeProjectFiles(),
+      logger,
+    }),
     logger,
   });
 

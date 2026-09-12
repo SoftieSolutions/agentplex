@@ -78,9 +78,11 @@ import type { DirectoryCreate } from './data-root.js';
  * name is checked here. Nothing outside ever names a folder, so nothing outside
  * can name somebody else's.
  *
- * There is no such request yet. This ticket makes the place and the rule; the
- * frames that read and write through it are their own, and they inherit the
- * rule rather than restating it.
+ * `project-docs.ts` is that request: the three document frames a hub sends,
+ * answered by this server writing into, reading from and listing a folder
+ * derived here. It inherits the rule rather than restating it -- the frame
+ * carries the working tree as a key, the key is derived here, the name is
+ * checked at the protocol, and no path either builds is handed to a process.
  *
  * ## What it is called, and what it is not called
  *
@@ -252,11 +254,20 @@ export function projectKeyFor(workingTree: string): ProjectKeyResult {
  * theirs: errno becomes a value, so the rules above can tell a folder they may
  * make from one they must not without matching on the text of an error.
  *
- * Two methods, because two things happen here and no more. `createDirectory` is
- * the data root's, recursive and contented with a directory already there.
- * `createFile` writes only where no file is, atomically: the note in a folder is
- * written once and never rewritten, and an implementation that reads first and
- * then writes is not this one.
+ * Five methods, one per thing that happens to a project folder and no more.
+ * `createDirectory` is the data root's, recursive and contented with a
+ * directory already there. `createFile` writes only where no file is,
+ * atomically: the note in a folder is written once and never rewritten, and an
+ * implementation that reads first and then writes is not this one. The other
+ * three are the documents': `writeFile` replaces a file whole, `readFile`
+ * reads one back, `listFiles` says what is in a folder.
+ *
+ * Every path handed to any of them was built by `projectPath` and a name the
+ * document parser took, and that is the whole of what keeps them inside the
+ * project root. The seam checks nothing about the path, because it cannot: an
+ * implementation that second-guessed a path would be a second policy to keep
+ * in step with the parser, and the day they disagreed one of them would be
+ * wrong about a file that already exists.
  */
 export type FileCreate =
   | { readonly kind: 'created' }
@@ -264,10 +275,56 @@ export type FileCreate =
   | { readonly kind: 'exists' }
   | { readonly kind: 'failed'; readonly reason: string };
 
+/**
+ * What a whole-file replacement answered.
+ *
+ * Whole, and through a temporary name in the same folder followed by a rename:
+ * a reader that opens the file at any moment sees the old document or the new
+ * one and never the first half of the new one, and a process killed mid-write
+ * leaves a hidden temporary file and an intact document rather than a
+ * truncated document. `updatedAt` is what the filesystem then recorded as
+ * the write time, so the answer to "when was this written" is read off the
+ * disk that will answer it next time rather than off a clock that may not
+ * agree with it.
+ */
+export type FileWrite =
+  | { readonly kind: 'written'; readonly updatedAt: number }
+  | { readonly kind: 'failed'; readonly reason: string };
+
+export type FileRead =
+  | { readonly kind: 'read'; readonly contents: string; readonly updatedAt: number }
+  /** No file at that path. A fact and not a failure: a document nobody has written. */
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'failed'; readonly reason: string };
+
+/** One file in a folder, as the directory listing and a stat of it said. */
+export interface FileEntry {
+  readonly name: string;
+  readonly updatedAt: number;
+  readonly bytes: number;
+}
+
+/**
+ * What a folder holds. Files only: a directory inside a project folder is
+ * nothing this store makes and nothing it lists. An entry that could not be
+ * stat-ed between the listing and the answer costs itself and not the listing,
+ * which is the direction that does not over-claim about a folder somebody is
+ * writing into as it is read.
+ */
+export type FileListing =
+  | { readonly kind: 'listed'; readonly entries: readonly FileEntry[] }
+  /** No folder at that path. A project nobody has written to. */
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'failed'; readonly reason: string };
+
 export interface ProjectFileSystem {
   /** Creates the folder and every parent, and succeeds on one already there. */
   createDirectory(path: string): Promise<DirectoryCreate>;
   createFile(path: string, contents: string): Promise<FileCreate>;
+  /** Replaces the file whole, or makes it. See `FileWrite` for the atomicity. */
+  writeFile(path: string, contents: string): Promise<FileWrite>;
+  readFile(path: string): Promise<FileRead>;
+  listFiles(path: string): Promise<FileListing>;
 }
 
 /**

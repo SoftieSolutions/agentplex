@@ -24,6 +24,7 @@ import {
 import type { GrantAuthority, GrantId, ServerIdentity } from '@agentplex/providers';
 import type { HubAudience, HubMember } from './hub-audience.js';
 import type { MachineLoadReader } from './machine-load.js';
+import type { ProjectDocs } from './project-docs.js';
 import type { SessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
 import {
@@ -176,6 +177,16 @@ export interface HubConnectionDependencies {
    * cpus, and each is told the window its own answer covers.
    */
   readonly machineLoad: MachineLoadReader;
+  /**
+   * The project document store, for the three frames that read and write it.
+   *
+   * The server's rather than the connection's, because the folders are the
+   * machine's: two hubs writing a project's notes are writing one folder,
+   * and the store is what makes the second write replace the first rather
+   * than race it. Nothing on this seam starts a process; see
+   * `project-docs.ts` for why a document write is not an operation.
+   */
+  readonly docs: ProjectDocs;
   readonly logger: Logger;
 }
 
@@ -254,6 +265,7 @@ export function serveHubConnection(
     sessions,
     terminals,
     machineLoad,
+    docs,
     logger,
   }: HubConnectionDependencies,
 ): HubConnection {
@@ -533,6 +545,41 @@ export function serveHubConnection(
         return;
       }
 
+      case 'doc-write': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        // Not awaited, like a start: a write makes a folder and replaces a
+        // file, and awaiting it here would stall every later frame on this
+        // socket behind one disk. The three fields go to the store and
+        // nowhere else -- there is no process for them to reach.
+        void runDocWrite(frame.id, {
+          directory: frame.directory,
+          name: frame.name,
+          content: frame.content,
+        });
+        return;
+      }
+
+      case 'doc-read': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        void runDocRead(frame.id, { directory: frame.directory, name: frame.name });
+        return;
+      }
+
+      case 'doc-list': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        void runDocList(frame.id, { directory: frame.directory });
+        return;
+      }
+
       case 'protocol-error': {
         // The hub could not read something this server sent. There is no reply
         // to an unsolicited error and nothing useful to retry, so it is a log
@@ -775,6 +822,95 @@ export function serveHubConnection(
     // `internal` rather than `refused`: this server broke on its own side, and
     // retrying may work. A refusal would say it understood and declined.
     send({ type: 'session-refused', replyTo, code: 'internal', message, hold: null });
+  }
+
+  /**
+   * The three document frames, each answered on its own socket and to nobody
+   * else.
+   *
+   * Unlike a start or a stop, a document changes what no other hub is
+   * watching -- there is no report to send around, because a document is not
+   * a running thing and the store has no subscribers -- so the answer is the
+   * whole of what happens. A refusal is `session-refused` with `hold: null`:
+   * that frame's contract is "this server said no, and to which frame", and
+   * the terminal frames already answer through it with no session in hand.
+   *
+   * Each catches what the store throws and answers `internal`, for the reason
+   * `runStart` does: a promise that rejected inside a socket handler is an
+   * unhandled rejection and a hub left waiting for an answer that never
+   * comes.
+   */
+  async function runDocWrite(
+    replyTo: FrameId,
+    request: Parameters<ProjectDocs['write']>[0],
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = await docs.write(request);
+    } catch (error) {
+      logger.error('could not write a document', { name: request.name, problem: String(error) });
+      answerFailure(replyTo, 'this server could not write that document');
+      return;
+    }
+    if (state !== 'established') return;
+    if (!outcome.ok) {
+      answerDocRefusal(replyTo, outcome);
+      return;
+    }
+    send({ type: 'doc-written', replyTo, updatedAt: outcome.updatedAt });
+  }
+
+  async function runDocRead(
+    replyTo: FrameId,
+    request: Parameters<ProjectDocs['read']>[0],
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = await docs.read(request);
+    } catch (error) {
+      logger.error('could not read a document', { name: request.name, problem: String(error) });
+      answerFailure(replyTo, 'this server could not read that document');
+      return;
+    }
+    if (state !== 'established') return;
+    if (!outcome.ok) {
+      answerDocRefusal(replyTo, outcome);
+      return;
+    }
+    send({ type: 'doc-content', replyTo, content: outcome.content, updatedAt: outcome.updatedAt });
+  }
+
+  async function runDocList(
+    replyTo: FrameId,
+    request: Parameters<ProjectDocs['list']>[0],
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = await docs.list(request);
+    } catch (error) {
+      logger.error('could not list a project', { problem: String(error) });
+      answerFailure(replyTo, 'this server could not list that project');
+      return;
+    }
+    if (state !== 'established') return;
+    if (!outcome.ok) {
+      answerDocRefusal(replyTo, outcome);
+      return;
+    }
+    send({ type: 'doc-listing', replyTo, entries: [...outcome.entries] });
+  }
+
+  function answerDocRefusal(
+    replyTo: FrameId,
+    refusal: { readonly code: 'refused' | 'internal'; readonly problem: string },
+  ): void {
+    send({
+      type: 'session-refused',
+      replyTo,
+      code: refusal.code,
+      message: refusal.problem,
+      hold: null,
+    });
   }
 
   /**
