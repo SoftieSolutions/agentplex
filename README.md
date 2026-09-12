@@ -115,19 +115,20 @@ pnpm docker:check   # the same, in a container
 
 Every setting has one flag and one environment variable; the flag wins.
 
-| Flag                     | Environment                      | Default        | Meaning                                                  |
-| ------------------------ | -------------------------------- | -------------- | -------------------------------------------------------- |
-| `--role`                 | `AGENTPLEX_ROLE`                 | none, required | `hub`, `server` or `both`                                |
-| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`      | Interface to bind                                        |
-| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`         | Port the hub serves on                                   |
-| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`         | Port the hub dials                                       |
-| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none           | SQLite file, absolute; required for `hub` and `both`     |
-| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none           | Client credential, 32+ chars; required for `hub`, `both` |
-| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none           | Store root; repeatable, absolute                         |
-| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none           | Absolute; required for `server` and `both`               |
-| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none           | Agent directory, searched before `PATH`; repeatable      |
-| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`            | Terminals held at once; at least 1                       |
-| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`         | `debug`, `info`, `warn`, `error`                         |
+| Flag                     | Environment                      | Default            | Meaning                                                  |
+| ------------------------ | -------------------------------- | ------------------ | -------------------------------------------------------- |
+| `--role`                 | `AGENTPLEX_ROLE`                 | none, required     | `hub`, `server` or `both`                                |
+| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`          | Interface to bind                                        |
+| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`             | Port the hub serves on                                   |
+| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`             | Port the hub dials                                       |
+| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none               | SQLite file, absolute; required for `hub` and `both`     |
+| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none               | Client credential, 32+ chars; required for `hub`, `both` |
+| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none               | Store root; repeatable, absolute                         |
+| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none               | Absolute; required for `server` and `both`               |
+| `--data-path`            | `AGENTPLEX_DATA_PATH`            | `$HOME/.agentplex` | Absolute; the one directory a server writes into         |
+| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none               | Agent directory, searched before `PATH`; repeatable      |
+| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                | Terminals held at once; at least 1                       |
+| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`             | `debug`, `info`, `warn`, `error`                         |
 
 ### Checking a machine
 
@@ -166,6 +167,12 @@ and a session outlives the tab that opened it — except stopping the server.
 A store is identified by an `agentplex-store.json` file at its root, minted the
 first time a server mounts it. Two servers mounting the same volume report the
 same store, and moving the volume takes its sessions with it.
+
+Everything a server writes for itself goes under `--data-path`, one directory
+per server, created at boot. A store path is a provider's directory and is only
+read; the data root is the server's own, and a server that cannot create it or
+cannot write in it refuses to start rather than losing what it was keeping
+there. A store that is missing is reported and costs only itself.
 
 ## Contributing
 

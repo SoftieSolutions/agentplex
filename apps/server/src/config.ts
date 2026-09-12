@@ -1,7 +1,9 @@
+import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import {
   DEFAULT_SERVER_PORT,
   LOG_LEVELS,
+  nonEmpty,
   readAbsolutePath,
   readAbsolutePaths,
   readFlags,
@@ -73,6 +75,23 @@ export interface ServerConfig {
    */
   readonly identityPath: string;
   /**
+   * The one directory this server writes into: absolute, created at boot, and
+   * refused rather than worked around when it cannot be.
+   *
+   * `data-root.ts` holds the rule for what may go under it and the argument
+   * for every part of that -- including why the identity file above did not
+   * fold into it, and why an absent store path is reported while an absent
+   * data root stops the start. This is only where the path comes from.
+   *
+   * It has a default, which the identity file deliberately does not, and the
+   * difference is what the two are for. The identity file is the machine's
+   * name and secret, and a default would be a machine paired under a file
+   * nobody chose. The data root is a working directory: every install already
+   * has a place for one, the default is that place, and being wrong about it
+   * costs a move rather than an identity.
+   */
+  readonly dataPath: string;
+  /**
    * How many terminals this server may hold at once.
    *
    * Configuration rather than a constant because it is a statement about the
@@ -120,6 +139,35 @@ const MISSING_IDENTITY_FILE =
   'set AGENTPLEX_SERVER_IDENTITY_FILE or pass --server-identity-file (an absolute path)';
 
 /**
+ * The data root's setting, named here and exported because the module that
+ * owns the directory has to name it too: every refusal `ensureDataRoot`
+ * produces tells the operator which setting to change, and a second spelling
+ * of it there would be a message pointing at a variable that does not exist.
+ */
+export const DATA_PATH = { flag: '--data-path', env: 'AGENTPLEX_DATA_PATH' } as const;
+
+/**
+ * What the data root falls back to under the account's home.
+ *
+ * The same directory an install already owns: a plain `install.sh` run puts
+ * the prefix at `$HOME/.agentplex` and makes that the state directory too, so
+ * on the tier most machines are, the default is where everything else about
+ * agentplex on that machine already is.
+ *
+ * On the `--system` tier the account's home is `/var/lib/agentplex` -- the
+ * state directory the installer created for it, not `/opt/agentplex`, which is
+ * root-owned runtime the account may not write to. Defaulting off the home
+ * rather than off `AGENTPLEX_PREFIX` is what keeps those two apart: the prefix
+ * is where the programs live and the home is where the account's own files go,
+ * and AGX-158 separated them on purpose.
+ */
+const DEFAULT_DATA_DIRECTORY = '.agentplex';
+
+const MISSING_DATA_PATH =
+  'a server needs one directory of its own to write into, and this machine has no HOME ' +
+  'to default one from: set AGENTPLEX_DATA_PATH or pass --data-path (an absolute path)';
+
+/**
  * Each setting has one flag and one env var. Flags win, because a flag is
  * typed by a person at the moment they mean it and an env var is inherited.
  *
@@ -140,6 +188,7 @@ const SETTINGS = {
     flag: '--server-identity-file',
     env: 'AGENTPLEX_SERVER_IDENTITY_FILE',
   },
+  dataPath: DATA_PATH,
   terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
   /**
    * Takes `true` or `false` rather than being a bare presence flag, which
@@ -205,7 +254,11 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
 
   const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), problems);
 
-  if (identityPath === undefined || problems.length > 0) return { ok: false, problems };
+  const dataPath = readDataPath(read(SETTINGS.dataPath), env, problems);
+
+  if (identityPath === undefined || dataPath === undefined || problems.length > 0) {
+    return { ok: false, problems };
+  }
 
   return {
     ok: true,
@@ -216,10 +269,54 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
       storePaths,
       binPath,
       identityPath,
+      dataPath,
       terminalCap,
       announce,
     },
   };
+}
+
+/**
+ * The data root: what was configured, or the default under the account's home.
+ *
+ * `HOME` is read here rather than treated as a setting, because it is not one:
+ * nothing in agentplex sets it, it is what the account the daemon runs as
+ * already has, and both tiers of install arrange for it to be the right
+ * answer. A user unit inherits the operator's; the system unit carries
+ * `User=`, and systemd sets `HOME` from the account database, whose entry
+ * `install.sh` created with the state directory as its home.
+ *
+ * When there is no home the configuration is refused rather than guessed at.
+ * That refusal is the whole reason defaulting from an inherited variable is
+ * safe: the failure mode of a wrong guess here is a server that writes its
+ * state somewhere nobody named and loses it, and the failure mode of an absent
+ * one is a sentence naming the setting, printed before anything starts.
+ */
+function readDataPath(
+  raw: string | undefined,
+  env: Readonly<Record<string, string | undefined>>,
+  problems: string[],
+): string | undefined {
+  if (raw !== undefined) return readAbsolutePath(raw, SETTINGS.dataPath.flag, problems);
+
+  const home = nonEmpty(env['HOME']);
+  if (home === undefined) {
+    problems.push(MISSING_DATA_PATH);
+    return undefined;
+  }
+  if (!isAbsolute(home)) {
+    // Refused rather than resolved, for the reason every path here is: a
+    // relative HOME would put this server's state under whatever directory a
+    // unit file or an image left the process in, which is a different
+    // directory the next time it starts.
+    problems.push(
+      `HOME is ${JSON.stringify(home)}, which is not an absolute path, so there is no default ` +
+        `data root: set ${SETTINGS.dataPath.env} or pass ${SETTINGS.dataPath.flag}`,
+    );
+    return undefined;
+  }
+
+  return readAbsolutePath(join(home, DEFAULT_DATA_DIRECTORY), SETTINGS.dataPath.flag, problems);
 }
 
 /**
