@@ -10,7 +10,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { createFakeMessageSocket, PEER_GONE } from '@agentplex/node-shared/testing';
-import { createLogger, CLOSE_POLICY } from '@agentplex/node-shared';
+import { createLogger, CLOSE_NORMAL, CLOSE_POLICY } from '@agentplex/node-shared';
 import { serveHubConnection } from './hub-connection.js';
 import type { ServerIdentity } from '@agentplex/providers';
 import { createFakeSessionController } from './fake-session-controller.js';
@@ -308,6 +308,45 @@ describe('serveHubConnection', () => {
     connection.announceDraining(15_000, []);
 
     expect(socket.sent).toHaveLength(0);
+  });
+
+  it('ends the connection when the facts it handshook with have changed', async () => {
+    // Not an error and not a shutdown: a normal close, because the connection
+    // was fine and the only thing wrong with it is that the handshake on it is
+    // out of date. The hub dials again by itself and reads the fresh one.
+    const { socket, connection } = connect();
+    socket.receive(handshake());
+    await settle();
+
+    connection.rehandshake('this server has re-read its providers');
+
+    expect(socket.closure).toEqual({
+      code: CLOSE_NORMAL,
+      reason: 'this server has re-read its providers',
+    });
+    expect(connection.state).toBe('closed');
+  });
+
+  it('leaves a peer that has not handshaken alone when the facts change', () => {
+    // There is nothing to re-handshake: this socket has never been told
+    // anything about this machine, so there is no stale fact on it to correct.
+    const { socket, connection } = connect();
+
+    connection.rehandshake('this server has re-read its providers');
+
+    expect(socket.closure).toBeNull();
+  });
+
+  it('does not close a connection twice when the facts change after it has gone', async () => {
+    const { socket, connection } = connect();
+    socket.receive(handshake());
+    await settle();
+    socket.closeFromPeer(PEER_GONE);
+    await settle();
+
+    connection.rehandshake('this server has re-read its providers');
+
+    expect(socket.closure).toEqual(PEER_GONE);
   });
 
   it('says nothing to a hub that has already gone', async () => {

@@ -1757,6 +1757,23 @@ render_unit() {
   # is not one. Nothing replaces it: both daemons dial out and retry, so there
   # is nothing here for an ordering to buy.
   local network_ordering=''
+  # `systemctl reload agentplex-server` -> SIGHUP -> the server asks this
+  # machine again what its providers are, and tells the hubs if the answer
+  # moved. It is here for the operator who has just installed a coding agent or
+  # just logged one in on a box that is already running: without it the fleet
+  # goes on reporting what was true at boot until somebody restarts the
+  # service, which drops every session on the machine to publish a fact.
+  #
+  # The server only. The hub reads no providers, so there is nothing for it to
+  # re-read -- and a SIGHUP to a Node process with no listener for it is a
+  # process that exits, so a line that offered `reload` on the hub would be a
+  # verb that restarts it. A unit with no ExecReload refuses `reload` and says
+  # so, which is the honest answer for a daemon that has nothing to reload.
+  local reload=''
+  if [ "$daemon" = 'server' ]; then
+    reload='ExecReload=/bin/kill -HUP $MAINPID
+'
+  fi
   if [ "$UNIT_SCOPE" = 'system' ]; then
     install_target='multi-user.target'
     identity="User=$SERVICE_USER
@@ -1791,7 +1808,7 @@ EnvironmentFile=$ENV_FILE
 # of the machine rather than instead of it.
 Environment=PATH=$(unit_search_path)
 ExecStart=$(daemon_command "$daemon")
-Restart=on-failure
+${reload}Restart=on-failure
 RestartSec=5s
 # Exit 2 is the daemon saying the configuration is wrong. Restarting will not
 # help and the operator has to act, so the unit stops instead of hiding the

@@ -1,5 +1,6 @@
 import {
   PROTOCOL_VERSION,
+  sameReadiness,
   type ProviderReadiness,
   type ServerId,
   type StoreDescriptor,
@@ -73,6 +74,13 @@ export interface SessionServerDependencies {
    * reconfigured underneath a running service, which is not the failure this is
    * for. The failure it is for is a machine that was never provisioned, and
    * that one is true at boot and stays true.
+   *
+   * That is still the rule, and `refreshReadiness` does not reopen it. What it
+   * adds is the case the rule left with no answer at all: the operator who has
+   * just installed the provider, or just logged it in, and now wants the fleet
+   * to know. A probe nobody asked for is the cost this paragraph refuses; a
+   * probe an operator asked for is a probe somebody is waiting on. So the
+   * trigger is a person and never a clock, a session, or a hub.
    */
   readonly preflight: ProviderPreflight;
   readonly clock: Clock;
@@ -136,8 +144,33 @@ export interface SessionServer {
   readonly serverId: ServerId;
   /** The stores this server can speak for. A store it could not read is not in here. */
   readonly stores: readonly StoreDescriptor[];
-  /** What each provider turned out to be at boot, as every hub is told. */
+  /**
+   * What each provider turned out to be when this server last looked, as every
+   * hub is told.
+   *
+   * At boot, unless somebody has asked for a re-read since. There is no age on
+   * it, for the reason `store-report` carries no timestamp: what a reading is
+   * worth is a question about this machine's clock, and the one answer that
+   * would not need a clock -- "this is current" -- is the one thing it must
+   * never claim.
+   */
   readonly providers: readonly ProviderReadiness[];
+  /**
+   * Asks this machine again what its providers are, and tells every hub that
+   * holds an answer if it changed.
+   *
+   * The one thing here that spends child processes without a hub or a user
+   * having asked for a session, which is why nothing calls it but a signal an
+   * operator sent. It never rejects: it is reached from a signal handler, and a
+   * rejection there is an unhandled one.
+   *
+   * Returns the reading this server now holds -- the fresh one when the probe
+   * answered, and the one it already had when the probe did not. A failed
+   * refresh writes nothing, because the alternative is reporting that every
+   * provider went `unknown` on a machine where nothing changed but this
+   * server's ability to run a probe.
+   */
+  refreshReadiness(): Promise<readonly ProviderReadiness[]>;
   /**
    * Drains and then stops: no new sessions, every turn given until the budget
    * runs out to reach a boundary, and then whatever is left is killed anyway.
@@ -229,11 +262,20 @@ export async function startSessionServer(
   // an unusable provider costs itself. What it must not do is stay quiet about
   // it, because on a pty the same fact arrives later as a session that appears
   // and vanishes.
-  const readiness = await preflight.run(providers);
-  for (const provider of readiness) {
-    if (provider.state === 'ready') continue;
-    logger.warn('provider unusable', { ...provider });
-  }
+  //
+  // `let`, because an operator can ask for it again. Every use of it below
+  // reads it at the moment it is needed rather than capturing it, so a
+  // connection accepted after a re-read hands the hub the reading this server
+  // holds now.
+  const reportUnusable = (reading: readonly ProviderReadiness[]): void => {
+    for (const provider of reading) {
+      if (provider.state === 'ready') continue;
+      logger.warn('provider unusable', { ...provider });
+    }
+  };
+
+  let readiness = await preflight.run(providers);
+  reportUnusable(readiness);
 
   // The one thing here that turns a store id and a provider name into a running
   // agent. It is built once and outlives every hub connection: a socket comes
@@ -333,6 +375,23 @@ export async function startSessionServer(
   });
 
   /**
+   * A re-read in flight, or `null`. Two asks in the same moment are one probe.
+   *
+   * Coalesced rather than queued, because what a second caller wants is a
+   * current reading and that is exactly what the run already in flight is about
+   * to produce. Queueing would turn a signal sent twice into two probes, which
+   * is the cost this whole design is built to keep off any path somebody can
+   * repeat.
+   */
+  let rereading: Promise<readonly ProviderReadiness[]> | null = null;
+
+  /**
+   * Whether `stop` has begun. A re-read after that point probes a machine this
+   * process is about to stop speaking for.
+   */
+  let stopping = false;
+
+  /**
    * The wait between "stop" and "everything is dead".
    *
    * Built here rather than in `stop` so that `stopWaiting` has something to
@@ -357,13 +416,96 @@ export async function startSessionServer(
     port: listener.port,
     serverId: identity.identity.serverId,
     stores,
-    providers: readiness,
+
+    // A getter, because the reading can be taken again. A value captured here
+    // would hand every later caller the answer from boot while the handshakes
+    // carried a different one.
+    get providers(): readonly ProviderReadiness[] {
+      return readiness;
+    },
 
     stopWaiting() {
       drain.stopWaiting();
     },
 
+    refreshReadiness(): Promise<readonly ProviderReadiness[]> {
+      if (stopping) {
+        logger.info('not re-reading providers: this server is shutting down');
+        return Promise.resolve(readiness);
+      }
+      if (rereading !== null) return rereading;
+
+      const run = (async (): Promise<readonly ProviderReadiness[]> => {
+        try {
+          const reading = await preflight.run(providers);
+
+          if (sameReadiness(readiness, reading)) {
+            // The ordinary outcome, and the one that must cost nothing. A hub
+            // holds this fact on its handshake, so redelivering it means ending
+            // a connection -- and ending one to say what the other end already
+            // knows would spend every watcher's subscription on no news.
+            logger.info('providers re-read; nothing changed', {
+              providers: reading.map(({ provider, state }) => `${provider}:${state}`),
+            });
+            return readiness;
+          }
+
+          if (stopping) {
+            // A shutdown began while this was probing. The hubs have been told
+            // this server is draining and their sockets stay up on purpose, so
+            // that a client keeps seeing the last of its agent's output --
+            // ending them now to deliver a fact about a machine that is going
+            // away would take that away for nothing.
+            logger.info('discarding a re-read: this server began shutting down during it');
+            return readiness;
+          }
+
+          readiness = reading;
+          reportUnusable(reading);
+          logger.info('providers re-read; this machine has changed', {
+            providers: reading.map(({ provider, state }) => `${provider}:${state}`),
+          });
+
+          // Every hub holding the old answer, told the only way there is to
+          // tell it: the handshake is where a server states what it is, and a
+          // handshake that is no longer true is a connection to end rather than
+          // a frame to invent. See `hub-connection.ts` for what that costs and
+          // why the sessions do not notice.
+          for (const connection of connections) {
+            if (connection.state === 'closed') {
+              connections.delete(connection);
+              continue;
+            }
+            connection.rehandshake('this server has re-read what its providers are');
+          }
+
+          return readiness;
+        } catch (error) {
+          // The preflight's contract says it never rejects, and this is here
+          // anyway: the caller is a signal handler, where a broken promise is
+          // an unhandled rejection rather than a failed refresh. The reading
+          // this server had stands, which is the direction that does not
+          // over-claim -- nothing was learned, so nothing is reported.
+          logger.error('could not re-read what this machine can run', {
+            problem: String(error),
+          });
+          return readiness;
+        } finally {
+          // Unconditionally, and it cannot clear somebody else's run: a new one
+          // is only ever made while this is `null`, so the run clearing it here
+          // is the only one there has been since it was set.
+          rereading = null;
+        }
+      })();
+
+      rereading = run;
+      return run;
+    },
+
     async stop() {
+      // Before anything slow, so that a re-read racing a shutdown is refused
+      // rather than left probing a machine this process is done speaking for.
+      stopping = true;
       // The beacon first, and before anything slow: every announcement from
       // here on would be inviting a hub to dial a server that is going away.
       beacon?.stop();

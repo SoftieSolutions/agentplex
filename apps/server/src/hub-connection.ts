@@ -15,6 +15,7 @@ import {
 } from '@agentplex/protocol';
 import {
   closure,
+  CLOSE_NORMAL,
   CLOSE_POLICY,
   type MessageSocket,
   type Logger,
@@ -129,6 +130,30 @@ export interface HubConnection {
    * facts about what is running here.
    */
   announceDraining(graceMs: number, sessions: readonly SessionRef[]): void;
+  /**
+   * Ends this connection because what it handshook with is no longer true, so
+   * that the hub dials again and reads the facts afresh.
+   *
+   * A close and not a frame, because of where the facts live. `stores` and
+   * `providers` are stated once, on `handshake-accepted`, and the hub holds
+   * them for the life of the connection; there is no frame on this direction
+   * that revises them, and a server cannot add one to a hub that is already
+   * running. What there is instead is the thing the hub already does well: it
+   * redials on its own, and the first frame it reads is the current answer to
+   * exactly the question that went stale.
+   *
+   * `CLOSE_NORMAL` and a sentence, because nothing is wrong. The sessions this
+   * server is running are untouched -- they outlive every connection, which is
+   * the same property that makes a dropped socket a detach rather than a stop
+   * -- and the cost is the hub's reconnect interval and the subscriptions this
+   * connection held, which the hub takes again with the scrollback replay it
+   * takes on any reattach.
+   *
+   * A connection that has not handshaken is left alone: it holds no fact of
+   * ours to be stale, and closing it would cost a hub mid-handshake a dial for
+   * nothing.
+   */
+  rehandshake(reason: string): void;
 }
 
 /**
@@ -624,6 +649,17 @@ export function serveHubConnection(
     announceDraining(graceMs: number, sessions: readonly SessionRef[]): void {
       if (state !== 'established') return;
       send({ type: 'server-draining', graceMs, sessions: [...sessions] });
+    },
+
+    rehandshake(reason: string): void {
+      if (state !== 'established') return;
+      // Marked closed here rather than left to the close event, for the reason
+      // `refuse` does it: between asking a socket to close and hearing that it
+      // did, nothing on this connection may still be answering as though the
+      // handshake on it stood.
+      state = 'closed';
+      logger.info('ending a hub connection so it re-handshakes', { reason });
+      socket.close(closure(CLOSE_NORMAL, reason));
     },
   };
 }

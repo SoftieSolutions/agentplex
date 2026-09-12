@@ -106,3 +106,37 @@ export function readinessRefusal(readiness: ProviderReadiness): string | null {
       return readiness.problem ?? `that server cannot run ${readiness.provider}`;
   }
 }
+
+/**
+ * Whether two readings of a machine's providers say the same thing.
+ *
+ * Here, beside the schema, for the reason `readinessRefusal` is: a reading is
+ * only worth re-reporting when it differs from the one the other end already
+ * holds, and "differs" has to mean the same thing wherever that question is
+ * asked. Every field is compared, including `version`, `directory` and
+ * `problem` -- a provider that is still `ready` from a different directory is a
+ * different fact about the machine, and it is exactly the fact an operator who
+ * has just changed a search path is looking for.
+ *
+ * Order is part of the comparison rather than something normalised away. A
+ * reading is reported in registration order and is produced by one registry, so
+ * two readings in different orders came from different builds, and calling
+ * those equal would be the one reordering nobody wants hidden.
+ */
+export function sameReadiness(
+  left: readonly ProviderReadiness[],
+  right: readonly ProviderReadiness[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((reading, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      reading.provider === other.provider &&
+      reading.state === other.state &&
+      reading.version === other.version &&
+      reading.directory === other.directory &&
+      reading.problem === other.problem
+    );
+  });
+}
