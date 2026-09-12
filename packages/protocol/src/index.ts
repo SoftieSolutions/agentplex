@@ -77,10 +77,31 @@ export type { ProviderReadiness, ProviderReadinessState } from './readiness.js';
 export {
   sessionDescriptorSchema,
   sessionHoldSchema,
+  sessionStartTagSchema,
   sessionStatusSchema,
   sessionUsageSchema,
 } from './session.js';
-export type { SessionDescriptor, SessionHold, SessionStatus, SessionUsage } from './session.js';
+export type {
+  SessionDescriptor,
+  SessionHold,
+  SessionStartTag,
+  SessionStatus,
+  SessionUsage,
+} from './session.js';
+
+export {
+  decodeTerminalChunk,
+  encodeTerminalChunk,
+  TERMINAL_CHUNK_MAX_CHARS,
+  TERMINAL_INPUT_MAX_CHARS,
+  TERMINAL_MAX_COLS,
+  TERMINAL_MAX_ROWS,
+  terminalChunkSchema,
+  terminalInputSchema,
+  terminalSizeSchema,
+  terminalTargetSchema,
+} from './terminal.js';
+export type { TerminalSize, TerminalTarget } from './terminal.js';
 
 export {
   clientFrameSchema,
