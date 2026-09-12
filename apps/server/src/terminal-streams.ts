@@ -56,13 +56,19 @@ export interface TerminalOutput {
  * before attaching rather than after: that ordering is the one with no gap
  * between the history and the live stream, and it is the ordering
  * `terminal-manager.ts` prescribes for exactly that reason.
+ *
+ * It is a bounded tail and not the session, so it travels with the one number
+ * that says so. An empty `replay` with `droppedBytes` at zero is a session
+ * that has printed nothing; an empty one is otherwise impossible, because the
+ * scrollback never evicts its last chunk. Those two are opposite facts that a
+ * pane cannot tell apart from the bytes alone.
  */
 export interface TerminalAttachment {
   readonly storeId: StoreId;
   readonly sessionId: SessionId | null;
   readonly startId: FrameId | null;
-  /** Whether the beginning of `replay` is gone, so the peer can say so. */
-  readonly truncated: boolean;
+  /** Bytes printed before `replay` begins, so the peer can size what is gone. */
+  readonly droppedBytes: number;
   readonly replay: readonly Uint8Array[];
 }
 
@@ -203,12 +209,12 @@ export function createTerminalStreams({
   const attachmentOf = (
     terminal: Terminal,
     replay: readonly Uint8Array[],
-    truncated: boolean,
+    droppedBytes: number,
   ): TerminalAttachment => ({
     storeId: terminal.storeId,
     sessionId: terminal.session?.sessionId ?? null,
     startId: startIdOf(terminal.terminalId),
-    truncated,
+    droppedBytes,
     replay,
   });
 
@@ -231,14 +237,14 @@ export function createTerminalStreams({
         byTarget.set(key, existing);
         return {
           ok: true,
-          attachment: attachmentOf(terminal, terminal.run.scrollback(), terminal.run.truncated),
+          attachment: attachmentOf(terminal, terminal.run.scrollback(), terminal.run.droppedBytes),
         };
       }
 
       // Read before attaching, and nothing is awaited in between, so no chunk
       // can arrive between the history and the live stream that follows it.
       const replay = terminal.run.scrollback();
-      const truncated = terminal.run.truncated;
+      const droppedBytes = terminal.run.droppedBytes;
 
       const stream: Stream = {
         terminal,
@@ -264,9 +270,10 @@ export function createTerminalStreams({
       logger.info('terminal subscription attached', {
         storeId: terminal.storeId,
         by: target.by,
-        truncated,
+        replayChunks: replay.length,
+        droppedBytes,
       });
-      return { ok: true, attachment: attachmentOf(terminal, replay, truncated) };
+      return { ok: true, attachment: attachmentOf(terminal, replay, droppedBytes) };
     },
 
     unsubscribe(target: TerminalTarget): StreamOutcome {

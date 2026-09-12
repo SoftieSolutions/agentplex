@@ -229,6 +229,35 @@ describe('createPtySupervisor runs', () => {
     expect(decode(started.run.scrollback())).toBe('bbbbcccc');
   });
 
+  it('reports the bytes the scrollback threw away, so a reader can size the gap', () => {
+    // What a client attaching an hour in is owed: not only that it is joining
+    // mid-stream, but how much of the beginning it is not being shown.
+    const { supervisor, factory } = supervisorOver(createFakePtyFactory(), {}, 8);
+    const started = supervisor.launch(launch());
+    if (!started.ok) throw new Error('the launch should have started');
+
+    expect(started.run.droppedBytes).toBe(0);
+
+    factory.last?.emit('aaaa');
+    factory.last?.emit('bbbb');
+    expect(started.run.droppedBytes).toBe(0);
+
+    factory.last?.emit('cccc');
+    expect(started.run.droppedBytes).toBe(4);
+  });
+
+  it('reports nothing dropped for a run that has printed nothing at all', () => {
+    // The opposite fact, and the one a bare flag cannot separate from the
+    // other: an empty replay with nothing dropped is a session that has been
+    // silent, not a session whose history was discarded.
+    const { supervisor } = supervisorOver(createFakePtyFactory(), {}, 8);
+    const started = supervisor.launch(launch());
+    if (!started.ok) throw new Error('the launch should have started');
+
+    expect(started.run.scrollback()).toEqual([]);
+    expect(started.run.droppedBytes).toBe(0);
+  });
+
   it('carries keystrokes and resizes to the pty', () => {
     const { supervisor, factory } = supervisorOver();
     const started = supervisor.launch(launch());

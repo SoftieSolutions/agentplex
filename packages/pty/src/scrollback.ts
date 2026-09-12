@@ -24,13 +24,24 @@ export interface Scrollback {
   chunks(): readonly Uint8Array[];
   /** Bytes currently held. May exceed the cap by at most the newest chunk. */
   readonly bytes: number;
-  /** Bytes dropped over this buffer's life. */
-  readonly dropped: number;
   /**
-   * Whether anything was dropped, so a reader can say "the beginning is gone"
-   * rather than presenting a tail as the whole session.
+   * Bytes dropped over this buffer's life, so a reader can say "the beginning
+   * is gone, and this much of it" rather than presenting a tail as the whole
+   * session.
+   *
+   * A number rather than a flag, and it is the flag as well: `dropped > 0` is
+   * "this is a tail", and nothing else carries that claim, so there is no
+   * second field to fall out of step with this one. What the count buys over a
+   * boolean is the pane's honesty about size -- "showing the last 256 KB of a
+   * session that has printed 40 MB" is a different admission from "the
+   * beginning is gone".
+   *
+   * It is also the only thing separating the two facts a blank pane cannot
+   * separate for itself: an empty buffer with nothing dropped is a session
+   * that has printed nothing, and an empty buffer is otherwise impossible
+   * here, because the whole-chunks rule below never evicts the last chunk.
    */
-  readonly truncated: boolean;
+  readonly dropped: number;
 }
 
 export interface ScrollbackOptions {
@@ -73,10 +84,6 @@ export function createScrollback({ maxBytes }: ScrollbackOptions): Scrollback {
 
     get dropped(): number {
       return dropped;
-    },
-
-    get truncated(): boolean {
-      return dropped > 0;
     },
   };
 }
