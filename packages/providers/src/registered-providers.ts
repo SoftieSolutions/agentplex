@@ -1,4 +1,5 @@
 import { createClaudeAdapter } from './claude-adapter.js';
+import { createCodexAdapter } from './codex-adapter.js';
 import { createNodeProcessProbe } from './node-process-probe.js';
 import type { ProcessRunner } from './operations/process-runner.js';
 import type { ProviderFiles } from './provider-files.js';
@@ -60,5 +61,9 @@ export function createRegisteredProviders({
 }: RegisteredProvidersDependencies): ProviderRegistry {
   return createProviderRegistry([
     createClaudeAdapter({ files, probe: createNodeProcessProbe({ runner }) }),
+    // The line AGX-174 said the next adapter would be. It takes `files` and
+    // nothing else: codex keeps no process registry, so there is no probe to
+    // hand it, and the dependency this function already carried was enough.
+    createCodexAdapter({ files }),
   ]);
 }
