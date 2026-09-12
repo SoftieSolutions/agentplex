@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { frameIdSchema } from './frames.js';
 import { providerSchema, sessionIdSchema, sessionRefSchema } from './identity.js';
 
 /**
@@ -148,3 +149,26 @@ export const sessionHoldSchema = z.object({
   stoppable: z.boolean(),
 });
 export type SessionHold = z.infer<typeof sessionHoldSchema>;
+
+/**
+ * A session a server started, tagged with the start that asked for it.
+ *
+ * The provenance of a spawn, and the thing that makes rebinding exact rather
+ * than heuristic. A `session-start` frame's own id is the start handle; the
+ * server tags the terminal it forked with it, and reports the tag until the
+ * provider has named the session. The reader gets two facts in one place --
+ * "this start is running here" and, on the first report after discovery, "and
+ * it turned out to be this session" -- which is what lets a pending pane
+ * become the real session's pane without guessing by time.
+ *
+ * `sessionId` is `null` for exactly as long as the provider has not written
+ * one. The tag stops being reported once it has been sent with an id: a
+ * handle local to one connection is worth putting on the wire while it is the
+ * only name a session has, and not one report longer.
+ */
+export const sessionStartTagSchema = z.object({
+  /** The id of the `session-start` frame, on the connection that sent it. */
+  startId: frameIdSchema,
+  sessionId: sessionIdSchema.nullable(),
+});
+export type SessionStartTag = z.infer<typeof sessionStartTagSchema>;

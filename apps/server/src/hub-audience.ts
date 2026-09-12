@@ -1,4 +1,4 @@
-import type { ServerToHubFrame, StoreId } from '@agentplex/protocol';
+import type { ServerToHubFrame, SessionStartTag, StoreId } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
 import type { GrantId } from '@agentplex/providers';
 import type { SessionController } from './session-control.js';
@@ -51,6 +51,12 @@ import type { SessionController } from './session-control.js';
  * and it is what stops a permitted action from looking like an unexplained one.
  */
 
+/**
+ * One store's whole view as this server holds it, before any one hub's start
+ * handles are put on it. Everything in here is the same for every hub.
+ */
+type StoreReport = Omit<Extract<ServerToHubFrame, { type: 'store-report' }>, 'starts'>;
+
 /** One connected hub, as this server can reach it. */
 export interface HubMember {
   /**
@@ -63,6 +69,19 @@ export interface HubMember {
   /** The grant this connection authenticated with. What a revocation names. */
   readonly grantId: GrantId;
   send(frame: ServerToHubFrame): void;
+  /**
+   * The start provenance this connection owes the next report of a store.
+   *
+   * Asked of the member rather than carried on the scan, because a start
+   * handle is the id of a frame on *this* socket: it identifies nothing on
+   * another hub's connection, and putting one hub's handles in another hub's
+   * report would name a start that hub never made. So the store is scanned
+   * once for everybody and the tags are taken once per hub, at the moment that
+   * hub's copy is actually sent -- taking them is what stops a start being
+   * reported twice, and a tag consumed by a report that never went out would
+   * be a pairing the hub was never told.
+   */
+  takeStartTags(storeId: StoreId): readonly SessionStartTag[];
   /** Ends this connection, with a reason only an authenticated peer ever reads. */
   close(reason: string): void;
 }
@@ -115,7 +134,7 @@ export function createHubAudience({
    * last one it had, labelled with its age, which is the true state of a store
    * this server could not read just now.
    */
-  const scan = async (storeId: StoreId): Promise<ServerToHubFrame | null> => {
+  const scan = async (storeId: StoreId): Promise<StoreReport | null> => {
     try {
       const report = await sessions.report(storeId);
       if (report === null) return null;
@@ -129,6 +148,11 @@ export function createHubAudience({
       logger.warn('could not report a store', { storeId, problem: String(error) });
       return null;
     }
+  };
+
+  /** One hub's copy of a scan: everybody's facts, and this hub's own starts. */
+  const deliver = (member: HubMember, report: StoreReport): void => {
+    member.send({ ...report, starts: [...member.takeStartTags(report.storeId)] });
   };
 
   return {
@@ -149,13 +173,13 @@ export function createHubAudience({
       // Read after the await, not before: a hub that connected while the store
       // was being scanned is owed this report, and one that left is not there
       // to be sent it.
-      for (const member of [...members]) member.send(frame);
+      for (const member of [...members]) deliver(member, frame);
     },
 
     async reportTo(member: HubMember, storeId: StoreId): Promise<void> {
       const frame = await scan(storeId);
       if (frame === null || !members.has(member)) return;
-      member.send(frame);
+      deliver(member, frame);
     },
 
     disconnect(grantId: GrantId, reason: string): number {

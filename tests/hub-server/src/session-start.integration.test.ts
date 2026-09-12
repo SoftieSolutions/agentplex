@@ -187,6 +187,9 @@ function serveMachine(machine: Machine): DialResult {
     },
     stores,
     providers: machine.providers,
+    // The same terminals the controller starts into: a subscription resolves
+    // a session through the manager that holds the process.
+    terminals: machine.terminals,
     sessions: createSessionController({
       stores,
       providers: createProviderRegistry([adapter]),

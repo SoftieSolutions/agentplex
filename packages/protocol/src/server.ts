@@ -10,7 +10,16 @@ import {
 } from './identity.js';
 import { frameParser } from './parse.js';
 import { providerReadinessSchema } from './readiness.js';
-import { sessionDescriptorSchema, sessionHoldSchema } from './session.js';
+import { sessionDescriptorSchema, sessionHoldSchema, sessionStartTagSchema } from './session.js';
+import {
+  sessionSubscribeFrameSchema,
+  sessionSubscribedFrameSchema,
+  sessionUnsubscribeFrameSchema,
+  sessionUnsubscribedFrameSchema,
+  terminalInputFrameSchema,
+  terminalOutputFrameSchema,
+  terminalResizeFrameSchema,
+} from './terminal.js';
 
 /**
  * The server-facing half of the protocol: hub to paired server.
@@ -81,6 +90,22 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
   }),
+  /**
+   * Watching a session, feeding it, and telling it how big the screen is.
+   *
+   * Defined in `terminal.ts` and put into both directions' unions unchanged,
+   * because these are relayed rather than answered: what a client sends the
+   * hub about a terminal is what the hub sends the server. See that file for
+   * why output is base64 in a JSON frame and input is text.
+   *
+   * They address a session or a start handle and never a terminal, so nothing
+   * here can name a process on this machine. What a subscription buys the peer
+   * is output from a session it could already stop.
+   */
+  sessionSubscribeFrameSchema,
+  sessionUnsubscribeFrameSchema,
+  terminalInputFrameSchema,
+  terminalResizeFrameSchema,
   protocolErrorFrameSchema,
 ]);
 export type HubToServerFrame = z.infer<typeof hubToServerFrameSchema>;
@@ -183,7 +208,28 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
     storeId: storeIdSchema,
     sessions: z.array(sessionDescriptorSchema),
     holding: z.array(sessionHoldSchema),
+    /**
+     * Which of this connection's starts produced which session, for as long as
+     * that is not obvious.
+     *
+     * `holding` cannot carry it: a hold is keyed by session id, and the whole
+     * difficulty is the stretch of time in which a spawned terminal has no
+     * session id to be keyed by. So a freshly spawned terminal appears here,
+     * under the start handle that asked for it, and appears here once more
+     * when discovery names its session -- after which the hub has the pair it
+     * needs and the tag is dropped.
+     *
+     * Present and empty rather than absent on a report with nothing to say, so
+     * that every report has one shape. The handles are ids from this
+     * connection's own frames and mean nothing on another connection, which is
+     * exactly what makes them safe to put here.
+     */
+    starts: z.array(sessionStartTagSchema),
   }),
+  /** The other half of the relay. See `terminal.ts`. */
+  sessionSubscribedFrameSchema,
+  sessionUnsubscribedFrameSchema,
+  terminalOutputFrameSchema,
   protocolErrorFrameSchema,
 ]);
 export type ServerToHubFrame = z.infer<typeof serverToHubFrameSchema>;

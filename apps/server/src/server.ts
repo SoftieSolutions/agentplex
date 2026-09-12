@@ -328,6 +328,10 @@ export async function startSessionServer(
         grants: grants.store,
         audience,
         sessions,
+        // The same terminals the controller starts sessions into. A connection
+        // only ever holds subscriptions to them, and hands those back when the
+        // socket goes; the processes themselves outlive every hub that dials.
+        terminals,
         // Read at connection time rather than captured, so a hub that dials
         // after a store came back reachable is told what is mounted now.
         stores,

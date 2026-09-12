@@ -8,6 +8,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { serveServerEnd } from './server-end.js';
+import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerIdentity } from '@agentplex/providers';
 import {
@@ -70,6 +71,7 @@ describe('handshakeWithServer against a real server', () => {
       stores,
       providers: [readyProvider()],
       sessions: createFakeSessionController(),
+      terminals: createFakeTerminals().terminals,
       logger,
       ...serverOverrides,
     });
@@ -279,6 +281,7 @@ describe('handshakeWithServer', () => {
       stores,
       providers: [readyProvider()],
       sessions: createFakeSessionController(),
+      terminals: createFakeTerminals().terminals,
       logger,
     });
     const timers = createFakeTimers();

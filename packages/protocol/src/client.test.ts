@@ -11,6 +11,7 @@ import {
   storeIdSchema,
 } from './identity.js';
 import { parseTextFrame } from './parse.js';
+import { encodeTerminalChunk } from './terminal.js';
 
 describe('parseClientFrame', () => {
   it('accepts hello with a version', () => {
@@ -212,6 +213,37 @@ describe('client and hub round trips', () => {
     },
     { type: 'pane-layout-request', id: 7 },
     { type: 'pane-layout-save', id: 8, layout: '{"v":1,"root":{"kind":"pane"}}' },
+    {
+      type: 'session-subscribe',
+      id: 9,
+      target: {
+        by: 'session',
+        storeId: storeIdSchema.parse('store-work'),
+        sessionId: sessionIdSchema.parse('session-1'),
+      },
+    },
+    { type: 'session-subscribe', id: 10, target: { by: 'start', startId: 4 } },
+    { type: 'session-unsubscribe', id: 11, target: { by: 'start', startId: 4 } },
+    {
+      type: 'terminal-input',
+      id: 12,
+      target: {
+        by: 'session',
+        storeId: storeIdSchema.parse('store-work'),
+        sessionId: sessionIdSchema.parse('session-1'),
+      },
+      data: 'yes\r',
+    },
+    {
+      type: 'terminal-resize',
+      id: 13,
+      target: {
+        by: 'session',
+        storeId: storeIdSchema.parse('store-work'),
+        sessionId: sessionIdSchema.parse('session-1'),
+      },
+      size: { cols: 96, rows: 30 },
+    },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
   ];
 
@@ -351,8 +383,31 @@ describe('client and hub round trips', () => {
         ],
       },
     },
+    {
+      type: 'session-subscribed',
+      replyTo: 10,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: null,
+      startId: 4,
+      truncated: false,
+    },
+    { type: 'session-unsubscribed', replyTo: 11 },
+    {
+      type: 'terminal-output',
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      startId: null,
+      chunk: encodeTerminalChunk(new TextEncoder().encode('\u001b[2K\u2819 thinking')),
+      droppedChunks: 0,
+    },
     { type: 'protocol-error', code: 'protocol-version', message: 'this hub speaks version 2' },
   ];
+
+  it('sends terminal output with no replyTo either: a stream is nobody\u2019s reply', () => {
+    const output = hubFrames.find((frame) => frame.type === 'terminal-output');
+    expect(output).toBeDefined();
+    expect(output).not.toHaveProperty('replyTo');
+  });
 
   it('sends the state with no replyTo, because nobody asked for it', () => {
     const broadcast = hubFrames.find((frame) => frame.type === 'machine-state');

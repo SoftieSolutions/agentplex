@@ -15,6 +15,8 @@ function member(connectionId: string, grantId: string) {
     connectionId,
     grantId: grantId as GrantId,
     send: (frame) => void sent.push(frame),
+    // No starts of its own: what this file is about is who a report reaches.
+    takeStartTags: () => [],
     close: (reason) => void closed.push(reason),
   };
   return { member: value, sent, closed };

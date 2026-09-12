@@ -66,6 +66,17 @@ export type SessionOutcome =
       readonly storeId: StoreId;
       /** `null` for a spawn: the provider has not written its id yet. */
       readonly sessionId: SessionId | null;
+      /**
+       * This server's own name for the process that was started.
+       *
+       * It never crosses a wire -- a terminal id is a handle on a process on
+       * this machine, and a peer that could name one could name any of them.
+       * It is on the outcome because the connection has to be able to join the
+       * start handle it was asked with to the terminal that answered, which is
+       * the only way a subscription can reach a spawn before the provider has
+       * named the session.
+       */
+      readonly terminalId: string;
     }
   | {
       readonly ok: false;
@@ -114,7 +125,12 @@ export function createSessionController(
 
   const answer = (storeId: StoreId, outcome: TerminalOutcome): SessionOutcome => {
     if (outcome.ok) {
-      return { ok: true, storeId, sessionId: outcome.terminal.session?.sessionId ?? null };
+      return {
+        ok: true,
+        storeId,
+        sessionId: outcome.terminal.session?.sessionId ?? null,
+        terminalId: outcome.terminal.terminalId,
+      };
     }
     return {
       ok: false,
@@ -208,7 +224,12 @@ export function createSessionController(
       }
 
       logger.info('session stopped', { ...session });
-      return { ok: true, storeId: session.storeId, sessionId: session.sessionId };
+      return {
+        ok: true,
+        storeId: session.storeId,
+        sessionId: session.sessionId,
+        terminalId: holder.terminalId,
+      };
     },
 
     async report(storeId: StoreId): Promise<StoreReport | null> {

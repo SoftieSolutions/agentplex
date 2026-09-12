@@ -13,6 +13,7 @@ import { createLogger, CLOSE_POLICY, type LogRecord } from '@agentplex/node-shar
 import { serveHubConnection } from './hub-connection.js';
 import type { ServerIdentity } from '@agentplex/providers';
 import { createFakeSessionController } from './fake-session-controller.js';
+import { createFakeTerminals } from './fake-terminals.js';
 import {
   createFakeGrantAuthority,
   missingProvider,
@@ -66,6 +67,7 @@ function deps(
     stores,
     providers,
     sessions,
+    terminals: createFakeTerminals().terminals,
     logger,
     ...overrides,
   };
@@ -73,8 +75,10 @@ function deps(
 
 function connect(overrides: Partial<Parameters<typeof serveHubConnection>[1]> = {}) {
   const socket = createFakeMessageSocket();
-  const connection = serveHubConnection(socket, deps(overrides));
-  return { socket, connection };
+  const { terminals, factory } = createFakeTerminals();
+  const sessions = overrides.sessions ?? createFakeSessionController();
+  const connection = serveHubConnection(socket, deps({ terminals, sessions, ...overrides }));
+  return { socket, connection, terminals, factory, sessions };
 }
 
 /** Everything the server said, parsed by the parser that owns this direction. */
@@ -463,6 +467,7 @@ describe('two hubs on one server', () => {
       ok: true,
       storeId: 'store-a' as StoreId,
       sessionId: 'session-a' as never,
+      terminalId: 'terminal-a',
     });
     sessions.setReport(report([]));
 
@@ -470,7 +475,7 @@ describe('two hubs on one server', () => {
     await settle();
 
     expect(since(laptop.socket, mark)).toEqual([
-      { type: 'store-report', storeId: 'store-a', sessions: [], holding: [] },
+      { type: 'store-report', storeId: 'store-a', sessions: [], holding: [], starts: [] },
     ]);
   });
 
@@ -481,6 +486,7 @@ describe('two hubs on one server', () => {
       ok: true,
       storeId: 'store-a' as StoreId,
       sessionId: 'session-a' as never,
+      terminalId: 'terminal-a',
     });
     sessions.setReport(report([]));
 
@@ -505,6 +511,7 @@ describe('two hubs on one server', () => {
       ok: true,
       storeId: 'store-a' as StoreId,
       sessionId: 'session-a' as never,
+      terminalId: 'terminal-a',
     });
     sessions.setReport(report([]));
     basement.socket.receive(JSON.stringify({ type: 'session-stop', id: 2, ...SESSION }));
@@ -521,7 +528,7 @@ describe('two hubs on one server', () => {
     await settle();
 
     expect(since(laptop.socket, mark)).toEqual([
-      { type: 'store-report', storeId: 'store-a', sessions: [], holding: [] },
+      { type: 'store-report', storeId: 'store-a', sessions: [], holding: [], starts: [] },
       {
         type: 'session-refused',
         replyTo: 3,
@@ -538,7 +545,12 @@ describe('two hubs on one server', () => {
   it('tells every hub about a session one of them started', async () => {
     const { basement, laptop, sessions } = await twoHubs();
     const mark = laptop.socket.sent.length;
-    sessions.answerWith({ ok: true, storeId: 'store-a' as StoreId, sessionId: null });
+    sessions.answerWith({
+      ok: true,
+      storeId: 'store-a' as StoreId,
+      sessionId: null,
+      terminalId: 'terminal-a',
+    });
 
     basement.socket.receive(
       JSON.stringify({
@@ -584,6 +596,7 @@ describe('two hubs on one server', () => {
       ok: true,
       storeId: 'store-a' as StoreId,
       sessionId: 'session-a' as never,
+      terminalId: 'terminal-a',
     });
 
     basement.socket.receive(JSON.stringify({ type: 'session-stop', id: 2, ...SESSION }));
