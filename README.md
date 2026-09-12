@@ -127,6 +127,7 @@ Every setting has one flag and one environment variable; the flag wins.
 | `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none               | Absolute; required for `server` and `both`               |
 | `--data-path`            | `AGENTPLEX_DATA_PATH`            | `$HOME/.agentplex` | Absolute; the one directory a server writes into         |
 | `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none               | Agent directory, searched before `PATH`; repeatable      |
+| `--tz`                   | `AGENTPLEX_TZ`                   | inherited          | Zone a spawned session reports times in; IANA name       |
 | `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                | Terminals held at once; at least 1                       |
 | `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`             | `debug`, `info`, `warn`, `error`                         |
 

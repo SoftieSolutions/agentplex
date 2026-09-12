@@ -35,7 +35,11 @@ export async function main(): Promise<void> {
     return;
   }
 
-  const environment = childEnvironment({ inherited: process.env, binPath: [] });
+  const environment = childEnvironment({
+    inherited: process.env,
+    binPath: [],
+    timezone: undefined,
+  });
 
   process.exitCode = await runUpdateCommand(process.argv.slice(2), {
     // `os.homedir()` is deliberately not the fallback, for the reason setup

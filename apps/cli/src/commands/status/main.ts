@@ -26,7 +26,11 @@ export async function main(): Promise<void> {
     return;
   }
 
-  const environment = childEnvironment({ inherited: process.env, binPath: [] });
+  const environment = childEnvironment({
+    inherited: process.env,
+    binPath: [],
+    timezone: undefined,
+  });
 
   process.exitCode = await runStatusCommand(process.argv.slice(2), {
     home: process.env['HOME'] ?? '',

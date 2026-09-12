@@ -87,6 +87,9 @@ const serverOnly: ServerConfig = {
   binPath: [],
   identityPath: IDENTITY_PATH,
   dataPath: DATA_PATH,
+  // Inherited, like a machine nobody has told where it is. Nothing this file
+  // starts spawns a child, so the zone has nowhere to show up.
+  timezone: undefined,
   terminalCap: 8,
   // Quiet, like the default. This file is about what starts and stops, and a
   // beacon would be a second thing coming up with the server.

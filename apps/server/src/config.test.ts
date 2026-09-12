@@ -397,6 +397,81 @@ describe('loadServerConfig data path', () => {
   });
 });
 
+describe('loadServerConfig timezone', () => {
+  function timezone(argv: string[], env: Record<string, string | undefined> = {}) {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok ? result.config.timezone : undefined;
+  }
+
+  it('is unset until somebody says otherwise, which leaves a child inheriting', () => {
+    // The honest default, and the one `binPath` takes for the same reason: a
+    // deployment that has said nothing about a zone gets what the unit gave
+    // it, rather than a zone this program picked on its behalf.
+    expect(timezone([])).toBeUndefined();
+  });
+
+  it('reads a zone from a flag and from the environment alike', () => {
+    expect(timezone(['--tz=Europe/Madrid'])).toBe('Europe/Madrid');
+    expect(timezone([], { AGENTPLEX_TZ: 'Europe/Madrid' })).toBe('Europe/Madrid');
+  });
+
+  it('lets the flag win over the environment, like every other setting', () => {
+    expect(timezone(['--tz=Asia/Tokyo'], { AGENTPLEX_TZ: 'UTC' })).toBe('Asia/Tokyo');
+  });
+
+  it('refuses a name no zone answers to, rather than handing a child a silent UTC', () => {
+    // What the check buys. A child handed a `TZ` naming nothing does not
+    // refuse; it sits in UTC, and the operator finds out when an agent tells
+    // them the wrong day. This turns that into one sentence at startup.
+    const problems = expectProblems(load(['--tz=Europe/Madird']));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('Europe/Madird');
+  });
+
+  it('accepts UTC, which the list of canonical names does not contain', () => {
+    // Measured rather than assumed, and the reason this is not checked against
+    // `Intl.supportedValuesOf('timeZone')`: on Node 24 that list holds neither
+    // `UTC` nor any `US/*` name, so a membership test would refuse the single
+    // most likely value an operator types.
+    expect(Intl.supportedValuesOf('timeZone')).not.toContain('UTC');
+    expect(timezone(['--tz=UTC'])).toBe('UTC');
+  });
+
+  it('accepts the aliases a machine accepts, spelled the way the operator wrote them', () => {
+    // Every one of these is a real entry in the tz database a child looks the
+    // word up in -- `date` reports PDT and IST for the first two inside
+    // `node:24-bookworm-slim` -- so they are kept as typed. Rewriting
+    // `Asia/Kolkata` to the `Asia/Calcutta` that ICU still canonicalizes it to
+    // would put a name in a session that its operator did not choose.
+    expect(timezone(['--tz=US/Pacific'])).toBe('US/Pacific');
+    expect(timezone(['--tz=Asia/Kolkata'])).toBe('Asia/Kolkata');
+    expect(timezone(['--tz=Europe/Kyiv'])).toBe('Europe/Kyiv');
+  });
+
+  it('corrects the capitalization, which is the spelling that would silently fail', () => {
+    // The one input ICU accepts and a child does not. ICU matches a zone name
+    // case-insensitively; the tz database is a directory of files, so glibc
+    // finds nothing for `america/new_york` and falls back to UTC without a
+    // word -- `date` prints `america +0000` inside `node:24-bookworm-slim`.
+    // Normalized rather than refused, for the reason a path is normalized
+    // rather than refused: it is the same zone, and ICU has just said how it
+    // is spelled.
+    expect(timezone(['--tz=america/new_york'])).toBe('America/New_York');
+    expect(timezone(['--tz=utc'])).toBe('UTC');
+  });
+
+  it('is collected with every other problem rather than reported on its own', () => {
+    const problems = expectProblems(load(['--server-port=abc', '--tz=Mars/Phobos']));
+    expect(problems).toHaveLength(2);
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(serverUsage()).toContain('--tz');
+    expect(serverUsage()).toContain('AGENTPLEX_TZ');
+  });
+});
+
 describe('loadServerConfig log level', () => {
   it('defaults to info', () => {
     expect(load([])).toMatchObject({ ok: true, config: { logLevel: 'info' } });

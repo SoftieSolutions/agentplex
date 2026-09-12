@@ -96,10 +96,16 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logLevel, jsonLineSink(write, systemClock));
 
   // What every child of this process gets, composed once: what the server
-  // inherited, with the configured directories ahead of its PATH. Both spawn
+  // inherited, with the configured directories ahead of its PATH and the
+  // configured zone in place of whatever the unit was started with. Both spawn
   // seams below take it at construction, so nothing downstream has an
-  // environment to read or a variable to add.
-  const environment = childEnvironment({ inherited: process.env, binPath: config.binPath });
+  // environment to read or a variable to add -- which is why the zone is
+  // another input to that function rather than something each seam sets.
+  const environment = childEnvironment({
+    inherited: process.env,
+    binPath: config.binPath,
+    timezone: config.timezone,
+  });
 
   // The one place a one-shot child is started. Every operation shares this
   // runner, so what a child inherits is decided above and cannot be added to
