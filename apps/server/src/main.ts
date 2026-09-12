@@ -12,12 +12,10 @@ import {
   wantsHelp,
 } from '@agentplex/node-shared';
 import {
-  createClaudeAdapter,
-  createNodeProcessProbe,
   createNodeProcessRunner,
   createNodeProgramResolver,
   createProviderPreflight,
-  createProviderRegistry,
+  createRegisteredProviders,
   nodeProviderFiles,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
@@ -112,14 +110,14 @@ async function main(): Promise<void> {
   // first the day the composition changes.
   const programs = createNodeProgramResolver(childSearchPath(environment));
 
-  // What this build drives, in one line. Adding codex is another adapter file
-  // and another entry here, and nothing else.
-  const providers = createProviderRegistry([
-    createClaudeAdapter({
-      files: nodeProviderFiles,
-      probe: createNodeProcessProbe({ runner: processRunner }),
-    }),
-  ]);
+  // What this build drives, composed where the adapters live. The list is the
+  // provider seam's, not this program's: `doctor` and setup call the same
+  // function, so no machine can have a server driving one set of providers and
+  // a check reporting on another.
+  const providers = createRegisteredProviders({
+    files: nodeProviderFiles,
+    runner: processRunner,
+  });
 
   // What those adapters turn out to be on this machine, asked once at boot and
   // carried into every handshake. The same implementation `doctor` prints, so

@@ -8,11 +8,9 @@ import {
   wantsHelp,
 } from '@agentplex/node-shared';
 import {
-  createClaudeAdapter,
-  createNodeProcessProbe,
   createNodeProcessRunner,
   createNodeProgramResolver,
-  createProviderRegistry,
+  createRegisteredProviders,
   nodeProviderFiles,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
@@ -109,16 +107,12 @@ export async function main(): Promise<void> {
           ids: randomIdGenerator,
           environment: childEnvironment({ inherited: process.env, binPath }),
         }),
-      // The same one line the server has, for the same reason: which providers
-      // this build drives is a fact about the build and belongs in the
-      // entrypoint.
-      providersFor: (runner) =>
-        createProviderRegistry([
-          createClaudeAdapter({
-            files: nodeProviderFiles,
-            probe: createNodeProcessProbe({ runner }),
-          }),
-        ]),
+      // The same call the server and `doctor` make. Which providers this build
+      // drives is a fact about the build rather than about this program, and
+      // the runner is what is genuinely setup's own: one per recorded
+      // `binPath`, so a replay probes the copy of the binary those directories
+      // resolve.
+      providersFor: (runner) => createRegisteredProviders({ files: nodeProviderFiles, runner }),
       files: nodeStoreFileSystem,
       // The one step that runs after everything else, and the reason it is
       // setup's rather than the installer's is in `start-after-setup.ts`. It is
