@@ -32,6 +32,33 @@ import { delimiter } from 'node:path';
  * startup preflight reporting which directory each provider actually came
  * from, where a person can read it, rather than by amputating PATH here.
  *
+ * `TZ` is the second thing composed here, and it is here rather than at a spawn
+ * site for the reason PATH is. A server under systemd inherits whatever its
+ * unit was started with, which on a container image is UTC, and the agents it
+ * spawns inherit that in turn: asked what day it is, one answers in a zone
+ * nobody chose, and the operator sitting in front of the machine is somewhere
+ * else. That is one answer the deployment gives, and every child has to get
+ * the same one -- a session's pty and the probe of the binary that session
+ * runs are two seams, and a setting read at each of them is a setting that can
+ * end up meaning two things on one machine.
+ *
+ * Unset inherits, exactly as an empty `binPath` does: a deployment that says
+ * nothing gets what it had, and no already-installed machine changes because
+ * this exists.
+ *
+ * `LANG` and `LC_ALL` are the obvious next two and are deliberately not here,
+ * because they are not the same kind of question. A zone is something only the
+ * deployment knows -- no image can work out where its operator is, so somebody
+ * has to say. A locale is a property of the image: which locales were
+ * generated in it decides what `LANG` may be, and a server that set
+ * `LANG=en_US.UTF-8` on an image carrying only `C.UTF-8` would hand its
+ * children a value that quietly does nothing. Checking that is a question to
+ * ask the machine rather than a word to parse, and a setting whose wrong value
+ * nothing can refuse is exactly the failure the zone's parser exists to
+ * prevent. If it is ever wanted it arrives as another input to this function,
+ * composed the same way, and not as a second place that reaches for an
+ * environment.
+ *
  * Nothing else is touched. HOME, and the provider state directory under it,
  * are how an adopted binary finds the credentials the operator logged in with.
  */
@@ -41,18 +68,28 @@ export interface ChildEnvironmentSources {
   readonly inherited: Readonly<Record<string, string | undefined>>;
   /** Absolute directories, searched first. Empty means inherit as before. */
   readonly binPath: readonly string[];
+  /**
+   * The zone a child reports times in, as the tz database spells it.
+   * Undefined means inherit.
+   *
+   * Required rather than optional, so that every spawn seam in this repository
+   * states which answer it takes. A seam that inherits says so.
+   */
+  readonly timezone: string | undefined;
 }
 
 export function childEnvironment({
   inherited,
   binPath,
+  timezone,
 }: ChildEnvironmentSources): Readonly<Record<string, string | undefined>> {
-  // An empty list is the deployment saying nothing about resolution, so this
-  // says nothing either: a machine that has never run setup behaves exactly as
-  // it did before the setting existed.
-  if (binPath.length === 0) return inherited;
+  // Nothing configured is the deployment saying nothing, so this says nothing
+  // either: a machine that has never run setup behaves exactly as it did
+  // before either setting existed.
+  if (binPath.length === 0 && timezone === undefined) return inherited;
 
   const environment: Record<string, string | undefined> = {};
+  const resolvesPath = binPath.length > 0;
   let inheritedPath: string | undefined;
 
   for (const [name, value] of Object.entries(inherited)) {
@@ -61,19 +98,29 @@ export function childEnvironment({
     // `PATH` set below, leaving which of them resolves a program up to the
     // platform rather than to this list. Its value is still the inherited
     // PATH and is carried over; an exact `PATH` wins if a record holds both.
-    if (name.toUpperCase() === 'PATH') {
+    if (resolvesPath && name.toUpperCase() === 'PATH') {
       if (name === 'PATH' || inheritedPath === undefined) inheritedPath = value;
       continue;
     }
+    // The same hazard, and this one is dropped rather than carried over: the
+    // inherited zone is the one being replaced.
+    if (timezone !== undefined && name.toUpperCase() === 'TZ') continue;
     environment[name] = value;
   }
 
-  // Empty segments are dropped rather than passed through: an empty entry in a
-  // PATH means the current directory, so joining a list that has one in it
-  // would hand every child a cwd nobody chose.
-  environment['PATH'] = [...binPath, ...(inheritedPath ?? '').split(delimiter)]
-    .filter((entry) => entry.length > 0)
-    .join(delimiter);
+  // Only what was configured is rebuilt. A deployment that chose a zone and no
+  // directories keeps the PATH it inherited character for character, rather
+  // than one this function reassembled out of itself.
+  if (resolvesPath) {
+    // Empty segments are dropped rather than passed through: an empty entry in
+    // a PATH means the current directory, so joining a list that has one in it
+    // would hand every child a cwd nobody chose.
+    environment['PATH'] = [...binPath, ...(inheritedPath ?? '').split(delimiter)]
+      .filter((entry) => entry.length > 0)
+      .join(delimiter);
+  }
+
+  if (timezone !== undefined) environment['TZ'] = timezone;
 
   return environment;
 }

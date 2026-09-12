@@ -115,6 +115,12 @@ async function discoverWithAdapter(
       // which is exactly the value that means nobody looked.
       branch: null,
       uncommitted: null,
+      // Spread away when the adapter found none, rather than sent as a null.
+      // The wire field is optional because absent and null say the same thing
+      // to every reader of it -- there is no number for this session -- and a
+      // frame that carried the distinction would be inviting somebody to act
+      // on a difference that does not exist.
+      ...(session.usage === null ? {} : { usage: session.usage }),
     };
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { randomTokenMinter, tokenMatches } from './tokens.js';
+import { randomTokenMinter, tokenDigest, tokenMatches } from './tokens.js';
 
 describe('randomTokenMinter', () => {
   it('does not mint the same token twice', () => {
@@ -38,5 +38,40 @@ describe('tokenMatches', () => {
 
   it('rejects a secret that only shares a prefix', () => {
     expect(tokenMatches('secret-aaaa', 'secret-aaab')).toBe(false);
+  });
+});
+
+describe('tokenDigest', () => {
+  it('is the same for the same secret and different for another', () => {
+    expect(tokenDigest('a-secret')).toBe(tokenDigest('a-secret'));
+    expect(tokenDigest('a-secret')).not.toBe(tokenDigest('b-secret'));
+  });
+
+  /**
+   * The verifier is written into a file a person opens, so it has to survive
+   * being read back out of JSON and pasted about, exactly as a minted token
+   * does.
+   */
+  it('is fixed-width base64url whatever the secret was', () => {
+    for (const secret of ['', 'short', randomTokenMinter.newToken()]) {
+      const digest = tokenDigest(secret);
+      expect(digest).toMatch(/^[A-Za-z0-9_-]+$/);
+      // 32 bytes of sha256, base64url, unpadded.
+      expect(digest).toHaveLength(43);
+    }
+  });
+
+  /**
+   * The property the grants file rests on: what is stored is not what is
+   * presented, so somebody who can read the file cannot present anything with
+   * it.
+   */
+  it('does not contain the secret it was taken of', () => {
+    expect(tokenDigest('a-secret')).not.toContain('a-secret');
+  });
+
+  it('is compared through tokenMatches like every other secret', () => {
+    expect(tokenMatches(tokenDigest('a-secret'), tokenDigest('a-secret'))).toBe(true);
+    expect(tokenMatches(tokenDigest('a-secret'), tokenDigest('b-secret'))).toBe(false);
   });
 });

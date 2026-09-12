@@ -9,13 +9,14 @@ describe('childEnvironment', () => {
     // Identity, not a copy that happens to match: an operator who has set
     // nothing gets the behaviour they had before this setting existed, and
     // there is no third state where the PATH was rebuilt from itself.
-    expect(childEnvironment({ inherited, binPath: [] })).toBe(inherited);
+    expect(childEnvironment({ inherited, binPath: [], timezone: undefined })).toBe(inherited);
   });
 
   it('builds the PATH out of the configured directories, in order', () => {
     const environment = childEnvironment({
       inherited: {},
       binPath: ['/opt/homebrew/bin', '/home/a/.local/bin'],
+      timezone: undefined,
     });
 
     expect(environment['PATH']).toBe(['/opt/homebrew/bin', '/home/a/.local/bin'].join(delimiter));
@@ -29,6 +30,7 @@ describe('childEnvironment', () => {
     const environment = childEnvironment({
       inherited: { PATH: inheritedPath },
       binPath: ['/opt/bin'],
+      timezone: undefined,
     });
 
     expect(environment['PATH']).toBe(['/opt/bin', inheritedPath].join(delimiter));
@@ -43,6 +45,7 @@ describe('childEnvironment', () => {
     const environment = childEnvironment({
       inherited: { PATH: '/usr/bin' },
       binPath: ['/opt/bin'],
+      timezone: undefined,
     });
 
     expect(environment['PATH']?.split(delimiter)).toContain('/usr/bin');
@@ -52,25 +55,106 @@ describe('childEnvironment', () => {
     // A machine with no PATH at all, and one with a trailing delimiter: both
     // would otherwise end as a list with an empty segment in it, which is how
     // a child silently gets its own cwd on the search path.
-    expect(childEnvironment({ inherited: {}, binPath: ['/opt/bin'] })['PATH']).toBe('/opt/bin');
     expect(
-      childEnvironment({ inherited: { PATH: `/usr/bin${delimiter}` }, binPath: ['/opt/bin'] })[
-        'PATH'
-      ],
+      childEnvironment({ inherited: {}, binPath: ['/opt/bin'], timezone: undefined })['PATH'],
+    ).toBe('/opt/bin');
+    expect(
+      childEnvironment({
+        inherited: { PATH: `/usr/bin${delimiter}` },
+        binPath: ['/opt/bin'],
+        timezone: undefined,
+      })['PATH'],
     ).toBe(['/opt/bin', '/usr/bin'].join(delimiter));
   });
 
   it('leaves every other inherited variable alone', () => {
     // Only resolution is being decided here. HOME is how a provider finds the
     // credentials the operator logged in with, and taking it away would turn a
-    // PATH fix into an authentication failure.
+    // PATH fix into an authentication failure. LANG is in this list on
+    // purpose: it is the variable a timezone setting invites somebody to
+    // compose next, and the module comment says why it is inherited instead.
     const environment = childEnvironment({
       inherited: { HOME: '/home/a', LANG: 'C.UTF-8', PATH: '/usr/bin' },
       binPath: ['/opt/bin'],
+      timezone: undefined,
     });
 
     expect(environment['HOME']).toBe('/home/a');
     expect(environment['LANG']).toBe('C.UTF-8');
+  });
+
+  it('sets TZ, which is the whole of what the timezone setting means', () => {
+    // The failure this closes: a unit file on a container image says nothing
+    // about a zone, the server inherits UTC, and every agent it spawns answers
+    // the question "what day is it" from UTC.
+    const environment = childEnvironment({
+      inherited: { PATH: '/usr/bin' },
+      binPath: [],
+      timezone: 'Europe/Madrid',
+    });
+
+    expect(environment['TZ']).toBe('Europe/Madrid');
+  });
+
+  it('leaves the PATH it was not asked about alone while setting TZ', () => {
+    // The two halves are separable and stay separable: a deployment that chose
+    // a zone and no directories gets the PATH it had, character for character,
+    // rather than one rebuilt out of itself.
+    const inheritedPath = `/usr/bin${delimiter}${delimiter}/bin`;
+    const environment = childEnvironment({
+      inherited: { PATH: inheritedPath, HOME: '/home/a' },
+      binPath: [],
+      timezone: 'Europe/Madrid',
+    });
+
+    expect(environment['PATH']).toBe(inheritedPath);
+    expect(environment['HOME']).toBe('/home/a');
+  });
+
+  it('composes both, because a child gets one environment and not two', () => {
+    const environment = childEnvironment({
+      inherited: { PATH: '/usr/bin' },
+      binPath: ['/opt/bin'],
+      timezone: 'Asia/Tokyo',
+    });
+
+    expect(environment['PATH']).toBe(['/opt/bin', '/usr/bin'].join(delimiter));
+    expect(environment['TZ']).toBe('Asia/Tokyo');
+  });
+
+  it('passes an inherited TZ through untouched when nothing was configured', () => {
+    // Unset means inherit, exactly as an empty binPath does: a deployment that
+    // says nothing about a zone gets whatever the unit was started with, which
+    // is what every already-installed machine has today.
+    const inherited = { TZ: 'America/Asuncion', PATH: '/usr/bin' };
+
+    expect(childEnvironment({ inherited, binPath: [], timezone: undefined })).toBe(inherited);
+  });
+
+  it('replaces an inherited TZ rather than letting the unit file win', () => {
+    const environment = childEnvironment({
+      inherited: { TZ: 'UTC', PATH: '/usr/bin' },
+      binPath: [],
+      timezone: 'Europe/Madrid',
+    });
+
+    expect(environment['TZ']).toBe('Europe/Madrid');
+  });
+
+  it('does not leave a differently-cased TZ beside the one it set', () => {
+    // The hazard PATH has, for the reason PATH has it: `process.env` is
+    // case-insensitive on Windows and a plain record is not, so a copied `Tz`
+    // would survive beside the `TZ` set here, and which of them a child reads
+    // would be the platform's decision rather than this function's.
+    const environment = childEnvironment({
+      inherited: { Tz: 'UTC', HOME: '/home/a' },
+      binPath: [],
+      timezone: 'Europe/Madrid',
+    });
+
+    expect(Object.keys(environment).filter((name) => name.toUpperCase() === 'TZ')).toEqual(['TZ']);
+    expect(environment['TZ']).toBe('Europe/Madrid');
+    expect(environment['HOME']).toBe('/home/a');
   });
 
   it('does not leave a differently-cased PATH beside the one it set', () => {
@@ -80,6 +164,7 @@ describe('childEnvironment', () => {
     const environment = childEnvironment({
       inherited: { Path: '/inherited/bin', HOME: '/home/a' },
       binPath: ['/opt/bin'],
+      timezone: undefined,
     });
 
     const names = Object.keys(environment).filter((name) => name.toUpperCase() === 'PATH');
@@ -95,6 +180,7 @@ describe('childSearchPath', () => {
     const environment = childEnvironment({
       inherited: { PATH: ['/usr/bin', '/bin'].join(delimiter) },
       binPath: ['/home/a/.agentplex/bin'],
+      timezone: undefined,
     });
 
     // The configured directory first, then the machine's own: the preflight

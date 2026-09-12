@@ -1,0 +1,35 @@
+{
+  "add": [],
+  "added": 0,
+  "audited": 0,
+  "change": [
+    {
+      "from": {
+        "name": "@openai/codex",
+        "version": "0.154.0",
+        "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@openai/codex"
+      },
+      "to": {
+        "name": "@openai/codex",
+        "version": "0.154.0",
+        "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@openai/codex"
+      }
+    },
+    {
+      "from": {
+        "name": "@openai/codex-darwin-arm64",
+        "version": "0.154.0-darwin-arm64",
+        "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64"
+      },
+      "to": {
+        "name": "@openai/codex-darwin-arm64",
+        "version": "0.154.0-darwin-arm64",
+        "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64"
+      }
+    }
+  ],
+  "changed": 2,
+  "funding": 0,
+  "remove": [],
+  "removed": 0
+}

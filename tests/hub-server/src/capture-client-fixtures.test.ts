@@ -24,7 +24,7 @@ import {
   type FakeBeaconSource,
 } from '../../../apps/hub/src/discovery/fake-beacon-source.js';
 import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web-assets.js';
-import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
+import { serveServerEnd } from './server-end.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import type { SessionOutcome, StoreReport } from '../../../apps/server/src/session-control.js';
 import {
@@ -166,7 +166,7 @@ function labelFor(text: string): string {
 
 /**
  * A fleet for the populated captures: hostnames that answer a dial with a real
- * `serveHubConnection` backed by a fake session controller, so every session
+ * `serveServerEnd` backed by a fake session controller, so every session
  * the machine-state frame carries travelled the whole real path -- store
  * report, reducer, broadcast -- before it was captured.
  */
@@ -199,7 +199,7 @@ function fleetDialer(
           ? { reports: machine.reports }
           : { reports: machine.reports, outcome: machine.startOutcome },
       );
-      serveHubConnection(serverEnd, {
+      serveServerEnd(serverEnd, {
         // A real scan reads a disk and takes event-loop turns; a fake that
         // resolved in the same microtask as the handshake would race its
         // report past the hub attaching its listener, an ordering no real
@@ -246,6 +246,7 @@ function descriptor(
    * nobody looked.
    */
   branch: string | null = null,
+  usage?: SessionDescriptor['usage'],
 ): SessionDescriptor {
   return {
     storeId: storeIdSchema.parse(storeId),
@@ -257,8 +258,28 @@ function descriptor(
     branch,
     title,
     uncommitted,
+    // Omitted rather than nulled when a session has no counts, so the captured
+    // frames carry both shapes the client has to render: a session with a
+    // number on it and a session with none.
+    ...(usage === undefined ? {} : { usage }),
   };
 }
+
+/**
+ * Token counts for a captured session, taken from real provider output.
+ *
+ * These are the two API responses in `packages/providers/fixtures/claude-
+ * completed-turn.jsonl` added up once each. Invented round numbers would hide
+ * the thing the client most has to get right: a real session is almost
+ * entirely cache reads, and a surface that folded these four into one input
+ * figure would show a cost several times over.
+ */
+const CAPTURED_USAGE = {
+  inputTokens: 4,
+  cacheReadTokens: 77_192,
+  cacheWriteTokens: 18_872,
+  outputTokens: 1347,
+};
 
 function hold(sessionId: string, stoppable: boolean): SessionHold {
   return { sessionId: sessionIdSchema.parse(sessionId), stoppable };
@@ -527,6 +548,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                     ],
                   },
                   'fix/auth-refresh',
+                  CAPTURED_USAGE,
                 ),
                 descriptor(
                   'store-agentplex',
@@ -669,6 +691,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                     ],
                   },
                   'fix/auth-refresh',
+                  CAPTURED_USAGE,
                 ),
                 descriptor(
                   'store-agentplex',

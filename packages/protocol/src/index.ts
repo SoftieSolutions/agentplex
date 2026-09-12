@@ -85,6 +85,7 @@ export {
   sessionHoldSchema,
   sessionStartTagSchema,
   sessionStatusSchema,
+  sessionUsageSchema,
   UNCOMMITTED_FILES_LISTED,
   uncommittedDiffSchema,
 } from './session.js';
@@ -94,6 +95,7 @@ export type {
   SessionHold,
   SessionStartTag,
   SessionStatus,
+  SessionUsage,
   UncommittedDiff,
 } from './session.js';
 

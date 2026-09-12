@@ -2,6 +2,7 @@ import {
   DEFAULT_HUB_PORT,
   DEFAULT_SERVER_PORT,
   LOG_LEVELS,
+  MIN_TOKEN_LENGTH,
   readAbsolutePath,
   readFlags,
   readPort,
@@ -49,7 +50,7 @@ export interface HubConfig {
    * There is no default, for the reason the database file has none, with more
    * at stake: a default would be published, and a hub is a thing on the
    * internet. A minimum length is enforced rather than trusted -- see
-   * `MIN_CLIENT_TOKEN_LENGTH`.
+   * `MIN_TOKEN_LENGTH`, which the server's configured pairing token shares.
    */
   readonly clientToken: string;
   /**
@@ -81,15 +82,6 @@ const DEFAULT_LOG_LEVEL: LogLevel = 'info';
 const DEFAULT_HOST = '0.0.0.0';
 
 /**
- * Short enough to be typed on a phone, long enough that guessing it is not a
- * plan. 32 characters is under what `randomTokenMinter` produces (43), so the
- * documented way of generating one always passes; what this refuses is the
- * password somebody picked because it was quick, on the one credential standing
- * between the internet and every session on every paired machine.
- */
-const MIN_CLIENT_TOKEN_LENGTH = 32;
-
-/**
  * Every setting is in here, including the interface to bind. One read
  * elsewhere -- `process.env['AGENTPLEX_HOST']`, straight out of `main` -- is
  * one setting with no flag, missing from `usage()`, and rejected by `readFlags`
@@ -119,7 +111,7 @@ const MISSING_DATABASE_FILE =
 
 const BAD_CLIENT_TOKEN =
   'the hub needs a client token of at least ' +
-  `${MIN_CLIENT_TOKEN_LENGTH} characters: set AGENTPLEX_CLIENT_TOKEN or pass --client-token ` +
+  `${MIN_TOKEN_LENGTH} characters: set AGENTPLEX_CLIENT_TOKEN or pass --client-token ` +
   '(generate one with: openssl rand -base64 32)';
 
 const logLevelSchema = z.enum(LOG_LEVELS);
@@ -192,7 +184,7 @@ function readDatabaseFile(raw: string | undefined, problems: string[]): string |
  * match what the user typed.
  */
 function readClientToken(raw: string | undefined, problems: string[]): string | undefined {
-  if (raw === undefined || raw.length < MIN_CLIENT_TOKEN_LENGTH) {
+  if (raw === undefined || raw.length < MIN_TOKEN_LENGTH) {
     problems.push(BAD_CLIENT_TOKEN);
     return undefined;
   }

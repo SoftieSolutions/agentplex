@@ -44,6 +44,16 @@ interface Harness {
   congest(congested: boolean): void;
 }
 
+/**
+ * Who this connection's watches are counted against.
+ *
+ * The manager counts watchers by name rather than by handle, so what a terminal
+ * reports is the set of connections holding it rather than a number. A suite
+ * with one connection in it still asserts on the set: the count is the thing
+ * that stopped being the whole answer.
+ */
+const WATCHER = 'connection-under-test';
+
 function harness(scrollbackBytes?: number): Harness {
   const { terminals, factory } = createFakeTerminals(
     scrollbackBytes === undefined ? {} : { scrollbackBytes },
@@ -53,6 +63,7 @@ function harness(scrollbackBytes?: number): Harness {
   let congested = false;
   const streams = createTerminalStreams({
     terminals,
+    watcher: WATCHER,
     onOutput: (chunk): TerminalDelivery => {
       if (congested) {
         refused.push(chunk);
@@ -277,12 +288,12 @@ describe('createTerminalStreams detaching', () => {
     const terminalId = spawn(terminals);
     terminals.bind(terminalId, SESSION_A);
     streams.subscribe(bySession(SESSION_A));
-    expect(terminals.terminal(terminalId)?.watchers).toBe(1);
+    expect(terminals.terminal(terminalId)?.watchers).toEqual([WATCHER]);
 
     const detached = streams.unsubscribe(bySession(SESSION_A));
 
     expect(detached.ok).toBe(true);
-    expect(terminals.terminal(terminalId)?.watchers).toBe(0);
+    expect(terminals.terminal(terminalId)?.watchers).toEqual([]);
   });
 
   it('never closes the terminal: a closing tab is not a decision about a session', () => {
@@ -320,7 +331,7 @@ describe('createTerminalStreams detaching', () => {
     factory.last?.emit('still watched\r\n');
 
     expect(output).toHaveLength(1);
-    expect(terminals.terminal(terminalId)?.watchers).toBe(1);
+    expect(terminals.terminal(terminalId)?.watchers).toEqual([WATCHER]);
   });
 
   it('refuses an unsubscribe from something this connection never subscribed to', () => {
@@ -340,7 +351,7 @@ describe('createTerminalStreams detaching', () => {
     streams.unsubscribe(bySession(SESSION_A));
     streams.unsubscribe(bySession(SESSION_A));
 
-    expect(terminals.terminal(terminalId)?.watchers).toBe(0);
+    expect(terminals.terminal(terminalId)?.watchers).toEqual([]);
   });
 
   it('gives every count back when the socket goes, through the same path a frame takes', () => {
@@ -356,8 +367,8 @@ describe('createTerminalStreams detaching', () => {
 
     streams.detachAll();
 
-    expect(terminals.terminal(first)?.watchers).toBe(0);
-    expect(terminals.terminal(second)?.watchers).toBe(0);
+    expect(terminals.terminal(first)?.watchers).toEqual([]);
+    expect(terminals.terminal(second)?.watchers).toEqual([]);
     expect(factory.ptys.every((pty) => pty.kills === 0)).toBe(true);
     expect(terminals.terminal(first)?.run.exit).toBeNull();
   });

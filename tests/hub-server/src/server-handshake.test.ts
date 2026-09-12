@@ -7,7 +7,7 @@ import {
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
+import { serveServerEnd } from './server-end.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerIdentity } from '@agentplex/providers';
@@ -65,9 +65,9 @@ describe('handshakeWithServer against a real server', () => {
    * server's rules are both the shipped code, the frames are real JSON, and
    * both parsers run. Nothing is replaced but the socket.
    */
-  function pair(serverOverrides: Partial<Parameters<typeof serveHubConnection>[1]> = {}) {
+  function pair(serverOverrides: Partial<Parameters<typeof serveServerEnd>[1]> = {}) {
     const { hubEnd, serverEnd } = createSocketPair();
-    serveHubConnection(serverEnd, {
+    serveServerEnd(serverEnd, {
       identity,
       stores,
       providers: [readyProvider()],
@@ -278,7 +278,7 @@ describe('handshakeWithServer', () => {
 
   it('cancels the deadline once the handshake has been answered', async () => {
     const { hubEnd, serverEnd } = createSocketPair();
-    serveHubConnection(serverEnd, {
+    serveServerEnd(serverEnd, {
       identity,
       stores,
       providers: [readyProvider()],

@@ -42,6 +42,27 @@ import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
  * only thing that sees every server attached to a store. This is the same rule
  * enforced where the processes actually are: a server that took an instruction
  * from a hub with a stale view must still refuse it.
+ *
+ * ## Two hubs, one machine
+ *
+ * A server may be paired with more than one hub, and none of the three rules is
+ * per hub. That is a decision and not an omission.
+ *
+ * **Any paired hub may watch any terminal.** A store is a volume both hubs have
+ * mounted and both can already read the transcript off it, so refusing the live
+ * bytes to the hub that did not start the session would withhold the slower
+ * copy of something already readable, and would do it on the basis of who
+ * *started* a session -- which is not part of a session's identity.
+ * `{ storeId, sessionId }` is, and it never names a machine, so by the same
+ * argument it never names a hub. When there is a reason to say no it will be a
+ * scope on a grant, which is where that goes.
+ *
+ * **What the cap needs instead is a watcher set.** Given cross-hub watching,
+ * "how many watchers" stopped being a question the eviction rule could act on:
+ * it cannot tell that the terminal it is about to close is the only one a
+ * second hub is watching, and it cannot drop the watchers of a connection that
+ * died without detaching. `WatcherId` below is the answer, and `release` is
+ * what a closing socket calls.
  */
 
 /**
@@ -53,6 +74,24 @@ import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
  * gets exercised rather than being theatre nobody ever reaches.
  */
 export const DEFAULT_TERMINAL_CAP = 8;
+
+/**
+ * Who is watching, rather than how many.
+ *
+ * One hub connection, identified by something the server minted. It is not a
+ * `hubId`: that arrives on the handshake and a hub in possession of a token can
+ * claim to be any hub, so keying the eviction rule on it would let a peer make
+ * a terminal unevictable by asserting a name. It is not a grant id either, and
+ * that is the finer distinction: one grant may hold two connections -- a hub
+ * reconnecting before the old socket has finished closing -- and one of them
+ * dying must not detach the other's watchers.
+ *
+ * A count was what this was, and a count is the thing the cap could not reason
+ * about. It cannot say whose watcher it is, so a connection that vanished
+ * without detaching left a terminal pinned against eviction forever, and no
+ * caller could ask "is this terminal watched by anyone other than me".
+ */
+export type WatcherId = string;
 
 export interface TerminalManagerDependencies {
   /** The one thing that starts processes. Injected, so a test forks nothing. */
@@ -85,7 +124,15 @@ export interface Terminal {
   readonly run: PtyRun;
   /** The last status anybody derived for this session. `unknown` until then. */
   readonly status: SessionStatus;
-  readonly watchers: number;
+  /**
+   * The connections watching right now, in the order they attached.
+   *
+   * A set rather than a number so that the cap can tell a terminal nobody is
+   * watching from one a second hub is the only watcher of, and so that a
+   * connection closing can take its own watchers off without knowing how many
+   * anybody else has.
+   */
+  readonly watchers: readonly WatcherId[];
   /**
    * Epoch ms when the last watcher left, or `null` while somebody is watching.
    *
@@ -104,7 +151,7 @@ export interface Terminal {
    * `run.scrollback()` first, which is the only ordering that lets it do so
    * without a gap.
    */
-  watch(listener: (chunk: Uint8Array) => void): () => void;
+  watch(watcher: WatcherId, listener: (chunk: Uint8Array) => void): () => void;
 }
 
 /**
@@ -122,6 +169,7 @@ export interface TerminalHolder {
   /** Epoch ms the process started, so a caller can say how long it has held. */
   readonly startedAt: number;
   readonly status: SessionStatus;
+  /** How many distinct connections are watching, not how many times they attached. */
   readonly watchers: number;
   readonly stoppable: boolean;
 }
@@ -169,6 +217,16 @@ export interface TerminalManager extends SessionLiveness {
   /** The live terminal for a session, in the form a refusal reports it. */
   holder(session: SessionRef): TerminalHolder | undefined;
   readonly terminals: readonly Terminal[];
+  /**
+   * Detaches everything one connection was watching, everywhere.
+   *
+   * A socket that closes is a watcher that is gone, and the terminal has no
+   * other way to find out: a detach is returned to whoever attached, and a
+   * connection that died is not there to call it. Without this the count of
+   * watchers only ever rises, and a terminal nobody can see becomes one the cap
+   * may never evict.
+   */
+  release(watcher: WatcherId): void;
   /** Kills the process. The terminal stays, because its output is what to read next. */
   stop(terminalId: string): StopOutcome;
   /**
@@ -190,7 +248,8 @@ interface TerminalRecord {
   readonly run: PtyRun;
   sessionId: SessionId | null;
   status: SessionStatus;
-  watchers: number;
+  /** Watcher to how many times it attached: one hub may open two tabs on one terminal. */
+  readonly watchers: Map<WatcherId, number>;
   unwatchedSince: number | null;
 }
 
@@ -275,7 +334,7 @@ export function createTerminalManager({
     while (terminals.size >= cap) {
       const evictable = [...terminals.values()]
         .map((entry) => entry.record)
-        .filter((record) => record.watchers === 0)
+        .filter((record) => record.watchers.size === 0)
         // Two tiers, and the first one is free: a terminal whose process has
         // already exited costs a scrollback nobody is reading, so it goes
         // before any live agent does. Within a tier it is longest-unwatched.
@@ -319,7 +378,7 @@ export function createTerminalManager({
       // transcript by an adapter, and guessing it here would put an
       // unverifiable claim in front of a user and a stop button behind it.
       status: 'unknown',
-      watchers: 0,
+      watchers: new Map(),
       unwatchedSince: openedAt,
     };
     return { record, view: viewOf(record, clock) };
@@ -379,6 +438,16 @@ export function createTerminalManager({
       return liveHolderOf(session) !== undefined;
     },
 
+    release(watcher: WatcherId): void {
+      for (const { record } of terminals.values()) {
+        if (!record.watchers.has(watcher)) continue;
+        // The whole of one connection's hold, however many times it attached.
+        // A socket does not half close.
+        record.watchers.delete(watcher);
+        if (record.watchers.size === 0) record.unwatchedSince = clock.now();
+      }
+    },
+
     stop(terminalId: string): StopOutcome {
       const record = terminals.get(terminalId)?.record;
       if (record === undefined) {
@@ -431,6 +500,29 @@ function stoppable(status: SessionStatus): boolean {
   return status !== 'working';
 }
 
+function attach(record: TerminalRecord, watcher: WatcherId): void {
+  record.watchers.set(watcher, (record.watchers.get(watcher) ?? 0) + 1);
+}
+
+/**
+ * One attachment off, and the clock set only when the last watcher leaves.
+ *
+ * A tab closing while another is open has not left the terminal unwatched, and
+ * dating it then would make eviction pick a session somebody is looking at.
+ * The same holds one level up: a connection with two tabs on one terminal is
+ * still watching after the first closes.
+ */
+function detach(record: TerminalRecord, watcher: WatcherId, clock: Clock): void {
+  const held = record.watchers.get(watcher);
+  if (held === undefined) return;
+  if (held > 1) {
+    record.watchers.set(watcher, held - 1);
+    return;
+  }
+  record.watchers.delete(watcher);
+  if (record.watchers.size === 0) record.unwatchedSince = clock.now();
+}
+
 function holderOf(record: TerminalRecord): TerminalHolder {
   return {
     terminalId: record.terminalId,
@@ -439,7 +531,7 @@ function holderOf(record: TerminalRecord): TerminalHolder {
     pid: record.run.pid,
     startedAt: record.run.startedAt,
     status: record.status,
-    watchers: record.watchers,
+    watchers: record.watchers.size,
     stoppable: stoppable(record.status),
   };
 }
@@ -460,8 +552,8 @@ function viewOf(record: TerminalRecord, clock: Clock): Terminal {
       return record.status;
     },
 
-    get watchers(): number {
-      return record.watchers;
+    get watchers(): readonly WatcherId[] {
+      return [...record.watchers.keys()];
     },
 
     get unwatchedSince(): number | null {
@@ -472,9 +564,9 @@ function viewOf(record: TerminalRecord, clock: Clock): Terminal {
       return stoppable(record.status);
     },
 
-    watch(listener: (chunk: Uint8Array) => void): () => void {
+    watch(watcher: WatcherId, listener: (chunk: Uint8Array) => void): () => void {
       const unsubscribe = record.run.subscribe(listener);
-      record.watchers += 1;
+      attach(record, watcher);
       record.unwatchedSince = null;
 
       let detached = false;
@@ -482,11 +574,7 @@ function viewOf(record: TerminalRecord, clock: Clock): Terminal {
         if (detached) return;
         detached = true;
         unsubscribe();
-        record.watchers -= 1;
-        // Only the last one out sets the clock: a tab closing while another is
-        // open has not left the terminal unwatched, and dating it then would
-        // make eviction pick a session somebody is looking at.
-        if (record.watchers === 0) record.unwatchedSince = clock.now();
+        detach(record, watcher, clock);
       };
     },
   };

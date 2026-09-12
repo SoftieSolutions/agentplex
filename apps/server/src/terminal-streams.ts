@@ -7,7 +7,7 @@ import type {
   TerminalTarget,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
-import type { Terminal, TerminalManager } from './terminal-manager.js';
+import type { Terminal, TerminalManager, WatcherId } from './terminal-manager.js';
 
 /**
  * One hub connection's standing interest in this server's terminals.
@@ -103,6 +103,16 @@ export interface TerminalStreamsDependencies {
   /** The terminals this server holds. Injected: they outlive this connection. */
   readonly terminals: TerminalManager;
   /**
+   * Who every watch taken here is counted against: this connection.
+   *
+   * The manager counts watchers by name rather than by handle so that a socket
+   * that died without detaching can still be swept -- `release` takes one
+   * connection off every terminal at once. `detachAll` below is the orderly
+   * path and this is the name the disorderly one needs, and they agree because
+   * both are this one id.
+   */
+  readonly watcher: WatcherId;
+  /**
    * Where a chunk goes. The connection turns it into a frame; this does not.
    *
    * Answers whether it actually went, because a sink that cannot say so leaves
@@ -155,6 +165,7 @@ interface StartRecord {
 
 export function createTerminalStreams({
   terminals,
+  watcher,
   onOutput,
   logger,
 }: TerminalStreamsDependencies): TerminalStreams {
@@ -270,7 +281,7 @@ export function createTerminalStreams({
       };
       streams.set(terminal.terminalId, stream);
       byTarget.set(key, stream);
-      stream.detach = terminal.watch((chunk) => {
+      stream.detach = terminal.watch(watcher, (chunk) => {
         const delivery = onOutput({
           storeId: terminal.storeId,
           // Read per chunk rather than captured: a spawn is named by the

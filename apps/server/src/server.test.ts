@@ -12,6 +12,7 @@ import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createProviderRegistry, type ProviderPreflight } from '@agentplex/providers';
 import {
+  createFakeGrantFiles,
   createFakeProcessRunner,
   createFakeStoreFiles,
   missingProvider,
@@ -21,6 +22,7 @@ import type { Launch, LaunchPlan } from '@agentplex/providers';
 import { startRuntime, type Runtime } from './boot.js';
 import type { ServerConfig } from './config.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
+import { createFakeDataRoot } from './fake-data-root.js';
 import { createFakeWorkingTree } from './fake-working-tree.js';
 import { createFakeTerminals, type FakeTerminals } from './fake-terminals.js';
 import { createFakeMachineLoadReader } from './fake-machine-probe.js';
@@ -46,6 +48,9 @@ import { createFakeMachineLoadReader } from './fake-machine-probe.js';
 const STORE_PATH = '/volumes/claude';
 const IDENTITY_PATH = '/etc/agentplex/server.json';
 
+/** The server's own directory, which it creates before it serves anything. */
+const DATA_PATH = '/var/lib/agentplex';
+
 const PLAN: LaunchPlan = {
   command: 'claude',
   args: [],
@@ -62,6 +67,13 @@ const config: ServerConfig = {
   storePaths: [STORE_PATH],
   binPath: [],
   identityPath: IDENTITY_PATH,
+  // Nothing supplied a pairing token, so this server mints its own; nothing
+  // told it a zone either. Neither is what this file is about -- it is about
+  // what a shutdown does to the sessions and the sockets -- and both have to
+  // be said now that a config carries them.
+  serverToken: undefined,
+  dataPath: DATA_PATH,
+  timezone: undefined,
   terminalCap: 8,
   drainMs: 15_000,
   announce: false,
@@ -147,6 +159,8 @@ async function start(reading: readonly ProviderReadiness[] = []): Promise<World>
     ids: { newId: () => 'id-under-test' },
     timers: createFakeTimers(),
     storeFileSystem: createFakeStoreFiles(),
+    dataRootFileSystem: createFakeDataRoot(),
+    grantFileSystem: createFakeGrantFiles(),
     tokens: { newToken: () => TOKEN },
     // No adapters. A scan that found sessions would derive statuses of its own
     // and overwrite the one each test is making its point with.

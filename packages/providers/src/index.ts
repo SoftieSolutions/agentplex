@@ -1,6 +1,9 @@
 export { createProviderRegistry } from './provider-registry.js';
 export type { ProviderLookup, ProviderRegistry } from './provider-registry.js';
 
+export { createRegisteredProviders } from './registered-providers.js';
+export type { RegisteredProvidersDependencies } from './registered-providers.js';
+
 export type {
   AuthProbe,
   AuthState,
@@ -54,6 +57,20 @@ export type {
 export { parseClaudeTranscript } from './claude-transcript.js';
 export type { ClaudeTranscript, ClaudeTranscriptParse } from './claude-transcript.js';
 
+export { CODEX_SESSIONS_DIRECTORY, createCodexAdapter } from './codex-adapter.js';
+export type { CodexAdapterDependencies } from './codex-adapter.js';
+export {
+  CODEX_COMMAND,
+  CODEX_DEFAULT_STORE_DIRECTORY,
+  CODEX_HOME,
+  CODEX_SCRUB_PREFIXES,
+  planCodexLaunch,
+} from './codex-launch.js';
+export { CODEX_PACKAGE, createCodexProvisioning } from './codex-provisioning.js';
+export { parseCodexRollout } from './codex-rollout.js';
+export type { CodexRollout, CodexRolloutParse } from './codex-rollout.js';
+export { CODEX_SESSION_INDEX_FILE, parseCodexSessionIndex } from './codex-session-index.js';
+
 export type { DirectoryEntry, DirectoryRead, ProviderFiles } from './provider-files.js';
 export { nodeProviderFiles } from './node-provider-files.js';
 
@@ -85,8 +102,48 @@ export type {
 } from './store-identity.js';
 export { nodeStoreFileSystem } from './node-store-files.js';
 
+export {
+  GRANT_ZERO_LABEL,
+  decideGrant,
+  grantIdSchema,
+  hubIdDisagrees,
+  parseServerGrants,
+  serializeServerGrants,
+  serverGrantSchema,
+  serverGrantsFileSchema,
+  serverGrantsPath,
+  summarizeGrant,
+  usableGrant,
+  witnessedGrant,
+} from './server-grants.js';
+export type {
+  FileWrite,
+  GrantDecision,
+  GrantFileSystem,
+  GrantId,
+  GrantRefusal,
+  GrantSummary,
+  ServerGrant,
+} from './server-grants.js';
+
+export { openServerGrants } from './server-grant-store.js';
+export type {
+  AuthorizedGrant,
+  GrantAuthority,
+  GrantListing,
+  GrantWitness,
+  MintedGrant,
+  RevokedGrant,
+  ServerGrantDependencies,
+  ServerGrantStore,
+  ServerGrantsReady,
+  WithdrawnGrant,
+} from './server-grant-store.js';
+export { nodeGrantFileSystem } from './node-grant-files.js';
+
 export { ensureServerIdentity, readServerIdentity } from './server-identity.js';
 export type {
+  ConfiguredToken,
   ServerIdentity,
   ServerIdentityDependencies,
   ServerIdentityResult,

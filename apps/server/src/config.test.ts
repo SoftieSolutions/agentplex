@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { loadServerConfig, serverUsage, type ServerConfigResult } from './config.js';
 
 const IDENTITY_FILE = '/etc/agentplex/server.json';
+const HOME = '/home/dev';
 
 /**
- * Every case needs an identity file.
+ * Every case needs an identity file, and a home for the data root to default
+ * from.
  *
  * They are supplied through the environment rather than written into each argv
  * so that a test about the terminal cap stays a test about the terminal cap. A
@@ -17,6 +19,7 @@ function load(argv: string[], env: Record<string, string | undefined> = {}): Ser
     argv,
     env: {
       AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE,
+      HOME,
       ...env,
     },
   });
@@ -70,9 +73,9 @@ describe('loadServerConfig ports', () => {
 describe('loadServerConfig failure reporting', () => {
   it('reports every problem at once rather than one env var per restart', () => {
     const problems = expectProblems(
-      load(['--server-port=abc', '--log-level=loud', '--announce=maybe']),
+      load(['--server-port=abc', '--log-level=loud', '--announce=maybe', '--server-token=short']),
     );
-    expect(problems).toHaveLength(3);
+    expect(problems).toHaveLength(4);
   });
 
   it('refuses an unknown flag rather than silently ignoring a typo', () => {
@@ -337,6 +340,173 @@ describe('loadServerConfig server identity file', () => {
   });
 });
 
+describe('loadServerConfig data path', () => {
+  /**
+   * Deliberately not the helper above: these cases are about what the data
+   * root falls back to, so the home it falls back to is the thing each one
+   * says for itself.
+   */
+  function loadBare(
+    argv: string[],
+    env: Record<string, string | undefined> = {},
+  ): ServerConfigResult {
+    return loadServerConfig({
+      argv,
+      env: { AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE, ...env },
+    });
+  }
+
+  function dataPath(argv: string[], env: Record<string, string | undefined> = {}) {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok ? result.config.dataPath : undefined;
+  }
+
+  it('defaults to the directory under the account home an install already owns', () => {
+    // The same directory `install.sh` calls the state directory on the tier
+    // that has a home: a machine that was never told where to put this gets
+    // the place everything else about agentplex on it already is.
+    expect(dataPath([])).toBe('/home/dev/.agentplex');
+  });
+
+  it('reads it from a flag', () => {
+    expect(dataPath(['--data-path=/var/lib/agentplex'])).toBe('/var/lib/agentplex');
+  });
+
+  it('reads it from the environment, which is all a container is configured with', () => {
+    expect(dataPath([], { AGENTPLEX_DATA_PATH: '/var/lib/agentplex' })).toBe('/var/lib/agentplex');
+  });
+
+  it('lets the flag win over the environment, like every other setting', () => {
+    expect(dataPath(['--data-path=/from/flag'], { AGENTPLEX_DATA_PATH: '/from/env' })).toBe(
+      '/from/flag',
+    );
+  });
+
+  it('is what is set, not what the home would have given', () => {
+    // The fleet tier's account has a home and its state lives somewhere else.
+    expect(
+      dataPath([], { HOME: '/var/lib/agentplex', AGENTPLEX_DATA_PATH: '/srv/agentplex' }),
+    ).toBe('/srv/agentplex');
+  });
+
+  it('refuses a relative path, which would be a different directory per working directory', () => {
+    const problems = expectProblems(load(['--data-path=agentplex']));
+    expect(problems[0]).toContain('absolute path');
+  });
+
+  it('normalizes the path it was given, so one directory has one name', () => {
+    expect(dataPath(['--data-path=/var/lib/other/../agentplex/'])).toBe('/var/lib/agentplex');
+  });
+
+  it('refuses to guess when there is no home to default from', () => {
+    // The one thing it must not do is pick something. A server whose state
+    // went to a directory nobody named forgets it the first time that
+    // directory is not there, and nothing anywhere says why.
+    const problems = expectProblems(loadBare([]));
+    expect(problems[0]).toContain('AGENTPLEX_DATA_PATH');
+  });
+
+  it('refuses a home that is not absolute rather than resolving it against a cwd', () => {
+    const problems = expectProblems(loadBare([], { HOME: 'dev' }));
+    expect(problems[0]).toContain('HOME');
+  });
+
+  it('takes a home that is absolute and reports nothing', () => {
+    expect(loadBare([], { HOME: '/var/lib/agentplex' })).toMatchObject({
+      ok: true,
+      config: { dataPath: '/var/lib/agentplex/.agentplex' },
+    });
+  });
+
+  it('is collected with every other problem rather than reported on its own', () => {
+    // The contract the whole file is built around: one restart per bad
+    // settings file, not one per bad line in it.
+    const problems = expectProblems(loadBare(['--server-port=abc', '--log-level=loud']));
+    expect(problems).toHaveLength(3);
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(serverUsage()).toContain('--data-path');
+    expect(serverUsage()).toContain('AGENTPLEX_DATA_PATH');
+  });
+});
+
+describe('loadServerConfig timezone', () => {
+  function timezone(argv: string[], env: Record<string, string | undefined> = {}) {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok ? result.config.timezone : undefined;
+  }
+
+  it('is unset until somebody says otherwise, which leaves a child inheriting', () => {
+    // The honest default, and the one `binPath` takes for the same reason: a
+    // deployment that has said nothing about a zone gets what the unit gave
+    // it, rather than a zone this program picked on its behalf.
+    expect(timezone([])).toBeUndefined();
+  });
+
+  it('reads a zone from a flag and from the environment alike', () => {
+    expect(timezone(['--tz=Europe/Madrid'])).toBe('Europe/Madrid');
+    expect(timezone([], { AGENTPLEX_TZ: 'Europe/Madrid' })).toBe('Europe/Madrid');
+  });
+
+  it('lets the flag win over the environment, like every other setting', () => {
+    expect(timezone(['--tz=Asia/Tokyo'], { AGENTPLEX_TZ: 'UTC' })).toBe('Asia/Tokyo');
+  });
+
+  it('refuses a name no zone answers to, rather than handing a child a silent UTC', () => {
+    // What the check buys. A child handed a `TZ` naming nothing does not
+    // refuse; it sits in UTC, and the operator finds out when an agent tells
+    // them the wrong day. This turns that into one sentence at startup.
+    const problems = expectProblems(load(['--tz=Europe/Madird']));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('Europe/Madird');
+  });
+
+  it('accepts UTC, which the list of canonical names does not contain', () => {
+    // Measured rather than assumed, and the reason this is not checked against
+    // `Intl.supportedValuesOf('timeZone')`: on Node 24 that list holds neither
+    // `UTC` nor any `US/*` name, so a membership test would refuse the single
+    // most likely value an operator types.
+    expect(Intl.supportedValuesOf('timeZone')).not.toContain('UTC');
+    expect(timezone(['--tz=UTC'])).toBe('UTC');
+  });
+
+  it('accepts the aliases a machine accepts, spelled the way the operator wrote them', () => {
+    // Every one of these is a real entry in the tz database a child looks the
+    // word up in -- `date` reports PDT and IST for the first two inside
+    // `node:24-bookworm-slim` -- so they are kept as typed. Rewriting
+    // `Asia/Kolkata` to the `Asia/Calcutta` that ICU still canonicalizes it to
+    // would put a name in a session that its operator did not choose.
+    expect(timezone(['--tz=US/Pacific'])).toBe('US/Pacific');
+    expect(timezone(['--tz=Asia/Kolkata'])).toBe('Asia/Kolkata');
+    expect(timezone(['--tz=Europe/Kyiv'])).toBe('Europe/Kyiv');
+  });
+
+  it('corrects the capitalization, which is the spelling that would silently fail', () => {
+    // The one input ICU accepts and a child does not. ICU matches a zone name
+    // case-insensitively; the tz database is a directory of files, so glibc
+    // finds nothing for `america/new_york` and falls back to UTC without a
+    // word -- `date` prints `america +0000` inside `node:24-bookworm-slim`.
+    // Normalized rather than refused, for the reason a path is normalized
+    // rather than refused: it is the same zone, and ICU has just said how it
+    // is spelled.
+    expect(timezone(['--tz=america/new_york'])).toBe('America/New_York');
+    expect(timezone(['--tz=utc'])).toBe('UTC');
+  });
+
+  it('is collected with every other problem rather than reported on its own', () => {
+    const problems = expectProblems(load(['--server-port=abc', '--tz=Mars/Phobos']));
+    expect(problems).toHaveLength(2);
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(serverUsage()).toContain('--tz');
+    expect(serverUsage()).toContain('AGENTPLEX_TZ');
+  });
+});
+
 describe('loadServerConfig log level', () => {
   it('defaults to info', () => {
     expect(load([])).toMatchObject({ ok: true, config: { logLevel: 'info' } });
@@ -376,5 +546,58 @@ describe('loadServerConfig host', () => {
   it('is listed in the usage message like every other setting', () => {
     expect(serverUsage()).toContain('--host');
     expect(serverUsage()).toContain('AGENTPLEX_HOST');
+  });
+});
+
+describe('loadServerConfig server token', () => {
+  /**
+   * Longer than the floor, and nothing a minter would produce, so a test that
+   * finds this string found the configured token.
+   */
+  const TOKEN = 'a-token-the-deployment-already-held-0123';
+
+  it('mints nothing when the deployment set none, which is every machine with a disk', () => {
+    expect(load([])).toMatchObject({ ok: true, config: { serverToken: undefined } });
+  });
+
+  it('takes a token the orchestrator injected, for a machine whose disk does not outlive it', () => {
+    const result = load([], { AGENTPLEX_SERVER_TOKEN: TOKEN });
+    expect(result).toMatchObject({ ok: true, config: { serverToken: { token: TOKEN } } });
+  });
+
+  it('carries the setting name with the value, so a refusal can name what to change', () => {
+    // The module that refuses a disagreement lives in a package that does not
+    // own this variable's name, and a refusal it could not name would send an
+    // operator looking.
+    const result = load([], { AGENTPLEX_SERVER_TOKEN: TOKEN });
+    expect(result).toMatchObject({
+      ok: true,
+      config: { serverToken: { setting: 'AGENTPLEX_SERVER_TOKEN' } },
+    });
+  });
+
+  it('takes the flag over the environment, like every other setting', () => {
+    const result = load([`--server-token=${TOKEN}`], { AGENTPLEX_SERVER_TOKEN: 'inherited-one' });
+    expect(result).toMatchObject({ ok: true, config: { serverToken: { token: TOKEN } } });
+  });
+
+  it('refuses one short enough to guess rather than taking it as given', () => {
+    // A minted token has 43 characters of CSPRNG behind it. A supplied one is
+    // whatever somebody typed, and the failure is a server anybody on the
+    // network can pair with.
+    const problems = expectProblems(load([], { AGENTPLEX_SERVER_TOKEN: 'letmein' }));
+    expect(problems[0]).toContain('--server-token');
+  });
+
+  it('is a setting nobody set when the env var is blank, not an empty token', () => {
+    // What an env file with nothing after the `=` means, decided the same way
+    // for this as for every other setting.
+    const result = load([], { AGENTPLEX_SERVER_TOKEN: '   ' });
+    expect(result).toMatchObject({ ok: true, config: { serverToken: undefined } });
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(serverUsage()).toContain('--server-token');
+    expect(serverUsage()).toContain('AGENTPLEX_SERVER_TOKEN');
   });
 });

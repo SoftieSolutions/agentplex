@@ -9,7 +9,7 @@ import {
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
+import { serveServerEnd } from './server-end.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import {
@@ -99,7 +99,7 @@ const dialer: SocketDialer = {
     }
 
     const { hubEnd, serverEnd } = createSocketPair();
-    serveHubConnection(serverEnd, {
+    serveServerEnd(serverEnd, {
       sessions: createFakeSessionController(),
       terminals: createFakeTerminals().terminals,
       machineLoad: createFakeMachineLoadReader(),

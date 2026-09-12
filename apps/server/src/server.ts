@@ -21,13 +21,19 @@ import { createDrain, drainingSessions } from './drain.js';
 import { serveHubConnection, type HubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import {
+  type ConfiguredToken,
+  type GrantFileSystem,
   type ProviderPreflight,
   type ProviderRegistry,
   ensureStores,
+  openServerGrants,
+  serverGrantsPath,
   type StoreFileSystem,
 } from '@agentplex/providers';
 import { announceServer, type BeaconNetwork } from './server-beacon.js';
 import { ensureServerIdentity } from '@agentplex/providers';
+import { createHubAudience } from './hub-audience.js';
+import { sweepGrants } from './grant-sweep.js';
 import { createSessionController } from './session-control.js';
 import type { MachineLoadReader } from './machine-load.js';
 import type { WorkingTree } from './working-tree.js';
@@ -59,8 +65,30 @@ export interface SessionServerDependencies {
    * identity written there would hand both of them the same name and secret.
    */
   readonly identityPath: string;
+  /**
+   * The disk under the grants file, which sits beside the identity file.
+   *
+   * A third filesystem seam, and not an oversight. The store seam reaches a
+   * provider's volume and may never grow a write; the data root seam creates a
+   * directory; this one replaces one file, atomically, because a reader that
+   * meets half a grants file is a server that refuses every handshake.
+   */
+  readonly grantFileSystem: GrantFileSystem;
   /** Where the pairing token comes from the first time this server starts. */
   readonly tokens: TokenMinter;
+  /**
+   * The pairing token the deployment set, when it set one.
+   *
+   * When it is here it is the token and `tokens` above is never reached, and
+   * when it is not, nothing about this server's first start has changed. It is
+   * a separate dependency from the minter rather than a minter that returns a
+   * constant, because the two are not the same fact: a minter is where entropy
+   * comes from, and this is a decision somebody already took. Folding it in
+   * would also lose the disagreement -- `ensureServerIdentity` has to be able
+   * to tell a token it was handed from one it produced, or a file holding a
+   * credential the operator thinks they replaced would be read straight past.
+   */
+  readonly serverToken: ConfiguredToken | undefined;
   /** The adapters this build can drive. An empty registry finds nothing and says nothing. */
   readonly providers: ProviderRegistry;
   /**
@@ -218,7 +246,9 @@ export async function startSessionServer(
     storePaths,
     storeFileSystem,
     identityPath,
+    grantFileSystem,
     tokens,
+    serverToken,
     providers,
     preflight,
     clock,
@@ -242,6 +272,7 @@ export async function startSessionServer(
     files: storeFileSystem,
     ids,
     tokens,
+    configuredToken: serverToken,
   });
   if (!identity.ok) {
     throw new Error(`agentplex cannot establish its server identity: ${identity.problem}`);
@@ -251,9 +282,51 @@ export async function startSessionServer(
   // to paste into the hub, and a secret in a log line is one that has to be
   // rotated. `logger.ts` would redact a `token` field anyway; not gathering it
   // is the version that does not depend on remembering.
-  logger.info(identity.minted ? 'server identity minted' : 'server identity loaded', {
+  //
+  // Three messages rather than two, because "minted" now over-claims on one of
+  // the three paths. A deployment that supplied the token has no new secret to
+  // go and read, and a line telling it one was just minted would send somebody
+  // to a file for a value they put there themselves.
+  logger.info(identityMessage(identity.minted, serverToken !== undefined), {
     serverId: identity.identity.serverId,
     identityPath,
+  });
+
+  // The grants this server will answer to, and grant zero the first time.
+  //
+  // Fatal for the reason the identity is. Coming up with an empty grants file
+  // would unpair every hub silently; coming up ignoring one it could not read
+  // would leave a server answering to credentials the operator believes they
+  // withdrew. Both are the failure nobody sees, and this is the moment it can
+  // be said out loud.
+  const grantsPath = serverGrantsPath(identityPath);
+  const grants = await openServerGrants(grantsPath, identity.identity.token, {
+    files: grantFileSystem,
+    ids,
+    tokens,
+    clock,
+    // The one sentence about a disagreeing hub id, written where the log lines
+    // about connections already are. The store records it and decides nothing
+    // with it; a hub whose database was rebuilt is still the same operator.
+    onWitness: ({ grantId, hubId, disagrees, unrecorded }) => {
+      if (disagrees) {
+        logger.warn('a grant is being used by a different hub id than the one it first saw', {
+          grantId,
+          hubId,
+        });
+      }
+      if (unrecorded !== null) {
+        logger.warn('could not record a handshake against its grant', { grantId, unrecorded });
+      }
+    },
+  });
+  if (!grants.ok) {
+    throw new Error(`agentplex cannot read this server's grants: ${grants.problem}`);
+  }
+  // The path and the count, never a verifier. What an operator needs from this
+  // line is where the file is and whether the upgrade wrote grant zero.
+  logger.info(grants.migrated ? 'grants file written with grant zero' : 'grants loaded', {
+    grantsPath,
   });
 
   // What this build can run, said out loud at boot. The registry is closed, so
@@ -330,17 +403,33 @@ export async function startSessionServer(
   }
 
   /**
-   * The hubs dialled in right now, so that one fact can be told to all of them:
-   * this server is going down.
+   * The hubs dialled in right now, as connections rather than as an audience.
    *
-   * Nothing else here needs the set -- a connection answers its own hub and
-   * holds its own subscriptions -- and it is pruned as connections are accepted
-   * rather than as they close, because a `HubConnection` says what state it is
-   * in and does not offer a hook for the end of one. Every dial drops whatever
-   * ended since the last dial, so what this holds is the live connections and
-   * the churn since the most recent one.
+   * Two sets, deliberately, because they answer two different questions. The
+   * audience below is what a *fact about a store* is told to, and it is keyed
+   * by grant because that is what a revocation names. This is what a fact about
+   * *this process* -- it is draining, it has re-read its providers -- is told
+   * to, and neither of those is a frame the audience carries: one is a
+   * `server-draining` and the other is a close.
+   *
+   * It is pruned as connections are accepted rather than as they close, because
+   * a `HubConnection` says what state it is in and does not offer a hook for the
+   * end of one. Every dial drops whatever ended since the last dial, so what
+   * this holds is the live connections and the churn since the most recent one.
    */
   const connections = new Set<HubConnection>();
+
+  // Every hub connected at once, which is what makes a stop by one of them
+  // something the others are told about. It outlives each connection: a socket
+  // comes and goes and the set is the server's.
+  const audience = createHubAudience({
+    sessions,
+    logger,
+    // A socket that closed is a watcher that is gone, and it is not there to
+    // call the detach it was handed. Without this a terminal nobody can see
+    // stays pinned against eviction for the life of the process.
+    onLeave: (member) => terminals.release(member.connectionId),
+  });
 
   // The one thing a hub can do with this server before it has proved itself:
   // open a socket. Everything past that is the handshake's to allow.
@@ -349,7 +438,10 @@ export async function startSessionServer(
       for (const ended of connections) if (ended.state === 'closed') connections.delete(ended);
       connections.add(
         serveHubConnection(socket, {
+          connectionId: ids.newId(),
           identity: identity.identity,
+          grants: grants.store,
+          audience,
           sessions,
           // The same terminals the controller starts sessions into. A
           // connection only ever holds subscriptions to them, and hands those
@@ -370,6 +462,10 @@ export async function startSessionServer(
       );
     },
   });
+
+  // Revocation reaching a connection that is already up. The handshake covers
+  // the hub that reconnects; this covers the one that does not have to.
+  const sweep = sweepGrants({ grants: grants.store, audience, timers, logger });
 
   const listener: HttpListener = await startHttpServer(
     port,
@@ -545,6 +641,9 @@ export async function startSessionServer(
       // The beacon first, and before anything slow: every announcement from
       // here on would be inviting a hub to dial a server that is going away.
       beacon?.stop();
+      // The sweep next, because a pending timer is a process that will not
+      // exit, and there is nothing left for it to revoke access to.
+      sweep.stop();
       // Then nothing new. This is what makes the wait below terminate at all:
       // a drain that is still accepting starts is not draining. It closes
       // nothing, which is the point -- the agents already running go on
@@ -577,4 +676,20 @@ export async function startSessionServer(
       logger.info('server stopped', { ...drained });
     },
   };
+}
+
+/**
+ * Which of the three things this boot did about the identity file.
+ *
+ * A function rather than a nested ternary at the call site, and outside
+ * `startSessionServer` because it needs nothing from it. What it is careful
+ * about is the second argument: it says whether a token was configured, never
+ * what it was, so no caller can accidentally pass the secret into a log
+ * message by passing the wrong thing here.
+ */
+function identityMessage(minted: boolean, configured: boolean): string {
+  if (!minted) return 'server identity loaded';
+  return configured
+    ? 'server identity written with the configured pairing token'
+    : 'server identity minted';
 }

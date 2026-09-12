@@ -174,31 +174,81 @@ describe('createTerminalManager one live process per session', () => {
 });
 
 describe('createTerminalManager watch accounting', () => {
-  it('counts watchers and forwards output to each of them', () => {
+  it('names its watchers and forwards output to each of them', () => {
     const { manager, factory } = harness();
     const terminalId = open(manager);
     const terminal = manager.terminal(terminalId);
     const seen: string[] = [];
 
-    const detach = terminal?.watch((chunk) => seen.push(new TextDecoder().decode(chunk)));
+    const detach = terminal?.watch('hub-a', (chunk) => seen.push(new TextDecoder().decode(chunk)));
     factory.last?.emit('hello');
 
-    expect(terminal?.watchers).toBe(1);
+    expect(terminal?.watchers).toEqual(['hub-a']);
     expect(terminal?.unwatchedSince).toBeNull();
     expect(seen).toEqual(['hello']);
 
     detach?.();
     factory.last?.emit('printed to nobody');
 
-    expect(terminal?.watchers).toBe(0);
+    expect(terminal?.watchers).toEqual([]);
     expect(seen).toEqual(['hello']);
+  });
+
+  /**
+   * The question the count could not answer, and the reason this is a set: the
+   * cap has to be able to tell that the terminal it is about to evict is the
+   * only one a second connection is watching.
+   */
+  it('tells two connections apart on one terminal', () => {
+    const { manager } = harness();
+    const terminal = manager.terminal(open(manager));
+
+    const first = terminal?.watch('hub-a', () => {});
+    terminal?.watch('hub-b', () => {});
+    expect(terminal?.watchers).toEqual(['hub-a', 'hub-b']);
+
+    first?.();
+    expect(terminal?.watchers).toEqual(['hub-b']);
+    expect(terminal?.unwatchedSince).toBeNull();
+  });
+
+  /**
+   * A socket that closes is a watcher that is gone, and it is not there to call
+   * the detach it was handed. Without this the set only ever grows and a
+   * terminal nobody can see becomes one the cap may never evict.
+   */
+  it('releases everything one connection was watching, everywhere', () => {
+    const { manager, clock } = harness(4);
+    const left = manager.terminal(open(manager));
+    const right = manager.terminal(open(manager));
+    left?.watch('hub-a', () => {});
+    left?.watch('hub-b', () => {});
+    right?.watch('hub-a', () => {});
+
+    clock.advance(500);
+    manager.release('hub-a');
+
+    expect(left?.watchers).toEqual(['hub-b']);
+    expect(left?.unwatchedSince).toBeNull();
+    expect(right?.watchers).toEqual([]);
+    expect(right?.unwatchedSince).toBe(clock.now());
+  });
+
+  it('releases a connection that was watching nothing without complaint', () => {
+    const { manager } = harness();
+    const terminal = manager.terminal(open(manager));
+    terminal?.watch('hub-a', () => {});
+
+    manager.release('hub-never-attached');
+
+    expect(terminal?.watchers).toEqual(['hub-a']);
   });
 
   it('dates a terminal from when its last watcher left, not from when the first arrived', () => {
     const { manager, clock } = harness();
     const terminal = manager.terminal(open(manager));
-    const first = terminal?.watch(() => {});
-    const second = terminal?.watch(() => {});
+    const first = terminal?.watch('a-hub', () => {});
+    const second = terminal?.watch('a-hub', () => {});
 
     clock.advance(5_000);
     first?.();
@@ -226,7 +276,7 @@ describe('createTerminalManager watch accounting', () => {
     const { manager, factory, clock } = harness();
     const terminal = manager.terminal(open(manager));
 
-    terminal?.watch(() => {})?.();
+    terminal?.watch('a-hub', () => {})?.();
     clock.advance(60 * 60 * 1000);
 
     expect(terminal?.run.exit).toBeNull();
@@ -237,13 +287,27 @@ describe('createTerminalManager watch accounting', () => {
   it('ignores a detach called twice rather than counting a watcher off twice', () => {
     const { manager } = harness();
     const terminal = manager.terminal(open(manager));
-    const one = terminal?.watch(() => {});
-    terminal?.watch(() => {});
+    const one = terminal?.watch('hub-a', () => {});
+    terminal?.watch('hub-b', () => {});
 
     one?.();
     one?.();
 
-    expect(terminal?.watchers).toBe(1);
+    expect(terminal?.watchers).toEqual(['hub-b']);
+  });
+
+  /** One connection with two tabs on one terminal is still watching after one closes. */
+  it('keeps a connection in the set until its last attachment goes', () => {
+    const { manager } = harness();
+    const terminal = manager.terminal(open(manager));
+    const first = terminal?.watch('hub-a', () => {});
+    const second = terminal?.watch('hub-a', () => {});
+
+    first?.();
+    expect(terminal?.watchers).toEqual(['hub-a']);
+
+    second?.();
+    expect(terminal?.watchers).toEqual([]);
   });
 });
 
@@ -258,9 +322,9 @@ describe('createTerminalManager cap and eviction', () => {
     const newer = open(manager);
 
     clock.advance(1_000);
-    manager.terminal(newer)?.watch(() => {})?.();
+    manager.terminal(newer)?.watch('a-hub', () => {})?.();
     clock.advance(3_000);
-    manager.terminal(older)?.watch(() => {})?.();
+    manager.terminal(older)?.watch('a-hub', () => {})?.();
 
     const third = open(manager);
 
@@ -274,7 +338,7 @@ describe('createTerminalManager cap and eviction', () => {
     const watched = open(manager);
     clock.advance(1_000);
     const idle = open(manager);
-    manager.terminal(watched)?.watch(() => {});
+    manager.terminal(watched)?.watch('a-hub', () => {});
 
     open(manager);
 
@@ -302,7 +366,7 @@ describe('createTerminalManager cap and eviction', () => {
   it('refuses to open when the cap is reached and every terminal is watched', () => {
     const { manager, factory } = harness(1);
     const held = open(manager);
-    manager.terminal(held)?.watch(() => {});
+    manager.terminal(held)?.watch('a-hub', () => {});
 
     const refused = manager.spawn(STORE, launch);
 
@@ -403,7 +467,7 @@ describe('createTerminalManager shutdown', () => {
   it('closes every terminal it is holding, which is the only thing that does', () => {
     const { manager, factory } = harness();
     const watched = open(manager);
-    manager.terminal(watched)?.watch(() => {});
+    manager.terminal(watched)?.watch('a-hub', () => {});
     open(manager);
 
     manager.closeAll();

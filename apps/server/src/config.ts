@@ -1,7 +1,10 @@
+import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import {
   DEFAULT_SERVER_PORT,
   LOG_LEVELS,
+  MIN_TOKEN_LENGTH,
+  nonEmpty,
   readAbsolutePath,
   readAbsolutePaths,
   readFlags,
@@ -11,6 +14,7 @@ import {
   usageLines,
   type LogLevel,
 } from '@agentplex/node-shared';
+import type { ConfiguredToken } from '@agentplex/providers';
 import { DEFAULT_DRAIN_MS } from './drain.js';
 import { DEFAULT_TERMINAL_CAP } from './terminal-manager.js';
 
@@ -73,6 +77,60 @@ export interface ServerConfig {
    * where it happened to work.
    */
   readonly identityPath: string;
+  /**
+   * The pairing token the deployment set, with the name of the setting that
+   * set it, or undefined to let the server mint its own on first start.
+   *
+   * Undefined is the default and stays the default: minting is right wherever
+   * there is a disk that outlives the process and somebody who can read a file
+   * off it, and that is most machines. What it cannot serve is the deployment
+   * that has neither -- a container whose filesystem goes at the next deploy, a
+   * CI job nobody will shell into -- where the orchestrator already holds the
+   * secret and expects the process to use it. A server that mints its own there
+   * comes up with a token nobody knows, and the pairing has to be redone every
+   * restart.
+   *
+   * A minimum length is enforced rather than trusted, for the reason the hub's
+   * client token enforces one and against the same number: what arrives here is
+   * whatever somebody put in a secret store, and a token a CSPRNG did not mint
+   * is only as good as the person who chose it.
+   */
+  readonly serverToken: ConfiguredToken | undefined;
+  /**
+   * The one directory this server writes into: absolute, created at boot, and
+   * refused rather than worked around when it cannot be.
+   *
+   * `data-root.ts` holds the rule for what may go under it and the argument
+   * for every part of that -- including why the identity file above did not
+   * fold into it, and why an absent store path is reported while an absent
+   * data root stops the start. This is only where the path comes from.
+   *
+   * It has a default, which the identity file deliberately does not, and the
+   * difference is what the two are for. The identity file is the machine's
+   * name and secret, and a default would be a machine paired under a file
+   * nobody chose. The data root is a working directory: every install already
+   * has a place for one, the default is that place, and being wrong about it
+   * costs a move rather than an identity.
+   */
+  readonly dataPath: string;
+  /**
+   * The zone every child this server spawns reports times in, or undefined to
+   * inherit whatever the unit gave this process.
+   *
+   * A setting rather than a line in a unit file for the reason this file opens
+   * with: configuration is a value produced from argv and env by a pure
+   * function, and a zone an operator can only choose by editing a systemd unit
+   * is a setting outside that function.
+   *
+   * It reaches a child and nothing else. The one time this server formats a
+   * time for a human is the log timestamp, which is ISO-8601 in UTC and stays
+   * that way: a log line is read beside a hub's and beside another server's,
+   * and being comparable is the whole value of the stamp -- the same argument
+   * that has the hub stamping what it receives with its own clock rather than
+   * with the one the report came from. What a zone changes is the answer an
+   * agent gives to "what day is it", and that answer is made in a child.
+   */
+  readonly timezone: string | undefined;
   /**
    * How many terminals this server may hold at once.
    *
@@ -137,6 +195,40 @@ const MISSING_IDENTITY_FILE =
   'the server role needs somewhere to keep its identity and pairing token: ' +
   'set AGENTPLEX_SERVER_IDENTITY_FILE or pass --server-identity-file (an absolute path)';
 
+const BAD_SERVER_TOKEN =
+  'a pairing token the deployment sets must be at least ' +
+  `${MIN_TOKEN_LENGTH} characters: set AGENTPLEX_SERVER_TOKEN or pass --server-token ` +
+  '(generate one with: openssl rand -base64 32), or set neither and let the server mint one';
+
+/**
+ * The data root's setting, named here and exported because the module that
+ * owns the directory has to name it too: every refusal `ensureDataRoot`
+ * produces tells the operator which setting to change, and a second spelling
+ * of it there would be a message pointing at a variable that does not exist.
+ */
+export const DATA_PATH = { flag: '--data-path', env: 'AGENTPLEX_DATA_PATH' } as const;
+
+/**
+ * What the data root falls back to under the account's home.
+ *
+ * The same directory an install already owns: a plain `install.sh` run puts
+ * the prefix at `$HOME/.agentplex` and makes that the state directory too, so
+ * on the tier most machines are, the default is where everything else about
+ * agentplex on that machine already is.
+ *
+ * On the `--system` tier the account's home is `/var/lib/agentplex` -- the
+ * state directory the installer created for it, not `/opt/agentplex`, which is
+ * root-owned runtime the account may not write to. Defaulting off the home
+ * rather than off `AGENTPLEX_PREFIX` is what keeps those two apart: the prefix
+ * is where the programs live and the home is where the account's own files go,
+ * and AGX-158 separated them on purpose.
+ */
+const DEFAULT_DATA_DIRECTORY = '.agentplex';
+
+const MISSING_DATA_PATH =
+  'a server needs one directory of its own to write into, and this machine has no HOME ' +
+  'to default one from: set AGENTPLEX_DATA_PATH or pass --data-path (an absolute path)';
+
 /**
  * Each setting has one flag and one env var. Flags win, because a flag is
  * typed by a person at the moment they mean it and an env var is inherited.
@@ -158,6 +250,34 @@ const SETTINGS = {
     flag: '--server-identity-file',
     env: 'AGENTPLEX_SERVER_IDENTITY_FILE',
   },
+  /**
+   * A flag, like every other setting, and that was the decision rather than
+   * the default.
+   *
+   * A secret on an argv is a secret in `ps` output, which is the one cost the
+   * other settings here do not carry, and taking the exception was the
+   * alternative. It was not taken because the repository has already decided
+   * this, in the other direction, for a strictly larger secret: the hub's
+   * `--client-token` is the one credential between the internet and every
+   * session on every paired machine, and it has a flag. An exception carved
+   * out for the smaller secret and not the larger one is not a position on
+   * process listings, it is an inconsistency that teaches nothing. If argv is
+   * the wrong channel for a credential it is wrong for both, and that is one
+   * decision taken once rather than here.
+   *
+   * The deployment this setting exists for pays nothing either way: an
+   * orchestrator injects an environment variable, and the flag is the path
+   * nobody on that tier uses.
+   */
+  serverToken: { flag: '--server-token', env: 'AGENTPLEX_SERVER_TOKEN' },
+  dataPath: DATA_PATH,
+  /**
+   * Named for the variable it becomes rather than for the word this codebase
+   * uses in prose. `TZ` is what a child reads, `AGENTPLEX_TZ` is the setting
+   * that decides it, and an operator reading a unit file beside a session's
+   * environment should not have to be told they are the same thing.
+   */
+  timezone: { flag: '--tz', env: 'AGENTPLEX_TZ' },
   terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
   /**
    * In seconds, because the number it has to agree with is in the unit beside
@@ -223,6 +343,8 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
     problems,
   );
 
+  const timezone = readTimezone(read(SETTINGS.timezone), problems);
+
   const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
 
   const drainMs = readDrainSeconds(read(SETTINGS.drainSeconds), problems);
@@ -231,7 +353,13 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
 
   const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), problems);
 
-  if (identityPath === undefined || problems.length > 0) return { ok: false, problems };
+  const serverToken = readServerToken(read(SETTINGS.serverToken), problems);
+
+  const dataPath = readDataPath(read(SETTINGS.dataPath), env, problems);
+
+  if (identityPath === undefined || dataPath === undefined || problems.length > 0) {
+    return { ok: false, problems };
+  }
 
   return {
     ok: true,
@@ -242,11 +370,57 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
       storePaths,
       binPath,
       identityPath,
+      serverToken,
+      dataPath,
+      timezone,
       terminalCap,
       drainMs,
       announce,
     },
   };
+}
+
+/**
+ * The data root: what was configured, or the default under the account's home.
+ *
+ * `HOME` is read here rather than treated as a setting, because it is not one:
+ * nothing in agentplex sets it, it is what the account the daemon runs as
+ * already has, and both tiers of install arrange for it to be the right
+ * answer. A user unit inherits the operator's; the system unit carries
+ * `User=`, and systemd sets `HOME` from the account database, whose entry
+ * `install.sh` created with the state directory as its home.
+ *
+ * When there is no home the configuration is refused rather than guessed at.
+ * That refusal is the whole reason defaulting from an inherited variable is
+ * safe: the failure mode of a wrong guess here is a server that writes its
+ * state somewhere nobody named and loses it, and the failure mode of an absent
+ * one is a sentence naming the setting, printed before anything starts.
+ */
+function readDataPath(
+  raw: string | undefined,
+  env: Readonly<Record<string, string | undefined>>,
+  problems: string[],
+): string | undefined {
+  if (raw !== undefined) return readAbsolutePath(raw, SETTINGS.dataPath.flag, problems);
+
+  const home = nonEmpty(env['HOME']);
+  if (home === undefined) {
+    problems.push(MISSING_DATA_PATH);
+    return undefined;
+  }
+  if (!isAbsolute(home)) {
+    // Refused rather than resolved, for the reason every path here is: a
+    // relative HOME would put this server's state under whatever directory a
+    // unit file or an image left the process in, which is a different
+    // directory the next time it starts.
+    problems.push(
+      `HOME is ${JSON.stringify(home)}, which is not an absolute path, so there is no default ` +
+        `data root: set ${SETTINGS.dataPath.env} or pass ${SETTINGS.dataPath.flag}`,
+    );
+    return undefined;
+  }
+
+  return readAbsolutePath(join(home, DEFAULT_DATA_DIRECTORY), SETTINGS.dataPath.flag, problems);
 }
 
 /**
@@ -263,6 +437,35 @@ function readIdentityPath(raw: string | undefined, problems: string[]): string |
     return undefined;
   }
   return readAbsolutePath(raw, SETTINGS.serverIdentityFile.flag, problems);
+}
+
+/**
+ * The pairing token the deployment set, or nothing.
+ *
+ * Absent is not a problem: it is the default, and it means the server mints
+ * one on its first start exactly as it always has. Present but too short is
+ * one problem with one message, because it is one mistake -- somebody put
+ * something in a secret store that is not a secret -- and the message names
+ * both the way out and the way back to the default.
+ *
+ * A blank env var arrives here as `undefined` rather than as an empty token,
+ * because `settingValue` decided that for every setting: a line with nothing
+ * after the `=` is a setting nobody set. That matters more here than
+ * elsewhere. An empty string taken literally would be a server configured to
+ * present no credential, and the failure would be an identity file written
+ * with a token nothing can ever match.
+ *
+ * The setting's name is carried out with the value. `ensureServerIdentity`
+ * refuses a file that disagrees with this token and has to say which variable
+ * to change, and it lives in a package that does not own this name.
+ */
+function readServerToken(raw: string | undefined, problems: string[]): ConfiguredToken | undefined {
+  if (raw === undefined) return undefined;
+  if (raw.length < MIN_TOKEN_LENGTH) {
+    problems.push(BAD_SERVER_TOKEN);
+    return undefined;
+  }
+  return { token: raw, setting: SETTINGS.serverToken.env };
 }
 
 /**
@@ -308,6 +511,65 @@ export function serverUsage(): string {
     '',
     ...usageLines(Object.values(SETTINGS)),
   ].join('\n');
+}
+
+/**
+ * The zone, checked against the database a child will look it up in, and kept
+ * as the operator spelled it.
+ *
+ * Checked rather than passed through, because the failure a typo causes is
+ * silent: a child handed a `TZ` that names no zone does not refuse, it sits in
+ * UTC, and the operator finds out weeks later when an agent tells them the
+ * wrong day. A check here turns that into one sentence at startup, next to
+ * every other thing wrong with the settings file.
+ *
+ * What it is checked against was measured rather than assumed, and it is not
+ * the obvious list. `Intl.supportedValuesOf('timeZone')` is ICU's *canonical*
+ * names: on Node 24 it holds 418 of them and none of them is `UTC`, no `US/*`
+ * name is in it, and it offers `Asia/Calcutta` and `Europe/Kiev` where tzdata
+ * has long since preferred `Asia/Kolkata` and `Europe/Kyiv`. A membership test
+ * against that list would refuse `AGENTPLEX_TZ=UTC`, which is worse than not
+ * checking at all: it would reject names the operator's own `date` accepts.
+ *
+ * Asking ICU to format with the zone asks the same database the question that
+ * matters, and it answers the way a machine does -- `UTC`, `US/Pacific`,
+ * `Asia/Kolkata` and `Europe/Kyiv` are accepted, `Europe/Madird` and
+ * `Mars/Phobos` throw.
+ *
+ * The name is kept as typed, with one exception. Every alias ICU accepts is a
+ * real entry in the tz database, so a child finds it: `date` reports PDT for
+ * `US/Pacific` and IST for `Asia/Kolkata` inside `node:24-bookworm-slim`.
+ * Replacing them with what ICU canonicalizes them to would put `Asia/Calcutta`
+ * in a session whose operator wrote `Asia/Kolkata`. The exception is
+ * capitalization: ICU matches a zone name case-insensitively and the tz
+ * database is a directory of files, so `america/new_york` is a name ICU knows
+ * and glibc does not -- a child given it falls back to UTC silently, and
+ * `date` prints `america +0000`. That one is normalized to the spelling ICU
+ * just named, for the reason a path is normalized rather than refused: it is
+ * the same zone, said differently.
+ */
+function readTimezone(raw: string | undefined, problems: string[]): string | undefined {
+  if (raw === undefined) return undefined;
+
+  const named = zoneNamed(raw);
+  if (named === undefined) {
+    problems.push(
+      `${SETTINGS.timezone.flag} must be a timezone this machine knows, like Europe/Madrid ` +
+        `or UTC, not ${JSON.stringify(raw)}`,
+    );
+    return undefined;
+  }
+
+  return named.toLowerCase() === raw.toLowerCase() ? named : raw;
+}
+
+/** What ICU says that name is, or nothing when it says no. */
+function zoneNamed(raw: string): string | undefined {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: raw }).resolvedOptions().timeZone;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

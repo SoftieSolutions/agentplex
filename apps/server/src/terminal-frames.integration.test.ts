@@ -20,12 +20,13 @@ import {
 import type { FakePty, FakePtyFactory } from '@agentplex/pty/testing';
 import type { Launch } from '@agentplex/providers';
 import type { ServerIdentity } from '@agentplex/providers';
-import { readyProvider } from '@agentplex/providers/testing';
+import { createFakeGrantAuthority, readyProvider } from '@agentplex/providers/testing';
 import { MAX_BUFFERED_OUTPUT_BYTES, serveHubConnection } from './hub-connection.js';
 import {
   createFakeSessionController,
   type FakeSessionController,
 } from './fake-session-controller.js';
+import { createHubAudience } from './hub-audience.js';
 import { createFakeTerminals } from './fake-terminals.js';
 import type { TerminalManager } from './terminal-manager.js';
 import { createFakeMachineLoadReader } from './fake-machine-probe.js';
@@ -92,7 +93,10 @@ function harness(scrollbackBytes?: number, socketOptions?: FakeMessageSocketOpti
   });
   const socket = createFakeMessageSocket(socketOptions ?? {});
   serveHubConnection(socket, {
+    connectionId: 'connection-under-test',
     identity,
+    grants: createFakeGrantAuthority({ grants: { [identity.token]: 'grant-under-test' } }),
+    audience: createHubAudience({ sessions, logger }),
     stores: [STORE],
     providers: [readyProvider()],
     sessions,
@@ -524,7 +528,7 @@ describe('detaching from a terminal', () => {
     await test.send({ type: 'session-unsubscribe', id: 6, target: { by: 'start', startId: 4 } });
 
     expect(test.frames().at(-1)).toEqual({ type: 'session-unsubscribed', replyTo: 6 });
-    expect(terminalOf(test).watchers).toBe(0);
+    expect(terminalOf(test).watchers).toEqual([]);
     // The rule detaching must not break: a closing tab is not a decision about
     // an agent that is mid-work.
     expect(pty.kills).toBe(0);
@@ -560,12 +564,12 @@ describe('detaching from a terminal', () => {
     const test = await handshaken();
     const pty = await start(test, 4);
     await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
-    expect(terminalOf(test).watchers).toBe(1);
+    expect(terminalOf(test).watchers).toEqual(['connection-under-test']);
 
     test.socket.closeFromPeer(PEER_GONE);
     await settle();
 
-    expect(terminalOf(test).watchers).toBe(0);
+    expect(terminalOf(test).watchers).toEqual([]);
     expect(pty.kills).toBe(0);
     expect(terminalOf(test).run.exit).toBeNull();
   });
