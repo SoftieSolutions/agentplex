@@ -13,10 +13,11 @@ import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from './terminal-manager.js';
 import { createFakeDataRoot, type FakeDataRoot } from './fake-data-root.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
-import { createFakeUncommittedDiffs } from './fake-uncommitted-diffs.js';
+import { createFakeWorkingTree } from './fake-working-tree.js';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import type { ServerConfig } from './config.js';
+import { createFakeMachineLoadReader } from './fake-machine-probe.js';
 
 const logger = createLogger('error', () => {});
 const ids = { newId: () => 'hub-under-test' };
@@ -58,7 +59,8 @@ function dependencies(
     // which halves come up and go down, and the operations are closed anyway —
     // there is no fake registry to build, only a fake machine for it to run on.
     operations: createOperationRegistry(createFakeProcessRunner()),
-    diffs: createFakeUncommittedDiffs(),
+    workingTree: createFakeWorkingTree(),
+    machineLoad: createFakeMachineLoadReader(),
     // Announcing is off in every configuration in this file, so this is a
     // capability nothing here may reach for. Opening it is the bug, and the
     // fake fails loudly rather than quietly putting a UDP socket into a test

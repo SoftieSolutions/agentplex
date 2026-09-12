@@ -93,6 +93,7 @@ describe('parseHubToServerFrame on the session instructions', () => {
     const smuggled = parseHubToServerFrame({
       ...A_START,
       cwd: '/srv/work',
+      branch: 'fix/auth-refresh',
       args: ['--resume', 'x'],
       env: { ANTHROPIC_API_KEY: 'k' },
       operation: 'git-status',
@@ -163,6 +164,7 @@ describe('terminal frames on the server direction', () => {
       command: '/bin/sh',
       args: ['-c', 'id'],
       cwd: '/etc',
+      branch: null,
     });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok || parsed.value.type !== 'terminal-input') return;
@@ -316,6 +318,7 @@ describe('parseServerToHubFrame', () => {
           status: 'working',
           updatedAt: 900,
           cwd: '/srv/work',
+          branch: null,
           title: null,
           // A working tree nobody read. The store report is the frame this
           // rides on, and `null` is what a server with no git says.
@@ -477,7 +480,15 @@ describe('hub and server round trips', () => {
       providers: [READY_CLAUDE],
     },
     { type: 'handshake-rejected', replyTo: 1, reason: 'unauthorized' },
-    { type: 'pong', replyTo: 2 },
+    {
+      type: 'pong',
+      replyTo: 2,
+      load: {
+        cpuCount: 14,
+        cpu: { percent: 31.4, windowMs: 20_000 },
+        loadAverage: [1.49951171875, 3.03271484375, 3.66796875],
+      },
+    },
     {
       type: 'session-started',
       replyTo: 3,
@@ -508,6 +519,7 @@ describe('hub and server round trips', () => {
           status: 'working',
           updatedAt: 900,
           cwd: '/srv/work',
+          branch: 'fix/auth-refresh',
           title: 'the ticket',
           uncommitted: { files: 1, added: 18, removed: 4, entries: [] },
         },

@@ -14,6 +14,7 @@ const descriptor = {
   status: 'awaiting-permission',
   updatedAt: 1_756_000_000_000,
   cwd: '/Users/dev/Code/agentplex',
+  branch: 'fix/auth-refresh',
   title: 'Docker compose without hub',
   uncommitted: {
     files: 3,
@@ -90,9 +91,20 @@ describe('sessionDescriptorSchema', () => {
     ).toBe(false);
   });
 
-  it('refuses an empty cwd or title, so a blank cannot pass for a value', () => {
+  it('refuses an empty cwd, branch or title, so a blank cannot pass for a value', () => {
     expect(sessionDescriptorSchema.safeParse({ ...descriptor, cwd: '' }).success).toBe(false);
+    expect(sessionDescriptorSchema.safeParse({ ...descriptor, branch: '' }).success).toBe(false);
     expect(sessionDescriptorSchema.safeParse({ ...descriptor, title: '' }).success).toBe(false);
+  });
+
+  it('takes null for a branch, whether the head is detached or nobody read it', () => {
+    // One value for both, deliberately. Unlike the diffstat below, the two ways
+    // of having no branch draw the same thing and neither claims anything about
+    // the checkout, so there is nothing for a client to tell apart.
+    expect(sessionDescriptorSchema.safeParse({ ...descriptor, branch: null }).success).toBe(true);
+
+    const { branch: _branch, ...withoutBranch } = descriptor;
+    expect(sessionDescriptorSchema.safeParse(withoutBranch).success).toBe(false);
   });
 
   it('refuses a session that names no provider', () => {

@@ -10,7 +10,7 @@ import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testin
 import { createPtySupervisor } from '@agentplex/pty';
 import { createFakeProviderAdapter, createFakeProviderFiles } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
-import { createFakeUncommittedDiffs, type FakeUncommittedDiffs } from './fake-uncommitted-diffs.js';
+import { createFakeWorkingTree, type FakeWorkingTree } from './fake-working-tree.js';
 import { createSessionController, type SessionController } from './session-control.js';
 import { createTerminalManager, type TerminalManager } from './terminal-manager.js';
 
@@ -50,13 +50,13 @@ interface Machine {
   readonly sessions: SessionController;
   readonly terminals: TerminalManager;
   readonly ptys: FakePtyFactory;
-  readonly diffs: FakeUncommittedDiffs;
+  readonly workingTree: FakeWorkingTree;
 }
 
 interface MachineOptions {
   readonly noAdapter?: boolean;
   /** What git found, by directory. Anything not in here was not readable. */
-  readonly diffs?: FakeUncommittedDiffs;
+  readonly workingTree?: FakeWorkingTree;
 }
 
 function machine(options: MachineOptions = {}): Machine {
@@ -94,12 +94,12 @@ function machine(options: MachineOptions = {}): Machine {
     clock,
   });
 
-  const diffs = options.diffs ?? createFakeUncommittedDiffs();
+  const workingTree = options.workingTree ?? createFakeWorkingTree();
 
   return {
     ptys,
     terminals,
-    diffs,
+    workingTree,
     sessions: createSessionController({
       stores: [STORE],
       providers: createProviderRegistry(
@@ -108,7 +108,7 @@ function machine(options: MachineOptions = {}): Machine {
           : [createFakeProviderAdapter({ provider: 'claude', files })],
       ),
       terminals,
-      diffs,
+      workingTree,
       clock,
       logger,
     }),
@@ -285,8 +285,8 @@ describe('a report', () => {
     // path. The point is that the fallback is the store and not the other
     // session's checkout -- a diffstat attributed to the wrong tree is worse
     // than none.
-    const { sessions, diffs } = machine({
-      diffs: createFakeUncommittedDiffs({
+    const { sessions, workingTree } = machine({
+      workingTree: createFakeWorkingTree({
         '/volumes/work/project': PROJECT_DIFF,
         '/volumes/work': STORE_ROOT_DIFF,
       }),
@@ -299,7 +299,42 @@ describe('a report', () => {
     expect(byId.get(session('session-busy'))).toEqual(PROJECT_DIFF);
     expect(byId.get(session('session-homeless'))).toEqual(STORE_ROOT_DIFF);
     // Two sessions share a checkout and it was read once.
-    expect([...diffs.asked].sort()).toEqual(['/volumes/work', '/volumes/work/project']);
+    expect([...workingTree.askedUncommitted].sort()).toEqual([
+      '/volumes/work',
+      '/volumes/work/project',
+    ]);
+  });
+
+  it('carries the branch each session own directory is on', async () => {
+    // The same fallback rule as the diffstat, for the same reason: a branch
+    // attributed to the wrong checkout is worse than none. Read in the same
+    // pass, so the branch and the diffstat on one descriptor are two answers
+    // about one tree at one moment.
+    const { sessions, workingTree } = machine({
+      workingTree: createFakeWorkingTree(
+        {},
+        { '/volumes/work/project': 'fix/auth-refresh', '/volumes/work': 'master' },
+      ),
+    });
+
+    const report = await sessions.report(WORK);
+    const byId = new Map(report?.sessions.map((one) => [one.sessionId, one.branch]));
+
+    expect(byId.get(session('session-1'))).toBe('fix/auth-refresh');
+    expect(byId.get(session('session-busy'))).toBe('fix/auth-refresh');
+    expect(byId.get(session('session-homeless'))).toBe('master');
+    expect([...workingTree.askedBranch].sort()).toEqual(['/volumes/work', '/volumes/work/project']);
+  });
+
+  it('reports no branch rather than a guess when git could not be asked', async () => {
+    // A detached head and a directory nobody read are the same `null` here, and
+    // both draw nothing. Neither claims anything about the checkout, which is
+    // why this field does not distinguish them and the diffstat does.
+    const { sessions } = machine();
+
+    const report = await sessions.report(WORK);
+
+    expect(report?.sessions.map((one) => one.branch)).toEqual([null, null, null]);
   });
 
   it('reports no diffstat rather than an empty one when git could not be asked', async () => {

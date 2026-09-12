@@ -27,6 +27,7 @@ import {
 } from '../../../apps/hub/src/pairing/server-handshake.js';
 import type { ServerAddress } from '../../../apps/hub/src/pairing/server-address.js';
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 const logger = createLogger('error', () => {});
 const hubId = 'hub-under-test' as HubId;
@@ -72,6 +73,7 @@ describe('handshakeWithServer against a real server', () => {
       providers: [readyProvider()],
       sessions: createFakeSessionController(),
       terminals: createFakeTerminals().terminals,
+      machineLoad: createFakeMachineLoadReader(),
       logger,
       ...serverOverrides,
     });
@@ -282,6 +284,7 @@ describe('handshakeWithServer', () => {
       providers: [readyProvider()],
       sessions: createFakeSessionController(),
       terminals: createFakeTerminals().terminals,
+      machineLoad: createFakeMachineLoadReader(),
       logger,
     });
     const timers = createFakeTimers();

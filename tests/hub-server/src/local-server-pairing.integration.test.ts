@@ -23,7 +23,8 @@ import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
 import { DEFAULT_DRAIN_MS } from '../../../apps/server/src/drain.js';
-import { createFakeUncommittedDiffs } from '../../../apps/server/src/fake-uncommitted-diffs.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
 import { localServerPairing } from '../../../apps/hub/src/pairing/local-server.js';
@@ -101,10 +102,11 @@ async function startServer({
     }),
     operations: createOperationRegistry(createFakeProcessRunner()),
     // Nothing in this file runs a session, so the drain has nothing to wait
-    // for and git is never asked anything; the default budget and the fake are
-    // here because a server carries them, not because this test uses them.
+    // for and git is never asked anything; the default budget and the fakes
+    // are here because a server carries them, not because this test uses them.
     drainMs: DEFAULT_DRAIN_MS,
-    diffs: createFakeUncommittedDiffs(),
+    workingTree: createFakeWorkingTree(),
+    machineLoad: createFakeMachineLoadReader(),
     timers: systemTimers,
     announce: null,
   });

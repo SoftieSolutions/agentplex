@@ -9,7 +9,8 @@ import type {
 } from '@agentplex/providers';
 import type { BeaconNetwork } from './server-beacon.js';
 import { startSessionServer, type SessionServer } from './server.js';
-import type { UncommittedDiffs } from './uncommitted-diffs.js';
+import type { MachineLoadReader } from './machine-load.js';
+import type { WorkingTree } from './working-tree.js';
 import type { TerminalManager } from './terminal-manager.js';
 import type { Clock, IdGenerator, Logger, Timers, TokenMinter } from '@agentplex/node-shared';
 
@@ -99,12 +100,22 @@ export interface RuntimeDependencies {
    */
   readonly operations: OperationRegistry;
   /**
-   * The one typed caller of an operation on the report path: what git says is
-   * uncommitted in a session's directory.
+   * The typed callers of operations on the report path: what git says about a
+   * session's directory, which branch is checked out and what is uncommitted.
    *
    * Injected for the same reason the registry is, and over the same runner.
    */
-  readonly diffs: UncommittedDiffs;
+  readonly workingTree: WorkingTree;
+  /**
+   * How this machine reads its own cpus, for the answer to a hub's ping.
+   *
+   * Injected rather than reached for, because a test that could not write the
+   * counters down would have to assert on whatever the machine running it
+   * happened to be doing. It is here beside the operations for the same reason
+   * they are here: `main` is where this process's view of the outside world is
+   * assembled, and nothing below it goes looking on its own.
+   */
+  readonly machineLoad: MachineLoadReader;
   /**
    * What the server would announce itself on, if it is configured to.
    *
@@ -146,7 +157,8 @@ export async function startRuntime(
     preflight,
     terminals,
     operations,
-    diffs,
+    workingTree,
+    machineLoad,
     beacon,
     timers,
     clock,
@@ -182,7 +194,8 @@ export async function startRuntime(
     terminals,
     drainMs: config.drainMs,
     operations,
-    diffs,
+    workingTree,
+    machineLoad,
     clock,
     timers,
     // The setting decides, in the one place that has read it. A server that

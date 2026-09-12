@@ -29,6 +29,7 @@ import {
 } from './fake-session-controller.js';
 import { createFakeTerminals } from './fake-terminals.js';
 import type { TerminalManager } from './terminal-manager.js';
+import { createFakeMachineLoadReader } from './fake-machine-probe.js';
 
 /**
  * The terminal frames, end to end against the real server.
@@ -100,6 +101,7 @@ function harness(scrollbackBytes?: number, socketOptions?: FakeMessageSocketOpti
     providers: [readyProvider()],
     sessions,
     terminals,
+    machineLoad: createFakeMachineLoadReader(),
     logger,
   });
 
@@ -390,7 +392,7 @@ describe('terminal frames against a real server', () => {
     await test.send({ type: 'ping', id: 9 });
     test.socket.drain();
 
-    expect(test.frames().at(-1)).toEqual({ type: 'pong', replyTo: 9 });
+    expect(test.frames().at(-1)).toMatchObject({ type: 'pong', replyTo: 9 });
   });
 
   it('counts the chunks it threw away and says so on the next one that gets through', async () => {
