@@ -1,114 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import type { ProgramResolver } from '@agentplex/providers';
-import {
-  createFakeProcessRunner,
-  printed,
-  refused,
-  type FakeProcessRunner,
-} from '@agentplex/providers/testing';
+import { printed, refused, createFakeProcessRunner } from '@agentplex/providers/testing';
 import { createFakeInstallationFiles } from '../../installation/fake-installation-files.js';
+import {
+  HOME,
+  HUB,
+  PREFIX,
+  SERVER,
+  UNITS,
+  packageAt,
+  runOnMachine,
+  show,
+  state,
+} from '../../installation/fake-units-machine.js';
 import { createSystemd } from '../../installation/systemd.js';
-import { runUnitsCommand } from './units-command.js';
+import { runUnitsCommand } from '../../installation/units-command.js';
+import { START } from './start-command.js';
 
 /**
- * `agentplex start` and `agentplex stop`, run against a prefix that is a table
- * and a `systemctl` that is a lookup.
+ * `agentplex start`: what it asks systemd for, and what it says when it cannot.
  *
- * Nothing here shells out and nothing reads a real prefix, which is the whole
- * point: the machines worth covering are a box with no systemd, a box with one
- * unit, a box with a unit the manager will not start and a directory that is
- * not an agentplex prefix at all, and every one of those is two literals rather
- * than a container.
- *
- * The composition under the command is the real one -- the real `createSystemd`
- * over a fake `ProcessRunner` -- so what the assertions reach is the argv the
- * operations built. A mock of the seam would have tested the code's shape; this
- * tests what would have been run.
+ * The machine every case runs against is described in `fake-units-machine.ts`,
+ * which `stop` runs against too. What is here is only what is true of `start`
+ * and false of its reverse.
  */
 
-const HOME = '/home/alice';
-const PREFIX = `${HOME}/.agentplex`;
-const UNITS = `${HOME}/.config/systemd/user`;
-const HUB = 'agentplex-hub.service';
-const SERVER = 'agentplex-server.service';
-
-const SHOW_PROPERTIES =
-  '--property=LoadState --property=ActiveState --property=SubState ' +
-  '--property=UnitFileState --property=ActiveEnterTimestamp';
-
-function show(scope: 'user' | 'system', unit: string): string {
-  return `systemctl ${scope === 'user' ? '--user ' : ''}show ${unit} ${SHOW_PROPERTIES}`;
-}
-
-function state(active: string, enabled = 'enabled'): ReturnType<typeof printed> {
-  return printed(
-    `LoadState=loaded\nActiveState=${active}\nSubState=running\nUnitFileState=${enabled}\n`,
-  );
-}
-
-function packageAt(name: string): string {
-  return `${PREFIX}/lib/node_modules/${name}/package.json`;
-}
-
-const SETTINGS = `AGENTPLEX_ROLE=both\nAGENTPLEX_PREFIX=${PREFIX}\n`;
-
-interface Machine {
-  /** Unit files on the disk. Nothing acts on a unit that is not here. */
-  readonly units?: readonly string[];
-  /** Whether this machine has a systemctl at all. */
-  readonly systemd?: boolean;
-  /** Extra files: manifests, a runtime stamp. */
-  readonly files?: Readonly<Record<string, string>>;
-  /** Paths that are files with nothing to read in them: an interpreter. */
-  readonly present?: readonly string[];
-  /** What systemctl prints, by argv. */
-  readonly outcomes?: Readonly<Record<string, ReturnType<typeof printed>>>;
-  /** A prefix with no agentplex in it at all. */
-  readonly bare?: boolean;
-}
-
-interface Run {
-  readonly code: number;
-  readonly out: string;
-  readonly errors: string;
-  readonly runner: FakeProcessRunner;
-}
-
-async function run(
-  verb: 'start' | 'stop',
-  argv: readonly string[],
-  machine: Machine = {},
-): Promise<Run> {
-  const out: string[] = [];
-  const errors: string[] = [];
-  const runner = createFakeProcessRunner({ outcomes: machine.outcomes ?? {} });
-  const programs: ProgramResolver = {
-    resolve: async (name) =>
-      (machine.systemd ?? true) && name === 'systemctl' ? '/usr/bin' : null,
-  };
-
-  const code = await runUnitsCommand(verb, argv, {
-    home: HOME,
-    files: createFakeInstallationFiles({
-      files:
-        machine.bare === true ? {} : { [`${PREFIX}/agentplex.env`]: SETTINGS, ...machine.files },
-      present: [
-        ...(machine.units ?? []).map((unit) => `${UNITS}/${unit}`),
-        ...(machine.present ?? []),
-      ],
-    }),
-    systemd: createSystemd({ runner, programs }),
-    interpreter: '/usr/bin/node',
-    write: (line) => out.push(line),
-    writeError: (line) => errors.push(line),
-  });
-
-  return { code, out: out.join('\n'), errors: errors.join('\n'), runner };
+function run(argv: readonly string[], machine?: Parameters<typeof runOnMachine>[2]) {
+  return runOnMachine(START, argv, machine);
 }
 
 describe('agentplex start', () => {
   it('reloads and then enables every unit this machine has', async () => {
-    const started = await run('start', [], {
+    const started = await run([], {
       units: [HUB, SERVER],
       outcomes: {
         'systemctl --user daemon-reload': printed(''),
@@ -130,7 +52,7 @@ describe('agentplex start', () => {
   });
 
   it('acts on the one unit a single-role machine has, and names no other', async () => {
-    const started = await run('start', [], {
+    const started = await run([], {
       units: [HUB],
       outcomes: {
         'systemctl --user daemon-reload': printed(''),
@@ -144,7 +66,7 @@ describe('agentplex start', () => {
   });
 
   it('does nothing and says so when no unit was ever written', async () => {
-    const started = await run('start', []);
+    const started = await run([]);
 
     expect(started.code).toBe(1);
     expect(started.out).toContain(`There is no agentplex unit in ${UNITS}`);
@@ -153,7 +75,7 @@ describe('agentplex start', () => {
   });
 
   it('prints the foreground command on a machine with no systemd', async () => {
-    const started = await run('start', [], {
+    const started = await run([], {
       systemd: false,
       files: {
         [packageAt('@softiesolutions/agentplex-hub')]: JSON.stringify({ version: '1.2.0' }),
@@ -176,7 +98,7 @@ describe('agentplex start', () => {
   });
 
   it("names the prefix's own runtime when it has one, rather than this process's", async () => {
-    const started = await run('start', [], {
+    const started = await run([], {
       systemd: false,
       files: {
         [packageAt('@softiesolutions/agentplex-hub')]: JSON.stringify({ version: '1.2.0' }),
@@ -192,7 +114,7 @@ describe('agentplex start', () => {
   });
 
   it('stops rather than enabling a unit the manager would not reload', async () => {
-    const started = await run('start', [], {
+    const started = await run([], {
       units: [HUB],
       outcomes: {
         'systemctl --user daemon-reload': refused(1, 'Failed to connect to bus: No medium found'),
@@ -207,7 +129,7 @@ describe('agentplex start', () => {
   });
 
   it("carries systemd's refusal through when it will not start them", async () => {
-    const started = await run('start', [], {
+    const started = await run([], {
       units: [HUB],
       outcomes: {
         'systemctl --user daemon-reload': printed(''),
@@ -228,7 +150,7 @@ describe('agentplex start', () => {
     // the fork does, so a daemon that reads its settings, refuses them and
     // exits is a successful job and a failed service -- which is exactly what
     // an incomplete settings file produces.
-    const started = await run('start', [], {
+    const started = await run([], {
       units: [HUB],
       outcomes: {
         'systemctl --user daemon-reload': printed(''),
@@ -243,34 +165,6 @@ describe('agentplex start', () => {
   });
 });
 
-describe('agentplex stop', () => {
-  it('disables as well as stops, because it is the reverse of start', async () => {
-    const stopped = await run('stop', [], {
-      units: [HUB, SERVER],
-      outcomes: {
-        [`systemctl --user disable --now ${HUB} ${SERVER}`]: printed(''),
-        [show('user', HUB)]: state('inactive', 'disabled'),
-        [show('user', SERVER)]: state('inactive', 'disabled'),
-      },
-    });
-
-    expect(stopped.code).toBe(0);
-    expect(stopped.out).toContain(`stopped and disabled ${HUB}, ${SERVER}`);
-    // No reload: nothing on the disk changed, and a stop that reloaded first
-    // would be doing something the operator did not ask for.
-    expect(stopped.runner.requests[0]?.args).toEqual(['--user', 'disable', '--now', HUB, SERVER]);
-  });
-
-  it('does not offer a foreground command to somebody trying to stop one', async () => {
-    const stopped = await run('stop', [], { systemd: false });
-
-    expect(stopped.code).toBe(1);
-    expect(stopped.out).toContain('There is no systemctl on this machine');
-    expect(stopped.out).toContain('started by hand');
-    expect(stopped.out).not.toContain('dist/main.js');
-  });
-});
-
 describe('the scope and the prefix', () => {
   it('reaches a fleet install with the systemctl that reaches a system unit', async () => {
     const out: string[] = [];
@@ -282,7 +176,7 @@ describe('the scope and the prefix', () => {
       },
     });
 
-    const code = await runUnitsCommand('start', [], {
+    const code = await runUnitsCommand(START, [], {
       home: HOME,
       files: createFakeInstallationFiles({
         files: { '/etc/agentplex/agentplex.env': 'AGENTPLEX_ROLE=hub\n' },
@@ -305,7 +199,7 @@ describe('the scope and the prefix', () => {
   });
 
   it('refuses a directory that is not an agentplex prefix', async () => {
-    const started = await run('start', ['--prefix', '/srv/nothing'], { bare: true });
+    const started = await run(['--prefix', '/srv/nothing'], { bare: true });
 
     expect(started.code).toBe(2);
     expect(started.out).toBe('');
@@ -315,21 +209,21 @@ describe('the scope and the prefix', () => {
   });
 
   it('refuses a relative prefix rather than resolving it against wherever you stood', async () => {
-    const started = await run('start', ['--prefix', 'agentplex']);
+    const started = await run(['--prefix', 'agentplex']);
 
     expect(started.code).toBe(2);
     expect(started.errors).toContain('has to be an absolute path');
   });
 
   it('refuses an argument it does not know rather than dropping it', async () => {
-    const started = await run('start', ['--prefx=/srv/agentplex']);
+    const started = await run(['--prefx=/srv/agentplex']);
 
     expect(started.code).toBe(2);
     expect(started.errors).toContain('unknown argument: --prefx=/srv/agentplex');
   });
 
   it('takes --system with no value, the way install.sh spells it', async () => {
-    const started = await run('start', ['--system=yes']);
+    const started = await run(['--system=yes']);
 
     expect(started.code).toBe(2);
     expect(started.errors).toContain('--system takes no value');
