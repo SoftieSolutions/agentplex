@@ -42,6 +42,10 @@ const supervisor = createPtySupervisor({
     // Kept, and the control for the prefix rule: a substring is not a prefix.
     MY_CLAUDE_NOTE: 'kept',
     PATH: process.env.PATH ?? '',
+    // The suite's throwaway home -- see `scripts/test-home.ts`. A pty child
+    // given no `$HOME` resolves one from the passwd entry instead, which is
+    // the operator's.
+    HOME: process.env.HOME ?? '',
   },
 });
 

@@ -47,7 +47,11 @@ function run(...args: readonly string[]): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [ENTRYPOINT, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { PATH: process.env['PATH'] ?? '' },
+    // `$HOME` travels with `$PATH`, and the suite's is a throwaway -- see
+    // `scripts/test-home.ts`. An environment without it is not sealed: a
+    // child asking `os.homedir()` gets the passwd entry when `$HOME` is
+    // missing, which is the operator's real home.
+    env: { HOME: process.env['HOME'] ?? '', PATH: process.env['PATH'] ?? '' },
     timeout: EXIT_TIMEOUT_MS,
   });
 }

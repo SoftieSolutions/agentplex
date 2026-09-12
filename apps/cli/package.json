@@ -10,8 +10,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests",
-    "test:coverage": "vitest run --coverage --passWithNoTests"
+    "test": "vitest run --config ../../scripts/vitest.config.ts --passWithNoTests",
+    "test:coverage": "vitest run --config ../../scripts/vitest.config.ts --coverage --passWithNoTests"
   },
   "dependencies": {
     "@agentplex/node-shared": "workspace:*",
