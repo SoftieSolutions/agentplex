@@ -115,21 +115,22 @@ pnpm docker:check   # the same, in a container
 
 Every setting has one flag and one environment variable; the flag wins.
 
-| Flag                     | Environment                      | Default            | Meaning                                                  |
-| ------------------------ | -------------------------------- | ------------------ | -------------------------------------------------------- |
-| `--role`                 | `AGENTPLEX_ROLE`                 | none, required     | `hub`, `server` or `both`                                |
-| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`          | Interface to bind                                        |
-| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`             | Port the hub serves on                                   |
-| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`             | Port the hub dials                                       |
-| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none               | SQLite file, absolute; required for `hub` and `both`     |
-| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none               | Client credential, 32+ chars; required for `hub`, `both` |
-| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none               | Store root; repeatable, absolute                         |
-| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none               | Absolute; required for `server` and `both`               |
-| `--data-path`            | `AGENTPLEX_DATA_PATH`            | `$HOME/.agentplex` | Absolute; the one directory a server writes into         |
-| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none               | Agent directory, searched before `PATH`; repeatable      |
-| `--tz`                   | `AGENTPLEX_TZ`                   | inherited          | Zone a spawned session reports times in; IANA name       |
-| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                | Terminals held at once; at least 1                       |
-| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`             | `debug`, `info`, `warn`, `error`                         |
+| Flag                     | Environment                      | Default               | Meaning                                                                                    |
+| ------------------------ | -------------------------------- | --------------------- | ------------------------------------------------------------------------------------------ |
+| `--role`                 | `AGENTPLEX_ROLE`                 | none, required        | `hub`, `server` or `both`                                                                  |
+| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`             | Interface to bind                                                                          |
+| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`                | Port the hub serves on                                                                     |
+| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`                | Port the hub dials                                                                         |
+| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none                  | SQLite file, absolute; required for `hub` and `both`                                       |
+| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none                  | Client credential, 32+ chars; required for `hub`, `both`                                   |
+| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none                  | Store root; repeatable, absolute                                                           |
+| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none                  | Absolute; required for `server` and `both`                                                 |
+| `--server-token`         | `AGENTPLEX_SERVER_TOKEN`         | minted on first start | Pairing token the deployment sets, 32+ chars; for a machine whose disk does not outlive it |
+| `--data-path`            | `AGENTPLEX_DATA_PATH`            | `$HOME/.agentplex`    | Absolute; the one directory a server writes into                                           |
+| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none                  | Agent directory, searched before `PATH`; repeatable                                        |
+| `--tz`                   | `AGENTPLEX_TZ`                   | inherited             | Zone a spawned session reports times in; IANA name                                         |
+| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                   | Terminals held at once; at least 1                                                         |
+| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`                | `debug`, `info`, `warn`, `error`                                                           |
 
 ### Checking a machine
 
@@ -152,6 +153,20 @@ discovery on the LAN pre-fills the address and nothing more.
 Tokens are per server, so revoking one instance touches no other. Keep the
 identity file somewhere that survives a restart: a server that loses it mints a
 new identity, and the pairing stops working until you pair again.
+
+Where there is no such place — a container whose filesystem goes at the next
+deploy, a CI job nobody will ever shell into — the deployment can supply the
+token instead, with `AGENTPLEX_SERVER_TOKEN`. The server writes that token into
+the identity file rather than minting one, so the secret is known before the
+process first starts and nobody has to read a file off the box to learn it. A
+file that already holds a different token stops the start rather than either
+token quietly winning: a server answering to a credential you believe you
+replaced is the failure that would cause.
+
+That settles the token and not the `serverId`, which is still minted per file.
+A hub refuses a handshake presenting a different `serverId` than the pairing was
+completed with, so a server whose filesystem is genuinely disposable wants its
+identity file on a mounted volume as well.
 
 The hub dials the server, never the reverse, so a server needs one inbound port
 reachable by the hub and dials out to nothing. That port carries both the health

@@ -31,12 +31,19 @@ export interface RuntimeDependencies {
    */
   readonly dataRootFileSystem: DataRootFileSystem;
   /**
-   * Where a secret comes from: the pairing token on a first start.
+   * Where a secret comes from when nothing supplied one: the pairing token on
+   * a first start.
    *
    * Injected rather than imported for the reason the id source is, and one
    * more: a test that asserts on a handshake needs to know the value, and a
    * seam is how it does that without the entropy being weaker in the build
    * anyone actually runs.
+   *
+   * It is a dependency and not a setting, and the token a deployment sets is a
+   * setting and not a dependency, which is the right way round: one is a
+   * capability the process supplies and the other is a decision the operator
+   * took. `config.serverToken` reaches the identity file through the same call
+   * as this, and when it is there this is never asked.
    */
   readonly tokens: TokenMinter;
   /**
@@ -133,6 +140,10 @@ export async function startRuntime(
     storeFileSystem,
     identityPath: config.identityPath,
     tokens,
+    // The setting decides, in the one place that has read it. A deployment
+    // that set none leaves the minter above as the only source, which is what
+    // every machine with a disk of its own does.
+    serverToken: config.serverToken,
     providers,
     preflight,
     terminals,

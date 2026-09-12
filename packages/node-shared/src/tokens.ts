@@ -37,6 +37,23 @@ export const randomTokenMinter: TokenMinter = {
 };
 
 /**
+ * The floor under a token a person or a deployment supplied, rather than one
+ * `randomTokenMinter` produced.
+ *
+ * Short enough to be typed on a phone, long enough that guessing it is not a
+ * plan. 32 characters is under what the minter above produces (43), so the
+ * documented way of generating one always passes; what it refuses is the
+ * password somebody picked because it was quick, on a credential that is the
+ * only thing standing between a network and every session behind it.
+ *
+ * One number rather than one per caller. The hub's client token and the
+ * server's configured pairing token are the same decision taken twice -- an
+ * operator supplied a secret instead of letting a CSPRNG mint one -- and two
+ * constants that have to agree are two that eventually do not.
+ */
+export const MIN_TOKEN_LENGTH = 32;
+
+/**
  * Compares two secrets without leaking how far the comparison got.
  *
  * `timingSafeEqual` throws on differing lengths, and calling it on the raw
