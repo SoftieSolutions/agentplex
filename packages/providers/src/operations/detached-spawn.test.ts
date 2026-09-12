@@ -77,7 +77,19 @@ describe('startDetached', () => {
   });
 });
 
-describe('createNodeDetachedSpawner', () => {
+/**
+ * A fork, a Node runtime booting, and then a file appearing.
+ *
+ * The poll below is the guard against a child that never writes, and it was set
+ * to exactly vitest's default bound -- so it could never report anything: the
+ * suite gave up at the same moment, with a message about a timeout instead of
+ * `eventually` returning null and the assertion naming what was missing. The
+ * budget is the inner bound and stays where a wedged child is caught quickly;
+ * the suite's is now outside it, so the inner one is the one that fires.
+ */
+const TEST_TIMEOUT_MS = 20_000;
+
+describe('createNodeDetachedSpawner', { timeout: TEST_TIMEOUT_MS }, () => {
   let directory: string;
 
   beforeAll(async () => {
@@ -128,9 +140,15 @@ describe('createNodeDetachedSpawner', () => {
   });
 });
 
-/** The child is not waited for, so its file is looked for until it appears. */
+/**
+ * The child is not waited for, so its file is looked for until it appears.
+ *
+ * Ten seconds of looking, which is half the suite's bound: a child that never
+ * writes fails here, as a null the assertion can name, rather than as the
+ * harness giving up on the test.
+ */
 async function eventually(path: string): Promise<string | null> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     try {
       return await readFile(path, 'utf8');
     } catch {

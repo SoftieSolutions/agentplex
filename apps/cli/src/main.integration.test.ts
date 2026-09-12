@@ -40,7 +40,17 @@ const BIN = fileURLToPath(new URL('../dist/main.js', import.meta.url));
  */
 const MANIFEST = fileURLToPath(new URL('../../../package.json', import.meta.url));
 
-/** A command that loads its module and refuses its configuration is still quick. */
+/**
+ * A command that loads its module and refuses its configuration is still quick.
+ *
+ * Stated for the whole suite rather than for the one test that happened to be
+ * slowest when somebody noticed. Every test here forks a Node runtime and waits
+ * for the bin's module graph to load, and vitest's default bound is five
+ * seconds -- so what these were guarding against was never a hang, it was the
+ * machine being busy, and four of them fork two children at once. Nothing here
+ * asserts anything about how long a run took; the claims are all about an exit
+ * code and what was printed.
+ */
 const RUN_TIMEOUT_MS = 20_000;
 
 interface Run {
@@ -92,7 +102,7 @@ async function declaredVersion(): Promise<string> {
   return version;
 }
 
-describe('the agentplex bin', () => {
+describe('the agentplex bin', { timeout: RUN_TIMEOUT_MS }, () => {
   it('asks for a command on stderr when it was given none', async () => {
     const result = await run();
 
@@ -194,20 +204,16 @@ describe('the agentplex bin', () => {
     expect(result.stderr).toContain('Usage: agentplex <command> [options]');
   });
 
-  it(
-    'runs a known command, which then refuses its own configuration',
-    { timeout: RUN_TIMEOUT_MS },
-    async () => {
-      const result = await run('doctor');
+  it('runs a known command, which then refuses its own configuration', async () => {
+    const result = await run('doctor');
 
-      // The doctor's refusal, not the bin's: proof the command word was
-      // consumed and the module behind it was loaded and called.
-      expect(result.code).toBe(2);
-      expect(result.stderr).toContain('agentplex doctor:');
-      expect(result.stderr).toContain('Usage: agentplex doctor');
-      expect(result.stderr).not.toContain('Usage: agentplex <command>');
-    },
-  );
+    // The doctor's refusal, not the bin's: proof the command word was
+    // consumed and the module behind it was loaded and called.
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('agentplex doctor:');
+    expect(result.stderr).toContain('Usage: agentplex doctor');
+    expect(result.stderr).not.toContain('Usage: agentplex <command>');
+  });
 
   /**
    * The word every unit file, every document and every habit still says, at a

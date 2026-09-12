@@ -90,13 +90,20 @@ afterEach(() => {
  * The versions directory is outside the home on purpose: several tests assert
  * that a run which was told to change nothing left the home empty, and a
  * fixture inside it would make every one of those assertions about the fixture.
+ *
+ * The stem is a parameter because the default one is a clock. `mkdtempSync`
+ * derives its suffix from the time rather than from randomness, so which
+ * directory a run gets is a fact about when it ran -- and a test that needs a
+ * particular name states it here instead of waiting for the clock to produce
+ * one. Six characters are still appended, so a stated name is as unique as the
+ * default.
  */
-function scratch(): {
+function scratch(named = 'agentplex-install-'): {
   readonly script: string;
   readonly home: string;
   readonly versions: string;
 } {
-  const root = mkdtempSync(join(tmpdir(), 'agentplex-install-'));
+  const root = mkdtempSync(join(tmpdir(), named));
   temporaries.push(root);
   const script = join(root, 'install.sh');
   const home = join(root, 'home');
@@ -239,6 +246,48 @@ function planned(stdout: string, key: string): string | undefined {
   const line = stdout.split('\n').find((candidate) => candidate.startsWith(`${key} `));
   return line?.slice(key.length).trim();
 }
+
+/** What the `package` step will hand npm, and where it will put the result. */
+interface PackagePlan {
+  /**
+   * The argv npm is given: one tarball spec per component, or -- where nothing
+   * has been resolved yet -- the components and the root their tags hang under.
+   */
+  readonly source: string;
+  /** The prefix it installs into, which under this suite is a scratch path. */
+  readonly destination: string;
+}
+
+/**
+ * The `package` line of the plan, split at its destination.
+ *
+ * Read this rather than the rendered line whenever the assertion is about what
+ * npm is handed, because the rendered line also names the scratch prefix and a
+ * scratch prefix is this suite's own invention rather than the script's answer.
+ *
+ * That distinction was not free. `mkdtempSync` derives its suffix from the
+ * clock and not from randomness, so `agentplex-install-vJKSyf` and
+ * `agentplex-install-vI0etU` are both names it really produced; a prefix under
+ * either one renders `-v` into this line, and the assertion below that greps
+ * for `-v` to prove no release tag was invented used to read the path instead.
+ * It failed twice in six container runs, always looking like a regression in
+ * argument handling and never being one.
+ *
+ * The needle is the part that varies. `-f`, `-y` and every other single-letter
+ * flag an installer test might want to look for sit in the same trap, so the
+ * fix is not a safer alphabet for the directory name -- it is to stop the
+ * directory name reaching an assertion that was never about it.
+ */
+function packagePlan(stdout: string): PackagePlan {
+  const line = planned(stdout, 'package');
+  if (line === undefined) throw new Error('the plan named no package step');
+  const at = line.lastIndexOf(DESTINATION);
+  if (at === -1) throw new Error(`a package step with no destination: ${line}`);
+  return { source: line.slice(0, at), destination: line.slice(at + DESTINATION.length) };
+}
+
+/** What the script prints between the packages and the prefix they land in. */
+const DESTINATION = ' into ';
 
 /** A literal path, as a fragment of a regular expression. */
 function escaped(value: string): string {
@@ -905,8 +954,7 @@ describe('the plan a dry run prints', () => {
     ['both', ['cli', 'hub', 'web', 'server'], []],
   ])('installs the packages --role=%s runs, and no others', (role, wanted, unwanted) => {
     const { script, home } = scratch();
-    const line =
-      planned(run(script, home, ['--dry-run', `--role=${role}`]).stdout, 'package') ?? '';
+    const { source: line } = packagePlan(run(script, home, ['--dry-run', `--role=${role}`]).stdout);
 
     for (const component of wanted) {
       expect(line, component).toContain(releaseUrl(component, CURRENT[component] ?? ''));
@@ -932,13 +980,11 @@ describe('the plan a dry run prints', () => {
       writeFileSync(join(packages, `softiesolutions-${name}-0.0.0.tgz`), '');
     }
 
-    const line =
-      planned(
-        run(script, home, ['--dry-run', '--role=hub'], {
-          environment: { AGENTPLEX_PACKAGE: packages },
-        }).stdout,
-        'package',
-      ) ?? '';
+    const { source: line } = packagePlan(
+      run(script, home, ['--dry-run', '--role=hub'], {
+        environment: { AGENTPLEX_PACKAGE: packages },
+      }).stdout,
+    );
 
     // The hub's three, by file. The `[0-9]` in the script's pattern is what
     // keeps the command's own tarball from also matching the hub, the server
@@ -2110,11 +2156,38 @@ describe('the versions manifest, which is read off the network and parsed', () =
     expect(result.status).toBe(0);
     expect(planned(result.stdout, 'release')).toContain('a dry run downloads nothing');
     expect(planned(result.stdout, 'protocol')).toContain('not checked');
-    // No URL was invented for a version this run never learned.
     // No URL was built for a version this run never learned: the download root
-    // is named, and no tag inside it is.
-    expect(planned(result.stdout, 'package')).not.toContain('-v');
-    expect(planned(result.stdout, 'package')).toContain('cli hub web from');
+    // is named, and no tag inside it is. Asked of what npm is handed, because
+    // the rest of the line is a prefix this suite chose and nothing the script
+    // decided.
+    const { source } = packagePlan(result.stdout);
+    expect(source).not.toContain('-v');
+    expect(source).toContain('cli hub web from');
+  });
+
+  /**
+   * The same claim, made from a scratch directory that sets the trap on
+   * purpose.
+   *
+   * `agentplex-install-vJKSyf` is a directory `mkdtempSync` really returned.
+   * Its suffix comes from the clock, so the failure was always there and only
+   * sometimes observed -- two of six container runs, each reported as an
+   * argument-handling regression. Stating the name is what turns that into a
+   * test: the assertion above passes on a lucky clock either way, and this one
+   * cannot.
+   */
+  it('says nothing about a version from a scratch directory named like a flag', () => {
+    const { script, home } = scratch('agentplex-install-vJKSyf');
+
+    const result = run(script, home, ['--dry-run', '--role=hub'], {
+      environment: { AGENTPLEX_VERSIONS: '' },
+    });
+
+    expect(result.status).toBe(0);
+    // The trap is set: the rendered line does carry `-v`, in the prefix.
+    expect(planned(result.stdout, 'package')).toContain('-v');
+    // And the half that is the script's answer does not.
+    expect(packagePlan(result.stdout).source).not.toContain('-v');
   });
 
   /**
