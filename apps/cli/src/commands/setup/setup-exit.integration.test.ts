@@ -90,16 +90,19 @@ const ESCAPE = '\u001b';
  */
 const CURSOR = new RegExp(`${ESCAPE}\\[[0-9;]*[A-Za-z]`, 'g');
 
+/** Everything the child has written, with the cursor moves it drew with gone. */
+function written(text: string): string {
+  return text.replaceAll(CURSOR, '');
+}
+
 /**
  * The question the child is sitting on, or nothing if it is still talking.
  *
  * A prompt is written without a newline, so it is whatever the child wrote after
- * the last one, with the cursor moves it drew it with taken out: `Role [server] `,
- * `codex [install] `, `Paste the code here: `.
+ * the last one: `Role [server] `, `codex [install] `, `Paste the code here: `.
  */
 function pendingPrompt(text: string): string {
-  const written = text.replaceAll(CURSOR, '');
-  const last = written.split(/[\r\n]/).at(-1) ?? '';
+  const last = text.split(/[\r\n]/).at(-1) ?? '';
   return last.trim().length === 0 ? '' : last;
 }
 
@@ -124,6 +127,34 @@ function asAnOperatorWould(prompt: string): string | undefined {
   if (prompt.endsWith('[install] ')) return `skip${RETURN}`;
   return prompt.endsWith('] ') ? RETURN : undefined;
 }
+
+/**
+ * The questions a server run has to ask, in the order it has to ask them.
+ *
+ * Asserted afterwards rather than typed from, which is the difference between
+ * this and a script: the run is driven by the rule above, and this only reads
+ * back what the rule was asked. So it is a *subsequence*. A question that is not
+ * named here — the offer for some provider registered later — is answered by the
+ * rule, ignored here, and breaks nothing, which is the property that stops this
+ * becoming the answer list it replaced. What it does pin is the spine, and every
+ * step of it is load-bearing for what this case claims: the plan is built before
+ * it is applied, applying is what finds claude logged out, the login is offered
+ * after that and lends the terminal out, and the save question comes back
+ * afterwards on a terminal that has to have been handed back to ask it at all.
+ *
+ * Matched on the question rather than the whole prompt: the default inside the
+ * brackets is the wizard's to change and a port or a path is this machine's.
+ */
+const THE_SPINE = [
+  'Role [',
+  'Server port [',
+  'Stores [',
+  'claude [',
+  'Apply it to this machine?',
+  'Log claude in now?',
+  'Paste the code here:',
+  'Save this plan to a file?',
+] as const;
 
 let home: string;
 /** A directory on the run's PATH, holding a `claude` and nothing else. */
@@ -182,16 +213,40 @@ async function installFakeClaude(): Promise<void> {
  * One at a time and never all at once, because a person types one line per
  * prompt and setup can tell the difference: answers that arrived ahead of the
  * questions are how it recognises a script behind a terminal and refuses to put
- * a browser OAuth flow in front of one. So the next line goes in only once the
- * child has stopped printing, which is what waiting for a prompt looks like from
- * out here.
+ * a browser OAuth flow in front of one.
  *
- * And then it answers what is actually on the screen. `answer` is handed the
- * prompt the run is sitting on and gives back what to type at it, so a question
- * this test did not know about is a question it can still answer rather than an
- * answer that lands one prompt early and a run that hangs behind it. Nothing to
- * type is nothing typed: the child stays where it is and the run fails as the
- * "never exited" it is, with the transcript saying which prompt stopped it.
+ * It answers what is actually on the screen. `answer` is handed the prompt the
+ * run is sitting on and gives back what to type at it, so a question this test
+ * did not know about is a question it can still answer rather than an answer
+ * that lands one prompt early and a run that hangs behind it. Nothing to type is
+ * nothing typed: the child stays where it is and the run fails as the "never
+ * exited" it is, with the transcript saying which prompt stopped it.
+ *
+ * **The rule is also the trigger.** This used to type after three consecutive
+ * silent 50ms ticks — a clock standing in for a prompt, and worse than merely
+ * slow: the tick count reset on every chunk, so a busier child emitted its
+ * output in more pieces, which paced the answers slower, which made the run
+ * longer, which left the child busier still against a fixed bound. A positive
+ * feedback loop, which is why raising the timeout would not have been the same
+ * fix. There is no clock here. A prompt the rule recognises *is* the signal that
+ * the child is waiting, because recognising one is the whole of what the rule
+ * does — every wizard question is written as `<question> [<default>] ` and
+ * parked on without a newline. The rule says what to type; the arrival of a
+ * prompt it answers says when.
+ *
+ * Keyed on the text rather than on a terminal escape, and that is load-bearing:
+ * `Paste the code here: ` comes from the provider's own program, not from
+ * setup's readline, so it is parked on with no cursor escape at all. A trigger
+ * watching for the escape readline emits would drive the wizard's own questions
+ * and then hang forever on that one.
+ *
+ * A question is answered once where it stands. Readline redraws a line it is
+ * sitting on by moving the cursor, which changes nothing once the moves are
+ * taken out — so "the same prompt at the same offset" is a redraw, and typing
+ * at it again would put the second line in front of the *next* question. That
+ * is not hypothetical: the first cut of this typed `skip` twice at the codex
+ * offer, the spare landed on `Apply it to this machine?`, and the run went off
+ * and really npm-installed codex.
  */
 function driveOnAPty(
   args: readonly string[],
@@ -200,6 +255,8 @@ function driveOnAPty(
   readonly pty: Pty;
   readonly exited: Promise<PtyExit | 'never exited'>;
   readonly text: () => string;
+  /** The questions this run answered, in the order it answered them. */
+  readonly asked: () => readonly string[];
 } {
   const pty = nodePtyFactory.open({
     command: process.execPath,
@@ -224,28 +281,23 @@ function driveOnAPty(
   });
 
   const chunks: string[] = [];
-  let quiet = 0;
-  // How much had been printed when the last answer went in. Nothing new since
-  // means the answer has not landed yet, and typing it twice would put the
-  // second copy in front of the next question — the failure this test is
-  // getting away from, arrived at from the other end.
-  let answeredAt = -1;
-  const typing = setInterval(() => {
-    quiet += 1;
-    if (quiet < 3) return;
-    quiet = 0;
-    const text = chunks.join('');
-    if (text.length === answeredAt) return;
-    const prompt = pendingPrompt(text);
+  const asked: string[] = [];
+  // How much the child had written before the question that was last answered.
+  // The text only ever grows, so every new question sits further along than the
+  // one before it and a redraw of the current one sits exactly here.
+  let answeredAfter = -1;
+  pty.onData((chunk) => {
+    chunks.push(new TextDecoder().decode(chunk));
+    const seen = written(chunks.join(''));
+    const prompt = pendingPrompt(seen);
     if (prompt.length === 0) return;
     const next = answer(prompt);
     if (next === undefined) return;
-    answeredAt = text.length;
+    const startsAt = seen.length - prompt.length;
+    if (startsAt === answeredAfter) return;
+    answeredAfter = startsAt;
+    asked.push(prompt);
     pty.write(next);
-  }, 50);
-  pty.onData((chunk) => {
-    quiet = 0;
-    chunks.push(new TextDecoder().decode(chunk));
   });
 
   const exited = Promise.race([
@@ -253,9 +305,9 @@ function driveOnAPty(
     new Promise<'never exited'>((resolve) =>
       setTimeout(() => resolve('never exited'), EXIT_TIMEOUT_MS),
     ),
-  ]).finally(() => clearInterval(typing));
+  ]);
 
-  return { pty, exited, text: () => chunks.join('') };
+  return { pty, exited, text: () => chunks.join(''), asked: () => asked };
 }
 
 beforeAll(async () => {
@@ -341,6 +393,16 @@ describe('a finished setup run', () => {
       expect(driven.text()).toContain('Paste the code here:');
       expect(driven.text()).toContain(`Signed in as ${CODE_FROM_THE_BROWSER}`);
       expect(driven.text()).toContain('claude is logged in.');
+      // And it asked the whole conversation, in order. Dropping the questions
+      // the spine does not name leaves exactly the spine, so a step that went
+      // missing or arrived out of turn is a diff rather than a run that still
+      // happens to end in an exit code of zero.
+      expect(
+        driven
+          .asked()
+          .flatMap((prompt) => THE_SPINE.filter((question) => prompt.startsWith(question))),
+        driven.text(),
+      ).toEqual([...THE_SPINE]);
     },
     TEST_TIMEOUT_MS,
   );
