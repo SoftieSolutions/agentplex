@@ -63,9 +63,67 @@ const BIN = fileURLToPath(new URL('../../../dist/main.js', import.meta.url));
 /** The command word the bin consumes before the wizard reads argv. */
 const COMMAND = 'setup';
 
-/** Role, hub port, apply, save. Every one of them takes the offer. */
 const RETURN = '\r';
-const ANSWERS = RETURN.repeat(4);
+
+/**
+ * The hub run's answers: role, hub port, apply, save. Every one takes the offer.
+ *
+ * Counted, and legitimately so. A hub plan runs no sessions, so the wizard asks
+ * it nothing about providers — these four questions are the whole of a hub, and
+ * registering a provider cannot add a fifth. The server run below is the one
+ * that has to stop counting.
+ */
+const HUB_ANSWERS = RETURN.repeat(4);
+
+/** What the operator pastes back from the browser, at the provider's own prompt. */
+const CODE_FROM_THE_BROWSER = 'a-code-from-the-browser';
+
+/** What a terminal starts a cursor move with. */
+const ESCAPE = '\u001b';
+
+/**
+ * Everything a terminal writes to put the cursor somewhere, gone.
+ *
+ * Built rather than written as a literal: a control character in a regular
+ * expression is banned in this repository, and it is banned for the reason that
+ * makes this one worth a comment — nobody can see it in the source.
+ */
+const CURSOR = new RegExp(`${ESCAPE}\\[[0-9;]*[A-Za-z]`, 'g');
+
+/**
+ * The question the child is sitting on, or nothing if it is still talking.
+ *
+ * A prompt is written without a newline, so it is whatever the child wrote after
+ * the last one, with the cursor moves it drew it with taken out: `Role [server] `,
+ * `codex [install] `, `Paste the code here: `.
+ */
+function pendingPrompt(text: string): string {
+  const written = text.replaceAll(CURSOR, '');
+  const last = written.split(/[\r\n]/).at(-1) ?? '';
+  return last.trim().length === 0 ? '' : last;
+}
+
+/**
+ * What a person sitting at this terminal would type at the question in front of
+ * them, or nothing if they would not recognise it as a question.
+ *
+ * Answering the question rather than counting the questions. This test's subject
+ * is whether the process exits, and the number of prompts between the start and
+ * that exit is incidental to it — so it is not encoded here. Registering a
+ * provider adds a question, and this keeps answering.
+ *
+ * The offer is taken everywhere but one place, and that one is the point of the
+ * rule rather than an exception to it: a provider this machine does not have is
+ * offered an install, and taking that offer would have the test npm-install a
+ * provider out of the public registry to reach a login that is not its. The
+ * `claude` on this run's PATH is the one being logged in, it is found, and what
+ * it is offered is adoption.
+ */
+function asAnOperatorWould(prompt: string): string | undefined {
+  if (prompt.startsWith('Paste the code here:')) return `${CODE_FROM_THE_BROWSER}${RETURN}`;
+  if (prompt.endsWith('[install] ')) return `skip${RETURN}`;
+  return prompt.endsWith('] ') ? RETURN : undefined;
+}
 
 let home: string;
 /** A directory on the run's PATH, holding a `claude` and nothing else. */
@@ -119,7 +177,7 @@ async function installFakeClaude(): Promise<void> {
 }
 
 /**
- * Runs the built bin on a pty and answers the wizard, one line at a time.
+ * Runs the built bin on a pty and answers the wizard, one question at a time.
  *
  * One at a time and never all at once, because a person types one line per
  * prompt and setup can tell the difference: answers that arrived ahead of the
@@ -127,10 +185,17 @@ async function installFakeClaude(): Promise<void> {
  * a browser OAuth flow in front of one. So the next line goes in only once the
  * child has stopped printing, which is what waiting for a prompt looks like from
  * out here.
+ *
+ * And then it answers what is actually on the screen. `answer` is handed the
+ * prompt the run is sitting on and gives back what to type at it, so a question
+ * this test did not know about is a question it can still answer rather than an
+ * answer that lands one prompt early and a run that hangs behind it. Nothing to
+ * type is nothing typed: the child stays where it is and the run fails as the
+ * "never exited" it is, with the transcript saying which prompt stopped it.
  */
 function driveOnAPty(
   args: readonly string[],
-  answers: readonly string[],
+  answer: (prompt: string) => string | undefined,
 ): {
   readonly pty: Pty;
   readonly exited: Promise<PtyExit | 'never exited'>;
@@ -159,14 +224,24 @@ function driveOnAPty(
   });
 
   const chunks: string[] = [];
-  const remaining = [...answers];
   let quiet = 0;
+  // How much had been printed when the last answer went in. Nothing new since
+  // means the answer has not landed yet, and typing it twice would put the
+  // second copy in front of the next question — the failure this test is
+  // getting away from, arrived at from the other end.
+  let answeredAt = -1;
   const typing = setInterval(() => {
     quiet += 1;
     if (quiet < 3) return;
     quiet = 0;
-    const next = remaining.shift();
-    if (next !== undefined) pty.write(next);
+    const text = chunks.join('');
+    if (text.length === answeredAt) return;
+    const prompt = pendingPrompt(text);
+    if (prompt.length === 0) return;
+    const next = answer(prompt);
+    if (next === undefined) return;
+    answeredAt = text.length;
+    pty.write(next);
   }, 50);
   pty.onData((chunk) => {
     quiet = 0;
@@ -221,7 +296,7 @@ describe('a finished setup run', () => {
       pty.onData(() => {
         if (answered) return;
         answered = true;
-        pty.write(ANSWERS);
+        pty.write(HUB_ANSWERS);
       });
 
       const outcome = await Promise.race([
@@ -251,29 +326,20 @@ describe('a finished setup run', () => {
       //
       // `--role server`: no hub port to answer, and every question that is left
       // is one the login step depends on.
-      const driven = driveOnAPty(
-        ['--role', 'server'],
-        [
-          // role, server port, stores, claude, apply, log in now
-          ...Array<string>(6).fill(RETURN),
-          // What the operator pastes back from the browser, typed at the
-          // provider's own program rather than at the wizard.
-          `a-code-from-the-browser${RETURN}`,
-          // save the plan
-          RETURN,
-        ],
-      );
+      const driven = driveOnAPty(['--role', 'server'], asAnOperatorWould);
 
       const outcome = await driven.exited;
       driven.pty.kill();
 
-      expect(outcome).toEqual({ exitCode: 0, signal: null });
+      // The transcript on failure, because a run that never exited is a run
+      // that stopped somewhere, and where is the whole of the answer.
+      expect(outcome, driven.text()).toEqual({ exitCode: 0, signal: null });
       // And it was a login that happened, rather than a question that was
       // skipped: the provider's prompt reached the operator's terminal, the
       // pasted code reached the provider, and the re-probe afterwards saw the
       // machine the login had changed.
       expect(driven.text()).toContain('Paste the code here:');
-      expect(driven.text()).toContain('Signed in as a-code-from-the-browser');
+      expect(driven.text()).toContain(`Signed in as ${CODE_FROM_THE_BROWSER}`);
       expect(driven.text()).toContain('claude is logged in.');
     },
     TEST_TIMEOUT_MS,
