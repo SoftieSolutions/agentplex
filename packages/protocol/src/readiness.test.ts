@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { providerReadinessSchema, readinessRefusal, type ProviderReadiness } from './readiness.js';
+import {
+  providerReadinessSchema,
+  readinessRefusal,
+  sameReadiness,
+  type ProviderReadiness,
+} from './readiness.js';
 
 const READY = {
   provider: 'claude',
@@ -95,5 +100,57 @@ describe('readinessRefusal', () => {
         readiness({ state: 'missing', version: null, directory: null, problem: null }),
       ),
     ).toBe('that server cannot run claude');
+  });
+});
+
+describe('sameReadiness', () => {
+  it('calls two identical readings the same', () => {
+    expect(sameReadiness([readiness({})], [readiness({})])).toBe(true);
+  });
+
+  it('calls two empty readings the same, because a build with no adapters has one', () => {
+    expect(sameReadiness([], [])).toBe(true);
+  });
+
+  it('sees a provider that has since been logged in', () => {
+    const before = readiness({ state: 'unauthenticated', problem: 'claude is logged out' });
+
+    expect(sameReadiness([before], [readiness({})])).toBe(false);
+  });
+
+  it('sees a provider that is still ready from a different directory', () => {
+    // The reading an operator who has just changed a search path is looking
+    // for. A comparison on `state` alone would call this unchanged and leave
+    // the hub showing the directory the old binary came from.
+    const moved = readiness({ directory: '/usr/local/bin' });
+
+    expect(sameReadiness([readiness({})], [moved])).toBe(false);
+  });
+
+  it('sees a provider that is still ready at a new version', () => {
+    expect(sameReadiness([readiness({})], [readiness({ version: '3.0.0' })])).toBe(false);
+  });
+
+  it('sees a problem that has changed wording while the state has not', () => {
+    const first = readiness({ state: 'unknown', problem: 'claude exited 1' });
+    const second = readiness({ state: 'unknown', problem: 'claude timed out' });
+
+    expect(sameReadiness([first], [second])).toBe(false);
+  });
+
+  it('sees a reading that has gained a provider', () => {
+    expect(sameReadiness([readiness({})], [readiness({}), readiness({ provider: 'codex' })])).toBe(
+      false,
+    );
+  });
+
+  it('sees two readings whose providers are in different orders', () => {
+    // Two different builds, not one build reported twice: a reading comes out
+    // of one registry in registration order. Calling these equal would hide the
+    // one reordering that means the machine is running something else.
+    const claude = readiness({});
+    const codex = readiness({ provider: 'codex' });
+
+    expect(sameReadiness([claude, codex], [codex, claude])).toBe(false);
   });
 });

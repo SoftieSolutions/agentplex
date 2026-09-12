@@ -170,6 +170,19 @@ export function formatDoctorReport(report: DoctorReport): readonly string[] {
     );
   } else {
     for (const provider of report.providers) lines.push(`  ${providerLine(provider)}`);
+    // The one thing a read-only report can do about a reading somebody else is
+    // still publishing. This probed the machine just now; a running server
+    // probed it at its own boot and carries that answer into every handshake,
+    // so on a box that has just been fixed the two disagree -- and the operator
+    // staring at a `ready` here and a `missing` in the client needs to know
+    // that ending the disagreement does not mean restarting the service and
+    // dropping every session on the machine with it.
+    lines.push(
+      '',
+      '  A running server read this at its own boot and reports that reading to',
+      '  every hub. If what is above is not what the hub shows, reload the unit',
+      '  rather than restarting it: systemctl reload agentplex-server.',
+    );
   }
 
   lines.push('', 'stores');

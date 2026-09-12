@@ -1293,6 +1293,25 @@ describe('the systemd unit', () => {
     expect(unit).toContain('Restart=on-failure');
   });
 
+  it('gives the server a reload that re-reads its providers, and the hub none', () => {
+    const { script, home } = scratch();
+    const units = run(script, home, ['--print-unit', '--role=both']).stdout;
+    const [hub = '', server = ''] = units.split('[Unit]').slice(1);
+
+    // The operator who has just installed a coding agent, or just logged one
+    // in, on a machine that is already serving. Without this the fleet reports
+    // what was true at boot until somebody restarts the service, which drops
+    // every session on the box to publish a fact about a binary.
+    expect(server).toContain('Description=agentplex server');
+    expect(server).toContain('ExecReload=/bin/kill -HUP $MAINPID');
+
+    // Not on the hub. It reads no providers, so it has nothing to re-read --
+    // and Node exits on a SIGHUP nothing is listening for, so offering `reload`
+    // there would be a verb that restarts it.
+    expect(hub).toContain('Description=agentplex hub');
+    expect(hub).not.toContain('ExecReload=');
+  });
+
   it('carries no sandboxing, because the service exists to reach the operator files', () => {
     const { script, home } = scratch();
     const unit = run(script, home, ['--print-unit']).stdout;
