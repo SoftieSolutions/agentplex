@@ -197,11 +197,38 @@ export const terminalResizeFrameSchema = z.object({
  * until the provider names the session, and one made by session is answered
  * with the start handle when this connection is the one that started it.
  *
- * `truncated` is the scrollback's flag, surfaced rather than left on the
- * server. The replay that follows this frame is what the terminal has kept,
- * and what it has kept may not be the beginning; a pane that says "the
- * beginning is gone" is honest, and one that presents a tail as the whole
- * session is not.
+ * ## What a client is given on attach, and what it is told about it
+ *
+ * A subscription to a session that has been running an hour is answered with a
+ * bounded tail of what it printed -- the scrollback the server already keeps,
+ * replayed on `terminal-output` frames that follow this one. Not everything,
+ * because a server holds a pty and not a recording; not nothing, because a
+ * pane that opens blank on a busy agent is useless.
+ *
+ * A tail is not the session, so this frame carries the two numbers that keep a
+ * pane from claiming it is.
+ *
+ * `replayChunks` is how many `terminal-output` frames of history follow this
+ * one, after which the stream is live. The socket is ordered and the replay is
+ * written in the same turn as this reply, so the count is exact rather than a
+ * hint. It is here because without it a client cannot tell a replay that has
+ * finished from one that has not started -- both are a pane with nothing on
+ * it -- and the case that matters most needs no counting at all: zero says
+ * outright that this session has produced nothing.
+ *
+ * `droppedBytes` is how much the terminal printed before the replay begins,
+ * over that terminal's whole life. Zero with a replay means the client is
+ * being shown the session from its first byte; anything else means it is
+ * joining mid-stream and can say by how much.
+ *
+ * Together they separate the two facts that render identically and mean
+ * opposite things: a pane that silently starts mid-stream, and a pane showing
+ * a session that has done nothing.
+ *
+ * There is no `truncated` flag beside them. `droppedBytes > 0` is that flag,
+ * and a boolean carried next to the number it is derived from is a second
+ * thing to keep in step across a relay for no gain -- the day they drifted,
+ * the symptom would be a pane confidently mislabelling its own history.
  */
 export const sessionSubscribedFrameSchema = z.object({
   type: z.literal('session-subscribed'),
@@ -209,7 +236,10 @@ export const sessionSubscribedFrameSchema = z.object({
   storeId: storeIdSchema,
   sessionId: sessionIdSchema.nullable(),
   startId: frameIdSchema.nullable(),
-  truncated: z.boolean(),
+  /** How many `terminal-output` frames of history follow, before live output. */
+  replayChunks: z.int().nonnegative(),
+  /** Bytes printed before the replay begins. `> 0` means this is a tail. */
+  droppedBytes: z.int().nonnegative(),
 });
 
 /** The subscription is gone. The session is not: detaching closes nothing. */
@@ -230,8 +260,8 @@ export const sessionUnsubscribedFrameSchema = z.object({
  *
  * The scrollback a subscription replays travels on this frame too. One frame
  * shape for bytes, whether they are history or live, so that the thing reading
- * them has one path; the reply that precedes the replay is what says where the
- * history begins and whether it is whole.
+ * them has one path; the reply that precedes the replay is what says how much
+ * of the beginning is missing and how many of these frames are history.
  */
 export const terminalOutputFrameSchema = z.object({
   type: z.literal('terminal-output'),

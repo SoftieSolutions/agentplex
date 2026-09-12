@@ -350,15 +350,19 @@ export function serveHubConnection(
           storeId: attachment.storeId,
           sessionId: attachment.sessionId,
           startId: attachment.startId,
-          truncated: attachment.truncated,
+          // Counted off the array the loop below sends, so the number cannot
+          // promise a frame that is never written.
+          replayChunks: attachment.replay.length,
+          droppedBytes: attachment.droppedBytes,
         });
         // The history, on the frame live output uses, after the reply that
-        // says whether the beginning of it survives. One frame shape for
-        // bytes, so the reader has one path for them.
+        // says how much of it is missing and how many of these frames are it.
+        // One frame shape for bytes, so the reader has one path for them.
         //
         // Sent here rather than carried on the reply so that a quarter of a
         // megabyte of scrollback is not one JSON frame the peer must hold
-        // whole, and synchronously, so nothing live can overtake it.
+        // whole, and synchronously, so nothing live can overtake it -- which
+        // is also what makes the count above exact rather than a hint.
         for (const chunk of attachment.replay) {
           send({
             type: 'terminal-output',
@@ -367,8 +371,8 @@ export function serveHubConnection(
             startId: attachment.startId,
             chunk: encodeTerminalChunk(chunk),
             // Nothing was dropped from this stream: what the scrollback threw
-            // away is what `truncated` above says, and this counter is about
-            // the live stream that follows.
+            // away is what `droppedBytes` above says, and this counter is
+            // about the live stream that follows.
             droppedChunks: 0,
           });
         }

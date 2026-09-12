@@ -484,7 +484,8 @@ describe('hub and server round trips', () => {
       storeId: storeIdSchema.parse('store-1'),
       sessionId: null,
       startId: 3,
-      truncated: true,
+      replayChunks: 2,
+      droppedBytes: 8_192,
     },
     { type: 'session-unsubscribed', replyTo: 7 },
     {

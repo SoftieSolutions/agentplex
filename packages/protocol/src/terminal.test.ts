@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   decodeTerminalChunk,
   encodeTerminalChunk,
+  sessionSubscribedFrameSchema,
   TERMINAL_INPUT_MAX_CHARS,
   TERMINAL_MAX_COLS,
   terminalChunkSchema,
@@ -161,5 +162,83 @@ describe('terminalSizeSchema', () => {
     expect(terminalSizeSchema.safeParse({ cols: TERMINAL_MAX_COLS + 1, rows: 40 }).success).toBe(
       false,
     );
+  });
+});
+
+describe('sessionSubscribedFrameSchema', () => {
+  const subscribed = (fields: Record<string, unknown>): unknown =>
+    sessionSubscribedFrameSchema.safeParse({
+      type: 'session-subscribed',
+      replyTo: 5,
+      storeId: 'store-1',
+      sessionId: 'session-1',
+      startId: null,
+      replayChunks: 0,
+      droppedBytes: 0,
+      ...fields,
+    });
+
+  it('tells a session that has produced nothing from one whose beginning is gone', () => {
+    // The pair of opposite facts this frame exists to keep apart. A pane that
+    // renders them the same way is claiming a silent session and a session
+    // whose first hour was discarded are the same thing.
+    const silent = sessionSubscribedFrameSchema.parse({
+      type: 'session-subscribed',
+      replyTo: 5,
+      storeId: 'store-1',
+      sessionId: 'session-1',
+      startId: null,
+      replayChunks: 0,
+      droppedBytes: 0,
+    });
+    const tail = sessionSubscribedFrameSchema.parse({
+      type: 'session-subscribed',
+      replyTo: 6,
+      storeId: 'store-1',
+      sessionId: 'session-1',
+      startId: null,
+      replayChunks: 3,
+      droppedBytes: 4_194_304,
+    });
+
+    expect(silent.replayChunks).toBe(0);
+    expect(silent.droppedBytes).toBe(0);
+    expect(tail.replayChunks).toBe(3);
+    expect(tail.droppedBytes).toBe(4_194_304);
+  });
+
+  it('carries no truncated flag, because the byte count already is one', () => {
+    // Two fields for one fact is two fields to fall out of step, and the
+    // number is strictly the more useful of the two: `droppedBytes > 0` is the
+    // flag, and the flag can never say how much.
+    const parsed = sessionSubscribedFrameSchema.safeParse({
+      type: 'session-subscribed',
+      replyTo: 5,
+      storeId: 'store-1',
+      sessionId: 'session-1',
+      startId: null,
+      replayChunks: 1,
+      droppedBytes: 12,
+      truncated: true,
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).not.toHaveProperty('truncated');
+  });
+
+  it('refuses a replay count or a dropped count that is not a whole number of them', () => {
+    expect(subscribed({ replayChunks: -1 })).toMatchObject({ success: false });
+    expect(subscribed({ replayChunks: 1.5 })).toMatchObject({ success: false });
+    expect(subscribed({ droppedBytes: -1 })).toMatchObject({ success: false });
+    expect(subscribed({ droppedBytes: 2.5 })).toMatchObject({ success: false });
+  });
+
+  it('refuses a frame that leaves out how much history follows it', () => {
+    // Absent is not zero. A reader that took a missing count for "nothing to
+    // wait for" would report a silent session every time a peer forgot the
+    // field, which is the exact over-claim this frame is built to prevent.
+    expect(subscribed({ replayChunks: undefined })).toMatchObject({ success: false });
+    expect(subscribed({ droppedBytes: undefined })).toMatchObject({ success: false });
   });
 });

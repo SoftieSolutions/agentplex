@@ -144,7 +144,7 @@ describe('createTerminalStreams subscribing', () => {
     expect(output[0]).toMatchObject({ sessionId: SESSION_A, startId: 7 });
   });
 
-  it('says whether the beginning of the scrollback is gone rather than passing a tail off as all of it', () => {
+  it('says how much of the beginning is gone rather than passing a tail off as all of it', () => {
     const { terminals, streams, factory } = harness(8);
     const terminalId = spawn(terminals);
     terminals.bind(terminalId, SESSION_A);
@@ -153,7 +153,22 @@ describe('createTerminalStreams subscribing', () => {
 
     const attached = streams.subscribe(bySession(SESSION_A));
 
-    expect(attached.ok && attached.attachment.truncated).toBe(true);
+    expect(attached.ok && attached.attachment.droppedBytes).toBe(27);
+    expect(attached.ok && attached.attachment.replay).toHaveLength(1);
+  });
+
+  it('separates a session that has produced nothing from one whose beginning is gone', () => {
+    // The two opposite facts. Both attachments replay less than the whole
+    // session; only one of them is missing anything, and an attachment that
+    // could not say which would make a pane guess.
+    const { terminals, streams } = harness(8);
+    const terminalId = spawn(terminals);
+    terminals.bind(terminalId, SESSION_A);
+
+    const attached = streams.subscribe(bySession(SESSION_A));
+
+    expect(attached.ok && attached.attachment.replay).toEqual([]);
+    expect(attached.ok && attached.attachment.droppedBytes).toBe(0);
   });
 
   it('refuses a subscription to a session this server is not running', () => {

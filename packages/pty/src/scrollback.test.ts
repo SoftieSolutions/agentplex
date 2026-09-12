@@ -61,14 +61,34 @@ describe('createScrollback', () => {
     expect(scrollback.dropped).toBe(0);
   });
 
-  it('says it is truncated, so a reader never presents a tail as a beginning', () => {
-    const scrollback = createScrollback({ maxBytes: 4 });
-    expect(scrollback.truncated).toBe(false);
+  it('tells a session that has produced nothing from one whose beginning is gone', () => {
+    // The two opposite facts a pane must never render identically. Both hold a
+    // buffer that is not the whole session, and the only thing separating them
+    // is this number: nothing has been thrown away, or this much has.
+    const silent = createScrollback({ maxBytes: 4 });
+    const busy = createScrollback({ maxBytes: 4 });
+
+    busy.append(bytes('aaaa'));
+    busy.append(bytes('bbbb'));
+
+    expect(silent.chunks()).toEqual([]);
+    expect(silent.dropped).toBe(0);
+    expect(busy.chunks()).toHaveLength(1);
+    expect(busy.dropped).toBe(4);
+  });
+
+  it('counts every dropped byte, not merely that some were dropped', () => {
+    // A boolean says "the beginning is gone". This says how much of it, which
+    // is the difference between a pane that admits a gap and one that can size
+    // it. It only ever rises: it is this buffer's whole life, not one eviction.
+    const scrollback = createScrollback({ maxBytes: 6 });
 
     scrollback.append(bytes('aaaa'));
     scrollback.append(bytes('bbbb'));
+    expect(scrollback.dropped).toBe(4);
 
-    expect(scrollback.truncated).toBe(true);
+    scrollback.append(bytes('cccccc'));
+    expect(scrollback.dropped).toBe(8);
   });
 
   it('ignores an empty chunk instead of filling the buffer with nothing', () => {
