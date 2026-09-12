@@ -150,9 +150,45 @@ logged, only its path — open it, copy the token, and type it into the hub alon
 with the server's `wss://` address. That is the only way a pairing is made;
 discovery on the LAN pre-fills the address and nothing more.
 
-Tokens are per server, so revoking one instance touches no other. Keep the
-identity file somewhere that survives a restart: a server that loses it mints a
-new identity, and the pairing stops working until you pair again.
+Keep the identity file somewhere that survives a restart: a server that loses
+it mints a new identity, and the pairing stops working until you pair again.
+
+### Grants: what a server can take away
+
+Beside the identity file, named after it, a server keeps a **grants file** —
+`server.json` gets `server-grants.json`. One record per pairing: a label, a
+verifier for the token, the hub id first seen presenting it, when it was created
+and last used, an optional expiry, and whether it was revoked. That is the unit
+an operator revokes, and revoking one leaves every other hub connected.
+
+The token in the identity file is grant zero. Nothing about a fresh install
+changes, no hub needs migrating, and on the first start of an upgraded server
+the grants file appears holding that one record. Revoking grant zero is allowed
+and does what it says: on a `--role=both` machine, the hub beside the server
+stops connecting until you re-mint the identity file.
+
+Three things are worth knowing about how it behaves.
+
+**It holds a verifier, not a token.** The hub must keep its tokens in the clear
+because it presents them; a server only ever checks one, so it stores a SHA-256
+of it. Somebody who can read the grants file cannot pair with what they found.
+
+**A revocation reaches a server that is already running.** The grants file is
+re-read at every handshake, so a hub revoked while disconnected is refused the
+moment it comes back, and a sweep on a short interval closes the connections a
+revoked or expired grant is still holding. There is no restart in either path.
+
+**A rejected handshake says only that it failed.** A revoked grant, an expired
+one and a token nothing was ever minted for are all refused identically —
+`unauthorized`, and no more. Telling a peer that its credential was real but
+withdrawn is exactly the thing worth probing for. Which of the three it was is
+in the server's log, where the person entitled to know it is.
+
+The hub id a hub sends is a **label**. It is self-reported, so nothing is
+decided with it; the server records the one it saw against the grant and, when
+a later one disagrees, accepts the connection and says so in the log. A hub
+whose database was rebuilt mints a new id and is still the same operator with
+the same token.
 
 Where there is no such place — a container whose filesystem goes at the next
 deploy, a CI job nobody will ever shell into — the deployment can supply the
