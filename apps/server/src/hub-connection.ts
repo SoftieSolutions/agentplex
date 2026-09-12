@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   type FrameId,
   type HubToServerFrame,
+  type Provider,
   type ProviderReadiness,
   type ServerToHubFrame,
   type SessionId,
@@ -401,7 +402,7 @@ export function serveHubConnection(
     request: {
       readonly storeId: StoreId;
       readonly sessionId: SessionId | null;
-      readonly provider: 'claude' | 'codex' | 'opencode';
+      readonly provider: Provider;
       readonly prompt: string | null;
     },
   ): Promise<void> {
