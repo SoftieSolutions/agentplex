@@ -1,4 +1,5 @@
 import type { ServerConfig } from './config.js';
+import { ensureDataRoot, type DataRootFileSystem } from './data-root.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 import type { BeaconNetwork } from './server-beacon.js';
@@ -18,6 +19,17 @@ export interface RuntimeDependencies {
   readonly ids: IdGenerator;
   /** The store volumes, injected so that a test runs on a volume it wrote down. */
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * The disk under this server's own data root, which is a different seam from
+   * the store volumes above and not an oversight.
+   *
+   * A store is read and never created; the data root is created by this
+   * process and has to be proved writable before anything relies on it.
+   * Folding the two into one interface would put a `mkdir` on the seam that
+   * reaches a provider's directory, which is the one thing `data-root.ts` says
+   * must never happen.
+   */
+  readonly dataRootFileSystem: DataRootFileSystem;
   /**
    * Where a secret comes from: the pairing token on a first start.
    *
@@ -90,6 +102,7 @@ export async function startRuntime(
     logger,
     ids,
     storeFileSystem,
+    dataRootFileSystem,
     tokens,
     providers,
     preflight,
@@ -99,6 +112,17 @@ export async function startRuntime(
     timers,
     clock,
   } = dependencies;
+
+  // First, and before a port is bound or an identity is minted. A server that
+  // cannot write its own state is one that will forget something at its next
+  // restart, and the only moment that can be said out loud is this one -- see
+  // `data-root.ts` for why this refuses where an absent store path does not.
+  // It throws rather than returning: `main` maps a startup failure to the exit
+  // code a unit retries, and a disk can become writable without anybody
+  // editing a settings file.
+  const dataRoot = await ensureDataRoot(config.dataPath, dataRootFileSystem);
+  if (!dataRoot.ok) throw new Error(dataRoot.problem);
+  logger.info('data root ready', { path: dataRoot.path, created: dataRoot.created });
 
   const server = await startSessionServer({
     logger,
