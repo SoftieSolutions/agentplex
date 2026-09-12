@@ -10,7 +10,12 @@ export {
   createSocketPair,
   createUnreachableDialer,
 } from './fake-message-socket.js';
-export type { FakeDialer, FakeMessageSocket, SocketPair } from './fake-message-socket.js';
+export type {
+  FakeDialer,
+  FakeMessageSocket,
+  FakeMessageSocketOptions,
+  SocketPair,
+} from './fake-message-socket.js';
 
 export { createFakeTimers } from './timers.js';
 export type { FakeTimers } from './timers.js';

@@ -33,10 +33,10 @@ import { sessionIdSchema, storeIdSchema } from './identity.js';
  * a chunk that ends mid-code-point arrives as the same half a code point.
  *
  * What it costs is a third more bytes on the busiest path, and that is the
- * trade taken deliberately. It is bounded by the same thing the wire is bounded
- * by -- a chunk cap here and, when AGX-209 lands, dropped chunks counted on the
- * frame -- and moving to a binary channel later is a protocol version bump and
- * two encoders, not a redesign.
+ * trade taken deliberately. It is bounded by the same things the wire is
+ * bounded by -- a chunk cap here, and a sender that drops whole chunks and
+ * counts them when its peer stops keeping up -- and moving to a binary channel
+ * later is a protocol version bump and two encoders, not a redesign.
  */
 
 /**
@@ -270,19 +270,36 @@ export const terminalOutputFrameSchema = z.object({
   startId: frameIdSchema.nullable(),
   chunk: terminalChunkSchema,
   /**
-   * Chunks this stream threw away before this one, counted since it attached
-   * and only ever increasing.
+   * Chunks this stream threw away before this one, over the life of the stream
+   * on this connection, and only ever increasing.
    *
-   * It is zero today: nothing drops output yet. It is on the frame anyway,
-   * because the answer AGX-209 is going to need for a session producing faster
-   * than the hub consumes is to drop whole chunks and say so -- the same shape
-   * `scrollback.ts` already uses for the same reason -- and adding the field
-   * then would be a protocol version bump for a number. Adding it now costs a
-   * zero on the wire.
+   * A session produces output at whatever rate its child prints, and a peer
+   * reads at whatever rate its link allows. When the second is slower than the
+   * first for long enough, something has to give, and what gives is the bytes:
+   * the sender drops whole chunks rather than buffering them until it dies, and
+   * this is how it admits to having done so. Whole chunks, never part of one,
+   * because an escape sequence spans whatever boundary it lands on -- the same
+   * rule, for the same reason, that `scrollback.ts` trims by.
    *
    * Cumulative rather than per frame so a reader that compares it with the
    * last value it saw learns the size of the gap, and one that does not
    * compare still sees a number that says the stream is lossy.
+   *
+   * ## Why this is not `droppedBytes`, and not added to it
+   *
+   * `session-subscribed` carries `droppedBytes`, and the two are different
+   * losses at different layers that happen to render the same way on a screen.
+   * `droppedBytes` is history the terminal evicted before anyone attached: a
+   * property of the session, the same for every peer watching it, and fixed at
+   * the moment of attaching. This is output that existed and did not fit down
+   * one link: a property of one connection, different for two peers watching
+   * the same terminal, and growing while the stream runs.
+   *
+   * Summed into one number they would tell a user the gap is in the session's
+   * history when it is in their own connection -- and the sum would be wrong
+   * for the other peer, which lost nothing. So: two numbers, because a pane
+   * that says "the first 40 MB is gone" and a pane that says "this link is
+   * dropping output" are asking for two different things to be done about it.
    */
   droppedChunks: z.int().nonnegative(),
 });

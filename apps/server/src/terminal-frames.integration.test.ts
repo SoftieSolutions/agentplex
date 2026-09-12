@@ -15,12 +15,13 @@ import {
   createFakeMessageSocket,
   PEER_GONE,
   type FakeMessageSocket,
+  type FakeMessageSocketOptions,
 } from '@agentplex/node-shared/testing';
 import type { FakePty, FakePtyFactory } from '@agentplex/pty/testing';
 import type { Launch } from '@agentplex/providers';
 import type { ServerIdentity } from '@agentplex/providers';
 import { readyProvider } from '@agentplex/providers/testing';
-import { serveHubConnection } from './hub-connection.js';
+import { MAX_BUFFERED_OUTPUT_BYTES, serveHubConnection } from './hub-connection.js';
 import {
   createFakeSessionController,
   type FakeSessionController,
@@ -81,14 +82,14 @@ interface Harness {
   send(frame: HubToServerFrame): Promise<void>;
 }
 
-function harness(scrollbackBytes?: number): Harness {
+function harness(scrollbackBytes?: number, socketOptions?: FakeMessageSocketOptions): Harness {
   const { terminals, factory } = createFakeTerminals(
     scrollbackBytes === undefined ? {} : { scrollbackBytes },
   );
   const sessions = createFakeSessionController({
     reports: [{ storeId: STORE.storeId, sessions: [], holding: [] }],
   });
-  const socket = createFakeMessageSocket();
+  const socket = createFakeMessageSocket(socketOptions ?? {});
   serveHubConnection(socket, {
     identity,
     stores: [STORE],
@@ -120,8 +121,11 @@ function harness(scrollbackBytes?: number): Harness {
 /** Delivery is asynchronous, as it is on a real socket. */
 const settle = (): Promise<void> => new Promise((resolve) => void setTimeout(resolve, 0));
 
-async function handshaken(scrollbackBytes?: number): Promise<Harness> {
-  const test = harness(scrollbackBytes);
+async function handshaken(
+  scrollbackBytes?: number,
+  socketOptions?: FakeMessageSocketOptions,
+): Promise<Harness> {
+  const test = harness(scrollbackBytes, socketOptions);
   await test.send({
     type: 'handshake',
     id: 1,
@@ -160,6 +164,8 @@ async function start(test: Harness, startId: number): Promise<FakePty> {
   if (pty === undefined) throw new Error('the spawn opened no pty');
   return pty;
 }
+
+const byteLength = (text: string): number => new TextEncoder().encode(text).length;
 
 const outputs = (test: Harness) =>
   test.frames().filter((frame) => frame.type === 'terminal-output');
@@ -315,6 +321,115 @@ describe('terminal frames against a real server', () => {
     await settle();
 
     expect(outputs(test).map((frame) => frame.droppedChunks)).toEqual([0]);
+  });
+
+  it('holds a bounded amount of a flood for a hub that has stopped reading', async () => {
+    // The denial of service this bound exists for, and it needs no attacker: a
+    // user runs `yes`, or a build that prints in colour, in their own session.
+    // The pty delivers at the rate the child prints, the socket is between it
+    // and a hub on a slow link, and a `ws` socket written to faster than it
+    // drains buffers in this process until the process dies -- taking every
+    // other session on this machine with it.
+    //
+    // So the assertion is on the buffer and not on the frames: what must stay
+    // bounded is what this process is holding, and it must stay bounded no
+    // matter how much the child prints.
+    const test = await handshaken(undefined, { drains: false });
+    const pty = await start(test, 4);
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+
+    const printed = new Uint8Array(16 * 1024).fill(0x61);
+    const OFFERED = 2_000;
+    for (let at = 0; at < OFFERED; at += 1) pty.emit(printed);
+    await settle();
+
+    // The cap, plus the one frame that was admitted while still under it. The
+    // same trade the scrollback makes for the same reason: whole chunks, so
+    // the bound is overshot by at most the newest one, because an escape
+    // sequence spans whatever boundary it lands on.
+    const largestFrame = Math.max(...test.socket.sent.map(byteLength));
+    expect(test.socket.bufferedBytes).toBeLessThanOrEqual(MAX_BUFFERED_OUTPUT_BYTES + largestFrame);
+    // And the flood really was offered: without a gate this is 32 MB of
+    // base64 on a socket nobody is reading.
+    expect(OFFERED * printed.byteLength).toBeGreaterThan(MAX_BUFFERED_OUTPUT_BYTES * 20);
+  });
+
+  it('holds the same bound however much more the session prints', async () => {
+    // Bounded, and not merely small. A gate that admitted a fixed fraction
+    // would pass the test above and still die on a session that printed for an
+    // hour, so the proof is that ten times the output does not cost more
+    // memory -- only more dropped chunks.
+    const bufferedAfter = async (chunks: number): Promise<number> => {
+      const test = await handshaken(undefined, { drains: false });
+      const pty = await start(test, 4);
+      await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+      const printed = new Uint8Array(16 * 1024).fill(0x61);
+      for (let at = 0; at < chunks; at += 1) pty.emit(printed);
+      await settle();
+      return test.socket.bufferedBytes;
+    };
+
+    expect(await bufferedAfter(2_000)).toBe(await bufferedAfter(200));
+  });
+
+  it('goes on answering the hub after a flood it could not send', async () => {
+    // The point of dropping rather than dying. The connection is still a
+    // connection, and every other session on this machine is still served.
+    const test = await handshaken(undefined, { drains: false });
+    const pty = await start(test, 4);
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+
+    const printed = new Uint8Array(16 * 1024).fill(0x61);
+    for (let at = 0; at < 2_000; at += 1) pty.emit(printed);
+    await settle();
+
+    await test.send({ type: 'ping', id: 9 });
+    test.socket.drain();
+
+    expect(test.frames().at(-1)).toEqual({ type: 'pong', replyTo: 9 });
+  });
+
+  it('counts the chunks it threw away and says so on the next one that gets through', async () => {
+    // A terminal that silently omits output looks exactly like a session that
+    // produced none. The count is what lets a pane say otherwise, and it is a
+    // number rather than a flag for the reason `droppedBytes` is: a pane can
+    // say how big the gap was, and `> 0` is still the flag.
+    const test = await handshaken(undefined, { drains: false });
+    const pty = await start(test, 4);
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+
+    const printed = new Uint8Array(16 * 1024).fill(0x61);
+    for (let at = 0; at < 2_000; at += 1) pty.emit(printed);
+    await settle();
+
+    // The hub catches up, and the next thing the session prints arrives
+    // carrying what it missed.
+    test.socket.drain();
+    pty.emit('and here is the rest of it');
+    await settle();
+
+    const last = outputs(test).at(-1);
+    expect(last?.droppedChunks).toBeGreaterThan(0);
+    expect(new TextDecoder().decode(decodeTerminalChunk(last?.chunk ?? ''))).toBe(
+      'and here is the rest of it',
+    );
+  });
+
+  it('never sends half a chunk, so nothing resumes mid escape sequence', async () => {
+    // Whole chunks, always. A stream resumed in the middle of a sequence
+    // paints as garbage from the first character, which is worse than a gap a
+    // pane can label -- and it is why this drops chunks rather than bytes.
+    const test = await handshaken(undefined, { drains: false });
+    const pty = await start(test, 4);
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+
+    const printed = new Uint8Array(16 * 1024).fill(0x61);
+    for (let at = 0; at < 2_000; at += 1) pty.emit(printed);
+    await settle();
+
+    for (const chunk of chunks(test)) {
+      expect(chunk.byteLength).toBe(printed.byteLength);
+    }
   });
 
   it('names the session on its output as soon as the provider has named it', async () => {

@@ -194,8 +194,9 @@ describe('terminal frames on the server direction', () => {
   });
 
   it('requires the dropped-chunk counter, so a lossy stream cannot look whole', () => {
-    // AGX-209 is what will make it move. It is required now because a frame
-    // that may omit it is a frame every reader has to treat as maybe-lossy.
+    // Required rather than optional, because a frame that may omit it is a
+    // frame every reader has to treat as maybe-lossy -- which is the claim the
+    // number exists to make precise.
     expect(
       parseServerToHubFrame({
         type: 'terminal-output',

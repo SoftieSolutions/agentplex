@@ -13,6 +13,7 @@ import type { TerminalManager } from './terminal-manager.js';
 import {
   createTerminalStreams,
   type TerminalAttachment,
+  type TerminalDelivery,
   type TerminalOutput,
   type TerminalStreams,
 } from './terminal-streams.js';
@@ -35,8 +36,12 @@ interface Harness {
   readonly terminals: TerminalManager;
   readonly streams: TerminalStreams;
   readonly factory: FakePtyFactory;
-  /** Everything the connection was handed to put on the wire, in order. */
+  /** Everything the connection was handed and took, in order. */
   readonly output: readonly TerminalOutput[];
+  /** Everything it was handed and refused, in order. */
+  readonly refused: readonly TerminalOutput[];
+  /** Whether the connection is taking chunks. A congested one is not. */
+  congest(congested: boolean): void;
 }
 
 function harness(scrollbackBytes?: number): Harness {
@@ -44,12 +49,28 @@ function harness(scrollbackBytes?: number): Harness {
     scrollbackBytes === undefined ? {} : { scrollbackBytes },
   );
   const output: TerminalOutput[] = [];
+  const refused: TerminalOutput[] = [];
+  let congested = false;
   const streams = createTerminalStreams({
     terminals,
-    onOutput: (chunk) => output.push(chunk),
+    onOutput: (chunk): TerminalDelivery => {
+      if (congested) {
+        refused.push(chunk);
+        return 'dropped';
+      }
+      output.push(chunk);
+      return 'sent';
+    },
     logger,
   });
-  return { terminals, streams, factory, output };
+  return {
+    terminals,
+    streams,
+    factory,
+    output,
+    refused,
+    congest: (value: boolean) => void (congested = value),
+  };
 }
 
 /** Spawns a terminal with no session id yet, as a real spawn arrives. */
@@ -101,14 +122,73 @@ describe('createTerminalStreams subscribing', () => {
     });
   });
 
-  it('counts the dropped chunks on every chunk, at zero until something drops them', () => {
-    // AGX-209 is what will make this move. It is carried now because adding it
-    // later is a protocol version bump for a number.
+  it('counts no dropped chunks while the connection is taking them', () => {
     const { terminals, streams, factory, output } = harness();
     attachToStart(terminals, streams, 7);
     factory.last?.emit('anything');
 
     expect(output[0]?.droppedChunks).toBe(0);
+  });
+
+  it('charges a refused chunk to its own stream and reports it on the next one through', () => {
+    // The connection decides whether it can take a chunk, because only it can
+    // see the socket; this decides which stream lost one, because only it
+    // knows. The count arrives on the next chunk that gets through rather than
+    // on the one that was lost, which is the only frame there is to put it on.
+    const { terminals, streams, factory, output, refused, congest } = harness();
+    attachToStart(terminals, streams, 7);
+
+    factory.last?.emit('the hub is keeping up');
+    congest(true);
+    factory.last?.emit('lost');
+    factory.last?.emit('lost as well');
+    congest(false);
+    factory.last?.emit('the hub caught up');
+
+    expect(refused.map((chunk) => text(chunk.chunk))).toEqual(['lost', 'lost as well']);
+    expect(output.map((chunk) => [text(chunk.chunk), chunk.droppedChunks])).toEqual([
+      ['the hub is keeping up', 0],
+      ['the hub caught up', 2],
+    ]);
+  });
+
+  it('keeps the count rising rather than reporting one gap and forgetting it', () => {
+    // Cumulative, so a reader that compares with the last value it saw learns
+    // the size of each gap, and one that does not still sees a number saying
+    // the stream is lossy.
+    const { terminals, streams, factory, output, congest } = harness();
+    attachToStart(terminals, streams, 7);
+
+    congest(true);
+    factory.last?.emit('gone');
+    congest(false);
+    factory.last?.emit('through');
+    congest(true);
+    factory.last?.emit('gone too');
+    congest(false);
+    factory.last?.emit('through again');
+
+    expect(output.map((chunk) => chunk.droppedChunks)).toEqual([1, 2]);
+  });
+
+  it('goes on filling the scrollback for chunks the connection could not take', () => {
+    // Dropping is a decision about the wire and not about the session. The
+    // child is never slowed down and its recent output is still there, so a
+    // hub that catches up and re-subscribes is replayed what it missed.
+    const { terminals, streams, factory, congest } = harness();
+    const { terminalId } = attachToStart(terminals, streams, 7);
+    terminals.bind(terminalId, SESSION_A);
+
+    congest(true);
+    factory.last?.emit('dropped on the wire, kept on the machine');
+    congest(false);
+
+    const attached = streams.subscribe(bySession(SESSION_A));
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) return;
+    expect(attached.attachment.replay.map(text)).toEqual([
+      'dropped on the wire, kept on the machine',
+    ]);
   });
 
   it('attaches to a spawn by the start that made it, before the session has a name', () => {
