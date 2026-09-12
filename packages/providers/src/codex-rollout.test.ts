@@ -47,6 +47,7 @@ describe('parseCodexRollout', () => {
         updatedAt: Date.parse('2026-09-12T02:51:35.024Z'),
         cwd: '/Users/dev/Code/agentplex',
         signal: 'awaiting-input',
+        usage: { inputTokens: 3380, cacheReadTokens: 9984, cacheWriteTokens: 0, outputTokens: 6 },
       },
     });
   });
@@ -88,6 +89,81 @@ describe('parseCodexRollout', () => {
     const parsed = parseCodexRollout(PENDING_TOOL_CALL);
 
     expect(parsed.ok && parsed.rollout.updatedAt).toBe(Date.parse('2026-09-12T02:37:44.589Z'));
+  });
+
+  it('takes the thread total codex keeps rather than adding the records up', () => {
+    // The difference from Claude Code that shapes both parsers. codex writes a
+    // running `thread_token_usage` onto every `token_usage_record`, so the
+    // last record is the session total and there is nothing to accumulate --
+    // where the Claude transcript states no total anywhere and its parser has
+    // to sum and deduplicate to get one. This fixture holds two records for
+    // one turn: the first thread total is 13612 input, the second 27382, and
+    // only the second is the answer. Summing the per-response `usage` lines
+    // would reach it the long way and be wrong the moment codex compacts.
+    const parsed = parseCodexRollout(PENDING_TOOL_CALL);
+
+    expect(parsed.ok && parsed.rollout.usage).toEqual({
+      inputTokens: 7414,
+      cacheReadTokens: 19_968,
+      cacheWriteTokens: 0,
+      outputTokens: 259,
+    });
+  });
+
+  it('takes the cached part out of the input total codex folds it into', () => {
+    // codex's arithmetic is not Claude Code's. Its `input_tokens` is the whole
+    // input with the cached part *inside* it -- the captured record reads
+    // input 13364, cached 9984, output 6, total 13370, and 13364 + 6 is the
+    // total, so the 9984 is a subset and not an addend. `SessionUsage`
+    // means fresh input by `inputTokens`, because that is the bucket billed at
+    // the full rate, so 13364 - 9984 = 3380 is what a price applies to. Adding
+    // the two instead would price this session at roughly seven times its
+    // cache-read cost, in the direction a spend figure must never fail.
+    const parsed = parseCodexRollout(COMPLETED_TURN);
+    const usage = parsed.ok ? parsed.rollout.usage : null;
+
+    expect(usage).not.toBeNull();
+    expect(usage === null ? 0 : usage.inputTokens + usage.cacheReadTokens).toBe(13_364);
+    expect(usage?.cacheReadTokens).toBe(9984);
+  });
+
+  it('reports no usage rather than zero for a turn that recorded none', () => {
+    // Captured, not contrived: a turn the user interrupted with escape closes
+    // with `turn_aborted` and no `token_usage_record` reaches the file at all.
+    // That session cost something or nothing and the rollout does not say
+    // which, which is a different fact from a session that cost zero -- and
+    // the surfaces above have to render it as absence, not as free.
+    const parsed = parseCodexRollout(ABORTED_TURN);
+
+    expect(parsed.ok && parsed.rollout.turns).toBe(1);
+    expect(parsed.ok && parsed.rollout.usage).toBeNull();
+  });
+
+  it('never reports a negative count, whatever the record claims', () => {
+    // These numbers are a claim read off disk like any other. A codex that
+    // changed what `input_tokens` includes would otherwise hand a negative
+    // count to whatever prices it, which is a negative bill produced by the
+    // one component whose job was to refuse exactly this.
+    const impossible = JSON.stringify({
+      timestamp: '2026-09-12T02:51:36.000Z',
+      type: 'token_usage_record',
+      payload: {
+        thread_token_usage: {
+          input_tokens: 10,
+          cached_input_tokens: 400,
+          cache_write_input_tokens: 0,
+          output_tokens: 5,
+        },
+      },
+    });
+    const parsed = parseCodexRollout(`${COMPLETED_TURN}${impossible}\n`);
+
+    expect(parsed.ok && parsed.rollout.usage).toEqual({
+      inputTokens: 0,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 0,
+      outputTokens: 5,
+    });
   });
 
   it('refuses a rollout with no turn in it, without calling it broken', () => {

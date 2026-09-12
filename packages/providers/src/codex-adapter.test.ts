@@ -64,8 +64,27 @@ describe('createCodexAdapter.discover', () => {
         running: false,
         cwd: CWD,
         title: 'Reply with pineapple',
+        // codex's own running thread total, with the cached part taken back
+        // out of the input figure it is folded into. See `codex-rollout.ts`.
+        usage: { inputTokens: 3380, cacheReadTokens: 9984, cacheWriteTokens: 0, outputTokens: 6 },
       },
     ]);
+  });
+
+  it('reports no usage for a rollout that recorded none, rather than zero', async () => {
+    // A turn the user interrupted writes no `token_usage_record` at all, so
+    // the adapter has nothing to report and says so. `null` is the answer an
+    // adapter gives when it looked; a zeroed record would be the adapter
+    // claiming the session was free.
+    const adapter = createCodexAdapter({
+      files: createFakeProviderFiles({
+        files: { [`${SESSIONS}/2026/09/12/rollout-aborted.jsonl`]: ABORTED_TURN },
+      }),
+    });
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.sessions).toMatchObject([{ sessionId: ABORTED_ID, usage: null }]);
   });
 
   it('walks the date partitions codex files its rollouts under', async () => {

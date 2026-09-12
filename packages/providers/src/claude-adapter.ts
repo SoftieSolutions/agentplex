@@ -195,6 +195,7 @@ async function readProject(
         running: resolved.running,
         cwd: parsed.transcript.cwd,
         title: parsed.transcript.title,
+        usage: parsed.transcript.usage,
       });
     } else if (parsed.reason === 'damaged') {
       problems.push({ subject: path, problem: `cannot read transcript: ${parsed.problem}` });

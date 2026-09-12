@@ -1,3 +1,4 @@
+import type { SessionUsage } from '@agentplex/protocol';
 import { z } from 'zod';
 import type { TranscriptSignal } from './provider-adapter.js';
 
@@ -22,6 +23,33 @@ import type { TranscriptSignal } from './provider-adapter.js';
  */
 
 /**
+ * What Claude Code records about one API response's token cost.
+ *
+ * Four disjoint counts, which is the happy case: `input_tokens` here is fresh
+ * input only, with the cached part kept beside it rather than folded in, so
+ * this maps onto `SessionUsage` without arithmetic. (codex does fold it in.
+ * See `codex-rollout.ts`.) The cache fields are optional because a response
+ * that neither read nor wrote the cache omits them, and absent means zero for
+ * a count the provider is itemising -- unlike an absent `usage` object, which
+ * means the line is not one that cost anything.
+ *
+ * Loose, and everything this parser does not price is left unread:
+ * `output_tokens_details.thinking_tokens` and `server_tool_use` are real and
+ * captured in the fixtures, and both are already inside a number above --
+ * thinking tokens are output tokens, and a web search is billed per request
+ * and not per token, which is a unit `SessionUsage` has nowhere to put and
+ * would have to invent a second one for.
+ */
+const usageSchema = z
+  .object({
+    input_tokens: z.int().nonnegative(),
+    cache_creation_input_tokens: z.int().nonnegative().optional(),
+    cache_read_input_tokens: z.int().nonnegative().optional(),
+    output_tokens: z.int().nonnegative(),
+  })
+  .loose();
+
+/**
  * The fields a turn must have to count as one.
  *
  * Non-strict on purpose: Claude Code adds fields between releases, and a
@@ -35,6 +63,11 @@ const turnSchema = z.object({
   timestamp: z.iso.datetime(),
   cwd: z.string().min(1).optional(),
   /**
+   * Claude Code's id for the HTTP request the turn came out of. Read only as
+   * the fallback key for counting a response once -- see `countUsageOnce`.
+   */
+  requestId: z.string().min(1).optional(),
+  /**
    * A `Task` subagent's turns land in its parent's transcript flagged this
    * way. They are the session's work but not its conversation, and a subagent
    * still running when the main turn ended would otherwise make a finished
@@ -43,6 +76,13 @@ const turnSchema = z.object({
   isSidechain: z.boolean().optional(),
   message: z
     .object({
+      /**
+       * The API's id for the response. One response is written across several
+       * lines of this file and every one of them repeats the whole `usage`
+       * object, so this is what makes it countable exactly once.
+       */
+      id: z.string().min(1).optional(),
+      usage: usageSchema.optional(),
       stop_reason: z.string().nullish(),
       content: z
         .union([
@@ -69,6 +109,16 @@ export interface ClaudeTranscript {
   readonly cwd: string | null;
   readonly title: string | null;
   readonly signal: TranscriptSignal;
+  /**
+   * Every token this session has spent so far, or `null` when the file states
+   * none.
+   *
+   * `null` and not a zeroed record. A transcript from a Claude Code that
+   * stopped reporting usage, or one whose turns all predate it, has to be
+   * distinguishable from a session that genuinely cost nothing, because the
+   * surfaces above render the first as absence and the second as a number.
+   */
+  readonly usage: SessionUsage | null;
 }
 
 /**
@@ -93,7 +143,9 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
   let cwd: string | null = null;
   let title: string | null = null;
   let last: z.infer<typeof turnSchema> | null = null;
+  let usage: SessionUsage | null = null;
   const pendingToolUse = new Set<string>();
+  const counted = new Set<string>();
 
   for (const line of contents.split('\n')) {
     if (line.trim() === '') continue;
@@ -119,6 +171,15 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
 
     const turn = turnSchema.safeParse(entry);
     if (!turn.success) continue;
+
+    // Before the sidechain filter, deliberately, and the only thing that is.
+    // A `Task` subagent's turns are not the session's conversation -- which is
+    // why they are skipped for dating and for the signal -- but they are the
+    // session's bill. Tokens a subagent burned were spent on this session's
+    // behalf and appear on the same invoice, and a count that dropped them
+    // would under-report spend on exactly the sessions that spend most.
+    usage = countUsageOnce(turn.data, usage, counted);
+
     if (turn.data.isSidechain === true) continue;
 
     turns += 1;
@@ -136,7 +197,61 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
 
   return {
     ok: true,
-    transcript: { turns, updatedAt, cwd, title, signal: signalOf(last, pendingToolUse) },
+    transcript: { turns, updatedAt, cwd, title, signal: signalOf(last, pendingToolUse), usage },
+  };
+}
+
+/**
+ * Adds one response's tokens to the running total, and refuses to add the same
+ * response twice.
+ *
+ * This is the finding that makes the whole file necessary rather than a
+ * one-line sum, and it was captured, not reasoned about. Claude Code writes
+ * one *line* per content block, not per response: a turn that thought and then
+ * called a tool is two `assistant` lines sharing one `message.id`, one
+ * `requestId` and one byte-identical `usage` object. Summing per line is not
+ * slightly high, it is a clean multiple -- both captured fixtures here double.
+ *
+ * So a response is keyed and counted once. `message.id` is the API's own name
+ * for the response and is the right key; `requestId` is the fallback for a
+ * line that omits it; a line with neither is counted on its own, because an
+ * unkeyed line cannot be a duplicate of anything we could recognise and
+ * dropping it would under-count. Under-counting spend is not the safe
+ * direction here.
+ *
+ * Cumulative rather than per-turn, and cheap: the caller is already walking
+ * every line for `updatedAt` and the signal, so this adds arithmetic to a pass
+ * that was happening anyway and no second read of anything. codex hands its
+ * adapter a running total and needs none of this -- see `codex-rollout.ts`.
+ */
+function countUsageOnce(
+  turn: z.infer<typeof turnSchema>,
+  total: SessionUsage | null,
+  counted: Set<string>,
+): SessionUsage | null {
+  const reported = turn.message?.usage;
+  // Absent, which is every user turn and every assistant line from a Claude
+  // Code that did not itemise. Nothing to add, and nothing that turns a `null`
+  // total into a zeroed one.
+  if (reported === undefined) return total;
+
+  const key = turn.message?.id ?? turn.requestId;
+  if (key !== undefined) {
+    if (counted.has(key)) return total;
+    counted.add(key);
+  }
+
+  const base = total ?? {
+    inputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+  };
+  return {
+    inputTokens: base.inputTokens + reported.input_tokens,
+    cacheReadTokens: base.cacheReadTokens + (reported.cache_read_input_tokens ?? 0),
+    cacheWriteTokens: base.cacheWriteTokens + (reported.cache_creation_input_tokens ?? 0),
+    outputTokens: base.outputTokens + reported.output_tokens,
   };
 }
 

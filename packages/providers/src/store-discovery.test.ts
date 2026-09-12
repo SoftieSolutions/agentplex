@@ -89,6 +89,59 @@ describe('discoverStoreSessions', () => {
     expect(discovered.sessions[0]).toMatchObject({ cwd: null, title: null });
   });
 
+  it("carries the adapter's token counts through to the descriptor untouched", async () => {
+    // Derived nowhere above an adapter. Only the thing that knows a provider's
+    // format can read its counts, and a store-level re-derivation would be a
+    // second opinion about a number the provider already stated.
+    const usage = {
+      inputTokens: 2,
+      cacheReadTokens: 24_372,
+      cacheWriteTokens: 18_438,
+      outputTokens: 206,
+    };
+    const files = createFakeProviderFiles({
+      files: {
+        [`${transcriptsAt('claude')}/session-a.json`]: JSON.stringify({
+          signal: 'quiet',
+          updatedAt: NOW - 1_000,
+          usage,
+        }),
+      },
+    });
+    const registry = createProviderRegistry([createFakeProviderAdapter({ files })]);
+
+    const discovered = await discoverStoreSessions(STORE, {
+      registry,
+      clock,
+      liveness: nothingRunning,
+    });
+
+    expect(discovered.sessions[0]?.usage).toEqual(usage);
+  });
+
+  it('leaves usage off a session the adapter found none for, rather than zeroing it', async () => {
+    // The rule the whole feature exists to keep. A session whose provider
+    // states no counts must reach the hub with no number on it at all: a
+    // zeroed record here would arrive on a spend screen as "this was free",
+    // which is a claim nothing in the store supports.
+    const files = createFakeProviderFiles({
+      files: {
+        [`${transcriptsAt('claude')}/session-a.json`]: transcript('quiet'),
+      },
+    });
+    const registry = createProviderRegistry([createFakeProviderAdapter({ files })]);
+
+    const discovered = await discoverStoreSessions(STORE, {
+      registry,
+      clock,
+      liveness: nothingRunning,
+    });
+
+    const [session] = discovered.sessions;
+    expect(session).toBeDefined();
+    expect(session !== undefined && 'usage' in session).toBe(false);
+  });
+
   it('hands the adapter liveness and the clock, and takes the status it answers', async () => {
     // Only the adapter knows what its own transcript signal means; only the
     // server knows whether a process is alive and what time it is. Status is
