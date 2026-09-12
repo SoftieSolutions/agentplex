@@ -115,19 +115,22 @@ pnpm docker:check   # the same, in a container
 
 Every setting has one flag and one environment variable; the flag wins.
 
-| Flag                     | Environment                      | Default        | Meaning                                                  |
-| ------------------------ | -------------------------------- | -------------- | -------------------------------------------------------- |
-| `--role`                 | `AGENTPLEX_ROLE`                 | none, required | `hub`, `server` or `both`                                |
-| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`      | Interface to bind                                        |
-| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`         | Port the hub serves on                                   |
-| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`         | Port the hub dials                                       |
-| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none           | SQLite file, absolute; required for `hub` and `both`     |
-| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none           | Client credential, 32+ chars; required for `hub`, `both` |
-| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none           | Store root; repeatable, absolute                         |
-| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none           | Absolute; required for `server` and `both`               |
-| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none           | Agent directory, searched before `PATH`; repeatable      |
-| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`            | Terminals held at once; at least 1                       |
-| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`         | `debug`, `info`, `warn`, `error`                         |
+| Flag                     | Environment                      | Default               | Meaning                                                                                    |
+| ------------------------ | -------------------------------- | --------------------- | ------------------------------------------------------------------------------------------ |
+| `--role`                 | `AGENTPLEX_ROLE`                 | none, required        | `hub`, `server` or `both`                                                                  |
+| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`             | Interface to bind                                                                          |
+| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`                | Port the hub serves on                                                                     |
+| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`                | Port the hub dials                                                                         |
+| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none                  | SQLite file, absolute; required for `hub` and `both`                                       |
+| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none                  | Client credential, 32+ chars; required for `hub`, `both`                                   |
+| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none                  | Store root; repeatable, absolute                                                           |
+| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none                  | Absolute; required for `server` and `both`                                                 |
+| `--server-token`         | `AGENTPLEX_SERVER_TOKEN`         | minted on first start | Pairing token the deployment sets, 32+ chars; for a machine whose disk does not outlive it |
+| `--data-path`            | `AGENTPLEX_DATA_PATH`            | `$HOME/.agentplex`    | Absolute; the one directory a server writes into                                           |
+| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none                  | Agent directory, searched before `PATH`; repeatable                                        |
+| `--tz`                   | `AGENTPLEX_TZ`                   | inherited             | Zone a spawned session reports times in; IANA name                                         |
+| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                   | Terminals held at once; at least 1                                                         |
+| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`                | `debug`, `info`, `warn`, `error`                                                           |
 
 ### Checking a machine
 
@@ -147,9 +150,59 @@ logged, only its path — open it, copy the token, and type it into the hub alon
 with the server's `wss://` address. That is the only way a pairing is made;
 discovery on the LAN pre-fills the address and nothing more.
 
-Tokens are per server, so revoking one instance touches no other. Keep the
-identity file somewhere that survives a restart: a server that loses it mints a
-new identity, and the pairing stops working until you pair again.
+Keep the identity file somewhere that survives a restart: a server that loses
+it mints a new identity, and the pairing stops working until you pair again.
+
+### Grants: what a server can take away
+
+Beside the identity file, named after it, a server keeps a **grants file** —
+`server.json` gets `server-grants.json`. One record per pairing: a label, a
+verifier for the token, the hub id first seen presenting it, when it was created
+and last used, an optional expiry, and whether it was revoked. That is the unit
+an operator revokes, and revoking one leaves every other hub connected.
+
+The token in the identity file is grant zero. Nothing about a fresh install
+changes, no hub needs migrating, and on the first start of an upgraded server
+the grants file appears holding that one record. Revoking grant zero is allowed
+and does what it says: on a `--role=both` machine, the hub beside the server
+stops connecting until you re-mint the identity file.
+
+Three things are worth knowing about how it behaves.
+
+**It holds a verifier, not a token.** The hub must keep its tokens in the clear
+because it presents them; a server only ever checks one, so it stores a SHA-256
+of it. Somebody who can read the grants file cannot pair with what they found.
+
+**A revocation reaches a server that is already running.** The grants file is
+re-read at every handshake, so a hub revoked while disconnected is refused the
+moment it comes back, and a sweep on a short interval closes the connections a
+revoked or expired grant is still holding. There is no restart in either path.
+
+**A rejected handshake says only that it failed.** A revoked grant, an expired
+one and a token nothing was ever minted for are all refused identically —
+`unauthorized`, and no more. Telling a peer that its credential was real but
+withdrawn is exactly the thing worth probing for. Which of the three it was is
+in the server's log, where the person entitled to know it is.
+
+The hub id a hub sends is a **label**. It is self-reported, so nothing is
+decided with it; the server records the one it saw against the grant and, when
+a later one disagrees, accepts the connection and says so in the log. A hub
+whose database was rebuilt mints a new id and is still the same operator with
+the same token.
+
+Where there is no such place — a container whose filesystem goes at the next
+deploy, a CI job nobody will ever shell into — the deployment can supply the
+token instead, with `AGENTPLEX_SERVER_TOKEN`. The server writes that token into
+the identity file rather than minting one, so the secret is known before the
+process first starts and nobody has to read a file off the box to learn it. A
+file that already holds a different token stops the start rather than either
+token quietly winning: a server answering to a credential you believe you
+replaced is the failure that would cause.
+
+That settles the token and not the `serverId`, which is still minted per file.
+A hub refuses a handshake presenting a different `serverId` than the pairing was
+completed with, so a server whose filesystem is genuinely disposable wants its
+identity file on a mounted volume as well.
 
 The hub dials the server, never the reverse, so a server needs one inbound port
 reachable by the hub and dials out to nothing. That port carries both the health
@@ -166,6 +219,12 @@ and a session outlives the tab that opened it — except stopping the server.
 A store is identified by an `agentplex-store.json` file at its root, minted the
 first time a server mounts it. Two servers mounting the same volume report the
 same store, and moving the volume takes its sessions with it.
+
+Everything a server writes for itself goes under `--data-path`, one directory
+per server, created at boot. A store path is a provider's directory and is only
+read; the data root is the server's own, and a server that cannot create it or
+cannot write in it refuses to start rather than losing what it was keeping
+there. A store that is missing is reported and costs only itself.
 
 ## Contributing
 

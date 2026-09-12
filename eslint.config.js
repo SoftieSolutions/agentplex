@@ -341,6 +341,16 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
+    // The suite that checks the suite's own isolation. Its subject is what a
+    // child process inherits, and starting one is the only way to have that as
+    // a subject: in process it would be asserting about the variable it just
+    // read rather than about the boundary the variable has to cross, which is
+    // the whole of what `scripts/test-home.ts` claims and the half that fails
+    // silently when it stops being true.
+    files: ['scripts/test-home.test.ts'],
+    rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
+  },
+  {
     // The third, for the same reason as the second. This suite's subject is an
     // install script that npm runs as a program and reads an exit code from, so
     // running it as a program is the only way to assert on the exit code. The

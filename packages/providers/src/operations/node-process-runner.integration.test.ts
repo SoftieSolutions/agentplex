@@ -29,7 +29,21 @@ const runner = createNodeProcessRunner({ environment: process.env });
 /** Enough for a process to start and print on a loaded CI machine. */
 const TIMEOUT_MS = 20_000;
 
-describe('createNodeProcessRunner', () => {
+/**
+ * The suite's own bound, and it has to outlive the runner's.
+ *
+ * Every test below hands the runner a 20s deadline and then asserts on what the
+ * child printed; not one of them asserts how long anything took. vitest's
+ * default bound is five seconds, so on a busy machine the suite gave up first
+ * and the runner's own answer -- "did not finish within 20000ms and was killed",
+ * which is the behaviour under test -- could not be produced at all. The guard
+ * against a genuine hang is the deadline above and it has not moved: what
+ * changes here is only which of the two bounds a hang is reported by, and
+ * therefore whether the report names the subject or the harness.
+ */
+const TEST_TIMEOUT_MS = 30_000;
+
+describe('createNodeProcessRunner', { timeout: TEST_TIMEOUT_MS }, () => {
   it('runs a program and reports what it printed', async () => {
     const outcome = await runner.run({
       file: node,
@@ -146,7 +160,7 @@ describe('createNodeProcessRunner', () => {
  * built on them would pass on a developer's mac and fail in the image this
  * deploys as. `tool` below stands for exactly those.
  */
-describe('createNodeProcessRunner with a configured binPath', () => {
+describe('createNodeProcessRunner with a configured binPath', { timeout: TEST_TIMEOUT_MS }, () => {
   const probe = createProbeProgram();
   // A second directory, holding a second program: what the machine already had
   // on its PATH before agentplex recorded anything.
@@ -160,7 +174,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
 
   it('resolves a bare program name from a configured directory', async () => {
     const runner = createNodeProcessRunner({
-      environment: childEnvironment({ inherited, binPath: [probe.directory] }),
+      environment: childEnvironment({ inherited, binPath: [probe.directory], timezone: undefined }),
     });
 
     const outcome = await runner.run({
@@ -174,7 +188,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
 
   it('finds nothing without it, which is what makes the test above about binPath', async () => {
     const runner = createNodeProcessRunner({
-      environment: childEnvironment({ inherited, binPath: [] }),
+      environment: childEnvironment({ inherited, binPath: [], timezone: undefined }),
     });
 
     const outcome = await runner.run({ file: probe.name, args: [], timeoutMs: TIMEOUT_MS });
@@ -192,6 +206,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
       environment: childEnvironment({
         inherited: { PATH: tool.directory },
         binPath: [probe.directory],
+        timezone: undefined,
       }),
     });
 
@@ -212,6 +227,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
       environment: childEnvironment({
         inherited: { PATH: tool.directory },
         binPath: [probe.directory],
+        timezone: undefined,
       }),
     });
 
@@ -240,6 +256,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
         environment: childEnvironment({
           inherited: { PATH: alsoOnPath.directory },
           binPath: [recorded.directory],
+          timezone: undefined,
         }),
       });
 
@@ -254,5 +271,49 @@ describe('createNodeProcessRunner with a configured binPath', () => {
       recorded.remove();
       alsoOnPath.remove();
     }
+  });
+});
+
+/**
+ * The other half of what `childEnvironment` composes, asserted against a real
+ * child for the reason everything in this file is: whether a `TZ` in a
+ * spawned process's environment changes the times that process reports is a
+ * claim about the operating system, and a record built in a unit test proves
+ * only that the variable was written down.
+ *
+ * The zone is Tokyo because it has had one offset since 1951: no rule about
+ * summer time makes this assertion depend on the day it is run. The offset is
+ * read as well as the name, so the case where ICU knows the zone and the
+ * clock underneath it does not would still fail here.
+ */
+describe('createNodeProcessRunner with a configured timezone', () => {
+  const reportZone = [
+    '-e',
+    'process.stdout.write(`${Intl.DateTimeFormat().resolvedOptions().timeZone} ${new Date(0).getTimezoneOffset()}`)',
+  ];
+
+  it('gives the child the zone the deployment chose', async () => {
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({ inherited: {}, binPath: [], timezone: 'Asia/Tokyo' }),
+    });
+
+    const outcome = await runner.run({ file: node, args: reportZone, timeoutMs: TIMEOUT_MS });
+
+    // Nine hours ahead, which `getTimezoneOffset` reports as the minutes to
+    // add to get back to UTC.
+    expect(outcome).toMatchObject({ kind: 'exited', stdout: 'Asia/Tokyo -540' });
+  });
+
+  it('leaves the child on the machine zone when the setting says nothing', async () => {
+    // What makes the case above about the setting. In `node:24-bookworm-slim`
+    // this is UTC, which is the condition the setting exists for.
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({ inherited: {}, binPath: [], timezone: undefined }),
+    });
+
+    const outcome = await runner.run({ file: node, args: reportZone, timeoutMs: TIMEOUT_MS });
+
+    expect(outcome).toMatchObject({ kind: 'exited' });
+    if (outcome.kind === 'exited') expect(outcome.stdout).not.toBe('Asia/Tokyo -540');
   });
 });

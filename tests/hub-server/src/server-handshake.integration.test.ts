@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { HubId } from '@agentplex/protocol';
-import { createFakeStoreFiles, createFakeProcessRunner } from '@agentplex/providers/testing';
+import {
+  createFakeGrantFiles,
+  createFakeStoreFiles,
+  createFakeProcessRunner,
+} from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
@@ -56,7 +60,13 @@ async function startServer(storePaths: readonly string[] = []) {
     storePaths,
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
+    // The grants file lands beside the identity file, on the same fake volume.
+    grantFileSystem: createFakeGrantFiles(),
     tokens: { newToken: () => TOKEN },
+    // Minted, like a machine with a disk of its own. This suite is about what
+    // the two apps say to each other over a real socket, and where the token
+    // came from changes nothing they say.
+    serverToken: undefined,
     providers: createProviderRegistry([]),
     // No adapters, so nothing to preflight: this suite is about the handshake
     // over a real socket, and a preflight that resolved programs would put the

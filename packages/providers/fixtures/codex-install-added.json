@@ -1,0 +1,21 @@
+{
+  "add": [
+    {
+      "name": "@openai/codex",
+      "version": "0.154.0",
+      "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@openai/codex"
+    },
+    {
+      "name": "@openai/codex-darwin-arm64",
+      "version": "0.154.0-darwin-arm64",
+      "path": "/private/tmp/agentplex-fixture/prefix/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64"
+    }
+  ],
+  "added": 2,
+  "audited": 0,
+  "change": [],
+  "changed": 0,
+  "funding": 0,
+  "remove": [],
+  "removed": 0
+}

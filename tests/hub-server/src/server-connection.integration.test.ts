@@ -6,7 +6,7 @@ import {
   type ServerId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
-import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
+import { serveServerEnd } from './server-end.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import {
   createFakeMessageSocket,
@@ -41,7 +41,7 @@ import { createFakeSessionController } from '../../../apps/server/src/fake-sessi
  * The connection supervisor for one server, driven end to end.
  *
  * Both halves of the handshake are the real code: the dialer hands back a
- * linked socket pair with the server role's own `serveHubConnection` on the
+ * linked socket pair with the server role's own `serveServerEnd` on the
  * far end, so a token is really compared, a protocol version is really
  * checked, and the frames are really JSON. Only three things are replaced, and
  * each is something a test cannot supply -- the wire, the passage of time, and
@@ -125,7 +125,7 @@ function fakeMachine(options: {
         const { hubEnd, serverEnd } = createSocketPair();
         // The real server half, so the handshake this test drives is the one
         // the product runs.
-        serveHubConnection(serverEnd, {
+        serveServerEnd(serverEnd, {
           sessions: createFakeSessionController(),
           identity: { serverId: machine.serverId, token: machine.token },
           stores: machine.stores,
@@ -555,7 +555,7 @@ describe('startServerConnection', () => {
     // until a process exits.
     const registration = await register('laptop');
     const { hubEnd, serverEnd } = createSocketPair();
-    serveHubConnection(serverEnd, {
+    serveServerEnd(serverEnd, {
       sessions: createFakeSessionController(),
       identity: { serverId: serverIdSchema.parse('server-laptop'), token: 'tok-laptop' },
       stores: [store('store-a', '/volumes/claude')],

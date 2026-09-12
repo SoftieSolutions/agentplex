@@ -3,6 +3,7 @@ import type {
   SessionId,
   SessionRef,
   SessionStatus,
+  SessionUsage,
   StoreDescriptor,
 } from '@agentplex/protocol';
 import type { Argv } from './operations/operation.js';
@@ -150,6 +151,22 @@ export interface DiscoveredSession {
   readonly cwd: string | null;
   /** What the provider calls this session, or `null` if it does not name it. */
   readonly title: string | null;
+  /**
+   * What this session has spent, in tokens the provider itself counted, or
+   * `null` when its files state none.
+   *
+   * Required and nullable, where the wire field is optional. An adapter is the
+   * only thing that can read a provider's own counts, so it is the one place
+   * that has to answer the question out loud -- a new adapter that simply
+   * omitted this would be a provider silently reporting no spend, and the type
+   * is what stops that being possible by accident. `null` is a real answer and
+   * the one an adapter gives when it looked.
+   *
+   * Never a zeroed record standing in for `null`. Zero is what a provider that
+   * counted and found nothing reports, and the surfaces above render the two
+   * differently on purpose.
+   */
+  readonly usage: SessionUsage | null;
 }
 
 export interface DiscoveryProblem {

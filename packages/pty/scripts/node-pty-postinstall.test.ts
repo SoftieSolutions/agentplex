@@ -39,7 +39,10 @@ function withoutNodePty(): string {
 function run(script: string, environment: Record<string, string> = {}) {
   const result = spawnSync(process.execPath, [script], {
     encoding: 'utf8',
-    env: { PATH: process.env['PATH'] ?? '', ...environment },
+    // The suite's throwaway `$HOME`, not the operator's: this child is a
+    // postinstall script run under node, and an absent `$HOME` would send
+    // anything asking for one to the passwd entry.
+    env: { HOME: process.env['HOME'] ?? '', PATH: process.env['PATH'] ?? '', ...environment },
   });
   return { status: result.status ?? -1, stderr: result.stderr, stdout: result.stdout };
 }

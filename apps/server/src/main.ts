@@ -12,19 +12,19 @@ import {
   wantsHelp,
 } from '@agentplex/node-shared';
 import {
-  createClaudeAdapter,
-  createNodeProcessProbe,
   createNodeProcessRunner,
   createNodeProgramResolver,
   createProviderPreflight,
-  createProviderRegistry,
+  createRegisteredProviders,
   nodeProviderFiles,
+  nodeGrantFileSystem,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
 import { checkNodePty, createPtySupervisor, nodePtyFactory } from '@agentplex/pty';
 import { startRuntime } from './boot.js';
 import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
+import { nodeDataRoot } from './node-data-root.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { refuseWithoutTerminals } from './terminal-support.js';
 import { createTerminalManager } from './terminal-manager.js';
@@ -95,10 +95,16 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logLevel, jsonLineSink(write, systemClock));
 
   // What every child of this process gets, composed once: what the server
-  // inherited, with the configured directories ahead of its PATH. Both spawn
+  // inherited, with the configured directories ahead of its PATH and the
+  // configured zone in place of whatever the unit was started with. Both spawn
   // seams below take it at construction, so nothing downstream has an
-  // environment to read or a variable to add.
-  const environment = childEnvironment({ inherited: process.env, binPath: config.binPath });
+  // environment to read or a variable to add -- which is why the zone is
+  // another input to that function rather than something each seam sets.
+  const environment = childEnvironment({
+    inherited: process.env,
+    binPath: config.binPath,
+    timezone: config.timezone,
+  });
 
   // The one place a one-shot child is started. Every operation shares this
   // runner, so what a child inherits is decided above and cannot be added to
@@ -112,14 +118,14 @@ async function main(): Promise<void> {
   // first the day the composition changes.
   const programs = createNodeProgramResolver(childSearchPath(environment));
 
-  // What this build drives, in one line. Adding codex is another adapter file
-  // and another entry here, and nothing else.
-  const providers = createProviderRegistry([
-    createClaudeAdapter({
-      files: nodeProviderFiles,
-      probe: createNodeProcessProbe({ runner: processRunner }),
-    }),
-  ]);
+  // What this build drives, composed where the adapters live. The list is the
+  // provider seam's, not this program's: `doctor` and setup call the same
+  // function, so no machine can have a server driving one set of providers and
+  // a check reporting on another.
+  const providers = createRegisteredProviders({
+    files: nodeProviderFiles,
+    runner: processRunner,
+  });
 
   // What those adapters turn out to be on this machine, asked once at boot and
   // carried into every handshake. The same implementation `doctor` prints, so
@@ -132,6 +138,11 @@ async function main(): Promise<void> {
       logger,
       ids: randomIdGenerator,
       storeFileSystem: nodeStoreFileSystem,
+      // The one place this process may create a directory of its own. It is a
+      // separate seam from the store volumes above because it is a separate
+      // permission: a store is read, and this is written.
+      dataRootFileSystem: nodeDataRoot,
+      grantFileSystem: nodeGrantFileSystem,
       // The only place a secret is generated, and the CSPRNG is the whole
       // implementation: the server's pairing token, once, on its first start.
       tokens: randomTokenMinter,

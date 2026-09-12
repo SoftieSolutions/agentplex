@@ -8,12 +8,10 @@ import {
   wantsHelp,
 } from '@agentplex/node-shared';
 import {
-  createClaudeAdapter,
-  createNodeProcessProbe,
   createNodeProcessRunner,
   createNodeProgramResolver,
   createProviderPreflight,
-  createProviderRegistry,
+  createRegisteredProviders,
   nodeProviderFiles,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
@@ -88,17 +86,19 @@ export async function main(): Promise<void> {
   const environment = childEnvironment({
     inherited: process.env,
     binPath: 'server' in config ? config.server.binPath : [],
+    timezone: undefined,
   });
   const processRunner = createNodeProcessRunner({ environment });
   const programs = createNodeProgramResolver(childSearchPath(environment));
 
-  // The same adapters the server drives, in the same one line.
-  const providers = createProviderRegistry([
-    createClaudeAdapter({
-      files: nodeProviderFiles,
-      probe: createNodeProcessProbe({ runner: processRunner }),
-    }),
-  ]);
+  // The same adapters the server drives, because it is the same call. This is
+  // the composition the provider seam owns, and it reaches no further than a
+  // store filesystem and a one-shot runner: a doctor that could be handed
+  // something able to open a pty would not be this program any more.
+  const providers = createRegisteredProviders({
+    files: nodeProviderFiles,
+    runner: processRunner,
+  });
 
   // The same preflight the server runs at boot. One implementation, so the two
   // can never disagree about whether a binary is there -- which is exactly the

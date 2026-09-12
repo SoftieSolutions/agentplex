@@ -45,7 +45,16 @@ const BIN = fileURLToPath(new URL('../../../dist/main.js', import.meta.url));
 /** The command word the bin consumes before this program reads argv. */
 const COMMAND = 'setup';
 
-/** Long enough for a fork on a busy machine, short enough to be a failure. */
+/**
+ * Long enough for a fork on a busy machine, short enough to be a failure.
+ *
+ * The pair only works if the outer one is stated. Two of the tests below were
+ * left on vitest's five-second default while `run` allowed their child fifteen,
+ * which inverts the layering this file is built on -- and because `spawnSync`
+ * blocks the thread, the suite's bound could not even interrupt the child it
+ * had given up on. The suite bound is on the describe now, so every test in it
+ * outlives the child it starts.
+ */
 const EXIT_TIMEOUT_MS = 15_000;
 const TEST_TIMEOUT_MS = 25_000;
 
@@ -60,12 +69,16 @@ function run(...args: readonly string[]): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [BIN, COMMAND, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { PATH: process.env['PATH'] ?? '' },
+    // `$HOME` travels with `$PATH`, and the suite's is a throwaway -- see
+    // `scripts/test-home.ts`. An environment without it is not sealed: a
+    // child asking `os.homedir()` gets the passwd entry when `$HOME` is
+    // missing, which is the operator's real home.
+    env: { HOME: process.env['HOME'] ?? '', PATH: process.env['PATH'] ?? '' },
     timeout: EXIT_TIMEOUT_MS,
   });
 }
 
-describe('agentplex setup', () => {
+describe('agentplex setup', { timeout: TEST_TIMEOUT_MS }, () => {
   it.each(['--help', '-h'])('prints its usage on stdout and exits 0 for %s', (flag) => {
     const result = run(flag);
 
@@ -74,40 +87,38 @@ describe('agentplex setup', () => {
     expect(result.status).toBe(0);
   });
 
-  it(
-    'answers on a real terminal and exits, rather than starting to ask questions',
-    async () => {
-      const pty = nodePtyFactory.open({
-        command: process.execPath,
-        args: [BIN, COMMAND, '--help'],
-        cwd: dirname(BIN),
-        // The directory node is in and nothing else, so nothing on this machine
-        // is discoverable and the run stays hermetic.
-        env: { PATH: dirname(process.execPath) },
-        cols: 80,
-        rows: 24,
-        term: 'xterm-256color',
-      });
+  it('answers on a real terminal and exits, rather than starting to ask questions', async () => {
+    const pty = nodePtyFactory.open({
+      command: process.execPath,
+      args: [BIN, COMMAND, '--help'],
+      cwd: dirname(BIN),
+      // The directory node is in and nothing else, so nothing on this machine
+      // is discoverable and the run stays hermetic.
+      // `$HOME` is the suite's throwaway rather than the operator's, so a
+      // wizard that reached for provider state would find none of theirs.
+      env: { HOME: process.env['HOME'] ?? '', PATH: dirname(process.execPath) },
+      cols: 80,
+      rows: 24,
+      term: 'xterm-256color',
+    });
 
-      const chunks: string[] = [];
-      pty.onData((chunk) => chunks.push(new TextDecoder().decode(chunk)));
+    const chunks: string[] = [];
+    pty.onData((chunk) => chunks.push(new TextDecoder().decode(chunk)));
 
-      const outcome = await Promise.race([
-        new Promise<PtyExit>((resolve) => pty.onExit(resolve)),
-        new Promise<'never exited'>((resolve) =>
-          setTimeout(() => resolve('never exited'), EXIT_TIMEOUT_MS),
-        ),
-      ]);
+    const outcome = await Promise.race([
+      new Promise<PtyExit>((resolve) => pty.onExit(resolve)),
+      new Promise<'never exited'>((resolve) =>
+        setTimeout(() => resolve('never exited'), EXIT_TIMEOUT_MS),
+      ),
+    ]);
 
-      // Killed either way: a test that leaves a child behind on failure is a
-      // test that makes the next run stranger than this one.
-      pty.kill();
+    // Killed either way: a test that leaves a child behind on failure is a
+    // test that makes the next run stranger than this one.
+    pty.kill();
 
-      expect(outcome).toEqual({ exitCode: 0, signal: null });
-      expect(chunks.join('')).toContain('Usage: agentplex setup');
-    },
-    TEST_TIMEOUT_MS,
-  );
+    expect(outcome).toEqual({ exitCode: 0, signal: null });
+    expect(chunks.join('')).toContain('Usage: agentplex setup');
+  });
 
   it('still refuses a flag it does not know, on stderr, with the code a unit will not retry', () => {
     const result = run('--pln', '/etc/agentplex/plan.json');

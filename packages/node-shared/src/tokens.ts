@@ -37,6 +37,23 @@ export const randomTokenMinter: TokenMinter = {
 };
 
 /**
+ * The floor under a token a person or a deployment supplied, rather than one
+ * `randomTokenMinter` produced.
+ *
+ * Short enough to be typed on a phone, long enough that guessing it is not a
+ * plan. 32 characters is under what the minter above produces (43), so the
+ * documented way of generating one always passes; what it refuses is the
+ * password somebody picked because it was quick, on a credential that is the
+ * only thing standing between a network and every session behind it.
+ *
+ * One number rather than one per caller. The hub's client token and the
+ * server's configured pairing token are the same decision taken twice -- an
+ * operator supplied a secret instead of letting a CSPRNG mint one -- and two
+ * constants that have to agree are two that eventually do not.
+ */
+export const MIN_TOKEN_LENGTH = 32;
+
+/**
  * Compares two secrets without leaking how far the comparison got.
  *
  * `timingSafeEqual` throws on differing lengths, and calling it on the raw
@@ -47,4 +64,27 @@ export const randomTokenMinter: TokenMinter = {
 export function tokenMatches(presented: string, expected: string): boolean {
   const digest = (value: string): Buffer => createHash('sha256').update(value, 'utf8').digest();
   return timingSafeEqual(digest(presented), digest(expected));
+}
+
+/**
+ * A secret reduced to something that can be stored where the secret may not be.
+ *
+ * Here rather than beside its caller because it is the same decision as the
+ * comparison below it and has to stay in step with it: a digest written into a
+ * file and a comparison taken somewhere else are two spellings of one rule, and
+ * the second one is where it stops being true.
+ *
+ * The asymmetry that makes it worth having is whose job each side has. The hub
+ * must hold its tokens in the clear because it *presents* them, and an outbound
+ * credential cannot be hashed. A server only ever *checks* one, so once the
+ * pairing flow prints a token rather than leaving it in a file to be re-read,
+ * the server never needs the plaintext again and holds this instead.
+ *
+ * No salt and no slow KDF, deliberately. These are 32 bytes from the CSPRNG,
+ * not passwords: there is nothing to guess offline and nothing a rainbow table
+ * could hold, so a per-record salt would buy nothing and cost the property that
+ * makes this usable -- that the digest of a presented token is a lookup key.
+ */
+export function tokenDigest(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('base64url');
 }

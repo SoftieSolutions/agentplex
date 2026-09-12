@@ -8,11 +8,9 @@ import {
   wantsHelp,
 } from '@agentplex/node-shared';
 import {
-  createClaudeAdapter,
-  createNodeProcessProbe,
   createNodeProcessRunner,
   createNodeProgramResolver,
-  createProviderRegistry,
+  createRegisteredProviders,
   nodeProviderFiles,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
@@ -78,7 +76,11 @@ export async function main(): Promise<void> {
   // with no `binPath` in front of it. `systemctl` is the machine's own program
   // and must resolve as the machine resolves it, where a provider is looked for
   // in the directories the plan named first.
-  const machineEnvironment = childEnvironment({ inherited: process.env, binPath: [] });
+  const machineEnvironment = childEnvironment({
+    inherited: process.env,
+    binPath: [],
+    timezone: undefined,
+  });
 
   try {
     process.exitCode = await runSetupCommand(process.argv.slice(2), {
@@ -95,7 +97,7 @@ export async function main(): Promise<void> {
       }),
       runnerFor: (binPath) =>
         createNodeProcessRunner({
-          environment: childEnvironment({ inherited: process.env, binPath }),
+          environment: childEnvironment({ inherited: process.env, binPath, timezone: undefined }),
         }),
       // The other place a real pty is opened, and the same composition the
       // server's supervisor gets. That is the point of it being here: a
@@ -107,18 +109,14 @@ export async function main(): Promise<void> {
           pty: nodePtyFactory,
           clock: systemClock,
           ids: randomIdGenerator,
-          environment: childEnvironment({ inherited: process.env, binPath }),
+          environment: childEnvironment({ inherited: process.env, binPath, timezone: undefined }),
         }),
-      // The same one line the server has, for the same reason: which providers
-      // this build drives is a fact about the build and belongs in the
-      // entrypoint.
-      providersFor: (runner) =>
-        createProviderRegistry([
-          createClaudeAdapter({
-            files: nodeProviderFiles,
-            probe: createNodeProcessProbe({ runner }),
-          }),
-        ]),
+      // The same call the server and `doctor` make. Which providers this build
+      // drives is a fact about the build rather than about this program, and
+      // the runner is what is genuinely setup's own: one per recorded
+      // `binPath`, so a replay probes the copy of the binary those directories
+      // resolve.
+      providersFor: (runner) => createRegisteredProviders({ files: nodeProviderFiles, runner }),
       files: nodeStoreFileSystem,
       // The one step that runs after everything else, and the reason it is
       // setup's rather than the installer's is in `start-after-setup.ts`. It is

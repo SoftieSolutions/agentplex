@@ -5,7 +5,7 @@ import {
   type HubId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
-import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
+import { serveServerEnd } from './server-end.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import {
   createSocketPair,
@@ -82,7 +82,7 @@ const dialer: SocketDialer = {
     }
 
     const { hubEnd, serverEnd } = createSocketPair();
-    serveHubConnection(serverEnd, {
+    serveServerEnd(serverEnd, {
       sessions: createFakeSessionController(),
       identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
       stores: machine.stores,

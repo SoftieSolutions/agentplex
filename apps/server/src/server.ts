@@ -19,13 +19,19 @@ import {
 import { serveHubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import {
+  type ConfiguredToken,
+  type GrantFileSystem,
   type ProviderPreflight,
   type ProviderRegistry,
   ensureStores,
+  openServerGrants,
+  serverGrantsPath,
   type StoreFileSystem,
 } from '@agentplex/providers';
 import { announceServer, type BeaconNetwork } from './server-beacon.js';
 import { ensureServerIdentity } from '@agentplex/providers';
+import { createHubAudience } from './hub-audience.js';
+import { sweepGrants } from './grant-sweep.js';
 import { createSessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
 
@@ -55,8 +61,30 @@ export interface SessionServerDependencies {
    * identity written there would hand both of them the same name and secret.
    */
   readonly identityPath: string;
+  /**
+   * The disk under the grants file, which sits beside the identity file.
+   *
+   * A third filesystem seam, and not an oversight. The store seam reaches a
+   * provider's volume and may never grow a write; the data root seam creates a
+   * directory; this one replaces one file, atomically, because a reader that
+   * meets half a grants file is a server that refuses every handshake.
+   */
+  readonly grantFileSystem: GrantFileSystem;
   /** Where the pairing token comes from the first time this server starts. */
   readonly tokens: TokenMinter;
+  /**
+   * The pairing token the deployment set, when it set one.
+   *
+   * When it is here it is the token and `tokens` above is never reached, and
+   * when it is not, nothing about this server's first start has changed. It is
+   * a separate dependency from the minter rather than a minter that returns a
+   * constant, because the two are not the same fact: a minter is where entropy
+   * comes from, and this is a decision somebody already took. Folding it in
+   * would also lose the disagreement -- `ensureServerIdentity` has to be able
+   * to tell a token it was handed from one it produced, or a file holding a
+   * credential the operator thinks they replaced would be read straight past.
+   */
+  readonly serverToken: ConfiguredToken | undefined;
   /** The adapters this build can drive. An empty registry finds nothing and says nothing. */
   readonly providers: ProviderRegistry;
   /**
@@ -141,7 +169,9 @@ export async function startSessionServer(
     storePaths,
     storeFileSystem,
     identityPath,
+    grantFileSystem,
     tokens,
+    serverToken,
     providers,
     preflight,
     clock,
@@ -162,6 +192,7 @@ export async function startSessionServer(
     files: storeFileSystem,
     ids,
     tokens,
+    configuredToken: serverToken,
   });
   if (!identity.ok) {
     throw new Error(`agentplex cannot establish its server identity: ${identity.problem}`);
@@ -171,9 +202,51 @@ export async function startSessionServer(
   // to paste into the hub, and a secret in a log line is one that has to be
   // rotated. `logger.ts` would redact a `token` field anyway; not gathering it
   // is the version that does not depend on remembering.
-  logger.info(identity.minted ? 'server identity minted' : 'server identity loaded', {
+  //
+  // Three messages rather than two, because "minted" now over-claims on one of
+  // the three paths. A deployment that supplied the token has no new secret to
+  // go and read, and a line telling it one was just minted would send somebody
+  // to a file for a value they put there themselves.
+  logger.info(identityMessage(identity.minted, serverToken !== undefined), {
     serverId: identity.identity.serverId,
     identityPath,
+  });
+
+  // The grants this server will answer to, and grant zero the first time.
+  //
+  // Fatal for the reason the identity is. Coming up with an empty grants file
+  // would unpair every hub silently; coming up ignoring one it could not read
+  // would leave a server answering to credentials the operator believes they
+  // withdrew. Both are the failure nobody sees, and this is the moment it can
+  // be said out loud.
+  const grantsPath = serverGrantsPath(identityPath);
+  const grants = await openServerGrants(grantsPath, identity.identity.token, {
+    files: grantFileSystem,
+    ids,
+    tokens,
+    clock,
+    // The one sentence about a disagreeing hub id, written where the log lines
+    // about connections already are. The store records it and decides nothing
+    // with it; a hub whose database was rebuilt is still the same operator.
+    onWitness: ({ grantId, hubId, disagrees, unrecorded }) => {
+      if (disagrees) {
+        logger.warn('a grant is being used by a different hub id than the one it first saw', {
+          grantId,
+          hubId,
+        });
+      }
+      if (unrecorded !== null) {
+        logger.warn('could not record a handshake against its grant', { grantId, unrecorded });
+      }
+    },
+  });
+  if (!grants.ok) {
+    throw new Error(`agentplex cannot read this server's grants: ${grants.problem}`);
+  }
+  // The path and the count, never a verifier. What an operator needs from this
+  // line is where the file is and whether the upgrade wrote grant zero.
+  logger.info(grants.migrated ? 'grants file written with grant zero' : 'grants loaded', {
+    grantsPath,
   });
 
   // What this build can run, said out loud at boot. The registry is closed, so
@@ -233,12 +306,27 @@ export async function startSessionServer(
     });
   }
 
+  // Every hub connected at once, which is what makes a stop by one of them
+  // something the others are told about. It outlives each connection: a socket
+  // comes and goes and the set is the server's.
+  const audience = createHubAudience({
+    sessions,
+    logger,
+    // A socket that closed is a watcher that is gone, and it is not there to
+    // call the detach it was handed. Without this a terminal nobody can see
+    // stays pinned against eviction for the life of the process.
+    onLeave: (member) => terminals.release(member.connectionId),
+  });
+
   // The one thing a hub can do with this server before it has proved itself:
   // open a socket. Everything past that is the handshake's to allow.
   const hubs = createWebSocketListener({
     onConnection: (socket) =>
       void serveHubConnection(socket, {
+        connectionId: ids.newId(),
         identity: identity.identity,
+        grants: grants.store,
+        audience,
         sessions,
         // Read at connection time rather than captured, so a hub that dials
         // after a store came back reachable is told what is mounted now.
@@ -247,6 +335,10 @@ export async function startSessionServer(
         logger,
       }),
   });
+
+  // Revocation reaching a connection that is already up. The handshake covers
+  // the hub that reconnects; this covers the one that does not have to.
+  const sweep = sweepGrants({ grants: grants.store, audience, timers, logger });
 
   const listener: HttpListener = await startHttpServer(
     port,
@@ -296,6 +388,9 @@ export async function startSessionServer(
       // The beacon first, and before anything slow: every announcement from
       // here on would be inviting a hub to dial a server that is going away.
       beacon?.stop();
+      // The sweep next, because a pending timer is a process that will not
+      // exit, and there is nothing left for it to revoke access to.
+      sweep.stop();
       // Children next. Closing the listener only stops new work arriving;
       // anything already running would go on writing into the store with
       // nothing left to watch it.
@@ -309,4 +404,20 @@ export async function startSessionServer(
       logger.info('server stopped', { killed: running });
     },
   };
+}
+
+/**
+ * Which of the three things this boot did about the identity file.
+ *
+ * A function rather than a nested ternary at the call site, and outside
+ * `startSessionServer` because it needs nothing from it. What it is careful
+ * about is the second argument: it says whether a token was configured, never
+ * what it was, so no caller can accidentally pass the secret into a log
+ * message by passing the wrong thing here.
+ */
+function identityMessage(minted: boolean, configured: boolean): string {
+  if (!minted) return 'server identity loaded';
+  return configured
+    ? 'server identity written with the configured pairing token'
+    : 'server identity minted';
 }

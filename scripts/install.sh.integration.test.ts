@@ -54,13 +54,6 @@ const enginesSchema = z.object({ engines: z.object({ node: z.string() }) });
 
 const suiteIsRoot = process.getuid?.() === 0;
 
-/**
- * Whether this machine could run a systemd unit, asked the way the script asks
- * it. The check container is a Node image and has no systemd, so a suite that
- * assumed one would be asserting about the machine it was written on.
- */
-const machineHasSystemd = spawnSync('bash', ['-c', 'command -v systemctl']).status === 0;
-
 interface RunResult {
   readonly status: number;
   readonly stdout: string;
@@ -97,13 +90,20 @@ afterEach(() => {
  * The versions directory is outside the home on purpose: several tests assert
  * that a run which was told to change nothing left the home empty, and a
  * fixture inside it would make every one of those assertions about the fixture.
+ *
+ * The stem is a parameter because the default one is a clock. `mkdtempSync`
+ * derives its suffix from the time rather than from randomness, so which
+ * directory a run gets is a fact about when it ran -- and a test that needs a
+ * particular name states it here instead of waiting for the clock to produce
+ * one. Six characters are still appended, so a stated name is as unique as the
+ * default.
  */
-function scratch(): {
+function scratch(named = 'agentplex-install-'): {
   readonly script: string;
   readonly home: string;
   readonly versions: string;
 } {
-  const root = mkdtempSync(join(tmpdir(), 'agentplex-install-'));
+  const root = mkdtempSync(join(tmpdir(), named));
   temporaries.push(root);
   const script = join(root, 'install.sh');
   const home = join(root, 'home');
@@ -247,6 +247,48 @@ function planned(stdout: string, key: string): string | undefined {
   return line?.slice(key.length).trim();
 }
 
+/** What the `package` step will hand npm, and where it will put the result. */
+interface PackagePlan {
+  /**
+   * The argv npm is given: one tarball spec per component, or -- where nothing
+   * has been resolved yet -- the components and the root their tags hang under.
+   */
+  readonly source: string;
+  /** The prefix it installs into, which under this suite is a scratch path. */
+  readonly destination: string;
+}
+
+/**
+ * The `package` line of the plan, split at its destination.
+ *
+ * Read this rather than the rendered line whenever the assertion is about what
+ * npm is handed, because the rendered line also names the scratch prefix and a
+ * scratch prefix is this suite's own invention rather than the script's answer.
+ *
+ * That distinction was not free. `mkdtempSync` derives its suffix from the
+ * clock and not from randomness, so `agentplex-install-vJKSyf` and
+ * `agentplex-install-vI0etU` are both names it really produced; a prefix under
+ * either one renders `-v` into this line, and the assertion below that greps
+ * for `-v` to prove no release tag was invented used to read the path instead.
+ * It failed twice in six container runs, always looking like a regression in
+ * argument handling and never being one.
+ *
+ * The needle is the part that varies. `-f`, `-y` and every other single-letter
+ * flag an installer test might want to look for sit in the same trap, so the
+ * fix is not a safer alphabet for the directory name -- it is to stop the
+ * directory name reaching an assertion that was never about it.
+ */
+function packagePlan(stdout: string): PackagePlan {
+  const line = planned(stdout, 'package');
+  if (line === undefined) throw new Error('the plan named no package step');
+  const at = line.lastIndexOf(DESTINATION);
+  if (at === -1) throw new Error(`a package step with no destination: ${line}`);
+  return { source: line.slice(0, at), destination: line.slice(at + DESTINATION.length) };
+}
+
+/** What the script prints between the packages and the prefix they land in. */
+const DESTINATION = ' into ';
+
 /** A literal path, as a fragment of a regular expression. */
 function escaped(value: string): string {
   return value.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
@@ -338,6 +380,89 @@ function unitLines(stdout: string): readonly string[] {
 }
 
 /**
+ * The script written back out with its last line dropped, so it can be sourced
+ * for its functions instead of run for its effects.
+ *
+ * `main "$@"` being the last line is exactly what makes dropping it enough to
+ * load the rest, and every driver below is built on that.
+ */
+function sourceableLibrary(script: string): string {
+  const library = `${script}.lib`;
+  writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
+  chmodSync(library, 0o644);
+  return library;
+}
+
+/**
+ * A machine the script can be told it is running on.
+ *
+ * The installer draws three of them and not two, which is the whole point: a
+ * Mac is not a Linux box missing systemctl, so it gets its own answer in both
+ * of the places the platform is asked about -- the unit it cannot write, and
+ * the compiler it does not need.
+ */
+interface Host {
+  /** What `uname -s` answers on it. */
+  readonly kernel: string;
+  /** What `uname -m` answers on it. */
+  readonly architecture: string;
+  /** Whether `systemctl` is on its PATH. */
+  readonly systemctl: boolean;
+}
+
+const LINUX_WITH_SYSTEMD: Host = { kernel: 'Linux', architecture: 'x86_64', systemctl: true };
+const LINUX_WITHOUT_SYSTEMD: Host = { kernel: 'Linux', architecture: 'x86_64', systemctl: false };
+const MACOS: Host = { kernel: 'Darwin', architecture: 'arm64', systemctl: false };
+
+/**
+ * A whole run, on a stated machine rather than on whoever is running the suite.
+ *
+ * This is the seam, and it is the shell's own: a function shadows a command for
+ * every caller in the process, so declaring `uname` here is enough for the
+ * script's real `detect_platform` to parse a stated kernel. Nothing about the
+ * installer changes -- it still runs `uname -s`, still maps the answer itself,
+ * and still dies on one it does not know -- which is why the two tests that
+ * assert on its parsing below can exist at all. An environment variable that
+ * set `PLATFORM` directly would have skipped exactly that code, and would have
+ * left a real operator a way to lie to their own installer.
+ *
+ * `have systemctl` is the other machine fact, and the only one taken out of the
+ * host's hands: every other `have` is still asked of the machine, because which
+ * node this run adopts and whether a compiler is already here are answers a
+ * suite has no business inventing.
+ *
+ * Anything not stated is still the real resolvers' to answer, which is the same
+ * bargain the summary drivers strike further down.
+ */
+function runOn(script: string, home: string, host: Host, args: readonly string[]): RunResult {
+  const library = sourceableLibrary(script);
+
+  const driver = `${script}.host`;
+  writeFileSync(
+    driver,
+    [
+      `source ${quote(library)}`,
+      `uname() {`,
+      `  case "$1" in`,
+      `    -s) printf '%s\\n' ${quote(host.kernel)} ;;`,
+      `    -m) printf '%s\\n' ${quote(host.architecture)} ;;`,
+      `    *) command uname "$@" ;;`,
+      `  esac`,
+      `}`,
+      `have() {`,
+      `  [ "$1" = 'systemctl' ] && return ${host.systemctl ? 0 : 1}`,
+      `  command -v "$1" >/dev/null 2>&1`,
+      `}`,
+      `main "$@"`,
+      '',
+    ].join('\n'),
+  );
+  chmodSync(driver, 0o755);
+
+  return run(driver, home, args);
+}
+
+/**
  * `summary` alone, on a machine that wrote no unit.
  *
  * The instruction block is the last thing a real install prints, and a dry run
@@ -356,9 +481,7 @@ function summaryWithNoUnitWritten(reason: string): {
 } {
   const { script, home } = scratch();
 
-  const library = `${script}.lib`;
-  writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
-  chmodSync(library, 0o644);
+  const library = sourceableLibrary(script);
 
   const driver = `${script}.summary`;
   writeFileSync(
@@ -400,9 +523,7 @@ function summaryWithUnits(role: string): { readonly home: string; readonly resul
     writeFileSync(join(units, `agentplex-${daemon}.service`), '');
   }
 
-  const library = `${script}.lib`;
-  writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
-  chmodSync(library, 0o644);
+  const library = sourceableLibrary(script);
 
   const driver = `${script}.summary`;
   writeFileSync(
@@ -439,9 +560,7 @@ function environmentFileWritten(options: (home: string) => readonly string[]): {
 } {
   const { script, home } = scratch();
 
-  const library = `${script}.lib`;
-  writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
-  chmodSync(library, 0o644);
+  const library = sourceableLibrary(script);
 
   const driver = `${script}.settings`;
   writeFileSync(
@@ -556,9 +675,7 @@ function systemStep(
   const root = mkdtempSync(join(tmpdir(), 'agentplex-system-'));
   temporaries.push(root);
 
-  const library = `${script}.lib`;
-  writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
-  chmodSync(library, 0o644);
+  const library = sourceableLibrary(script);
 
   const driver = `${script}.${step}`;
   writeFileSync(
@@ -656,6 +773,55 @@ describe('the options', () => {
   });
 });
 
+/**
+ * `detect_platform`, driven by a stated `uname` rather than by the machine.
+ *
+ * These are the tests the seam pays for. The kernel and the architecture are
+ * words read out of another program, so they go through something that can say
+ * no -- and the only way to watch it say no is to hand it a word this machine
+ * would never produce. A seam that set `PLATFORM` directly would have skipped
+ * this parser entirely.
+ */
+describe('the machines it will and will not install on', () => {
+  it('refuses a kernel it has no answer for, rather than guessing one', () => {
+    const { script, home } = scratch();
+    const host: Host = { kernel: 'FreeBSD', architecture: 'x86_64', systemctl: false };
+
+    const result = runOn(script, home, host, ['--dry-run', '--role=server']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unsupported system "FreeBSD"');
+    // Which two it does install on, so the refusal is an answer and not a stop.
+    expect(result.stderr).toContain('Linux and macOS');
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  it('refuses an architecture it has no runtime to download for', () => {
+    const { script, home } = scratch();
+    const host: Host = { kernel: 'Linux', architecture: 'ppc64le', systemctl: true };
+
+    const result = runOn(script, home, host, ['--dry-run', '--role=server']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unsupported architecture "ppc64le"');
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  /**
+   * The spellings a kernel actually uses, which are not the spellings the
+   * script carries internally. Both of these are real `uname -m` answers.
+   */
+  it('takes the other spelling of each architecture it supports', () => {
+    const { script, home } = scratch();
+
+    for (const architecture of ['amd64', 'aarch64']) {
+      const host: Host = { kernel: 'Linux', architecture, systemctl: true };
+      const result = runOn(script, home, host, ['--dry-run', '--role=server']);
+      expect(result.status, architecture).toBe(0);
+    }
+  });
+});
+
 describe('the plan a dry run prints', () => {
   it('installs into the user prefix, for the user who ran it', () => {
     const { script, home } = scratch();
@@ -669,21 +835,28 @@ describe('the plan a dry run prints', () => {
   });
 
   /**
-   * The unit line is the one thing in the plan that depends on the machine
-   * running the suite, so it is asserted against that machine rather than
-   * against an assumption about it. The check container is a Node image with no
-   * systemd in it, and a plan claiming it would write a unit there would be the
-   * over-claim, not the skip.
+   * The unit line used to be asserted against whatever machine the suite was
+   * running on, which made it a lottery: a Linux runner read one branch, a Mac
+   * read a third the branch did not have, and the suite was red on one platform
+   * and green on the other for the same commit. The machine is stated now, so
+   * all three answers are asserted everywhere.
+   *
+   * The three stay apart because they send the operator to different places:
+   * macOS wants launchd, a Linux box without systemctl wants systemd installed
+   * or the daemon started by hand, and a Linux box with it gets a file.
    */
-  it('plans a user unit where there is a systemd to run one, and says so where there is not', () => {
+  it('plans a user unit where there is systemd, and gives each machine without one its own reason', () => {
     const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--role=server']);
+    const unit = (host: Host): string | undefined =>
+      planned(runOn(script, home, host, ['--dry-run', '--role=server']).stdout, 'unit');
 
-    expect(planned(result.stdout, 'unit')).toBe(
-      machineHasSystemd
-        ? `${home}/.config/systemd/user/agentplex-server.service (write, not enabled)`
-        : 'skipped: no systemctl on this machine',
+    expect(unit(LINUX_WITH_SYSTEMD)).toBe(
+      `${home}/.config/systemd/user/agentplex-server.service (write, not enabled)`,
     );
+    expect(unit(LINUX_WITHOUT_SYSTEMD)).toBe('skipped: no systemctl on this machine');
+    // Not the systemctl reason with a different machine behind it: telling a Mac
+    // user to install systemd would be wrong, and this is what says so.
+    expect(unit(MACOS)).toBe('skipped: macOS has no systemd, hand the process to launchd');
   });
 
   /**
@@ -692,17 +865,19 @@ describe('the plan a dry run prints', () => {
    * once per place that asked -- and a second place that asked was added, and
    * the plan grew a duplicate nobody had written.
    */
-  it('reports the unit step once, whichever answer this machine gives', () => {
+  it('reports the unit step once, whichever answer the machine gives', () => {
     const { script, home } = scratch();
+    const lines = (host: Host, role: string): readonly string[] =>
+      unitLines(runOn(script, home, host, ['--dry-run', `--role=${role}`]).stdout);
 
-    const server = run(script, home, ['--dry-run', '--role=server']);
-    const both = run(script, home, ['--dry-run', '--role=both']);
-
-    expect(unitLines(server.stdout)).toHaveLength(1);
+    expect(lines(LINUX_WITH_SYSTEMD, 'server')).toHaveLength(1);
     // A machine with systemd writes a file per daemon and names each file. A
     // machine without one has a single answer to give, not one answer per
-    // daemon that will not be written.
-    expect(unitLines(both.stdout)).toHaveLength(machineHasSystemd ? 2 : 1);
+    // daemon that will not be written -- and that holds for both of the machines
+    // that have no unit to write, for their two different reasons.
+    expect(lines(LINUX_WITH_SYSTEMD, 'both')).toHaveLength(2);
+    expect(lines(LINUX_WITHOUT_SYSTEMD, 'both')).toHaveLength(1);
+    expect(lines(MACOS, 'both')).toHaveLength(1);
   });
 
   it('changes nothing at all', () => {
@@ -779,8 +954,7 @@ describe('the plan a dry run prints', () => {
     ['both', ['cli', 'hub', 'web', 'server'], []],
   ])('installs the packages --role=%s runs, and no others', (role, wanted, unwanted) => {
     const { script, home } = scratch();
-    const line =
-      planned(run(script, home, ['--dry-run', `--role=${role}`]).stdout, 'package') ?? '';
+    const { source: line } = packagePlan(run(script, home, ['--dry-run', `--role=${role}`]).stdout);
 
     for (const component of wanted) {
       expect(line, component).toContain(releaseUrl(component, CURRENT[component] ?? ''));
@@ -806,13 +980,11 @@ describe('the plan a dry run prints', () => {
       writeFileSync(join(packages, `softiesolutions-${name}-0.0.0.tgz`), '');
     }
 
-    const line =
-      planned(
-        run(script, home, ['--dry-run', '--role=hub'], {
-          environment: { AGENTPLEX_PACKAGE: packages },
-        }).stdout,
-        'package',
-      ) ?? '';
+    const { source: line } = packagePlan(
+      run(script, home, ['--dry-run', '--role=hub'], {
+        environment: { AGENTPLEX_PACKAGE: packages },
+      }).stdout,
+    );
 
     // The hub's three, by file. The `[0-9]` in the script's pattern is what
     // keeps the command's own tarball from also matching the hub, the server
@@ -887,9 +1059,7 @@ describe('the plan a dry run prints', () => {
   it('names the prefix in the handover it would make where there is a terminal', () => {
     const { script, home } = scratch();
 
-    const library = `${script}.lib`;
-    writeFileSync(library, readFileSync(script, 'utf8').replace(/main "\$@"\s*$/, ''));
-    chmodSync(library, 0o644);
+    const library = sourceableLibrary(script);
 
     const driver = `${script}.setup`;
     writeFileSync(
@@ -945,16 +1115,46 @@ describe('the toolchain, which only one role needs', () => {
    * that actually builds. `optionalDependencies` lets npm exit 0 without it,
    * which on a server is the silent success the whole ticket is about.
    */
-  it('still plans a toolchain for a server and for both, and says the build must succeed', () => {
+  it('still plans a toolchain for a server and for both on Linux, and says the build must succeed', () => {
     const { script, home } = scratch();
 
     for (const role of ['server', 'both']) {
-      const line = planned(run(script, home, ['--dry-run', `--role=${role}`]).stdout, 'toolchain');
+      const line = planned(
+        runOn(script, home, LINUX_WITH_SYSTEMD, ['--dry-run', `--role=${role}`]).stdout,
+        'toolchain',
+      );
       expect(line, role).not.toContain('not needed');
       // Either it is already here or it is about to be installed; what the line
-      // must never say for these roles is that nothing needs it.
+      // must never say for these roles is that nothing needs it. Which of the
+      // two it is stays the machine's answer -- a suite that stated a compiler
+      // into or out of existence would be asserting about its own fixture.
       expect(line, role).toMatch(/present|install/);
       expect(line, role).toContain('node-pty');
+    }
+  });
+
+  /**
+   * The same two roles on a Mac, where the honest answer is the opposite one.
+   *
+   * node-pty ships prebuilt binaries for macOS -- `apps/server/README.md` says
+   * so outright -- so there is nothing for a compiler to build and nothing to
+   * install. This assertion was a Linux rule stated as a universal one, and on
+   * a Mac it failed the installer for telling the truth.
+   */
+  it('needs no toolchain on macOS, where node-pty ships a prebuild', () => {
+    const { script, home } = scratch();
+
+    for (const role of ['server', 'both']) {
+      const line = planned(
+        runOn(script, home, MACOS, ['--dry-run', `--role=${role}`]).stdout,
+        'toolchain',
+      );
+      expect(line, role).toContain('not needed');
+      // The reason, and the right one of the two: a Mac is skipped for its
+      // prebuild, not for being a machine that runs no server.
+      expect(line, role).toContain('macOS');
+      expect(line, role).toContain('node-pty');
+      expect(line, role).not.toContain('g++');
     }
   });
 
@@ -1956,11 +2156,38 @@ describe('the versions manifest, which is read off the network and parsed', () =
     expect(result.status).toBe(0);
     expect(planned(result.stdout, 'release')).toContain('a dry run downloads nothing');
     expect(planned(result.stdout, 'protocol')).toContain('not checked');
-    // No URL was invented for a version this run never learned.
     // No URL was built for a version this run never learned: the download root
-    // is named, and no tag inside it is.
-    expect(planned(result.stdout, 'package')).not.toContain('-v');
-    expect(planned(result.stdout, 'package')).toContain('cli hub web from');
+    // is named, and no tag inside it is. Asked of what npm is handed, because
+    // the rest of the line is a prefix this suite chose and nothing the script
+    // decided.
+    const { source } = packagePlan(result.stdout);
+    expect(source).not.toContain('-v');
+    expect(source).toContain('cli hub web from');
+  });
+
+  /**
+   * The same claim, made from a scratch directory that sets the trap on
+   * purpose.
+   *
+   * `agentplex-install-vJKSyf` is a directory `mkdtempSync` really returned.
+   * Its suffix comes from the clock, so the failure was always there and only
+   * sometimes observed -- two of six container runs, each reported as an
+   * argument-handling regression. Stating the name is what turns that into a
+   * test: the assertion above passes on a lucky clock either way, and this one
+   * cannot.
+   */
+  it('says nothing about a version from a scratch directory named like a flag', () => {
+    const { script, home } = scratch('agentplex-install-vJKSyf');
+
+    const result = run(script, home, ['--dry-run', '--role=hub'], {
+      environment: { AGENTPLEX_VERSIONS: '' },
+    });
+
+    expect(result.status).toBe(0);
+    // The trap is set: the rendered line does carry `-v`, in the prefix.
+    expect(planned(result.stdout, 'package')).toContain('-v');
+    // And the half that is the script's answer does not.
+    expect(packagePlan(result.stdout).source).not.toContain('-v');
   });
 
   /**

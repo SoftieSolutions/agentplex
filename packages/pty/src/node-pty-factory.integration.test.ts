@@ -42,6 +42,10 @@ const supervisor = createPtySupervisor({
     // Kept, and the control for the prefix rule: a substring is not a prefix.
     MY_CLAUDE_NOTE: 'kept',
     PATH: process.env.PATH ?? '',
+    // The suite's throwaway home -- see `scripts/test-home.ts`. A pty child
+    // given no `$HOME` resolves one from the passwd entry instead, which is
+    // the operator's.
+    HOME: process.env.HOME ?? '',
   },
 });
 
@@ -203,12 +207,15 @@ describe('nodePtyFactory with a configured binPath', () => {
     tool.remove();
   });
 
-  function launchNamed(command: string): Launch {
+  function launchNamed(
+    command: string,
+    source = 'process.stdout.write(`PATH=${process.env.PATH}\\n`)',
+  ): Launch {
     return {
       ok: true,
       plan: {
         command,
-        args: ['-e', 'process.stdout.write(`PATH=${process.env.PATH}\\n`)'],
+        args: ['-e', source],
         cwd: process.cwd(),
         env: {},
         scrubEnvPrefixes: [],
@@ -220,12 +227,16 @@ describe('nodePtyFactory with a configured binPath', () => {
     return launchNamed(probe.name);
   }
 
-  function supervisorFor(binPath: readonly string[], inheritedPath = ''): PtySupervisor {
+  function supervisorFor(
+    binPath: readonly string[],
+    inheritedPath = '',
+    timezone: string | undefined = undefined,
+  ): PtySupervisor {
     return createPtySupervisor({
       pty: nodePtyFactory,
       clock: systemClock,
       ids: randomIdGenerator,
-      environment: childEnvironment({ inherited: { PATH: inheritedPath }, binPath }),
+      environment: childEnvironment({ inherited: { PATH: inheritedPath }, binPath, timezone }),
     });
   }
 
@@ -261,6 +272,33 @@ describe('nodePtyFactory with a configured binPath', () => {
 
       expect(printed).toContain(`PATH=${[probe.directory, tool.directory].join(delimiter)}`);
       expect(started.run.exit).toEqual({ exitCode: 0, signal: null });
+    },
+    CHILD_TIMEOUT_MS,
+  );
+
+  it(
+    'gives the session the zone the deployment chose',
+    async () => {
+      // The other half of what this environment composes, on the seam a coding
+      // agent is actually started through. This is where the question "what
+      // day is it" gets answered, and before the setting existed the answer
+      // was whatever the unit file was started with -- UTC, on every container
+      // image.
+      const started = supervisorFor([probe.directory], '', 'Asia/Tokyo').launch(
+        launchNamed(
+          probe.name,
+          'process.stdout.write(`ZONE=${Intl.DateTimeFormat().resolvedOptions().timeZone} ${new Date(0).getTimezoneOffset()}\\n`)',
+        ),
+      );
+
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+
+      // The zone the child reports, not the variable it was handed: a session
+      // that had `TZ` in its environment and told the time in UTC anyway would
+      // pass the weaker assertion and fail the operator. Tokyo has had one
+      // offset since 1951, so the minutes are the same on every day this runs.
+      expect(await output(started.run)).toContain('ZONE=Asia/Tokyo -540');
     },
     CHILD_TIMEOUT_MS,
   );
