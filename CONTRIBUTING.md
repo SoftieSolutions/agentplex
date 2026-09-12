@@ -89,6 +89,20 @@ line, and neither app may import the other. `pnpm lint` enforces this.
 `packages/protocol` is shared by a Node service and a browser bundle, so it may
 use neither Node builtins nor another workspace package.
 
+One boundary is not a package line, and so is not lint's to carry. `agentplex
+doctor` reads a machine and must not be able to change it, and it lives in a
+directory of `apps/cli` — an app that declares `@agentplex/pty` legitimately,
+because the wizard beside it opens terminals. ESLint sees one file at a time, so
+a rule scoped to the doctor's directory catches a direct import and misses one
+reached through any sibling module in the same app.
+`apps/cli/src/commands/doctor/pty-boundary.test.ts` is the half that holds the
+property: it follows the import graph out of the doctor's entrypoint and fails
+if any module in it binds anything from that package beyond the three names that
+ask whether a pty can be opened without being able to open one. A constraint
+that cannot be drawn at a package line gets a test, not a comment — a
+half-enforced rule is worse than an unenforced one, because the second gets read
+and the first gets trusted.
+
 ## Commits and pull requests
 
 One ticket per branch, one branch per pull request. Keep the diff reviewable:

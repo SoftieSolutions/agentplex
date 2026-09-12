@@ -29,6 +29,15 @@ const restrictedImports = (extra) => ['error', { patterns: [forbidAppInternals, 
  * The narrowing that keeps the doctor unable to open what it inspects, named
  * here because two configurations below need exactly it: the program, and the
  * one suite of its own that is allowed to start a child.
+ *
+ * A third place holds the same three names and is not this file.
+ * `apps/cli/src/commands/doctor/pty-boundary.test.ts` walks the doctor's whole
+ * import graph and asks the same question of every module in it, because what
+ * ESLint can enforce here is narrower than it reads -- the block below says how
+ * narrow, and AGX-215 is why anybody measured. That suite repeats the list by
+ * hand rather than importing it: an app's test reaching into the repository's
+ * lint configuration would be a worse coupling than two lists a failure names in
+ * full. Change one, change the other.
  */
 const doctorOpensNoPty = [
   {
@@ -255,11 +264,30 @@ export default tseslint.config(
     // somebody has to remember.
     //
     // The doctor is a directory inside `apps/cli` now rather than an app of its
-    // own, and this is the block that makes that costless: the boundary was
-    // never the package.json, it was this rule, and a path narrows exactly as
-    // well as a manifest did. `apps/cli` as a whole declares `pty` -- the
-    // wizard beside this directory opens terminals -- so nothing but this
-    // stops the doctor importing what could open one.
+    // own, and this block is what took over from the manifest that used to
+    // carry the boundary. A path does not narrow as well as a manifest did, and
+    // AGX-215 is the ticket that measured the difference: this rule is scoped to
+    // the doctor's own files, so it sees a specifier written in that directory
+    // and nothing else, while `apps/cli` as a whole declares `pty` because the
+    // wizard beside the doctor opens terminals. A sibling module in this app
+    // that binds `createPtySupervisor`, imported from the doctor, passes every
+    // rule in this file. That was run, not reasoned about.
+    //
+    // So this is the near half of the boundary and not the whole of it. It
+    // fails in the editor, on the line somebody wrote, for the import somebody
+    // is actually most likely to write -- which is worth keeping and is not
+    // worth mistaking for the property. The far half is
+    // `apps/cli/src/commands/doctor/pty-boundary.test.ts`, which follows the
+    // import graph out of the doctor's entrypoint and applies these same three
+    // names to every module it reaches. A leak through a sibling, through a
+    // workspace package, through a re-export or through a dynamic `import()`
+    // fails there.
+    //
+    // Not `eslint-plugin-import`'s `no-restricted-paths`: its zones were run
+    // against a three-module chain and reported only the direct import. It
+    // resolves paths per import declaration in the file being linted, with no
+    // traversal and no option asking for one, so it would restate this rule in
+    // another vocabulary and catch exactly what this rule catches.
     //
     // It declares `pty` for exactly three names, and the narrowing is the rule
     // rather than a hole in it. node-pty is an optional dependency of the
