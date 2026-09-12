@@ -61,17 +61,10 @@ export function createTokenStore(access: () => Storage): TokenStore {
   };
 }
 
-/** The browser's store. The property access lives inside the guarded call. */
-const browserTokenStore = createTokenStore(() => window.localStorage);
-
-export function readHubToken(): string | null {
-  return browserTokenStore.read();
-}
-
-export function writeHubToken(token: string): boolean {
-  return browserTokenStore.write(token);
-}
-
-export function clearHubToken(): boolean {
-  return browserTokenStore.clear();
-}
+/**
+ * The browser's store, and the one the page hands around: the settings screen
+ * writes through it and the hub store's ticket exchange reads through it, so
+ * there is exactly one key a token can be under. The property access lives
+ * inside the guarded call.
+ */
+export const browserTokenStore: TokenStore = createTokenStore(() => window.localStorage);
