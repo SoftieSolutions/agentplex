@@ -28,6 +28,12 @@ import { formatDoctorReport, inspectMachine } from './doctor.js';
  * expression in this program that could open one. A check is easier to trust
  * when the program running it cannot change what it checks.
  *
+ * "Not reachable from here" is a claim about every module this file can reach
+ * rather than about this file, and `pty-boundary.test.ts` beside it is what
+ * makes it one: it walks the import graph out of this entrypoint and asks what
+ * each module in it binds from that package. The lint rule alone read as though
+ * it said this and only ever said it of this directory (AGX-215).
+ *
  * The report goes to stdout and this program's own log lines to stderr, so
  * that what an operator reads -- or pipes into an issue -- is the report and
  * not the report with a JSON line about a probe in the middle of it.
