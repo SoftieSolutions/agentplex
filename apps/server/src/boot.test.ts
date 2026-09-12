@@ -10,6 +10,7 @@ import {
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from './terminal-manager.js';
+import { createFakeDataRoot, type FakeDataRoot } from './fake-data-root.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
@@ -18,12 +19,16 @@ import type { ServerConfig } from './config.js';
 const logger = createLogger('error', () => {});
 const ids = { newId: () => 'hub-under-test' };
 
-function dependencies(storeFileSystem = createFakeStoreFiles()) {
+function dependencies(
+  storeFileSystem = createFakeStoreFiles(),
+  dataRootFileSystem: FakeDataRoot = createFakeDataRoot(),
+) {
   return {
     logger,
     ids,
     timers: createFakeTimers(),
     storeFileSystem,
+    dataRootFileSystem,
     tokens: { newToken: () => 'token-under-test' },
     // No adapters: this file is about which halves start and stop, and a
     // registry with a real one in it would put a provider's disk layout into
@@ -71,6 +76,9 @@ const HOST = '127.0.0.1';
  */
 const IDENTITY_PATH = '/etc/agentplex/server.json';
 
+/** The server's own directory, which it creates before it serves anything. */
+const DATA_PATH = '/var/lib/agentplex';
+
 const serverOnly: ServerConfig = {
   logLevel: 'error',
   host: HOST,
@@ -78,6 +86,7 @@ const serverOnly: ServerConfig = {
   storePaths: [],
   binPath: [],
   identityPath: IDENTITY_PATH,
+  dataPath: DATA_PATH,
   terminalCap: 8,
   // Quiet, like the default. This file is about what starts and stops, and a
   // beacon would be a second thing coming up with the server.
@@ -162,6 +171,26 @@ describe('startRuntime', () => {
     runtime = await startRuntime(withStores, dependencies(files));
 
     expect(runtime.server?.stores.map((store) => store.path)).toEqual(['/volumes/claude']);
+  });
+
+  it('creates its data root before it binds a port', async () => {
+    const dataRoot = createFakeDataRoot();
+
+    runtime = await startRuntime(serverOnly, dependencies(createFakeStoreFiles(), dataRoot));
+
+    expect(dataRoot.creates).toEqual([DATA_PATH]);
+  });
+
+  it('does not come up at all when it cannot write its own state', async () => {
+    // The asymmetry with a store, asserted where the two meet: an unreadable
+    // store costs itself and the server comes up without it, and a data root
+    // it cannot write costs the start. A server that served anyway would be
+    // one that forgets at its next restart and says so at neither moment.
+    const dataRoot = createFakeDataRoot({ uncreatable: [DATA_PATH] });
+
+    await expect(
+      startRuntime(serverOnly, dependencies(createFakeStoreFiles(), dataRoot)),
+    ).rejects.toThrow(DATA_PATH);
   });
 
   it('is safe to stop twice, because a signal can arrive twice', async () => {

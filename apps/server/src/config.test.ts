@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { loadServerConfig, serverUsage, type ServerConfigResult } from './config.js';
 
 const IDENTITY_FILE = '/etc/agentplex/server.json';
+const HOME = '/home/dev';
 
 /**
- * Every case needs an identity file.
+ * Every case needs an identity file, and a home for the data root to default
+ * from.
  *
  * They are supplied through the environment rather than written into each argv
  * so that a test about the terminal cap stays a test about the terminal cap. A
@@ -17,6 +19,7 @@ function load(argv: string[], env: Record<string, string | undefined> = {}): Ser
     argv,
     env: {
       AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE,
+      HOME,
       ...env,
     },
   });
@@ -299,6 +302,98 @@ describe('loadServerConfig server identity file', () => {
 
   it('normalizes the path it was given', () => {
     expect(identityPath(['--server-identity-file=/srv/../srv/id.json'])).toBe('/srv/id.json');
+  });
+});
+
+describe('loadServerConfig data path', () => {
+  /**
+   * Deliberately not the helper above: these cases are about what the data
+   * root falls back to, so the home it falls back to is the thing each one
+   * says for itself.
+   */
+  function loadBare(
+    argv: string[],
+    env: Record<string, string | undefined> = {},
+  ): ServerConfigResult {
+    return loadServerConfig({
+      argv,
+      env: { AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE, ...env },
+    });
+  }
+
+  function dataPath(argv: string[], env: Record<string, string | undefined> = {}) {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok ? result.config.dataPath : undefined;
+  }
+
+  it('defaults to the directory under the account home an install already owns', () => {
+    // The same directory `install.sh` calls the state directory on the tier
+    // that has a home: a machine that was never told where to put this gets
+    // the place everything else about agentplex on it already is.
+    expect(dataPath([])).toBe('/home/dev/.agentplex');
+  });
+
+  it('reads it from a flag', () => {
+    expect(dataPath(['--data-path=/var/lib/agentplex'])).toBe('/var/lib/agentplex');
+  });
+
+  it('reads it from the environment, which is all a container is configured with', () => {
+    expect(dataPath([], { AGENTPLEX_DATA_PATH: '/var/lib/agentplex' })).toBe('/var/lib/agentplex');
+  });
+
+  it('lets the flag win over the environment, like every other setting', () => {
+    expect(dataPath(['--data-path=/from/flag'], { AGENTPLEX_DATA_PATH: '/from/env' })).toBe(
+      '/from/flag',
+    );
+  });
+
+  it('is what is set, not what the home would have given', () => {
+    // The fleet tier's account has a home and its state lives somewhere else.
+    expect(
+      dataPath([], { HOME: '/var/lib/agentplex', AGENTPLEX_DATA_PATH: '/srv/agentplex' }),
+    ).toBe('/srv/agentplex');
+  });
+
+  it('refuses a relative path, which would be a different directory per working directory', () => {
+    const problems = expectProblems(load(['--data-path=agentplex']));
+    expect(problems[0]).toContain('absolute path');
+  });
+
+  it('normalizes the path it was given, so one directory has one name', () => {
+    expect(dataPath(['--data-path=/var/lib/other/../agentplex/'])).toBe('/var/lib/agentplex');
+  });
+
+  it('refuses to guess when there is no home to default from', () => {
+    // The one thing it must not do is pick something. A server whose state
+    // went to a directory nobody named forgets it the first time that
+    // directory is not there, and nothing anywhere says why.
+    const problems = expectProblems(loadBare([]));
+    expect(problems[0]).toContain('AGENTPLEX_DATA_PATH');
+  });
+
+  it('refuses a home that is not absolute rather than resolving it against a cwd', () => {
+    const problems = expectProblems(loadBare([], { HOME: 'dev' }));
+    expect(problems[0]).toContain('HOME');
+  });
+
+  it('takes a home that is absolute and reports nothing', () => {
+    expect(loadBare([], { HOME: '/var/lib/agentplex' })).toMatchObject({
+      ok: true,
+      config: { dataPath: '/var/lib/agentplex/.agentplex' },
+    });
+  });
+
+  it('is collected with every other problem rather than reported on its own', () => {
+    // The contract the whole file is built around: one restart per bad
+    // settings file, not one per bad line in it.
+    const problems = expectProblems(loadBare(['--server-port=abc', '--log-level=loud']));
+    expect(problems).toHaveLength(3);
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(serverUsage()).toContain('--data-path');
+    expect(serverUsage()).toContain('AGENTPLEX_DATA_PATH');
   });
 });
 

@@ -25,6 +25,7 @@ import { checkNodePty, createPtySupervisor, nodePtyFactory } from '@agentplex/pt
 import { startRuntime } from './boot.js';
 import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
+import { nodeDataRoot } from './node-data-root.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { refuseWithoutTerminals } from './terminal-support.js';
 import { createTerminalManager } from './terminal-manager.js';
@@ -132,6 +133,10 @@ async function main(): Promise<void> {
       logger,
       ids: randomIdGenerator,
       storeFileSystem: nodeStoreFileSystem,
+      // The one place this process may create a directory of its own. It is a
+      // separate seam from the store volumes above because it is a separate
+      // permission: a store is read, and this is written.
+      dataRootFileSystem: nodeDataRoot,
       // The only place a secret is generated, and the CSPRNG is the whole
       // implementation: the server's pairing token, once, on its first start.
       tokens: randomTokenMinter,
