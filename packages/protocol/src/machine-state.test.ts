@@ -51,6 +51,7 @@ const A_SESSION_ROW = {
     updatedAt: 900,
     cwd: '/srv/work',
     title: null,
+    uncommitted: { files: 1, added: 18, removed: 4, entries: [] },
   },
   source: 'registration-1',
   reportedBy: ['registration-1'],

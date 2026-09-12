@@ -75,18 +75,23 @@ export {
 export type { ProviderReadiness, ProviderReadinessState } from './readiness.js';
 
 export {
+  changedFileSchema,
   sessionDescriptorSchema,
   sessionHoldSchema,
   sessionStartTagSchema,
   sessionStatusSchema,
   sessionUsageSchema,
+  UNCOMMITTED_FILES_LISTED,
+  uncommittedDiffSchema,
 } from './session.js';
 export type {
+  ChangedFile,
   SessionDescriptor,
   SessionHold,
   SessionStartTag,
   SessionStatus,
   SessionUsage,
+  UncommittedDiff,
 } from './session.js';
 
 export {

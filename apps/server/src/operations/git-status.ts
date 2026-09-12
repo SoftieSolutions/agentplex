@@ -1,6 +1,6 @@
-import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { CompletedProcess, Operation, OperationOutcome } from '@agentplex/providers';
+import { directorySchema, firstLine } from './directory.js';
 
 /**
  * What a session's working directory looks like to git right now.
@@ -50,26 +50,6 @@ export interface GitStatus {
    */
   readonly changes: number;
 }
-
-/**
- * A directory this operation will accept.
- *
- * Absolute, because a relative path would resolve against whatever directory
- * agentplex happens to have been started in — and because an absolute path
- * cannot be mistaken by git for one of its own options. No NUL, because a NUL
- * truncates the path at the syscall, so what is opened is a prefix of what was
- * checked.
- *
- * Note what this does *not* do: it does not decide whether the directory is one
- * a session may look at. That is `parseWorkingDirectory`'s job at the point a
- * session's directory is chosen, and duplicating it here would put the same
- * policy in two places to drift apart.
- */
-const directorySchema = z
-  .string()
-  .min(1)
-  .refine((value) => !value.includes('\0'), 'a directory may not contain a null byte')
-  .refine(isAbsolute, 'a directory must be an absolute path');
 
 export const gitStatusRequestSchema = z.strictObject({ directory: directorySchema });
 export type GitStatusRequest = z.infer<typeof gitStatusRequestSchema>;
@@ -170,9 +150,4 @@ function signedCount(field: string | undefined, sign: string): number {
   if (field === undefined || !field.startsWith(sign)) return 0;
   const count = Number(field.slice(sign.length));
   return Number.isInteger(count) && count >= 0 ? count : 0;
-}
-
-function firstLine(text: string): string {
-  const line = text.trim().split('\n')[0];
-  return line === undefined || line === '' ? 'it said nothing' : line;
 }

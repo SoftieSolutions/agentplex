@@ -79,6 +79,7 @@ describe('the operation registry', () => {
     const registry = createOperationRegistry(createFakeProcessRunner());
 
     expect(registry.operations.map(({ name }) => name)).toEqual([
+      'git.diff',
       'git.status',
       'process.start-time',
     ]);
@@ -105,6 +106,7 @@ describe('the operation registry', () => {
     // adding an operation forces someone to write down what a valid request to
     // it looks like — and brings it under every assertion below.
     const requests: Readonly<Record<string, unknown>> = {
+      'git.diff': { directory: DIRECTORY },
       'git.status': { directory: DIRECTORY },
       'process.start-time': { pid: 42 },
     };
@@ -130,9 +132,14 @@ describe('the operation registry', () => {
       expect(request.timeoutMs).toBeGreaterThan(0);
     }
 
-    // And the directory really did reach git as an argument it parses.
-    expect(runner.requests[0]?.args).toContain('-C');
-    expect(runner.requests[0]?.args).toContain(DIRECTORY);
+    // And the directory really did reach git as an argument it parses, in
+    // every operation that takes one.
+    const gitRequests = runner.requests.filter((request) => request.file === 'git');
+    expect(gitRequests).not.toEqual([]);
+    for (const request of gitRequests) {
+      expect(request.args).toContain('-C');
+      expect(request.args).toContain(DIRECTORY);
+    }
   });
 
   it('holds none of the operations setup has', () => {

@@ -11,6 +11,7 @@ import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
+import { createFakeUncommittedDiffs } from '../../../apps/server/src/fake-uncommitted-diffs.js';
 import {
   createLogger,
   closure,
@@ -72,6 +73,7 @@ async function startServer(storePaths: readonly string[] = []) {
     // over a real socket, and a preflight that resolved programs would put the
     // test machine's PATH into it.
     preflight: { run: async () => [] },
+    diffs: createFakeUncommittedDiffs(),
     clock,
     terminals: createTerminalManager({
       supervisor: createPtySupervisor({

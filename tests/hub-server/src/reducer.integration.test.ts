@@ -158,6 +158,7 @@ function session(
     updatedAt: START,
     cwd: '/volumes/claude/work',
     title: null,
+    uncommitted: null,
   };
 }
 

@@ -70,6 +70,7 @@ function session(id: string): SessionDescriptor {
     updatedAt: START,
     cwd: '/srv/work',
     title: 'the ticket',
+    uncommitted: null,
   };
 }
 

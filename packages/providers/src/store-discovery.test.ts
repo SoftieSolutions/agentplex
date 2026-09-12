@@ -52,6 +52,10 @@ describe('discoverStoreSessions', () => {
         updatedAt: NOW - 1_000,
         cwd: '/work',
         title: 'a made-up session',
+        // Discovery reads a provider's files and does not start git, so every
+        // session it reports says nobody looked at the working tree. The server
+        // fills this in above discovery, where the operations are.
+        uncommitted: null,
       },
       {
         storeId: 'store-a',
@@ -61,6 +65,7 @@ describe('discoverStoreSessions', () => {
         updatedAt: NOW - 1_000,
         cwd: '/work',
         title: 'a made-up session',
+        uncommitted: null,
       },
     ]);
   });

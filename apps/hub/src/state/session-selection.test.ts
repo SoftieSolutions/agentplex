@@ -27,6 +27,7 @@ function descriptor(overrides: Partial<SessionDescriptor> = {}): SessionDescript
     updatedAt: START,
     cwd: '/srv/work',
     title: null,
+    uncommitted: null,
     ...overrides,
   };
 }
