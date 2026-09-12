@@ -31,6 +31,7 @@ import {
 import { announceServer, type BeaconNetwork } from './server-beacon.js';
 import { ensureServerIdentity } from '@agentplex/providers';
 import { createHubAudience } from './hub-audience.js';
+import { sweepGrants } from './grant-sweep.js';
 import { createSessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
 
@@ -335,6 +336,9 @@ export async function startSessionServer(
       }),
   });
 
+  // Revocation reaching a connection that is already up. The handshake covers
+  // the hub that reconnects; this covers the one that does not have to.
+  const sweep = sweepGrants({ grants: grants.store, audience, timers, logger });
 
   const listener: HttpListener = await startHttpServer(
     port,
@@ -384,6 +388,9 @@ export async function startSessionServer(
       // The beacon first, and before anything slow: every announcement from
       // here on would be inviting a hub to dial a server that is going away.
       beacon?.stop();
+      // The sweep next, because a pending timer is a process that will not
+      // exit, and there is nothing left for it to revoke access to.
+      sweep.stop();
       // Children next. Closing the listener only stops new work arriving;
       // anything already running would go on writing into the store with
       // nothing left to watch it.
