@@ -337,6 +337,12 @@ describe('client and hub round trips', () => {
                   updatedAt: 900,
                   cwd: '/srv/work',
                   title: 'the ticket',
+                  uncommitted: {
+                    files: 3,
+                    added: 42,
+                    removed: 5,
+                    entries: [{ path: 'src/auth/refresh.ts', added: 18, removed: 4 }],
+                  },
                 },
                 source: serverRegistrationIdSchema.parse('registration-1'),
                 reportedBy: [serverRegistrationIdSchema.parse('registration-1')],

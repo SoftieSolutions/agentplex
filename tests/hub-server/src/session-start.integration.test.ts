@@ -35,6 +35,7 @@ import {
 } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
 import { createSessionController } from '../../../apps/server/src/session-control.js';
+import { createFakeUncommittedDiffs } from '../../../apps/server/src/fake-uncommitted-diffs.js';
 import {
   createTerminalManager,
   type TerminalManager,
@@ -194,6 +195,7 @@ function serveMachine(machine: Machine): DialResult {
       stores,
       providers: createProviderRegistry([adapter]),
       terminals: machine.terminals,
+      diffs: createFakeUncommittedDiffs(),
       clock,
       logger,
     }),

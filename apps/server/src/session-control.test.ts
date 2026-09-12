@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { sessionIdSchema, storeIdSchema, type StoreDescriptor } from '@agentplex/protocol';
+import {
+  sessionIdSchema,
+  storeIdSchema,
+  type StoreDescriptor,
+  type UncommittedDiff,
+} from '@agentplex/protocol';
 import { createLogger } from '@agentplex/node-shared';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createFakeProviderAdapter, createFakeProviderFiles } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
+import { createFakeUncommittedDiffs, type FakeUncommittedDiffs } from './fake-uncommitted-diffs.js';
 import { createSessionController, type SessionController } from './session-control.js';
 import { createTerminalManager, type TerminalManager } from './terminal-manager.js';
 
@@ -24,6 +30,18 @@ const clock = { now: () => START };
 const WORK = storeIdSchema.parse('store-work');
 const STORE: StoreDescriptor = { storeId: WORK, path: '/volumes/work' };
 
+const PROJECT_DIFF: UncommittedDiff = {
+  files: 2,
+  added: 20,
+  removed: 5,
+  entries: [
+    { path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+    { path: 'src/auth/index.ts', added: 2, removed: 1 },
+  ],
+};
+
+const STORE_ROOT_DIFF: UncommittedDiff = { files: 0, added: 0, removed: 0, entries: [] };
+
 function session(id: string): ReturnType<typeof sessionIdSchema.parse> {
   return sessionIdSchema.parse(id);
 }
@@ -32,9 +50,16 @@ interface Machine {
   readonly sessions: SessionController;
   readonly terminals: TerminalManager;
   readonly ptys: FakePtyFactory;
+  readonly diffs: FakeUncommittedDiffs;
 }
 
-function machine(options: { readonly noAdapter?: boolean } = {}): Machine {
+interface MachineOptions {
+  readonly noAdapter?: boolean;
+  /** What git found, by directory. Anything not in here was not readable. */
+  readonly diffs?: FakeUncommittedDiffs;
+}
+
+function machine(options: MachineOptions = {}): Machine {
   const files = createFakeProviderFiles({
     files: {
       '/volumes/work/claude/sessions/session-1.json': JSON.stringify({
@@ -69,9 +94,12 @@ function machine(options: { readonly noAdapter?: boolean } = {}): Machine {
     clock,
   });
 
+  const diffs = options.diffs ?? createFakeUncommittedDiffs();
+
   return {
     ptys,
     terminals,
+    diffs,
     sessions: createSessionController({
       stores: [STORE],
       providers: createProviderRegistry(
@@ -80,6 +108,7 @@ function machine(options: { readonly noAdapter?: boolean } = {}): Machine {
           : [createFakeProviderAdapter({ provider: 'claude', files })],
       ),
       terminals,
+      diffs,
       clock,
       logger,
     }),
@@ -248,6 +277,41 @@ describe('a report', () => {
   it('answers nothing for a store this server does not have', async () => {
     const { sessions } = machine();
     expect(await sessions.report(storeIdSchema.parse('store-elsewhere'))).toBeNull();
+  });
+
+  it('carries what git says is uncommitted in each session own directory', async () => {
+    // Two directories in one store: the two sessions the provider recorded a
+    // cwd for, and the one it did not, which falls back to the store's own
+    // path. The point is that the fallback is the store and not the other
+    // session's checkout -- a diffstat attributed to the wrong tree is worse
+    // than none.
+    const { sessions, diffs } = machine({
+      diffs: createFakeUncommittedDiffs({
+        '/volumes/work/project': PROJECT_DIFF,
+        '/volumes/work': STORE_ROOT_DIFF,
+      }),
+    });
+
+    const report = await sessions.report(WORK);
+    const byId = new Map(report?.sessions.map((one) => [one.sessionId, one.uncommitted]));
+
+    expect(byId.get(session('session-1'))).toEqual(PROJECT_DIFF);
+    expect(byId.get(session('session-busy'))).toEqual(PROJECT_DIFF);
+    expect(byId.get(session('session-homeless'))).toEqual(STORE_ROOT_DIFF);
+    // Two sessions share a checkout and it was read once.
+    expect([...diffs.asked].sort()).toEqual(['/volumes/work', '/volumes/work/project']);
+  });
+
+  it('reports no diffstat rather than an empty one when git could not be asked', async () => {
+    // The default machine has a reader that answers nothing, which is what a
+    // server with no git on it, or a store that is not a repository, looks
+    // like. `null` and not `{ files: 0 }`: a zero says a person has nothing
+    // outstanding, and nobody looked.
+    const { sessions } = machine();
+
+    const report = await sessions.report(WORK);
+
+    expect(report?.sessions.map((one) => one.uncommitted)).toEqual([null, null, null]);
   });
 });
 

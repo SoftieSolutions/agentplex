@@ -30,6 +30,90 @@ export const sessionStatusSchema = z.enum([
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 
 /**
+ * How many per-file rows a descriptor may carry.
+ *
+ * The rows ride on a frame that carries every session in a store and is sent
+ * again on every scan, so an unbounded list would make one refactor in one
+ * session cost the whole fleet's traffic. Twenty covers what an agent's working
+ * tree looks like almost always, and the totals beside the list are over
+ * everything, so a client with more files than this has the true count and a
+ * prefix of the rows rather than a wrong count.
+ */
+export const UNCOMMITTED_FILES_LISTED = 20;
+
+/**
+ * One file, as git counted it.
+ *
+ * Both nullable fields are a refusal to invent a number, and they are different
+ * refusals.
+ *
+ * `added` and `removed` are `null` together for a file git would not count — a
+ * binary, or one a `.gitattributes` marks as such. Zero would say the bytes did
+ * not move, which is the opposite of what git meant by declining.
+ *
+ * `path` is `null` when git printed a name in bytes that are not UTF-8. A file
+ * name on Linux is bytes and not text, and the decoding this server does on the
+ * way in cannot be undone. So the file still counts — it is in `files` and its
+ * lines are in the totals — and only its name is missing, because dropping the
+ * row would undercount and printing the replacement characters would put a name
+ * on screen that opens nothing.
+ */
+export const changedFileSchema = z.object({
+  path: z.string().min(1).nullable(),
+  added: z.int().nonnegative().nullable(),
+  removed: z.int().nonnegative().nullable(),
+});
+export type ChangedFile = z.infer<typeof changedFileSchema>;
+
+/**
+ * Uncommitted work in a session's working tree: what is there now and is not in
+ * `HEAD`.
+ *
+ * The name is the whole point of this type. "Changed" means two things about a
+ * git repository — what is uncommitted, and what the branch has done since it
+ * left its base — and the mockup this comes from shows both numbers without
+ * saying which is which. They are nowhere near each other in value, and a
+ * client that rendered one as the other would be confidently wrong, so the
+ * field is named for the one it is; a branch diffstat, if it ever lands, gets a
+ * field of its own rather than this one.
+ *
+ * Only this one is here, because only this one can be read without answering a
+ * question nobody has answered. A branch diffstat is `git diff <base>...HEAD`,
+ * and there is no honest `<base>` for an arbitrary checkout: `origin/HEAD` is
+ * absent from a repository cloned `--single-branch` and from one that was never
+ * cloned at all, the "default branch" is a hosting provider's idea that git does
+ * not store, and a stack of dependent branches — how this repository is
+ * actually worked in — has a base that is another branch rather than the trunk.
+ * A number computed against the wrong ref looks exactly like one computed
+ * against the right one. It needs a base the user configured per store, which is
+ * its own ticket; until then the absence of the field is the honest answer.
+ *
+ * What is counted is every tracked file that differs from `HEAD`, staged and
+ * unstaged alike, which is what somebody watching an agent edit their checkout
+ * means by "files changed". Untracked files are not in it: git counts no lines
+ * for a file it is not tracking, and walking one to count them here would mean
+ * reading a directory nobody bounded. `git.status` already counts untracked
+ * entries in its own total, and the two stay separate numbers because they
+ * answer separate questions.
+ */
+export const uncommittedDiffSchema = z.object({
+  /** Tracked files differing from HEAD. The true total, including unlisted ones. */
+  files: z.int().nonnegative(),
+  /** Lines added and removed over every file git counted. Binaries add nothing. */
+  added: z.int().nonnegative(),
+  removed: z.int().nonnegative(),
+  /**
+   * A bounded prefix of the per-file rows, in the order git printed them.
+   *
+   * `entries.length < files` is a list that was cut and not a disagreement: the
+   * counts above are over all of `files`. A client draws the rows it has and
+   * says how many it does not.
+   */
+  entries: z.array(changedFileSchema).max(UNCOMMITTED_FILES_LISTED),
+});
+export type UncommittedDiff = z.infer<typeof uncommittedDiffSchema>;
+
+/**
  * A session as a server reports it.
  *
  * `provider` is on here from day one, not added when the second adapter lands:
@@ -63,6 +147,23 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
   cwd: z.string().min(1).nullable(),
   /** What the provider calls this session, if it names its sessions at all. */
   title: z.string().min(1).nullable(),
+  /**
+   * The uncommitted work in this session's working directory, or `null` when
+   * this server did not read it.
+   *
+   * `null` is the whole of "did not read it", whatever the reason: the
+   * directory is not a git repository, git is not installed, git took too long,
+   * the repository has no commits to be different from, or the server did not
+   * ask because it had already asked about enough directories for one scan. A
+   * client draws nothing rather than a zero, because a zero here says a person
+   * has nothing outstanding and every one of those cases says only that nobody
+   * looked.
+   *
+   * Read by the server, on the server, from the directory the provider recorded
+   * — never from anything on a frame. The hub relays this field and computes
+   * none of it: the working tree is on one machine's disk and nowhere else.
+   */
+  uncommitted: uncommittedDiffSchema.nullable(),
 });
 export type SessionDescriptor = z.infer<typeof sessionDescriptorSchema>;
 

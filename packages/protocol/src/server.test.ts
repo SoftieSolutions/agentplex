@@ -317,6 +317,9 @@ describe('parseServerToHubFrame', () => {
           updatedAt: 900,
           cwd: '/srv/work',
           title: null,
+          // A working tree nobody read. The store report is the frame this
+          // rides on, and `null` is what a server with no git says.
+          uncommitted: null,
         },
       ],
       holding: [{ sessionId: 'session-1', stoppable: false }],
@@ -506,6 +509,7 @@ describe('hub and server round trips', () => {
           updatedAt: 900,
           cwd: '/srv/work',
           title: 'the ticket',
+          uncommitted: { files: 1, added: 18, removed: 4, entries: [] },
         },
       ],
       holding: [{ sessionId: sessionIdSchema.parse('session-1'), stoppable: false }],

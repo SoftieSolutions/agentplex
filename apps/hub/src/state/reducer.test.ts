@@ -69,6 +69,7 @@ function session(id: string, overrides: Partial<SessionDescriptor> = {}): Sessio
     updatedAt: START,
     cwd: '/srv/work',
     title: null,
+    uncommitted: null,
     ...overrides,
   };
 }

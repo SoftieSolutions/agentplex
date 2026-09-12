@@ -15,6 +15,7 @@ import type { Launch, LaunchPlan } from '@agentplex/providers';
 import { startRuntime, type Runtime } from './boot.js';
 import type { ServerConfig } from './config.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
+import { createFakeUncommittedDiffs } from './fake-uncommitted-diffs.js';
 import { createFakeTerminals, type FakeTerminals } from './fake-terminals.js';
 
 /**
@@ -90,6 +91,7 @@ async function start(): Promise<World> {
     preflight: { run: async () => [] },
     terminals: terminals.terminals,
     operations: createOperationRegistry(createFakeProcessRunner()),
+    diffs: createFakeUncommittedDiffs(),
     beacon: {
       open: () => {
         throw new Error('the runtime opened a beacon socket with announcing off');

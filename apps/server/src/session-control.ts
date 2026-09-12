@@ -11,6 +11,7 @@ import type {
 import type { Clock, Logger } from '@agentplex/node-shared';
 import { type ProviderRegistry, discoverStoreSessions } from '@agentplex/providers';
 import type { Terminal, TerminalManager, TerminalOutcome } from './terminal-manager.js';
+import { readUncommittedDiffs, type UncommittedDiffs } from './uncommitted-diffs.js';
 
 /**
  * What a server does when a hub tells it to run a session.
@@ -41,6 +42,14 @@ export interface SessionControllerDependencies {
   readonly stores: readonly StoreDescriptor[];
   readonly providers: ProviderRegistry;
   readonly terminals: TerminalManager;
+  /**
+   * How a scan finds out what is uncommitted in the directories it just read.
+   *
+   * A dependency rather than something built here, for the reason the terminals
+   * are: it starts a child, and the runner underneath it fixes what a child
+   * inherits, which only `main` may decide.
+   */
+  readonly diffs: UncommittedDiffs;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -111,7 +120,7 @@ export interface SessionController {
 export function createSessionController(
   dependencies: SessionControllerDependencies,
 ): SessionController {
-  const { stores, providers, terminals, clock } = dependencies;
+  const { stores, providers, terminals, diffs, clock } = dependencies;
   const logger = dependencies.logger.child({ part: 'sessions' });
 
   const storeOf = (storeId: StoreId): StoreDescriptor | undefined =>
@@ -247,9 +256,55 @@ export function createSessionController(
         terminals.observe({ storeId, sessionId: descriptor.sessionId }, descriptor.status);
       }
 
-      return { storeId, sessions, holding: holdsIn(storeId) };
+      return {
+        storeId,
+        sessions: await withUncommitted(store, sessions),
+        holding: holdsIn(storeId),
+      };
     },
   };
+
+  /**
+   * The directory a session's diffstat is about.
+   *
+   * The provider's own record of where the session ran, which is the checkout
+   * the agent is editing, and the store's path for a session whose provider
+   * does not say. Neither comes off a frame: one was read out of a transcript
+   * on this disk and the other was resolved by this server at boot. What makes
+   * that safe to spawn against is not where it came from but what happens next
+   * -- it reaches `git.diff`, whose parser refuses anything that is not an
+   * absolute path free of NULs, and a refusal is a `null` on one descriptor.
+   */
+  function directoryOf(store: StoreDescriptor, session: SessionDescriptor): string {
+    return session.cwd ?? store.path;
+  }
+
+  /**
+   * The same descriptors, each carrying what git said about its directory.
+   *
+   * Attached here rather than in discovery because only this layer has the
+   * operation seam, and attached at all because the alternative is a client
+   * asking per session over the wire: the hub would have to relay a question it
+   * cannot answer, and the answer would arrive a round trip after the row it
+   * belongs to. A session whose directory was not read keeps the `null` it came
+   * with, which costs that session and never the report.
+   */
+  async function withUncommitted(
+    store: StoreDescriptor,
+    sessions: readonly SessionDescriptor[],
+  ): Promise<readonly SessionDescriptor[]> {
+    if (sessions.length === 0) return sessions;
+
+    const found = await readUncommittedDiffs(
+      sessions.map((session) => directoryOf(store, session)),
+      diffs,
+    );
+
+    return sessions.map((session) => ({
+      ...session,
+      uncommitted: found.get(directoryOf(store, session)) ?? null,
+    }));
+  }
 
   async function discover(store: StoreDescriptor): Promise<readonly SessionDescriptor[]> {
     const found = await discoverStoreSessions(store, {

@@ -87,6 +87,7 @@ function session(id: string): SessionDescriptor {
     updatedAt: START,
     cwd: '/srv/work',
     title: null,
+    uncommitted: null,
   };
 }
 

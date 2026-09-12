@@ -3,6 +3,7 @@ import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 import type { BeaconNetwork } from './server-beacon.js';
 import { startSessionServer, type SessionServer } from './server.js';
+import type { UncommittedDiffs } from './uncommitted-diffs.js';
 import type { TerminalManager } from './terminal-manager.js';
 import type { Clock, IdGenerator, Logger, Timers, TokenMinter } from '@agentplex/node-shared';
 
@@ -65,6 +66,13 @@ export interface RuntimeDependencies {
    */
   readonly operations: OperationRegistry;
   /**
+   * The one typed caller of an operation on the report path: what git says is
+   * uncommitted in a session's directory.
+   *
+   * Injected for the same reason the registry is, and over the same runner.
+   */
+  readonly diffs: UncommittedDiffs;
+  /**
    * What the server would announce itself on, if it is configured to.
    *
    * Supplied whatever the configuration says, and consulted only when it says
@@ -103,6 +111,7 @@ export async function startRuntime(
     preflight,
     terminals,
     operations,
+    diffs,
     beacon,
     timers,
     clock,
@@ -122,6 +131,7 @@ export async function startRuntime(
     terminals,
     drainMs: config.drainMs,
     operations,
+    diffs,
     clock,
     timers,
     // The setting decides, in the one place that has read it. A server that
