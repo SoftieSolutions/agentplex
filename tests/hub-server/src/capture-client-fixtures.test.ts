@@ -228,6 +228,7 @@ function descriptor(
   updatedAt: number,
   cwd: string | null,
   title: string | null,
+  usage?: SessionDescriptor['usage'],
 ): SessionDescriptor {
   return {
     storeId: storeIdSchema.parse(storeId),
@@ -237,8 +238,28 @@ function descriptor(
     updatedAt,
     cwd,
     title,
+    // Omitted rather than nulled when a session has no counts, so the captured
+    // frames carry both shapes the client has to render: a session with a
+    // number on it and a session with none.
+    ...(usage === undefined ? {} : { usage }),
   };
 }
+
+/**
+ * Token counts for a captured session, taken from real provider output.
+ *
+ * These are the two API responses in `packages/providers/fixtures/claude-
+ * completed-turn.jsonl` added up once each. Invented round numbers would hide
+ * the thing the client most has to get right: a real session is almost
+ * entirely cache reads, and a surface that folded these four into one input
+ * figure would show a cost several times over.
+ */
+const CAPTURED_USAGE = {
+  inputTokens: 4,
+  cacheReadTokens: 77_192,
+  cacheWriteTokens: 18_872,
+  outputTokens: 1347,
+};
 
 function hold(sessionId: string, stoppable: boolean): SessionHold {
   return { sessionId: sessionIdSchema.parse(sessionId), stoppable };
@@ -493,6 +514,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   START - 12 * MINUTE,
                   '/Users/robert/code/agentplex',
                   'fix-auth-refresh',
+                  CAPTURED_USAGE,
                 ),
                 descriptor(
                   'store-agentplex',
@@ -621,6 +643,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   START - 12 * MINUTE,
                   '/Users/robert/code/agentplex',
                   'fix-auth-refresh',
+                  CAPTURED_USAGE,
                 ),
                 descriptor(
                   'store-agentplex',

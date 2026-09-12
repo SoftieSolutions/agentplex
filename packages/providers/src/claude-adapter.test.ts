@@ -65,6 +65,15 @@ describe('createClaudeAdapter.discover', () => {
         running: false,
         cwd: '/Users/dev/Code/agentplex',
         title: 'Docker compose without hub',
+        // Two API responses across four lines, counted once each. The
+        // deduplication is `claude-transcript.ts`'s; this is the assertion
+        // that the number it reaches leaves the adapter intact.
+        usage: {
+          inputTokens: 4,
+          cacheReadTokens: 77_192,
+          cacheWriteTokens: 18_872,
+          outputTokens: 1347,
+        },
       },
     ]);
   });

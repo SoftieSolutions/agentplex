@@ -29,6 +29,43 @@ export const sessionStatusSchema = z.enum([
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 
 /**
+ * What one session has spent, in tokens, as the provider itself counted it.
+ *
+ * Tokens and not money. A token count is a number the provider states about
+ * its own work; a dollar figure is a conversion through a price table that
+ * agentplex does not control, cannot verify, and would be shipping at its own
+ * release cadence rather than at the vendor's pricing cadence. So this carries
+ * the fact, and whatever converts it owns the estimate and the caveat that has
+ * to be rendered with it.
+ *
+ * The four buckets are disjoint and they stay disjoint, because they are not
+ * four ways of saying "input". Cached input is billed at a fraction of fresh
+ * input -- an order of magnitude, for the providers here -- and a cache write
+ * is billed above it. Collapsing them into one number does not lose precision,
+ * it produces a wrong answer: a long session is mostly cache reads, so a
+ * flattened figure over-states its cost several-fold. A provider that reports
+ * a total it cannot break down this way is not represented by zeroes in three
+ * of these fields; it reports no usage at all.
+ *
+ * Every adapter normalises into this shape, and no two of them arrive from the
+ * same arithmetic. Claude Code states four disjoint counts directly. codex
+ * states an input total with the cached part *inside* it, so its adapter
+ * subtracts. Anything above an adapter reads these four and never learns which
+ * of those a session came from.
+ */
+export const sessionUsageSchema = z.object({
+  /** Fresh input: prompt tokens the provider billed at its full input rate. */
+  inputTokens: z.int().nonnegative(),
+  /** Input served out of the prompt cache, billed far below fresh input. */
+  cacheReadTokens: z.int().nonnegative(),
+  /** Input written into the prompt cache, billed above fresh input. */
+  cacheWriteTokens: z.int().nonnegative(),
+  /** Everything generated, reasoning and visible text alike -- they are billed alike. */
+  outputTokens: z.int().nonnegative(),
+});
+export type SessionUsage = z.infer<typeof sessionUsageSchema>;
+
+/**
  * A session as a server reports it.
  *
  * `provider` is on here from day one, not added when the second adapter lands:
@@ -62,6 +99,24 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
   cwd: z.string().min(1).nullable(),
   /** What the provider calls this session, if it names its sessions at all. */
   title: z.string().min(1).nullable(),
+  /**
+   * What this session has spent, or nothing at all.
+   *
+   * Optional, and alone among this descriptor's fields in that -- `cwd` and
+   * `title` are nullable because "the provider was asked and does not record
+   * one" is a different fact from "nobody filled this in", and for a working
+   * directory it is a difference a reader acts on. Here it is not. A session
+   * whose transcript carries no usage and a report from something that does not
+   * count tokens are the same fact to everything downstream: there is no number
+   * to show, and the surface has to render that as absence.
+   *
+   * What is never allowed is the third possibility. An absent field is not
+   * zero. Zero appears here only when a provider counted and said zero, and a
+   * consumer that defaults this to a zeroed record has turned "unknown" into
+   * "free" -- which is the direction that over-claims, on the one screen where
+   * over-claiming is a number somebody budgets against.
+   */
+  usage: sessionUsageSchema.optional(),
 });
 export type SessionDescriptor = z.infer<typeof sessionDescriptorSchema>;
 

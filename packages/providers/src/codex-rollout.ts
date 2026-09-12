@@ -1,3 +1,4 @@
+import type { SessionUsage } from '@agentplex/protocol';
 import { z } from 'zod';
 import type { TranscriptSignal } from './provider-adapter.js';
 
@@ -47,6 +48,49 @@ const lineSchema = z.object({
 });
 
 /**
+ * The running total codex keeps for the whole session.
+ *
+ * This is the difference that matters most between the two providers, and it
+ * is worth stating plainly: codex does the accumulating itself. Every
+ * `token_usage_record` carries the usage of the one response (`usage`), the
+ * turn so far (`turn_token_usage`) *and* the thread so far
+ * (`thread_token_usage`), and the last of those is exactly the number a spend
+ * figure wants. The Claude Code transcript has no equivalent, so its parser
+ * sums and has to deduplicate to do it; here the last record wins and there is
+ * nothing to add up. Only `thread_token_usage` is read -- summing the
+ * per-response `usage` lines would arrive at the same answer the long way and
+ * be wrong the moment codex compacts a thread.
+ *
+ * The arithmetic is not the same arithmetic either. codex's `input_tokens` is
+ * the *whole* input with the cached part inside it: the captured record reads
+ * `input_tokens: 13364, cached_input_tokens: 9984, output_tokens: 6,
+ * total_tokens: 13370`, and 13364 + 6 = 13370, so the 9984 is a subset and not
+ * an addend. `SessionUsage.inputTokens` means fresh input only -- the bucket
+ * billed at the full rate -- so the cached part is subtracted out on the way.
+ * Get that backwards and a long codex session reads several times its real
+ * cost, which is the one direction a spend figure must not fail in.
+ *
+ * `cache_write_input_tokens` is subtracted on the same reading, and that is
+ * the one part of this not settled by a captured number: it is `0` in every
+ * rollout captured so far, so no arithmetic in the fixtures distinguishes a
+ * subset from an addend, and codex naming it `*_input_tokens` alongside the
+ * field that demonstrably is one is the whole of the evidence. The subtraction
+ * is clamped at zero so a wrong guess costs a bucket and never a negative
+ * count, and re-capturing a rollout with a non-zero cache write settles it:
+ * the check is whether the four buckets still sum to `total_tokens`.
+ */
+const threadUsageSchema = z
+  .object({
+    input_tokens: z.int().nonnegative(),
+    cached_input_tokens: z.int().nonnegative().optional(),
+    cache_write_input_tokens: z.int().nonnegative().optional(),
+    output_tokens: z.int().nonnegative(),
+  })
+  .loose();
+
+const tokenUsageRecordSchema = z.object({ thread_token_usage: threadUsageSchema });
+
+/**
  * The line codex opens a rollout with, and the only one that names the
  * session.
  *
@@ -91,6 +135,17 @@ export interface CodexRollout {
   readonly updatedAt: number;
   readonly cwd: string | null;
   readonly signal: TranscriptSignal;
+  /**
+   * Every token this session has spent so far, as codex's own running total
+   * last stated it, or `null` when no line in the file states one.
+   *
+   * `null` and not a zeroed record, and a rollout really does reach here: a
+   * turn the user aborted before the first response closes with `turn_aborted`
+   * and no `token_usage_record` at all. That session cost something or nothing
+   * and the file does not say which, which is a different fact from a session
+   * that cost zero.
+   */
+  readonly usage: SessionUsage | null;
 }
 
 /**
@@ -116,6 +171,7 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
   let cwd: string | null = null;
   const open = new Set<string>();
   let lastClose: 'task_complete' | 'turn_aborted' | null = null;
+  let usage: SessionUsage | null = null;
 
   for (const raw of contents.split('\n')) {
     if (raw.trim() === '') continue;
@@ -153,6 +209,14 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
       continue;
     }
 
+    if (line.data.type === 'token_usage_record') {
+      const record = tokenUsageRecordSchema.safeParse(line.data.payload);
+      // Last one wins. Each record restates the thread total, so the newest is
+      // the answer and every earlier one is a prefix of it.
+      if (record.success) usage = normalise(record.data.thread_token_usage);
+      continue;
+    }
+
     if (line.data.type !== 'event_msg') continue;
 
     const event = turnEventSchema.safeParse(line.data.payload);
@@ -176,7 +240,30 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
 
   return {
     ok: true,
-    rollout: { sessionId, turns, updatedAt, cwd, signal: signalOf(open, lastClose) },
+    rollout: { sessionId, turns, updatedAt, cwd, signal: signalOf(open, lastClose), usage },
+  };
+}
+
+/**
+ * codex's overlapping counts, pulled apart into the four disjoint buckets
+ * `SessionUsage` is defined in terms of.
+ *
+ * Clamped at zero rather than trusted to be consistent. These numbers are a
+ * claim like any other read off disk, and a codex that changed what
+ * `input_tokens` includes would otherwise hand a negative count to whatever
+ * prices it -- a negative bill, from a parser whose job was to refuse exactly
+ * this. `reasoning_output_tokens` is deliberately unread: it is part of
+ * `output_tokens` already and is billed as output, so adding it would count
+ * the same thinking twice.
+ */
+function normalise(usage: z.infer<typeof threadUsageSchema>): SessionUsage {
+  const cacheReadTokens = usage.cached_input_tokens ?? 0;
+  const cacheWriteTokens = usage.cache_write_input_tokens ?? 0;
+  return {
+    inputTokens: Math.max(0, usage.input_tokens - cacheReadTokens - cacheWriteTokens),
+    cacheReadTokens,
+    cacheWriteTokens,
+    outputTokens: usage.output_tokens,
   };
 }
 

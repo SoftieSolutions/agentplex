@@ -74,8 +74,13 @@ export {
 } from './readiness.js';
 export type { ProviderReadiness, ProviderReadinessState } from './readiness.js';
 
-export { sessionDescriptorSchema, sessionHoldSchema, sessionStatusSchema } from './session.js';
-export type { SessionDescriptor, SessionHold, SessionStatus } from './session.js';
+export {
+  sessionDescriptorSchema,
+  sessionHoldSchema,
+  sessionStatusSchema,
+  sessionUsageSchema,
+} from './session.js';
+export type { SessionDescriptor, SessionHold, SessionStatus, SessionUsage } from './session.js';
 
 export {
   clientFrameSchema,

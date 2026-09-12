@@ -25,6 +25,25 @@ const NO_TURNS = fixture('claude-no-turns.jsonl');
 /** The last turn in `claude-completed-turn.jsonl`, as Claude Code dated it. */
 const LAST_TURN_AT = Date.parse('2026-09-03T02:03:10.027Z');
 
+/**
+ * The two API responses in `claude-completed-turn.jsonl`, added up once each.
+ *
+ * Worked from the fixture by hand so the test states an answer rather than
+ * restating the implementation's arithmetic. The file holds four `assistant`
+ * lines and two `message.id`s: `msg_011CefgYDbysFQKShDzRPzGo` (input 2, cache
+ * write 18438, cache read 24372, output 206) written across a `thinking` line
+ * and a `tool_use` line, and `msg_011CefgcA32p8nbfPtSA8Dua` (input 2, cache
+ * write 434, cache read 52820, output 1141) written across a `thinking` line
+ * and a `text` line. Counting lines instead of responses gives exactly double
+ * every number below.
+ */
+const COMPLETED_TURN_USAGE = {
+  inputTokens: 4,
+  cacheReadTokens: 77_192,
+  cacheWriteTokens: 18_872,
+  outputTokens: 1347,
+};
+
 describe('parseClaudeTranscript', () => {
   it('reads a real transcript down to its cwd, title and last turn', () => {
     const parsed = parseClaudeTranscript(COMPLETED_TURN);
@@ -37,6 +56,7 @@ describe('parseClaudeTranscript', () => {
         cwd: '/Users/dev/Code/agentplex',
         title: 'Docker compose without hub',
         signal: 'awaiting-input',
+        usage: COMPLETED_TURN_USAGE,
       },
     });
   });
@@ -105,6 +125,97 @@ describe('parseClaudeTranscript', () => {
     const parsed = parseClaudeTranscript(`${COMPLETED_TURN}${sidechain}\n`);
 
     expect(parsed.ok && parsed.transcript.updatedAt).toBe(LAST_TURN_AT);
+  });
+
+  it('counts one API response once, however many lines Claude Code split it over', () => {
+    // The finding this whole feature turns on, and it is captured rather than
+    // assumed. Claude Code writes one line per *content block*, not per
+    // response: a turn that thought and then called a tool is two `assistant`
+    // lines carrying the same `message.id` and the same byte-identical `usage`
+    // object. A sum over lines is not approximately right, it is exactly
+    // double, and a cost figure built on it would bill every user twice.
+    const parsed = parseClaudeTranscript(COMPLETED_TURN);
+
+    expect(parsed.ok && parsed.transcript.usage).toEqual(COMPLETED_TURN_USAGE);
+  });
+
+  it('keeps cached input apart from fresh input', () => {
+    // Not detail, and not a nicety. A cache read is billed around a tenth of
+    // fresh input and a cache write above it, so one collapsed "input" number
+    // does not lose precision -- it produces a figure several times the real
+    // cost for exactly the long sessions anybody would look at. This fixture
+    // is 99.99% cache: 2 fresh input tokens against 24372 read and 18438
+    // written.
+    const parsed = parseClaudeTranscript(PENDING_TOOL_USE);
+
+    expect(parsed.ok && parsed.transcript.usage).toEqual({
+      inputTokens: 2,
+      cacheReadTokens: 24_372,
+      cacheWriteTokens: 18_438,
+      outputTokens: 206,
+    });
+  });
+
+  it('reports no usage rather than zero when the transcript states none', () => {
+    // The ticket's central rule, at the parser. A session that cost nothing
+    // and a session whose file never said what it cost are different facts,
+    // and only one of them is a number to put on a screen. Claude Code lines
+    // with no `message.usage` at all -- every user turn, and every line from a
+    // release that did not itemise -- must leave the total absent.
+    const stripped = COMPLETED_TURN.split('\n')
+      .filter((line) => !line.includes('"usage"'))
+      .join('\n');
+    const parsed = parseClaudeTranscript(stripped);
+
+    expect(parsed.ok && parsed.transcript.turns).toBeGreaterThan(0);
+    expect(parsed.ok && parsed.transcript.usage).toBeNull();
+  });
+
+  it('bills a subagent sidechain to the session that ran it', () => {
+    // A sidechain is skipped for dating and for the signal -- it is not the
+    // conversation -- but it is the session's bill. A `Task` subagent's tokens
+    // are spent on this session's behalf and land on the same invoice, so
+    // dropping them would under-report spend worst on the sessions that spend
+    // most. Bent out of a captured line, given a message id of its own so it
+    // is a second response rather than a duplicate of the one it came from.
+    const captured = JSON.parse(lastLineOf(COMPLETED_TURN, 'assistant')) as {
+      message: { id: string };
+    };
+    const sidechain = JSON.stringify({
+      ...captured,
+      isSidechain: true,
+      requestId: 'req_subagent',
+      message: { ...captured.message, id: 'msg_subagent' },
+    });
+    const parsed = parseClaudeTranscript(`${COMPLETED_TURN}${sidechain}\n`);
+
+    expect(parsed.ok && parsed.transcript.usage).toEqual({
+      inputTokens: COMPLETED_TURN_USAGE.inputTokens + 2,
+      cacheReadTokens: COMPLETED_TURN_USAGE.cacheReadTokens + 52_820,
+      cacheWriteTokens: COMPLETED_TURN_USAGE.cacheWriteTokens + 434,
+      outputTokens: COMPLETED_TURN_USAGE.outputTokens + 1141,
+    });
+  });
+
+  it('counts a response with no id of any kind rather than dropping it', () => {
+    // An unkeyed line cannot be recognised as a duplicate of anything, so the
+    // choice is between counting it once and dropping it. Under-reporting
+    // spend is the direction that over-claims about a budget, so it counts.
+    const captured = JSON.parse(lastLineOf(COMPLETED_TURN, 'assistant')) as Record<
+      string,
+      unknown
+    > & { message: Record<string, unknown> };
+    const { id: _id, ...message } = captured.message;
+    const { requestId: _requestId, ...rest } = captured;
+    const unkeyed = JSON.stringify({ ...rest, message });
+    const parsed = parseClaudeTranscript(`${COMPLETED_TURN}${unkeyed}\n`);
+
+    expect(parsed.ok && parsed.transcript.usage).toEqual({
+      inputTokens: COMPLETED_TURN_USAGE.inputTokens + 2,
+      cacheReadTokens: COMPLETED_TURN_USAGE.cacheReadTokens + 52_820,
+      cacheWriteTokens: COMPLETED_TURN_USAGE.cacheWriteTokens + 434,
+      outputTokens: COMPLETED_TURN_USAGE.outputTokens + 1141,
+    });
   });
 
   it('has no opinion about a transcript whose entries it cannot recognise', () => {

@@ -1,5 +1,6 @@
 import {
   sessionIdSchema,
+  sessionUsageSchema,
   type Provider,
   type ProviderReadiness,
   type SessionStatus,
@@ -53,6 +54,12 @@ const fakeTranscriptSchema = z.object({
   /** This made-up provider records neither, and `null` is what that looks like. */
   cwd: z.string().min(1).nullish(),
   title: z.string().min(1).nullish(),
+  /**
+   * What this made-up provider says the session cost, when it says anything.
+   * Absent is the default on purpose: a provider that counts no tokens is a
+   * case the seam has to carry, and it is the one this fake defaults to.
+   */
+  usage: sessionUsageSchema.nullish(),
 });
 
 export interface FakeProviderAdapterOptions {
@@ -290,6 +297,7 @@ function parseTranscript(name: string, contents: string) {
       running: parsed.data.running ?? false,
       cwd: parsed.data.cwd ?? null,
       title: parsed.data.title ?? null,
+      usage: parsed.data.usage ?? null,
     },
   };
 }

@@ -237,6 +237,7 @@ async function readRollout(
     running: false,
     cwd: parsed.rollout.cwd,
     title: names.get(sessionId.data) ?? null,
+    usage: parsed.rollout.usage,
   });
 }
 
