@@ -35,7 +35,7 @@ import {
 } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
 import { createSessionController } from '../../../apps/server/src/session-control.js';
-import { createFakeUncommittedDiffs } from '../../../apps/server/src/fake-uncommitted-diffs.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
 import {
   createTerminalManager,
   type TerminalManager,
@@ -63,6 +63,7 @@ import {
   createSessionControl,
   type SessionControl,
 } from '../../../apps/hub/src/sessions/session-control.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**
  * A start, from a client's frame to a process on another machine and back.
@@ -191,11 +192,12 @@ function serveMachine(machine: Machine): DialResult {
     // The same terminals the controller starts into: a subscription resolves
     // a session through the manager that holds the process.
     terminals: machine.terminals,
+    machineLoad: createFakeMachineLoadReader(),
     sessions: createSessionController({
       stores,
       providers: createProviderRegistry([adapter]),
       terminals: machine.terminals,
-      diffs: createFakeUncommittedDiffs(),
+      workingTree: createFakeWorkingTree(),
       clock,
       logger,
     }),

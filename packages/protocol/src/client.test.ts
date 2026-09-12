@@ -66,6 +66,7 @@ describe('parseClientFrame on the session frames', () => {
     const smuggled = parseClientFrame({
       ...A_START,
       cwd: '/etc',
+      branch: null,
       args: ['--dangerously-skip-permissions'],
       env: { PATH: '/tmp' },
       command: 'claude',
@@ -336,6 +337,7 @@ describe('client and hub round trips', () => {
                   status: 'awaiting-permission',
                   updatedAt: 900,
                   cwd: '/srv/work',
+                  branch: 'fix/auth-refresh',
                   title: 'the ticket',
                   uncommitted: {
                     files: 3,

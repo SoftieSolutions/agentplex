@@ -9,6 +9,7 @@ import {
   storeDescriptorSchema,
   storeIdSchema,
 } from './identity.js';
+import { machineLoadSchema } from './machine-state.js';
 import { frameParser } from './parse.js';
 import { providerReadinessSchema } from './readiness.js';
 import { sessionDescriptorSchema, sessionHoldSchema, sessionStartTagSchema } from './session.js';
@@ -149,6 +150,31 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('pong'),
     replyTo: frameIdSchema,
+    /**
+     * What this machine's cpus were doing when it answered, or `null` when it
+     * could not tell.
+     *
+     * On the heartbeat rather than on a frame of its own or on a ticker of this
+     * server's, and that is the whole of the cadence argument. A machine's load
+     * is the one fact in the panel that goes stale in seconds, and the obvious
+     * way to keep it fresh is to send it every second whether or not anyone is
+     * looking -- which is the unbounded reporting the terminal path already had
+     * to grow a cap and a drop counter for, rebuilt somewhere new and cheaper
+     * to overlook.
+     *
+     * The heartbeat is already the right cadence and already has the right
+     * bounds. It runs while a hub is connected and not otherwise, so a server
+     * nobody is watching samples nothing; its interval is the hub's to choose,
+     * so a fleet that wants this less often changes one number at the end that
+     * pays for it; and it is the very round trip the hub times its latency
+     * over, so the two live facts of the machine block arrive together and are
+     * true of the same instant.
+     *
+     * Sampling happens when the ping arrives, not on a schedule of this
+     * server's -- there is no timer here to have got stuck, and no reading held
+     * from before the hub asked.
+     */
+    load: machineLoadSchema.nullable(),
   }),
   /**
    * The session is running here. `sessionId` is `null` for a spawn, whose id

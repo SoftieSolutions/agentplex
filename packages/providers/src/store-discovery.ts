@@ -107,12 +107,13 @@ async function discoverWithAdapter(
       // from a directory name would be guessing at a lossy encoding.
       cwd: session.cwd,
       title: session.title,
-      // Not read here, and `null` rather than absent. Discovery reads a
-      // provider's own files; a diffstat means starting git, and this package
-      // has no process runner and should not grow one to get it. The server
-      // fills it in above this, where the operation registry is, and a session
-      // it did not ask about keeps the `null` -- which is exactly the value
-      // that means nobody looked.
+      // Neither is read here, and `null` rather than absent. Discovery reads a
+      // provider's own files; a branch or a diffstat means starting git, and
+      // this package has no process runner and should not grow one to get
+      // them. The server fills them in above this, where the operation
+      // registry is, and a session it did not ask about keeps the `null` --
+      // which is exactly the value that means nobody looked.
+      branch: null,
       uncommitted: null,
     };
   });

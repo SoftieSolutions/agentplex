@@ -21,6 +21,7 @@ import {
   tokenMatches,
 } from '@agentplex/node-shared';
 import type { ServerIdentity } from '@agentplex/providers';
+import type { MachineLoadReader } from './machine-load.js';
 import type { SessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
 import {
@@ -109,6 +110,14 @@ export interface HubConnectionDependencies {
    * connection below and handed back when the socket goes.
    */
   readonly terminals: TerminalManager;
+  /**
+   * How this machine reads its own cpus, for the answer to a ping.
+   *
+   * The server's reader rather than one per connection, because the counters
+   * belong to the machine: two hubs pinging are two questions about the same
+   * cpus, and each is told the window its own answer covers.
+   */
+  readonly machineLoad: MachineLoadReader;
   readonly logger: Logger;
 }
 
@@ -142,7 +151,15 @@ export interface HubConnection {
  */
 export function serveHubConnection(
   socket: MessageSocket,
-  { identity, stores, providers, sessions, terminals, logger }: HubConnectionDependencies,
+  {
+    identity,
+    stores,
+    providers,
+    sessions,
+    terminals,
+    machineLoad,
+    logger,
+  }: HubConnectionDependencies,
 ): HubConnection {
   let state: HubConnectionState = 'awaiting-handshake';
 
@@ -313,6 +330,14 @@ export function serveHubConnection(
           // and directories were logged once at boot where they belong.
           providers: providers.map((readiness) => `${readiness.provider}:${readiness.state}`),
         });
+        // The first reading of the cpu counters, thrown away. A busy share is
+        // the difference between two of them, so without this the first pong
+        // would carry none and a freshly connected machine would show no cpu
+        // figure for a whole heartbeat. This is not a schedule: it happens
+        // once, because a hub dialled in, which is the same thing every other
+        // sample here is caused by.
+        machineLoad.read();
+
         // Every mounted store, straight away and unasked. A hub that has just
         // connected knows what this machine has mounted and nothing about what
         // is in it, and waiting for it to ask would be a second protocol for a
@@ -326,7 +351,10 @@ export function serveHubConnection(
           handshakeFirst();
           return;
         }
-        send({ type: 'pong', replyTo: frame.id });
+        // Read here, as the ping is answered, so what goes back describes the
+        // interval that just ended rather than one this server chose to
+        // measure on its own schedule. A server nobody pings samples nothing.
+        send({ type: 'pong', replyTo: frame.id, load: machineLoad.read() });
         return;
       }
 

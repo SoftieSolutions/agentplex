@@ -32,6 +32,7 @@ import {
   type ConnectionSupervisor,
 } from '../../../apps/hub/src/connections/connection-supervisor.js';
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**
  * The fleet: which servers are dialled, and what one being down costs the
@@ -86,6 +87,7 @@ const dialer: SocketDialer = {
     serveHubConnection(serverEnd, {
       sessions: createFakeSessionController(),
       terminals: createFakeTerminals().terminals,
+      machineLoad: createFakeMachineLoadReader(),
       identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
       stores: machine.stores,
       providers: [readyProvider()],

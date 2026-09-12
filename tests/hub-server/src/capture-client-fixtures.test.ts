@@ -55,6 +55,7 @@ import {
   CLIENT_SOCKET_PATH,
   CLIENT_TICKET_PATH,
 } from '../../../apps/hub/src/clients/client-auth.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**
  * Captures what a real hub says to a client, for the web store's tests.
@@ -211,6 +212,7 @@ function fleetDialer(
           },
         },
         terminals: createFakeTerminals().terminals,
+        machineLoad: createFakeMachineLoadReader(),
         identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
         stores: machine.stores,
         providers: machine.providers,
@@ -237,6 +239,13 @@ function descriptor(
    * machine with no git.
    */
   uncommitted: SessionDescriptor['uncommitted'] = null,
+  /**
+   * The branch that checkout was on, or `null` for a session whose directory
+   * this server did not read, or one on a detached head. Last and defaulted for
+   * the same reason the diffstat is: the common descriptor is the one where
+   * nobody looked.
+   */
+  branch: string | null = null,
 ): SessionDescriptor {
   return {
     storeId: storeIdSchema.parse(storeId),
@@ -245,6 +254,7 @@ function descriptor(
     status,
     updatedAt,
     cwd,
+    branch,
     title,
     uncommitted,
   };
@@ -516,6 +526,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                       { path: 'src/auth/index.ts', added: 2, removed: 1 },
                     ],
                   },
+                  'fix/auth-refresh',
                 ),
                 descriptor(
                   'store-agentplex',
@@ -657,6 +668,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                       { path: 'src/auth/index.ts', added: 2, removed: 1 },
                     ],
                   },
+                  'fix/auth-refresh',
                 ),
                 descriptor(
                   'store-agentplex',

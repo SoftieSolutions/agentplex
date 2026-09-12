@@ -16,6 +16,9 @@ import type { ServerIdentity } from '@agentplex/providers';
 import { createFakeSessionController } from './fake-session-controller.js';
 import { createFakeTerminals } from './fake-terminals.js';
 import { missingProvider, readyProvider } from '@agentplex/providers/testing';
+import { createFakeMachineLoadReader, createFakeMachineProbe } from './fake-machine-probe.js';
+import { createMachineLoadReader, type MachineLoadReader } from './machine-load.js';
+import * as linux from './machine-load-linux.fixture.js';
 
 const logger = createLogger('error', () => {});
 
@@ -45,7 +48,7 @@ function handshake(overrides: Record<string, unknown> = {}): string {
   });
 }
 
-function connect() {
+function connect(machineLoad: MachineLoadReader = createFakeMachineLoadReader()) {
   const socket = createFakeMessageSocket();
   const { terminals, factory } = createFakeTerminals();
   const sessions = createFakeSessionController();
@@ -55,9 +58,31 @@ function connect() {
     providers,
     sessions,
     terminals,
+    machineLoad,
     logger,
   });
   return { socket, connection, terminals, factory, sessions };
+}
+
+/**
+ * A machine whose counters move between questions, and a clock that moves with
+ * them, so that a pong has a share to carry.
+ *
+ * Built from the captured Linux counters rather than from numbers written here:
+ * what a pong carries is whatever the reader made of a real machine's
+ * accounting, and a hand-made pair would test the assembly and not the reading.
+ */
+function busyMachine(): { reader: MachineLoadReader; advance: () => void } {
+  const probe = createFakeMachineProbe(linux.before, linux.loadAverage);
+  let now = 0;
+  const reader = createMachineLoadReader({ probe, clock: { now: () => now } });
+  return {
+    reader,
+    advance: () => {
+      probe.set(linux.after);
+      now += linux.windowMs;
+    },
+  };
 }
 
 /** Everything the server said, parsed by the parser that owns this direction. */
@@ -101,6 +126,7 @@ describe('serveHubConnection', () => {
       providers: [readyProvider()],
       sessions: createFakeSessionController(),
       terminals: createFakeTerminals().terminals,
+      machineLoad: createFakeMachineLoadReader(),
       logger,
     });
 
@@ -122,6 +148,7 @@ describe('serveHubConnection', () => {
       providers: [missingProvider('claude'), readyProvider('codex')],
       sessions: createFakeSessionController(),
       terminals: createFakeTerminals().terminals,
+      machineLoad: createFakeMachineLoadReader(),
       logger,
     });
 
@@ -214,7 +241,65 @@ describe('serveHubConnection', () => {
     socket.receive(JSON.stringify({ type: 'ping', id: 2 }));
     await settle();
 
-    expect(replies(socket.sent)[1]).toEqual({ type: 'pong', replyTo: 2 });
+    expect(replies(socket.sent)[1]).toMatchObject({ type: 'pong', replyTo: 2 });
+  });
+
+  it('carries what this machine was doing, on the answer to the ping', async () => {
+    // The cadence argument, made into a test. The load rides the heartbeat, so
+    // a machine reports its cpus exactly as often as a hub asks after it and
+    // never on a schedule of its own.
+    const { reader, advance } = busyMachine();
+    const { socket } = connect(reader);
+    socket.receive(handshake());
+    await settle();
+
+    advance();
+    socket.receive(JSON.stringify({ type: 'ping', id: 2 }));
+    await settle();
+
+    const pong = replies(socket.sent)[1];
+    expect(pong).toMatchObject({ type: 'pong', replyTo: 2 });
+    // A share, and the window it is a share of. Not the window this test chose
+    // for the fixture capture -- the one that elapsed between the reading taken
+    // at the handshake and the reading taken now.
+    expect(pong).toMatchObject({ load: { cpu: { windowMs: linux.windowMs } } });
+  });
+
+  it('takes its first reading at the handshake, so the first pong has a window', async () => {
+    // Without the baseline the first answer after a connection opens would
+    // carry no share at all, and a freshly connected machine would show no cpu
+    // figure for a whole heartbeat. This is not a timer: it happens once,
+    // because a hub dialled in.
+    const { reader, advance } = busyMachine();
+    const { socket } = connect(reader);
+
+    socket.receive(handshake());
+    await settle();
+    advance();
+    socket.receive(JSON.stringify({ type: 'ping', id: 2 }));
+    await settle();
+
+    expect(replies(socket.sent)[1]).toMatchObject({
+      load: { cpu: { percent: expect.any(Number) } },
+    });
+  });
+
+  it('says nothing about its load rather than inventing one it cannot read', async () => {
+    // A machine that exposes no cpu accounting. `null` on the frame, not a
+    // reading of zeros: the pong still answers the ping, and the hub learns
+    // that this machine cannot say.
+    const silent = createMachineLoadReader({
+      probe: createFakeMachineProbe([]),
+      clock: { now: () => 0 },
+    });
+    const { socket } = connect(silent);
+    socket.receive(handshake());
+    await settle();
+
+    socket.receive(JSON.stringify({ type: 'ping', id: 2 }));
+    await settle();
+
+    expect(replies(socket.sent)[1]).toEqual({ type: 'pong', replyTo: 2, load: null });
   });
 
   it('refuses a second handshake on a connection that already has one', async () => {

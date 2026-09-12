@@ -86,6 +86,7 @@ function session(id: string): SessionDescriptor {
     status: 'idle',
     updatedAt: START,
     cwd: '/srv/work',
+    branch: null,
     title: null,
     uncommitted: null,
   };

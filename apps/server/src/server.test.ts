@@ -15,8 +15,9 @@ import type { Launch, LaunchPlan } from '@agentplex/providers';
 import { startRuntime, type Runtime } from './boot.js';
 import type { ServerConfig } from './config.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
-import { createFakeUncommittedDiffs } from './fake-uncommitted-diffs.js';
+import { createFakeWorkingTree } from './fake-working-tree.js';
 import { createFakeTerminals, type FakeTerminals } from './fake-terminals.js';
+import { createFakeMachineLoadReader } from './fake-machine-probe.js';
 
 /**
  * The draining shutdown, against a real server on a real port with a real hub
@@ -90,8 +91,9 @@ async function start(): Promise<World> {
     providers: createProviderRegistry([]),
     preflight: { run: async () => [] },
     terminals: terminals.terminals,
+    machineLoad: createFakeMachineLoadReader(),
     operations: createOperationRegistry(createFakeProcessRunner()),
-    diffs: createFakeUncommittedDiffs(),
+    workingTree: createFakeWorkingTree(),
     beacon: {
       open: () => {
         throw new Error('the runtime opened a beacon socket with announcing off');

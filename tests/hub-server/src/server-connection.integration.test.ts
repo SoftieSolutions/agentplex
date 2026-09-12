@@ -37,6 +37,7 @@ import {
   type ServerConnection,
 } from '../../../apps/hub/src/connections/server-connection.js';
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**
  * The connection supervisor for one server, driven end to end.
@@ -129,6 +130,7 @@ function fakeMachine(options: {
         serveHubConnection(serverEnd, {
           sessions: createFakeSessionController(),
           terminals: createFakeTerminals().terminals,
+          machineLoad: createFakeMachineLoadReader(),
           identity: { serverId: machine.serverId, token: machine.token },
           stores: machine.stores,
           providers: [readyProvider()],
@@ -560,6 +562,7 @@ describe('startServerConnection', () => {
     serveHubConnection(serverEnd, {
       sessions: createFakeSessionController(),
       terminals: createFakeTerminals().terminals,
+      machineLoad: createFakeMachineLoadReader(),
       identity: { serverId: serverIdSchema.parse('server-laptop'), token: 'tok-laptop' },
       stores: [store('store-a', '/volumes/claude')],
       providers: [readyProvider()],

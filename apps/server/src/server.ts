@@ -28,7 +28,8 @@ import {
 import { announceServer, type BeaconNetwork } from './server-beacon.js';
 import { ensureServerIdentity } from '@agentplex/providers';
 import { createSessionController } from './session-control.js';
-import type { UncommittedDiffs } from './uncommitted-diffs.js';
+import type { MachineLoadReader } from './machine-load.js';
+import type { WorkingTree } from './working-tree.js';
 import type { TerminalManager } from './terminal-manager.js';
 
 /**
@@ -117,15 +118,25 @@ export interface SessionServerDependencies {
    */
   readonly operations: OperationRegistry;
   /**
-   * How a store scan learns what is uncommitted in the directories it read.
+   * How a store scan learns what git says about the directories it read.
    *
    * Beside `operations` and not inside it, because they are different things:
-   * the registry is the closed list of what a name may reach, and this is one
-   * typed caller that already knows which operation it wants. Both are built in
-   * `main` over the same runner, so what a child inherits is still decided in
-   * exactly one place.
+   * the registry is the closed list of what a name may reach, and this is a
+   * typed caller that already knows which operations it wants. Both are built
+   * in `main` over the same runner, so what a child inherits is still decided
+   * in exactly one place.
    */
-  readonly diffs: UncommittedDiffs;
+  readonly workingTree: WorkingTree;
+  /**
+   * How this machine reads its own cpus, for the answer to a hub's ping.
+   *
+   * Injected rather than reached for, because a test that could not write the
+   * counters down would have to assert on whatever the machine running it
+   * happened to be doing. It is here beside the operations for the same reason
+   * they are here: `main` is where this process's view of the outside world is
+   * assembled, and nothing below it goes looking on its own.
+   */
+  readonly machineLoad: MachineLoadReader;
   readonly timers: Timers;
   /**
    * How this server announces itself on the local network, or `null` for one
@@ -181,7 +192,8 @@ export async function startSessionServer(
     terminals,
     drainMs,
     operations,
-    diffs,
+    workingTree,
+    machineLoad,
     timers,
     announce,
   } = dependencies;
@@ -254,7 +266,7 @@ export async function startSessionServer(
     stores,
     providers,
     terminals,
-    diffs,
+    workingTree,
     clock,
     logger,
   });
@@ -306,6 +318,11 @@ export async function startSessionServer(
           // after a store came back reachable is told what is mounted now.
           stores,
           providers: readiness,
+          // Sampled when this connection is pinged and at no other time, so a
+          // server nobody has dialled reads nothing. The reader is the
+          // server's and not the connection's: the counters are one machine's,
+          // and two hubs asking are two questions about the same cpus.
+          machineLoad,
           logger,
         }),
       );

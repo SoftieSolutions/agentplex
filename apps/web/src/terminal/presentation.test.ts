@@ -42,6 +42,7 @@ function stateWith(overrides?: {
               status: 'working',
               updatedAt: 1_756_000_000_000,
               cwd: '/home/robert/code/universe',
+              branch: null,
               title: 'fix-auth-refresh',
               uncommitted: null,
             },

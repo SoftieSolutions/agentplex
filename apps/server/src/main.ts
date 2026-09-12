@@ -26,7 +26,8 @@ import { startRuntime } from './boot.js';
 import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
-import { createGitUncommittedDiffs } from './uncommitted-diffs.js';
+import { createMachineLoadReader, createNodeMachineProbe } from './machine-load.js';
+import { createGitWorkingTree } from './working-tree.js';
 import { refuseWithoutTerminals } from './terminal-support.js';
 import { createTerminalManager } from './terminal-manager.js';
 
@@ -144,12 +145,17 @@ async function main(): Promise<void> {
       // not called here: a serving process has no installer to be asked for
       // over a socket, rather than one it declines to use.
       operations: createOperationRegistry(processRunner),
-      // The one typed caller of an operation, over the same runner: what git
-      // says is uncommitted in a session's working directory, attached to
-      // every store report. It names `git.diff` at compile time rather than
-      // by string, so it can reach no operation the registry does not have and
-      // no name it does not know.
-      diffs: createGitUncommittedDiffs({ runner: processRunner }),
+      // The typed callers of operations, over the same runner: what git says
+      // about a session's working directory -- the branch, and what is
+      // uncommitted -- attached to every store report. They name `git.status`
+      // and `git.diff` at compile time rather than by string, so they can
+      // reach no operation the registry does not have and no name it does not
+      // know.
+      workingTree: createGitWorkingTree({ runner: processRunner }),
+      // What this machine says about its own cpus, read when a hub asks and
+      // never on a timer. Composed here for the reason everything else is: the
+      // probe is the one thing in it that touches the outside world.
+      machineLoad: createMachineLoadReader({ probe: createNodeMachineProbe(), clock: systemClock }),
       // The only place a real pty is opened. It is handed the same composed
       // environment as the one-shot runner, so a provider binary resolves the
       // same way whether it is being probed or driven.

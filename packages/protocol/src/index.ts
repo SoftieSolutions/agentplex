@@ -47,6 +47,8 @@ export { layoutNodeSchema, layoutSchema } from './layout.js';
 export type { Layout, LayoutNode } from './layout.js';
 
 export {
+  cpuSampleSchema,
+  machineLoadSchema,
   machineStateSchema,
   serverCandidateSchema,
   serverPhaseSchema,
@@ -57,6 +59,8 @@ export {
   storeViewSchema,
 } from './machine-state.js';
 export type {
+  CpuSample,
+  MachineLoad,
   MachineState,
   ServerCandidate,
   ServerPhase,

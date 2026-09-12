@@ -44,11 +44,14 @@ import {
  *   being reported as a live session — and it replaces the one direct
  *   `execFile` call that used to sit in `node-process-probe`.
  * - `git.status` answers the first question anyone asks about a session's
- *   working directory. The hub cannot: the directory is on the server's disk.
+ *   working directory, which is the branch. The hub cannot: the directory is on
+ *   the server's disk.
  * - `git.diff` answers the next one, which is how much is uncommitted and in
- *   which files. It is on the store report path: every scan attaches what it
- *   read to the descriptors it is about to send, so the number a client draws
- *   is the number this machine read off its own disk.
+ *   which files.
+ *
+ * Both of the last two are on the store report path: every scan attaches what
+ * it read to the descriptors it is about to send, so the branch and the numbers
+ * a client draws are what this machine read off its own disk.
  *
  * Nothing speculative is here. An operation with no caller is an argv nobody
  * has run, and the registry's value is that its contents are exactly what this

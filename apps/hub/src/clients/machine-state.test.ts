@@ -69,6 +69,7 @@ function session(id: string): SessionDescriptor {
     status: 'awaiting-permission',
     updatedAt: START,
     cwd: '/srv/work',
+    branch: null,
     title: 'the ticket',
     uncommitted: null,
   };

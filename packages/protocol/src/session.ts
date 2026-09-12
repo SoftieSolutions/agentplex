@@ -145,6 +145,28 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
    * takes a cwd off a frame: that is the operation registry's job.
    */
   cwd: z.string().min(1).nullable(),
+  /**
+   * The branch checked out in `cwd`, or `null` when there is no name to show.
+   *
+   * The other half of the pair the panel draws beside the directory, and the
+   * slower-moving of the two live facts about a machine: a checkout changes
+   * branch rarely, but it does change, so it is read on the scan that reports
+   * the session rather than recorded once and remembered.
+   *
+   * One nullable string rather than the little object `uncommitted` gets,
+   * because the two ways of having no answer draw the same thing here. A
+   * detached HEAD has no branch name. A directory nobody read has no branch
+   * name either. Both render as no branch, and neither claims anything about
+   * the checkout -- where a zero diffstat would have claimed a person has
+   * nothing outstanding, which is exactly why that field distinguishes them and
+   * this one has no reason to.
+   *
+   * Read on the server with `git.status`, in the directory the provider
+   * recorded, in the same bounded pass that reads the diffstat -- so the branch
+   * and the diffstat on one descriptor are two answers about one checkout at
+   * one moment, rather than two moments a client would have to reconcile.
+   */
+  branch: z.string().min(1).nullable(),
   /** What the provider calls this session, if it names its sessions at all. */
   title: z.string().min(1).nullable(),
   /**

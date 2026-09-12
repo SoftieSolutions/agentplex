@@ -51,6 +51,7 @@ describe('discoverStoreSessions', () => {
         status: 'awaiting-permission',
         updatedAt: NOW - 1_000,
         cwd: '/work',
+        branch: null,
         title: 'a made-up session',
         // Discovery reads a provider's files and does not start git, so every
         // session it reports says nobody looked at the working tree. The server
@@ -64,6 +65,7 @@ describe('discoverStoreSessions', () => {
         status: 'idle',
         updatedAt: NOW - 1_000,
         cwd: '/work',
+        branch: null,
         title: 'a made-up session',
         uncommitted: null,
       },

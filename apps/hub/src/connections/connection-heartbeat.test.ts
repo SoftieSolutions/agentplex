@@ -69,7 +69,7 @@ describe('startHeartbeat', () => {
     const { socket, timers } = beating();
     timers.fireAll();
 
-    socket.receive(reply({ type: 'pong', replyTo: pings(socket.sent)[0] ?? 0 }));
+    socket.receive(reply({ type: 'pong', replyTo: pings(socket.sent)[0] ?? 0, load: null }));
     await settle();
 
     expect(socket.closure).toBeNull();
@@ -94,11 +94,11 @@ describe('startHeartbeat', () => {
     // connection could be kept alive by echoes of itself.
     const { socket, timers } = beating();
     timers.fireAll();
-    socket.receive(reply({ type: 'pong', replyTo: 1 }));
+    socket.receive(reply({ type: 'pong', replyTo: 1, load: null }));
     await settle();
     timers.fireAll();
 
-    socket.receive(reply({ type: 'pong', replyTo: 1 }));
+    socket.receive(reply({ type: 'pong', replyTo: 1, load: null }));
     await settle();
     timers.fireAll();
 

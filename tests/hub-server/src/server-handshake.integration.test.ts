@@ -7,7 +7,7 @@ import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
-import { createFakeUncommittedDiffs } from '../../../apps/server/src/fake-uncommitted-diffs.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
 import {
   createLogger,
   closure,
@@ -21,6 +21,7 @@ import {
   type DialTarget,
 } from '../../../apps/hub/src/pairing/server-handshake.js';
 import { serverAddressSchema } from '../../../apps/hub/src/pairing/server-address.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**
  * The handshake over a real socket, against the real server role.
@@ -63,7 +64,7 @@ async function startServer(storePaths: readonly string[] = []) {
     // over a real socket, and a preflight that resolved programs would put the
     // test machine's PATH into it.
     preflight: { run: async () => [] },
-    diffs: createFakeUncommittedDiffs(),
+    workingTree: createFakeWorkingTree(),
     clock,
     terminals: createTerminalManager({
       supervisor: createPtySupervisor({
@@ -78,6 +79,7 @@ async function startServer(storePaths: readonly string[] = []) {
     // here would only be a number the shutdown does not reach for.
     drainMs: 0,
     operations: createOperationRegistry(createFakeProcessRunner()),
+    machineLoad: createFakeMachineLoadReader(),
     timers: systemTimers,
     // This suite opens real sockets on loopback on purpose, and a broadcast is
     // the one thing it will not open: the handshake is what is under test, and
