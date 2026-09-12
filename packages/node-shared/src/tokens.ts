@@ -65,3 +65,26 @@ export function tokenMatches(presented: string, expected: string): boolean {
   const digest = (value: string): Buffer => createHash('sha256').update(value, 'utf8').digest();
   return timingSafeEqual(digest(presented), digest(expected));
 }
+
+/**
+ * A secret reduced to something that can be stored where the secret may not be.
+ *
+ * Here rather than beside its caller because it is the same decision as the
+ * comparison below it and has to stay in step with it: a digest written into a
+ * file and a comparison taken somewhere else are two spellings of one rule, and
+ * the second one is where it stops being true.
+ *
+ * The asymmetry that makes it worth having is whose job each side has. The hub
+ * must hold its tokens in the clear because it *presents* them, and an outbound
+ * credential cannot be hashed. A server only ever *checks* one, so once the
+ * pairing flow prints a token rather than leaving it in a file to be re-read,
+ * the server never needs the plaintext again and holds this instead.
+ *
+ * No salt and no slow KDF, deliberately. These are 32 bytes from the CSPRNG,
+ * not passwords: there is nothing to guess offline and nothing a rainbow table
+ * could hold, so a per-record salt would buy nothing and cost the property that
+ * makes this usable -- that the digest of a presented token is a lookup key.
+ */
+export function tokenDigest(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('base64url');
+}

@@ -1,7 +1,12 @@
 import type { ServerConfig } from './config.js';
 import { ensureDataRoot, type DataRootFileSystem } from './data-root.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
-import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
+import type {
+  GrantFileSystem,
+  ProviderPreflight,
+  ProviderRegistry,
+  StoreFileSystem,
+} from '@agentplex/providers';
 import type { BeaconNetwork } from './server-beacon.js';
 import { startSessionServer, type SessionServer } from './server.js';
 import type { TerminalManager } from './terminal-manager.js';
@@ -30,6 +35,15 @@ export interface RuntimeDependencies {
    * must never happen.
    */
   readonly dataRootFileSystem: DataRootFileSystem;
+  /**
+   * The disk under the grants file, beside the identity file.
+   *
+   * A third seam rather than a method on either of the two above, and for the
+   * reason the data root got its own: this one replaces a file atomically, and
+   * putting a replace on the seam that reaches a provider's volume is the one
+   * thing `data-root.ts` says must never happen.
+   */
+  readonly grantFileSystem: GrantFileSystem;
   /**
    * Where a secret comes from when nothing supplied one: the pairing token on
    * a first start.
@@ -110,6 +124,7 @@ export async function startRuntime(
     ids,
     storeFileSystem,
     dataRootFileSystem,
+    grantFileSystem,
     tokens,
     providers,
     preflight,
@@ -139,6 +154,7 @@ export async function startRuntime(
     storePaths: config.storePaths,
     storeFileSystem,
     identityPath: config.identityPath,
+    grantFileSystem,
     tokens,
     // The setting decides, in the one place that has read it. A deployment
     // that set none leaves the minter above as the only source, which is what
