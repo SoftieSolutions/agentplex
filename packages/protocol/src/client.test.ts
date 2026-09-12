@@ -389,7 +389,8 @@ describe('client and hub round trips', () => {
       storeId: storeIdSchema.parse('store-work'),
       sessionId: null,
       startId: 4,
-      truncated: false,
+      replayChunks: 0,
+      droppedBytes: 0,
     },
     { type: 'session-unsubscribed', replyTo: 11 },
     {

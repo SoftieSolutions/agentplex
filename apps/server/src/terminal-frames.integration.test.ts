@@ -180,7 +180,8 @@ describe('terminal frames against a real server', () => {
       storeId: STORE.storeId,
       sessionId: null,
       startId: 4,
-      truncated: false,
+      replayChunks: 0,
+      droppedBytes: 0,
     });
   });
 
@@ -235,7 +236,7 @@ describe('terminal frames against a real server', () => {
     ]);
   });
 
-  it('says the beginning is gone rather than passing a tail off as the whole session', async () => {
+  it('says how much of the beginning is gone rather than passing a tail off as the whole session', async () => {
     const test = await handshaken(8);
     const pty = await start(test, 4);
     pty.emit('the first line, long gone\r\n');
@@ -244,9 +245,65 @@ describe('terminal frames against a real server', () => {
 
     await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
 
+    // A byte count rather than a flag: a pane can say how much it is not
+    // showing, and `> 0` is still the flag for one that only wants to say it
+    // is showing a tail.
     expect(test.frames().find((frame) => frame.type === 'session-subscribed')).toMatchObject({
-      truncated: true,
+      replayChunks: 1,
+      droppedBytes: 27,
     });
+  });
+
+  it('is the same frame shape whether a session was silent or had its beginning dropped', async () => {
+    // The whole point of the reply. A pane that starts mid-stream and a pane
+    // showing a session that has done nothing are opposite facts, and before
+    // the next byte arrives they look identical on screen. These two numbers
+    // are what separates them, and they arrive before any of the bytes do.
+    const silent = await handshaken(8);
+    await start(silent, 4);
+    await silent.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+
+    const busy = await handshaken(8);
+    const pty = await start(busy, 4);
+    pty.emit('an hour of output, gone\r\n');
+    pty.emit('what is left');
+    await settle();
+    await busy.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+
+    expect(silent.frames().find((frame) => frame.type === 'session-subscribed')).toMatchObject({
+      replayChunks: 0,
+      droppedBytes: 0,
+    });
+    expect(busy.frames().find((frame) => frame.type === 'session-subscribed')).toMatchObject({
+      replayChunks: 1,
+      droppedBytes: 25,
+    });
+  });
+
+  it('counts the replay frames that follow it, so a reader knows where history ends', async () => {
+    // The socket is ordered and the replay is written in the same turn as the
+    // reply, so the next `replayChunks` chunks are history and everything
+    // after them is live. Without the count a client cannot tell a replay that
+    // is finished from one that has not started, which is the same blank pane
+    // as a session that has printed nothing.
+    const test = await handshaken();
+    const pty = await start(test, 4);
+    pty.emit('first\r\n');
+    pty.emit('second\r\n');
+    pty.emit('third\r\n');
+    await settle();
+
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    pty.emit('live\r\n');
+    await settle();
+
+    const subscribed = test.frames().find((frame) => frame.type === 'session-subscribed');
+    expect(subscribed).toMatchObject({ replayChunks: 3, droppedBytes: 0 });
+
+    const decoded = chunks(test).map((chunk) => new TextDecoder().decode(chunk));
+    const count = subscribed?.type === 'session-subscribed' ? subscribed.replayChunks : -1;
+    expect(decoded.slice(0, count)).toEqual(['first\r\n', 'second\r\n', 'third\r\n']);
+    expect(decoded.slice(count)).toEqual(['live\r\n']);
   });
 
   it('counts dropped chunks on every chunk of output, at zero until something drops them', async () => {

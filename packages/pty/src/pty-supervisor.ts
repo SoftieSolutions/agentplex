@@ -23,7 +23,30 @@ import { createScrollback, type Scrollback } from './scrollback.js';
  * inherited, and reading `process.env` in here would make that untestable.
  */
 
-/** Enough that a client attaching mid-session sees a screenful of real history. */
+/**
+ * The bound on what a client attaching mid-session is given.
+ *
+ * A session may have been printing for an hour, and a server holds a pty
+ * rather than a recording, so there is no "everything" to replay and the only
+ * question is how much of the end to keep. This is that decision.
+ *
+ * In bytes, and not in lines or in minutes, because bytes is the only bound
+ * that can be enforced by something that never reads the output. Counting
+ * lines means finding line ends, which means parsing a stream that is mostly
+ * escape sequences; bounding by time leaves the memory a chatty session costs
+ * decided by the session. Bytes bounds the thing actually at stake.
+ *
+ * 256 KiB, which is a hundred-odd full repaints of an 80x24 screen: enough
+ * that an agent's TUI redrawing itself still leaves a real screen underneath,
+ * rather than a tail that begins in the middle of the last repaint. Against it
+ * stands the whole cost, which is this times the terminal cap -- 2 MiB on a
+ * default server, and that is the number this constant is really choosing.
+ *
+ * It is deliberately not durable. The buffer is a tail of a live process, and
+ * when the process goes so does the thing a client would attach to; what
+ * survives a restart is the provider's transcript on disk, which is a
+ * different question with a different answer.
+ */
 const DEFAULT_SCROLLBACK_BYTES = 256 * 1024;
 
 /**
@@ -107,8 +130,15 @@ export interface PtyRun {
   whenExited(): Promise<PtyExit>;
   /** Recent output, oldest first, trimmed by whole chunks. */
   scrollback(): readonly Uint8Array[];
-  /** Whether the beginning has been dropped, so a viewer can say so. */
-  readonly truncated: boolean;
+  /**
+   * Bytes this run printed before what `scrollback` still holds, so a viewer
+   * can say how much of the beginning is gone instead of only that some is.
+   *
+   * Zero with an empty scrollback is the fact a pane cannot read off its own
+   * blank screen: this session has printed nothing, as opposed to this session
+   * printed for an hour and none of it was kept.
+   */
+  readonly droppedBytes: number;
   /** Live output. Returns the unsubscribe; the buffer keeps filling either way. */
   subscribe(listener: (chunk: Uint8Array) => void): () => void;
   write(input: string): void;
@@ -260,8 +290,8 @@ function trackRun(pty: Pty, runId: string, startedAt: number, scrollbackBytes: n
       return buffer.chunks();
     },
 
-    get truncated(): boolean {
-      return buffer.truncated;
+    get droppedBytes(): number {
+      return buffer.dropped;
     },
 
     subscribe(listener: (chunk: Uint8Array) => void): () => void {
