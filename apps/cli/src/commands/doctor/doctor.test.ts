@@ -233,6 +233,36 @@ describe('formatDoctorReport', () => {
     expect(printed).toContain('no directory this server searches holds claude');
   });
 
+  it('says how to make a running server re-read what it just printed', () => {
+    // The disagreement this is for: a provider installed since the service
+    // started reads `ready` here and `missing` in the client, because the two
+    // took their readings at different times. A restart would end it and take
+    // every session on the machine with it.
+    const printed = formatDoctorReport({
+      role: 'server',
+      usable: true,
+      providers: [readyProvider('claude')],
+      stores: [],
+      terminals: { state: 'ready', problem: null },
+    }).join('\n');
+
+    expect(printed).toContain('systemctl reload agentplex-server');
+  });
+
+  it('says nothing about reloading on a machine that reports no providers', () => {
+    // A hub. There is no server on it to have taken a stale reading, and
+    // naming a unit this machine does not run would be advice that fails.
+    const printed = formatDoctorReport({
+      role: 'hub',
+      usable: true,
+      providers: [],
+      stores: [],
+      terminals: null,
+    }).join('\n');
+
+    expect(printed).not.toContain('systemctl reload');
+  });
+
   it('prints each store path and what it turned out to be', () => {
     const printed = formatDoctorReport({
       role: 'server',

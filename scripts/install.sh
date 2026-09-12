@@ -1757,6 +1757,34 @@ render_unit() {
   # is not one. Nothing replaces it: both daemons dial out and retry, so there
   # is nothing here for an ordering to buy.
   local network_ordering=''
+  # `systemctl reload agentplex-server` -> SIGHUP -> the server asks this
+  # machine again what its providers are, and tells the hubs if the answer
+  # moved. It is here for the operator who has just installed a coding agent or
+  # just logged one in on a box that is already running: without it the fleet
+  # goes on reporting what was true at boot until somebody restarts the
+  # service, which drops every session on the machine to publish a fact.
+  #
+  # The server only. The hub reads no providers, so there is nothing for it to
+  # re-read -- and a SIGHUP to a Node process with no listener for it is a
+  # process that exits, so a line that offered `reload` on the hub would be a
+  # verb that restarts it. A unit with no ExecReload refuses `reload` and says
+  # so, which is the honest answer for a daemon that has nothing to reload.
+  local reload=''
+  if [ "$daemon" = 'server' ]; then
+    # `/bin/sh` and its builtin, not `/bin/kill`. There is no kill binary to
+    # name on a minimal machine: debian:bookworm-slim ships none at any path,
+    # because `kill` belongs to procps and a slim image drops it, and a unit
+    # naming a program that is not there is one systemd refuses at `reload` --
+    # `systemd-analyze verify` says so in the bootstrap container. A shell is
+    # the one interpreter every Linux has, and `kill` is builtin to it, so this
+    # spawns nothing that has to have been installed.
+    #
+    # `\$MAINPID` stays a literal: systemd puts MAINPID in the environment of
+    # the reload process, so the shell reads it there at reload time. Expanding
+    # it here would write the installing shell's empty value instead.
+    reload="ExecReload=/bin/sh -c 'kill -HUP \$MAINPID'
+"
+  fi
   if [ "$UNIT_SCOPE" = 'system' ]; then
     install_target='multi-user.target'
     identity="User=$SERVICE_USER
@@ -1791,7 +1819,7 @@ EnvironmentFile=$ENV_FILE
 # of the machine rather than instead of it.
 Environment=PATH=$(unit_search_path)
 ExecStart=$(daemon_command "$daemon")
-Restart=on-failure
+${reload}Restart=on-failure
 RestartSec=5s
 # Exit 2 is the daemon saying the configuration is wrong. Restarting will not
 # help and the operator has to act, so the unit stops instead of hiding the

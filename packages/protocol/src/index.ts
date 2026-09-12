@@ -75,6 +75,7 @@ export {
   providerReadinessSchema,
   providerReadinessStateSchema,
   readinessRefusal,
+  sameReadiness,
 } from './readiness.js';
 export type { ProviderReadiness, ProviderReadinessState } from './readiness.js';
 
