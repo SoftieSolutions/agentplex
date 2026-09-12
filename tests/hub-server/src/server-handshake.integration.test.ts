@@ -57,6 +57,10 @@ async function startServer(storePaths: readonly string[] = []) {
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     tokens: { newToken: () => TOKEN },
+    // Minted, like a machine with a disk of its own. This suite is about what
+    // the two apps say to each other over a real socket, and where the token
+    // came from changes nothing they say.
+    serverToken: undefined,
     providers: createProviderRegistry([]),
     // No adapters, so nothing to preflight: this suite is about the handshake
     // over a real socket, and a preflight that resolved programs would put the

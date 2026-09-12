@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { serverIdSchema, type ServerId } from '@agentplex/protocol';
-import type { IdGenerator, TokenMinter } from '@agentplex/node-shared';
+import { tokenMatches, type IdGenerator, type TokenMinter } from '@agentplex/node-shared';
 import type { StoreFileSystem } from './store-identity.js';
 
 /**
@@ -19,9 +19,22 @@ import type { StoreFileSystem } from './store-identity.js';
  * and the same secret. This file belongs to one server, and where it lives is
  * configuration.
  *
- * The token is minted here rather than typed by the operator because the
- * minting side is the side that can get the entropy right. Pairing is still
- * always the user typing it into the hub; this only decides what they type.
+ * The token is minted here by default, rather than typed by the operator,
+ * because the minting side is the side that can get the entropy right. That is
+ * a default and not a rule, and the difference is the case it cannot serve: it
+ * assumes a disk that outlives the process and an operator who can read a file
+ * off it, and a container has the first only until the next deploy while CI has
+ * nobody to do the second. A deployment that already holds the secret hands it
+ * over as `configuredToken`, and nothing is minted.
+ *
+ * What does not change either way is where the token ends up: in this file,
+ * under `token`, written exactly as a minted one is. A configured token is a
+ * token source and not a second mechanism, which is what keeps everything that
+ * reads a token off this file reading one -- the hub's local pairing on a
+ * `--role=both` box, and the grant AGX-204 will migrate this record into.
+ *
+ * Pairing is still always the user typing it into the hub; this only decides
+ * what they type, and whether they were told it in advance.
  */
 
 /**
@@ -39,17 +52,49 @@ export interface ServerIdentity {
   readonly token: string;
 }
 
+/**
+ * A pairing token the deployment chose, and the name of the setting that
+ * carried it.
+ *
+ * The name travels with the value because the only sentence this module writes
+ * about a configured token is a refusal an operator has to act on, and a
+ * refusal that cannot name the variable to change is one that sends them
+ * looking. This package does not own that name -- the server app does -- so it
+ * arrives here rather than being spelled here.
+ */
+export interface ConfiguredToken {
+  readonly token: string;
+  readonly setting: string;
+}
+
 export interface ServerIdentityDependencies {
   readonly files: StoreFileSystem;
   readonly ids: IdGenerator;
   readonly tokens: TokenMinter;
+  /**
+   * The token the deployment set, when it set one.
+   *
+   * Present means it *is* the token: `tokens` is never consulted, and a file
+   * that already holds a different one stops the start rather than being
+   * overwritten or quietly preferred. See `agreeingToken` for why neither of
+   * those is the safe direction.
+   */
+  readonly configuredToken?: ConfiguredToken | undefined;
 }
 
 export type ServerIdentityResult =
   | {
       readonly ok: true;
       readonly identity: ServerIdentity;
-      /** True when this call created the file. The operator has a new token to paste. */
+      /**
+       * True when this call created the file.
+       *
+       * It says the file is new, not that the token is: a deployment that
+       * supplied one gets `true` here for a token it already had. What a
+       * caller may conclude from it is that nothing was paired against this
+       * file before now -- which is what the operator needs to be told, and is
+       * true either way.
+       */
       readonly minted: boolean;
     }
   | { readonly ok: false; readonly path: string; readonly problem: string };
@@ -66,18 +111,25 @@ export type ServerIdentityResult =
  */
 export async function ensureServerIdentity(
   path: string,
-  { files, ids, tokens }: ServerIdentityDependencies,
+  { files, ids, tokens, configuredToken }: ServerIdentityDependencies,
 ): Promise<ServerIdentityResult> {
   const existing = await readServerIdentity(path, files);
-  if (existing !== null) return existing;
+  if (existing !== null) return agreeingToken(existing, path, configuredToken);
 
   const serverId = serverIdSchema.safeParse(ids.newId());
   if (!serverId.success) {
     return { ok: false, path, problem: 'the id source produced no usable server id' };
   }
-  const token = tokens.newToken();
+  const token = configuredToken?.token ?? tokens.newToken();
   if (token.length === 0) {
-    return { ok: false, path, problem: 'the token source produced an empty token' };
+    return {
+      ok: false,
+      path,
+      problem:
+        configuredToken === undefined
+          ? 'the token source produced an empty token'
+          : `${configuredToken.setting} is set to an empty pairing token`,
+    };
   }
 
   const identity: ServerIdentity = { serverId: serverId.data, token };
@@ -91,7 +143,50 @@ export async function ensureServerIdentity(
   // this server started against the same file. Its identity is the one on
   // disk; the one minted above never existed.
   const winner = await readServerIdentity(path, files);
-  return winner ?? { ok: false, path, problem: 'the identity file was created and then removed' };
+  if (winner === null) {
+    return { ok: false, path, problem: 'the identity file was created and then removed' };
+  }
+  return agreeingToken(winner, path, configuredToken);
+}
+
+/**
+ * The identity that is on disk, checked against the token the deployment set.
+ *
+ * A disagreement stops the start rather than being resolved, and both ways of
+ * resolving it are the argument. Preferring the file leaves a server answering
+ * to a credential the operator believes they replaced, and the only symptom is
+ * that the replacement never took -- the failure nobody sees. Preferring the
+ * setting rewrites an identity a pairing was completed against, which is the
+ * one rule this module has held since it was written: it never mints over a
+ * file it found. A refusal naming both costs one restart and cannot be
+ * misread.
+ *
+ * A caller with no configured token is unaffected, which is every caller that
+ * existed before this: the check is the identity function when there is nothing
+ * to disagree with.
+ */
+function agreeingToken(
+  result: ServerIdentityResult,
+  path: string,
+  configured: ConfiguredToken | undefined,
+): ServerIdentityResult {
+  if (!result.ok || configured === undefined) return result;
+  // `tokenMatches` rather than `===`, though nothing is being authenticated
+  // here. There is one way two secrets are compared in this codebase, and a
+  // second spelling of it is how that stops being true.
+  if (tokenMatches(result.identity.token, configured.token)) return result;
+
+  // Neither token, for the reason the result never carries one: this sentence
+  // is handed to a logger and a log is a scrollback.
+  return {
+    ok: false,
+    path,
+    problem:
+      `${path} holds a pairing token that is not the one ${configured.setting} sets, and a ` +
+      'server may not answer to both: stop setting it to keep the token this machine is ' +
+      'already paired under, or delete the file to take the configured one and pair this ' +
+      'server again afterwards',
+  };
 }
 
 /**

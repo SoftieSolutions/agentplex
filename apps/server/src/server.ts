@@ -19,6 +19,7 @@ import {
 import { serveHubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import {
+  type ConfiguredToken,
   type ProviderPreflight,
   type ProviderRegistry,
   ensureStores,
@@ -57,6 +58,19 @@ export interface SessionServerDependencies {
   readonly identityPath: string;
   /** Where the pairing token comes from the first time this server starts. */
   readonly tokens: TokenMinter;
+  /**
+   * The pairing token the deployment set, when it set one.
+   *
+   * When it is here it is the token and `tokens` above is never reached, and
+   * when it is not, nothing about this server's first start has changed. It is
+   * a separate dependency from the minter rather than a minter that returns a
+   * constant, because the two are not the same fact: a minter is where entropy
+   * comes from, and this is a decision somebody already took. Folding it in
+   * would also lose the disagreement -- `ensureServerIdentity` has to be able
+   * to tell a token it was handed from one it produced, or a file holding a
+   * credential the operator thinks they replaced would be read straight past.
+   */
+  readonly serverToken: ConfiguredToken | undefined;
   /** The adapters this build can drive. An empty registry finds nothing and says nothing. */
   readonly providers: ProviderRegistry;
   /**
@@ -142,6 +156,7 @@ export async function startSessionServer(
     storeFileSystem,
     identityPath,
     tokens,
+    serverToken,
     providers,
     preflight,
     clock,
@@ -162,6 +177,7 @@ export async function startSessionServer(
     files: storeFileSystem,
     ids,
     tokens,
+    configuredToken: serverToken,
   });
   if (!identity.ok) {
     throw new Error(`agentplex cannot establish its server identity: ${identity.problem}`);
@@ -171,7 +187,12 @@ export async function startSessionServer(
   // to paste into the hub, and a secret in a log line is one that has to be
   // rotated. `logger.ts` would redact a `token` field anyway; not gathering it
   // is the version that does not depend on remembering.
-  logger.info(identity.minted ? 'server identity minted' : 'server identity loaded', {
+  //
+  // Three messages rather than two, because "minted" now over-claims on one of
+  // the three paths. A deployment that supplied the token has no new secret to
+  // go and read, and a line telling it one was just minted would send somebody
+  // to a file for a value they put there themselves.
+  logger.info(identityMessage(identity.minted, serverToken !== undefined), {
     serverId: identity.identity.serverId,
     identityPath,
   });
@@ -309,4 +330,20 @@ export async function startSessionServer(
       logger.info('server stopped', { killed: running });
     },
   };
+}
+
+/**
+ * Which of the three things this boot did about the identity file.
+ *
+ * A function rather than a nested ternary at the call site, and outside
+ * `startSessionServer` because it needs nothing from it. What it is careful
+ * about is the second argument: it says whether a token was configured, never
+ * what it was, so no caller can accidentally pass the secret into a log
+ * message by passing the wrong thing here.
+ */
+function identityMessage(minted: boolean, configured: boolean): string {
+  if (!minted) return 'server identity loaded';
+  return configured
+    ? 'server identity written with the configured pairing token'
+    : 'server identity minted';
 }

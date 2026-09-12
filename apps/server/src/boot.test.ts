@@ -86,6 +86,10 @@ const serverOnly: ServerConfig = {
   storePaths: [],
   binPath: [],
   identityPath: IDENTITY_PATH,
+  // Nothing supplied one, which is every machine with a disk of its own: the
+  // server mints its own on first start. The block at the bottom of this file
+  // is the other case.
+  serverToken: undefined,
   dataPath: DATA_PATH,
   // Inherited, like a machine nobody has told where it is. Nothing this file
   // starts spawns a child, so the zone has nowhere to show up.
@@ -202,5 +206,77 @@ describe('startRuntime', () => {
     await runtime.stop();
 
     await expect(runtime.stop()).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * What an orchestrator injects: long enough to pass the configuration's floor,
+ * and nothing the minter in `dependencies` would ever produce, so a string
+ * that turns up anywhere is this one.
+ */
+const CONFIGURED_TOKEN = 'a-token-the-deployment-already-held-0123';
+
+const withConfiguredToken: ServerConfig = {
+  ...serverOnly,
+  serverToken: { token: CONFIGURED_TOKEN, setting: 'AGENTPLEX_SERVER_TOKEN' },
+};
+
+describe('startRuntime with a pairing token the deployment set', () => {
+  it('writes that token into the identity file rather than minting one nobody knows', async () => {
+    // The whole point on a filesystem that goes at the next deploy. It is
+    // written and not merely held, so the hub beside a `--role=both` server
+    // reads the same token off the same file it always has.
+    const files = createFakeStoreFiles();
+
+    runtime = await startRuntime(withConfiguredToken, dependencies(files));
+
+    expect(JSON.parse(files.contents.get(IDENTITY_PATH) ?? '')).toMatchObject({
+      token: CONFIGURED_TOKEN,
+    });
+  });
+
+  it('keeps that token out of every line it logs, not just the identity line', async () => {
+    // `redactSecrets` is wired into every log call, and the thing that would go
+    // wrong silently is a field named so that it slips past the key list. The
+    // assertion is over the whole log at `debug`, because a bar that only
+    // checked the one line somebody remembered is the bar that fails.
+    const records: LogRecord[] = [];
+
+    runtime = await startRuntime(withConfiguredToken, {
+      ...dependencies(),
+      logger: createLogger('debug', (record) => records.push(record)),
+    });
+
+    expect(records.length).toBeGreaterThan(0);
+    expect(JSON.stringify(records)).not.toContain(CONFIGURED_TOKEN);
+  });
+
+  it('does not come up at all when the file holds a different token', async () => {
+    // Last-writer-wins is not obviously right in either direction: preferring
+    // the file leaves the server answering to a credential the operator
+    // believes they replaced, and preferring the setting rewrites an identity
+    // a pairing was completed against.
+    const files = createFakeStoreFiles({
+      files: { [IDENTITY_PATH]: '{"serverId":"s1","token":"the-token-on-the-disk"}' },
+    });
+
+    await expect(startRuntime(withConfiguredToken, dependencies(files))).rejects.toThrow(
+      IDENTITY_PATH,
+    );
+  });
+
+  it('says which file and which setting disagree, and neither token', async () => {
+    const files = createFakeStoreFiles({
+      files: { [IDENTITY_PATH]: '{"serverId":"s1","token":"the-token-on-the-disk"}' },
+    });
+
+    const problem = await startRuntime(withConfiguredToken, dependencies(files)).then(
+      () => '',
+      (error: unknown) => String(error),
+    );
+
+    expect(problem).toContain('AGENTPLEX_SERVER_TOKEN');
+    expect(problem).not.toContain(CONFIGURED_TOKEN);
+    expect(problem).not.toContain('the-token-on-the-disk');
   });
 });

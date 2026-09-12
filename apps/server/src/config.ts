@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   DEFAULT_SERVER_PORT,
   LOG_LEVELS,
+  MIN_TOKEN_LENGTH,
   nonEmpty,
   readAbsolutePath,
   readAbsolutePaths,
@@ -13,6 +14,7 @@ import {
   usageLines,
   type LogLevel,
 } from '@agentplex/node-shared';
+import type { ConfiguredToken } from '@agentplex/providers';
 import { DEFAULT_TERMINAL_CAP } from './terminal-manager.js';
 
 /**
@@ -74,6 +76,25 @@ export interface ServerConfig {
    * where it happened to work.
    */
   readonly identityPath: string;
+  /**
+   * The pairing token the deployment set, with the name of the setting that
+   * set it, or undefined to let the server mint its own on first start.
+   *
+   * Undefined is the default and stays the default: minting is right wherever
+   * there is a disk that outlives the process and somebody who can read a file
+   * off it, and that is most machines. What it cannot serve is the deployment
+   * that has neither -- a container whose filesystem goes at the next deploy, a
+   * CI job nobody will shell into -- where the orchestrator already holds the
+   * secret and expects the process to use it. A server that mints its own there
+   * comes up with a token nobody knows, and the pairing has to be redone every
+   * restart.
+   *
+   * A minimum length is enforced rather than trusted, for the reason the hub's
+   * client token enforces one and against the same number: what arrives here is
+   * whatever somebody put in a secret store, and a token a CSPRNG did not mint
+   * is only as good as the person who chose it.
+   */
+  readonly serverToken: ConfiguredToken | undefined;
   /**
    * The one directory this server writes into: absolute, created at boot, and
    * refused rather than worked around when it cannot be.
@@ -156,6 +177,11 @@ const MISSING_IDENTITY_FILE =
   'the server role needs somewhere to keep its identity and pairing token: ' +
   'set AGENTPLEX_SERVER_IDENTITY_FILE or pass --server-identity-file (an absolute path)';
 
+const BAD_SERVER_TOKEN =
+  'a pairing token the deployment sets must be at least ' +
+  `${MIN_TOKEN_LENGTH} characters: set AGENTPLEX_SERVER_TOKEN or pass --server-token ` +
+  '(generate one with: openssl rand -base64 32), or set neither and let the server mint one';
+
 /**
  * The data root's setting, named here and exported because the module that
  * owns the directory has to name it too: every refusal `ensureDataRoot`
@@ -206,6 +232,26 @@ const SETTINGS = {
     flag: '--server-identity-file',
     env: 'AGENTPLEX_SERVER_IDENTITY_FILE',
   },
+  /**
+   * A flag, like every other setting, and that was the decision rather than
+   * the default.
+   *
+   * A secret on an argv is a secret in `ps` output, which is the one cost the
+   * other settings here do not carry, and taking the exception was the
+   * alternative. It was not taken because the repository has already decided
+   * this, in the other direction, for a strictly larger secret: the hub's
+   * `--client-token` is the one credential between the internet and every
+   * session on every paired machine, and it has a flag. An exception carved
+   * out for the smaller secret and not the larger one is not a position on
+   * process listings, it is an inconsistency that teaches nothing. If argv is
+   * the wrong channel for a credential it is wrong for both, and that is one
+   * decision taken once rather than here.
+   *
+   * The deployment this setting exists for pays nothing either way: an
+   * orchestrator injects an environment variable, and the flag is the path
+   * nobody on that tier uses.
+   */
+  serverToken: { flag: '--server-token', env: 'AGENTPLEX_SERVER_TOKEN' },
   dataPath: DATA_PATH,
   /**
    * Named for the variable it becomes rather than for the word this codebase
@@ -281,6 +327,8 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
 
   const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), problems);
 
+  const serverToken = readServerToken(read(SETTINGS.serverToken), problems);
+
   const dataPath = readDataPath(read(SETTINGS.dataPath), env, problems);
 
   if (identityPath === undefined || dataPath === undefined || problems.length > 0) {
@@ -296,6 +344,7 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
       storePaths,
       binPath,
       identityPath,
+      serverToken,
       dataPath,
       timezone,
       terminalCap,
@@ -361,6 +410,35 @@ function readIdentityPath(raw: string | undefined, problems: string[]): string |
     return undefined;
   }
   return readAbsolutePath(raw, SETTINGS.serverIdentityFile.flag, problems);
+}
+
+/**
+ * The pairing token the deployment set, or nothing.
+ *
+ * Absent is not a problem: it is the default, and it means the server mints
+ * one on its first start exactly as it always has. Present but too short is
+ * one problem with one message, because it is one mistake -- somebody put
+ * something in a secret store that is not a secret -- and the message names
+ * both the way out and the way back to the default.
+ *
+ * A blank env var arrives here as `undefined` rather than as an empty token,
+ * because `settingValue` decided that for every setting: a line with nothing
+ * after the `=` is a setting nobody set. That matters more here than
+ * elsewhere. An empty string taken literally would be a server configured to
+ * present no credential, and the failure would be an identity file written
+ * with a token nothing can ever match.
+ *
+ * The setting's name is carried out with the value. `ensureServerIdentity`
+ * refuses a file that disagrees with this token and has to say which variable
+ * to change, and it lives in a package that does not own this name.
+ */
+function readServerToken(raw: string | undefined, problems: string[]): ConfiguredToken | undefined {
+  if (raw === undefined) return undefined;
+  if (raw.length < MIN_TOKEN_LENGTH) {
+    problems.push(BAD_SERVER_TOKEN);
+    return undefined;
+  }
+  return { token: raw, setting: SETTINGS.serverToken.env };
 }
 
 /**
