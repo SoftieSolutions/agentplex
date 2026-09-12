@@ -160,7 +160,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
 
   it('resolves a bare program name from a configured directory', async () => {
     const runner = createNodeProcessRunner({
-      environment: childEnvironment({ inherited, binPath: [probe.directory] }),
+      environment: childEnvironment({ inherited, binPath: [probe.directory], timezone: undefined }),
     });
 
     const outcome = await runner.run({
@@ -174,7 +174,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
 
   it('finds nothing without it, which is what makes the test above about binPath', async () => {
     const runner = createNodeProcessRunner({
-      environment: childEnvironment({ inherited, binPath: [] }),
+      environment: childEnvironment({ inherited, binPath: [], timezone: undefined }),
     });
 
     const outcome = await runner.run({ file: probe.name, args: [], timeoutMs: TIMEOUT_MS });
@@ -192,6 +192,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
       environment: childEnvironment({
         inherited: { PATH: tool.directory },
         binPath: [probe.directory],
+        timezone: undefined,
       }),
     });
 
@@ -212,6 +213,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
       environment: childEnvironment({
         inherited: { PATH: tool.directory },
         binPath: [probe.directory],
+        timezone: undefined,
       }),
     });
 
@@ -240,6 +242,7 @@ describe('createNodeProcessRunner with a configured binPath', () => {
         environment: childEnvironment({
           inherited: { PATH: alsoOnPath.directory },
           binPath: [recorded.directory],
+          timezone: undefined,
         }),
       });
 
@@ -254,5 +257,49 @@ describe('createNodeProcessRunner with a configured binPath', () => {
       recorded.remove();
       alsoOnPath.remove();
     }
+  });
+});
+
+/**
+ * The other half of what `childEnvironment` composes, asserted against a real
+ * child for the reason everything in this file is: whether a `TZ` in a
+ * spawned process's environment changes the times that process reports is a
+ * claim about the operating system, and a record built in a unit test proves
+ * only that the variable was written down.
+ *
+ * The zone is Tokyo because it has had one offset since 1951: no rule about
+ * summer time makes this assertion depend on the day it is run. The offset is
+ * read as well as the name, so the case where ICU knows the zone and the
+ * clock underneath it does not would still fail here.
+ */
+describe('createNodeProcessRunner with a configured timezone', () => {
+  const reportZone = [
+    '-e',
+    'process.stdout.write(`${Intl.DateTimeFormat().resolvedOptions().timeZone} ${new Date(0).getTimezoneOffset()}`)',
+  ];
+
+  it('gives the child the zone the deployment chose', async () => {
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({ inherited: {}, binPath: [], timezone: 'Asia/Tokyo' }),
+    });
+
+    const outcome = await runner.run({ file: node, args: reportZone, timeoutMs: TIMEOUT_MS });
+
+    // Nine hours ahead, which `getTimezoneOffset` reports as the minutes to
+    // add to get back to UTC.
+    expect(outcome).toMatchObject({ kind: 'exited', stdout: 'Asia/Tokyo -540' });
+  });
+
+  it('leaves the child on the machine zone when the setting says nothing', async () => {
+    // What makes the case above about the setting. In `node:24-bookworm-slim`
+    // this is UTC, which is the condition the setting exists for.
+    const runner = createNodeProcessRunner({
+      environment: childEnvironment({ inherited: {}, binPath: [], timezone: undefined }),
+    });
+
+    const outcome = await runner.run({ file: node, args: reportZone, timeoutMs: TIMEOUT_MS });
+
+    expect(outcome).toMatchObject({ kind: 'exited' });
+    if (outcome.kind === 'exited') expect(outcome.stdout).not.toBe('Asia/Tokyo -540');
   });
 });
