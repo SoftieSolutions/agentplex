@@ -16,7 +16,8 @@ import {
   type TokenMinter,
   createWebSocketListener,
 } from '@agentplex/node-shared';
-import { serveHubConnection } from './hub-connection.js';
+import { createDrain, drainingSessions } from './drain.js';
+import { serveHubConnection, type HubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import {
   type ConfiguredToken,
@@ -118,6 +119,15 @@ export interface SessionServerDependencies {
    */
   readonly terminals: TerminalManager;
   /**
+   * How long shutdown waits for the turns this server holds to end before it
+   * kills them, in milliseconds.
+   *
+   * A value rather than a constant because the number it has to agree with is
+   * in the systemd unit beside it. See `drain.ts` for what the wait is actually
+   * against, and `config.ts` for why the two numbers are rendered from one.
+   */
+  readonly drainMs: number;
+  /**
    * The one thing on this server that starts anything else.
    *
    * Every non-PTY child comes from here: a name, a parsed request, an argv this
@@ -156,7 +166,19 @@ export interface SessionServer {
   readonly stores: readonly StoreDescriptor[];
   /** What each provider turned out to be at boot, as every hub is told. */
   readonly providers: readonly ProviderReadiness[];
+  /**
+   * Drains and then stops: no new sessions, every turn given until the budget
+   * runs out to reach a boundary, and then whatever is left is killed anyway.
+   */
   stop(): Promise<void>;
+  /**
+   * Abandons the wait a `stop` is in the middle of. Safe before one and after.
+   *
+   * A second signal is the operator saying they are done waiting, and this is
+   * what that means: the drain answers at once, the terminals still mid-turn
+   * are killed, and the shutdown finishes the way it always did.
+   */
+  stopWaiting(): void;
 }
 
 export async function startSessionServer(
@@ -176,6 +198,7 @@ export async function startSessionServer(
     preflight,
     clock,
     terminals,
+    drainMs,
     operations,
     timers,
     announce,
@@ -306,6 +329,23 @@ export async function startSessionServer(
     });
   }
 
+  /**
+   * The hubs dialled in right now, as connections rather than as an audience.
+   *
+   * Two sets, deliberately, because they answer two different questions. The
+   * audience below is what a *fact about a store* is told to, and it is keyed
+   * by grant because that is what a revocation names. This is what a fact about
+   * *this process* -- it is draining, it has re-read its providers -- is told
+   * to, and neither of those is a frame the audience carries: one is a
+   * `server-draining` and the other is a close.
+   *
+   * It is pruned as connections are accepted rather than as they close, because
+   * a `HubConnection` says what state it is in and does not offer a hook for the
+   * end of one. Every dial drops whatever ended since the last dial, so what
+   * this holds is the live connections and the churn since the most recent one.
+   */
+  const connections = new Set<HubConnection>();
+
   // Every hub connected at once, which is what makes a stop by one of them
   // something the others are told about. It outlives each connection: a socket
   // comes and goes and the set is the server's.
@@ -321,23 +361,28 @@ export async function startSessionServer(
   // The one thing a hub can do with this server before it has proved itself:
   // open a socket. Everything past that is the handshake's to allow.
   const hubs = createWebSocketListener({
-    onConnection: (socket) =>
-      void serveHubConnection(socket, {
-        connectionId: ids.newId(),
-        identity: identity.identity,
-        grants: grants.store,
-        audience,
-        sessions,
-        // The same terminals the controller starts sessions into. A connection
-        // only ever holds subscriptions to them, and hands those back when the
-        // socket goes; the processes themselves outlive every hub that dials.
-        terminals,
-        // Read at connection time rather than captured, so a hub that dials
-        // after a store came back reachable is told what is mounted now.
-        stores,
-        providers: readiness,
-        logger,
-      }),
+    onConnection: (socket) => {
+      for (const ended of connections) if (ended.state === 'closed') connections.delete(ended);
+      connections.add(
+        serveHubConnection(socket, {
+          connectionId: ids.newId(),
+          identity: identity.identity,
+          grants: grants.store,
+          audience,
+          sessions,
+          // The same terminals the controller starts sessions into. A
+          // connection only ever holds subscriptions to them, and hands those
+          // back when the socket goes; the processes themselves outlive every
+          // hub that dials.
+          terminals,
+          // Read at connection time rather than captured, so a hub that dials
+          // after a store came back reachable is told what is mounted now.
+          stores,
+          providers: readiness,
+          logger,
+        }),
+      );
+    },
   });
 
   // Revocation reaching a connection that is already up. The handshake covers
@@ -383,11 +428,37 @@ export async function startSessionServer(
     logger,
   });
 
+  /**
+   * The wait between "stop" and "everything is dead".
+   *
+   * Built here rather than in `stop` so that `stopWaiting` has something to
+   * call before a shutdown has begun -- two signals arriving in the same
+   * millisecond is exactly the case where an operator is in a hurry -- and so
+   * that the thing it waits on is the same terminal manager everything else on
+   * this server holds.
+   */
+  const drain = createDrain({
+    terminals,
+    // One scan of one store, which is the only part of a report the drain
+    // wants: a status is derived by an adapter and handed to the terminal
+    // holding the session, and nothing derives one unless somebody asks.
+    observe: async (storeId) => void (await sessions.report(storeId)),
+    timers,
+    clock,
+    logger,
+    budgetMs: drainMs,
+  });
+
   return {
     port: listener.port,
     serverId: identity.identity.serverId,
     stores,
     providers: readiness,
+
+    stopWaiting() {
+      drain.stopWaiting();
+    },
+
     async stop() {
       // The beacon first, and before anything slow: every announcement from
       // here on would be inviting a hub to dial a server that is going away.
@@ -395,17 +466,36 @@ export async function startSessionServer(
       // The sweep next, because a pending timer is a process that will not
       // exit, and there is nothing left for it to revoke access to.
       sweep.stop();
-      // Children next. Closing the listener only stops new work arriving;
-      // anything already running would go on writing into the store with
-      // nothing left to watch it.
-      const running = terminals.terminals.length;
+      // Then nothing new. This is what makes the wait below terminate at all:
+      // a drain that is still accepting starts is not draining. It closes
+      // nothing, which is the point -- the agents already running go on
+      // working for as long as the budget allows.
+      terminals.seal();
+
+      const held = drainingSessions(terminals);
+      // Said before the waiting rather than after it, because the whole value
+      // of saying it is that somebody watching a session learns it is closing
+      // while it is still closing. The sockets stay up through the drain for
+      // the same reason: a client keeps seeing the last of its agent's output.
+      for (const connection of connections) connection.announceDraining(drainMs, held);
+      logger.info('draining', { sessions: held.length, graceMs: drainMs });
+
+      const drained = await drain.run();
+
+      // Whatever the drain did not release, killed. Closing the listener only
+      // stops new work arriving; anything still running would go on writing
+      // into the store with nothing left to watch it, and on a laptop it would
+      // outlive the terminal that started it.
       terminals.closeAll();
       // Then the hub sockets: an upgraded connection is not an HTTP request,
       // so closing the listener does not reach it, and a live websocket would
       // hold the process open after everything it could ask about had stopped.
       hubs.close();
       await listener.close();
-      logger.info('server stopped', { killed: running });
+      // `killed` is the count this line used to carry, and it now means what it
+      // says: sessions that were still mid-turn when the waiting stopped,
+      // rather than every session that was running.
+      logger.info('server stopped', { ...drained });
     },
   };
 }

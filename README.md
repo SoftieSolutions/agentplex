@@ -130,6 +130,7 @@ Every setting has one flag and one environment variable; the flag wins.
 | `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none                  | Agent directory, searched before `PATH`; repeatable                                        |
 | `--tz`                   | `AGENTPLEX_TZ`                   | inherited             | Zone a spawned session reports times in; IANA name                                         |
 | `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                   | Terminals held at once; at least 1                                                         |
+| `--drain-seconds`        | `AGENTPLEX_SERVER_DRAIN_SECONDS` | `15`                  | Seconds shutdown waits for turns to end                                                    |
 | `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`                | `debug`, `info`, `warn`, `error`                                                           |
 
 ### Checking a machine

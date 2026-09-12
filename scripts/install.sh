@@ -220,6 +220,23 @@ readonly SYSTEM_UNIT_DIR='/etc/systemd/system'
 
 readonly DOCS_URL='https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md'
 
+# How long a stop may take, and how much of that the server may spend waiting.
+#
+# One decision written as two numbers because systemd needs one of them and the
+# daemon needs the other, and the unit below renders both from here so they
+# cannot drift. The server drains on SIGTERM: no new sessions, and the agents
+# already running are given until the drain budget to reach a turn boundary,
+# because killing one mid-tool is how a half-applied edit gets left on disk.
+# systemd sends SIGKILL after TimeoutStopSec whatever the daemon is doing, so a
+# drain that outlasted it would not be a drain -- it would be a hang followed by
+# the same kill. The margin is what the process has left after it stops waiting:
+# kill the stragglers, close the sockets, exit.
+#
+# The daemon's own default is the same fifteen seconds, for a checkout or an
+# image that has no unit to read this from.
+readonly STOP_TIMEOUT_SECONDS=20
+readonly STOP_KILL_MARGIN_SECONDS=5
+
 # The PATH this script was started with, kept because the script changes its own
 # further down. What the summary has to answer is whether the operator's shell
 # will find `agentplex` tomorrow, and asking that of a PATH this run has
@@ -1780,9 +1797,14 @@ RestartSec=5s
 # help and the operator has to act, so the unit stops instead of hiding the
 # message in a restart loop.
 RestartPreventExitStatus=2
-# SIGTERM is the default and the signal main.ts shuts down on. Twenty seconds is
-# for the sessions: a server closes its pty children on the way out.
-TimeoutStopSec=20s
+# SIGTERM is the default and the signal main.ts shuts down on. The server drains
+# first -- it waits for the turns it is holding to reach a boundary -- and the
+# two lines below are the one number that bounds both halves of that: the daemon
+# stops waiting with the margin still to go, and systemd's SIGKILL is what it is
+# racing. A second SIGTERM means the operator is done waiting and skips to the
+# kill. The hub ignores the drain setting; both daemons share this unit template.
+Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=$((STOP_TIMEOUT_SECONDS - STOP_KILL_MARGIN_SECONDS))
+TimeoutStopSec=${STOP_TIMEOUT_SECONDS}s
 
 # There is deliberately no sandboxing here -- no ProtectHome, no
 # ProtectSystem=strict, no NoNewPrivileges. This service's job is to run a

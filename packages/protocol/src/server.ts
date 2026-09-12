@@ -5,6 +5,7 @@ import {
   providerSchema,
   serverIdSchema,
   sessionIdSchema,
+  sessionRefSchema,
   storeDescriptorSchema,
   storeIdSchema,
 } from './identity.js';
@@ -225,6 +226,41 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
      * exactly what makes them safe to put here.
      */
     starts: z.array(sessionStartTagSchema),
+  }),
+  /**
+   * This server is shutting down, and is waiting for the turns it holds to end
+   * before it closes them.
+   *
+   * Unsolicited, sent once, and the last thing a hub hears from a server that
+   * is going down on purpose. Without it a drain is indistinguishable from a
+   * machine that stopped answering: the sessions simply stop being reported,
+   * and a client has to decide between showing them as running and showing
+   * nothing. With it there is a third reading, which is the true one -- these
+   * sessions are closing, this is how long it will take at the outside.
+   *
+   * `graceMs` is a duration and not a deadline, for the reason `store-report`
+   * carries no timestamp: two machines' clocks disagree, and the hub stamps
+   * what it receives with its own.
+   *
+   * `sessions` is what this server is holding as it starts to drain, named
+   * rather than left to be inferred from the last `holding` the hub was sent --
+   * a report can be older than this frame, and the sessions that are about to
+   * close are exactly the ones a client is looking at. A terminal the provider
+   * has not named yet cannot appear here and is not invented: it is absent,
+   * which is the honest shape of "this server cannot tell you which session
+   * that is".
+   *
+   * It promises nothing about what happens next. A server may close a session
+   * the moment it reaches a boundary, or kill it when the grace runs out, and
+   * either way the connection ends without a second frame -- because a server
+   * that is exiting cannot promise to send one.
+   */
+  z.object({
+    type: z.literal('server-draining'),
+    /** How long this server will wait for a turn to end before it kills it. */
+    graceMs: z.int().nonnegative(),
+    /** The sessions it holds as the drain starts. Empty is a server with none. */
+    sessions: z.array(sessionRefSchema),
   }),
   /** The other half of the relay. See `terminal.ts`. */
   sessionSubscribedFrameSchema,

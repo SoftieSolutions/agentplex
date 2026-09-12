@@ -352,6 +352,38 @@ describe('parseServerToHubFrame', () => {
     expect(parsed.value).not.toHaveProperty('reportedAt');
   });
 
+  it('accepts a drain notice naming the sessions that are about to close', () => {
+    const parsed = parseServerToHubFrame({
+      type: 'server-draining',
+      graceMs: 15_000,
+      sessions: [{ storeId: 'store-1', sessionId: 'session-1' }],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.value.type !== 'server-draining') return;
+    expect(parsed.value.graceMs).toBe(15_000);
+    expect(parsed.value.sessions).toEqual([{ storeId: 'store-1', sessionId: 'session-1' }]);
+  });
+
+  it('accepts a drain notice from a server that was holding nothing', () => {
+    expect(parseServerToHubFrame({ type: 'server-draining', graceMs: 0, sessions: [] }).ok).toBe(
+      true,
+    );
+  });
+
+  it('strips a deadline off a drain notice: the hub stamps what it receives', () => {
+    // The same rule the store report follows. A server's own clock is not the
+    // hub's, so what crosses is how long the drain lasts and never when it ends.
+    const parsed = parseServerToHubFrame({
+      type: 'server-draining',
+      graceMs: 15_000,
+      sessions: [],
+      deadlineAt: 1_756_000_015_000,
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).not.toHaveProperty('deadlineAt');
+  });
+
   it('holds rejection reasons to a closed set that reveals nothing extra', () => {
     expect(
       parseServerToHubFrame({ type: 'handshake-rejected', replyTo: 1, reason: 'unauthorized' }).ok,
