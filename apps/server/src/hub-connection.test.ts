@@ -13,6 +13,7 @@ import { createLogger, CLOSE_POLICY } from '@agentplex/node-shared';
 import { serveHubConnection } from './hub-connection.js';
 import type { ServerIdentity } from '@agentplex/providers';
 import { createFakeSessionController } from './fake-session-controller.js';
+import { createFakeTerminals } from './fake-terminals.js';
 import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 
 const logger = createLogger('error', () => {});
@@ -43,14 +44,17 @@ function handshake(overrides: Record<string, unknown> = {}): string {
 
 function connect() {
   const socket = createFakeMessageSocket();
+  const { terminals, factory } = createFakeTerminals();
+  const sessions = createFakeSessionController();
   const connection = serveHubConnection(socket, {
     identity,
     stores,
     providers,
-    sessions: createFakeSessionController(),
+    sessions,
+    terminals,
     logger,
   });
-  return { socket, connection };
+  return { socket, connection, terminals, factory, sessions };
 }
 
 /** Everything the server said, parsed by the parser that owns this direction. */
@@ -93,6 +97,7 @@ describe('serveHubConnection', () => {
       stores: [],
       providers: [readyProvider()],
       sessions: createFakeSessionController(),
+      terminals: createFakeTerminals().terminals,
       logger,
     });
 
@@ -113,6 +118,7 @@ describe('serveHubConnection', () => {
       stores,
       providers: [missingProvider('claude'), readyProvider('codex')],
       sessions: createFakeSessionController(),
+      terminals: createFakeTerminals().terminals,
       logger,
     });
 

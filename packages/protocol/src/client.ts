@@ -10,6 +10,15 @@ import {
 import { layoutSchema } from './layout.js';
 import { machineStateSchema, sessionHolderSchema } from './machine-state.js';
 import { frameParser } from './parse.js';
+import {
+  sessionSubscribeFrameSchema,
+  sessionSubscribedFrameSchema,
+  sessionUnsubscribeFrameSchema,
+  sessionUnsubscribedFrameSchema,
+  terminalInputFrameSchema,
+  terminalOutputFrameSchema,
+  terminalResizeFrameSchema,
+} from './terminal.js';
 
 /**
  * The client-facing half of the protocol: browser (or MCP caller) to hub.
@@ -25,7 +34,13 @@ import { frameParser } from './parse.js';
  *     broadcast: the other clients did not ask, and nothing about the world
  *     changed because one of them was told no.
  *
- * Terminal frames arrive with the milestone that implements them.
+ * Terminal frames are the third kind, and they break the second rule on
+ * purpose: `terminal-output` is unsolicited like `machine-state` but goes to
+ * the clients watching that session rather than to all of them, because a
+ * client that is not looking at a terminal has no use for its bytes. They are
+ * defined in `terminal.ts` and shared with the server direction unchanged --
+ * a terminal frame is relayed, not answered, and one shape for both legs is
+ * what keeps the relay from being two shapes that drift.
  */
 
 /**
@@ -147,6 +162,24 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
   }),
+  /**
+   * Watching a session, typing into it, and saying how big the screen is.
+   *
+   * A subscription is standing interest and is replayed on reconnection, which
+   * is why it is a frame with a partner rather than something implied by
+   * opening a pane: the thing it moves is a count the server evicts by, and a
+   * client that closes a tab has to be able to give it back.
+   *
+   * Selection, copy and scroll are deliberately not here. Selection and copy
+   * happen entirely in the browser's emulator and this protocol has no notion
+   * of a selection; paste is `terminal-input` and nothing more, because the
+   * bytes a user pastes are the bytes a user typed; scroll is scrollback,
+   * which is its own ticket. Resize is the one that genuinely crosses.
+   */
+  sessionSubscribeFrameSchema,
+  sessionUnsubscribeFrameSchema,
+  terminalInputFrameSchema,
+  terminalResizeFrameSchema,
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
 ]);
@@ -272,6 +305,17 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
      */
     holder: sessionHolderSchema.nullable(),
   }),
+  /**
+   * The terminal's own frames, relayed from the server that holds the session.
+   *
+   * `session-subscribed` is a reply and reaches the client that asked;
+   * `terminal-output` is unsolicited and reaches every client subscribed to
+   * that session, which is the one thing here that is neither a broadcast to
+   * everybody nor an answer to one asker.
+   */
+  sessionSubscribedFrameSchema,
+  sessionUnsubscribedFrameSchema,
+  terminalOutputFrameSchema,
   protocolErrorFrameSchema,
 ]);
 export type HubFrame = z.infer<typeof hubFrameSchema>;

@@ -1,5 +1,6 @@
 import {
   checkProtocolVersion,
+  encodeTerminalChunk,
   parseHubToServerFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
@@ -20,6 +21,12 @@ import {
 } from '@agentplex/node-shared';
 import type { ServerIdentity } from '@agentplex/providers';
 import type { SessionController } from './session-control.js';
+import type { TerminalManager } from './terminal-manager.js';
+import {
+  createTerminalStreams,
+  type StreamOutcome,
+  type TerminalOutput,
+} from './terminal-streams.js';
 
 /**
  * The server's half of the handshake.
@@ -71,6 +78,16 @@ export interface HubConnectionDependencies {
    * sessions it left behind, not a fresh empty manager.
    */
   readonly sessions: SessionController;
+  /**
+   * The terminals this server holds, for the frames that are about their bytes
+   * rather than about starting and stopping them.
+   *
+   * The same object the controller above starts sessions into, and injected
+   * here for the same reason: terminals outlive connections. What belongs to a
+   * connection is only the subscriptions it opened, and those are built per
+   * connection below and handed back when the socket goes.
+   */
+  readonly terminals: TerminalManager;
   readonly logger: Logger;
 }
 
@@ -92,11 +109,39 @@ export interface HubConnection {
  */
 export function serveHubConnection(
   socket: MessageSocket,
-  { identity, stores, providers, sessions, logger }: HubConnectionDependencies,
+  { identity, stores, providers, sessions, terminals, logger }: HubConnectionDependencies,
 ): HubConnection {
   let state: HubConnectionState = 'awaiting-handshake';
 
   const send = (frame: ServerToHubFrame): void => void socket.send(JSON.stringify(frame));
+
+  /**
+   * This connection's subscriptions, its start handles, and the one place a
+   * watch is given back.
+   *
+   * Per connection rather than per server, because a start handle is the id of
+   * a frame on this socket and means nothing on another one, and because the
+   * watches this connection took are exactly what has to be released when it
+   * ends.
+   */
+  const streams = createTerminalStreams({
+    terminals,
+    onOutput: sendOutput,
+    logger,
+  });
+
+  /** Bytes to a frame. The one place output becomes characters. */
+  function sendOutput(output: TerminalOutput): void {
+    if (state !== 'established') return;
+    send({
+      type: 'terminal-output',
+      storeId: output.storeId,
+      sessionId: output.sessionId,
+      startId: output.startId,
+      chunk: encodeTerminalChunk(output.chunk),
+      droppedChunks: output.droppedChunks,
+    });
+  }
 
   const refuse = (reason: string): void => {
     state = 'closed';
@@ -106,6 +151,11 @@ export function serveHubConnection(
   socket.onClose((ended) => {
     const wasEstablished = state === 'established';
     state = 'closed';
+    // A socket closing is a detach, and it is the same detach the frame path
+    // takes. Nothing here closes a terminal: the agents this connection was
+    // watching go on working, which is the whole difference between a lid
+    // closing and somebody stopping a session.
+    streams.detachAll();
     logger.info('hub connection closed', {
       code: ended.code,
       reason: ended.reason,
@@ -231,6 +281,91 @@ export function serveHubConnection(
         return;
       }
 
+      case 'session-subscribe': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        const attached = streams.subscribe(frame.target);
+        if (!attached.ok) {
+          send({
+            type: 'session-refused',
+            replyTo: frame.id,
+            code: 'refused',
+            message: attached.problem,
+            hold: null,
+          });
+          return;
+        }
+
+        const { attachment } = attached;
+        send({
+          type: 'session-subscribed',
+          replyTo: frame.id,
+          storeId: attachment.storeId,
+          sessionId: attachment.sessionId,
+          startId: attachment.startId,
+          truncated: attachment.truncated,
+        });
+        // The history, on the frame live output uses, after the reply that
+        // says whether the beginning of it survives. One frame shape for
+        // bytes, so the reader has one path for them.
+        //
+        // Sent here rather than carried on the reply so that a quarter of a
+        // megabyte of scrollback is not one JSON frame the peer must hold
+        // whole, and synchronously, so nothing live can overtake it.
+        for (const chunk of attachment.replay) {
+          send({
+            type: 'terminal-output',
+            storeId: attachment.storeId,
+            sessionId: attachment.sessionId,
+            startId: attachment.startId,
+            chunk: encodeTerminalChunk(chunk),
+            // Nothing was dropped from this stream: what the scrollback threw
+            // away is what `truncated` above says, and this counter is about
+            // the live stream that follows.
+            droppedChunks: 0,
+          });
+        }
+        return;
+      }
+
+      case 'session-unsubscribe': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        const detached = streams.unsubscribe(frame.target);
+        if (!detached.ok) {
+          answerStream(frame.id, detached);
+          return;
+        }
+        send({ type: 'session-unsubscribed', replyTo: frame.id });
+        return;
+      }
+
+      case 'terminal-input': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        // Answered only when it fails. A terminal acknowledges input the way
+        // terminals do, by echoing it, and a reply per keystroke would double
+        // the frame rate of the busiest path on the wire to restate what the
+        // user can already see.
+        answerStream(frame.id, streams.write(frame.target, frame.data));
+        return;
+      }
+
+      case 'terminal-resize': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        answerStream(frame.id, streams.resize(frame.target, frame.size));
+        return;
+      }
+
       case 'protocol-error': {
         // The hub could not read something this server sent. There is no reply
         // to an unsolicited error and nothing useful to retry, so it is a log
@@ -240,6 +375,24 @@ export function serveHubConnection(
         return;
       }
     }
+  }
+
+  /**
+   * Says nothing when a terminal frame worked, and why when it did not.
+   *
+   * The silence is the design: input and resize are answered by the terminal
+   * itself, on the screen, and the case a user cannot see for themselves is
+   * the one that gets a frame.
+   */
+  function answerStream(replyTo: FrameId, outcome: StreamOutcome): void {
+    if (outcome.ok || state !== 'established') return;
+    send({
+      type: 'session-refused',
+      replyTo,
+      code: 'refused',
+      message: outcome.problem,
+      hold: null,
+    });
   }
 
   /** Everything but a handshake needs a handshake first, and says so the same way. */
@@ -278,6 +431,11 @@ export function serveHubConnection(
       answerFailure(replyTo, 'this server could not start that session');
       return;
     }
+
+    // Before the report, because the report is where the tag goes: the hub is
+    // owed "this start is running here" in the same breath as the start, so a
+    // pending pane has something to be while the provider is still starting.
+    if (outcome.ok) streams.noteStart(replyTo, outcome.terminalId);
 
     await reportStore(request.storeId);
     if (state !== 'established') return;
@@ -361,6 +519,11 @@ export function serveHubConnection(
         storeId: report.storeId,
         sessions: [...report.sessions],
         holding: [...report.holding],
+        // Taken here, at the moment the report is actually sent, because
+        // taking them is what stops a start being reported again: a tag
+        // consumed by a report that never went out would be a pairing the hub
+        // was never told.
+        starts: [...streams.takeStartTags(report.storeId)],
       });
     } catch (error) {
       // A scan that failed costs the report and nothing else. The hub keeps

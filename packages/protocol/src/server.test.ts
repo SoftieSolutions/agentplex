@@ -8,6 +8,7 @@ import {
 } from './server.js';
 import { hubIdSchema, serverIdSchema, sessionIdSchema, storeIdSchema } from './identity.js';
 import { parseTextFrame } from './parse.js';
+import { encodeTerminalChunk } from './terminal.js';
 
 const HUB_ID = hubIdSchema.parse('hub-1');
 
@@ -114,6 +115,130 @@ describe('parseHubToServerFrame on the session instructions', () => {
   });
 });
 
+describe('terminal frames on the server direction', () => {
+  const SESSION = {
+    by: 'session',
+    storeId: 'store-1',
+    sessionId: 'session-1',
+  } as const;
+
+  it('accepts a subscription that names a session', () => {
+    expect(parseHubToServerFrame({ type: 'session-subscribe', id: 6, target: SESSION }).ok).toBe(
+      true,
+    );
+  });
+
+  it('accepts a subscription that names only the start that made the session', () => {
+    // The whole point of the start handle: a spawned session has no id of its
+    // own until the provider writes one, and its terminal is producing output
+    // in the meantime.
+    const parsed = parseHubToServerFrame({
+      type: 'session-subscribe',
+      id: 6,
+      target: { by: 'start', startId: 3 },
+    });
+    expect(parsed.ok).toBe(true);
+  });
+
+  it('refuses a subscription with no target rather than subscribing to everything', () => {
+    expect(parseHubToServerFrame({ type: 'session-subscribe', id: 6 }).ok).toBe(false);
+  });
+
+  it('gives the subscription a partner, so a closing tab can give the count back', () => {
+    expect(parseHubToServerFrame({ type: 'session-unsubscribe', id: 7, target: SESSION }).ok).toBe(
+      true,
+    );
+  });
+
+  it('refuses input that is not addressed to a session', () => {
+    expect(parseHubToServerFrame({ type: 'terminal-input', id: 8, data: 'ls\r' }).ok).toBe(false);
+  });
+
+  it('carries no command, argv or cwd on input: it is keystrokes and nothing else', () => {
+    const parsed = parseHubToServerFrame({
+      type: 'terminal-input',
+      id: 8,
+      target: SESSION,
+      data: 'ls\r',
+      command: '/bin/sh',
+      args: ['-c', 'id'],
+      cwd: '/etc',
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.value.type !== 'terminal-input') return;
+    expect(parsed.value).toEqual({ type: 'terminal-input', id: 8, target: SESSION, data: 'ls\r' });
+  });
+
+  it('refuses a resize with a dimension no terminal has', () => {
+    expect(
+      parseHubToServerFrame({
+        type: 'terminal-resize',
+        id: 9,
+        target: SESSION,
+        size: { cols: 0, rows: 24 },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('refuses output whose bytes are not base64 rather than handing on rubbish', () => {
+    expect(
+      parseServerToHubFrame({
+        type: 'terminal-output',
+        storeId: 'store-1',
+        sessionId: 'session-1',
+        startId: null,
+        chunk: 'this is not base64 %%%',
+        droppedChunks: 0,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('requires the dropped-chunk counter, so a lossy stream cannot look whole', () => {
+    // AGX-209 is what will make it move. It is required now because a frame
+    // that may omit it is a frame every reader has to treat as maybe-lossy.
+    expect(
+      parseServerToHubFrame({
+        type: 'terminal-output',
+        storeId: 'store-1',
+        sessionId: 'session-1',
+        startId: null,
+        chunk: '',
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('lets output name a start before it can name a session', () => {
+    const parsed = parseServerToHubFrame({
+      type: 'terminal-output',
+      storeId: 'store-1',
+      sessionId: null,
+      startId: 3,
+      chunk: encodeTerminalChunk(new Uint8Array([27, 91, 48, 109])),
+      droppedChunks: 0,
+    });
+    expect(parsed.ok).toBe(true);
+  });
+
+  it('reports which start produced which session, and accepts one with no id yet', () => {
+    const parsed = parseServerToHubFrame({
+      type: 'store-report',
+      storeId: 'store-1',
+      sessions: [],
+      holding: [],
+      starts: [
+        { startId: 3, sessionId: null },
+        { startId: 4, sessionId: 'session-2' },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.value.type !== 'store-report') return;
+    expect(parsed.value.starts).toEqual([
+      { startId: 3, sessionId: null },
+      { startId: 4, sessionId: 'session-2' },
+    ]);
+  });
+});
+
 describe('parseServerToHubFrame', () => {
   it('accepts an acceptance naming the server and its mounted stores', () => {
     const result = parseServerToHubFrame({
@@ -194,6 +319,7 @@ describe('parseServerToHubFrame', () => {
         },
       ],
       holding: [{ sessionId: 'session-1', stoppable: false }],
+      starts: [],
     });
     expect(result.ok).toBe(true);
   });
@@ -204,6 +330,7 @@ describe('parseServerToHubFrame', () => {
       storeId: 'store-1',
       sessions: [],
       holding: [{ sessionId: 'session-1', stoppable: true, pid: 4321, terminalId: 'terminal-1' }],
+      starts: [],
     });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok || parsed.value.type !== 'store-report') return;
@@ -216,6 +343,7 @@ describe('parseServerToHubFrame', () => {
       storeId: 'store-1',
       sessions: [],
       holding: [],
+      starts: [],
       reportedAt: 1_000,
     });
     expect(parsed.ok).toBe(true);
@@ -270,6 +398,36 @@ describe('hub and server round trips', () => {
       storeId: storeIdSchema.parse('store-1'),
       sessionId: sessionIdSchema.parse('session-1'),
     },
+    {
+      type: 'session-subscribe',
+      id: 6,
+      target: { by: 'start', startId: 3 },
+    },
+    {
+      type: 'session-unsubscribe',
+      id: 7,
+      target: {
+        by: 'session',
+        storeId: storeIdSchema.parse('store-1'),
+        sessionId: sessionIdSchema.parse('session-1'),
+      },
+    },
+    {
+      type: 'terminal-input',
+      id: 8,
+      target: {
+        by: 'session',
+        storeId: storeIdSchema.parse('store-1'),
+        sessionId: sessionIdSchema.parse('session-1'),
+      },
+      data: 'pnpm test\r',
+    },
+    {
+      type: 'terminal-resize',
+      id: 9,
+      target: { by: 'start', startId: 3 },
+      size: { cols: 120, rows: 40 },
+    },
     { type: 'protocol-error', code: 'bad-request', message: 'type: invalid input' },
   ];
 
@@ -318,6 +476,24 @@ describe('hub and server round trips', () => {
         },
       ],
       holding: [{ sessionId: sessionIdSchema.parse('session-1'), stoppable: false }],
+      starts: [{ startId: 3, sessionId: sessionIdSchema.parse('session-1') }],
+    },
+    {
+      type: 'session-subscribed',
+      replyTo: 6,
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: null,
+      startId: 3,
+      truncated: true,
+    },
+    { type: 'session-unsubscribed', replyTo: 7 },
+    {
+      type: 'terminal-output',
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      startId: null,
+      chunk: encodeTerminalChunk(new TextEncoder().encode('\u001b[32mok\u001b[0m\r\n')),
+      droppedChunks: 0,
     },
     { type: 'protocol-error', code: 'protocol-version', message: 'this server speaks version 2' },
   ];

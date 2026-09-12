@@ -10,6 +10,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
+import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import {
   createSocketPair,
@@ -99,6 +100,7 @@ const dialer: SocketDialer = {
     const { hubEnd, serverEnd } = createSocketPair();
     serveHubConnection(serverEnd, {
       sessions: createFakeSessionController(),
+      terminals: createFakeTerminals().terminals,
       identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
       stores: machine.stores,
       providers: [readyProvider()],

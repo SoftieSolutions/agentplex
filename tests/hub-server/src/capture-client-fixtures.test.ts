@@ -25,6 +25,7 @@ import {
 } from '../../../apps/hub/src/discovery/fake-beacon-source.js';
 import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web-assets.js';
 import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
+import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import type { SessionOutcome, StoreReport } from '../../../apps/server/src/session-control.js';
 import {
   createUnreachableDialer,
@@ -209,6 +210,7 @@ function fleetDialer(
             return controller.report(storeId);
           },
         },
+        terminals: createFakeTerminals().terminals,
         identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
         stores: machine.stores,
         providers: machine.providers,
@@ -642,6 +644,10 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
             ok: true,
             storeId: storeIdSchema.parse('store-agentplex'),
             sessionId: null,
+            // The server's own name for the process it opened. It never
+            // crosses a wire; it is here because the outcome is the server's
+            // and not the hub's.
+            terminalId: 'terminal-mbp-1',
           },
         },
       ],
