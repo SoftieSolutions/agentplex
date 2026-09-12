@@ -224,6 +224,41 @@ describe('loadServerConfig terminal cap', () => {
   });
 });
 
+describe('loadServerConfig drain budget', () => {
+  function drainMs(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok ? result.config.drainMs : undefined;
+  }
+
+  it('defaults to the number install.sh renders beside the unit timeout', () => {
+    expect(drainMs([])).toBe(15_000);
+  });
+
+  it('is read in seconds, because the unit line it has to agree with is', () => {
+    expect(drainMs(['--drain-seconds=30'])).toBe(30_000);
+    expect(drainMs([], { AGENTPLEX_SERVER_DRAIN_SECONDS: '5' })).toBe(5_000);
+  });
+
+  it('accepts no drain at all, which is the shutdown this replaced', () => {
+    // Not refused the way a terminal cap of zero is. A cap of zero describes a
+    // server that can never do its job; this describes one that waits for
+    // nothing, and it still closes at a boundary whatever is already at one.
+    expect(drainMs(['--drain-seconds=0'])).toBe(0);
+  });
+
+  it('refuses a budget that is not a whole number of seconds, or is negative', () => {
+    expect(expectProblems(load(['--drain-seconds=-1']))).toHaveLength(1);
+    expect(expectProblems(load(['--drain-seconds=soon']))).toHaveLength(1);
+    expect(expectProblems(load(['--drain-seconds=2.5']))).toHaveLength(1);
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(serverUsage()).toContain('--drain-seconds');
+    expect(serverUsage()).toContain('AGENTPLEX_SERVER_DRAIN_SECONDS');
+  });
+});
+
 describe('loadServerConfig announce', () => {
   function announce(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);

@@ -170,16 +170,45 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Containers stop with SIGTERM; a terminal stops with SIGINT. A second signal
-  // means the operator is done waiting, so it is not intercepted.
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.once(signal, () => {
+  // Containers stop with SIGTERM; a terminal stops with SIGINT.
+  //
+  // The first one starts a draining shutdown: no new sessions, and the agents
+  // already running are given until the drain budget to reach a turn boundary
+  // before they are killed. See `drain.ts` for why that is worth waiting for.
+  //
+  // The second one means the operator is done waiting, and it now has somewhere
+  // to say so. It used to be left uncaught, which had the process die on the
+  // spot -- fine when shutdown was instantaneous, and wrong the moment it is
+  // not: dying mid-drain would leave every agent this server forked running
+  // with nothing left to stop them, which is the orphan the shutdown exists to
+  // prevent. So it cancels the wait and lets the same shutdown finish, which is
+  // both faster and the only version that kills the children.
+  //
+  // The third is uncaught, deliberately. By then this process has been asked
+  // twice and has already stopped waiting for anything, so a third signal can
+  // only mean the shutdown itself is stuck -- and the one thing worse than a
+  // slow exit is a program that cannot be killed.
+  let asked = 0;
+  const listeners: (() => void)[] = [];
+  const onSignal = (signal: NodeJS.Signals): void => {
+    asked += 1;
+    if (asked === 1) {
       logger.info('shutting down', { signal });
       void runtime.stop().catch((error: unknown) => {
         logger.error('shutdown failed', { error: String(error) });
         process.exitCode = EXIT_STARTUP_FAILED;
       });
-    });
+      return;
+    }
+    logger.info('no longer waiting for sessions to finish', { signal });
+    runtime.stopWaiting();
+    for (const remove of listeners) remove();
+  };
+
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    const listener = (): void => onSignal(signal);
+    process.on(signal, listener);
+    listeners.push(() => void process.off(signal, listener));
   }
 }
 

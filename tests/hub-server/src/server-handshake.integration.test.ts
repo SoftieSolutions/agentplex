@@ -72,6 +72,9 @@ async function startServer(storePaths: readonly string[] = []) {
       }),
       clock,
     }),
+    // Nothing to drain: no session in this suite is ever mid-turn, so a budget
+    // here would only be a number the shutdown does not reach for.
+    drainMs: 0,
     operations: createOperationRegistry(createFakeProcessRunner()),
     timers: systemTimers,
     // This suite opens real sockets on loopback on purpose, and a broadcast is

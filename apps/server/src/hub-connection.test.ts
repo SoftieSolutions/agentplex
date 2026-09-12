@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   type ProviderReadiness,
   type ServerToHubFrame,
+  sessionRefSchema,
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
@@ -26,6 +27,8 @@ const identity: ServerIdentity = {
 const stores: readonly StoreDescriptor[] = [
   { storeId: 'store-a' as StoreId, path: '/volumes/claude' },
 ];
+
+const SESSION = sessionRefSchema.parse({ storeId: 'store-a', sessionId: 'session-a' });
 
 /** What the startup preflight found, as every handshake reports it. */
 const providers: readonly ProviderReadiness[] = [readyProvider()];
@@ -278,5 +281,45 @@ describe('serveHubConnection', () => {
     await settle();
 
     expect(connection.state).toBe('closed');
+  });
+
+  it('says it is draining, unasked, with the sessions that are closing', async () => {
+    const { socket, connection } = connect();
+    socket.receive(handshake());
+    await settle();
+    const before = socket.sent.length;
+
+    connection.announceDraining(15_000, [SESSION]);
+
+    expect(replies(socket.sent.slice(before))).toEqual([
+      {
+        type: 'server-draining',
+        graceMs: 15_000,
+        sessions: [SESSION],
+      },
+    ]);
+  });
+
+  it('tells a peer that has not handshaken nothing about what is running here', () => {
+    // The same rule every other frame follows. A socket that never proved it
+    // may ask is owed no facts about this machine, and a shutdown is a fact.
+    const { socket, connection } = connect();
+
+    connection.announceDraining(15_000, []);
+
+    expect(socket.sent).toHaveLength(0);
+  });
+
+  it('says nothing to a hub that has already gone', async () => {
+    const { socket, connection } = connect();
+    socket.receive(handshake());
+    await settle();
+    socket.closeFromPeer(PEER_GONE);
+    await settle();
+    const before = socket.sent.length;
+
+    connection.announceDraining(15_000, []);
+
+    expect(socket.sent).toHaveLength(before);
   });
 });

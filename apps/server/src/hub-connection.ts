@@ -9,6 +9,7 @@ import {
   type ProviderReadiness,
   type ServerToHubFrame,
   type SessionId,
+  type SessionRef,
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
@@ -116,6 +117,18 @@ export type HubConnectionState = 'awaiting-handshake' | 'established' | 'closed'
 
 export interface HubConnection {
   readonly state: HubConnectionState;
+  /**
+   * Tells this hub that the server is going down and is waiting for the turns
+   * it holds to end first.
+   *
+   * Sent rather than answered, because nobody asked: a shutdown is something
+   * this machine decided, and the hub's alternative reading of the same
+   * silence -- a server that stopped reporting -- is the wrong one. A
+   * connection that has not handshaken or has already closed is told nothing,
+   * which is not a degradation: a peer that never proved it may ask is owed no
+   * facts about what is running here.
+   */
+  announceDraining(graceMs: number, sessions: readonly SessionRef[]): void;
 }
 
 /**
@@ -606,6 +619,11 @@ export function serveHubConnection(
   return {
     get state(): HubConnectionState {
       return state;
+    },
+
+    announceDraining(graceMs: number, sessions: readonly SessionRef[]): void {
+      if (state !== 'established') return;
+      send({ type: 'server-draining', graceMs, sessions: [...sessions] });
     },
   };
 }
