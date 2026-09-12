@@ -26,6 +26,19 @@ import { hubUsage } from './config.js';
 const ENTRYPOINT = fileURLToPath(new URL('../dist/main.js', import.meta.url));
 
 /**
+ * Two bounds, because this forks a Node runtime and `spawnSync` blocks the
+ * thread it runs on.
+ *
+ * The child had none, and vitest's default five seconds could not supply one: a
+ * blocked thread cannot be interrupted, so the suite's bound was only consulted
+ * once the child had already returned. `EXIT_TIMEOUT_MS` is the guard that can
+ * actually stop one; the suite's is larger, so a busy machine is not mistaken
+ * for a wedged daemon. Nothing below asserts how long a run took.
+ */
+const EXIT_TIMEOUT_MS = 15_000;
+const TEST_TIMEOUT_MS = 25_000;
+
+/**
  * A run with nothing inherited but a PATH: usage is a fact about the program,
  * and a settings file's environment must not be able to change it. stdin is
  * closed, because nothing on this path may ask anybody anything.
@@ -35,10 +48,11 @@ function run(...args: readonly string[]): SpawnSyncReturns<string> {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { PATH: process.env['PATH'] ?? '' },
+    timeout: EXIT_TIMEOUT_MS,
   });
 }
 
-describe('agentplex hub', () => {
+describe('agentplex hub', { timeout: TEST_TIMEOUT_MS }, () => {
   it.each(['--help', '-h'])('prints its usage on stdout and exits 0 for %s', (flag) => {
     const result = run(flag);
 

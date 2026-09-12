@@ -29,7 +29,21 @@ const runner = createNodeProcessRunner({ environment: process.env });
 /** Enough for a process to start and print on a loaded CI machine. */
 const TIMEOUT_MS = 20_000;
 
-describe('createNodeProcessRunner', () => {
+/**
+ * The suite's own bound, and it has to outlive the runner's.
+ *
+ * Every test below hands the runner a 20s deadline and then asserts on what the
+ * child printed; not one of them asserts how long anything took. vitest's
+ * default bound is five seconds, so on a busy machine the suite gave up first
+ * and the runner's own answer -- "did not finish within 20000ms and was killed",
+ * which is the behaviour under test -- could not be produced at all. The guard
+ * against a genuine hang is the deadline above and it has not moved: what
+ * changes here is only which of the two bounds a hang is reported by, and
+ * therefore whether the report names the subject or the harness.
+ */
+const TEST_TIMEOUT_MS = 30_000;
+
+describe('createNodeProcessRunner', { timeout: TEST_TIMEOUT_MS }, () => {
   it('runs a program and reports what it printed', async () => {
     const outcome = await runner.run({
       file: node,
@@ -146,7 +160,7 @@ describe('createNodeProcessRunner', () => {
  * built on them would pass on a developer's mac and fail in the image this
  * deploys as. `tool` below stands for exactly those.
  */
-describe('createNodeProcessRunner with a configured binPath', () => {
+describe('createNodeProcessRunner with a configured binPath', { timeout: TEST_TIMEOUT_MS }, () => {
   const probe = createProbeProgram();
   // A second directory, holding a second program: what the machine already had
   // on its PATH before agentplex recorded anything.

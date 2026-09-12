@@ -759,7 +759,22 @@ describe('parseManifest', () => {
   });
 });
 
-describe('the assembled packages', () => {
+/**
+ * Every test in here builds a workspace on the real disk -- a scratch root,
+ * some forty directories and files, four package trees copied out of it and
+ * then walked -- and removes it again afterwards. That is hundreds of syscalls
+ * against whatever else the machine is doing, and it fell over vitest default
+ * five-second bound once during a run with several suites in flight.
+ *
+ * This is mitigation and not a fix, and it is worth saying which. Nothing here
+ * asserts anything about elapsed time, so there is no claim being weakened --
+ * but unlike the process suites there is also no inner bound to hand the job
+ * to, because the work is a pile of filesystem calls with no deadline of their
+ * own. A test that hangs here will now take a minute to say so. The real
+ * answer would be an injected filesystem, which is a larger change than this
+ * ticket, and the tests below are about what lands on a real disk.
+ */
+describe('the assembled packages', { timeout: 60_000 }, () => {
   const temporary: string[] = [];
 
   afterEach(async () => {
