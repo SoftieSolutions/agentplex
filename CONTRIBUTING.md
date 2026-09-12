@@ -173,8 +173,9 @@ differences is load-bearing:
   mints it the first time that server starts, because the minting side is the
   side that can get the entropy right, and writes it beside the server's id so
   that both survive a restart. It only ever arrives. It authenticates a hub to
-  one server, which is why there is one per server: a pairing is the unit an
-  operator revokes.
+  one server, and there is one per pairing rather than one per server: a pairing
+  is the unit an operator revokes, so a server two hubs have paired with holds
+  two, and revoking either leaves the other working.
 - **The enrollment token** is short-lived, minted by a hub for a single
   enrollment. It expires in minutes rather than hours because it is a string
   that gets pasted in front of other people, and the only safe assumption about
