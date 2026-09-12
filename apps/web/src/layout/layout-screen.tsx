@@ -2,7 +2,6 @@ import { useCallback, useState, useSyncExternalStore, type JSX } from 'react';
 import type { SessionRef } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { browserTimers } from '../store/timers.js';
-import { appHubStore } from '../terminal/hub.js';
 import { createShortcutRegistry, type ShortcutRegistry } from '../terminal/shortcuts.js';
 import { Stack, Text, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
@@ -126,13 +125,12 @@ function buildHeldStores(hub: HubStore, injected: LayoutStore | undefined): Held
 export interface LayoutScreenProps {
   /** The session the address names, or `null` for no session route. */
   readonly session: SessionRef | null;
-  /** Injected by tests; the page uses the app singleton. */
-  readonly store?: HubStore;
+  /** The page's one hub store, handed down from the root. */
+  readonly store: HubStore;
   readonly layoutStore?: LayoutStore;
 }
 
-export function LayoutScreen({ session, store, layoutStore }: LayoutScreenProps): JSX.Element {
-  const hub = store ?? appHubStore();
+export function LayoutScreen({ session, store: hub, layoutStore }: LayoutScreenProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const [held] = useState<HeldStores>(() => buildHeldStores(hub, layoutStore));
   const { layout, registry, registerPane } = held;

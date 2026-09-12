@@ -1,24 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { clearHubToken, createTokenStore, readHubToken, writeHubToken } from './token.js';
-
-/**
- * A stand-in for a localStorage that behaves. The throwing accessors below
- * stand in for the browsers that do not — and the throw sits on the property
- * access itself, because that is where a real privacy-mode browser throws.
- */
-function fakeStorage(initial: Record<string, string> = {}): Storage {
-  const entries = new Map(Object.entries(initial));
-  return {
-    get length() {
-      return entries.size;
-    },
-    key: (index: number) => [...entries.keys()][index] ?? null,
-    getItem: (key: string) => entries.get(key) ?? null,
-    setItem: (key: string, value: string) => void entries.set(key, value),
-    removeItem: (key: string) => void entries.delete(key),
-    clear: () => entries.clear(),
-  };
-}
+import { fakeStorage } from './fake-storage.js';
+import { browserTokenStore, createTokenStore } from './token.js';
 
 describe('the token store', () => {
   it('round-trips a token', () => {
@@ -75,11 +57,11 @@ describe('the token store', () => {
     expect(store.clear()).toBe(false);
   });
 
-  it('the browser-bound functions survive an environment with no window at all', () => {
-    // This test process has no `window`; the module-level functions must treat
-    // that the way they treat a browser that refuses storage.
-    expect(readHubToken()).toBeNull();
-    expect(writeHubToken('the-hub-token')).toBe(false);
-    expect(clearHubToken()).toBe(false);
+  it('the browser-bound store survives an environment with no window at all', () => {
+    // This test process has no `window`; the module-level store must treat
+    // that the way it treats a browser that refuses storage.
+    expect(browserTokenStore.read()).toBeNull();
+    expect(browserTokenStore.write('the-hub-token')).toBe(false);
+    expect(browserTokenStore.clear()).toBe(false);
   });
 });

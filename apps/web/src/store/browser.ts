@@ -1,4 +1,5 @@
 import type { ParseResult } from '@agentplex/protocol';
+import type { TokenStore } from '../auth/token.js';
 import { createFrameIdCounter } from './frame-ids.js';
 import type { HubStoreDependencies, StoreSocket } from './hub-store.js';
 import { browserTimers } from './timers.js';
@@ -52,11 +53,15 @@ export function socketUrl(origin: PageOrigin, ticket: string): string {
 
 export interface BrowserDependencyOptions {
   /**
-   * The long-lived credential, read per exchange so the settings screen can
-   * change it without rebuilding the store. It goes in a header and never in a
-   * URL; the URL only ever carries the single-use ticket.
+   * Where the long-lived credential lives. Read per exchange, so a token the
+   * settings screen writes is on the next dial without rebuilding the store;
+   * the same store object the settings screen writes through, so there is one
+   * key and not two. The token goes in a header and never in a URL; the URL
+   * only ever carries the single-use ticket.
    */
-  readToken(): string;
+  readonly tokens: TokenStore;
+  /** The ticket exchange's transport. The page's own `fetch` unless a test says otherwise. */
+  readonly fetch?: typeof globalThis.fetch;
 }
 
 /** One `WebSocket`, behind the store's socket seam. */
@@ -77,11 +82,14 @@ function wrapWebSocket(socket: WebSocket): StoreSocket {
 
 /** The real dependencies for `createHubStore`, minus the future frame seams. */
 export function createBrowserDependencies(options: BrowserDependencyOptions): HubStoreDependencies {
+  const { tokens, fetch = globalThis.fetch } = options;
   return {
     async fetchTicket(): Promise<string> {
+      // No token is an empty Bearer, never a missing header: the hub answers
+      // both with its ordinary 401, and the snapshot words that refusal.
       const response = await fetch(CLIENT_TICKET_PATH, {
         method: 'POST',
-        headers: { authorization: `Bearer ${options.readToken()}` },
+        headers: { authorization: `Bearer ${tokens.read() ?? ''}` },
       });
       if (!response.ok) {
         // The hub says `not authorized` and no more, on purpose; the status is

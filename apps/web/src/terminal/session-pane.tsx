@@ -22,7 +22,6 @@ import {
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import { createTerminalFeed, DEFAULT_FEED_BYTES, type TerminalFeed } from './chunk-feed.js';
 import type { TerminalEmulator } from './emulator.js';
-import { appHubStore } from './hub.js';
 import {
   findSessionRow,
   machineLabel,
@@ -61,12 +60,11 @@ function useSessionInterest(store: HubStore, sessionRef: SessionRef): void {
 
 export interface SessionPaneProps {
   readonly sessionRef: SessionRef;
-  /** Injected by tests; the page uses the app singleton. */
-  readonly store?: HubStore;
+  /** The page's one hub store, handed down through the layout. */
+  readonly store: HubStore;
 }
 
-export function SessionPane({ sessionRef, store }: SessionPaneProps): JSX.Element {
-  const hub = store ?? appHubStore();
+export function SessionPane({ sessionRef, store: hub }: SessionPaneProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const snapshot = useHubSnapshot(hub);
   useSessionInterest(hub, sessionRef);
