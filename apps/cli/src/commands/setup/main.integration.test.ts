@@ -69,7 +69,11 @@ function run(...args: readonly string[]): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [BIN, COMMAND, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { PATH: process.env['PATH'] ?? '' },
+    // `$HOME` travels with `$PATH`, and the suite's is a throwaway -- see
+    // `scripts/test-home.ts`. An environment without it is not sealed: a
+    // child asking `os.homedir()` gets the passwd entry when `$HOME` is
+    // missing, which is the operator's real home.
+    env: { HOME: process.env['HOME'] ?? '', PATH: process.env['PATH'] ?? '' },
     timeout: EXIT_TIMEOUT_MS,
   });
 }
@@ -90,7 +94,9 @@ describe('agentplex setup', { timeout: TEST_TIMEOUT_MS }, () => {
       cwd: dirname(BIN),
       // The directory node is in and nothing else, so nothing on this machine
       // is discoverable and the run stays hermetic.
-      env: { PATH: dirname(process.execPath) },
+      // `$HOME` is the suite's throwaway rather than the operator's, so a
+      // wizard that reached for provider state would find none of theirs.
+      env: { HOME: process.env['HOME'] ?? '', PATH: dirname(process.execPath) },
       cols: 80,
       rows: 24,
       term: 'xterm-256color',

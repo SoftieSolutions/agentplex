@@ -195,7 +195,10 @@ const supervisor = createPtySupervisor({
   pty: nodePtyFactory,
   clock: systemClock,
   ids: randomIdGenerator,
-  environment: { PATH: process.env['PATH'] ?? '' },
+  // The suite's throwaway `$HOME` travels with the PATH -- see
+  // `scripts/test-home.ts`. A pty child with none would resolve one from the
+  // passwd entry, which is the operator's.
+  environment: { HOME: process.env['HOME'] ?? '', PATH: process.env['PATH'] ?? '' },
 });
 
 /**
