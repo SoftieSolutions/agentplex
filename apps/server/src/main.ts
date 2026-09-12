@@ -19,6 +19,7 @@ import {
   createProviderPreflight,
   createProviderRegistry,
   nodeProviderFiles,
+  nodeGrantFileSystem,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
 import { checkNodePty, createPtySupervisor, nodePtyFactory } from '@agentplex/pty';
@@ -143,6 +144,7 @@ async function main(): Promise<void> {
       // separate seam from the store volumes above because it is a separate
       // permission: a store is read, and this is written.
       dataRootFileSystem: nodeDataRoot,
+      grantFileSystem: nodeGrantFileSystem,
       // The only place a secret is generated, and the CSPRNG is the whole
       // implementation: the server's pairing token, once, on its first start.
       tokens: randomTokenMinter,

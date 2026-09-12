@@ -28,11 +28,19 @@ import { DATA_PATH } from './config.js';
  *    does, the path is a coordinate two programs must agree on, and it needs a
  *    setting of its own -- see below.
  *
- * Scrollback spilled out of memory, whatever a session accumulates per
- * project, the record of which hubs this server has authorized: all three are
- * this server's own, all three have to survive a restart, and nothing else on
- * the machine reads them. They belong here, in a subdirectory each names for
- * itself.
+ * Scrollback spilled out of memory, and whatever a session accumulates per
+ * project: both are this server's own, both have to survive a restart, and
+ * nothing else on the machine reads them. They belong here, in a subdirectory
+ * each names for itself.
+ *
+ * This file once listed a third -- the record of which hubs this server has
+ * authorized -- and that one turned out to fail the second question rather than
+ * pass it. Grants sit beside the identity file, named after it, because the two
+ * are one deployment coordinate: the file that says who this server is and the
+ * file that says who may use that identity are read together, and a second
+ * setting for the second one is a second thing to get out of step with the
+ * first. See `server-grants.ts`. The rule below is what decided it, which is
+ * the reason to leave the correction here rather than quietly drop the line.
  *
  * ## What does not
  *

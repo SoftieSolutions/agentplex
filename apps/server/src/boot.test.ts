@@ -5,6 +5,7 @@ import {
   createFakeProviderFiles,
   createFakeProcessProbe,
   createFakeProcessRunner,
+  createFakeGrantFiles,
   createFakeStoreFiles,
 } from '@agentplex/providers/testing';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
@@ -29,6 +30,9 @@ function dependencies(
     timers: createFakeTimers(),
     storeFileSystem,
     dataRootFileSystem,
+    // The grants file lives beside the identity file, so a runtime that starts
+    // writes one here too: grant zero, for the token it just minted.
+    grantFileSystem: createFakeGrantFiles(),
     tokens: { newToken: () => 'token-under-test' },
     // No adapters: this file is about which halves start and stop, and a
     // registry with a real one in it would put a provider's disk layout into

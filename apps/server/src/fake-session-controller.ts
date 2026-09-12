@@ -24,6 +24,15 @@ export interface FakeSessionController extends SessionController {
   readonly starts: readonly StartSessionRequest[];
   /** Every stop it was asked for, in order. */
   readonly stops: readonly SessionRef[];
+  /**
+   * Every store scan it was asked for, in order.
+   *
+   * A scan is a disk read, so how many of them one instruction costs is a fact
+   * worth asserting on: reporting a store to each connected hub separately
+   * would be the same read repeated for an answer that cannot differ between
+   * hubs.
+   */
+  readonly scans: readonly StoreId[];
   /** What the next start and stop answer with. */
   answerWith(outcome: SessionOutcome): void;
   /** What this server says is in a store. A store with no report is not mounted. */
@@ -40,6 +49,7 @@ export function createFakeSessionController(
 ): FakeSessionController {
   const starts: StartSessionRequest[] = [];
   const stops: SessionRef[] = [];
+  const scans: StoreId[] = [];
   const reports = new Map<StoreId, StoreReport>(
     (options.reports ?? []).map((report) => [report.storeId, report]),
   );
@@ -63,6 +73,7 @@ export function createFakeSessionController(
     },
 
     async report(storeId: StoreId): Promise<StoreReport | null> {
+      scans.push(storeId);
       return reports.get(storeId) ?? null;
     },
 
@@ -80,6 +91,10 @@ export function createFakeSessionController(
 
     get stops(): readonly SessionRef[] {
       return stops;
+    },
+
+    get scans(): readonly StoreId[] {
+      return scans;
     },
   };
 }

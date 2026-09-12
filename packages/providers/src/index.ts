@@ -85,6 +85,45 @@ export type {
 } from './store-identity.js';
 export { nodeStoreFileSystem } from './node-store-files.js';
 
+export {
+  GRANT_ZERO_LABEL,
+  decideGrant,
+  grantIdSchema,
+  hubIdDisagrees,
+  parseServerGrants,
+  serializeServerGrants,
+  serverGrantSchema,
+  serverGrantsFileSchema,
+  serverGrantsPath,
+  summarizeGrant,
+  usableGrant,
+  witnessedGrant,
+} from './server-grants.js';
+export type {
+  FileWrite,
+  GrantDecision,
+  GrantFileSystem,
+  GrantId,
+  GrantRefusal,
+  GrantSummary,
+  ServerGrant,
+} from './server-grants.js';
+
+export { openServerGrants } from './server-grant-store.js';
+export type {
+  AuthorizedGrant,
+  GrantAuthority,
+  GrantListing,
+  GrantWitness,
+  MintedGrant,
+  RevokedGrant,
+  ServerGrantDependencies,
+  ServerGrantStore,
+  ServerGrantsReady,
+  WithdrawnGrant,
+} from './server-grant-store.js';
+export { nodeGrantFileSystem } from './node-grant-files.js';
+
 export { ensureServerIdentity, readServerIdentity } from './server-identity.js';
 export type {
   ConfiguredToken,

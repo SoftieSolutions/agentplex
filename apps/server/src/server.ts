@@ -20,13 +20,17 @@ import { serveHubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import {
   type ConfiguredToken,
+  type GrantFileSystem,
   type ProviderPreflight,
   type ProviderRegistry,
   ensureStores,
+  openServerGrants,
+  serverGrantsPath,
   type StoreFileSystem,
 } from '@agentplex/providers';
 import { announceServer, type BeaconNetwork } from './server-beacon.js';
 import { ensureServerIdentity } from '@agentplex/providers';
+import { createHubAudience } from './hub-audience.js';
 import { createSessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
 
@@ -56,6 +60,15 @@ export interface SessionServerDependencies {
    * identity written there would hand both of them the same name and secret.
    */
   readonly identityPath: string;
+  /**
+   * The disk under the grants file, which sits beside the identity file.
+   *
+   * A third filesystem seam, and not an oversight. The store seam reaches a
+   * provider's volume and may never grow a write; the data root seam creates a
+   * directory; this one replaces one file, atomically, because a reader that
+   * meets half a grants file is a server that refuses every handshake.
+   */
+  readonly grantFileSystem: GrantFileSystem;
   /** Where the pairing token comes from the first time this server starts. */
   readonly tokens: TokenMinter;
   /**
@@ -155,6 +168,7 @@ export async function startSessionServer(
     storePaths,
     storeFileSystem,
     identityPath,
+    grantFileSystem,
     tokens,
     serverToken,
     providers,
@@ -195,6 +209,43 @@ export async function startSessionServer(
   logger.info(identityMessage(identity.minted, serverToken !== undefined), {
     serverId: identity.identity.serverId,
     identityPath,
+  });
+
+  // The grants this server will answer to, and grant zero the first time.
+  //
+  // Fatal for the reason the identity is. Coming up with an empty grants file
+  // would unpair every hub silently; coming up ignoring one it could not read
+  // would leave a server answering to credentials the operator believes they
+  // withdrew. Both are the failure nobody sees, and this is the moment it can
+  // be said out loud.
+  const grantsPath = serverGrantsPath(identityPath);
+  const grants = await openServerGrants(grantsPath, identity.identity.token, {
+    files: grantFileSystem,
+    ids,
+    tokens,
+    clock,
+    // The one sentence about a disagreeing hub id, written where the log lines
+    // about connections already are. The store records it and decides nothing
+    // with it; a hub whose database was rebuilt is still the same operator.
+    onWitness: ({ grantId, hubId, disagrees, unrecorded }) => {
+      if (disagrees) {
+        logger.warn('a grant is being used by a different hub id than the one it first saw', {
+          grantId,
+          hubId,
+        });
+      }
+      if (unrecorded !== null) {
+        logger.warn('could not record a handshake against its grant', { grantId, unrecorded });
+      }
+    },
+  });
+  if (!grants.ok) {
+    throw new Error(`agentplex cannot read this server's grants: ${grants.problem}`);
+  }
+  // The path and the count, never a verifier. What an operator needs from this
+  // line is where the file is and whether the upgrade wrote grant zero.
+  logger.info(grants.migrated ? 'grants file written with grant zero' : 'grants loaded', {
+    grantsPath,
   });
 
   // What this build can run, said out loud at boot. The registry is closed, so
@@ -254,12 +305,27 @@ export async function startSessionServer(
     });
   }
 
+  // Every hub connected at once, which is what makes a stop by one of them
+  // something the others are told about. It outlives each connection: a socket
+  // comes and goes and the set is the server's.
+  const audience = createHubAudience({
+    sessions,
+    logger,
+    // A socket that closed is a watcher that is gone, and it is not there to
+    // call the detach it was handed. Without this a terminal nobody can see
+    // stays pinned against eviction for the life of the process.
+    onLeave: (member) => terminals.release(member.connectionId),
+  });
+
   // The one thing a hub can do with this server before it has proved itself:
   // open a socket. Everything past that is the handshake's to allow.
   const hubs = createWebSocketListener({
     onConnection: (socket) =>
       void serveHubConnection(socket, {
+        connectionId: ids.newId(),
         identity: identity.identity,
+        grants: grants.store,
+        audience,
         sessions,
         // Read at connection time rather than captured, so a hub that dials
         // after a store came back reachable is told what is mounted now.
@@ -268,6 +334,7 @@ export async function startSessionServer(
         logger,
       }),
   });
+
 
   const listener: HttpListener = await startHttpServer(
     port,
