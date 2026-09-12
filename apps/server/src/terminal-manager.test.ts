@@ -491,3 +491,58 @@ describe('createTerminalManager shutdown', () => {
     expect(manager.holder(sessionRef('session-b'))).toBeUndefined();
   });
 });
+
+describe('createTerminalManager seal', () => {
+  it('refuses a spawn and a resume once it is sealed, and starts nothing', () => {
+    const { manager, factory } = harness();
+
+    manager.seal();
+
+    const spawned = manager.spawn(STORE, launch);
+    const resumed = manager.resume(sessionRef('session-a'), launch);
+    expect(spawned).toEqual({
+      ok: false,
+      problem: 'this server is shutting down',
+      holder: null,
+    });
+    expect(resumed.ok).toBe(false);
+    expect(factory.opened).toHaveLength(0);
+  });
+
+  it('leaves every live terminal alone, because that is the whole point of a drain', () => {
+    const { manager, factory } = harness();
+    const running = open(manager);
+
+    manager.seal();
+
+    expect(manager.sealed).toBe(true);
+    expect(manager.terminal(running)).toBeDefined();
+    expect(factory.ptys[0]?.kills).toBe(0);
+  });
+
+  it('evicts nothing to make room for a start it is going to refuse anyway', () => {
+    // The cap is reached and every terminal is closable, so an unsealed manager
+    // would close the longest-unwatched one here. Doing that on the way out
+    // would cost a session for a start that was never going to happen.
+    const { manager, factory } = harness(1);
+    open(manager);
+
+    manager.seal();
+    const refused = manager.spawn(STORE, launch);
+
+    expect(refused.ok).toBe(false);
+    expect(factory.ptys[0]?.kills).toBe(0);
+    expect(manager.terminals).toHaveLength(1);
+  });
+
+  it('is one-way and idempotent: nothing unseals a manager', () => {
+    const { manager } = harness();
+
+    expect(manager.sealed).toBe(false);
+    manager.seal();
+    manager.seal();
+
+    expect(manager.sealed).toBe(true);
+    expect(manager.spawn(STORE, launch).ok).toBe(false);
+  });
+});

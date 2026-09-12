@@ -7,10 +7,10 @@
  * and these exist to test that it can read what the hub actually sends.
  * Re-capture after any change to the hub-to-client frames.
  *
- * Captured at protocol version 10.
+ * Captured at protocol version 11.
  */
 export const hubFrames = {
-  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":10,"hubId":"hub-1"}',
+  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":11,"hubId":"hub-1"}',
   machineState:
     '{"type":"machine-state","state":{"version":0,"stores":[],"servers":[],"candidates":[]}}',
   pong: '{"type":"pong","replyTo":2}',
@@ -22,7 +22,7 @@ export const hubFrames = {
   protocolError:
     '{"type":"protocol-error","code":"bad-request","message":"frame is not valid JSON"}',
   refusalProtocolVersion:
-    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 10, not 11","holder":null}',
+    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 11, not 12","holder":null}',
   machineStateWithServer:
     '{"type":"machine-state","state":{"version":1,"stores":[],"servers":[{"registrationId":"pairing-1","label":"gpu-box-01","serverId":null,"phase":"stale","stores":[],"providers":[],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":null,"staleReason":"unreachable","problem":"connection refused"}],"candidates":[]}}',
   paneLayout:
@@ -40,5 +40,5 @@ export const hubFrames = {
   machineStateSharedDegraded:
     '{"type":"machine-state","state":{"version":5,"stores":[{"storeId":"store-shared","servers":["registration-gpu-box-01","registration-mbp-robert"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-shared","sessionId":"session-shared-notes","provider":"claude","status":"idle","updatedAt":1755998200000,"cwd":"/mnt/volumes/shared/notes","title":"shared-notes"},"source":"registration-mbp-robert","reportedBy":["registration-gpu-box-01","registration-mbp-robert"],"reportedAt":1756000000000,"reachable":true,"holder":null}]}],"servers":[{"registrationId":"registration-gpu-box-01","label":"gpu-box-01","serverId":"server-gpu","phase":"stale","stores":["store-shared"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"missing","version":null,"directory":null,"problem":"no directory this server searches holds codex"}],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":1756000000000,"staleReason":"dropped","problem":"the connection to the server ended"},{"registrationId":"registration-mbp-robert","label":"mbp-robert","serverId":"server-mbp","phase":"connected","stores":["store-shared"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"problem":null}],"candidates":[]}}',
   machineStateDiscovered:
-    '{"type":"machine-state","state":{"version":2,"stores":[],"servers":[],"candidates":[{"serverId":"server-mbp","address":"192.168.1.24","port":8443,"protocolVersion":10},{"serverId":"server-old-build","address":"192.168.1.31","port":8443,"protocolVersion":9}]}}',
+    '{"type":"machine-state","state":{"version":2,"stores":[],"servers":[],"candidates":[{"serverId":"server-mbp","address":"192.168.1.24","port":8443,"protocolVersion":11},{"serverId":"server-old-build","address":"192.168.1.31","port":8443,"protocolVersion":10}]}}',
 } as const;

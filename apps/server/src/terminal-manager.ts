@@ -15,7 +15,7 @@ import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
  *
  * The supervisor below it knows how to start one process and nothing about the
  * others. Every rule that is about the *set* of running agents lives here, and
- * there are only three of them:
+ * there are only four of them:
  *
  * - **A cap, with longest-unwatched eviction.** A client attaches to a session
  *   the moment it is opened, which is only safe because opening the tenth one
@@ -33,8 +33,12 @@ import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
  *   rather than "no". The way out is stopping the holder — and a holder that is
  *   working is not offered that either, because interrupting a turn mid-tool is
  *   how a half-applied edit gets left on disk.
+ * - **A sealed manager starts nothing more.** Shutdown seals it before it waits
+ *   for anything, because a drain that is still accepting starts is a drain
+ *   that never ends. It is one-way: nothing unseals a manager, because the only
+ *   thing that seals one is a process that is on its way out.
  *
- * The hub is the authority on the last rule across servers, since it is the
+ * The hub is the authority on the third rule across servers, since it is the
  * only thing that sees every server attached to a store. This is the same rule
  * enforced where the processes actually are: a server that took an instruction
  * from a hub with a stale view must still refuse it.
@@ -225,6 +229,15 @@ export interface TerminalManager extends SessionLiveness {
   release(watcher: WatcherId): void;
   /** Kills the process. The terminal stays, because its output is what to read next. */
   stop(terminalId: string): StopOutcome;
+  /**
+   * Refuses every new terminal from here on, and touches none of the live ones.
+   *
+   * The first step of a draining shutdown, and separate from `closeAll` because
+   * the whole point of a drain is the stretch of time between them: the agents
+   * this server is holding go on working, and nothing new joins them. Idempotent.
+   */
+  seal(): void;
+  readonly sealed: boolean;
   /** Shutdown. The one thing besides the cap that closes a terminal. */
   closeAll(): void;
 }
@@ -259,6 +272,7 @@ export function createTerminalManager({
   cap = DEFAULT_TERMINAL_CAP,
 }: TerminalManagerDependencies): TerminalManager {
   const terminals = new Map<string, TerminalEntry>();
+  let sealed = false;
 
   const liveHolderOf = (session: SessionRef): TerminalRecord | undefined => {
     for (const { record } of terminals.values()) {
@@ -284,6 +298,14 @@ export function createTerminalManager({
     // terminal to make room for a launch that was never going to happen would
     // close a session over a typo in a working directory.
     if (!launch.ok) return { ok: false, problem: launch.problem, holder: null };
+
+    // Before the cap and before the holder check, because neither is the
+    // reason: a sealed manager has no answer that involves starting something,
+    // and evicting a terminal to make room on a server that is going down would
+    // close a session for nothing.
+    if (sealed) {
+      return { ok: false, problem: 'this server is shutting down', holder: null };
+    }
 
     if (sessionId !== null) {
       const held = liveHolderOf({ storeId, sessionId });
@@ -444,6 +466,14 @@ export function createTerminalManager({
       // in the transcript. It is the cheapest thing to evict from now on.
       record.run.kill();
       return { ok: true };
+    },
+
+    seal(): void {
+      sealed = true;
+    },
+
+    get sealed(): boolean {
+      return sealed;
     },
 
     closeAll(): void {

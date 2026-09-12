@@ -943,6 +943,32 @@ describe('the plan a dry run prints', () => {
   });
 
   /**
+   * The drain and the unit's stop timeout, which are one decision.
+   *
+   * The server waits for the turns it is holding to reach a boundary before it
+   * closes them, and systemd sends SIGKILL after `TimeoutStopSec` whatever the
+   * daemon is doing. A drain at or past that number is not a longer drain: it
+   * is the same kill with a wait in front of it, and every session mid-turn
+   * dies exactly where the drain was supposed to stop it dying. So the two
+   * numbers have to be read together, and this is the place they can be --
+   * `install.sh` renders both from one pair, and this is what says so.
+   */
+  it('gives the drain less time than systemd gives the whole stop', () => {
+    const { script, home } = scratch();
+    const unit = run(script, home, ['--print-unit', '--role=server']).stdout;
+
+    const drain = /^Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=(\d+)$/m.exec(unit);
+    const stop = /^TimeoutStopSec=(\d+)s$/m.exec(unit);
+
+    expect(drain?.[1], 'the unit sets no drain budget').toBeDefined();
+    expect(stop?.[1], 'the unit sets no stop timeout').toBeDefined();
+    expect(Number(drain?.[1])).toBeLessThan(Number(stop?.[1]));
+    // And the margin is a real one, not a rounding error: what is left is what
+    // the process has to kill the stragglers, close its sockets and exit.
+    expect(Number(stop?.[1]) - Number(drain?.[1])).toBeGreaterThanOrEqual(5);
+  });
+
+  /**
    * The one role table, asserted as a table. `web` is not a role: it is part of
    * being a hub, because the hub finds the client by resolving that package
    * name and a hub without it serves 503. The command is in every row, because

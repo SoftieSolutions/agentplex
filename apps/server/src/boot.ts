@@ -112,7 +112,15 @@ export interface RuntimeDependencies {
 
 export interface Runtime {
   readonly server: SessionServer;
+  /** Drains, then stops. Calling it twice is safe; the second call answers at once. */
   stop(): Promise<void>;
+  /**
+   * A second signal: stop waiting for turns to end and kill what is left.
+   *
+   * Separate from `stop` rather than an argument to it, because it arrives
+   * while the first call is still running and there is nothing to hand it to.
+   */
+  stopWaiting(): void;
 }
 
 export async function startRuntime(
@@ -163,6 +171,7 @@ export async function startRuntime(
     providers,
     preflight,
     terminals,
+    drainMs: config.drainMs,
     operations,
     clock,
     timers,
@@ -173,14 +182,24 @@ export async function startRuntime(
 
   logger.info('agentplex server started');
 
-  let stopped = false;
+  let stopped: Promise<void> | null = null;
   return {
     server,
-    async stop() {
-      if (stopped) return;
-      stopped = true;
-      await server.stop();
-      logger.info('agentplex server stopped');
+
+    stopWaiting() {
+      server.stopWaiting();
+    },
+
+    stop() {
+      // The promise and not a boolean, so that a second caller waits for the
+      // first shutdown rather than being told it is already over. It is not
+      // over: a drain takes time, and a caller that returned immediately would
+      // let the process exit in the middle of one.
+      stopped ??= (async () => {
+        await server.stop();
+        logger.info('agentplex server stopped');
+      })();
+      return stopped;
     },
   };
 }

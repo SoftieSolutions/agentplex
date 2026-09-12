@@ -15,6 +15,7 @@ import {
   type LogLevel,
 } from '@agentplex/node-shared';
 import type { ConfiguredToken } from '@agentplex/providers';
+import { DEFAULT_DRAIN_MS } from './drain.js';
 import { DEFAULT_TERMINAL_CAP } from './terminal-manager.js';
 
 /**
@@ -142,6 +143,23 @@ export interface ServerConfig {
    */
   readonly terminalCap: number;
   /**
+   * How long shutdown waits for the turns this server is holding to end, in
+   * milliseconds.
+   *
+   * Configuration rather than a constant because the number that has to be
+   * right is not this one on its own -- it is this one against the unit's
+   * `TimeoutStopSec`, and only the thing that wrote the unit knows what that
+   * says. `install.sh` renders both from one pair, so a machine installed by it
+   * has a single number and a margin; the default is what a checkout, an image
+   * and anything else without such a unit gets.
+   *
+   * Zero is legal and is not the same as no drain: a server told to wait for
+   * nothing still closes at a boundary whatever is already at one, which is
+   * strictly more than the kill it replaces. A negative number is refused,
+   * because it could only ever be a typo.
+   */
+  readonly drainMs: number;
+  /**
    * Whether this server broadcasts a UDP beacon saying it exists.
    *
    * Off unless the operator turns it on. Announcing is a fact about this
@@ -262,6 +280,12 @@ const SETTINGS = {
   timezone: { flag: '--tz', env: 'AGENTPLEX_TZ' },
   terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
   /**
+   * In seconds, because the number it has to agree with is in the unit beside
+   * it and systemd writes `TimeoutStopSec=20s`. Two settings in two units for
+   * one decision is how the two drift.
+   */
+  drainSeconds: { flag: '--drain-seconds', env: 'AGENTPLEX_SERVER_DRAIN_SECONDS' },
+  /**
    * Takes `true` or `false` rather than being a bare presence flag, which
    * `readFlags` would refuse anyway: every setting here has one value, and a
    * flag with none is a typo. It earns its keep beyond consistency, too -- an
@@ -323,6 +347,8 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
 
   const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
 
+  const drainMs = readDrainSeconds(read(SETTINGS.drainSeconds), problems);
+
   const announce = readAnnounce(read(SETTINGS.announce), problems);
 
   const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), problems);
@@ -348,6 +374,7 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
       dataPath,
       timezone,
       terminalCap,
+      drainMs,
       announce,
     },
   };
@@ -560,6 +587,31 @@ function readTerminalCap(raw: string | undefined, problems: string[]): number {
     return DEFAULT_TERMINAL_CAP;
   }
   return cap;
+}
+
+/**
+ * The drain budget: a whole number of seconds, none of them negative.
+ *
+ * Seconds in, milliseconds out, because the operator reads this line next to
+ * `TimeoutStopSec=20s` and everything below counts in milliseconds. Zero is
+ * accepted rather than refused the way a zero terminal cap is: a cap of zero
+ * describes a server that can never do its job, and a drain of zero describes
+ * one that shuts down the way it did before this existed. There is no upper
+ * bound here, because the bound that matters is the unit's and this file cannot
+ * see it -- a drain longer than `TimeoutStopSec` is not a longer drain, it is
+ * the same SIGKILL with a wait in front of it, and the installer is what keeps
+ * the two in step.
+ */
+function readDrainSeconds(raw: string | undefined, problems: string[]): number {
+  if (raw === undefined) return DEFAULT_DRAIN_MS;
+  const seconds = Number(raw);
+  if (!Number.isInteger(seconds) || seconds < 0) {
+    problems.push(
+      `${SETTINGS.drainSeconds.flag} must be a whole number of seconds, none of them negative, not ${JSON.stringify(raw)}`,
+    );
+    return DEFAULT_DRAIN_MS;
+  }
+  return seconds * 1000;
 }
 
 /**
