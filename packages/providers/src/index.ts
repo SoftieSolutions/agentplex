@@ -57,6 +57,20 @@ export type {
 export { parseClaudeTranscript } from './claude-transcript.js';
 export type { ClaudeTranscript, ClaudeTranscriptParse } from './claude-transcript.js';
 
+export { CODEX_SESSIONS_DIRECTORY, createCodexAdapter } from './codex-adapter.js';
+export type { CodexAdapterDependencies } from './codex-adapter.js';
+export {
+  CODEX_COMMAND,
+  CODEX_DEFAULT_STORE_DIRECTORY,
+  CODEX_HOME,
+  CODEX_SCRUB_PREFIXES,
+  planCodexLaunch,
+} from './codex-launch.js';
+export { CODEX_PACKAGE, createCodexProvisioning } from './codex-provisioning.js';
+export { parseCodexRollout } from './codex-rollout.js';
+export type { CodexRollout, CodexRolloutParse } from './codex-rollout.js';
+export { CODEX_SESSION_INDEX_FILE, parseCodexSessionIndex } from './codex-session-index.js';
+
 export type { DirectoryEntry, DirectoryRead, ProviderFiles } from './provider-files.js';
 export { nodeProviderFiles } from './node-provider-files.js';
 
