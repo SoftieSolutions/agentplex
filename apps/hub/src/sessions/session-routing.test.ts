@@ -75,6 +75,7 @@ function session(id: string, storeId: StoreId = WORK): SessionDescriptor {
     updatedAt: START,
     cwd: '/srv/work',
     title: null,
+    uncommitted: null,
   };
 }
 

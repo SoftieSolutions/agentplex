@@ -230,6 +230,13 @@ function descriptor(
   updatedAt: number,
   cwd: string | null,
   title: string | null,
+  /**
+   * What git found in that session's checkout, or `null` for a session whose
+   * directory this server did not read -- which is most of them, and is the
+   * shape a client has to draw for a store that is not a repository or a
+   * machine with no git.
+   */
+  uncommitted: SessionDescriptor['uncommitted'] = null,
   usage?: SessionDescriptor['usage'],
 ): SessionDescriptor {
   return {
@@ -240,6 +247,7 @@ function descriptor(
     updatedAt,
     cwd,
     title,
+    uncommitted,
     // Omitted rather than nulled when a session has no counts, so the captured
     // frames carry both shapes the client has to render: a session with a
     // number on it and a session with none.
@@ -516,6 +524,19 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   START - 12 * MINUTE,
                   '/Users/robert/code/agentplex',
                   'fix-auth-refresh',
+                  // One session with a working tree somebody read, so the
+                  // client's store has a fixture for the diff panel as well as
+                  // for the far commoner case beneath it.
+                  {
+                    files: 3,
+                    added: 42,
+                    removed: 5,
+                    entries: [
+                      { path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+                      { path: 'src/auth/refresh.test.ts', added: 22, removed: 0 },
+                      { path: 'src/auth/index.ts', added: 2, removed: 1 },
+                    ],
+                  },
                   CAPTURED_USAGE,
                 ),
                 descriptor(
@@ -645,6 +666,19 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   START - 12 * MINUTE,
                   '/Users/robert/code/agentplex',
                   'fix-auth-refresh',
+                  // One session with a working tree somebody read, so the
+                  // client's store has a fixture for the diff panel as well as
+                  // for the far commoner case beneath it.
+                  {
+                    files: 3,
+                    added: 42,
+                    removed: 5,
+                    entries: [
+                      { path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+                      { path: 'src/auth/refresh.test.ts', added: 22, removed: 0 },
+                      { path: 'src/auth/index.ts', added: 2, removed: 1 },
+                    ],
+                  },
                   CAPTURED_USAGE,
                 ),
                 descriptor(

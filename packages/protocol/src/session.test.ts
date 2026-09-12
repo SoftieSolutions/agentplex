@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { sessionDescriptorSchema, sessionStatusSchema, sessionUsageSchema } from './session.js';
+import {
+  sessionDescriptorSchema,
+  sessionStatusSchema,
+  sessionUsageSchema,
+  UNCOMMITTED_FILES_LISTED,
+  uncommittedDiffSchema,
+} from './session.js';
 
 const descriptor = {
   storeId: 'store-a',
@@ -9,6 +15,16 @@ const descriptor = {
   updatedAt: 1_756_000_000_000,
   cwd: '/Users/dev/Code/agentplex',
   title: 'Docker compose without hub',
+  uncommitted: {
+    files: 3,
+    added: 42,
+    removed: 5,
+    entries: [
+      { path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+      { path: 'src/auth/refresh.test.ts', added: 22, removed: 0 },
+      { path: 'src/auth/index.ts', added: 2, removed: 1 },
+    ],
+  },
 };
 
 describe('sessionDescriptorSchema', () => {
@@ -157,5 +173,87 @@ describe('sessionStatusSchema', () => {
     expect(sessionStatusSchema.safeParse('awaiting-input').success).toBe(true);
     expect(sessionStatusSchema.safeParse('working').success).toBe(true);
     expect(sessionStatusSchema.safeParse('idle').success).toBe(true);
+  });
+});
+
+describe('uncommittedDiffSchema', () => {
+  const diff = {
+    files: 1,
+    added: 18,
+    removed: 4,
+    entries: [{ path: 'src/auth/refresh.ts', added: 18, removed: 4 }],
+  };
+
+  it('is the uncommitted sense of "changed" and says so by being the only one', () => {
+    // The field a client reads is named for what it is. There is no branch
+    // diffstat beside it and no flag that would turn this into one: "changed"
+    // means two things about a repository, and a schema that could carry either
+    // under one name is a screen where two numbers that disagree are both
+    // labelled the same.
+    expect(uncommittedDiffSchema.safeParse(diff).success).toBe(true);
+    expect(Object.keys(uncommittedDiffSchema.shape).sort()).toEqual([
+      'added',
+      'entries',
+      'files',
+      'removed',
+    ]);
+  });
+
+  it('takes null counts for a file git would not count, but never a negative one', () => {
+    // A binary. `null` is git declining; `0` would be git having counted and
+    // found nothing, which is a different claim about the same file.
+    expect(
+      uncommittedDiffSchema.safeParse({
+        ...diff,
+        entries: [{ path: 'assets/logo.png', added: null, removed: null }],
+      }).success,
+    ).toBe(true);
+
+    expect(
+      uncommittedDiffSchema.safeParse({
+        ...diff,
+        entries: [{ path: 'src/a.ts', added: -1, removed: 0 }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('takes a null path, so a name that cannot be represented costs its name only', () => {
+    expect(
+      uncommittedDiffSchema.safeParse({
+        ...diff,
+        entries: [{ path: null, added: 2, removed: 0 }],
+      }).success,
+    ).toBe(true);
+
+    // Nullable, not empty. A blank name would be drawn as a file called
+    // nothing rather than as a file whose name this cannot show.
+    expect(
+      uncommittedDiffSchema.safeParse({
+        ...diff,
+        entries: [{ path: '', added: 2, removed: 0 }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('refuses a list longer than the bound, because the totals carry the whole count', () => {
+    const row = { path: 'src/a.ts', added: 1, removed: 0 };
+    const entries = Array.from({ length: UNCOMMITTED_FILES_LISTED + 1 }, () => row);
+
+    expect(uncommittedDiffSchema.safeParse({ ...diff, entries }).success).toBe(false);
+    expect(
+      uncommittedDiffSchema.safeParse({ ...diff, entries: entries.slice(0, -1) }).success,
+    ).toBe(true);
+  });
+
+  it('is nullable on a descriptor, because "nobody looked" is not "nothing changed"', () => {
+    expect(sessionDescriptorSchema.safeParse({ ...descriptor, uncommitted: null }).success).toBe(
+      true,
+    );
+
+    // Nullable and not optional, for the reason `cwd` is: a field nobody filled
+    // in and a server that looked and could not read are different facts, and
+    // only one of them is safe to draw as an empty cell.
+    const { uncommitted: _uncommitted, ...withoutDiff } = descriptor;
+    expect(sessionDescriptorSchema.safeParse(withoutDiff).success).toBe(false);
   });
 });

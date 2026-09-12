@@ -34,6 +34,7 @@ import { ensureServerIdentity } from '@agentplex/providers';
 import { createHubAudience } from './hub-audience.js';
 import { sweepGrants } from './grant-sweep.js';
 import { createSessionController } from './session-control.js';
+import type { UncommittedDiffs } from './uncommitted-diffs.js';
 import type { TerminalManager } from './terminal-manager.js';
 
 /**
@@ -143,6 +144,16 @@ export interface SessionServerDependencies {
    * `main` may read this process's environment.
    */
   readonly operations: OperationRegistry;
+  /**
+   * How a store scan learns what is uncommitted in the directories it read.
+   *
+   * Beside `operations` and not inside it, because they are different things:
+   * the registry is the closed list of what a name may reach, and this is one
+   * typed caller that already knows which operation it wants. Both are built in
+   * `main` over the same runner, so what a child inherits is still decided in
+   * exactly one place.
+   */
+  readonly diffs: UncommittedDiffs;
   readonly timers: Timers;
   /**
    * How this server announces itself on the local network, or `null` for one
@@ -200,6 +211,7 @@ export async function startSessionServer(
     terminals,
     drainMs,
     operations,
+    diffs,
     timers,
     announce,
   } = dependencies;
@@ -311,7 +323,14 @@ export async function startSessionServer(
   // The one thing here that turns a store id and a provider name into a running
   // agent. It is built once and outlives every hub connection: a socket comes
   // and goes, and the sessions this server started go on running across both.
-  const sessions = createSessionController({ stores, providers, terminals, clock, logger });
+  const sessions = createSessionController({
+    stores,
+    providers,
+    terminals,
+    diffs,
+    clock,
+    logger,
+  });
 
   // One pass over every mounted store, so that a misconfigured store path is
   // discovered at boot rather than the first time somebody opens the client.

@@ -1,3 +1,4 @@
+import { gitDiffOperation } from './git-diff.js';
 import { gitStatusOperation } from './git-status.js';
 import {
   runOperation,
@@ -35,7 +36,7 @@ import {
 /**
  * Every operation this build can run.
  *
- * Two today, and both earn their place by being needed rather than by
+ * Three today, and each earns its place by being needed rather than by
  * demonstrating the shape:
  *
  * - `process.start-time` dates a pid where `/proc` does not exist. It is on the
@@ -44,12 +45,17 @@ import {
  *   `execFile` call that used to sit in `node-process-probe`.
  * - `git.status` answers the first question anyone asks about a session's
  *   working directory. The hub cannot: the directory is on the server's disk.
+ * - `git.diff` answers the next one, which is how much is uncommitted and in
+ *   which files. It is on the store report path: every scan attaches what it
+ *   read to the descriptors it is about to send, so the number a client draws
+ *   is the number this machine read off its own disk.
  *
  * Nothing speculative is here. An operation with no caller is an argv nobody
  * has run, and the registry's value is that its contents are exactly what this
  * build can do.
  */
 const OPERATIONS: readonly RegisteredOperation[] = [
+  register(gitDiffOperation),
   register(gitStatusOperation),
   register(processStartTimeOperation),
 ];

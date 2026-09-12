@@ -26,6 +26,7 @@ import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
 import { nodeDataRoot } from './node-data-root.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
+import { createGitUncommittedDiffs } from './uncommitted-diffs.js';
 import { refuseWithoutTerminals } from './terminal-support.js';
 import { createTerminalManager } from './terminal-manager.js';
 
@@ -154,6 +155,12 @@ async function main(): Promise<void> {
       // not called here: a serving process has no installer to be asked for
       // over a socket, rather than one it declines to use.
       operations: createOperationRegistry(processRunner),
+      // The one typed caller of an operation, over the same runner: what git
+      // says is uncommitted in a session's working directory, attached to
+      // every store report. It names `git.diff` at compile time rather than
+      // by string, so it can reach no operation the registry does not have and
+      // no name it does not know.
+      diffs: createGitUncommittedDiffs({ runner: processRunner }),
       // The only place a real pty is opened. It is handed the same composed
       // environment as the one-shot runner, so a provider binary resolves the
       // same way whether it is being probed or driven.
