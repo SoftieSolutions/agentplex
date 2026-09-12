@@ -24,7 +24,7 @@ import {
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
-import { serveHubConnection } from '../../../apps/server/src/hub-connection.js';
+import { serveServerEnd } from './server-end.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
@@ -180,7 +180,7 @@ function serveMachine(machine: Machine): DialResult {
   const stores = [storeOn('/volumes/work')];
   const { hubEnd, serverEnd } = createSocketPair();
 
-  serveHubConnection(serverEnd, {
+  serveServerEnd(serverEnd, {
     identity: {
       serverId: serverIdSchema.parse(`server-${machine.label}`),
       token: `tok-${machine.label}`,

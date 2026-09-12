@@ -15,6 +15,12 @@ export type { FakeProviderAdapter, FakeProviderAdapterOptions } from './fake-pro
 export { createFakeProviderFiles } from './fake-provider-files.js';
 export type { FakeProviderFilesOptions } from './fake-provider-files.js';
 
+export { createFakeGrantFiles } from './fake-grant-files.js';
+export type { FakeGrantFiles, FakeGrantFilesOptions } from './fake-grant-files.js';
+
+export { createFakeGrantAuthority } from './fake-grant-authority.js';
+export type { FakeGrantAuthority, FakeGrantAuthorityOptions } from './fake-grant-authority.js';
+
 export { createFakeStoreFiles } from './fake-store-files.js';
 export type { FakeStoreFiles, FakeStoreFilesOptions } from './fake-store-files.js';
 
