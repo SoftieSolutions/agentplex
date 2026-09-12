@@ -87,6 +87,7 @@ export { nodeStoreFileSystem } from './node-store-files.js';
 
 export { ensureServerIdentity, readServerIdentity } from './server-identity.js';
 export type {
+  ConfiguredToken,
   ServerIdentity,
   ServerIdentityDependencies,
   ServerIdentityResult,

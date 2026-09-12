@@ -8,6 +8,16 @@ const PATH = '/etc/agentplex/server.json';
 const ids = { newId: () => 'server-under-test' };
 const tokens = { newToken: () => 'token-under-test' };
 
+/**
+ * What an orchestrator would inject. Long enough to be a real one, and nothing
+ * `tokens` above would ever produce, so a test that finds it found the
+ * configured one.
+ */
+const CONFIGURED = {
+  token: 'a-token-the-deployment-already-held-0123',
+  setting: 'AGENTPLEX_SERVER_TOKEN',
+};
+
 function dependencies(files = createFakeStoreFiles()) {
   return { files, ids, tokens };
 }
@@ -120,6 +130,129 @@ describe('ensureServerIdentity', () => {
       identity: { serverId: 'winner', token: 'w' },
       minted: false,
     });
+  });
+});
+
+describe('ensureServerIdentity with a token the deployment set', () => {
+  it('takes the configured token rather than minting one nobody knows', async () => {
+    // The case the default cannot serve: a container has no disk that outlives
+    // it and CI has nobody to read a file off it, so a minted token is a
+    // credential that exists only where nothing can reach it.
+    const result = await ensureServerIdentity(PATH, {
+      ...dependencies(),
+      configuredToken: CONFIGURED,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      identity: { serverId: 'server-under-test', token: CONFIGURED.token },
+      minted: true,
+    });
+  });
+
+  it('writes it to the identity file exactly as a minted one, so nothing downstream changes', async () => {
+    // The hub beside a `--role=both` server reads its token off this file, and
+    // the grant AGX-204 will migrate this record into is this record. A
+    // configured token is a token source and not a second mechanism.
+    const files = createFakeStoreFiles();
+
+    await ensureServerIdentity(PATH, { ...dependencies(files), configuredToken: CONFIGURED });
+
+    expect(JSON.parse(files.contents.get(PATH) ?? '')).toEqual({
+      serverId: 'server-under-test',
+      token: CONFIGURED.token,
+    });
+  });
+
+  it('refuses to start when the file and the setting name different tokens', async () => {
+    // Neither direction of resolving it is safe. Preferring the file leaves a
+    // server answering to a credential the operator believes they replaced;
+    // preferring the setting rewrites an identity a pairing was completed
+    // against.
+    const files = createFakeStoreFiles({
+      files: { [PATH]: '{"serverId":"server-under-test","token":"the-token-on-the-disk"}' },
+    });
+
+    const result = await ensureServerIdentity(PATH, {
+      ...dependencies(files),
+      configuredToken: CONFIGURED,
+    });
+
+    expect(result).toMatchObject({ ok: false, path: PATH });
+  });
+
+  it('names the file and the setting in that refusal, and neither token', async () => {
+    const files = createFakeStoreFiles({
+      files: { [PATH]: '{"serverId":"server-under-test","token":"the-token-on-the-disk"}' },
+    });
+
+    const result = await ensureServerIdentity(PATH, {
+      ...dependencies(files),
+      configuredToken: CONFIGURED,
+    });
+
+    const problem = result.ok ? '' : result.problem;
+    expect(problem).toContain(PATH);
+    expect(problem).toContain(CONFIGURED.setting);
+    expect(problem).not.toContain(CONFIGURED.token);
+    expect(problem).not.toContain('the-token-on-the-disk');
+  });
+
+  it('leaves the disagreeing file exactly as it found it', async () => {
+    const contents = '{"serverId":"server-under-test","token":"the-token-on-the-disk"}';
+    const files = createFakeStoreFiles({ files: { [PATH]: contents } });
+
+    await ensureServerIdentity(PATH, { ...dependencies(files), configuredToken: CONFIGURED });
+
+    expect(files.contents.get(PATH)).toBe(contents);
+    expect(files.creates).toEqual([]);
+  });
+
+  it('takes the file when it agrees, and says nothing was minted', async () => {
+    const files = createFakeStoreFiles({
+      files: { [PATH]: JSON.stringify({ serverId: 's1', token: CONFIGURED.token }) },
+    });
+
+    const result = await ensureServerIdentity(PATH, {
+      ...dependencies(files),
+      configuredToken: CONFIGURED,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      identity: { serverId: 's1', token: CONFIGURED.token },
+      minted: false,
+    });
+  });
+
+  it('refuses when the copy that won the create race holds another token', async () => {
+    // The same disagreement, arriving by the one path that reaches an existing
+    // file without having read it first.
+    let winnerHasMinted = false;
+    const files = createFakeStoreFiles({
+      beforeCreate: async (path) => {
+        if (winnerHasMinted) return;
+        winnerHasMinted = true;
+        await files.createFile(path, '{"serverId":"winner","token":"the-winners-token"}');
+      },
+    });
+
+    const result = await ensureServerIdentity(PATH, {
+      ...dependencies(files),
+      configuredToken: CONFIGURED,
+    });
+
+    expect(result).toMatchObject({ ok: false, path: PATH });
+  });
+
+  it('refuses an empty configured token rather than writing an identity nothing can present', async () => {
+    const result = await ensureServerIdentity(PATH, {
+      ...dependencies(),
+      configuredToken: { ...CONFIGURED, token: '' },
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok ? '' : result.problem).toContain(CONFIGURED.setting);
   });
 });
 

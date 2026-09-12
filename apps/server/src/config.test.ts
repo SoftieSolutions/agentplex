@@ -73,9 +73,9 @@ describe('loadServerConfig ports', () => {
 describe('loadServerConfig failure reporting', () => {
   it('reports every problem at once rather than one env var per restart', () => {
     const problems = expectProblems(
-      load(['--server-port=abc', '--log-level=loud', '--announce=maybe']),
+      load(['--server-port=abc', '--log-level=loud', '--announce=maybe', '--server-token=short']),
     );
-    expect(problems).toHaveLength(3);
+    expect(problems).toHaveLength(4);
   });
 
   it('refuses an unknown flag rather than silently ignoring a typo', () => {
@@ -511,5 +511,58 @@ describe('loadServerConfig host', () => {
   it('is listed in the usage message like every other setting', () => {
     expect(serverUsage()).toContain('--host');
     expect(serverUsage()).toContain('AGENTPLEX_HOST');
+  });
+});
+
+describe('loadServerConfig server token', () => {
+  /**
+   * Longer than the floor, and nothing a minter would produce, so a test that
+   * finds this string found the configured token.
+   */
+  const TOKEN = 'a-token-the-deployment-already-held-0123';
+
+  it('mints nothing when the deployment set none, which is every machine with a disk', () => {
+    expect(load([])).toMatchObject({ ok: true, config: { serverToken: undefined } });
+  });
+
+  it('takes a token the orchestrator injected, for a machine whose disk does not outlive it', () => {
+    const result = load([], { AGENTPLEX_SERVER_TOKEN: TOKEN });
+    expect(result).toMatchObject({ ok: true, config: { serverToken: { token: TOKEN } } });
+  });
+
+  it('carries the setting name with the value, so a refusal can name what to change', () => {
+    // The module that refuses a disagreement lives in a package that does not
+    // own this variable's name, and a refusal it could not name would send an
+    // operator looking.
+    const result = load([], { AGENTPLEX_SERVER_TOKEN: TOKEN });
+    expect(result).toMatchObject({
+      ok: true,
+      config: { serverToken: { setting: 'AGENTPLEX_SERVER_TOKEN' } },
+    });
+  });
+
+  it('takes the flag over the environment, like every other setting', () => {
+    const result = load([`--server-token=${TOKEN}`], { AGENTPLEX_SERVER_TOKEN: 'inherited-one' });
+    expect(result).toMatchObject({ ok: true, config: { serverToken: { token: TOKEN } } });
+  });
+
+  it('refuses one short enough to guess rather than taking it as given', () => {
+    // A minted token has 43 characters of CSPRNG behind it. A supplied one is
+    // whatever somebody typed, and the failure is a server anybody on the
+    // network can pair with.
+    const problems = expectProblems(load([], { AGENTPLEX_SERVER_TOKEN: 'letmein' }));
+    expect(problems[0]).toContain('--server-token');
+  });
+
+  it('is a setting nobody set when the env var is blank, not an empty token', () => {
+    // What an env file with nothing after the `=` means, decided the same way
+    // for this as for every other setting.
+    const result = load([], { AGENTPLEX_SERVER_TOKEN: '   ' });
+    expect(result).toMatchObject({ ok: true, config: { serverToken: undefined } });
+  });
+
+  it('is listed in the usage message like every other setting', () => {
+    expect(serverUsage()).toContain('--server-token');
+    expect(serverUsage()).toContain('AGENTPLEX_SERVER_TOKEN');
   });
 });

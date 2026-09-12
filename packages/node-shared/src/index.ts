@@ -10,7 +10,7 @@ export type { LogFields, LogLevel, LogRecord, LogSink, Logger } from './logger.j
 export { systemTimers } from './timers.js';
 export type { Timers } from './timers.js';
 
-export { randomTokenMinter, tokenMatches } from './tokens.js';
+export { MIN_TOKEN_LENGTH, randomTokenMinter, tokenMatches } from './tokens.js';
 export type { TokenMinter } from './tokens.js';
 
 export { HTTP_TIMEOUTS, sendBytes, sendJson, startHttpServer } from './http.js';
