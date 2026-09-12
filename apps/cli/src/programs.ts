@@ -83,12 +83,12 @@ export const PROGRAMS: Readonly<Record<string, Program>> = {
   },
   start: {
     kind: 'command',
-    load: () => import('./commands/units/start-main.js'),
+    load: () => import('./commands/start/main.js'),
     summary: "enable and start this machine's units",
   },
   stop: {
     kind: 'command',
-    load: () => import('./commands/units/stop-main.js'),
+    load: () => import('./commands/stop/main.js'),
     summary: 'stop them and take them off boot',
   },
   status: {
