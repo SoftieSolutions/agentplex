@@ -234,6 +234,35 @@ async function main(): Promise<void> {
     process.on(signal, listener);
     listeners.push(() => void process.off(signal, listener));
   }
+
+  // SIGHUP is the operator saying the machine changed underneath this service:
+  // they installed a coding agent, or logged one in, and want the fleet to know
+  // without every session on this box being dropped to publish it. The unit
+  // carries `ExecReload=/bin/kill -HUP $MAINPID`, so `systemctl reload
+  // agentplex-server` is the gesture and this is the other end of it.
+  //
+  // A person and never a clock. `server.ts` argues at length that a probe must
+  // not ride a timer or a session start, and this does not reopen that: two
+  // child processes per provider are spent only when somebody who can signal
+  // this process asked for them, which is somebody who could already restart
+  // it. There is nothing here for a hub, a client or a socket to reach.
+  //
+  // It is also what a SIGHUP now means to this process, and that is a real
+  // change with a real cost. Node kills a process on a SIGHUP nothing is
+  // listening for, so until this line a server started in a terminal died when
+  // the terminal closed. Under the unit that signal only ever arrives because a
+  // person sent it -- a service has no controlling terminal -- but in a
+  // checkout it means `pnpm -C apps/server start` now outlives the window it
+  // was started in, and is stopped with Ctrl-C or a SIGTERM rather than by
+  // closing the tab.
+  process.on('SIGHUP', () => {
+    logger.info('re-reading what this machine can run', { signal: 'SIGHUP' });
+    // Not awaited and not caught: this returns after two probes with timeouts
+    // on them, a signal handler is no place to wait, and the call answers
+    // rather than rejects -- a preflight that failed leaves the reading this
+    // server already had and says so on its own log line.
+    void runtime.refreshReadiness();
+  });
 }
 
 await main();

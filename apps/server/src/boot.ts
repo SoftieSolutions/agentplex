@@ -13,6 +13,7 @@ import type { MachineLoadReader } from './machine-load.js';
 import type { WorkingTree } from './working-tree.js';
 import type { TerminalManager } from './terminal-manager.js';
 import type { Clock, IdGenerator, Logger, Timers, TokenMinter } from '@agentplex/node-shared';
+import type { ProviderReadiness } from '@agentplex/protocol';
 
 /**
  * Composition of the server from a configuration.
@@ -140,6 +141,15 @@ export interface Runtime {
    * while the first call is still running and there is nothing to hand it to.
    */
   stopWaiting(): void;
+  /**
+   * A third signal, and the only one that is not about stopping: re-read what
+   * this machine's providers are, and tell the hubs if the answer moved.
+   *
+   * Here beside the other two because it arrives the same way -- something
+   * outside this process asking for something while it runs -- and because
+   * `main` is where a signal is turned into a call. It never rejects.
+   */
+  refreshReadiness(): Promise<readonly ProviderReadiness[]>;
 }
 
 export async function startRuntime(
@@ -211,6 +221,10 @@ export async function startRuntime(
 
     stopWaiting() {
       server.stopWaiting();
+    },
+
+    refreshReadiness() {
+      return server.refreshReadiness();
     },
 
     stop() {
