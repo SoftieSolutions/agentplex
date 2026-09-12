@@ -26,6 +26,7 @@ function descriptor(overrides: Partial<SessionDescriptor> = {}): SessionDescript
     status: 'idle',
     updatedAt: START,
     cwd: '/srv/work',
+    branch: null,
     title: null,
     uncommitted: null,
     ...overrides,

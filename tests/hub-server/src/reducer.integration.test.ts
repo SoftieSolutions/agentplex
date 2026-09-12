@@ -44,6 +44,7 @@ import {
   type StoreView,
 } from '../../../apps/hub/src/state/reducer.js';
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**
  * The reducer against the real supervisor, over real handshakes.
@@ -101,6 +102,7 @@ const dialer: SocketDialer = {
     serveServerEnd(serverEnd, {
       sessions: createFakeSessionController(),
       terminals: createFakeTerminals().terminals,
+      machineLoad: createFakeMachineLoadReader(),
       identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
       stores: machine.stores,
       providers: [readyProvider()],
@@ -157,6 +159,7 @@ function session(
     status,
     updatedAt: START,
     cwd: '/volumes/claude/work',
+    branch: null,
     title: null,
     uncommitted: null,
   };

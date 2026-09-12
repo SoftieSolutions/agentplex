@@ -64,6 +64,95 @@ export const staleReasonSchema = z.enum([
 ]);
 export type StaleReason = z.infer<typeof staleReasonSchema>;
 
+/**
+ * A busy share, and the interval it is a share of.
+ *
+ * The two fields are one object rather than two nullable fields beside each
+ * other because they are one fact. A percentage is a rate, and a rate without
+ * its window is a number nobody can check: "31%" could be the last second or
+ * the last hour, and those are different claims about a machine. Split, a
+ * reading with a percentage and no window would be representable, which is
+ * precisely the over-claim this type exists to prevent.
+ */
+export const cpuSampleSchema = z.object({
+  /** Non-idle time as a share of all cpus over `windowMs`, 0 to 100. */
+  percent: z.number().min(0).max(100),
+  /** How wide the interval was. Never zero: a rate over no time is not a rate. */
+  windowMs: z.int().positive(),
+});
+export type CpuSample = z.infer<typeof cpuSampleSchema>;
+
+/**
+ * What a machine is doing to itself, as of the last time it was asked.
+ *
+ * The panel this feeds draws four facts about one machine together -- which
+ * machine, how far away it is, which directory, which branch -- and they are
+ * not equally knowable. A panel that showed all four with one confidence would
+ * claim more than anybody knows the moment a server goes quiet, so where each
+ * one comes from is the design rather than a detail of it:
+ *
+ * - The working directory and the branch are per-session facts about a checkout
+ *   on one disk. They ride the session descriptor, read by the server that has
+ *   the disk, and they change rarely.
+ * - Latency is not on this type, and it is not a server's to report. It is a
+ *   property of a connection, and only the end that dialled can time one. A
+ *   server putting a millisecond figure on the wire would be reporting a number
+ *   it cannot observe -- the round trip it would have to be measured over is
+ *   the very frame carrying it. The hub times its own `ping` against the `pong`
+ *   that answers, which is the measurement that exists, and it belongs to the
+ *   hub for the same reason `connectedSince` does.
+ * - This is the rest: what this machine's cpus are doing. It is the one fact
+ *   here that goes stale in seconds.
+ *
+ * There is no timestamp on it, for the reason `store-report` carries none and
+ * `server-draining` sends a duration rather than a deadline: two machines'
+ * clocks disagree, and a hub comparing readings dated by the machines that made
+ * them is comparing different times. The hub stamps what it receives with its
+ * own clock, so how long ago a reading arrived is already the hub's to say, and
+ * a date here could only be a second copy of that free to contradict it.
+ *
+ * What a receipt time cannot recover, and what is therefore on this type, is
+ * the width of the interval the reading summarises. That is the age a reading
+ * carries about itself: not when it was taken, which the receiver knows better,
+ * but what span it is true of, which only the machine that took it knows.
+ */
+export const machineLoadSchema = z.object({
+  /**
+   * How many cpus the share below is averaged over, and the divisor that makes
+   * a load average mean anything: 4 is a busy pair of cores and an idle
+   * sixteen.
+   */
+  cpuCount: z.int().positive(),
+  /**
+   * The busy share since this machine was last asked, or `null` when there is
+   * no interval to have measured one over.
+   *
+   * `null` is the answer before there are two counter readings to difference,
+   * and whenever they cannot be differenced -- a cpu that came or went, a clock
+   * that stepped backwards, two questions inside one tick of the OS's own
+   * accounting. Zero would say the machine was idle, and every one of those
+   * cases says only that nobody can tell.
+   */
+  cpu: cpuSampleSchema.nullable(),
+  /**
+   * The 1, 5 and 15 minute load averages, or `null` on a platform that keeps
+   * none.
+   *
+   * Beside the percentage rather than instead of it, because it is the reading
+   * that needs no window: it is there on the first answer, where `cpu` is still
+   * `null`, so a machine that has only just connected still says something true
+   * about itself.
+   *
+   * Whether a platform has one is decided by the platform and never by the
+   * value. `os.loadavg()` answers `[0, 0, 0]` where the counter does not exist,
+   * and an idle machine answers nearly that, so a reader inferring absence from
+   * zeros would call a quiet machine unsupported and an unsupported platform
+   * quiet.
+   */
+  loadAverage: z.tuple([z.number(), z.number(), z.number()]).nullable(),
+});
+export type MachineLoad = z.infer<typeof machineLoadSchema>;
+
 /** One paired server's connectivity, as the hub publishes it. */
 export const serverViewSchema = z.object({
   /** The stable key for this row, from the moment the pairing form was submitted. */

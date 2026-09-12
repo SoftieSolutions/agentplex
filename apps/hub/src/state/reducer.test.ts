@@ -68,6 +68,7 @@ function session(id: string, overrides: Partial<SessionDescriptor> = {}): Sessio
     status: 'idle',
     updatedAt: START,
     cwd: '/srv/work',
+    branch: null,
     title: null,
     uncommitted: null,
     ...overrides,

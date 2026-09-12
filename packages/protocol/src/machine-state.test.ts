@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  machineLoadSchema,
   machineStateSchema,
   serverCandidateSchema,
   serverViewSchema,
@@ -50,6 +51,7 @@ const A_SESSION_ROW = {
     status: 'idle',
     updatedAt: 900,
     cwd: '/srv/work',
+    branch: 'fix/auth-refresh',
     title: null,
     uncommitted: { files: 1, added: 18, removed: 4, entries: [] },
   },
@@ -302,5 +304,79 @@ describe('machineStateSchema', () => {
       machineStateSchema.safeParse({ version: -1, stores: [], servers: [], candidates: [] })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('machineLoadSchema', () => {
+  const LOAD = {
+    cpuCount: 14,
+    cpu: { percent: 31.4, windowMs: 20_000 },
+    loadAverage: [1.49951171875, 3.03271484375, 3.66796875],
+  };
+
+  it('accepts a share with the window it is a share of', () => {
+    expect(machineLoadSchema.safeParse(LOAD).success).toBe(true);
+  });
+
+  it('accepts a machine that has no share to report yet', () => {
+    // The first answer after a connection opens. `null` and not zero: zero is a
+    // claim that the machine was idle, and this is a machine nobody has
+    // measured an interval on yet.
+    expect(machineLoadSchema.safeParse({ ...LOAD, cpu: null }).success).toBe(true);
+  });
+
+  it('accepts a platform that keeps no load average', () => {
+    expect(machineLoadSchema.safeParse({ ...LOAD, loadAverage: null }).success).toBe(true);
+  });
+
+  it('accepts a load average of zeros, which is an idle machine and not a missing one', () => {
+    // The value says nothing about whether the platform keeps the counter, and
+    // this is where that is settled: a reading of zeros is a reading.
+    expect(machineLoadSchema.safeParse({ ...LOAD, loadAverage: [0, 0, 0] }).success).toBe(true);
+  });
+
+  it('has no shape in which a share arrives without its window', () => {
+    // The whole reason the two are one object. A percentage with no interval
+    // behind it is a number nobody can check, and there must be no way to send
+    // one.
+    expect(machineLoadSchema.safeParse({ ...LOAD, cpu: { percent: 31.4 } }).success).toBe(false);
+    expect(machineLoadSchema.safeParse({ ...LOAD, cpu: { windowMs: 20_000 } }).success).toBe(false);
+  });
+
+  it('rejects a window of no time at all', () => {
+    expect(
+      machineLoadSchema.safeParse({ ...LOAD, cpu: { percent: 31.4, windowMs: 0 } }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a share outside the range a share can take', () => {
+    for (const percent of [-1, 100.1]) {
+      expect(
+        machineLoadSchema.safeParse({ ...LOAD, cpu: { percent, windowMs: 20_000 } }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects a machine with no cpus, which is a machine that could not answer', () => {
+    // A reading with `cpuCount: 0` would be a machine reporting on nothing. The
+    // server sends no load at all in that case, and this is what makes the
+    // other shape unrepresentable.
+    expect(machineLoadSchema.safeParse({ ...LOAD, cpuCount: 0 }).success).toBe(false);
+  });
+
+  it('rejects a load average that is not three numbers', () => {
+    for (const average of [[1], [1, 2], [1, 2, 3, 4], ['1', '2', '3']]) {
+      expect(machineLoadSchema.safeParse({ ...LOAD, loadAverage: average }).success).toBe(false);
+    }
+  });
+
+  it('carries no timestamp, because the receiver dates it', () => {
+    // The rule `store-report` and `server-draining` follow, restated here: two
+    // machines' clocks disagree, so a reading says how wide its window was and
+    // never when it was taken.
+    expect(machineLoadSchema.safeParse({ ...LOAD, at: 1_700_000_000_000 })).toMatchObject({
+      success: true,
+      data: LOAD,
+    });
   });
 });
