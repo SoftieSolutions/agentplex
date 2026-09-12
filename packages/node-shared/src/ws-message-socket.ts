@@ -81,6 +81,15 @@ export function wrapWebSocket(socket: WebSocket): MessageSocket {
       socket.send(text);
     },
 
+    get bufferedBytes(): number {
+      // What `ws` has queued in its own sender plus what the kernel socket has
+      // not written, which together are everything this process is holding on
+      // behalf of a peer that is not keeping up. Read rather than tracked here:
+      // a count kept on this side would have to guess when a frame left, and a
+      // guess is what turns a cap into a leak.
+      return socket.bufferedAmount;
+    },
+
     close(reason: SocketClosure): void {
       if (ended) return;
       ended = true;

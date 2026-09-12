@@ -20,6 +20,27 @@
 export interface MessageSocket {
   /** Fire and forget. A socket that has closed drops what it is handed. */
   send(text: string): void;
+  /**
+   * Bytes handed to `send` that the transport has not written out yet.
+   *
+   * Here because `send` cannot fail and cannot block, which is the right shape
+   * for every frame on this protocol but one. A reply, a report or a refusal is
+   * small and is produced by something a peer asked for, so a peer that reads
+   * slowly slows itself down. Terminal output is neither: it is produced by a
+   * child process at whatever rate that process prints, and nothing about a
+   * slow reader reaches the thing writing. Without a number here the only
+   * available behaviour is to queue it all, and a websocket queue is memory --
+   * so a session running `yes` kills the machine holding every other session.
+   *
+   * A reading rather than a signal, deliberately. A drain event says a socket
+   * has caught up and says nothing at the moment a caller is deciding whether
+   * to add to the backlog, which is the moment that matters; a number can be
+   * read against a cap on the spot, by a caller that then drops rather than
+   * queues. It is also the one thing a fake cannot honestly invent -- see
+   * `fake-message-socket.ts`, where a peer that never reads is a socket whose
+   * buffer never empties.
+   */
+  readonly bufferedBytes: number;
   /** Closes from this end. Closing twice is allowed and does nothing the second time. */
   close(closure: SocketClosure): void;
   /** Subscribing twice delivers to both; nothing that already arrived is replayed. */
