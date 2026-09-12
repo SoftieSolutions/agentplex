@@ -26,6 +26,7 @@ import {
 } from '../../../apps/hub/src/pairing/server-handshake.js';
 import { serverAddressSchema } from '../../../apps/hub/src/pairing/server-address.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
 
 /**
  * The handshake over a real socket, against the real server role.
@@ -90,6 +91,8 @@ async function startServer(storePaths: readonly string[] = []) {
     drainMs: 0,
     operations: createOperationRegistry(createFakeProcessRunner()),
     machineLoad: createFakeMachineLoadReader(),
+    dataRoot: '/var/lib/agentplex',
+    projectFiles: createFakeProjectFiles(),
     timers: systemTimers,
     // This suite opens real sockets on loopback on purpose, and a broadcast is
     // the one thing it will not open: the handshake is what is under test, and

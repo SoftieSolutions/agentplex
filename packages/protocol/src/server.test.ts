@@ -9,6 +9,7 @@ import {
 import { hubIdSchema, serverIdSchema, sessionIdSchema, storeIdSchema } from './identity.js';
 import { parseTextFrame } from './parse.js';
 import { encodeTerminalChunk } from './terminal.js';
+import { docNameSchema } from './doc.js';
 
 const HUB_ID = hubIdSchema.parse('hub-1');
 
@@ -113,6 +114,112 @@ describe('parseHubToServerFrame on the session instructions', () => {
     expect(named.ok).toBe(true);
     if (!named.ok) return;
     expect(named.value).not.toHaveProperty('pid');
+  });
+});
+
+describe('parseHubToServerFrame on the document frames', () => {
+  const A_WRITE = {
+    type: 'doc-write',
+    id: 2,
+    directory: '/Users/dev/Code/agentplex',
+    name: 'plan.md',
+    content: '# Plan\n',
+  };
+
+  it('accepts a write naming a project, a document and its whole content', () => {
+    expect(parseHubToServerFrame(A_WRITE).ok).toBe(true);
+    expect(parseHubToServerFrame({ ...A_WRITE, content: '' }).ok).toBe(true);
+  });
+
+  it('accepts a read and a list, each naming the project by its working tree', () => {
+    expect(
+      parseHubToServerFrame({ type: 'doc-read', id: 3, directory: '/srv/work', name: 'plan.md' })
+        .ok,
+    ).toBe(true);
+    expect(parseHubToServerFrame({ type: 'doc-list', id: 4, directory: '/srv/work' }).ok).toBe(
+      true,
+    );
+  });
+
+  // The name is the one string on this direction that is joined onto a path
+  // on the server's disk, and the parser is what keeps it inside the folder.
+  it.each([
+    ['a separator', 'notes/plan.md'],
+    ['a traversal', '../plan.md'],
+    ['a leading dot', '.plan.md'],
+    ['an extension off the list', 'plan.sh'],
+  ])('refuses a document name with %s, on every frame that carries one', (_why, name) => {
+    expect(parseHubToServerFrame({ ...A_WRITE, name }).ok).toBe(false);
+    expect(
+      parseHubToServerFrame({ type: 'doc-read', id: 3, directory: '/srv/work', name }).ok,
+    ).toBe(false);
+  });
+
+  it.each([
+    ['relative', 'Code/agentplex'],
+    ['a parent reference', '../agentplex'],
+    ['empty', ''],
+  ])('refuses a directory that is %s, on every frame that carries one', (_why, directory) => {
+    expect(parseHubToServerFrame({ ...A_WRITE, directory }).ok).toBe(false);
+    expect(parseHubToServerFrame({ type: 'doc-read', id: 3, directory, name: 'plan.md' }).ok).toBe(
+      false,
+    );
+    expect(parseHubToServerFrame({ type: 'doc-list', id: 4, directory }).ok).toBe(false);
+  });
+
+  it('refuses content past the cap rather than truncating it', () => {
+    expect(parseHubToServerFrame({ ...A_WRITE, content: 'x'.repeat(256_001) }).ok).toBe(false);
+  });
+
+  it('refuses a write with no content: a document is replaced whole or not at all', () => {
+    const { content: _content, ...withoutContent } = A_WRITE;
+    expect(parseHubToServerFrame(withoutContent).ok).toBe(false);
+  });
+
+  it('strips a cwd, an argv, an env or an operation name off a document frame', () => {
+    // A directory is on this frame as a file-store key, and the parser makes
+    // sure nothing else that could reach a process rides along with it.
+    const smuggled = parseHubToServerFrame({
+      ...A_WRITE,
+      cwd: '/srv/work',
+      args: ['--resume', 'x'],
+      env: { ANTHROPIC_API_KEY: 'k' },
+      operation: 'git-status',
+      command: 'claude',
+    });
+    expect(smuggled.ok).toBe(true);
+    if (!smuggled.ok) return;
+    for (const forbidden of ['cwd', 'args', 'env', 'operation', 'command']) {
+      expect(smuggled.value).not.toHaveProperty(forbidden);
+    }
+  });
+});
+
+describe('parseServerToHubFrame on the document answers', () => {
+  it('accepts a listing whose every entry names a document', () => {
+    const result = parseServerToHubFrame({
+      type: 'doc-listing',
+      replyTo: 4,
+      entries: [{ name: 'plan.md', updatedAt: 1_756_000_000_000, bytes: 7 }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts an empty listing, which is a project nobody has written to', () => {
+    expect(parseServerToHubFrame({ type: 'doc-listing', replyTo: 4, entries: [] }).ok).toBe(true);
+  });
+
+  it('refuses a listing carrying a name the name parser would not take', () => {
+    const result = parseServerToHubFrame({
+      type: 'doc-listing',
+      replyTo: 4,
+      entries: [{ name: '.plan.md.tmp', updatedAt: 1_756_000_000_000, bytes: 7 }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('refuses a content answer with no write time', () => {
+    expect(parseServerToHubFrame({ type: 'doc-content', replyTo: 3, content: 'x' }).ok).toBe(false);
   });
 });
 
@@ -467,6 +574,20 @@ describe('hub and server round trips', () => {
       target: { by: 'start', startId: 3 },
       size: { cols: 120, rows: 40 },
     },
+    {
+      type: 'doc-write',
+      id: 10,
+      directory: '/Users/dev/Code/agentplex',
+      name: docNameSchema.parse('plan.md'),
+      content: '# Plan\n\n- read the failing test\n',
+    },
+    {
+      type: 'doc-read',
+      id: 11,
+      directory: '/Users/dev/Code/agentplex',
+      name: docNameSchema.parse('plan.md'),
+    },
+    { type: 'doc-list', id: 12, directory: '/Users/dev/Code/agentplex' },
     { type: 'protocol-error', code: 'bad-request', message: 'type: invalid input' },
   ];
 
@@ -544,6 +665,21 @@ describe('hub and server round trips', () => {
       startId: null,
       chunk: encodeTerminalChunk(new TextEncoder().encode('\u001b[32mok\u001b[0m\r\n')),
       droppedChunks: 0,
+    },
+    { type: 'doc-written', replyTo: 10, updatedAt: 1_756_000_000_000 },
+    {
+      type: 'doc-content',
+      replyTo: 11,
+      content: '# Plan\n\n- read the failing test\n',
+      updatedAt: 1_756_000_000_000,
+    },
+    {
+      type: 'doc-listing',
+      replyTo: 12,
+      entries: [
+        { name: docNameSchema.parse('plan.md'), updatedAt: 1_756_000_000_000, bytes: 34 },
+        { name: docNameSchema.parse('results.csv'), updatedAt: 1_756_000_001_000, bytes: 0 },
+      ],
     },
     { type: 'protocol-error', code: 'protocol-version', message: 'this server speaks version 2' },
   ];

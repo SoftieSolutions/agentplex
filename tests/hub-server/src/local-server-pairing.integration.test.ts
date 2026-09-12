@@ -25,6 +25,7 @@ import { createOperationRegistry } from '../../../apps/server/src/operations/ope
 import { DEFAULT_DRAIN_MS } from '../../../apps/server/src/drain.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
 import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
 import { localServerPairing } from '../../../apps/hub/src/pairing/local-server.js';
@@ -107,6 +108,8 @@ async function startServer({
     drainMs: DEFAULT_DRAIN_MS,
     workingTree: createFakeWorkingTree(),
     machineLoad: createFakeMachineLoadReader(),
+    dataRoot: '/var/lib/agentplex',
+    projectFiles: createFakeProjectFiles(),
     timers: systemTimers,
     announce: null,
   });

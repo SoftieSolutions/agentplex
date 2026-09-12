@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { docContentSchema, docDirectorySchema, docEntrySchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import {
   hubIdSchema,
@@ -108,6 +109,44 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
   sessionUnsubscribeFrameSchema,
   terminalInputFrameSchema,
   terminalResizeFrameSchema,
+  /**
+   * A project's documents: replace one whole, read one back, list them.
+   *
+   * `directory` is the working tree the project is keyed by, and it is a key
+   * and not a cwd. The server derives a folder name from it by the one-way
+   * function `project-files.ts` describes and joins `name` -- one path segment
+   * from a closed list of extensions, see `doc.ts` -- onto that folder under
+   * its own data root. Nothing on these frames is handed to a process: a
+   * document write is a file the server writes on its own account, not a
+   * spawn, and it goes through no operation registry because there is no
+   * operation. The rule that no frame carries a cwd is about what reaches a
+   * child, and the test beside the server's handler holds that nothing here
+   * does.
+   *
+   * A write replaces the whole document. There is no patch form, so there is
+   * no way for the hub to hold a version the server never saw whole, and a
+   * write that lands is the document. The folder is made on the first write
+   * and never on a read: reading a project nobody has written to is an empty
+   * listing or a refusal, not a directory.
+   */
+  z.object({
+    type: z.literal('doc-write'),
+    id: frameIdSchema,
+    directory: docDirectorySchema,
+    name: docNameSchema,
+    content: docContentSchema,
+  }),
+  z.object({
+    type: z.literal('doc-read'),
+    id: frameIdSchema,
+    directory: docDirectorySchema,
+    name: docNameSchema,
+  }),
+  z.object({
+    type: z.literal('doc-list'),
+    id: frameIdSchema,
+    directory: docDirectorySchema,
+  }),
   protocolErrorFrameSchema,
 ]);
 export type HubToServerFrame = z.infer<typeof hubToServerFrameSchema>;
@@ -292,6 +331,44 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
   sessionSubscribedFrameSchema,
   sessionUnsubscribedFrameSchema,
   terminalOutputFrameSchema,
+  /**
+   * The answers to the document frames.
+   *
+   * `updatedAt` on each is the write time the server's filesystem recorded,
+   * in milliseconds since the epoch on that machine's clock. It is carried
+   * rather than stamped by the hub, unlike a store report, because it is a
+   * fact about a file rather than about when a message arrived: a client
+   * showing "edited three minutes ago" is showing this number, and the hub's
+   * receipt time would be the wrong answer by however long the doc had been
+   * sitting there before anybody asked.
+   *
+   * A refusal on any of the three is `session-refused` with `hold: null`.
+   * That frame's contract is "the server said no, and to which frame", and
+   * the terminal frames already answer through it with no session in hand;
+   * its name predates this direction carrying anything but session
+   * instructions, and renaming it is a change to every peer for a word.
+   */
+  z.object({
+    type: z.literal('doc-written'),
+    replyTo: frameIdSchema,
+    updatedAt: z.int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal('doc-content'),
+    replyTo: frameIdSchema,
+    content: docContentSchema,
+    updatedAt: z.int().nonnegative(),
+  }),
+  /**
+   * Every document in the project's folder, whole. A file in the folder whose
+   * name the name parser would refuse is not a document and is not listed;
+   * one that could not be read costs itself and not the listing.
+   */
+  z.object({
+    type: z.literal('doc-listing'),
+    replyTo: frameIdSchema,
+    entries: z.array(docEntrySchema),
+  }),
   protocolErrorFrameSchema,
 ]);
 export type ServerToHubFrame = z.infer<typeof serverToHubFrameSchema>;

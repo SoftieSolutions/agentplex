@@ -22,6 +22,9 @@ import {
 } from '@agentplex/providers/testing';
 import { createHubAudience } from './hub-audience.js';
 import { createFakeMachineLoadReader, createFakeMachineProbe } from './fake-machine-probe.js';
+import { createFakeProjectFiles } from './fake-project-files.js';
+import { createProjectDocs } from './project-docs.js';
+import { projectKeyFor, projectPath } from './project-files.js';
 import { createMachineLoadReader, type MachineLoadReader } from './machine-load.js';
 import * as linux from './machine-load-linux.fixture.js';
 
@@ -41,6 +44,8 @@ const stores: readonly StoreDescriptor[] = [
 ];
 
 const SESSION = sessionRefSchema.parse({ storeId: 'store-a', sessionId: 'session-a' });
+
+const DATA_ROOT = '/var/lib/agentplex';
 
 /** What the startup preflight found, as every handshake reports it. */
 const providers: readonly ProviderReadiness[] = [readyProvider()];
@@ -75,6 +80,7 @@ function deps(
     sessions,
     terminals: createFakeTerminals().terminals,
     machineLoad: createFakeMachineLoadReader(),
+    docs: createProjectDocs({ dataRoot: DATA_ROOT, files: createFakeProjectFiles(), logger }),
     logger,
     ...overrides,
   };
@@ -571,6 +577,223 @@ describe('serveHubConnection', () => {
  * minted for it, and grants carry no scopes yet -- and that the cost of saying
  * yes is telling everybody what happened.
  */
+describe('the document frames on one connection', () => {
+  const DIRECTORY = '/Users/dev/Code/agentplex';
+
+  function since(socket: { readonly sent: readonly string[] }, mark: number): ServerToHubFrame[] {
+    return replies(socket.sent.slice(mark));
+  }
+
+  /** A connection past its handshake, over a disk the test can read back. */
+  async function established(files = createFakeProjectFiles()) {
+    const sessions = createFakeSessionController();
+    const docs = createProjectDocs({ dataRoot: DATA_ROOT, files, logger });
+    const connected = connect({ docs, sessions });
+    connected.socket.receive(handshake());
+    await settle();
+    const mark = connected.socket.sent.length;
+    return { ...connected, sessions, files, mark };
+  }
+
+  it('writes a document and answers with when it was written', async () => {
+    const { socket, files, mark } = await established();
+
+    socket.receive(
+      JSON.stringify({
+        type: 'doc-write',
+        id: 2,
+        directory: DIRECTORY,
+        name: 'plan.md',
+        content: '# Plan\n',
+      }),
+    );
+    await settle();
+
+    const written = [...files.written.entries()].find(([path]) => path.endsWith('/plan.md'));
+    expect(written?.[1]).toBe('# Plan\n');
+    expect(since(socket, mark)).toEqual([
+      { type: 'doc-written', replyTo: 2, updatedAt: expect.any(Number) },
+    ]);
+  });
+
+  it('reads a document back with its content and write time', async () => {
+    const { socket, mark } = await established();
+    socket.receive(
+      JSON.stringify({
+        type: 'doc-write',
+        id: 2,
+        directory: DIRECTORY,
+        name: 'plan.md',
+        content: 'x',
+      }),
+    );
+    await settle();
+
+    socket.receive(
+      JSON.stringify({ type: 'doc-read', id: 3, directory: DIRECTORY, name: 'plan.md' }),
+    );
+    await settle();
+
+    const [written, content] = since(socket, mark);
+    expect(content).toEqual({
+      type: 'doc-content',
+      replyTo: 3,
+      content: 'x',
+      updatedAt: written?.type === 'doc-written' ? written.updatedAt : -1,
+    });
+  });
+
+  it('lists a project, and an empty one for a project nobody has written to', async () => {
+    const { socket, mark } = await established();
+
+    socket.receive(JSON.stringify({ type: 'doc-list', id: 2, directory: DIRECTORY }));
+    await settle();
+    socket.receive(
+      JSON.stringify({
+        type: 'doc-write',
+        id: 3,
+        directory: DIRECTORY,
+        name: 'plan.md',
+        content: 'x',
+      }),
+    );
+    await settle();
+    socket.receive(JSON.stringify({ type: 'doc-list', id: 4, directory: DIRECTORY }));
+    await settle();
+
+    const frames = since(socket, mark);
+    expect(frames[0]).toEqual({ type: 'doc-listing', replyTo: 2, entries: [] });
+    expect(frames[2]).toEqual({
+      type: 'doc-listing',
+      replyTo: 4,
+      entries: [{ name: 'plan.md', updatedAt: expect.any(Number), bytes: 1 }],
+    });
+  });
+
+  it('refuses a document it does not have, and stays connected', async () => {
+    const { socket, connection, mark } = await established();
+
+    socket.receive(
+      JSON.stringify({ type: 'doc-read', id: 2, directory: DIRECTORY, name: 'plan.md' }),
+    );
+    await settle();
+
+    expect(since(socket, mark)).toEqual([
+      {
+        type: 'session-refused',
+        replyTo: 2,
+        code: 'refused',
+        message: expect.stringContaining('plan.md'),
+        hold: null,
+      },
+    ]);
+    expect(connection.state).toBe('established');
+  });
+
+  it('answers a disk that failed as internal, so the hub knows to retry', async () => {
+    const key = projectKeyFor(DIRECTORY);
+    if (!key.ok) throw new Error(key.problem);
+    const { socket, mark } = await established(
+      createFakeProjectFiles({
+        unwritableFiles: [`${projectPath(DATA_ROOT, key.projectKey)}/plan.md`],
+      }),
+    );
+
+    socket.receive(
+      JSON.stringify({
+        type: 'doc-write',
+        id: 2,
+        directory: DIRECTORY,
+        name: 'plan.md',
+        content: 'x',
+      }),
+    );
+    await settle();
+
+    expect(since(socket, mark)).toMatchObject([
+      { type: 'session-refused', replyTo: 2, code: 'internal', hold: null },
+    ]);
+  });
+
+  it('answers a store that threw as internal rather than leaving the hub waiting', async () => {
+    const docs = createProjectDocs({
+      dataRoot: DATA_ROOT,
+      files: createFakeProjectFiles(),
+      logger,
+    });
+    const { socket } = connect({
+      docs: {
+        ...docs,
+        list: () => Promise.reject(new Error('the disk fell over')),
+      },
+    });
+    socket.receive(handshake());
+    await settle();
+    const mark = socket.sent.length;
+
+    socket.receive(JSON.stringify({ type: 'doc-list', id: 2, directory: DIRECTORY }));
+    await settle();
+
+    expect(since(socket, mark)).toMatchObject([
+      { type: 'session-refused', replyTo: 2, code: 'internal', hold: null },
+    ]);
+  });
+
+  it('closes on a document frame whose name the parser refuses, before any rule runs', async () => {
+    const { socket, connection, files } = await established();
+
+    socket.receive(
+      JSON.stringify({
+        type: 'doc-write',
+        id: 2,
+        directory: DIRECTORY,
+        name: '../plan.md',
+        content: 'x',
+      }),
+    );
+    await settle();
+
+    expect(connection.state).toBe('closed');
+    expect(files.writes).toEqual([]);
+    expect(files.creates).toEqual([]);
+  });
+
+  it('answers a document frame before a handshake with a refusal to talk, like any other', async () => {
+    const { socket, connection } = connect();
+
+    socket.receive(JSON.stringify({ type: 'doc-list', id: 1, directory: DIRECTORY }));
+    await settle();
+
+    expect(replies(socket.sent)).toEqual([
+      {
+        type: 'protocol-error',
+        code: 'bad-request',
+        message: 'the first frame on a connection is a handshake',
+      },
+    ]);
+    expect(connection.state).toBe('closed');
+  });
+
+  it('sends the answer to the hub that asked and no store report to anybody', async () => {
+    const { socket, mark, sessions } = await established();
+    const scans = sessions.scans.length;
+
+    socket.receive(
+      JSON.stringify({
+        type: 'doc-write',
+        id: 2,
+        directory: DIRECTORY,
+        name: 'plan.md',
+        content: 'x',
+      }),
+    );
+    await settle();
+
+    expect(since(socket, mark).map((frame) => frame.type)).toEqual(['doc-written']);
+    expect(sessions.scans).toHaveLength(scans);
+  });
+});
+
 describe('two hubs on one server', () => {
   const SESSION = { storeId: 'store-a', sessionId: 'session-a' };
 

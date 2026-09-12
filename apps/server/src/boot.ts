@@ -1,6 +1,7 @@
 import type { ServerConfig } from './config.js';
 import { ensureDataRoot, type DataRootFileSystem } from './data-root.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
+import type { ProjectFileSystem } from './project-files.js';
 import type {
   GrantFileSystem,
   ProviderPreflight,
@@ -47,6 +48,17 @@ export interface RuntimeDependencies {
    * thing `data-root.ts` says must never happen.
    */
   readonly grantFileSystem: GrantFileSystem;
+  /**
+   * The disk under the project file store, below the data root.
+   *
+   * A fourth seam, and for the reason each of the others is its own: this
+   * one replaces files whole and lists folders, and neither belongs on the
+   * seam that makes the data root, whose one job is a `mkdir` it has to be
+   * able to refuse. It is handed the root the data root seam ensured, so a
+   * test that says "this folder cannot be made" is describing this disk and
+   * not the one above it.
+   */
+  readonly projectFiles: ProjectFileSystem;
   /**
    * Where a secret comes from when nothing supplied one: the pairing token on
    * a first start.
@@ -162,6 +174,7 @@ export async function startRuntime(
     storeFileSystem,
     dataRootFileSystem,
     grantFileSystem,
+    projectFiles,
     tokens,
     providers,
     preflight,
@@ -206,6 +219,11 @@ export async function startRuntime(
     operations,
     workingTree,
     machineLoad,
+    // The root as ensured above and not as configured: the two are the same
+    // string today, and the day they differ the server should be writing
+    // where it proved it could.
+    dataRoot: dataRoot.path,
+    projectFiles,
     clock,
     timers,
     // The setting decides, in the one place that has read it. A server that
