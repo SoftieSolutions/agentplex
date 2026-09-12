@@ -45,9 +45,28 @@ export interface TerminalOutput {
   /** The start this connection made, when it made it, and `null` otherwise. */
   readonly startId: FrameId | null;
   readonly chunk: Uint8Array;
-  /** Chunks this stream threw away before this one. Zero until AGX-209 lands. */
+  /**
+   * Chunks this stream threw away before this one, over the life of the stream.
+   *
+   * Counted here rather than at the socket because it belongs to a stream and
+   * not to a connection's whole output: two terminals on one congested socket
+   * lose different amounts, and a single number over the socket could not tell
+   * a pane which of them was missing anything.
+   */
   readonly droppedChunks: number;
 }
+
+/**
+ * Whether a chunk went out, or was thrown away because the connection is behind.
+ *
+ * The answer comes back from the sink rather than being decided here, because
+ * only the thing holding the socket knows whether the socket is keeping up --
+ * and only this knows which stream to charge the loss to. So the sink decides
+ * and this counts, which is one rule in each of the two places that can state
+ * it, rather than a socket reaching into a subscription or a subscription
+ * reaching into a socket.
+ */
+export type TerminalDelivery = 'sent' | 'dropped';
 
 /**
  * What a subscription attached to.
@@ -93,8 +112,16 @@ export interface TerminalStreamsDependencies {
    * both are this one id.
    */
   readonly watcher: WatcherId;
-  /** Where a chunk goes. The connection turns it into a frame; this does not. */
-  onOutput(output: TerminalOutput): void;
+  /**
+   * Where a chunk goes. The connection turns it into a frame; this does not.
+   *
+   * Answers whether it actually went, because a sink that cannot say so leaves
+   * the only honest alternatives as queueing without a bound -- which is the
+   * denial of service this answers -- or dropping without telling anyone,
+   * and a terminal that silently omits output looks exactly like a session
+   * that produced none.
+   */
+  onOutput(output: TerminalOutput): TerminalDelivery;
   readonly logger: Logger;
 }
 
@@ -255,7 +282,7 @@ export function createTerminalStreams({
       streams.set(terminal.terminalId, stream);
       byTarget.set(key, stream);
       stream.detach = terminal.watch(watcher, (chunk) => {
-        onOutput({
+        const delivery = onOutput({
           storeId: terminal.storeId,
           // Read per chunk rather than captured: a spawn is named by the
           // provider while its terminal is already producing output, and the
@@ -263,8 +290,16 @@ export function createTerminalStreams({
           sessionId: terminal.session?.sessionId ?? null,
           startId: startIdOf(terminal.terminalId),
           chunk,
+          // The count as it stood before this chunk, so a reader comparing it
+          // with the last one it saw learns of a gap that opened between them.
           droppedChunks: stream.droppedChunks,
         });
+        // Counted after the attempt, so the chunk that is dropped is the one
+        // reported on the next chunk that gets through rather than on itself.
+        // The terminal goes on running and the scrollback goes on filling
+        // either way: nothing here slows a child down, which is the whole
+        // reason this is a count and not a pause.
+        if (delivery === 'dropped') stream.droppedChunks += 1;
       });
 
       logger.info('terminal subscription attached', {

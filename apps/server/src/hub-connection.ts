@@ -21,6 +21,7 @@ import type { TerminalManager } from './terminal-manager.js';
 import {
   createTerminalStreams,
   type StreamOutcome,
+  type TerminalDelivery,
   type TerminalOutput,
 } from './terminal-streams.js';
 
@@ -64,6 +65,25 @@ import {
  * has the shape it has. The distinction is in the log line on this machine,
  * where the person entitled to it is.
  */
+
+/**
+ * How much unsent terminal output one connection may be holding before this
+ * server starts throwing chunks away.
+ *
+ * Per connection, because congestion is: two hubs watching the same terminal
+ * are two sockets with two links, and one of them being on a phone must not
+ * cost the other a single byte. The counter that goes with this is per stream
+ * per connection for the same reason.
+ *
+ * 1 MiB. Four times one terminal's scrollback, so an ordinary burst -- a build
+ * repainting, a test suite dumping a failure -- crosses whole even if the link
+ * hiccups; half of the 2 MiB the terminal cap already lets a machine spend on
+ * scrollback, so a wedged connection cannot cost more than the terminals it is
+ * watching. Larger would not buy fidelity so much as staleness: a viewer a
+ * megabyte behind is watching the past, and the output it would eventually be
+ * shown has been superseded on the screen it is drawing.
+ */
+export const MAX_BUFFERED_OUTPUT_BYTES = 1024 * 1024;
 
 export interface HubConnectionDependencies {
   /**
@@ -209,9 +229,50 @@ export function serveHubConnection(
     logger,
   });
 
-  /** Bytes to a frame. The one place output becomes characters. */
-  function sendOutput(output: TerminalOutput): void {
-    if (state !== 'established') return;
+  /**
+   * Bytes to a frame, unless this connection is too far behind to take them.
+   *
+   * The one place output becomes characters, and the one place output is
+   * thrown away.
+   *
+   * ## Why it drops instead of pausing the pty
+   *
+   * node-pty can stop reading, and the kernel buffer would carry that back to
+   * the child as a blocking write: nothing would be lost, and the session
+   * would simply run slower. It is rejected anyway. It makes the behaviour of
+   * a user's program depend on the speed of somebody's browser -- a build that
+   * stalls because a phone went to sleep, a test suite whose timings move
+   * because a tab was backgrounded -- and a program that runs differently when
+   * nobody is watching is a worse surprise than a pane that says it is missing
+   * output. The bytes here are also the cheap thing and the process is the
+   * expensive one: an agent mid-edit must not be held still to spare a
+   * megabyte. So the session runs at full speed, the viewer misses some of it,
+   * and `droppedChunks` is what stops that from being a lie.
+   *
+   * ## Why it drops rather than queueing
+   *
+   * A queue of our own in front of the socket's queue would be the same bytes
+   * held twice, and it could only drain by watching the same number this reads
+   * -- so it would buy latency and a second buffer to bound, and bound nothing
+   * the cap below does not. Refusing to add to the one queue that exists is
+   * the same bound with one fewer copy.
+   *
+   * Whole chunks, never part of one: an escape sequence spans whatever
+   * boundary it lands on, and a stream resumed mid-sequence paints as garbage
+   * from the first character. The same rule `scrollback.ts` follows, for the
+   * same reason, and it is why the bound is overshot by at most one chunk.
+   *
+   * The scrollback replay on a subscription does not go through here, and is
+   * not gated: it is bounded already by the scrollback cap one layer down, it
+   * happens once per subscription rather than at a rate, and `replayChunks`
+   * promises exactly the frames that follow the reply -- a gate that dropped
+   * one of them would make that count a lie.
+   */
+  function sendOutput(output: TerminalOutput): TerminalDelivery {
+    if (state !== 'established') return 'dropped';
+    // Before the encoding, which is a third of a megabyte of base64 per
+    // megabyte of output: a chunk nobody can take is not worth the CPU either.
+    if (socket.bufferedBytes > MAX_BUFFERED_OUTPUT_BYTES) return 'dropped';
     send({
       type: 'terminal-output',
       storeId: output.storeId,
@@ -220,6 +281,7 @@ export function serveHubConnection(
       chunk: encodeTerminalChunk(output.chunk),
       droppedChunks: output.droppedChunks,
     });
+    return 'sent';
   }
 
   const refuse = (reason: string): void => {

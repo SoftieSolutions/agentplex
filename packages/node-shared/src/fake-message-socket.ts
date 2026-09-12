@@ -25,6 +25,15 @@ import {
 export interface FakeMessageSocket extends MessageSocket {
   /** Delivers a frame as if the peer had sent it. */
   receive(text: string): void;
+  /**
+   * Writes out everything queued: the peer receives it and the buffer empties.
+   *
+   * Only a socket built with `drains: false` has anything to write out. It is
+   * the moment a slow reader catches up, which is the other half of what a
+   * backpressure rule has to be tested against -- a gate that drops forever is
+   * as wrong as one that never drops, and only a drain can tell them apart.
+   */
+  drain(): void;
   /** Closes as if the peer had closed. */
   closeFromPeer(closure: SocketClosure): void;
   /** Joins this socket to another, so what one sends the other receives. */
@@ -35,7 +44,31 @@ export interface FakeMessageSocket extends MessageSocket {
   readonly closure: SocketClosure | null;
 }
 
-export function createFakeMessageSocket(): FakeMessageSocket {
+export interface FakeMessageSocketOptions {
+  /**
+   * Whether the peer is reading.
+   *
+   * True by default, which is every socket in every test that is not about
+   * backpressure: a frame is written out as it is sent, `bufferedBytes` stays
+   * at zero, and the peer hears it on the next microtask as before.
+   *
+   * False is the case that kills a server. It is not a socket that refuses a
+   * write -- no socket does that, which is the whole problem -- but one that
+   * accepts every write and never gets rid of it, so the queue is this
+   * process's memory and grows for as long as something keeps sending. A test
+   * that wants to prove a producer is bounded needs a consumer that provides no
+   * bound at all, and this is it.
+   */
+  readonly drains?: boolean;
+}
+
+const encoder = new TextEncoder();
+
+export function createFakeMessageSocket(options: FakeMessageSocketOptions = {}): FakeMessageSocket {
+  const writesThrough = options.drains ?? true;
+  /** Sent and not yet written out. Empty whenever the peer is reading. */
+  const queued: string[] = [];
+  let bufferedBytes = 0;
   const sent: string[] = [];
   const messageListeners: ((text: string) => void)[] = [];
   const closeListeners: ((closure: SocketClosure) => void)[] = [];
@@ -53,11 +86,23 @@ export function createFakeMessageSocket(): FakeMessageSocket {
     });
   };
 
+  /** Writes the queue out, in order, exactly as a socket that caught up would. */
+  const flush = (): void => {
+    const writing = queued.splice(0, queued.length);
+    bufferedBytes = 0;
+    for (const text of writing) peer?.receive(text);
+  };
+
   return {
     send(text: string): void {
       if (ended !== null) return;
       sent.push(text);
-      peer?.receive(text);
+      queued.push(text);
+      // Bytes and not characters, because that is what a socket holds and what
+      // `ws` counts; a cap measured in characters would be a different cap on
+      // every alphabet.
+      bufferedBytes += encoder.encode(text).length;
+      if (writesThrough) flush();
     },
     close(reason: SocketClosure): void {
       const alreadyEnded = ended !== null;
@@ -69,6 +114,12 @@ export function createFakeMessageSocket(): FakeMessageSocket {
     },
     onClose(listener: (reason: SocketClosure) => void): void {
       closeListeners.push(listener);
+    },
+    drain(): void {
+      flush();
+    },
+    get bufferedBytes(): number {
+      return bufferedBytes;
     },
     receive(text: string): void {
       if (ended !== null) return;
