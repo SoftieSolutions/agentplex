@@ -80,6 +80,7 @@ export async function main(): Promise<void> {
   const environment = childEnvironment({
     inherited: process.env,
     binPath: 'server' in config ? config.server.binPath : [],
+    timezone: undefined,
   });
   const processRunner = createNodeProcessRunner({ environment });
   const programs = createNodeProgramResolver(childSearchPath(environment));

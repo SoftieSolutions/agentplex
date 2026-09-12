@@ -150,7 +150,11 @@ export async function runUnitsMain(command: UnitsCommand): Promise<void> {
     return;
   }
 
-  const environment = childEnvironment({ inherited: process.env, binPath: [] });
+  const environment = childEnvironment({
+    inherited: process.env,
+    binPath: [],
+    timezone: undefined,
+  });
 
   process.exitCode = await runUnitsCommand(command, process.argv.slice(2), {
     // `os.homedir()` is deliberately not the fallback, for the reason setup

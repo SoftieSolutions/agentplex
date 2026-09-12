@@ -92,6 +92,24 @@ export interface ServerConfig {
    */
   readonly dataPath: string;
   /**
+   * The zone every child this server spawns reports times in, or undefined to
+   * inherit whatever the unit gave this process.
+   *
+   * A setting rather than a line in a unit file for the reason this file opens
+   * with: configuration is a value produced from argv and env by a pure
+   * function, and a zone an operator can only choose by editing a systemd unit
+   * is a setting outside that function.
+   *
+   * It reaches a child and nothing else. The one time this server formats a
+   * time for a human is the log timestamp, which is ISO-8601 in UTC and stays
+   * that way: a log line is read beside a hub's and beside another server's,
+   * and being comparable is the whole value of the stamp -- the same argument
+   * that has the hub stamping what it receives with its own clock rather than
+   * with the one the report came from. What a zone changes is the answer an
+   * agent gives to "what day is it", and that answer is made in a child.
+   */
+  readonly timezone: string | undefined;
+  /**
    * How many terminals this server may hold at once.
    *
    * Configuration rather than a constant because it is a statement about the
@@ -189,6 +207,13 @@ const SETTINGS = {
     env: 'AGENTPLEX_SERVER_IDENTITY_FILE',
   },
   dataPath: DATA_PATH,
+  /**
+   * Named for the variable it becomes rather than for the word this codebase
+   * uses in prose. `TZ` is what a child reads, `AGENTPLEX_TZ` is the setting
+   * that decides it, and an operator reading a unit file beside a session's
+   * environment should not have to be told they are the same thing.
+   */
+  timezone: { flag: '--tz', env: 'AGENTPLEX_TZ' },
   terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
   /**
    * Takes `true` or `false` rather than being a bare presence flag, which
@@ -248,6 +273,8 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
     problems,
   );
 
+  const timezone = readTimezone(read(SETTINGS.timezone), problems);
+
   const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
 
   const announce = readAnnounce(read(SETTINGS.announce), problems);
@@ -270,6 +297,7 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
       binPath,
       identityPath,
       dataPath,
+      timezone,
       terminalCap,
       announce,
     },
@@ -373,6 +401,65 @@ export function serverUsage(): string {
     '',
     ...usageLines(Object.values(SETTINGS)),
   ].join('\n');
+}
+
+/**
+ * The zone, checked against the database a child will look it up in, and kept
+ * as the operator spelled it.
+ *
+ * Checked rather than passed through, because the failure a typo causes is
+ * silent: a child handed a `TZ` that names no zone does not refuse, it sits in
+ * UTC, and the operator finds out weeks later when an agent tells them the
+ * wrong day. A check here turns that into one sentence at startup, next to
+ * every other thing wrong with the settings file.
+ *
+ * What it is checked against was measured rather than assumed, and it is not
+ * the obvious list. `Intl.supportedValuesOf('timeZone')` is ICU's *canonical*
+ * names: on Node 24 it holds 418 of them and none of them is `UTC`, no `US/*`
+ * name is in it, and it offers `Asia/Calcutta` and `Europe/Kiev` where tzdata
+ * has long since preferred `Asia/Kolkata` and `Europe/Kyiv`. A membership test
+ * against that list would refuse `AGENTPLEX_TZ=UTC`, which is worse than not
+ * checking at all: it would reject names the operator's own `date` accepts.
+ *
+ * Asking ICU to format with the zone asks the same database the question that
+ * matters, and it answers the way a machine does -- `UTC`, `US/Pacific`,
+ * `Asia/Kolkata` and `Europe/Kyiv` are accepted, `Europe/Madird` and
+ * `Mars/Phobos` throw.
+ *
+ * The name is kept as typed, with one exception. Every alias ICU accepts is a
+ * real entry in the tz database, so a child finds it: `date` reports PDT for
+ * `US/Pacific` and IST for `Asia/Kolkata` inside `node:24-bookworm-slim`.
+ * Replacing them with what ICU canonicalizes them to would put `Asia/Calcutta`
+ * in a session whose operator wrote `Asia/Kolkata`. The exception is
+ * capitalization: ICU matches a zone name case-insensitively and the tz
+ * database is a directory of files, so `america/new_york` is a name ICU knows
+ * and glibc does not -- a child given it falls back to UTC silently, and
+ * `date` prints `america +0000`. That one is normalized to the spelling ICU
+ * just named, for the reason a path is normalized rather than refused: it is
+ * the same zone, said differently.
+ */
+function readTimezone(raw: string | undefined, problems: string[]): string | undefined {
+  if (raw === undefined) return undefined;
+
+  const named = zoneNamed(raw);
+  if (named === undefined) {
+    problems.push(
+      `${SETTINGS.timezone.flag} must be a timezone this machine knows, like Europe/Madrid ` +
+        `or UTC, not ${JSON.stringify(raw)}`,
+    );
+    return undefined;
+  }
+
+  return named.toLowerCase() === raw.toLowerCase() ? named : raw;
+}
+
+/** What ICU says that name is, or nothing when it says no. */
+function zoneNamed(raw: string): string | undefined {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: raw }).resolvedOptions().timeZone;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
