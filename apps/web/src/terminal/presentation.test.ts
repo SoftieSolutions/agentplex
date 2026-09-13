@@ -110,6 +110,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastRefusal: null,
     lastStarted: null,
     lastStopped: null,
+    lastListing: null,
     ...overrides,
   };
 }

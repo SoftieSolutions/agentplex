@@ -124,6 +124,7 @@ Every setting has one flag and one environment variable; the flag wins.
 | `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none                  | SQLite file, absolute; required for `hub` and `both`                                       |
 | `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none                  | Client credential, 32+ chars; required for `hub`, `both`                                   |
 | `--store-path`           | `AGENTPLEX_STORE_PATH`           | none                  | Store root; repeatable, absolute                                                           |
+| `--browse-root`          | `AGENTPLEX_BROWSE_ROOTS`         | none                  | Directory a client may browse under; repeatable, absolute. None means browsing is refused  |
 | `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none                  | Absolute; required for `server` and `both`                                                 |
 | `--server-token`         | `AGENTPLEX_SERVER_TOKEN`         | minted on first start | Pairing token the deployment sets, 32+ chars; for a machine whose disk does not outlive it |
 | `--data-path`            | `AGENTPLEX_DATA_PATH`            | `$HOME/.agentplex`    | Absolute; the one directory a server writes into                                           |

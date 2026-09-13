@@ -1616,6 +1616,13 @@ AGENTPLEX_BIN_PATH=$BIN_DIR
 #AGENTPLEX_SERVER_IDENTITY_FILE=$STATE_DIR/server.json
 #AGENTPLEX_STORE_PATH=
 
+# The directories a client may browse when somebody picks a project on this
+# machine. Absolute and ':'-separated, like the store paths. Anything under one
+# of these can be listed by a client of any hub this server is paired with, and
+# nothing else can. Unset means this server lists no directory at all, which is
+# the default: \`$PACKAGE_NAME setup\` asks before it writes one.
+#AGENTPLEX_BROWSE_ROOTS=
+
 #AGENTPLEX_HOST=127.0.0.1
 #AGENTPLEX_HUB_PORT=8080
 #AGENTPLEX_SERVER_PORT=8081

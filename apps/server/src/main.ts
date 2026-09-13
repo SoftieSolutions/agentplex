@@ -25,6 +25,7 @@ import { startRuntime } from './boot.js';
 import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
 import { nodeDataRoot } from './node-data-root.js';
+import { nodeDirectoryReader } from './node-directory-reader.js';
 import { nodeProjectFiles } from './node-project-files.js';
 import { nodeStoreWatcher } from './node-store-watcher.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
@@ -156,6 +157,11 @@ async function main(): Promise<void> {
       // documents -- and separate from the seam above because a replace does
       // not belong beside a `mkdir` that has to be refusable.
       projectFiles: nodeProjectFiles,
+      // The one place this process resolves a link. A sixth filesystem seam
+      // because it is a sixth permission: browsing walks the machine rather
+      // than reading a provider's volume, and the rule that bounds where it may
+      // walk is `directory-browse.ts` over the configured roots.
+      directoryReader: nodeDirectoryReader,
       grantFileSystem: nodeGrantFileSystem,
       // The only place a secret is generated, and the CSPRNG is the whole
       // implementation: the server's pairing token, once, on its first start.

@@ -34,6 +34,7 @@ import {
   handshakeWithServer,
   type DialTarget,
 } from '../../../apps/hub/src/features/servers/server-handshake.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 
 /**
  * The `--role=both` box, end to end, across the change that introduced grants.
@@ -90,6 +91,9 @@ async function startServer({
     // Nothing in this file writes into a store, so the watch is a seam that
     // is handed over and never fires.
     storeWatcher: createFakeStoreWatcher(),
+    // Nothing to browse: this suite is about the one pairing nobody types.
+    browseRoots: [],
+    directoryReader: createFakeDirectoryReader(),
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     grantFileSystem: grantFiles,

@@ -22,6 +22,7 @@ import {
   type Logger,
 } from '@agentplex/node-shared';
 import type { GrantAuthority, GrantId, ServerIdentity } from '@agentplex/providers';
+import type { DirectoryBrowser } from './directory-browse.js';
 import type { HubAudience, HubMember } from './hub-audience.js';
 import type { MachineLoadReader } from './machine-load.js';
 import type { ProjectDocs } from './project-docs.js';
@@ -170,6 +171,17 @@ export interface HubConnectionDependencies {
    */
   readonly terminals: TerminalManager;
   /**
+   * What a hub may look at on this machine's disk, and the rule that decides.
+   *
+   * A seam like the session controller beside it, and for the same two reasons:
+   * a test cannot supply a filesystem, and the answer is a fact about this
+   * machine rather than about this connection. It is built once per server over
+   * the roots that server's operator configured, so every hub browsing gets the
+   * same list and no connection can widen it -- which is the half of the
+   * amended directory rule that has teeth. See `directory-browse.ts`.
+   */
+  readonly browse: DirectoryBrowser;
+  /**
    * How this machine reads its own cpus, for the answer to a ping.
    *
    * The server's reader rather than one per connection, because the counters
@@ -268,6 +280,7 @@ export function serveHubConnection(
     providers,
     sessions,
     terminals,
+    browse,
     machineLoad,
     docs,
     logger,
@@ -457,6 +470,18 @@ export function serveHubConnection(
           return;
         }
         void runStop(frame.id, { storeId: frame.storeId, sessionId: frame.sessionId });
+        return;
+      }
+
+      case 'directory-list': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        // Not awaited, for the reason a start is not: a listing resolves paths
+        // and reads a directory, and awaiting it inside `onMessage` would stall
+        // every later frame on this socket behind one disk.
+        void runDirectoryList(frame.id, frame.directory);
         return;
       }
 
@@ -818,6 +843,53 @@ export function serveHubConnection(
       replyTo,
       storeId: session.storeId,
       sessionId: session.sessionId,
+    });
+  }
+
+  /**
+   * Lists a directory and answers the hub that asked.
+   *
+   * The rule is not here. What is here is that this connection is the only
+   * thing that can decide whether the socket is still worth answering, and that
+   * a throw becomes a refusal rather than an unhandled rejection: the browser
+   * returns its refusals as values, so anything that reaches the catch is this
+   * server breaking on its own side.
+   */
+  async function runDirectoryList(replyTo: FrameId, directory: string | null): Promise<void> {
+    let outcome;
+    try {
+      outcome = await browse.list(directory);
+    } catch (error) {
+      logger.error('could not list a directory', { problem: String(error) });
+      if (state !== 'established') return;
+      send({
+        type: 'directory-refused',
+        replyTo,
+        code: 'internal',
+        message: 'this server could not list that directory',
+      });
+      return;
+    }
+
+    if (state !== 'established') return;
+
+    if (!outcome.ok) {
+      // Logged here, where the machine is, as well as sent. The sentence is
+      // safe to send -- it names the path the peer asked for and never what it
+      // resolved to -- and the operator reading this log is the one who can
+      // change the roots it is about.
+      logger.info('directory browse refused', { directory, problem: outcome.problem });
+      send({ type: 'directory-refused', replyTo, code: outcome.code, message: outcome.problem });
+      return;
+    }
+
+    send({
+      type: 'directory-listing',
+      replyTo,
+      directory: outcome.directory,
+      roots: [...outcome.roots],
+      entries: [...outcome.entries],
+      truncated: outcome.truncated,
     });
   }
 

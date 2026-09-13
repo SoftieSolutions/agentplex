@@ -146,6 +146,26 @@ const plannedServerSchema = z.strictObject({
   /** The store roots this machine mounts. Empty is legal, as it is in the config. */
   storePaths: directoriesSchema,
   /**
+   * The directories a client may browse under, when the user picks a project's.
+   *
+   * Separate from the store paths above, though they often name the same
+   * directory, because they are different permissions: a store is a provider's
+   * volume this server watches, and a browse root is where somebody may look
+   * for a checkout to work in. Empty is legal and is the default, and it means
+   * browsing is refused with that as the reason -- what a root grants is a list
+   * of this machine's files to anybody who can reach a paired hub, and a plan
+   * that picked one by default would be deciding that for whoever replays it.
+   *
+   * Absent and empty mean the same thing and are both accepted, which is the
+   * one place this schema is not strict about a missing key. That is not a
+   * convenience: a plan is an artifact that outlives the build that wrote it,
+   * every plan written before this field existed describes a machine that
+   * browses nothing, and that is exactly what an empty list means. Requiring it
+   * would refuse those files, and bumping the plan version to require it would
+   * refuse them more loudly for no difference in the machine described.
+   */
+  browseRoots: directoriesSchema.optional().transform((roots) => roots ?? []),
+  /**
    * Directories to resolve a provider in, ahead of whatever PATH the service
    * inherits: the operator's homebrew prefix, a version manager's shim
    * directory, `~/.local/bin`.

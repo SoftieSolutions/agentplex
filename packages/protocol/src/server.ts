@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { directoryListFrameSchema, directoryListingFrameSchema } from './directory.js';
 import { docContentSchema, docDirectorySchema, docEntrySchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import {
@@ -147,6 +148,21 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
     id: frameIdSchema,
     directory: docDirectorySchema,
   }),
+  /**
+   * List a directory on this machine, for a user browsing for a project.
+   *
+   * The one instruction on this direction that carries a path, and the only
+   * one that ever will without amending the rule again: `directory.ts` holds
+   * the amendment and the argument for it. What arrives here is a claim like
+   * any other -- the server checks it against the browse roots its own
+   * operator configured, which is a list nothing on this wire can add to, and
+   * refuses anything else.
+   *
+   * Which server is not on it. The hub chose this connection before the frame
+   * was written, and a field naming the machine would be the hub telling a
+   * server which server it is.
+   */
+  directoryListFrameSchema,
   protocolErrorFrameSchema,
 ]);
 export type HubToServerFrame = z.infer<typeof hubToServerFrameSchema>;
@@ -368,6 +384,31 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('doc-listing'),
     replyTo: frameIdSchema,
     entries: z.array(docEntrySchema),
+  }),
+  /** What is in that directory. The same shape the hub answers a client with. */
+  directoryListingFrameSchema,
+  /**
+   * The server will not list that directory, and why.
+   *
+   * Its own frame rather than a second use of `session-refused`, and the
+   * difference is `hold`. A session refusal carries the live process when
+   * there is one, because "it is running over here" is an answer that leads
+   * somewhere; a directory has no process to name, so the field would be
+   * present, always null, and every reader would have to learn which refusals
+   * it means anything on. A frame that carries only what it can say is one
+   * fewer thing to check.
+   *
+   * The codes are the shared set. `refused` is the rule speaking -- no roots
+   * are configured, that path is not under one, that path is not a directory
+   * -- and retrying changes nothing. `internal` is this machine failing on its
+   * own side, a directory inside a root that it could not read, where a fixed
+   * permission makes the same request work.
+   */
+  z.object({
+    type: z.literal('directory-refused'),
+    replyTo: frameIdSchema,
+    code: refusalCodeSchema,
+    message: z.string(),
   }),
   protocolErrorFrameSchema,
 ]);

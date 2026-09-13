@@ -67,7 +67,7 @@ function readyHub(): HubChecks {
   };
 }
 
-function serverConfig(storePaths: readonly string[]): Config {
+function serverConfig(storePaths: readonly string[], browseRoots: readonly string[] = []): Config {
   return {
     role: 'server',
     logLevel: 'error',
@@ -76,6 +76,9 @@ function serverConfig(storePaths: readonly string[]): Config {
       port: 8081,
       storePaths,
       binPath: ['/home/robert/.agentplex/bin'],
+      // Nothing to browse unless a test is about browsing: that is the default
+      // a server ships with, and the doctor reports it rather than judging it.
+      browseRoots,
       identityPath: IDENTITY_PATH,
       terminalCap: 8,
       announce: false,
@@ -251,6 +254,36 @@ describe('inspectMachine', () => {
     expect(report.usable).toBe(false);
   });
 
+  it('is not usable when a configured browse root is not there', async () => {
+    // A root that is not there is a browse that will be refused, which is a
+    // fact about this deployment and therefore part of the exit code.
+    const report = await inspectMachine(serverConfig([], ['/home/robert/gone']), {
+      providers,
+      ...workingHub,
+      preflight: { run: async () => [readyProvider('claude')] },
+      files: createFakeStoreFiles(),
+      terminals: workingPty,
+    });
+
+    expect(report.usable).toBe(false);
+    expect(report.browseRoots).toEqual([
+      { path: '/home/robert/gone', state: 'missing', problem: 'there is nothing at that path' },
+    ]);
+  });
+
+  it('is usable with no browse roots at all, which is the default', async () => {
+    const report = await inspectMachine(serverConfig([]), {
+      providers,
+      ...workingHub,
+      preflight: { run: async () => [readyProvider('claude')] },
+      files: createFakeStoreFiles(),
+      terminals: workingPty,
+    });
+
+    expect(report.usable).toBe(true);
+    expect(report.browseRoots).toEqual([]);
+  });
+
   it('is not usable when a configured store is not there', async () => {
     const report = await inspectMachine(serverConfig(['/volumes/gone']), {
       providers,
@@ -335,6 +368,7 @@ describe('formatDoctorReport', () => {
       usable: true,
       providers: [readyProvider('claude')],
       stores: [],
+      browseRoots: [],
       terminals: { state: 'ready', problem: null },
     }).join('\n');
 
@@ -351,6 +385,7 @@ describe('formatDoctorReport', () => {
       usable: false,
       providers: [missingProvider('claude')],
       stores: [],
+      browseRoots: [],
       terminals: { state: 'ready', problem: null },
     }).join('\n');
 
@@ -369,6 +404,7 @@ describe('formatDoctorReport', () => {
       usable: true,
       providers: [readyProvider('claude')],
       stores: [],
+      browseRoots: [],
       terminals: { state: 'ready', problem: null },
     }).join('\n');
 
@@ -384,6 +420,7 @@ describe('formatDoctorReport', () => {
       usable: true,
       providers: [],
       stores: [],
+      browseRoots: [],
       terminals: null,
     }).join('\n');
 
@@ -400,12 +437,50 @@ describe('formatDoctorReport', () => {
         { path: '/volumes/work', state: 'present', problem: null },
         { path: '/volumes/gone', state: 'missing', problem: 'there is nothing at that path' },
       ],
+      browseRoots: [],
       terminals: { state: 'ready', problem: null },
     }).join('\n');
 
     expect(printed).toContain('/volumes/work');
     expect(printed).toContain('/volumes/gone');
     expect(printed).toContain('there is nothing at that path');
+  });
+
+  it('prints each browse root the same way a store path is printed', () => {
+    const printed = formatDoctorReport({
+      role: 'server',
+      hub: null,
+      usable: false,
+      providers: [],
+      stores: [],
+      browseRoots: [
+        { path: '/home/robert/code', state: 'present', problem: null },
+        { path: '/mnt/volumes/gone', state: 'missing', problem: 'there is nothing at that path' },
+      ],
+      terminals: { state: 'ready', problem: null },
+    }).join('\n');
+
+    expect(printed).toContain('/home/robert/code');
+    expect(printed).toContain('/mnt/volumes/gone');
+    // And what a root actually grants, which is the half of this setting an
+    // operator most needs said out loud before they add one.
+    expect(printed).toContain('never followed');
+  });
+
+  it('says a machine with no browse roots will not list anything, as a fact', () => {
+    // Not a problem: it is the default, and a machine nobody asked to offer
+    // browsing is working exactly as configured.
+    const printed = formatDoctorReport({
+      role: 'server',
+      hub: null,
+      usable: true,
+      providers: [],
+      stores: [],
+      browseRoots: [],
+      terminals: { state: 'ready', problem: null },
+    }).join('\n');
+
+    expect(printed).toContain('will not list any directory');
   });
 
   it('prints the load failure and what to install beneath it', () => {
@@ -415,6 +490,7 @@ describe('formatDoctorReport', () => {
       usable: false,
       providers: [],
       stores: [],
+      browseRoots: [],
       terminals: { state: 'unusable', problem: 'node-pty could not be loaded: no such module' },
     }).join('\n');
 
@@ -432,6 +508,7 @@ describe('formatDoctorReport', () => {
       usable: true,
       providers: [],
       stores: [],
+      browseRoots: [],
       terminals: null,
     }).join('\n');
 
@@ -447,6 +524,7 @@ describe('formatDoctorReport', () => {
       usable: true,
       providers: [],
       stores: [],
+      browseRoots: [],
       terminals: { state: 'ready', problem: null },
     }).join('\n');
 
@@ -460,6 +538,7 @@ describe('formatDoctorReport', () => {
       usable: true,
       providers: [],
       stores: [],
+      browseRoots: [],
       terminals: null,
     }).join('\n');
 

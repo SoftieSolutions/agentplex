@@ -1,5 +1,6 @@
 import type { ServerConfig } from './config.js';
 import { ensureDataRoot, type DataRootFileSystem } from './data-root.js';
+import type { DirectoryReader } from './directory-browse.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProjectFileSystem } from './project-files.js';
 import type {
@@ -69,6 +70,15 @@ export interface RuntimeDependencies {
    * not the one above it.
    */
   readonly projectFiles: ProjectFileSystem;
+  /**
+   * The disk a browse reads, which is a sixth seam and not an oversight.
+   *
+   * It resolves links -- the one call the containment rule in
+   * `directory-browse.ts` cannot be written without -- and reads a directory's
+   * entries with their kinds. Neither belongs on the seam that reaches a
+   * provider's volume: a store is read as files, and this walks a machine.
+   */
+  readonly directoryReader: DirectoryReader;
   /**
    * Where a secret comes from when nothing supplied one: the pairing token on
    * a first start.
@@ -186,6 +196,7 @@ export async function startRuntime(
     dataRootFileSystem,
     grantFileSystem,
     projectFiles,
+    directoryReader,
     tokens,
     providers,
     preflight,
@@ -217,6 +228,10 @@ export async function startRuntime(
     storePaths: config.storePaths,
     storeFileSystem,
     storeWatcher,
+    // The setting decides, in the one place that has read it. A server nobody
+    // gave a root to browses nothing and says so.
+    browseRoots: config.browseRoots,
+    directoryReader,
     identityPath: config.identityPath,
     grantFileSystem,
     tokens,

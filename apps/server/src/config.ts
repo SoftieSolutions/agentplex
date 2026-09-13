@@ -62,6 +62,31 @@ export interface ServerConfig {
    */
   readonly binPath: readonly string[];
   /**
+   * The directories a client may browse under, absolute and deduplicated.
+   *
+   * This is the whole of what makes a directory on a frame something other than
+   * the `{ cwd }` field the v2 rule forbade: a browse request is refused unless
+   * its real path sits under one of these, and nothing on the wire can add to
+   * the list. See `directory-browse.ts` for the rule and
+   * `packages/protocol/src/directory.ts` for the amendment and its argument.
+   *
+   * Empty is legal and is the default, and it means browsing is refused --
+   * every request, with that as the reason. That is the direction that does not
+   * over-claim: what a root grants is a list of this machine's files to anybody
+   * who can reach a paired hub, and a build that picked one by default would be
+   * a build that decided that for an operator who never read this line. A
+   * machine where nobody has set one is a machine where the projects screen
+   * says so rather than one that quietly shows `/`.
+   *
+   * Separate from the store paths on purpose, though the two often name the
+   * same directory. A store is a provider's volume this server watches; a
+   * browse root is where a person may look for a checkout to work in, and on
+   * most machines that is a home directory or a `code` folder with no
+   * transcripts in it at all. Deriving one from the other would make widening
+   * a browse root a change to what this server watches.
+   */
+  readonly browseRoots: readonly string[];
+  /**
    * Where this server keeps its own identity: its `serverId` and the pairing
    * token the user types into the hub.
    *
@@ -246,6 +271,17 @@ const SETTINGS = {
   storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
   /** Repeatable, and ordered: the first directory holding a program wins. */
   binPath: { flag: '--bin-path', env: 'AGENTPLEX_BIN_PATH' },
+  /**
+   * Repeatable: a machine may offer more than one place to browse.
+   *
+   * The flag is singular and the variable is plural because each names what it
+   * holds: one `--browse-root` is one root and the operator repeats it, and the
+   * variable is one string holding the whole list, separated the way every
+   * other path list here is. `--store-path` predates this and spells it the
+   * other way round; matching it would have made the flag read as though a
+   * machine had one.
+   */
+  browseRoot: { flag: '--browse-root', env: 'AGENTPLEX_BROWSE_ROOTS' },
   serverIdentityFile: {
     flag: '--server-identity-file',
     env: 'AGENTPLEX_SERVER_IDENTITY_FILE',
@@ -343,6 +379,13 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
     problems,
   );
 
+  const browseRoots = readAbsolutePaths(
+    SETTINGS.browseRoot,
+    flags.values.get(SETTINGS.browseRoot.flag),
+    env[SETTINGS.browseRoot.env],
+    problems,
+  );
+
   const timezone = readTimezone(read(SETTINGS.timezone), problems);
 
   const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
@@ -369,6 +412,7 @@ export function loadServerConfig({ argv, env }: ServerConfigSources): ServerConf
       port: serverPort,
       storePaths,
       binPath,
+      browseRoots,
       identityPath,
       serverToken,
       dataPath,

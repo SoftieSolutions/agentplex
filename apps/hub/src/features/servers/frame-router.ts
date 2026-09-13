@@ -49,6 +49,7 @@ export function routeServerFrame(
   switch (frame.type) {
     case 'session-started':
     case 'session-stopped':
+    case 'directory-listing':
       handlers.onAnswer(frame.replyTo, { ok: true, answer: frame });
       return;
     case 'session-refused':
@@ -57,6 +58,18 @@ export function routeServerFrame(
         code: frame.code,
         problem: frame.message,
         hold: frame.hold,
+      });
+      return;
+    case 'directory-refused':
+      // The same outcome shape with no hold to put in it, which is why the
+      // frame is its own: a directory has no live process to name, and a field
+      // that was always null on half the refusals would be one every reader had
+      // to learn when it means anything.
+      handlers.onAnswer(frame.replyTo, {
+        ok: false,
+        code: frame.code,
+        problem: frame.message,
+        hold: null,
       });
       return;
     case 'store-report':

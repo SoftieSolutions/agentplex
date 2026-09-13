@@ -356,6 +356,18 @@ describe('client and hub round trips', () => {
       id: 15,
       registrationId: serverRegistrationIdSchema.parse('registration-1'),
     },
+    {
+      type: 'directory-list',
+      id: 16,
+      server: serverRegistrationIdSchema.parse('registration-2'),
+      directory: null,
+    },
+    {
+      type: 'directory-list',
+      id: 17,
+      server: serverRegistrationIdSchema.parse('registration-2'),
+      directory: '/Users/dev/code',
+    },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
   ];
 
@@ -557,6 +569,29 @@ describe('client and hub round trips', () => {
     },
     { type: 'server-unpaired', replyTo: 15 },
     { type: 'protocol-error', code: 'protocol-version', message: 'this hub speaks version 2' },
+    {
+      type: 'directory-listing',
+      replyTo: 14,
+      directory: null,
+      roots: ['/Users/dev/code', '/srv/work'],
+      entries: [
+        { name: '/Users/dev/code', kind: 'directory' },
+        { name: '/srv/work', kind: 'directory' },
+      ],
+      truncated: false,
+    },
+    {
+      type: 'directory-listing',
+      replyTo: 15,
+      directory: '/Users/dev/code',
+      roots: ['/Users/dev/code'],
+      entries: [
+        { name: '.git', kind: 'directory' },
+        { name: 'README.md', kind: 'file' },
+        { name: 'latest', kind: 'other' },
+      ],
+      truncated: true,
+    },
   ];
 
   it('sends terminal output with no replyTo either: a stream is nobody\u2019s reply', () => {

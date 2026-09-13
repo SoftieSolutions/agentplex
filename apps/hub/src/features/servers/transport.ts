@@ -21,7 +21,7 @@ import {
   type DialTarget,
   type HandshakeFailureReason,
 } from './server-handshake.js';
-import type { InstructionOutcome, SessionInstruction } from './servers.js';
+import type { InstructionOutcome, ServerInstruction } from './servers.js';
 
 /**
  * How the hub speaks to one server, once it is connected.
@@ -59,7 +59,7 @@ export interface ServerTransportHandlers {
 
 export interface ServerTransport {
   /** Puts one instruction to the server and waits for its answer. */
-  ask(instruction: SessionInstruction): Promise<InstructionOutcome>;
+  ask(instruction: ServerInstruction): Promise<InstructionOutcome>;
   /**
    * Attaches the handlers for what the server says unprompted. Called once,
    * before anything is awaited, so that nothing the server says in the
