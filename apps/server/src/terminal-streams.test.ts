@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   sessionIdSchema,
+  startIdSchema,
   storeDescriptorSchema,
+  type ServerTerminalTarget,
   type SessionId,
-  type TerminalTarget,
+  type StartId,
 } from '@agentplex/protocol';
 import { createLogger } from '@agentplex/node-shared';
 import type { FakePtyFactory } from '@agentplex/pty/testing';
-import type { Launch, LaunchPlan } from '@agentplex/providers';
+import type { GrantId, Launch, LaunchPlan } from '@agentplex/providers';
 import { createFakeTerminals } from './fake-terminals.js';
 import type { TerminalManager } from './terminal-manager.js';
 import {
@@ -41,9 +43,32 @@ const logger = createLogger('error', () => {});
  */
 const WATCHER = 'connection-under-test';
 
+/**
+ * The grant that connection authenticated with, and one belonging to a second
+ * hub.
+ *
+ * Starts are scoped to a grant rather than to a connection, which is what lets
+ * a hub that redialled be told again what it started -- and what keeps a start
+ * id, which one hub minted and the other has never heard of, out of the other
+ * hub's reports.
+ */
+const GRANT = 'grant-under-test' as GrantId;
+const OTHER_GRANT = 'grant-another-hub' as GrantId;
+
+/** One hub-minted start handle. Opaque, and the same across that hub's sockets. */
+const START = startIdSchema.parse('start-7');
+
 interface Harness {
   readonly terminals: TerminalManager;
   readonly streams: TerminalStreams;
+  /**
+   * Another connection over the same terminals: a hub that redialled, or a
+   * second hub with a grant of its own.
+   *
+   * Its output goes to the same arrays, which no test that uses it reads --
+   * what a second connection is for here is what it is told about starts.
+   */
+  connect(options?: { readonly grant?: GrantId; readonly watcher?: string }): TerminalStreams;
   readonly factory: FakePtyFactory;
   /** Everything the connection was handed and took, in order. */
   readonly output: readonly TerminalOutput[];
@@ -60,22 +85,26 @@ function harness(scrollbackBytes?: number): Harness {
   const output: TerminalOutput[] = [];
   const refused: TerminalOutput[] = [];
   let congested = false;
-  const streams = createTerminalStreams({
-    terminals,
-    watcher: WATCHER,
-    onOutput: (chunk): TerminalDelivery => {
-      if (congested) {
-        refused.push(chunk);
-        return 'dropped';
-      }
-      output.push(chunk);
-      return 'sent';
-    },
-    logger,
-  });
+  const connect = (options: { readonly grant?: GrantId; readonly watcher?: string } = {}) =>
+    createTerminalStreams({
+      terminals,
+      watcher: options.watcher ?? WATCHER,
+      grant: () => options.grant ?? GRANT,
+      onOutput: (chunk): TerminalDelivery => {
+        if (congested) {
+          refused.push(chunk);
+          return 'dropped';
+        }
+        output.push(chunk);
+        return 'sent';
+      },
+      logger,
+    });
+
   return {
     terminals,
-    streams,
+    streams: connect(),
+    connect,
     factory,
     output,
     refused,
@@ -90,13 +119,13 @@ function spawn(terminals: TerminalManager): string {
   return opened.terminal.terminalId;
 }
 
-const bySession = (sessionId: SessionId): TerminalTarget => ({
+const bySession = (sessionId: SessionId): ServerTerminalTarget => ({
   by: 'session',
   storeId: STORE.storeId,
   sessionId,
 });
 
-const byStart = (startId: number): TerminalTarget => ({ by: 'start', startId });
+const byStart = (startId: StartId): ServerTerminalTarget => ({ by: 'start', startId });
 
 const text = (chunk: Uint8Array): string => new TextDecoder().decode(chunk);
 
@@ -134,7 +163,7 @@ describe('createTerminalStreams subscribing', () => {
 
   it('counts no dropped chunks while the connection is taking them', () => {
     const { terminals, streams, factory, output } = harness();
-    attachToStart(terminals, streams, 7);
+    attachToStart(terminals, streams, START);
     factory.last?.emit('anything');
 
     expect(output[0]?.droppedChunks).toBe(0);
@@ -146,7 +175,7 @@ describe('createTerminalStreams subscribing', () => {
     // knows. The count arrives on the next chunk that gets through rather than
     // on the one that was lost, which is the only frame there is to put it on.
     const { terminals, streams, factory, output, refused, congest } = harness();
-    attachToStart(terminals, streams, 7);
+    attachToStart(terminals, streams, START);
 
     factory.last?.emit('the hub is keeping up');
     congest(true);
@@ -167,7 +196,7 @@ describe('createTerminalStreams subscribing', () => {
     // the size of each gap, and one that does not still sees a number saying
     // the stream is lossy.
     const { terminals, streams, factory, output, congest } = harness();
-    attachToStart(terminals, streams, 7);
+    attachToStart(terminals, streams, START);
 
     congest(true);
     factory.last?.emit('gone');
@@ -186,7 +215,7 @@ describe('createTerminalStreams subscribing', () => {
     // child is never slowed down and its recent output is still there, so a
     // hub that catches up and re-subscribes is replayed what it missed.
     const { terminals, streams, factory, congest } = harness();
-    const { terminalId } = attachToStart(terminals, streams, 7);
+    const { terminalId } = attachToStart(terminals, streams, START);
     terminals.bind(terminalId, SESSION_A);
 
     congest(true);
@@ -205,23 +234,23 @@ describe('createTerminalStreams subscribing', () => {
     // The pending-pane case: the provider has not written a session id yet and
     // the terminal is already producing output.
     const { terminals, streams, factory, output } = harness();
-    const { attachment } = attachToStart(terminals, streams, 7);
+    const { attachment } = attachToStart(terminals, streams, START);
 
     factory.last?.emit('starting up\r\n');
 
     expect(attachment.sessionId).toBeNull();
-    expect(attachment.startId).toBe(7);
-    expect(output[0]).toMatchObject({ sessionId: null, startId: 7 });
+    expect(attachment.startId).toBe(START);
+    expect(output[0]).toMatchObject({ sessionId: null, startId: START });
   });
 
   it('names the session as soon as it has one, on a subscription made by start', () => {
     const { terminals, streams, factory, output } = harness();
-    const { terminalId } = attachToStart(terminals, streams, 7);
+    const { terminalId } = attachToStart(terminals, streams, START);
 
     terminals.bind(terminalId, SESSION_A);
     factory.last?.emit('named now\r\n');
 
-    expect(output[0]).toMatchObject({ sessionId: SESSION_A, startId: 7 });
+    expect(output[0]).toMatchObject({ sessionId: SESSION_A, startId: START });
   });
 
   it('says how much of the beginning is gone rather than passing a tail off as all of it', () => {
@@ -262,7 +291,7 @@ describe('createTerminalStreams subscribing', () => {
   it('refuses a subscription to a start that has not happened on this connection', () => {
     const { streams } = harness();
 
-    expect(streams.subscribe(byStart(99)).ok).toBe(false);
+    expect(streams.subscribe(byStart(startIdSchema.parse('start-nobody-made'))).ok).toBe(false);
   });
 
   it('sends one copy of a chunk however many targets are watching that terminal', () => {
@@ -271,7 +300,7 @@ describe('createTerminalStreams subscribing', () => {
     // once; the peer fans them out, which is what the two ids on the frame are
     // for.
     const { terminals, streams, factory, output } = harness();
-    const { terminalId } = attachToStart(terminals, streams, 7);
+    const { terminalId } = attachToStart(terminals, streams, START);
     terminals.bind(terminalId, SESSION_A);
     streams.subscribe(bySession(SESSION_A));
 
@@ -322,11 +351,11 @@ describe('createTerminalStreams detaching', () => {
 
   it('holds the terminal while another target is still watching it', () => {
     const { terminals, streams, factory, output } = harness();
-    const { terminalId } = attachToStart(terminals, streams, 7);
+    const { terminalId } = attachToStart(terminals, streams, START);
     terminals.bind(terminalId, SESSION_A);
     streams.subscribe(bySession(SESSION_A));
 
-    streams.unsubscribe(byStart(7));
+    streams.unsubscribe(byStart(START));
     factory.last?.emit('still watched\r\n');
 
     expect(output).toHaveLength(1);
@@ -362,7 +391,7 @@ describe('createTerminalStreams detaching', () => {
     const first = spawn(terminals);
     terminals.bind(first, SESSION_A);
     streams.subscribe(bySession(SESSION_A));
-    const { terminalId: second } = attachToStart(terminals, streams, 7);
+    const { terminalId: second } = attachToStart(terminals, streams, START);
 
     streams.detachAll();
 
@@ -422,9 +451,9 @@ describe('createTerminalStreams input and resize', () => {
 
   it('resizes a spawn addressed by its start handle', () => {
     const { terminals, streams, factory } = harness();
-    attachToStart(terminals, streams, 7);
+    attachToStart(terminals, streams, START);
 
-    expect(streams.resize(byStart(7), { cols: 100, rows: 30 }).ok).toBe(true);
+    expect(streams.resize(byStart(START), { cols: 100, rows: 30 }).ok).toBe(true);
     expect(factory.last?.resizes).toEqual([{ cols: 100, rows: 30 }]);
   });
 });
@@ -433,30 +462,32 @@ describe('createTerminalStreams start provenance', () => {
   it('reports a start with no session id yet, so a pending pane has something to be', () => {
     const { terminals, streams } = harness();
     const terminalId = spawn(terminals);
-    streams.noteStart(7, terminalId);
+    streams.noteStart(START, terminalId);
 
-    expect(streams.takeStartTags(STORE.storeId)).toEqual([{ startId: 7, sessionId: null }]);
+    expect(streams.takeStartTags(STORE.storeId)).toEqual([{ startId: START, sessionId: null }]);
   });
 
   it('reports the pair once the provider has named the session, and then stops', () => {
     // Exact, never heuristic: the reader is told which start produced which
-    // session rather than being left to match them up by time. Once it has
-    // been told, repeating a handle local to one connection buys nothing.
+    // session rather than being left to match them up by time. Once this
+    // connection has been told, repeating the handle to it buys nothing.
     const { terminals, streams } = harness();
     const terminalId = spawn(terminals);
-    streams.noteStart(7, terminalId);
+    streams.noteStart(START, terminalId);
     streams.takeStartTags(STORE.storeId);
 
     terminals.bind(terminalId, SESSION_A);
 
-    expect(streams.takeStartTags(STORE.storeId)).toEqual([{ startId: 7, sessionId: SESSION_A }]);
+    expect(streams.takeStartTags(STORE.storeId)).toEqual([
+      { startId: START, sessionId: SESSION_A },
+    ]);
     expect(streams.takeStartTags(STORE.storeId)).toEqual([]);
   });
 
   it('says nothing about a start in another store', () => {
     const { terminals, streams } = harness();
     const terminalId = spawn(terminals);
-    streams.noteStart(7, terminalId);
+    streams.noteStart(START, terminalId);
 
     expect(
       streams.takeStartTags(
@@ -468,10 +499,66 @@ describe('createTerminalStreams start provenance', () => {
   it('drops a start whose terminal is gone rather than naming one that is not there', () => {
     const { terminals, streams } = harness();
     const terminalId = spawn(terminals);
-    streams.noteStart(7, terminalId);
+    streams.noteStart(START, terminalId);
     terminals.closeAll();
 
     expect(streams.takeStartTags(STORE.storeId)).toEqual([]);
+  });
+
+  it('tells a hub that redialled what it started, with no session id yet', () => {
+    // The whole of this change, on the server side. The socket the start
+    // arrived on is gone and the provider has still written nothing, so the
+    // start handle is the only name that spawn has -- and the hub that minted
+    // it is the one asking. A tag held against the socket would be lost here,
+    // and the hub would be watching a terminal it could no longer address.
+    const { terminals, streams, connect } = harness();
+    const terminalId = spawn(terminals);
+    streams.noteStart(START, terminalId);
+    streams.takeStartTags(STORE.storeId);
+
+    const redialled = connect({ watcher: 'connection-after-the-drop' });
+
+    expect(redialled.takeStartTags(STORE.storeId)).toEqual([{ startId: START, sessionId: null }]);
+  });
+
+  it('tells the reconnected hub the pair as soon as the provider names it', () => {
+    const { terminals, streams, connect } = harness();
+    const terminalId = spawn(terminals);
+    streams.noteStart(START, terminalId);
+
+    const redialled = connect({ watcher: 'connection-after-the-drop' });
+    terminals.bind(terminalId, SESSION_A);
+
+    // Once, with the id, and then not again: the same rule the first
+    // connection was under, applied to this one on its own terms.
+    expect(redialled.takeStartTags(STORE.storeId)).toEqual([
+      { startId: START, sessionId: SESSION_A },
+    ]);
+    expect(redialled.takeStartTags(STORE.storeId)).toEqual([]);
+  });
+
+  it('says nothing to a hub that did not make the start', () => {
+    // A start id is minted by one hub and means nothing to another, so the
+    // other hub is not told one. It is not being kept from anything: it sees
+    // the session itself the moment the provider names it, like every other
+    // session in a store it can already read.
+    const { terminals, streams, connect } = harness();
+    const terminalId = spawn(terminals);
+    streams.noteStart(START, terminalId);
+
+    const otherHub = connect({ grant: OTHER_GRANT, watcher: 'connection-of-another-hub' });
+
+    expect(otherHub.takeStartTags(STORE.storeId)).toEqual([]);
+  });
+
+  it('refuses another hub a subscription by a start handle it never minted', () => {
+    const { terminals, streams, connect } = harness();
+    const terminalId = spawn(terminals);
+    streams.noteStart(START, terminalId);
+
+    const otherHub = connect({ grant: OTHER_GRANT, watcher: 'connection-of-another-hub' });
+
+    expect(otherHub.subscribe(byStart(START)).ok).toBe(false);
   });
 });
 
@@ -479,7 +566,7 @@ describe('createTerminalStreams start provenance', () => {
 function attachToStart(
   terminals: TerminalManager,
   streams: TerminalStreams,
-  startId: number,
+  startId: StartId,
 ): { readonly terminalId: string; readonly attachment: TerminalAttachment } {
   const terminalId = spawn(terminals);
   streams.noteStart(startId, terminalId);

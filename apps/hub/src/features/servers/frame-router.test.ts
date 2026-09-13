@@ -7,17 +7,22 @@ import {
 } from '@agentplex/protocol';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { routeServerFrame, type StoreReport } from './frame-router.js';
-import type { InstructionOutcome } from './servers.js';
+import type { InstructionOutcome, StreamAnswer, TerminalOutputFrame } from './servers.js';
 
 /**
  * What a server says, and where each of it goes.
  *
- * The half of this suite that is about silence is the half worth having. Four
- * frames in the protocol have no handler in this build -- the drain notice and
- * the three the terminal relay is made of -- and until the switch became
- * exhaustive they parsed cleanly and vanished with nothing anywhere saying so.
- * A drop is now a debug line that names the frame, which is the difference
- * between "this build does not do that yet" and "something ate a frame".
+ * The half of this suite that is about silence is still the half worth having.
+ * One frame in the protocol has no handler in this build -- the drain notice --
+ * and until the switch became exhaustive it and the three the terminal relay is
+ * made of parsed cleanly and vanished with nothing anywhere saying so. A drop
+ * is now a debug line that names the frame, which is the difference between
+ * "this build does not do that yet" and "something ate a frame".
+ *
+ * The other three have somewhere to go now, and the thing worth asserting about
+ * them is that they go to different places: a subscription's reply is settled
+ * by whoever asked for it, and a chunk of output is a stream nobody asked for.
+ * Telling those two apart is this file's job, not the transport's.
  */
 
 const STORE = storeIdSchema.parse('store-work');
@@ -26,12 +31,16 @@ const SESSION = sessionIdSchema.parse('session-1');
 interface Routed {
   readonly answers: readonly { replyTo: number; outcome: InstructionOutcome }[];
   readonly reports: readonly StoreReport[];
+  readonly streamAnswers: readonly { replyTo: number; answer: StreamAnswer }[];
+  readonly output: readonly TerminalOutputFrame[];
   readonly logged: readonly LogRecord[];
 }
 
 function route(frame: ServerToHubFrame): Routed {
   const answers: { replyTo: number; outcome: InstructionOutcome }[] = [];
   const reports: StoreReport[] = [];
+  const streamAnswers: { replyTo: number; answer: StreamAnswer }[] = [];
+  const output: TerminalOutputFrame[] = [];
   const logged: LogRecord[] = [];
   const logger = createLogger('debug', (record) => logged.push(record));
 
@@ -40,11 +49,13 @@ function route(frame: ServerToHubFrame): Routed {
     {
       onAnswer: (replyTo, outcome) => answers.push({ replyTo, outcome }),
       onReport: (report) => reports.push(report),
+      onStreamAnswer: (replyTo, answer) => streamAnswers.push({ replyTo, answer }),
+      onOutput: (chunk) => output.push(chunk),
     },
     logger,
   );
 
-  return { answers, reports, logged };
+  return { answers, reports, streamAnswers, output, logged };
 }
 
 describe('an answer to an instruction', () => {
@@ -109,30 +120,57 @@ describe('a store report', () => {
   });
 });
 
-describe('a frame this build has no handler for', () => {
-  const unhandled: readonly ServerToHubFrame[] = [
-    { type: 'server-draining', graceMs: 15_000, sessions: [] },
+describe("a subscription's reply", () => {
+  const replies: readonly StreamAnswer[] = [
     {
       type: 'session-subscribed',
       replyTo: 6,
       storeId: STORE,
       sessionId: SESSION,
       startId: null,
-      replayChunks: 0,
-      droppedBytes: 0,
+      replayChunks: 2,
+      droppedBytes: 4_096,
     },
     { type: 'session-unsubscribed', replyTo: 7 },
-    {
+  ];
+
+  it.each(replies)('goes to whoever asked, and not to the instruction channel', (frame) => {
+    const routed = route(frame);
+
+    expect(routed.streamAnswers).toEqual([{ replyTo: frame.replyTo, answer: frame }]);
+    // The one thing worth stating twice: a subscription is not an instruction,
+    // and a hub that settled one with the other would resolve a start with a
+    // reply to a watch.
+    expect(routed.answers).toEqual([]);
+    expect(routed.logged).toEqual([]);
+  });
+});
+
+describe('a chunk of terminal output', () => {
+  it('goes to the relay whole, answers nobody, and is not read on the way', () => {
+    const chunk = encodeTerminalChunk(new TextEncoder().encode('ok\r\n'));
+    const frame: TerminalOutputFrame = {
       type: 'terminal-output',
       storeId: STORE,
       sessionId: SESSION,
       startId: null,
-      chunk: encodeTerminalChunk(new TextEncoder().encode('ok\r\n')),
+      chunk,
       droppedChunks: 0,
-    },
-  ];
+    };
 
-  it.each(unhandled)('says so at debug rather than dropping $type in silence', (frame) => {
+    const routed = route(frame);
+
+    expect(routed.output).toEqual([frame]);
+    expect(routed.output[0]?.chunk).toBe(chunk);
+    expect(routed.answers).toEqual([]);
+    expect(routed.streamAnswers).toEqual([]);
+  });
+});
+
+describe('a frame this build has no handler for', () => {
+  it('says so at debug rather than dropping the drain notice in silence', () => {
+    const frame: ServerToHubFrame = { type: 'server-draining', graceMs: 15_000, sessions: [] };
+
     const routed = route(frame);
 
     expect(routed.answers).toEqual([]);
@@ -141,7 +179,7 @@ describe('a frame this build has no handler for', () => {
       {
         level: 'debug',
         message: 'frame dropped: this hub build does not handle it yet',
-        fields: { type: frame.type },
+        fields: { type: 'server-draining' },
       },
     ]);
   });

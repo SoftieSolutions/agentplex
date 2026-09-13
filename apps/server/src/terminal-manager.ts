@@ -2,11 +2,12 @@ import type {
   SessionId,
   SessionRef,
   SessionStatus,
+  StartId,
   StoreDescriptor,
   StoreId,
 } from '@agentplex/protocol';
 import type { Clock } from '@agentplex/node-shared';
-import type { Launch, SessionLiveness } from '@agentplex/providers';
+import type { GrantId, Launch, SessionLiveness } from '@agentplex/providers';
 import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
 
 /**
@@ -63,6 +64,21 @@ import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
  * second hub is watching, and it cannot drop the watchers of a connection that
  * died without detaching. `WatcherId` below is the answer, and `release` is
  * what a closing socket calls.
+ *
+ * **A start tag is the one thing here that is per hub.** It is the hub's own
+ * name for the act of starting, minted before the instruction was sent, and it
+ * lives here rather than on the connection the instruction arrived on -- which
+ * is the whole point of it. A spawn has no session id until the provider
+ * writes one, so between the fork and the first scan the start tag is the only
+ * name it has, and a tag held by a socket would be lost exactly when the socket
+ * drops: the hub would redial into a terminal it started and could no longer
+ * name, forever if the provider never named the session. Held against the
+ * terminal, it outlives every connection the terminal does.
+ *
+ * The grant is on the tag because a start id means nothing to the hub that did
+ * not mint it. Scoping by grant and not by `hubId` for the reason `WatcherId`
+ * is not a `hubId`: a grant is a record this server minted and a hub id is a
+ * name a peer asserts.
  */
 
 /**
@@ -92,6 +108,20 @@ export const DEFAULT_TERMINAL_CAP = 8;
  * caller could ask "is this terminal watched by anyone other than me".
  */
 export type WatcherId = string;
+
+/**
+ * A start this server was asked to make, and the terminal it produced.
+ *
+ * The `storeId` and the session are not on it: both are facts about the
+ * terminal, which the holder of one of these looks up, and copying them here
+ * would be two records to keep in step while a spawn is being named.
+ */
+export interface TerminalStart {
+  /** The hub's own name for the start, as it arrived on `session-start`. */
+  readonly startId: StartId;
+  /** This server's name for the process that start produced. Never on a wire. */
+  readonly terminalId: string;
+}
 
 export interface TerminalManagerDependencies {
   /** The one thing that starts processes. Injected, so a test forks nothing. */
@@ -211,6 +241,28 @@ export interface TerminalManager extends SessionLiveness {
   resume(session: SessionRef, launch: Launch, options?: LaunchOptions): TerminalOutcome;
   /** Names a spawned terminal's session once discovery has read the id off disk. */
   bind(terminalId: string, sessionId: SessionId): TerminalOutcome;
+  /**
+   * Records that one grant's start produced this terminal.
+   *
+   * Separate from `spawn` and `resume` rather than an argument to them, because
+   * a start id is the asking hub's name for what it asked and the manager's
+   * rules are about processes: nothing in the cap, the eviction order or the
+   * one-live-process rule reads one. It is bookkeeping the manager holds on a
+   * connection's behalf, and holding it is the entire feature.
+   */
+  noteStart(terminalId: string, startId: StartId, grantId: GrantId): void;
+  /**
+   * The starts one grant made that this server still holds a terminal for.
+   *
+   * Scoped to the grant and never merged across them: a start id minted by one
+   * hub means nothing to another, so a second hub is told nothing about this
+   * one's starts. It learns about the session itself as soon as the provider
+   * names it, like any other session in the store.
+   *
+   * A tag whose terminal is gone is gone: a handle pointing at nothing is worse
+   * than no handle, because it names a start that is not running here.
+   */
+  starts(grantId: GrantId): readonly TerminalStart[];
   /** Records the status somebody derived for a session, if a terminal holds it. */
   observe(session: SessionRef, status: SessionStatus): void;
   terminal(terminalId: string): Terminal | undefined;
@@ -272,6 +324,8 @@ export function createTerminalManager({
   cap = DEFAULT_TERMINAL_CAP,
 }: TerminalManagerDependencies): TerminalManager {
   const terminals = new Map<string, TerminalEntry>();
+  /** Every live start, by the grant that made it. Pruned when a terminal closes. */
+  const startsByGrant = new Map<GrantId, Map<StartId, string>>();
   let sealed = false;
 
   const liveHolderOf = (session: SessionRef): TerminalRecord | undefined => {
@@ -361,6 +415,15 @@ export function createTerminalManager({
     // running" has one answer rather than two that drift.
     supervisor.forget(record.terminalId);
     terminals.delete(record.terminalId);
+    // And every start that named it, for the same reason: the one thing worse
+    // than a hub not being told which terminal its start produced is being
+    // told a terminal that is no longer here.
+    for (const [grantId, held] of startsByGrant) {
+      for (const [startId, terminalId] of held) {
+        if (terminalId === record.terminalId) held.delete(startId);
+      }
+      if (held.size === 0) startsByGrant.delete(grantId);
+    }
   };
 
   const track = (
@@ -414,6 +477,22 @@ export function createTerminalManager({
 
       record.sessionId = sessionId;
       return { ok: true, terminal: entry.view };
+    },
+
+    noteStart(terminalId: string, startId: StartId, grantId: GrantId): void {
+      // A start for a terminal that is already gone is not recorded: it would
+      // be pruned by the next close it outlived and reported as running in the
+      // meantime.
+      if (!terminals.has(terminalId)) return;
+      const held = startsByGrant.get(grantId) ?? new Map<StartId, string>();
+      held.set(startId, terminalId);
+      startsByGrant.set(grantId, held);
+    },
+
+    starts(grantId: GrantId): readonly TerminalStart[] {
+      const held = startsByGrant.get(grantId);
+      if (held === undefined) return [];
+      return [...held].map(([startId, terminalId]) => ({ startId, terminalId }));
     },
 
     observe(session: SessionRef, status: SessionStatus): void {

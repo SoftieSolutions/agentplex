@@ -1,4 +1,9 @@
-import type { ProviderReadiness, ServerId, StoreId } from '@agentplex/protocol';
+import type {
+  ProviderReadiness,
+  ServerId,
+  ServerRegistrationId,
+  StoreId,
+} from '@agentplex/protocol';
 import {
   type Clock,
   type Logger,
@@ -17,6 +22,9 @@ import type {
   ServerStoreReport,
   SessionInstruction,
   StaleReason,
+  StreamInstruction,
+  StreamOutcome,
+  TerminalOutputFrame,
 } from './servers.js';
 import type {
   ServerTransport,
@@ -88,6 +96,16 @@ export interface DialLoopDependencies {
    * running -- so there is nothing here to request and nothing to correlate.
    */
   readonly onReport?: (report: ServerStoreReport) => void;
+  /**
+   * Called with every chunk of terminal output this server sends.
+   *
+   * Straight through rather than buffered like a report, and the asymmetry is
+   * the point: a report can arrive before the hub has recorded the connection,
+   * because accepting a handshake is what makes a server send one. Output
+   * cannot -- nothing produces it until somebody subscribes, and nothing can
+   * subscribe until this loop is holding a connection to put the frame on.
+   */
+  readonly onStream?: (registrationId: ServerRegistrationId, output: TerminalOutputFrame) => void;
 }
 
 const DEFAULT_REFUSED_RETRY_MS = 60_000;
@@ -113,6 +131,15 @@ export interface DialLoop {
    * is an instruction nobody would still authorise.
    */
   ask(instruction: SessionInstruction): Promise<InstructionOutcome>;
+  /**
+   * Puts one terminal frame to this server and answers where the reply is read.
+   *
+   * Refuses rather than throwing when there is nothing to put it on, for the
+   * reason `ask` does, and the refusal names the machine: a pane that has gone
+   * silent and a machine that has gone away render identically, and the whole
+   * of the difference is a sentence saying which server the hub cannot reach.
+   */
+  stream(frame: StreamInstruction, answer: (outcome: StreamOutcome) => void): void;
   /**
    * Stops dialling and closes whatever is held. Resolves when the loop has
    * actually finished, so a hub shutdown cannot leave a dial in flight.
@@ -265,6 +292,7 @@ export function startDialLoop(
           storeId: frame.storeId,
           sessions: frame.sessions,
           holding: frame.holding,
+          starts: frame.starts,
         };
         if (pendingReports !== null) {
           pendingReports.push(arrived);
@@ -272,6 +300,7 @@ export function startDialLoop(
         }
         dependencies.onReport?.(arrived);
       },
+      onOutput: (output) => dependencies.onStream?.(registration.id, output),
     });
   };
 
@@ -414,6 +443,18 @@ export function startDialLoop(
         });
       }
       return transport.ask(instruction);
+    },
+    stream(frame: StreamInstruction, answer: (outcome: StreamOutcome) => void): void {
+      const transport = held;
+      if (transport === null) {
+        answer({
+          ok: false,
+          code: 'refused',
+          problem: `the hub is not connected to ${registration.label}`,
+        });
+        return;
+      }
+      transport.stream(frame, answer);
     },
     stop(): Promise<void> {
       stopped = true;
