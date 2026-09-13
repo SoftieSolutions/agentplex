@@ -118,6 +118,10 @@ export interface SchemeRoles {
   terminalBackground: HueName;
   /** The terminal's foreground. */
   terminalText: HueName;
+  /** The wash behind every match a find in the pane turned up. */
+  terminalMatch: HueName;
+  /** The wash behind the one match the find bar is standing on. */
+  terminalMatchActive: HueName;
 }
 
 export const roles = {
@@ -137,6 +141,8 @@ export const roles = {
     link: 'amber',
     terminalBackground: 'pitch',
     terminalText: 'driftwood',
+    terminalMatch: 'walnut',
+    terminalMatchActive: 'ridge',
   },
   light: {
     background: 'parchment',
@@ -154,6 +160,12 @@ export const roles = {
     link: 'bronze',
     terminalBackground: 'ink',
     terminalText: 'driftwood',
+    // The same two hues as the dark scheme, for the same reason
+    // `terminalText` is: the terminal well is dark in both schemes, so a
+    // highlight that followed the page would paint a light block behind
+    // driftwood text on paper and make the match the one thing unreadable.
+    terminalMatch: 'walnut',
+    terminalMatchActive: 'ridge',
   },
 } as const satisfies Record<Scheme, SchemeRoles>;
 

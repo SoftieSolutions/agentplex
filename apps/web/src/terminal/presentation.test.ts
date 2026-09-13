@@ -6,9 +6,12 @@ import {
   type MachineState,
 } from '@agentplex/protocol';
 import type { HubSnapshot } from '../store/hub-store.js';
+import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
 import {
   findSessionRow,
   machineLabel,
+  matchSummary,
+  searchScopeNotice,
   terminalInputNotice,
   toneForStatus,
 } from './presentation.js';
@@ -176,5 +179,38 @@ describe('terminalInputNotice', () => {
   it('does not carry a stale refusal into a reconnecting spell the store already words', () => {
     const snapshot = snapshotWith({ phase: 'reconnecting' });
     expect(terminalInputNotice(snapshot, 'stale reason')).toBeNull();
+  });
+});
+
+describe('matchSummary', () => {
+  it('says nothing before anything has been typed', () => {
+    expect(matchSummary('', { index: 4, count: 9 })).toBe('');
+    expect(matchSummary('refresh', null)).toBe('');
+  });
+
+  it('counts from one, because the user is not counting from zero', () => {
+    expect(matchSummary('refresh', { index: 2, count: 12 })).toBe('3 of 12');
+    expect(matchSummary('refresh', { index: 0, count: 1 })).toBe('1 of 1');
+  });
+
+  it('gives a total without a position when it is standing on no match', () => {
+    expect(matchSummary('refresh', { index: -1, count: 12 })).toBe('12 matches');
+    expect(matchSummary('refresh', { index: -1, count: 1 })).toBe('1 match');
+  });
+
+  it('says a miss is a miss rather than showing an empty count', () => {
+    expect(matchSummary('refresh', { index: -1, count: 0 })).toBe('no matches');
+  });
+});
+
+describe('searchScopeNotice', () => {
+  it('says nothing while the pane still holds everything it was sent', () => {
+    expect(searchScopeNotice(false)).toBeNull();
+  });
+
+  it('names the window and refuses to let a miss stand for absence', () => {
+    const notice = searchScopeNotice(true);
+    expect(notice).toContain(String(EMULATOR_SCROLLBACK_LINES));
+    expect(notice).toContain('not proof of absence');
   });
 });
