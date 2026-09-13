@@ -7,7 +7,7 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
-import type { InstructionOutcome, SessionInstruction } from '../servers/servers.js';
+import type { InstructionOutcome, ServerInstruction } from '../servers/servers.js';
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
 import { routeStart, routeStop } from './session-routing.js';
 
@@ -36,7 +36,7 @@ export interface SessionsDependencies {
   readonly connections: {
     ask(
       registrationId: ServerRegistrationId,
-      instruction: SessionInstruction,
+      instruction: ServerInstruction,
     ): Promise<InstructionOutcome>;
   };
   readonly logger: Logger;

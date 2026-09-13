@@ -17,6 +17,7 @@ import {
   type TokenMinter,
   createWebSocketListener,
 } from '@agentplex/node-shared';
+import { createDirectoryBrowser, type DirectoryReader } from './directory-browse.js';
 import { createDrain, drainingSessions } from './drain.js';
 import { serveHubConnection, type HubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
@@ -58,6 +59,26 @@ export interface SessionServerDependencies {
   /** Store roots from configuration, already absolute and deduplicated. */
   readonly storePaths: readonly string[];
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * The directories a hub may browse under, already absolute and deduplicated.
+   *
+   * Separate from the store paths above, though they often name the same
+   * directory, because they are different permissions: a store is a volume this
+   * server watches, and a browse root is where somebody may look for a checkout
+   * to work in. Empty is legal and means browsing is refused with that as the
+   * reason -- `config.ts` argues why that is the default.
+   */
+  readonly browseRoots: readonly string[];
+  /**
+   * How a browse reads this machine's disk: resolve a path, read a directory.
+   *
+   * A fourth filesystem seam, and not an oversight. The store seam reaches a
+   * provider's volume and may never grow a write; the data root seam creates a
+   * directory; the grants seam replaces a file. This one resolves links, which
+   * is the one call the containment rule cannot be written without and the one
+   * nothing else here has ever needed.
+   */
+  readonly directoryReader: DirectoryReader;
   /**
    * Where this server's own identity and pairing token live, absolute.
    *
@@ -245,6 +266,8 @@ export async function startSessionServer(
     ids,
     storePaths,
     storeFileSystem,
+    browseRoots,
+    directoryReader,
     identityPath,
     grantFileSystem,
     tokens,
@@ -431,6 +454,13 @@ export async function startSessionServer(
     onLeave: (member) => terminals.release(member.connectionId),
   });
 
+  // What any hub may look at on this machine's disk, built once over the roots
+  // the operator configured. One browser for the server rather than one per
+  // connection, because the roots are a fact about the machine: two hubs
+  // browsing are two questions about the same disk, and a per-connection copy
+  // would be a second place the list could differ from the first.
+  const browse = createDirectoryBrowser({ roots: browseRoots, reader: directoryReader });
+
   // The one thing a hub can do with this server before it has proved itself:
   // open a socket. Everything past that is the handshake's to allow.
   const hubs = createWebSocketListener({
@@ -452,6 +482,9 @@ export async function startSessionServer(
           // after a store came back reachable is told what is mounted now.
           stores,
           providers: readiness,
+          // The roots this server was configured with, and nothing a frame can
+          // add to. A connection may ask; what it may be told is decided above.
+          browse,
           // Sampled when this connection is pinged and at no other time, so a
           // server nobody has dialled reads nothing. The reader is the
           // server's and not the connection's: the counters are one machine's,

@@ -468,6 +468,8 @@ describe('hub and server round trips', () => {
       size: { cols: 120, rows: 40 },
     },
     { type: 'protocol-error', code: 'bad-request', message: 'type: invalid input' },
+    { type: 'directory-list', id: 14, directory: null },
+    { type: 'directory-list', id: 15, directory: '/srv/work' },
   ];
 
   const serverToHub: readonly ServerToHubFrame[] = [
@@ -544,6 +546,24 @@ describe('hub and server round trips', () => {
       startId: null,
       chunk: encodeTerminalChunk(new TextEncoder().encode('\u001b[32mok\u001b[0m\r\n')),
       droppedChunks: 0,
+    },
+    {
+      type: 'directory-listing',
+      replyTo: 8,
+      directory: '/srv/work',
+      roots: ['/srv/work'],
+      entries: [
+        { name: 'agentplex', kind: 'directory' },
+        { name: 'notes.md', kind: 'file' },
+        { name: 'current', kind: 'other' },
+      ],
+      truncated: false,
+    },
+    {
+      type: 'directory-refused',
+      replyTo: 9,
+      code: 'refused',
+      message: '/etc is not under a directory this server will browse',
     },
     { type: 'protocol-error', code: 'protocol-version', message: 'this server speaks version 2' },
   ];

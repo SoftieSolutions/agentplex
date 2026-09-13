@@ -25,6 +25,8 @@ import {
 } from '../../../apps/hub/src/features/discovery/fake-discovery.js';
 import { createFakeWebAssets } from '../../../apps/hub/src/features/web/fake-web.js';
 import { serveServerEnd } from './server-end.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import type { SessionOutcome, StoreReport } from '../../../apps/server/src/session-control.js';
 import {
@@ -149,6 +151,12 @@ function labelFor(text: string): string {
   if (frame.type === 'pane-layout') {
     return frame.layout === null ? 'paneLayoutEmpty' : 'paneLayout';
   }
+  if (frame.type === 'directory-listing') {
+    // Labelled by which of the two shapes it is. The roots listing carries the
+    // absolute paths of the roots as entry names and the other carries single
+    // segments, and the web's joining rule has to be tested against both.
+    return frame.directory === null ? 'directoryRoots' : 'directoryListing';
+  }
   const labels = new Map<string, string>([
     ['welcome', 'welcome'],
     ['pong', 'pong'],
@@ -176,6 +184,19 @@ interface Machine {
   readonly providers: readonly ProviderReadiness[];
   /** What this machine's controller answers a start with. Default: a refusal. */
   readonly startOutcome?: SessionOutcome;
+  /**
+   * What a client may browse on this machine, and what is under it.
+   *
+   * Absent is a machine with no browse roots, which is the default a server
+   * ships with; the one machine that has them is the one the directory-listing
+   * fixture is captured from.
+   */
+  readonly browse?: {
+    readonly roots: readonly string[];
+    readonly directories: Readonly<
+      Record<string, readonly { name: string; kind: 'directory' | 'file' | 'other' }[]>
+    >;
+  };
 }
 
 const START = 1_756_000_000_000;
@@ -214,6 +235,10 @@ function fleetDialer(
         identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
         stores: machine.stores,
         providers: machine.providers,
+        browse: createDirectoryBrowser({
+          roots: [...(machine.browse?.roots ?? [])],
+          reader: createFakeDirectoryReader({ directories: machine.browse?.directories ?? {} }),
+        }),
         logger,
       });
       live.set(host, serverEnd);
@@ -711,6 +736,20 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
               holding: [hold('session-fix-auth', false)],
             },
           ],
+          // The one machine in these captures with somewhere to browse, so the
+          // directory frames are captured from a real server answering out of
+          // real configuration rather than written by hand.
+          browse: {
+            roots: ['/Users/robert/code'],
+            directories: {
+              '/Users/robert/code': [
+                { name: '.config', kind: 'directory' },
+                { name: 'agentplex', kind: 'directory' },
+                { name: 'notes.md', kind: 'file' },
+                { name: 'scratch', kind: 'other' },
+              ],
+            },
+          },
           // Answers a start the way a real spawn does: ok, with no session id,
           // because the provider has not written one yet. The web form's
           // follow-up rules are tested against exactly this reply.
@@ -761,6 +800,38 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     const sessionStarted = starter.received.find((text) => labelFor(text) === 'sessionStarted');
     if (sessionStarted === undefined) throw new Error('the start was not answered');
+
+    // A browse of the same machine, both shapes. The roots listing is how a
+    // picker starts -- the client does not know what a machine will allow --
+    // and the directory listing under it is what every step after that looks
+    // like. Both travel the whole real path: the hub relays, the server answers
+    // out of the roots it was configured with, and the frames captured here are
+    // what a client actually reads.
+    starter.send({
+      type: 'directory-list',
+      id: 3,
+      server: 'registration-mbp-robert',
+      directory: null,
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'directoryRoots'),
+      'the roots browse to be answered',
+    );
+    starter.send({
+      type: 'directory-list',
+      id: 4,
+      server: 'registration-mbp-robert',
+      directory: '/Users/robert/code',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'directoryListing'),
+      'the directory browse to be answered',
+    );
+    const directoryRoots = starter.received.find((text) => labelFor(text) === 'directoryRoots');
+    const directoryListing = starter.received.find((text) => labelFor(text) === 'directoryListing');
+    if (directoryRoots === undefined || directoryListing === undefined) {
+      throw new Error('a browse was not answered');
+    }
     await singleHub.cleanup();
 
     // A shared volume: two machines with the same store mounted. This is the
@@ -924,6 +995,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStateStale', machineStateStale);
     captured.set('machineStateSingle', machineStateSingle);
     captured.set('sessionStarted', sessionStarted);
+    captured.set('directoryRoots', directoryRoots);
+    captured.set('directoryListing', directoryListing);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
     captured.set('machineStateDiscovered', machineStateDiscovered);

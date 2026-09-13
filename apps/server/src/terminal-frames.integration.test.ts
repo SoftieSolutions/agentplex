@@ -22,6 +22,8 @@ import type { Launch } from '@agentplex/providers';
 import type { ServerIdentity } from '@agentplex/providers';
 import { createFakeGrantAuthority, readyProvider } from '@agentplex/providers/testing';
 import { createHubAudience } from './hub-audience.js';
+import { createDirectoryBrowser } from './directory-browse.js';
+import { createFakeDirectoryReader } from './fake-directory-reader.js';
 import { MAX_BUFFERED_OUTPUT_BYTES, serveHubConnection } from './hub-connection.js';
 import {
   createFakeSessionController,
@@ -101,6 +103,9 @@ function harness(scrollbackBytes?: number, socketOptions?: FakeMessageSocketOpti
     providers: [readyProvider()],
     sessions,
     terminals,
+    // Nothing to browse. This file's subject is terminal bytes, and a machine
+    // with no browse roots is the default one anyway.
+    browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
     machineLoad: createFakeMachineLoadReader(),
     logger,
   });

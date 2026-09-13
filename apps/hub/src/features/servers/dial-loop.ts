@@ -15,7 +15,7 @@ import type {
   ServerConnectionPhase,
   ServerConnectionReport,
   ServerStoreReport,
-  SessionInstruction,
+  ServerInstruction,
   StaleReason,
 } from './servers.js';
 import type {
@@ -112,7 +112,7 @@ export interface DialLoop {
    * ten minutes later, on a session the user has since opened somewhere else,
    * is an instruction nobody would still authorise.
    */
-  ask(instruction: SessionInstruction): Promise<InstructionOutcome>;
+  ask(instruction: ServerInstruction): Promise<InstructionOutcome>;
   /**
    * Stops dialling and closes whatever is held. Resolves when the loop has
    * actually finished, so a hub shutdown cannot leave a dial in flight.
@@ -403,7 +403,7 @@ export function startDialLoop(
     get report(): ServerConnectionReport {
       return report();
     },
-    ask(instruction: SessionInstruction): Promise<InstructionOutcome> {
+    ask(instruction: ServerInstruction): Promise<InstructionOutcome> {
       const transport = held;
       if (transport === null) {
         return Promise.resolve({

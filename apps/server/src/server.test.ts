@@ -23,6 +23,7 @@ import { startRuntime, type Runtime } from './boot.js';
 import type { ServerConfig } from './config.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { createFakeDataRoot } from './fake-data-root.js';
+import { createFakeDirectoryReader } from './fake-directory-reader.js';
 import { createFakeWorkingTree } from './fake-working-tree.js';
 import { createFakeTerminals, type FakeTerminals } from './fake-terminals.js';
 import { createFakeMachineLoadReader } from './fake-machine-probe.js';
@@ -66,6 +67,9 @@ const config: ServerConfig = {
   port: 0,
   storePaths: [STORE_PATH],
   binPath: [],
+  // Nothing to browse: this file is about what a shutdown does to the sessions
+  // and the sockets, and an empty list is the default a server ships with.
+  browseRoots: [],
   identityPath: IDENTITY_PATH,
   // Nothing supplied a pairing token, so this server mints its own; nothing
   // told it a zone either. Neither is what this file is about -- it is about
@@ -160,6 +164,7 @@ async function start(reading: readonly ProviderReadiness[] = []): Promise<World>
     timers: createFakeTimers(),
     storeFileSystem: createFakeStoreFiles(),
     dataRootFileSystem: createFakeDataRoot(),
+    directoryReader: createFakeDirectoryReader(),
     grantFileSystem: createFakeGrantFiles(),
     tokens: { newToken: () => TOKEN },
     // No adapters. A scan that found sessions would derive statuses of its own

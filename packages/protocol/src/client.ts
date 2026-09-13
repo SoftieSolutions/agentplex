@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { directoryListingFrameSchema, directorySchema } from './directory.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import {
   hubIdSchema,
@@ -180,6 +181,33 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
   sessionUnsubscribeFrameSchema,
   terminalInputFrameSchema,
   terminalResizeFrameSchema,
+  /**
+   * Asks what is in a directory on one paired server, so that the user can
+   * pick one by browsing.
+   *
+   * This is the first client frame to carry a directory, and `directory.ts`
+   * holds the amended rule that lets it. What makes this not the `{ cwd }`
+   * field the old rule forbade is not that a directory is harmless: it is that
+   * the value is parsed by `directorySchema`, refused by the server unless it
+   * sits under a root that server's operator configured, and reaches no spawn
+   * field but `cwd` on a spawn the operation registry still builds.
+   *
+   * `server` is named and is not the hub's to choose, which is the one place
+   * this differs from a start. A start names a store, because a store is a
+   * volume more than one machine may have mounted and which of them runs a
+   * session is the hub's decision; a directory is a fact about one machine's
+   * disk, and "browse somewhere" is not a question the hub could answer for
+   * the user.
+   *
+   * `null` lists the roots, which is how a browse begins: the client does not
+   * know what that machine will allow, and must not have to guess.
+   */
+  z.object({
+    type: z.literal('directory-list'),
+    id: frameIdSchema,
+    server: serverRegistrationIdSchema,
+    directory: directorySchema.nullable(),
+  }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
 ]);
@@ -316,6 +344,20 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
   sessionSubscribedFrameSchema,
   sessionUnsubscribedFrameSchema,
   terminalOutputFrameSchema,
+  /**
+   * What is in that directory, relayed from the server that holds the disk.
+   *
+   * A reply to the client that asked and to nobody else, for the reason a
+   * layout is: what one person is browsing on one machine is not a fact about
+   * the fleet, and pushing it unasked would be answering a question nobody
+   * else had open. The same shape the server answered the hub with, unchanged
+   * -- see `directory.ts` for why one shape serves both legs.
+   *
+   * A refusal travels as `refusal` with `holder: null`, like every other no on
+   * this direction: a directory has no live process to name, and the client
+   * renders the sentence.
+   */
+  directoryListingFrameSchema,
   protocolErrorFrameSchema,
 ]);
 export type HubFrame = z.infer<typeof hubFrameSchema>;

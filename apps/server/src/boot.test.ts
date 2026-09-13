@@ -18,6 +18,7 @@ import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import type { ServerConfig } from './config.js';
 import { createFakeMachineLoadReader } from './fake-machine-probe.js';
+import { createFakeDirectoryReader } from './fake-directory-reader.js';
 
 const logger = createLogger('error', () => {});
 const ids = { newId: () => 'hub-under-test' };
@@ -32,6 +33,10 @@ function dependencies(
     timers: createFakeTimers(),
     storeFileSystem,
     dataRootFileSystem,
+    // A disk with nothing on it: the configuration below browses nothing, so
+    // this seam is never reached and a reader that could be is the honest
+    // shape of "not what this file is about".
+    directoryReader: createFakeDirectoryReader(),
     // The grants file lives beside the identity file, so a runtime that starts
     // writes one here too: grant zero, for the token it just minted.
     grantFileSystem: createFakeGrantFiles(),
@@ -93,6 +98,10 @@ const serverOnly: ServerConfig = {
   port: 0,
   storePaths: [],
   binPath: [],
+  // Nothing to browse, which is the default a server ships with: a machine
+  // nobody gave a root to refuses every browse and says so. This file is about
+  // what starts and stops.
+  browseRoots: [],
   identityPath: IDENTITY_PATH,
   // Nothing supplied one, which is every machine with a disk of its own: the
   // server mints its own on first start. The block at the bottom of this file

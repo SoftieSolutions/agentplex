@@ -150,17 +150,24 @@ export function countsTowardAttention(report: ServerConnectionReport): boolean {
  * caller that supplied its own would be numbering frames on a socket it does
  * not own. Derived from the wire union rather than restated, so that a field
  * added to an instruction is a field this carries, without an edit.
+ *
+ * It was `ServerInstruction` until AGX-238 put a directory listing on the same
+ * channel, and the rename is the honest half of that: an `ask` that carries
+ * something which is not about a session should not be typed as though it were.
+ * The set is still a list rather than every frame with an id -- a handshake and
+ * a ping are the connection's own, not a caller's -- so adding one here stays a
+ * decision somebody takes.
  */
 type WithoutFrameId<Frame> = Frame extends { id: FrameId } ? Omit<Frame, 'id'> : never;
 
-export type SessionInstruction = WithoutFrameId<
-  Extract<HubToServerFrame, { type: 'session-start' | 'session-stop' }>
+export type ServerInstruction = WithoutFrameId<
+  Extract<HubToServerFrame, { type: 'session-start' | 'session-stop' | 'directory-list' }>
 >;
 
 /** What a server answers an instruction with when it did it. */
-export type SessionAnswer = Extract<
+export type ServerAnswer = Extract<
   ServerToHubFrame,
-  { type: 'session-started' | 'session-stopped' }
+  { type: 'session-started' | 'session-stopped' | 'directory-listing' }
 >;
 
 /**
@@ -172,7 +179,7 @@ export type SessionAnswer = Extract<
  * that was the reason, exactly as the server sent it.
  */
 export type InstructionOutcome =
-  | { readonly ok: true; readonly answer: SessionAnswer }
+  | { readonly ok: true; readonly answer: ServerAnswer }
   | {
       readonly ok: false;
       readonly code: RefusalCode;
@@ -252,7 +259,7 @@ export interface Servers {
    */
   ask(
     registrationId: ServerRegistrationId,
-    instruction: SessionInstruction,
+    instruction: ServerInstruction,
   ): Promise<InstructionOutcome>;
   stop(): Promise<void>;
 }
@@ -337,7 +344,7 @@ export function createServers(dependencies: ServersDependencies): Servers {
 
     ask(
       registrationId: ServerRegistrationId,
-      instruction: SessionInstruction,
+      instruction: ServerInstruction,
     ): Promise<InstructionOutcome> {
       const connection = connections.get(registrationId);
       if (connection === undefined) {

@@ -11,6 +11,8 @@ import {
 } from '@agentplex/protocol';
 import { createFakeMessageSocket, PEER_GONE } from '@agentplex/node-shared/testing';
 import { createLogger, CLOSE_NORMAL, CLOSE_POLICY, type LogRecord } from '@agentplex/node-shared';
+import { createDirectoryBrowser } from './directory-browse.js';
+import { createFakeDirectoryReader } from './fake-directory-reader.js';
 import { serveHubConnection } from './hub-connection.js';
 import type { ServerIdentity } from '@agentplex/providers';
 import { createFakeSessionController } from './fake-session-controller.js';
@@ -57,6 +59,9 @@ function handshake(overrides: Record<string, unknown> = {}): string {
   });
 }
 
+/** The one directory this file's connections will browse under. */
+const BROWSE_ROOT = '/srv/work';
+
 /**
  * The dependencies every connection in this file shares, so that a test naming
  * one of them is naming the thing it is about.
@@ -74,6 +79,16 @@ function deps(
     providers,
     sessions,
     terminals: createFakeTerminals().terminals,
+    // One browse root and a disk under it, so that the frames in this file have
+    // something real to be answered with. Whether a path is allowed is
+    // `directory-browse.test.ts`'s subject; this file's is what a connection
+    // does with the answer.
+    browse: createDirectoryBrowser({
+      roots: [BROWSE_ROOT],
+      reader: createFakeDirectoryReader({
+        directories: { [BROWSE_ROOT]: [{ name: 'agentplex', kind: 'directory' }] },
+      }),
+    }),
     machineLoad: createFakeMachineLoadReader(),
     logger,
     ...overrides,
@@ -243,6 +258,54 @@ describe('serveHubConnection', () => {
       { type: 'protocol-error', code: 'bad-request', message: expect.any(String) },
     ]);
     expect(connection.state).toBe('closed');
+  });
+
+  it('lists no directory for a socket that has not handshaken', async () => {
+    // The bound that matters most about the frame that carries a path: a peer
+    // that has not proved it may talk to this server learns nothing about what
+    // is on its disk, including whether it has any browse roots at all.
+    const { socket, connection } = connect();
+
+    socket.receive(JSON.stringify({ type: 'directory-list', id: 7, directory: null }));
+    await settle();
+
+    expect(replies(socket.sent)).toEqual([
+      { type: 'protocol-error', code: 'bad-request', message: expect.any(String) },
+    ]);
+    expect(connection.state).toBe('closed');
+  });
+
+  it('answers a browse of the roots once the connection is established', async () => {
+    const { socket } = connect();
+    socket.receive(handshake());
+    await settle();
+
+    socket.receive(JSON.stringify({ type: 'directory-list', id: 2, directory: null }));
+    await settle();
+
+    expect(replies(socket.sent).at(-1)).toMatchObject({
+      type: 'directory-listing',
+      replyTo: 2,
+      directory: null,
+      roots: [BROWSE_ROOT],
+    });
+  });
+
+  it('sends a refusal of its own rather than a session refusal with no hold on it', async () => {
+    // A directory has no live process to name, so `directory-refused` is what
+    // a browse is answered no with: a `hold` that was always null on half the
+    // refusals would be a field every reader had to learn when it means
+    // anything.
+    const { socket } = connect();
+    socket.receive(handshake());
+    await settle();
+
+    socket.receive(JSON.stringify({ type: 'directory-list', id: 2, directory: '/etc' }));
+    await settle();
+
+    const refused = replies(socket.sent).at(-1);
+    expect(refused).toMatchObject({ type: 'directory-refused', replyTo: 2, code: 'refused' });
+    expect(refused).not.toHaveProperty('hold');
   });
 
   it('answers a ping once the connection is established', async () => {

@@ -120,8 +120,11 @@ carries the argument for each.
   listing.
 - **One parser per protocol direction**, ending in one `assertNever` switch.
   Nothing downstream re-checks a frame's `type` by hand.
-- **No frame carries an operation name, an argv element, an env var, or a cwd.**
-  Every spawn goes through the operation registry, `shell: false` always.
+- **No frame carries an operation name, an argv element or an env var.** A
+  directory crosses the wire only as a `directory` field parsed by
+  `directorySchema`, refused unless under a configured browse root, and the only
+  spawn field it may reach is `cwd`. Every spawn goes through the operation
+  registry, `shell: false` always.
 - **Migrations are forward-only and append-only.** There is no `down`. An
   applied migration is history: add a new one rather than editing it.
 - Export interfaces from the file that defines them. Types live near what they

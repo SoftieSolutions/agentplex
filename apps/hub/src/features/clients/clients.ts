@@ -6,6 +6,7 @@ import {
   type MessageSocket,
   type Timers,
 } from '@agentplex/node-shared';
+import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
 import type { FleetState } from '../fleet-state/fleet-state.js';
 import {
@@ -67,6 +68,14 @@ export interface ClientsDependencies {
    */
   readonly sessions: Sessions;
   /**
+   * Browsing a server's directories, handed to every client this serves.
+   *
+   * One instance for the whole broadcast, for the reason the sessions seam is
+   * one: which machines are reachable is a fact about the fleet, and a
+   * per-socket copy of that would be a second answer waiting to differ.
+   */
+  readonly projects: Projects;
+  /**
    * The deadline seam the flush is scheduled on.
    *
    * Injected rather than `setTimeout` because coalescing is exactly the
@@ -110,7 +119,7 @@ export interface Clients {
 const DEFAULT_COALESCE_MS = 0;
 
 export function createClients(dependencies: ClientsDependencies): Clients {
-  const { hubId, state, timers, readLayout, readPaneLayout, writePaneLayout, sessions } =
+  const { hubId, state, timers, readLayout, readPaneLayout, writePaneLayout, sessions, projects } =
     dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
@@ -181,6 +190,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         readPaneLayout,
         writePaneLayout,
         sessions,
+        projects,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);
         },

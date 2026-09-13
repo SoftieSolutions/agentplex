@@ -16,6 +16,16 @@ export {
 } from './beacon.js';
 export type { ServerBeacon } from './beacon.js';
 
+export {
+  DIRECTORY_ENTRIES_MAX,
+  directoryEntryKindSchema,
+  directoryEntrySchema,
+  directoryListFrameSchema,
+  directoryListingFrameSchema,
+  directorySchema,
+} from './directory.js';
+export type { DirectoryEntry, DirectoryEntryKind, DirectoryListingFrame } from './directory.js';
+
 export { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 export type { FrameId, ProtocolErrorFrame, RefusalCode } from './frames.js';
 

@@ -25,6 +25,8 @@ import {
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
 import { serveServerEnd } from './server-end.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
@@ -58,6 +60,7 @@ import {
   createFleetState,
   type FleetState,
 } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
+import { createProjects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
@@ -85,6 +88,16 @@ const START = 1_756_000_000_000;
 const clock = { now: () => START };
 
 const WORK = storeIdSchema.parse('store-work');
+
+/**
+ * What every machine in this fleet will let a client browse.
+ *
+ * Named here because the wire-shape assertion at the bottom of the file is
+ * about it: the rule that lets a directory cross is that it is under a root the
+ * server operator configured, so the test that says no instruction carries a
+ * cwd now also says that every directory one does carry is under one of these.
+ */
+const BROWSE_ROOTS = ['/volumes/work'] as const;
 
 /** A store both machines have mounted: one volume, two servers attached. */
 function storeOn(path: string): StoreDescriptor {
@@ -183,6 +196,12 @@ function serveMachine(machine: Machine): DialResult {
       serverId: serverIdSchema.parse(`server-${machine.label}`),
       token: `tok-${machine.label}`,
     },
+    // The roots this fleet browses under, so that a directory on any frame in
+    // this file has something real to be checked against.
+    browse: createDirectoryBrowser({
+      roots: [...BROWSE_ROOTS],
+      reader: createFakeDirectoryReader({ directories: { '/volumes/work': [] } }),
+    }),
     stores,
     providers: machine.providers,
     // The same terminals the controller starts into: a subscription resolves
@@ -295,6 +314,10 @@ async function start(
     readPaneLayout: async () => null,
     writePaneLayout: async () => undefined,
     sessions,
+    // Browsing is not this file's subject, but the broadcast needs the seam:
+    // the wire-shape assertion at the bottom is what cares that a directory on
+    // any frame is under a root.
+    projects: createProjects({ state, connections, logger }),
   });
 
   await connections.sync();
@@ -689,11 +712,19 @@ describe('a client-initiated session start', () => {
 
     // `cwd` is the one word with two meanings, so it is checked by direction
     // rather than by name. A session descriptor carries it as a label the user
-    // reads; no instruction may carry it at all, because a directory off the
-    // wire is a remote code execution primitive wearing a path.
+    // reads; no instruction may carry it at all, because a `{ cwd }` field on an
+    // instruction is a remote code execution primitive wearing a path.
     for (const frame of [...clientToHub, ...hubToServer]) {
       expect(keysOf(frame), `${frame.type} carried a cwd`).not.toContain('cwd');
     }
+
+    // And the half of the amended rule that is not an absence. A directory may
+    // cross, as a `directory` field and only as one, and every such field on an
+    // instruction the hub puts to a server is either null or under a root that
+    // server's operator configured. This start carries none, which is the point
+    // of asserting it here rather than in the browse suite: when AGX-133 adds
+    // `session-start.directory` the assertion is already standing over it.
+    expectDirectoriesWithin(hubToServer, BROWSE_ROOTS);
   });
 });
 
@@ -786,6 +817,47 @@ describe('a session start against a machine with no such provider installed', ()
     ]);
   });
 });
+
+/**
+ * Every `directory` field on an instruction is null or under one of these
+ * roots.
+ *
+ * The rule as the wire can see it. The server enforces it for real, against
+ * roots its own operator configured and with a `realpath` behind the check;
+ * this is the shape assertion that stands whether or not any particular suite
+ * remembered to browse -- so a frame that grows a directory field, anywhere,
+ * has to be under a root before this file goes green.
+ *
+ * A path-prefix test and not a resolved one, deliberately: a test that resolved
+ * paths would be a second implementation of the containment rule, and the one
+ * this file exists to hold is "the field is bounded", not "the bound is
+ * correct". `directory-browse.test.ts` holds the second.
+ */
+function expectDirectoriesWithin(
+  frames: readonly { type: string }[],
+  roots: readonly string[],
+): void {
+  for (const frame of frames) {
+    for (const directory of directoriesIn(frame)) {
+      if (directory === null) continue;
+      const within = roots.some((root) => directory === root || directory.startsWith(`${root}/`));
+      expect(
+        within,
+        `${frame.type} carried ${String(directory)}, which is under no browse root`,
+      ).toBe(true);
+    }
+  }
+}
+
+/** Every value under a `directory` key anywhere in a frame, however nested. */
+function directoriesIn(value: unknown): readonly (string | null)[] {
+  if (Array.isArray(value)) return value.flatMap(directoriesIn);
+  if (value === null || typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([key, nested]) => [
+    ...(key === 'directory' && (typeof nested === 'string' || nested === null) ? [nested] : []),
+    ...directoriesIn(nested),
+  ]);
+}
 
 function parsed<T>(parser: (raw: unknown) => { ok: boolean }, text: string): T & { type: string } {
   const result = parseTextFrame(parser as never, text) as

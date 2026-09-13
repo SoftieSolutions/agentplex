@@ -25,6 +25,7 @@ import { startRuntime } from './boot.js';
 import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
 import { nodeDataRoot } from './node-data-root.js';
+import { nodeDirectoryReader } from './node-directory-reader.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { createMachineLoadReader, createNodeMachineProbe } from './machine-load.js';
 import { createGitWorkingTree } from './working-tree.js';
@@ -144,6 +145,11 @@ async function main(): Promise<void> {
       // separate seam from the store volumes above because it is a separate
       // permission: a store is read, and this is written.
       dataRootFileSystem: nodeDataRoot,
+      // The one place this process resolves a link. A fourth filesystem seam
+      // because it is a fourth permission: browsing walks the machine rather
+      // than reading a provider's volume, and the rule that bounds where it may
+      // walk is `directory-browse.ts` over the configured roots.
+      directoryReader: nodeDirectoryReader,
       grantFileSystem: nodeGrantFileSystem,
       // The only place a secret is generated, and the CSPRNG is the whole
       // implementation: the server's pairing token, once, on its first start.

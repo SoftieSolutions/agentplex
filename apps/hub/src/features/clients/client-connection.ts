@@ -10,6 +10,7 @@ import {
   type HubId,
   type Layout,
   type RefusalCode,
+  type ServerRegistrationId,
   type SessionHolder,
 } from '@agentplex/protocol';
 import {
@@ -20,6 +21,7 @@ import {
   type MessageSocket,
   type SocketClosure,
 } from '@agentplex/node-shared';
+import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
 
 /**
@@ -122,6 +124,16 @@ export interface ClientConnectionDependencies {
    * lives: the routing sees the whole fleet, and a connection sees one socket.
    */
   readonly sessions: Sessions;
+  /**
+   * Browsing a server's directories, so the user can pick a project's.
+   *
+   * A seam beside the sessions one and not folded into it, because they answer
+   * different questions: which machine runs this, and which directory is this.
+   * The rule about what a client may see lives further down still -- on the
+   * server, over roots its own operator configured -- and nothing on this file's
+   * path can widen it.
+   */
+  readonly projects: Projects;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -141,6 +153,7 @@ export function serveClientConnection(
     readPaneLayout,
     writePaneLayout,
     sessions,
+    projects,
     onClosed,
   }: ClientConnectionDependencies,
 ): ClientConnection {
@@ -303,6 +316,19 @@ export function serveClientConnection(
         return;
       }
 
+      case 'directory-list': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a start is not: a browse crosses to
+        // another machine and reads a disk there, and awaiting it here would
+        // stall every later frame on this socket behind it -- including this
+        // client's own next step up the tree.
+        void answerDirectoryList(frame.id, frame.server, frame.directory);
+        return;
+      }
+
       case 'session-subscribe':
       case 'session-unsubscribe':
       case 'terminal-input':
@@ -435,6 +461,45 @@ export function serveClientConnection(
       logger.error('could not start a session', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not start that session');
+    }
+  }
+
+  /**
+   * Lists a directory on one server and answers the client that asked.
+   *
+   * The state is checked again after the await for the reason every other
+   * answer here checks it: a browse takes as long as another machine takes, and
+   * this socket may have closed while it did.
+   *
+   * A refusal carries no holder, and that is not an omission: a directory has
+   * no live process to name, and `holder` is the field that means "it is
+   * running over here". `null` is the honest value and the one every refusal
+   * but a session's carries.
+   */
+  async function answerDirectoryList(
+    replyTo: FrameId,
+    server: ServerRegistrationId,
+    directory: string | null,
+  ): Promise<void> {
+    try {
+      const outcome = await projects.listDirectory(server, directory);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'directory-listing',
+        replyTo,
+        directory: outcome.directory,
+        roots: [...outcome.roots],
+        entries: [...outcome.entries],
+        truncated: outcome.truncated,
+      });
+    } catch (error) {
+      logger.error('could not list a directory', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not list that directory');
     }
   }
 

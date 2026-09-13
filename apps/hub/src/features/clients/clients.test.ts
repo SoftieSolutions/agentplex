@@ -29,6 +29,7 @@ import { serverAddressSchema } from '../pairing/pairing.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
 import { createClients, type Clients } from './clients.js';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
+import { createFakeProjects, type FakeProjects } from '../projects/fake-projects.js';
 
 /**
  * The pipeline, with the real reducer above it and fake sockets below.
@@ -103,6 +104,8 @@ interface Harness {
   readonly broadcast: Clients;
   /** The session control this broadcast was built on, for tests that drive it. */
   readonly sessions: FakeSessions;
+  /** The browse this broadcast was built on, for the same reason. */
+  readonly projects: FakeProjects;
 }
 
 /**
@@ -119,6 +122,7 @@ function harness(
     read?: () => Promise<string | null>;
     write?: (layout: string) => Promise<void>;
   } = {},
+  projects: FakeProjects = createFakeProjects(),
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
@@ -131,8 +135,9 @@ function harness(
     readPaneLayout: paneLayout.read ?? (async () => null),
     writePaneLayout: paneLayout.write ?? (async () => undefined),
     sessions,
+    projects,
   });
-  return { state, timers, broadcast, sessions };
+  return { state, timers, broadcast, sessions, projects };
 }
 
 /**

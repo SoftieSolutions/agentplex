@@ -170,6 +170,41 @@ describe('loadDoctorConfig store paths', () => {
   });
 });
 
+describe('loadDoctorConfig browse roots', () => {
+  function browseRoots(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok && 'server' in result.config ? result.config.server.browseRoots : undefined;
+  }
+
+  it('reads them the way the server reads them, which is the whole point', () => {
+    // A doctor with its own idea of a setting would eventually disagree with
+    // the service, and the one moment that happens is the one where somebody
+    // is already staring at a machine wondering why a browse is refused.
+    const value = ['/home/robert/code', '/srv/work'].join(delimiter);
+    expect(browseRoots(['--role=server'], { AGENTPLEX_BROWSE_ROOTS: value })).toEqual([
+      '/home/robert/code',
+      '/srv/work',
+    ]);
+  });
+
+  it('reads none as none, which is the default a server ships with', () => {
+    expect(browseRoots(['--role=server'])).toEqual([]);
+  });
+
+  it('takes one root per repeated flag', () => {
+    expect(browseRoots(['--role=server', '--browse-root=/a', '--browse-root=/b'])).toEqual([
+      '/a',
+      '/b',
+    ]);
+  });
+
+  it('refuses a relative root', () => {
+    const problems = expectProblems(load(['--role=server', '--browse-root=code']));
+    expect(problems[0]).toContain('absolute');
+  });
+});
+
 describe('loadDoctorConfig bin path', () => {
   function binPath(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);

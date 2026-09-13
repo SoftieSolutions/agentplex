@@ -33,6 +33,7 @@ import {
   type DialTarget,
 } from '../../../apps/hub/src/features/servers/server-handshake.js';
 import { serverAddressSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 
 /**
  * The `--role=both` box, end to end, across the change that introduced grants.
@@ -86,6 +87,9 @@ async function startServer({
     host: '127.0.0.1',
     port: 0,
     storePaths: [],
+    // Nothing to browse: this suite is about the one pairing nobody types.
+    browseRoots: [],
+    directoryReader: createFakeDirectoryReader(),
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     grantFileSystem: grantFiles,

@@ -76,6 +76,7 @@ const HUB_FEATURES = [
   'fleet-state',
   'pairing',
   'pane-layout',
+  'projects',
   'servers',
   'sessions',
   'web',
