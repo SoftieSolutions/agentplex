@@ -6,6 +6,7 @@ import { createUnreachableDialer, createFakeTimers } from '@agentplex/node-share
 import { createFakeStoreFiles } from '@agentplex/providers/testing';
 import { hubIdSchema, PROTOCOL_VERSION } from '@agentplex/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { createFakeDatabase } from '../../db/fake-database.js';
 import type { MigrationFileSystem } from '../../db/migration-files.js';
 import { startHub, type Hub } from '../../hub.js';
@@ -47,10 +48,42 @@ afterEach(async () => {
   hub = undefined;
 });
 
+/**
+ * What the endpoint is given when it is stood up on a port of its own, below.
+ *
+ * Those two cases are about the shutdown window and the bearer gate, and reach
+ * no tool at all: a hub with parts being taken down underneath it is exactly
+ * when nothing should be asking a feature anything.
+ */
+const emptyFleet = { published: () => ({ version: 0, stores: [], servers: [], candidates: [] }) };
+const noTerminal = { subscribe: () => {}, forget: () => {} };
+
+/**
+ * One pairing in the hub's table, so the fleet an agent lists is not empty.
+ *
+ * The dialer is unreachable, which is the useful state rather than a limitation
+ * of the harness: what `list_servers` has to get right is that a machine
+ * nobody can reach keeps its row, with the reason attached, instead of
+ * disappearing.
+ */
+const PAIRED_SERVER = {
+  id: 'registration-attic',
+  label: 'attic',
+  address: 'wss://attic.example:8443',
+  token: 'tok-attic',
+  server_id: null,
+  created_at: 1_756_000_000_000,
+  revoked_at: null,
+  last_connected_at: null,
+};
+
 async function startTestHub(records: LogRecord[] = []): Promise<Hub> {
   hub = await startHub({
     database: createFakeDatabase({
-      respondWith: [{ match: /SELECT hub_id FROM hub_identity/, rows: [{ hub_id: HUB_ID }] }],
+      respondWith: [
+        { match: /SELECT hub_id FROM hub_identity/, rows: [{ hub_id: HUB_ID }] },
+        { match: /FROM servers WHERE revoked_at IS NULL/, rows: [PAIRED_SERVER] },
+      ],
     }),
     logger: createLogger('debug', (record) => void records.push(record)),
     ids: { newId: () => HUB_ID },
@@ -97,6 +130,39 @@ async function connect(started: Hub, token = CLIENT_TOKEN): Promise<Client> {
   return connecting;
 }
 
+/** One tool's structured answer, parsed rather than asserted into shape. */
+async function structuredOf(
+  connected: Client,
+  name: string,
+  args: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  const result = await connected.callTool({ name, arguments: args });
+  expect(result.isError).toBeFalsy();
+  return z.record(z.string(), z.unknown()).parse(result.structuredContent);
+}
+
+/** What `list_servers` answered with, as a list of rows. */
+async function serversOf(connected: Client): Promise<Record<string, unknown>[]> {
+  return z
+    .array(z.record(z.string(), z.unknown()))
+    .parse((await structuredOf(connected, 'list_servers')).servers);
+}
+
+/**
+ * Spins until something the hub is doing on its own has happened.
+ *
+ * The dial is started before the port is open and is deliberately not awaited
+ * -- a machine that is switched off must not delay a hub coming up -- so its
+ * failure lands a turn or two after this suite has a client.
+ */
+async function until(attempt: () => Promise<boolean>, what: string): Promise<void> {
+  for (let tries = 0; tries < 200; tries += 1) {
+    if (await attempt()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
 /** A POST that is well-formed MCP, so that only the credential is in question. */
 async function postToolsList(started: Hub, headers: Record<string, string>): Promise<Response> {
   return fetch(endpoint(started), {
@@ -127,7 +193,15 @@ describe('the hub MCP endpoint', () => {
 
     const { tools } = await connected.listTools();
 
-    expect(tools.map((tool) => tool.name)).toEqual(['hub_info']);
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'hub_info',
+      'list_servers',
+      'list_sessions',
+      'read_terminal',
+      'session_status',
+    ]);
+    // Every one of them, because this build has no tool that changes anything.
+    expect(tools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
   });
 
   it('answers hub_info with the two facts a client already gets in welcome', async () => {
@@ -148,6 +222,72 @@ describe('the hub MCP endpoint', () => {
     });
   });
 
+  it('lists the fleet over the transport an agent actually speaks', async () => {
+    // The tool that makes the endpoint worth having, end to end: a real port, a
+    // real MCP client, the hub's own reducer behind it, and the pairing this
+    // harness put in the table. The machine is unreachable on purpose -- what
+    // has to be right is that its row survives that with the reason attached.
+    const started = await startTestHub();
+    const connected = await connect(started);
+    await until(
+      async () => (await serversOf(connected))[0]?.phase === 'stale',
+      'the dial to attic to fail',
+    );
+
+    const servers = await serversOf(connected);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]).toMatchObject({
+      registrationId: 'registration-attic',
+      label: 'attic',
+      phase: 'stale',
+      staleReason: 'unreachable',
+      problem: 'connection refused',
+    });
+    // Nothing the hub dials with. The address is in the row this suite wrote
+    // into the table, and it does not come back out here.
+    expect(JSON.stringify(servers)).not.toContain('attic.example');
+  });
+
+  it('answers list_sessions with an empty list rather than a failure', async () => {
+    // No machine is reachable, so there is nothing to report and that is an
+    // answer. A tool that treated "nothing to say" as an error would make every
+    // caller special-case a fleet that is merely asleep.
+    const started = await startTestHub();
+    const connected = await connect(started);
+
+    const answered = await structuredOf(connected, 'list_sessions');
+
+    expect(answered).toEqual({ sessions: [], matched: 0, omitted: 0 });
+  });
+
+  it('refuses a session nobody reports, in a sentence and not a stack trace', async () => {
+    const started = await startTestHub();
+    const connected = await connect(started);
+
+    const status = await connected.callTool({
+      name: 'session_status',
+      arguments: { storeId: 'store-work', sessionId: 'session-quiet' },
+    });
+    const output = await connected.callTool({
+      name: 'read_terminal',
+      arguments: { storeId: 'store-work', sessionId: 'session-quiet' },
+    });
+
+    for (const refused of [status, output]) {
+      expect(refused.isError).toBe(true);
+      const content = refused.content as { type: string; text: string }[];
+      expect(content[0]?.text).not.toContain('Error:');
+      expect(content[0]?.text.length).toBeGreaterThan(10);
+    }
+    // The relay's own words for a terminal that is not there, carried whole
+    // rather than reworded here. What an agent can act on is that no machine
+    // with that volume is reachable, which this hub is the only thing that
+    // knows.
+    const words = (output.content as { text: string }[])[0]?.text ?? '';
+    expect(words).toBe('no server the hub is paired with has that store mounted');
+  });
+
   it('serves a second client without either having a session', async () => {
     // Stateless, demonstrated rather than described: no `Mcp-Session-Id` is
     // minted, so two agents are two independent sequences of requests and
@@ -158,8 +298,7 @@ describe('the hub MCP endpoint', () => {
     await second.connect(bearerTransport(started, CLIENT_TOKEN));
 
     try {
-      expect((await first.listTools()).tools).toHaveLength(1);
-      expect((await second.listTools()).tools).toHaveLength(1);
+      expect((await first.listTools()).tools).toEqual((await second.listTools()).tools);
 
       const response = await postToolsList(started, { authorization: `Bearer ${CLIENT_TOKEN}` });
       expect(response.headers.get('mcp-session-id')).toBeNull();
@@ -272,6 +411,9 @@ describe('the MCP endpoint while the hub is stopping', () => {
     const mcp = createMcp({
       hubId: HUB_ID,
       clientToken: CLIENT_TOKEN,
+      state: emptyFleet,
+      terminal: noTerminal,
+      timers: createFakeTimers(),
       logger: createLogger('debug', () => {}),
     });
     const listener = await startHttpServer(0, HOST, (request, response) => {
@@ -315,6 +457,9 @@ describe('the MCP endpoint while the hub is stopping', () => {
     const mcp = createMcp({
       hubId: HUB_ID,
       clientToken: CLIENT_TOKEN,
+      state: emptyFleet,
+      terminal: noTerminal,
+      timers: createFakeTimers(),
       logger: createLogger('debug', () => {}),
     });
     const listener = await startHttpServer(0, HOST, (request, response) => {

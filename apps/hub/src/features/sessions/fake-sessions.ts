@@ -1,6 +1,7 @@
 import type {
   Sessions,
   SessionOutcome,
+  StartOutcome,
   StartSessionRequest,
   StopSessionRequest,
 } from './sessions.js';
@@ -20,19 +21,26 @@ import type {
 export interface FakeSessions extends Sessions {
   readonly starts: readonly StartSessionRequest[];
   readonly stops: readonly StopSessionRequest[];
-  /** What every later start and stop answers with. */
-  answerWith(outcome: SessionOutcome): void;
+  /**
+   * What every later start and stop answers with.
+   *
+   * A start's outcome, because it is the wider of the two: a stop answered
+   * with one is answered with a field it does not declare, which no reader of
+   * a stop can see, and the alternative is two answers to set on a fake whose
+   * every test sets one.
+   */
+  answerWith(outcome: StartOutcome): void;
 }
 
 export interface FakeSessionsOptions {
-  readonly outcome?: SessionOutcome;
+  readonly outcome?: StartOutcome;
 }
 
 export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessions {
   const starts: StartSessionRequest[] = [];
   const stops: StopSessionRequest[] = [];
 
-  let outcome: SessionOutcome = options.outcome ?? {
+  let outcome: StartOutcome = options.outcome ?? {
     ok: false,
     code: 'refused',
     problem: 'this fake control was given no answer',
@@ -40,7 +48,7 @@ export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessi
   };
 
   return {
-    async start(request: StartSessionRequest): Promise<SessionOutcome> {
+    async start(request: StartSessionRequest): Promise<StartOutcome> {
       starts.push(request);
       return outcome;
     },
@@ -50,7 +58,7 @@ export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessi
       return outcome;
     },
 
-    answerWith(next: SessionOutcome): void {
+    answerWith(next: StartOutcome): void {
       outcome = next;
     },
 

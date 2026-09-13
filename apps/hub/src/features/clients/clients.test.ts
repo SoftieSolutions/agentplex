@@ -7,6 +7,7 @@ import {
   nodeIdSchema,
   nodeKindSchema,
   sessionIdSchema,
+  startIdSchema,
   storeIdSchema,
   type HubFrame,
   type Layout,
@@ -22,13 +23,14 @@ import {
   createFakeTimers,
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
-import { createLogger } from '@agentplex/node-shared';
+import { closure, CLOSE_NORMAL, createLogger } from '@agentplex/node-shared';
 import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { serverAddressSchema } from '../pairing/pairing.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
 import { createClients, type Clients } from './clients.js';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
+import { createFakeTerminal, type FakeTerminal } from '../terminal/fake-terminal.js';
 
 /**
  * The pipeline, with the real reducer above it and fake sockets below.
@@ -103,6 +105,8 @@ interface Harness {
   readonly broadcast: Clients;
   /** The session control this broadcast was built on, for tests that drive it. */
   readonly sessions: FakeSessions;
+  /** The relay it hands terminal frames to, which records rather than answers. */
+  readonly terminal: FakeTerminal;
 }
 
 /**
@@ -122,6 +126,7 @@ function harness(
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
+  const terminal = createFakeTerminal();
   const broadcast = createClients({
     hubId: HUB_ID,
     state,
@@ -131,8 +136,9 @@ function harness(
     readPaneLayout: paneLayout.read ?? (async () => null),
     writePaneLayout: paneLayout.write ?? (async () => undefined),
     sessions,
+    terminal,
   });
-  return { state, timers, broadcast, sessions };
+  return { state, timers, broadcast, sessions, terminal };
 }
 
 /**
@@ -543,63 +549,110 @@ describe('a refusal', () => {
 });
 
 /**
- * The four frames this build parses and cannot serve.
+ * The four terminal frames, and what this file is responsible for about them.
  *
  * Before the switch was exhaustive they did something worse than fail: they
  * parsed, matched no case, and fell out of the bottom. The client was left
- * holding a frame id nothing would ever answer, and there was no log line, no
- * reply and no type error anywhere to say so. Each one is now a refusal in
- * words, which is what a client can render and a person can read. AGX-102 is
- * what replaces them with a relay.
+ * holding a frame id nothing would ever answer, with no log line, no reply and
+ * no type error anywhere to say so. They were refused in words next, and now
+ * they are handed to the relay -- which is where every question about what the
+ * answer should be belongs. What is asserted here is the socket's half: the
+ * frame reaches the relay, under this connection's own identity, with the id
+ * that has to be replied to, and only once this peer has said hello.
  */
-describe('a terminal frame, on a hub that has no terminal relay yet', () => {
+describe('a terminal frame', () => {
   const TARGET = {
     by: 'session' as const,
     storeId: storeIdSchema.parse('store-work'),
     sessionId: sessionIdSchema.parse('session-1'),
   };
 
+  it('hands a subscribe to the relay, with the frame it has to answer', async () => {
+    const { broadcast, terminal } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'session-subscribe', id: 2, target: TARGET });
+
+    expect(terminal.subscribed).toMatchObject([{ replyTo: 2, target: TARGET }]);
+    // Nothing is answered here. The reply is the relay's, and it is written
+    // where the server's own answer is read -- see `terminal.ts` for why a
+    // promise in between would reorder a terminal.
+    expect(client.received.map((frame) => frame.type)).toEqual(['welcome', 'machine-state']);
+  });
+
+  it('hands an unsubscribe, an input and a resize over as they arrived', async () => {
+    const { broadcast, terminal } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'session-unsubscribe', id: 2, target: TARGET });
+    await client.say({ type: 'terminal-input', id: 3, target: TARGET, data: 'yes\r' });
+    await client.say({
+      type: 'terminal-resize',
+      id: 4,
+      target: TARGET,
+      size: { cols: 96, rows: 30 },
+    });
+
+    expect(terminal.unsubscribed).toMatchObject([{ replyTo: 2, target: TARGET }]);
+    expect(terminal.typed).toMatchObject([{ replyTo: 3, target: TARGET, data: 'yes\r' }]);
+    expect(terminal.resized).toMatchObject([{ replyTo: 4, size: { cols: 96, rows: 30 } }]);
+  });
+
+  it('names one watcher for the life of the connection, however many frames', async () => {
+    const { broadcast, terminal } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'session-subscribe', id: 2, target: TARGET });
+    await client.say({ type: 'terminal-input', id: 3, target: TARGET, data: 'ls\r' });
+
+    // One identity, because it is what the relay files a subscription under: a
+    // fresh handle per frame would be a new client every time somebody typed.
+    expect(terminal.typed[0]?.client).toBe(terminal.subscribed[0]?.client);
+  });
+
+  it('tells the relay when the socket goes, so the watch is given back', async () => {
+    const { broadcast, terminal } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    await client.say({ type: 'session-subscribe', id: 2, target: TARGET });
+
+    client.socket.closeFromPeer(closure(CLOSE_NORMAL, 'the tab was closed'));
+    await Promise.resolve();
+
+    // A socket closing is a detach, and it is the only path a client that
+    // crashed ever takes. Without this the server would go on counting an
+    // audience that left, and its eviction rule would be choosing between
+    // terminals that all claim to be watched.
+    expect(terminal.forgotten).toEqual([terminal.subscribed[0]?.client]);
+  });
+
   const frames: readonly Record<string, unknown>[] = [
-    { type: 'session-subscribe', id: 2, target: TARGET },
-    { type: 'session-unsubscribe', id: 2, target: TARGET },
-    { type: 'terminal-input', id: 2, target: TARGET, data: 'yes\r' },
-    { type: 'terminal-resize', id: 2, target: TARGET, size: { cols: 96, rows: 30 } },
+    { type: 'session-subscribe', target: TARGET },
+    { type: 'session-unsubscribe', target: TARGET },
+    { type: 'terminal-input', target: TARGET, data: 'yes\r' },
+    { type: 'terminal-resize', target: TARGET, size: { cols: 96, rows: 30 } },
   ];
 
-  for (const frame of frames) {
-    it(`refuses ${String(frame.type)} in words rather than dropping it`, async () => {
-      const { broadcast } = harness();
-      const client = attach(broadcast);
-      await client.hello();
+  it.each(frames)('refuses $type before hello, and relays nothing', async (frame) => {
+    const { broadcast, terminal } = harness();
+    const client = attach(broadcast);
 
-      await client.say(frame);
+    await client.say({ ...frame, id: 1 });
 
-      expect(client.received.at(-1)).toEqual({
-        type: 'refusal',
-        replyTo: 2,
-        code: 'refused',
-        message: 'this hub build does not relay terminal frames yet',
-        holder: null,
-      });
-      // Being told no is an answer, so the connection stays up and the client
-      // can go on asking for everything this build does serve.
-      expect(client.socket.closure).toBeNull();
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'refusal',
+      replyTo: 1,
+      code: 'bad-request',
+      message: 'the first frame on a connection is a hello',
     });
-
-    it(`refuses ${String(frame.type)} before hello for not having said hello`, async () => {
-      const { broadcast } = harness();
-      const client = attach(broadcast);
-
-      await client.say({ ...frame, id: 1 });
-
-      expect(client.received.at(-1)).toMatchObject({
-        type: 'refusal',
-        replyTo: 1,
-        code: 'bad-request',
-        message: 'the first frame on a connection is a hello',
-      });
-    });
-  }
+    expect(terminal.subscribed).toEqual([]);
+    expect(terminal.unsubscribed).toEqual([]);
+    expect(terminal.typed).toEqual([]);
+    expect(terminal.resized).toEqual([]);
+  });
 });
 
 describe('starting and stopping a session', () => {
@@ -613,6 +666,7 @@ describe('starting and stopping a session', () => {
         storeId: store(STORE),
         sessionId: sessionIdSchema.parse(SESSION),
         server: 'registration-workshop' as ServerRegistrationId,
+        startId: startIdSchema.parse('start-2f9c'),
       },
     });
     const { broadcast } = harness(async () => [], sessions);
@@ -692,6 +746,7 @@ describe('starting and stopping a session', () => {
         storeId: store(STORE),
         sessionId: sessionIdSchema.parse(SESSION),
         server: 'registration-workshop' as ServerRegistrationId,
+        startId: startIdSchema.parse('start-2f9c'),
       },
     });
     const { broadcast } = harness(async () => [], sessions);

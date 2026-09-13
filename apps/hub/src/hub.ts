@@ -31,6 +31,7 @@ import { createPairing, type LocalServerEntry } from './features/pairing/pairing
 import { createPaneLayout } from './features/pane-layout/pane-layout.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
+import { createTerminal } from './features/terminal/terminal.js';
 import { createWeb, type WebAssetFileSystem } from './features/web/web.js';
 import { createHubRoutes } from './http/routes.js';
 import { ensureHubIdentity } from './hub-identity.js';
@@ -231,17 +232,31 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     // Stamped with the hub's clock and not the server's. Two machines' clocks
     // disagree, and a hub comparing readings dated by the machines that made
     // them is comparing two different times.
-    onReport: (report) =>
-      void state.applySessions({
+    onReport: (report) => {
+      state.applySessions({
         registrationId: report.registrationId,
         storeId: report.storeId,
         sessions: report.sessions,
         holding: report.holding,
         reportedAt: clock.now(),
-      }),
+      });
+      // The one part of a report the reducer wants nothing to do with: a start
+      // is not a session and a tag is not a row. It goes to the relay, which is
+      // the only thing that has been waiting to hear which session a spawn it
+      // is already showing turned out to be.
+      terminal.noteStarts(report.registrationId, report.storeId, report.starts);
+    },
+    onStream: (registrationId, output) => terminal.deliver(registrationId, output),
   });
 
-  const sessions = createSessions({ state, connections: servers, logger });
+  // Named in the closures above before it is built, which is the shape of the
+  // one knot in this file: the relay puts frames to servers and the servers
+  // hand it what arrives, so one of the two has to be written down first.
+  // Neither closure can run before both exist -- a server says nothing until
+  // `sync` below dials one.
+  const terminal = createTerminal({ state, servers, logger });
+
+  const sessions = createSessions({ state, connections: servers, ids, logger });
 
   // The tree and the pane arrangement are read from the database per request
   // rather than held in memory beside the fleet state. They are durable and it
@@ -264,6 +279,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     readPaneLayout: () => paneLayout.read(),
     writePaneLayout: (layout) => paneLayout.write(layout),
     sessions,
+    terminal,
   });
 
   // Not awaited past its first read of the pairing table, and started before
@@ -302,7 +318,12 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // feature is: this file is the only one that knows the concrete set. It holds
   // no session and nothing durable, so it is the last thing that has to be
   // built and the first of the two that has to be stopped.
-  const mcp = createMcp({ hubId, clientToken, logger });
+  // The two features its tools read are handed in narrowed: the fleet state as
+  // the projection it publishes to clients, and the relay as subscribe and
+  // detach. That is where "MCP gains no capability the UI lacks" is enforced
+  // rather than asserted -- a tool cannot reach the reducer's own snapshot or
+  // type into a terminal, because neither is on the seam it was given.
+  const mcp = createMcp({ hubId, clientToken, state, terminal, timers, logger });
 
   const web = createWeb({ files: webAssets, logger });
 

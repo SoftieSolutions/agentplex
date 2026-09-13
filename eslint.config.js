@@ -79,6 +79,7 @@ const HUB_FEATURES = [
   'pane-layout',
   'servers',
   'sessions',
+  'terminal',
   'web',
 ];
 

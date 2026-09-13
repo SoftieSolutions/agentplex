@@ -37,8 +37,16 @@ export interface InstructionChannelDependencies {
 
 export interface InstructionChannel {
   ask(instruction: SessionInstruction): Promise<InstructionOutcome>;
-  /** Settles the instruction a reply names. A reply nothing asked for is ignored. */
-  answer(replyTo: FrameId, outcome: InstructionOutcome): void;
+  /**
+   * Settles the instruction a reply names, and says whether anything was
+   * waiting.
+   *
+   * The answer is read at one call site. A `session-refused` may be answering
+   * an instruction or a terminal frame, and the transport tries this channel
+   * first; `false` is what sends it on to the other one rather than dropping
+   * a refusal a client is owed.
+   */
+  answer(replyTo: FrameId, outcome: InstructionOutcome): boolean;
   /** Settles everything still waiting, because nothing can answer it any more. */
   settleAll(problem: string): void;
 }
@@ -85,9 +93,11 @@ export function createInstructionChannel(
       });
     },
 
-    answer(replyTo: FrameId, outcome: InstructionOutcome): void {
-      outstanding.get(replyTo)?.(outcome);
+    answer(replyTo: FrameId, outcome: InstructionOutcome): boolean {
+      const settle = outstanding.get(replyTo);
       outstanding.delete(replyTo);
+      settle?.(outcome);
+      return settle !== undefined;
     },
 
     settleAll(problem: string): void {
