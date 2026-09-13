@@ -17,6 +17,7 @@ import {
   type TokenMinter,
   createWebSocketListener,
 } from '@agentplex/node-shared';
+import { createDirectoryBrowser, type DirectoryReader } from './directory-browse.js';
 import { createDrain, drainingSessions } from './drain.js';
 import { serveHubConnection, type HubConnection } from './hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
@@ -36,8 +37,11 @@ import { createHubAudience } from './hub-audience.js';
 import { sweepGrants } from './grant-sweep.js';
 import { createSessionController } from './session-control.js';
 import type { MachineLoadReader } from './machine-load.js';
+import { createProjectDocs } from './project-docs.js';
+import type { ProjectFileSystem } from './project-files.js';
 import type { WorkingTree } from './working-tree.js';
 import type { TerminalManager } from './terminal-manager.js';
+import { watchStores, type StoreWatcher } from './store-watch.js';
 
 /**
  * The server role.
@@ -58,6 +62,37 @@ export interface SessionServerDependencies {
   /** Store roots from configuration, already absolute and deduplicated. */
   readonly storePaths: readonly string[];
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * The directories a hub may browse under, already absolute and deduplicated.
+   *
+   * Separate from the store paths above, though they often name the same
+   * directory, because they are different permissions: a store is a volume this
+   * server watches, and a browse root is where somebody may look for a checkout
+   * to work in. Empty is legal and means browsing is refused with that as the
+   * reason -- `config.ts` argues why that is the default.
+   */
+  readonly browseRoots: readonly string[];
+  /**
+   * How a browse reads this machine's disk: resolve a path, read a directory.
+   *
+   * A filesystem seam of its own, and not an oversight. The store seam reaches a
+   * provider's volume and may never grow a write; the data root seam creates a
+   * directory; the grants seam replaces a file. This one resolves links, which
+   * is the one call the containment rule cannot be written without and the one
+   * nothing else here has ever needed.
+   */
+  readonly directoryReader: DirectoryReader;
+  /**
+   * How this server finds out that a store changed without being told.
+   *
+   * A separate seam from the store filesystem above, and not an oversight: that
+   * one reads a volume when somebody asks, and this one is the machine
+   * interrupting. It is injected for the reason the beacon's socket is --
+   * `fs.watch` is a kernel facility a test cannot make fire on cue, so
+   * everything that decides what an event is worth lives above it in
+   * `store-watch.ts`.
+   */
+  readonly storeWatcher: StoreWatcher;
   /**
    * Where this server's own identity and pairing token live, absolute.
    *
@@ -173,6 +208,19 @@ export interface SessionServerDependencies {
    * assembled, and nothing below it goes looking on its own.
    */
   readonly machineLoad: MachineLoadReader;
+  /**
+   * The data root, as `boot.ts` ensured it before anything was served, and
+   * the disk under it for the project file store.
+   *
+   * The path and the seam arrive together because they are one capability:
+   * a project folder is made under this root through this seam, and a
+   * server handed one without the other could make folders it cannot name
+   * or name folders it cannot make. The seam is separate from the data
+   * root's for the reason the grant seam is: this one replaces files, and a
+   * replace does not belong on the seam that only makes directories.
+   */
+  readonly dataRoot: string;
+  readonly projectFiles: ProjectFileSystem;
   readonly timers: Timers;
   /**
    * How this server announces itself on the local network, or `null` for one
@@ -245,6 +293,9 @@ export async function startSessionServer(
     ids,
     storePaths,
     storeFileSystem,
+    browseRoots,
+    directoryReader,
+    storeWatcher,
     identityPath,
     grantFileSystem,
     tokens,
@@ -257,6 +308,8 @@ export async function startSessionServer(
     operations,
     workingTree,
     machineLoad,
+    dataRoot,
+    projectFiles,
     timers,
     announce,
   } = dependencies;
@@ -374,6 +427,15 @@ export async function startSessionServer(
   let readiness = await preflight.run(providers);
   reportUnusable(readiness);
 
+  // What any hub may look at on this machine's disk, and what it may spawn in,
+  // built once over the roots the operator configured. One browser for the
+  // server rather than one per connection, because the roots are a fact about
+  // the machine: two hubs browsing are two questions about the same disk, and a
+  // per-connection copy would be a second place the list could differ from the
+  // first. The session controller below takes the guard half of it, so a start
+  // can ask the rule without being able to list anything.
+  const browse = createDirectoryBrowser({ roots: browseRoots, reader: directoryReader });
+
   // The one thing here that turns a store id and a provider name into a running
   // agent. It is built once and outlives every hub connection: a socket comes
   // and goes, and the sessions this server started go on running across both.
@@ -382,6 +444,9 @@ export async function startSessionServer(
     providers,
     terminals,
     workingTree,
+    // The same guard a browse passes, so that "this machine will open that
+    // directory" has one answer whether it is being listed or spawned in.
+    browse,
     clock,
     logger,
   });
@@ -419,6 +484,14 @@ export async function startSessionServer(
    */
   const connections = new Set<HubConnection>();
 
+  // The document store, one per server and shared by every connection,
+  // because a project's folder is the machine's and not a socket's. It takes
+  // no lock and holds no state, so sharing it serialises nothing: what a
+  // concurrent second write owes to the first is the rename in
+  // `node-project-files.ts`. Nothing in it starts a process;
+  // `project-docs.ts` says why it is not an operation.
+  const docs = createProjectDocs({ dataRoot, files: projectFiles, logger });
+
   // Every hub connected at once, which is what makes a stop by one of them
   // something the others are told about. It outlives each connection: a socket
   // comes and goes and the set is the server's.
@@ -452,11 +525,15 @@ export async function startSessionServer(
           // after a store came back reachable is told what is mounted now.
           stores,
           providers: readiness,
+          // The roots this server was configured with, and nothing a frame can
+          // add to. A connection may ask; what it may be told is decided above.
+          browse,
           // Sampled when this connection is pinged and at no other time, so a
           // server nobody has dialled reads nothing. The reader is the
           // server's and not the connection's: the counters are one machine's,
           // and two hubs asking are two questions about the same cpus.
           machineLoad,
+          docs,
           logger,
         }),
       );
@@ -466,6 +543,17 @@ export async function startSessionServer(
   // Revocation reaching a connection that is already up. The handshake covers
   // the hub that reconnects; this covers the one that does not have to.
   const sweep = sweepGrants({ grants: grants.store, audience, timers, logger });
+
+  // The one reporter on this server that no hub prompted, and the answer to the
+  // staleness the scan above is careful not to claim it fixed: a session
+  // somebody starts in a terminal changes a store, and until this nothing told
+  // a hub so until the next handshake, start or stop. It is started after the
+  // first scan rather than before it, so a store is reported once at boot by
+  // the pass that logs it and not twice.
+  //
+  // It reports through the audience -- the same `reportToAll` a start and a
+  // stop reach -- so there is one way a store report leaves this server.
+  const watching = watchStores({ stores, watcher: storeWatcher, audience, timers, logger });
 
   const listener: HttpListener = await startHttpServer(
     port,
@@ -644,6 +732,12 @@ export async function startSessionServer(
       // The sweep next, because a pending timer is a process that will not
       // exit, and there is nothing left for it to revoke access to.
       sweep.stop();
+      // Then the watches, before the drain rather than after it. Everything
+      // the drain does writes into a store -- it is closing sessions -- so a
+      // watch left open would spend the shutdown scanning stores on behalf of
+      // hubs that have just been told this server is going away. The drain's
+      // own polling is the reporting a shutdown needs, and it is bounded.
+      watching.stop();
       // Then nothing new. This is what makes the wait below terminate at all:
       // a drain that is still accepting starts is not draining. It closes
       // nothing, which is the point -- the agents already running go on

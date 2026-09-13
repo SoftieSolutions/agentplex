@@ -51,7 +51,10 @@ describe('start_session', () => {
 
     // The whole request, field by field, because what is not on it is the
     // subject: there is no argv, no environment and no working directory here,
-    // and the one piece of user content is the prompt.
+    // and the one piece of user content is the prompt. `project: null` is the
+    // nearest thing to a directory on this request and it is the hub's own
+    // rows either way -- a project is a node id, never a path, and this tool
+    // names none.
     expect(sessions.starts).toEqual([
       {
         storeId: WORK,
@@ -59,6 +62,7 @@ describe('start_session', () => {
         provider: 'claude',
         prompt: 'read the ticket and start',
         server: null,
+        project: null,
       },
     ]);
   });

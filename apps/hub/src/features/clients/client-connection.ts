@@ -5,11 +5,14 @@ import {
   parseTextFrame,
   PROTOCOL_VERSION,
   type ClientFrame,
+  type DocName,
   type FrameId,
   type HubFrame,
   type HubId,
   type Layout,
+  type NodeId,
   type RefusalCode,
+  type ServerRegistrationId,
   type SessionHolder,
 } from '@agentplex/protocol';
 import {
@@ -20,6 +23,8 @@ import {
   type MessageSocket,
   type SocketClosure,
 } from '@agentplex/node-shared';
+import type { Docs } from '../docs/docs.js';
+import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
 import type { Terminal, TerminalClient } from '../terminal/terminal.js';
 
@@ -134,6 +139,27 @@ export interface ClientConnectionDependencies {
    * socket goes away.
    */
   readonly terminal: Terminal;
+  /**
+   * Projects: the rows a client makes and renames, and the browse a directory
+   * is picked with.
+   *
+   * A seam beside the sessions one and not folded into it, because they answer
+   * different questions: which machine runs this, and which directory is this.
+   * The rule about what a client may see lives further down still -- on the
+   * server, over roots its own operator configured -- and nothing on this file's
+   * path can widen it.
+   */
+  readonly projects: Projects;
+  /**
+   * Documents: the index, and the one path a write to one takes.
+   *
+   * A seam beside projects rather than a method on it, because they own
+   * different rows and answer different questions -- which directory is this,
+   * and what is in it. What matters more here is what this file may not do: it
+   * calls the four functions and reaches no server, so the MCP tools of
+   * AGX-244 calling the same four are the same write path and not a second one.
+   */
+  readonly docs: Docs;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -154,6 +180,8 @@ export function serveClientConnection(
     writePaneLayout,
     sessions,
     terminal,
+    projects,
+    docs,
     onClosed,
   }: ClientConnectionDependencies,
 ): ClientConnection {
@@ -333,6 +361,7 @@ export function serveClientConnection(
           provider: frame.provider,
           prompt: frame.prompt,
           server: frame.server,
+          project: frame.project,
         });
         return;
       }
@@ -383,6 +412,70 @@ export function serveClientConnection(
           return;
         }
         terminal.resize(watcher, frame.id, frame.target, frame.size);
+        return;
+      }
+
+      case 'directory-list': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a start is not: a browse crosses to
+        // another machine and reads a disk there, and awaiting it here would
+        // stall every later frame on this socket behind it -- including this
+        // client's own next step up the tree.
+        void answerDirectoryList(frame.id, frame.server, frame.directory);
+        return;
+      }
+
+      case 'project-create': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a layout read is not: two statements
+        // against the database, and awaiting them here would stall every later
+        // frame on this socket behind one write.
+        void answerProjectCreate(frame.id, frame.name, frame.directory);
+        return;
+      }
+
+      case 'project-rename': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerProjectRename(frame.id, frame.nodeId, frame.name);
+        return;
+      }
+
+      case 'doc-create': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a browse is not: a create writes a file
+        // on another machine, and awaiting it here would stall every later
+        // frame on this socket behind one disk somewhere else.
+        void answerDocCreate(frame.id, frame.projectId, frame.server, frame.name, frame.content);
+        return;
+      }
+
+      case 'doc-save': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerDocSave(frame.id, frame.nodeId, frame.content);
+        return;
+      }
+
+      case 'doc-open': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerDocOpen(frame.id, frame.nodeId);
         return;
       }
 
@@ -510,6 +603,177 @@ export function serveClientConnection(
       logger.error('could not start a session', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not start that session');
+    }
+  }
+
+  /**
+   * Lists a directory on one server and answers the client that asked.
+   *
+   * The state is checked again after the await for the reason every other
+   * answer here checks it: a browse takes as long as another machine takes, and
+   * this socket may have closed while it did.
+   *
+   * A refusal carries no holder, and that is not an omission: a directory has
+   * no live process to name, and `holder` is the field that means "it is
+   * running over here". `null` is the honest value and the one every refusal
+   * but a session's carries.
+   */
+  async function answerDirectoryList(
+    replyTo: FrameId,
+    server: ServerRegistrationId,
+    directory: string | null,
+  ): Promise<void> {
+    try {
+      const outcome = await projects.listDirectory(server, directory);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'directory-listing',
+        replyTo,
+        directory: outcome.directory,
+        roots: [...outcome.roots],
+        entries: [...outcome.entries],
+        truncated: outcome.truncated,
+      });
+    } catch (error) {
+      logger.error('could not list a directory', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not list that directory');
+    }
+  }
+
+  /**
+   * Makes a project and answers the client that asked.
+   *
+   * The refusal carries no holder, like every refusal but a session's: a
+   * project has no live process to name. A throw is `internal` for the reason
+   * every other answer here gives -- the hub broke, retrying may work, and what
+   * broke inside its database is not a client's to render.
+   */
+  async function answerProjectCreate(
+    replyTo: FrameId,
+    name: string,
+    directory: string,
+  ): Promise<void> {
+    try {
+      const outcome = await projects.create({ name, directory });
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'project-created', replyTo, nodeId: outcome.nodeId });
+    } catch (error) {
+      logger.error('could not create a project', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not create that project');
+    }
+  }
+
+  /** Renames a project and answers the client that asked. */
+  async function answerProjectRename(
+    replyTo: FrameId,
+    nodeId: NodeId,
+    name: string,
+  ): Promise<void> {
+    try {
+      const outcome = await projects.rename(nodeId, name);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'node-renamed', replyTo });
+    } catch (error) {
+      logger.error('could not rename a project', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not rename that project');
+    }
+  }
+
+  /**
+   * Makes a document on one machine and answers the client that asked.
+   *
+   * The reply carries the node and nothing else. There is no broadcast saying
+   * the tree changed -- `catalogue-changed` is AGX-239's frame and supersedes
+   * this -- so what keeps the screen honest until then is the client asking
+   * for the layout again, exactly as it does after a project create.
+   */
+  async function answerDocCreate(
+    replyTo: FrameId,
+    projectId: NodeId,
+    server: ServerRegistrationId,
+    name: DocName,
+    content: string,
+  ): Promise<void> {
+    try {
+      const outcome = await docs.create(projectId, server, name, content);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'doc-created', replyTo, nodeId: outcome.nodeId });
+    } catch (error) {
+      logger.error('could not create a document', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not create that document');
+    }
+  }
+
+  /**
+   * Replaces a document and answers the client that asked.
+   *
+   * `updatedAt` is the machine's, relayed rather than stamped here: a client
+   * showing when a document was last written is describing a file, and the
+   * hub's receipt time would be that answer plus however long two machines
+   * took to talk.
+   */
+  async function answerDocSave(replyTo: FrameId, nodeId: NodeId, content: string): Promise<void> {
+    try {
+      const outcome = await docs.save(nodeId, content);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'doc-saved', replyTo, updatedAt: outcome.updatedAt });
+    } catch (error) {
+      logger.error('could not save a document', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not save that document');
+    }
+  }
+
+  /**
+   * Reads a document back and answers the client that asked.
+   *
+   * A document on a machine that is not connected is a refusal naming that
+   * machine, and the sentence comes from the feature rather than from here:
+   * the hub holds no copy, and what a client renders is the reason it cannot
+   * have one right now.
+   */
+  async function answerDocOpen(replyTo: FrameId, nodeId: NodeId): Promise<void> {
+    try {
+      const outcome = await docs.open(nodeId);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'doc-content',
+        replyTo,
+        content: outcome.content,
+        updatedAt: outcome.updatedAt,
+      });
+    } catch (error) {
+      logger.error('could not open a document', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not open that document');
     }
   }
 

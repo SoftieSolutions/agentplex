@@ -127,6 +127,18 @@ export interface ServerSetupOutcome {
    * PATH systemd handed it.
    */
   readonly binPath: readonly string[];
+  /**
+   * The directories a client may browse under, carried from the plan.
+   *
+   * Carried rather than acted on: there is nothing to provision here. A store
+   * path gets a store file minted under it, and a browse root gets nothing --
+   * it is a permission, and the one thing setup does with it is record it where
+   * the daemon reads it. Directories that do not exist yet are left alone for
+   * the same reason a store that is not mounted is: the server reports what it
+   * finds, and creating somebody's `code` directory to make a setting true
+   * would be setup inventing a fact.
+   */
+  readonly browseRoots: readonly string[];
   readonly identity: ServerIdentityReport;
   /** Every configured store, in configured order, failures kept in the listing. */
   readonly stores: readonly StoreIdentity[];
@@ -186,7 +198,14 @@ async function provisionServer(
     providers.push(await provisionProvider(provider, planned.installPrefix, dependencies));
   }
 
-  return { port: planned.port, binPath, identity, stores, providers };
+  return {
+    port: planned.port,
+    binPath,
+    browseRoots: planned.browseRoots,
+    identity,
+    stores,
+    providers,
+  };
 }
 
 /**

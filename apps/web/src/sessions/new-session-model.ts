@@ -1,6 +1,8 @@
 import type {
   FrameId,
   MachineState,
+  NodeId,
+  Provider,
   ServerRegistrationId,
   SessionRef,
   StoreId,
@@ -20,6 +22,14 @@ import type { ConnectionPhase, HubCommand, RefusalView, StartedView } from '../s
  * actually run the chosen store. The provider is on the frame -- it is a field
  * of every session -- but v2 ships one adapter, so it is named in words and
  * never drawn as a choice.
+ *
+ * The project picker follows the same rule from the other end: it is drawn when
+ * there is at least one project, because "in a project" and "wherever the store
+ * is" are two different starts and a form with no way to say which would only
+ * ever make the second. Choosing one narrows the machine list, and the
+ * narrowing is the hub's rule reflected rather than a second one: a start in a
+ * project is refused by a machine that cannot run the provider, so a menu
+ * offering such a machine would be offering a refusal.
  */
 
 /** Every store a session could start in, in the order the hub sent them. */
@@ -42,10 +52,20 @@ export interface ServerChoice {
  * can only be refused is worse than no control. Below two live candidates
  * there is no decision to override -- the hub's pick is the one machine -- so
  * the control is not drawn, which is `[]` here.
+ *
+ * `provider` narrows it further and is passed only when a project was chosen.
+ * The narrowing is not extra caution: a machine that reported the provider
+ * missing is a machine the hub refuses the start on, with that machine's own
+ * sentence, and a menu that listed it would be a menu of one live option and
+ * one apology. It is applied for a project start and not for every start
+ * because a project start is the one the user is steering -- when the hub is
+ * choosing, it already filters the candidates itself and an unusable machine
+ * costs its own machine a start and never the store.
  */
 export function serverOverrideChoices(
   state: MachineState,
   storeId: StoreId | null,
+  provider: Provider | null = null,
 ): readonly ServerChoice[] {
   if (storeId === null) return [];
   const store = state.stores.find((view) => view.storeId === storeId);
@@ -53,11 +73,26 @@ export function serverOverrideChoices(
   const choices: ServerChoice[] = [];
   for (const id of store.servers) {
     const server = state.servers.find((view) => view.registrationId === id);
-    if (server !== undefined && server.phase === 'connected') {
-      choices.push({ id, label: server.label });
-    }
+    if (server === undefined || server.phase !== 'connected') continue;
+    if (provider !== null && !runs(server.providers, provider)) continue;
+    choices.push({ id, label: server.label });
   }
   return choices.length < 2 ? [] : choices;
+}
+
+/**
+ * Whether that machine said it can run this provider.
+ *
+ * `ready` and nothing else. A provider a server never mentioned is one it does
+ * not run, and one it reported as missing or broken is one the start is refused
+ * on -- the hub says so in the machine's own words, and this is the client
+ * declining to offer the question.
+ */
+function runs(
+  providers: readonly { readonly provider: Provider; readonly state: string }[],
+  provider: Provider,
+): boolean {
+  return providers.some((entry) => entry.provider === provider && entry.state === 'ready');
 }
 
 /**
@@ -83,6 +118,7 @@ export function buildStart(
   storeId: StoreId,
   server: ServerRegistrationId | null,
   promptText: string,
+  project: NodeId | null = null,
 ): HubCommand {
   return {
     type: 'session-start',
@@ -91,6 +127,10 @@ export function buildStart(
     provider: 'claude',
     prompt: parsePrompt(promptText),
     server,
+    // A node id and never a path. Which directory that project is, is the hub's
+    // to answer out of its own rows -- a client that could send the path would
+    // be a client choosing a cwd on somebody else's machine.
+    project,
   };
 }
 

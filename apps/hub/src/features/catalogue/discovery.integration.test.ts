@@ -1,7 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { sessionIdSchema, storeIdSchema, type SessionRef } from '@agentplex/protocol';
+import {
+  nodeIdSchema,
+  sessionIdSchema,
+  storeIdSchema,
+  type NodeId,
+  type SessionRef,
+} from '@agentplex/protocol';
 import type { Database } from '../../db/database.js';
 import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-schema.js';
+import type { DiscoveredSession } from './catalogue.js';
 import { discoverNodes } from './discovery.js';
 import { findNodeForSession, listNodes, listRemovals } from './reads.js';
 import { createFolder, moveNode, removeNode, renameNode, forgetRemoval } from './writes.js';
@@ -36,6 +43,44 @@ function ref(sessionId: string): SessionRef {
   return { storeId: STORE, sessionId: sessionIdSchema.parse(sessionId) };
 }
 
+/**
+ * One session a scan found.
+ *
+ * `cwd` defaults to `null`, which is a provider that records no working
+ * directory -- the case every assertion below but the project ones is about,
+ * since where a session ran only matters for deciding which project it is in.
+ */
+function found(
+  sessionId: string,
+  title: string | null,
+  cwd: string | null = null,
+): DiscoveredSession {
+  return { ref: ref(sessionId), title, cwd };
+}
+
+/**
+ * A project node, written directly.
+ *
+ * The projects feature owns the two rows a project is and is tested against
+ * them in its own folder; what this file needs is a node of that kind to be a
+ * parent, and reaching for another feature's factory to get one would make
+ * every assertion below depend on how a project is made.
+ */
+async function makeProject(directory: string): Promise<NodeId> {
+  const id = nodeIdSchema.parse(`project-${directory}`);
+  await db().query(
+    `INSERT INTO nodes (id, parent_id, kind, position, name, name_source, created_at)
+     VALUES (?, NULL, 'project', 0, ?, 'user', ?)`,
+    [id, directory, NOW],
+  );
+  await db().query('INSERT INTO projects (node_id, directory, created_at) VALUES (?, ?, ?)', [
+    id,
+    directory,
+    NOW,
+  ]);
+  return id;
+}
+
 describe('discovery and the node tree', () => {
   beforeAll(async () => {
     migrated = await openMigratedSchema('layout-discovery-probe');
@@ -52,9 +97,7 @@ describe('discovery and the node tree', () => {
   });
 
   it('places a newly discovered session at the root, named by its title', async () => {
-    const outcome = await discoverNodes(db(), ids, clock, [
-      { ref: ref('s1'), title: 'fixing the parser' },
-    ]);
+    const outcome = await discoverNodes(db(), ids, clock, [found('s1', 'fixing the parser')]);
 
     expect(outcome.created).toHaveLength(1);
     expect(outcome.suppressed).toEqual([]);
@@ -65,9 +108,101 @@ describe('discovery and the node tree', () => {
     expect(node?.anchor).toEqual(ref('s1'));
   });
 
+  /**
+   * The project placement, and the whole of what it is: a different default
+   * place, decided once.
+   */
+  it('places a session inside the project whose directory it ran in', async () => {
+    const project = await makeProject('/srv/work/agentplex');
+
+    const outcome = await discoverNodes(
+      db(),
+      ids,
+      clock,
+      [found('s1', 'in the project', '/srv/work/agentplex')],
+      new Map([[ref('s1').sessionId, project]]),
+    );
+
+    expect(outcome.created[0]?.parentId).toBe(project);
+  });
+
+  it("starts a project's children at 0 rather than after everything at the root", async () => {
+    const project = await makeProject('/srv/work/agentplex');
+    // Two sessions already at the root, so a position counted over the wrong
+    // parent would be visible rather than coincidentally right.
+    await discoverNodes(db(), ids, clock, [found('root-1', 'one'), found('root-2', 'two')]);
+
+    const outcome = await discoverNodes(
+      db(),
+      ids,
+      clock,
+      [found('s1', 'in the project', '/srv/work/agentplex')],
+      new Map([[ref('s1').sessionId, project]]),
+    );
+
+    expect(outcome.created[0]?.position).toBe(0);
+  });
+
+  it("leaves a session whose directory is nobody's at the root", async () => {
+    await makeProject('/srv/work/agentplex');
+
+    const outcome = await discoverNodes(db(), ids, clock, [
+      found('s1', 'somewhere else', '/srv/work/other'),
+    ]);
+
+    expect(outcome.created[0]?.parentId).toBeNull();
+  });
+
+  /**
+   * The cost of keeping the rule migration 0004 stated, written down as a test
+   * so that nobody changes it by accident.
+   *
+   * Discovery writes placement exactly once, at creation, which is why `nodes`
+   * has no `placed_by` to sit beside `name_source`. A session found before its
+   * project existed therefore stays where it was put, and making the project
+   * does not gather it up. Moving it would mean this deciding that a node at
+   * the root is there by default rather than by choice, and nothing in the
+   * schema can tell those apart -- which is exactly the column that does not
+   * exist. The tree has a move for the user to make.
+   */
+  it('never moves a session that already has a node, however its project changes', async () => {
+    await discoverNodes(db(), ids, clock, [found('s1', 'placed early', '/srv/work/agentplex')]);
+    const project = await makeProject('/srv/work/agentplex');
+
+    const outcome = await discoverNodes(
+      db(),
+      ids,
+      clock,
+      [found('s1', 'placed early', '/srv/work/agentplex')],
+      new Map([[ref('s1').sessionId, project]]),
+    );
+
+    expect(outcome.created).toEqual([]);
+    expect((await findNodeForSession(db(), ref('s1')))?.parentId).toBeNull();
+  });
+
+  it('still declines to place a session whose removal is remembered, project or not', async () => {
+    const project = await makeProject('/srv/work/agentplex');
+    await db().query(
+      'INSERT INTO node_removals (store_id, session_id, removed_at) VALUES (?, ?, ?)',
+      [STORE, 's1', NOW],
+    );
+
+    const outcome = await discoverNodes(
+      db(),
+      ids,
+      clock,
+      [found('s1', 'in the project', '/srv/work/agentplex')],
+      new Map([[ref('s1').sessionId, project]]),
+    );
+
+    expect(outcome.created).toEqual([]);
+    expect(outcome.suppressed).toEqual([ref('s1')]);
+  });
+
   it('places each session once, however often it is discovered', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
-    const second = await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
+    const second = await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
 
     expect(second.created).toEqual([]);
     expect(await listNodes(db())).toHaveLength(1);
@@ -75,9 +210,9 @@ describe('discovery and the node tree', () => {
 
   it('appends discovered sessions after each other rather than stacking them at 0', async () => {
     await discoverNodes(db(), ids, clock, [
-      { ref: ref('s1'), title: 'one' },
-      { ref: ref('s2'), title: 'two' },
-      { ref: ref('s3'), title: 'three' },
+      found('s1', 'one'),
+      found('s2', 'two'),
+      found('s3', 'three'),
     ]);
 
     const positions = (await listNodes(db())).map((node) => node.position).sort();
@@ -85,10 +220,10 @@ describe('discovery and the node tree', () => {
   });
 
   it('follows the transcript title while nobody has renamed the node', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'first guess' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'first guess')]);
 
     const outcome = await discoverNodes(db(), ids, clock, [
-      { ref: ref('s1'), title: 'what it turned out to be' },
+      found('s1', 'what it turned out to be'),
     ]);
 
     expect(outcome.retitled).toHaveLength(1);
@@ -98,7 +233,7 @@ describe('discovery and the node tree', () => {
   });
 
   it('lets a node with no title stay nameless rather than inventing one', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: null }]);
+    await discoverNodes(db(), ids, clock, [found('s1', null)]);
 
     const node = await findNodeForSession(db(), ref('s1'));
     expect(node?.name).toBeNull();
@@ -106,13 +241,13 @@ describe('discovery and the node tree', () => {
 
   /** The rename wins permanently. This is the one that would be maddening. */
   it('never renames a node the user named, however the title changes', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'first guess' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'first guess')]);
     const node = await findNodeForSession(db(), ref('s1'));
     if (node === null) throw new Error('the node discovery just created is missing');
     await renameNode(db(), node.id, 'the payments bug');
 
     const outcome = await discoverNodes(db(), ids, clock, [
-      { ref: ref('s1'), title: 'a completely different title' },
+      found('s1', 'a completely different title'),
     ]);
 
     expect(outcome.retitled).toEqual([]);
@@ -123,38 +258,38 @@ describe('discovery and the node tree', () => {
 
   /** And it stays won across many scans, not just the next one. */
   it('keeps the rename through repeated scans', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'first' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'first')]);
     const node = await findNodeForSession(db(), ref('s1'));
     if (node === null) throw new Error('the node discovery just created is missing');
     await renameNode(db(), node.id, 'mine');
 
     for (const title of ['second', 'third', 'fourth']) {
-      await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title }]);
+      await discoverNodes(db(), ids, clock, [found('s1', title)]);
     }
 
     expect((await findNodeForSession(db(), ref('s1')))?.name).toBe('mine');
   });
 
   it('never moves a node the user placed', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
     const folder = await createFolder(db(), ids, clock, { parentId: null, name: 'this week' });
     const node = await findNodeForSession(db(), ref('s1'));
     if (node === null) throw new Error('the node discovery just created is missing');
     await moveNode(db(), node.id, { parentId: folder.id });
 
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
 
     expect((await findNodeForSession(db(), ref('s1')))?.parentId).toBe(folder.id);
   });
 
   it('leaves a user-placed node where it is even while following its title', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
     const folder = await createFolder(db(), ids, clock, { parentId: null, name: 'this week' });
     const node = await findNodeForSession(db(), ref('s1'));
     if (node === null) throw new Error('the node discovery just created is missing');
     await moveNode(db(), node.id, { parentId: folder.id });
 
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'retitled' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'retitled')]);
 
     const after = await findNodeForSession(db(), ref('s1'));
     expect(after?.name).toBe('retitled');
@@ -167,13 +302,13 @@ describe('discovery and the node tree', () => {
    * remembered.
    */
   it('does not restore a removed session, because the removal is remembered', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
     const node = await findNodeForSession(db(), ref('s1'));
     if (node === null) throw new Error('the node discovery just created is missing');
     const removed = await removeNode(db(), clock, node.id);
     expect(removed.remembered).toEqual([ref('s1')]);
 
-    const outcome = await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    const outcome = await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
 
     expect(outcome.created).toEqual([]);
     expect(outcome.suppressed).toEqual([ref('s1')]);
@@ -181,13 +316,13 @@ describe('discovery and the node tree', () => {
   });
 
   it('keeps it removed over many scans, not merely the next one', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
     const node = await findNodeForSession(db(), ref('s1'));
     if (node === null) throw new Error('the node discovery just created is missing');
     await removeNode(db(), clock, node.id);
 
     for (let scan = 0; scan < 5; scan += 1) {
-      await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+      await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
     }
 
     expect(await listNodes(db())).toEqual([]);
@@ -195,13 +330,13 @@ describe('discovery and the node tree', () => {
   });
 
   it('places the session again once the removal is forgotten', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
     const node = await findNodeForSession(db(), ref('s1'));
     if (node === null) throw new Error('the node discovery just created is missing');
     await removeNode(db(), clock, node.id);
 
     expect(await forgetRemoval(db(), ref('s1'))).toBe(true);
-    const outcome = await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    const outcome = await discoverNodes(db(), ids, clock, [found('s1', 'one')]);
 
     expect(outcome.created).toHaveLength(1);
     expect(await findNodeForSession(db(), ref('s1'))).not.toBeNull();
@@ -214,10 +349,7 @@ describe('discovery and the node tree', () => {
    * a worse outcome than the removal simply not working.
    */
   it('remembers the sessions inside a removed folder, not just the folder', async () => {
-    await discoverNodes(db(), ids, clock, [
-      { ref: ref('s1'), title: 'one' },
-      { ref: ref('s2'), title: 'two' },
-    ]);
+    await discoverNodes(db(), ids, clock, [found('s1', 'one'), found('s2', 'two')]);
     const folder = await createFolder(db(), ids, clock, { parentId: null, name: 'done' });
     for (const sessionId of ['s1', 's2']) {
       const node = await findNodeForSession(db(), ref(sessionId));
@@ -228,10 +360,7 @@ describe('discovery and the node tree', () => {
     const removed = await removeNode(db(), clock, folder.id);
     expect(removed.remembered).toEqual(expect.arrayContaining([ref('s1'), ref('s2')]));
 
-    const outcome = await discoverNodes(db(), ids, clock, [
-      { ref: ref('s1'), title: 'one' },
-      { ref: ref('s2'), title: 'two' },
-    ]);
+    const outcome = await discoverNodes(db(), ids, clock, [found('s1', 'one'), found('s2', 'two')]);
 
     expect(outcome.created).toEqual([]);
     expect(await listNodes(db())).toEqual([]);
@@ -251,8 +380,8 @@ describe('discovery and the node tree', () => {
   it('treats the same session id in two stores as two sessions', async () => {
     const other = storeIdSchema.parse('store-b');
     await discoverNodes(db(), ids, clock, [
-      { ref: ref('s1'), title: 'in a' },
-      { ref: { storeId: other, sessionId: sessionIdSchema.parse('s1') }, title: 'in b' },
+      found('s1', 'in a'),
+      { ref: { storeId: other, sessionId: sessionIdSchema.parse('s1') }, title: 'in b', cwd: null },
     ]);
 
     expect(await listNodes(db())).toHaveLength(2);

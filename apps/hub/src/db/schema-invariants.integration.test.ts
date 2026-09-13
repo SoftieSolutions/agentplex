@@ -140,12 +140,24 @@ describe('the schema, read back', () => {
     await db().query(`DELETE FROM node_kinds WHERE kind = 'saved-search'`);
   });
 
-  it('seeds the two kinds v2 ships, so nothing has to insert them at startup', async () => {
+  /**
+   * Seeded by migrations rather than by code at startup, which is the rule
+   * 0004 stated and 0006 is the first test of: a lookup table whose contents
+   * depend on which build last booted is a lookup table that differs between
+   * two machines running the same migration.
+   *
+   * `project` and `doc` arrived as two INSERTs in 0006 with no change to any
+   * table, which is what the kinds being rows buys and what the test above
+   * asserts in general.
+   */
+  it('seeds the kinds the migrations ship, so nothing has to insert them at startup', async () => {
     const result = await db().query(
       'SELECT kind, container, anchors_session FROM node_kinds ORDER BY kind',
     );
     expect(result.rows).toEqual([
+      { kind: 'doc', container: 0, anchors_session: 0 },
       { kind: 'folder', container: 1, anchors_session: 0 },
+      { kind: 'project', container: 1, anchors_session: 0 },
       { kind: 'session', container: 0, anchors_session: 1 },
     ]);
   });

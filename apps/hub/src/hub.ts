@@ -29,6 +29,8 @@ import { createFleetState, type FleetState } from './features/fleet-state/fleet-
 import { createMcp } from './features/mcp/mcp.js';
 import { createPairing, type LocalServerEntry } from './features/pairing/pairing.js';
 import { createPaneLayout } from './features/pane-layout/pane-layout.js';
+import { createDocs } from './features/docs/docs.js';
+import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
 import { createTerminal } from './features/terminal/terminal.js';
@@ -216,6 +218,33 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   const beacons = createDiscovery({ source: discovery, clock, timers, logger });
   beacons.subscribe((candidates) => void state.applyCandidates(candidates));
 
+  // The tree, read from the database per request rather than held in memory
+  // beside the fleet state. It is durable and the fleet state is not: where the
+  // user put things survives a restart, and which sessions are reachable this
+  // second does not.
+  //
+  // Built before the servers feature for the reason the fleet state is: it is
+  // told about a store the moment one is read, and a report that arrived before
+  // there was anywhere to put it would leave the tree behind until the next
+  // one. It reads a store through the reducer rather than from the report,
+  // which is the decision `catalogue.ts` argues: the tree follows what the hub
+  // believes is in a store, not what the one server that spoke last could see.
+  const catalogue = createCatalogue({
+    database,
+    ids,
+    clock,
+    logger,
+    readStore: (storeId) => state.storeSessions(storeId),
+    // Which project a directory is, so that a session reported from one is
+    // filed under it. Reached through a call rather than by holding the
+    // feature, and that is this file's ordering rather than a seam of its own:
+    // the tree has to exist before the servers feature, because a report is
+    // handed to it, and projects has to exist after it, because a browse goes
+    // out over a connection. Nothing asks this question until a store has been
+    // reported, which is after `sync` far below.
+    projects: { findByDirectory: (directory) => projects.findByDirectory(directory) },
+  });
+
   // Constructed here and dialling nothing yet. That is what the split between
   // building this and calling `sync` below buys: everything that has to see a
   // connectivity change -- the fleet state, and the broadcast attached to it --
@@ -229,11 +258,11 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     clock,
     logger,
     onChange: (report) => state.applyConnection(report),
-    // Stamped with the hub's clock and not the server's. Two machines' clocks
-    // disagree, and a hub comparing readings dated by the machines that made
-    // them is comparing two different times.
     onReport: (report) => {
-      state.applySessions({
+      // Stamped with the hub's clock and not the server's. Two machines' clocks
+      // disagree, and a hub comparing readings dated by the machines that made
+      // them is comparing two different times.
+      const accepted = state.applySessions({
         registrationId: report.registrationId,
         storeId: report.storeId,
         sessions: report.sessions,
@@ -245,6 +274,16 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // the only thing that has been waiting to hear which session a spawn it
       // is already showing turned out to be.
       terminal.noteStarts(report.registrationId, report.storeId, report.starts);
+      // Only what the reducer took. A report from a server the hub holds no
+      // connection to, or for a store that server has not mounted, is refused
+      // there because the hub cannot place it -- and a tree built on one would
+      // name sessions the state on the same screen does not have.
+      //
+      // Not awaited, and nothing on this path may await it: a server's report
+      // is answered by the fleet state and the broadcast, and the tree write is
+      // what happens after that. A failed one costs this store's tree update
+      // and is logged where it happened.
+      if (accepted) void catalogue.observe(report.storeId);
     },
     onStream: (registrationId, output) => terminal.deliver(registrationId, output),
   });
@@ -256,13 +295,33 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // `sync` below dials one.
   const terminal = createTerminal({ state, servers, logger });
 
-  const sessions = createSessions({ state, connections: servers, ids, logger });
+  // Projects: the rows a user makes, and the browse a directory is picked with.
+  // The rule about which directories may be browsed is not this hub's -- it is
+  // checked against roots that machine's operator configured -- so what this
+  // feature adds is the one fact a server cannot have: whether the hub holds a
+  // connection to ask down at all. What it owns outright is the record: a name,
+  // a directory, and the node the tree shows it as.
+  const projects = createProjects({ database, ids, clock, state, connections: servers, logger });
 
-  // The tree and the pane arrangement are read from the database per request
-  // rather than held in memory beside the fleet state. They are durable and it
-  // is not: where the user put things survives a restart, and which sessions
-  // are reachable this second does not.
-  const catalogue = createCatalogue({ database, ids, clock });
+  const sessions = createSessions({ state, projects, connections: servers, ids, logger });
+
+  // Documents: the index of files the hub does not hold, and the one path a
+  // write to one takes. It reads projects for the directory a frame is
+  // addressed to and nothing else of that feature, which is the same one-way
+  // edge the catalogue has -- the rows a document is are this feature's, and
+  // where a project is stays the projects feature's answer.
+  const docs = createDocs({
+    database,
+    ids,
+    clock,
+    state,
+    projects,
+    connections: servers,
+    logger,
+  });
+
+  // Read per request for the reason the tree above is, and durable for the
+  // same one: an arrangement of panes outlives the process that was told it.
   const paneLayout = createPaneLayout({ database, clock });
 
   // Subscribed before the first server is dialled, so that the first
@@ -280,6 +339,8 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     writePaneLayout: (layout) => paneLayout.write(layout),
     sessions,
     terminal,
+    projects,
+    docs,
   });
 
   // Not awaited past its first read of the pairing table, and started before

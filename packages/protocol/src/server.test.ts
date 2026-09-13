@@ -15,6 +15,7 @@ import {
 } from './identity.js';
 import { parseTextFrame } from './parse.js';
 import { encodeTerminalChunk } from './terminal.js';
+import { DOC_CONTENT_MAX_CHARS, docNameSchema } from './doc.js';
 
 const HUB_ID = hubIdSchema.parse('hub-1');
 
@@ -87,6 +88,7 @@ describe('parseHubToServerFrame on the session instructions', () => {
     sessionId: null,
     provider: 'claude',
     prompt: null,
+    directory: null,
   };
 
   it('accepts a start that names a store and a provider, and nothing else', () => {
@@ -126,12 +128,27 @@ describe('parseHubToServerFrame on the session instructions', () => {
     ).toBe(false);
   });
 
+  it('accepts a start in a project, whose directory is parsed like every other', () => {
+    expect(parseHubToServerFrame({ ...A_START, directory: '/srv/work/agentplex' }).ok).toBe(true);
+  });
+
+  it('refuses a project directory that is relative or holds a NUL', () => {
+    // The frame's half of the amended rule. What it cannot check is whose disk
+    // this is, which is why the server checks the value again against the roots
+    // its own operator configured -- see `directory-browse.ts`.
+    expect(parseHubToServerFrame({ ...A_START, directory: 'work/agentplex' }).ok).toBe(false);
+    expect(parseHubToServerFrame({ ...A_START, directory: '/srv/\u0000/x' }).ok).toBe(false);
+    expect(parseHubToServerFrame({ ...A_START, directory: '' }).ok).toBe(false);
+  });
+
   it('strips a cwd, an argv, an env or an operation name off an instruction', () => {
-    // The rule this frame exists to keep: the server owns the spawn. A
-    // directory off the wire is a remote code execution primitive wearing a
-    // path, and an argv element off the wire is one without the disguise.
-    // Neither survives the parser, so the server's handler has no field to be
-    // talked into reading.
+    // The rule this frame exists to keep: the server owns the spawn. An argv
+    // element off the wire is the `{ command }` frame without a disguise, and a
+    // `cwd` is one wearing a path -- neither survives the parser, so the
+    // server's handler has no field to be talked into reading. A directory does
+    // cross, under its own name and its own schema, and it is the one value on
+    // this frame that is checked twice: parsed here, and refused by the machine
+    // unless its operator listed a root above it.
     const smuggled = parseHubToServerFrame({
       ...A_START,
       cwd: '/srv/work',
@@ -155,6 +172,149 @@ describe('parseHubToServerFrame on the session instructions', () => {
     expect(named.ok).toBe(true);
     if (!named.ok) return;
     expect(named.value).not.toHaveProperty('pid');
+  });
+});
+
+describe('parseHubToServerFrame on the document frames', () => {
+  const A_WRITE = {
+    type: 'doc-write',
+    id: 2,
+    directory: '/Users/dev/Code/agentplex',
+    name: 'plan.md',
+    content: '# Plan\n',
+  };
+
+  it('accepts a write naming a project, a document and its whole content', () => {
+    expect(parseHubToServerFrame(A_WRITE).ok).toBe(true);
+    expect(parseHubToServerFrame({ ...A_WRITE, content: '' }).ok).toBe(true);
+  });
+
+  it('accepts a read and a list, each naming the project by its working tree', () => {
+    expect(
+      parseHubToServerFrame({ type: 'doc-read', id: 3, directory: '/srv/work', name: 'plan.md' })
+        .ok,
+    ).toBe(true);
+    expect(parseHubToServerFrame({ type: 'doc-list', id: 4, directory: '/srv/work' }).ok).toBe(
+      true,
+    );
+  });
+
+  // The name is the one string on this direction that is joined onto a path
+  // on the server's disk, and the parser is what keeps it inside the folder.
+  it.each([
+    ['a separator', 'notes/plan.md'],
+    ['a traversal', '../plan.md'],
+    ['a leading dot', '.plan.md'],
+    ['an extension off the list', 'plan.sh'],
+  ])('refuses a document name with %s, on every frame that carries one', (_why, name) => {
+    expect(parseHubToServerFrame({ ...A_WRITE, name }).ok).toBe(false);
+    expect(
+      parseHubToServerFrame({ type: 'doc-read', id: 3, directory: '/srv/work', name }).ok,
+    ).toBe(false);
+  });
+
+  it.each([
+    ['relative', 'Code/agentplex'],
+    ['a parent reference', '../agentplex'],
+    ['empty', ''],
+  ])('refuses a directory that is %s, on every frame that carries one', (_why, directory) => {
+    expect(parseHubToServerFrame({ ...A_WRITE, directory }).ok).toBe(false);
+    expect(parseHubToServerFrame({ type: 'doc-read', id: 3, directory, name: 'plan.md' }).ok).toBe(
+      false,
+    );
+    expect(parseHubToServerFrame({ type: 'doc-list', id: 4, directory }).ok).toBe(false);
+  });
+
+  it('refuses content past the cap rather than truncating it', () => {
+    expect(parseHubToServerFrame({ ...A_WRITE, content: 'x'.repeat(256_001) }).ok).toBe(false);
+  });
+
+  /**
+   * The reason the cap is the number it is. `DOC_CONTENT_MAX_CHARS` is chosen
+   * so that a maximal document of text is a frame the socket will carry, and
+   * that is an arithmetic claim about JSON and UTF-8 rather than an opinion:
+   * this measures it. The ceiling is `DEFAULT_MAX_PAYLOAD_BYTES` in
+   * `packages/node-shared/src/ws-message-socket.ts`, spelled again here
+   * because this package may not import another workspace package.
+   */
+  it('serialises a maximal document of text as a frame the socket will carry', () => {
+    const SOCKET_CEILING_BYTES = 1_000_000;
+    const encoder = new TextEncoder();
+    const bytesOf = (content: string): number =>
+      encoder.encode(JSON.stringify({ ...A_WRITE, content })).length;
+
+    for (const [why, character] of [
+      ['ascii', 'x'],
+      ['a two-byte letter', 'д'],
+      ['the worst of the Basic Multilingual Plane', '漢'],
+      ['a quote, which JSON escapes', '"'],
+      ['a newline, which JSON escapes', '\n'],
+    ] as const) {
+      const content = character.repeat(DOC_CONTENT_MAX_CHARS);
+      expect(parseHubToServerFrame({ ...A_WRITE, content }).ok, why).toBe(true);
+      expect(bytesOf(content), why).toBeLessThan(SOCKET_CEILING_BYTES);
+    }
+
+    // A surrogate pair is two code units of two bytes each, so a document of
+    // emoji is cheaper per code unit than one of CJK, not dearer.
+    expect(bytesOf('\u{1F600}'.repeat(DOC_CONTENT_MAX_CHARS / 2))).toBeLessThan(
+      SOCKET_CEILING_BYTES,
+    );
+
+    // And the exception the constant's comment names: a file of control codes
+    // is not a document, and it is the case the cap does not cover.
+    expect(bytesOf('\u0001'.repeat(DOC_CONTENT_MAX_CHARS))).toBeGreaterThan(SOCKET_CEILING_BYTES);
+  });
+
+  it('refuses a write with no content: a document is replaced whole or not at all', () => {
+    const { content: _content, ...withoutContent } = A_WRITE;
+    expect(parseHubToServerFrame(withoutContent).ok).toBe(false);
+  });
+
+  it('strips a cwd, an argv, an env or an operation name off a document frame', () => {
+    // A directory is on this frame as a file-store key, and the parser makes
+    // sure nothing else that could reach a process rides along with it.
+    const smuggled = parseHubToServerFrame({
+      ...A_WRITE,
+      cwd: '/srv/work',
+      args: ['--resume', 'x'],
+      env: { ANTHROPIC_API_KEY: 'k' },
+      operation: 'git-status',
+      command: 'claude',
+    });
+    expect(smuggled.ok).toBe(true);
+    if (!smuggled.ok) return;
+    for (const forbidden of ['cwd', 'args', 'env', 'operation', 'command']) {
+      expect(smuggled.value).not.toHaveProperty(forbidden);
+    }
+  });
+});
+
+describe('parseServerToHubFrame on the document answers', () => {
+  it('accepts a listing whose every entry names a document', () => {
+    const result = parseServerToHubFrame({
+      type: 'doc-listing',
+      replyTo: 4,
+      entries: [{ name: 'plan.md', updatedAt: 1_756_000_000_000, bytes: 7 }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts an empty listing, which is a project nobody has written to', () => {
+    expect(parseServerToHubFrame({ type: 'doc-listing', replyTo: 4, entries: [] }).ok).toBe(true);
+  });
+
+  it('refuses a listing carrying a name the name parser would not take', () => {
+    const result = parseServerToHubFrame({
+      type: 'doc-listing',
+      replyTo: 4,
+      entries: [{ name: '.plan.md.tmp', updatedAt: 1_756_000_000_000, bytes: 7 }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('refuses a content answer with no write time', () => {
+    expect(parseServerToHubFrame({ type: 'doc-content', replyTo: 3, content: 'x' }).ok).toBe(false);
   });
 });
 
@@ -465,6 +625,7 @@ describe('hub and server round trips', () => {
       sessionId: null,
       provider: 'claude',
       prompt: 'look at the failing test',
+      directory: null,
     },
     {
       type: 'session-start',
@@ -474,6 +635,7 @@ describe('hub and server round trips', () => {
       sessionId: sessionIdSchema.parse('session-1'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     },
     {
       type: 'session-stop',
@@ -511,7 +673,23 @@ describe('hub and server round trips', () => {
       target: { by: 'start', startId: A_START_ID },
       size: { cols: 120, rows: 40 },
     },
+    {
+      type: 'doc-write',
+      id: 10,
+      directory: '/Users/dev/Code/agentplex',
+      name: docNameSchema.parse('plan.md'),
+      content: '# Plan\n\n- read the failing test\n',
+    },
+    {
+      type: 'doc-read',
+      id: 11,
+      directory: '/Users/dev/Code/agentplex',
+      name: docNameSchema.parse('plan.md'),
+    },
+    { type: 'doc-list', id: 12, directory: '/Users/dev/Code/agentplex' },
     { type: 'protocol-error', code: 'bad-request', message: 'type: invalid input' },
+    { type: 'directory-list', id: 14, directory: null },
+    { type: 'directory-list', id: 15, directory: '/srv/work' },
   ];
 
   const serverToHub: readonly ServerToHubFrame[] = [
@@ -588,6 +766,39 @@ describe('hub and server round trips', () => {
       startId: null,
       chunk: encodeTerminalChunk(new TextEncoder().encode('\u001b[32mok\u001b[0m\r\n')),
       droppedChunks: 0,
+    },
+    {
+      type: 'directory-listing',
+      replyTo: 8,
+      directory: '/srv/work',
+      roots: ['/srv/work'],
+      entries: [
+        { name: 'agentplex', kind: 'directory' },
+        { name: 'notes.md', kind: 'file' },
+        { name: 'current', kind: 'other' },
+      ],
+      truncated: false,
+    },
+    {
+      type: 'directory-refused',
+      replyTo: 9,
+      code: 'refused',
+      message: '/etc is not under a directory this server will browse',
+    },
+    { type: 'doc-written', replyTo: 10, updatedAt: 1_756_000_000_000 },
+    {
+      type: 'doc-content',
+      replyTo: 11,
+      content: '# Plan\n\n- read the failing test\n',
+      updatedAt: 1_756_000_000_000,
+    },
+    {
+      type: 'doc-listing',
+      replyTo: 12,
+      entries: [
+        { name: docNameSchema.parse('plan.md'), updatedAt: 1_756_000_000_000, bytes: 34 },
+        { name: docNameSchema.parse('results.csv'), updatedAt: 1_756_000_001_000, bytes: 0 },
+      ],
     },
     { type: 'protocol-error', code: 'protocol-version', message: 'this server speaks version 2' },
   ];

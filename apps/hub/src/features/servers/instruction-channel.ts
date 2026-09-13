@@ -1,6 +1,6 @@
 import type { FrameId, HubToServerFrame } from '@agentplex/protocol';
 import type { Logger, Timers } from '@agentplex/node-shared';
-import type { InstructionOutcome, SessionInstruction } from './servers.js';
+import type { InstructionOutcome, ServerInstruction } from './servers.js';
 
 /**
  * The instructions one connection is waiting on answers to.
@@ -36,7 +36,7 @@ export interface InstructionChannelDependencies {
 }
 
 export interface InstructionChannel {
-  ask(instruction: SessionInstruction): Promise<InstructionOutcome>;
+  ask(instruction: ServerInstruction): Promise<InstructionOutcome>;
   /**
    * Settles the instruction a reply names, and says whether anything was
    * waiting.
@@ -60,7 +60,7 @@ export function createInstructionChannel(
   const outstanding = new Map<FrameId, (outcome: InstructionOutcome) => void>();
 
   return {
-    ask(instruction: SessionInstruction): Promise<InstructionOutcome> {
+    ask(instruction: ServerInstruction): Promise<InstructionOutcome> {
       return new Promise<InstructionOutcome>((resolve) => {
         const id = nextFrameId();
         let cancelDeadline: () => void = () => {};

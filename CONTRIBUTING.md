@@ -63,9 +63,55 @@ item in a listing costs itself and not the listing.
 **One parser per direction.** Each half of the protocol owns exactly one parser,
 and nothing downstream re-checks a frame's `type` by hand.
 
-**No frame carries an operation name, an argv element, an env var, or a cwd.**
-Every spawn goes through the operation registry, `shell: false` always. A
-generic `{ command }` frame is the failure mode the registry exists to prevent.
+**No frame carries an operation name, an argv element or an env var. A
+directory crosses the wire only as a `directory` field parsed by
+`directorySchema`, refused unless under a configured browse root, and the only
+spawn field it may reach is `cwd`.** Every spawn goes through the operation
+registry, `shell: false` always. A generic `{ command }` frame is the failure
+mode the registry exists to prevent.
+
+The cwd half of that rule is an amendment, taken deliberately and argued here so
+it is not re-argued. A project holds a directory on a server and the user picks
+it by browsing, so a directory has to cross. The rule's reason was that a
+`{ command }` or `{ cwd }` field is a generic execution surface; three things
+together are what make this one not that, and none is optional. The value is
+parsed by one schema, `packages/protocol/src/directory.ts`, which is the same
+schema an operation's request is parsed by — absolute, no NUL. The server
+refuses it unless its **real** path sits under a root that server's operator
+configured, which is a list nothing on the wire can add to and which is empty by
+default, so a machine nobody has configured browses nothing and says so. And the
+only spawn field it may ever reach is `cwd`, on a spawn that still goes through
+the registry with an argv this process built.
+
+The rejected alternative is server-declared workspaces with opaque ids on the
+wire, which keeps the old rule verbatim. It was rejected because it makes adding
+a directory a server-side setup action, and the decision the catalogue rests on
+is that the user browses for one — an operator editing a settings file to make a
+checkout pickable is the workflow the browse exists to remove.
+
+Three uses are covered by the amended wording, and each was argued separately.
+`directory-list` (AGX-238) is a browse request. `project-create` (AGX-133)
+records a directory in a hub row, and the `session-start` that names that
+project is the only one of the three that reaches a spawn — as `cwd`, and
+nothing else. The document frames (AGX-241) carry a `directory` as the key of a
+per-project file store and reach no spawn at all. One rule covers all three
+because what bounds them is the same thing — a parser that can say no, and a
+root list only the machine's operator writes.
+
+A client never sends the path a session spawns in, and that is the shape of the
+project frames rather than a habit of the code: `session-start` carries a
+`project` node id, the hub resolves the directory out of its own rows, and the
+machine refuses it unless a root is above it. The party that types a path and
+the party that runs a process are two hops apart, with a parser and a root list
+between them.
+
+`apps/server/src/directory-browse.ts` holds the containment rule and the reason
+it runs on `fs.realpath` rather than on the string. Its `allow` is that rule
+alone — a session start asks it, and takes no listing with it — and
+`tests/hub-server/src/session-start.integration.test.ts` is where the wire shape
+is asserted: `args`, `argv`, `env`, `command`, `operation`, `pid` and
+`terminalId` absent everywhere, and every `directory` on a hub-to-server
+instruction either null or under a configured root.
 
 **Setup's spawns go through a second registry, not a wider one.** Installing a
 provider is a spawn, so it obeys every rule above, and it is registered where
@@ -84,9 +130,9 @@ migration is history: add a new one rather than editing it.
 ## Features
 
 `apps/hub/src/features/` is one folder per feature: the fleet state, the paired
-servers, pairing, sessions, the terminal relay, the catalogue, the pane layout,
-the clients, client auth, discovery, the web assets, and MCP. Four rules hold it
-together, and `pnpm lint` enforces the first one.
+servers, pairing, sessions, the terminal relay, projects, documents, the
+catalogue, the pane layout, the clients, client auth, discovery, the web assets,
+and MCP. Four rules hold it together, and `pnpm lint` enforces the first one.
 
 **A feature is a folder with one entry file.** `features/catalogue/catalogue.ts`
 exports the interface `Catalogue` and `createCatalogue(deps)`, and another
@@ -125,6 +171,15 @@ the bottom with no reply, no log line and nothing to find. A client was left
 holding a frame id that would never be answered. What this build cannot serve it
 now says so — a refusal in words to a client, a debug line naming the frame from
 a server — and neither is silence.
+
+**A feature with two callers is what a feature is for.** `features/docs/docs.ts`
+exposes four functions and reaches a server through the connections seam;
+`client-connection.ts` calls them on a frame and the MCP tools will call the
+same four in the same process. Neither reaches a connection itself, and that is
+the point rather than a tidiness: a second caller putting its own `doc-write` on
+a socket would be a second answer to what a document write means -- which index
+rows it touches, which refusals it produces, what happens when the machine is
+away -- and the two would part company the first time one of them was fixed.
 
 One file is deliberately thin. `features/servers/transport.ts` is how the hub
 speaks to a server once it is connected, and it declares only what is actually

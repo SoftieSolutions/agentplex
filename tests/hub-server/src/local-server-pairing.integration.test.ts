@@ -24,7 +24,9 @@ import { createPtySupervisor } from '@agentplex/pty';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
 import { DEFAULT_DRAIN_MS } from '../../../apps/server/src/drain.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
+import { createFakeStoreWatcher } from '../../../apps/server/src/fake-store-watcher.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
 import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
 import { localServerPairing } from '../../../apps/hub/src/features/pairing/local-server.js';
@@ -33,6 +35,7 @@ import {
   type DialTarget,
 } from '../../../apps/hub/src/features/servers/server-handshake.js';
 import { serverAddressSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 
 /**
  * The `--role=both` box, end to end, across the change that introduced grants.
@@ -86,6 +89,12 @@ async function startServer({
     host: '127.0.0.1',
     port: 0,
     storePaths: [],
+    // Nothing to browse: this suite is about the one pairing nobody types.
+    browseRoots: [],
+    directoryReader: createFakeDirectoryReader(),
+    // Nothing in this file writes into a store, so the watch is a seam that
+    // is handed over and never fires.
+    storeWatcher: createFakeStoreWatcher(),
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     grantFileSystem: grantFiles,
@@ -107,6 +116,8 @@ async function startServer({
     drainMs: DEFAULT_DRAIN_MS,
     workingTree: createFakeWorkingTree(),
     machineLoad: createFakeMachineLoadReader(),
+    dataRoot: '/var/lib/agentplex',
+    projectFiles: createFakeProjectFiles(),
     timers: systemTimers,
     announce: null,
   });

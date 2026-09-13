@@ -53,15 +53,19 @@ const INSTALL_ARGV =
   `npm install --global --prefix ${PREFIX} --json --no-ignore-scripts ` +
   '@anthropic-ai/claude-code@latest';
 
-/** Everything the operator presses return through, on a machine with claude on it. */
-const STRAIGHT_THROUGH = ['', '', '', '', '', '', '', ''];
+/**
+ * Everything the operator presses return through, on a machine with claude on
+ * it. One answer longer than it was: the browse-roots question offers `none`,
+ * so a run that presses return through the wizard still browses nothing.
+ */
+const STRAIGHT_THROUGH = ['', '', '', '', '', '', '', '', ''];
 
 /**
  * The same, on a machine whose `claude` is logged out: one more return, for the
  * offer to log it in. Pressing return through the whole wizard is meant to end
  * with the providers logged in, so that offer's own answer is yes.
  */
-const LOG_IN_TOO = ['', '', '', '', '', '', '', '', ''];
+const LOG_IN_TOO = ['', '', '', '', '', '', '', '', '', ''];
 
 /** A machine with `claude` on it that nobody has signed into. */
 function loggedOutMachine(): FakeMachine {
@@ -229,7 +233,7 @@ describe('the setup wizard', () => {
     // while this wizard installed the provider into ~/.agentplex and recorded
     // the pairing in ~/.agentplex/agentplex.env: a service that comes up
     // unpaired with no provider on its bin path, and nothing anywhere saying so.
-    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', ''], {
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 8), 'y', ''], {
       prefix: HANDED_PREFIX,
     });
 
@@ -257,7 +261,7 @@ describe('the setup wizard', () => {
   it('owns a prefix under the home directory when it was handed none', async () => {
     // The hand-run `agentplex setup`, unchanged: no installer told it anything,
     // so the prefix is the one it has always chosen for itself.
-    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', '']);
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 8), 'y', '']);
 
     const plan = savedPlan(wizard.files);
     expect('server' in plan && plan.server.installPrefix).toBe(PREFIX);
@@ -332,7 +336,7 @@ describe('the setup wizard', () => {
   });
 
   it('leaves a provider out of the plan entirely when told to skip it', async () => {
-    const wizard = await run(['', '', '', '', 'skip', '', '', 'y', '']);
+    const wizard = await run(['', '', '', '', '', 'skip', '', '', 'y', '']);
 
     expect(wizard.runner.installs).toEqual([]);
     expect(wizard.terminal.transcript).toContain('providers: none');
@@ -345,7 +349,7 @@ describe('the setup wizard', () => {
     // `--role` pre-seeds the question rather than replacing it: `curl | bash -s
     // -- --role=server` is an intention stated, not a chance to see what setup
     // found waived.
-    const wizard = await run(['', '', '', '', '', ''], { role: 'server' });
+    const wizard = await run(['', '', '', '', '', '', ''], { role: 'server' });
 
     expect(wizard.terminal.questions).toContain('Role [server] ');
     expect(wizard.terminal.lines).toContain(
@@ -371,7 +375,7 @@ describe('the setup wizard', () => {
     // The whole answer is asked for again rather than the good half being kept:
     // a relative path in a plan names a different directory on every boot, and
     // half of what somebody meant, provisioned quietly, is the worse outcome.
-    const wizard = await run(['', '', '', 'work, /srv/other', '/srv/other', '', '', '', '']);
+    const wizard = await run(['', '', '', 'work, /srv/other', '/srv/other', '', '', '', '', '']);
 
     expect(wizard.terminal.transcript).toContain('A store path has to be absolute: work');
     expect(wizard.terminal.transcript).toContain('stores: /srv/other');
@@ -380,14 +384,61 @@ describe('the setup wizard', () => {
   it('takes no stores at all as an answer', async () => {
     // Legal in the configuration too: a server whose volume is not mounted yet
     // reports no stores rather than refusing to start.
-    const wizard = await run(['', '', '', 'none', '', '', '', 'y', '']);
+    const wizard = await run(['', '', '', 'none', '', '', '', '', 'y', '']);
 
     const plan = savedPlan(wizard.files);
     expect('server' in plan && plan.server.storePaths).toEqual([]);
   });
 
+  it('offers no browse root, so pressing return through the wizard grants nothing', async () => {
+    // The offer is `none` and is deliberately not the home directory or the
+    // stores above. What a root grants is a listing of this machine's files to
+    // anybody who can reach a paired hub, and an offer somebody accepts by
+    // pressing enter is a decision the wizard took rather than the operator.
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 8), 'y', '']);
+
+    expect(wizard.terminal.questions).toContain('Browse roots [none] ');
+    const plan = savedPlan(wizard.files);
+    expect('server' in plan && plan.server.browseRoots).toEqual([]);
+    expect(
+      settings(wizard.machine).some((line) => line.startsWith('AGENTPLEX_BROWSE_ROOTS=')),
+    ).toBe(false);
+  });
+
+  it('records the browse roots it was given, and refuses a relative one', async () => {
+    // The whole answer is asked for again rather than the good half being kept,
+    // for the reason a store path is: half of what somebody meant, provisioned
+    // quietly, is the worse outcome -- and here the half in question is a
+    // permission.
+    const wizard = await run([
+      '',
+      '',
+      '',
+      '',
+      'code, /srv/other',
+      '/home/dev/code',
+      '',
+      '',
+      '',
+      '',
+    ]);
+
+    expect(wizard.terminal.transcript).toContain('A browse root has to be absolute: code');
+    expect(wizard.terminal.transcript).toContain('browse roots: /home/dev/code');
+    expect(settings(wizard.machine)).toContain('AGENTPLEX_BROWSE_ROOTS=/home/dev/code');
+  });
+
+  it('joins several browse roots the way the daemon splits them', async () => {
+    // One value, `:`-separated, which is what `readAbsolutePaths` splits an env
+    // var on. A second spelling here would be a machine whose roots all parsed
+    // as one directory nobody has.
+    const wizard = await run(['', '', '', '', '/home/dev/code, /srv/other', '', '', '', '']);
+
+    expect(settings(wizard.machine)).toContain('AGENTPLEX_BROWSE_ROOTS=/home/dev/code:/srv/other');
+  });
+
   it('saves the plan it applied, and it is a plan the other front end reads', async () => {
-    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', '']);
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 8), 'y', '']);
 
     expect(wizard.terminal.transcript).toContain(`Saved ${PLAN_FILE}`);
     const plan = savedPlan(wizard.files);
@@ -404,7 +455,7 @@ describe('the setup wizard', () => {
     // A plan is a file that ends up in user-data, in an image, and in whatever
     // bucket somebody copied it to. The token this machine pairs with is minted
     // into the identity file, where the server has always kept it.
-    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', '']);
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 8), 'y', '']);
 
     const contents = wizard.files.contents.get(PLAN_FILE) ?? '';
     expect(contents).not.toContain('minted-on-the-machine');
@@ -414,7 +465,7 @@ describe('the setup wizard', () => {
 
   it('never writes over a plan that is already there', async () => {
     const files = createFakeStoreFiles({ files: { [PLAN_FILE]: '{"someone else": true}' } });
-    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 7), 'y', '', 'y', '/tmp/plan.json'], {
+    const wizard = await run([...STRAIGHT_THROUGH.slice(0, 8), 'y', '', 'y', '/tmp/plan.json'], {
       files,
     });
 
@@ -424,7 +475,7 @@ describe('the setup wizard', () => {
   });
 
   it('changes nothing when the operator says no to the plan, and still offers to save it', async () => {
-    const wizard = await run(['', '', '', '', '', 'n', 'y', '']);
+    const wizard = await run(['', '', '', '', '', '', 'n', 'y', '']);
 
     expect(wizard.outcome).toEqual({ kind: 'abandoned' });
     expect(wizard.runner.installs).toEqual([]);
@@ -499,7 +550,9 @@ describe('the setup wizard', () => {
   it('names the login to run for a provider the operator will log in later', async () => {
     // Declining is a legitimate answer, and the sentence it gets is the one that
     // was already true: installed, not logged in, and here is what to type.
-    const wizard = await run(['', '', '', '', '', '', 'n', '', ''], { runner: loggedOutMachine() });
+    const wizard = await run(['', '', '', '', '', '', '', 'n', '', ''], {
+      runner: loggedOutMachine(),
+    });
 
     expect(wizard.ptys.opened).toEqual([]);
     expect(wizard.terminal.transcript).toContain(
@@ -624,7 +677,7 @@ describe('the setup wizard', () => {
     // Declining is a legitimate answer, and what it gets is the sentence that
     // was true before this step existed: the token is in that file, and typing
     // it into a hub is how this machine gets paired.
-    const wizard = await run(['', '', '', '', '', '', 'none', '']);
+    const wizard = await run(['', '', '', '', '', '', '', 'none', '']);
 
     expect(wizard.machine.writes).toEqual([]);
     expect(wizard.terminal.transcript).toContain(`paired: the pairing token is in ${IDENTITY}`);
@@ -634,7 +687,7 @@ describe('the setup wizard', () => {
     // The bound that matters most. A `--role=server` machine is one a hub
     // elsewhere has to be told about by a person, which is the rule the
     // loopback case is the exception to.
-    const wizard = await run(['', '', '', '', '', ''], { role: 'server' });
+    const wizard = await run(['', '', '', '', '', '', ''], { role: 'server' });
 
     expect(wizard.machine.writes).toEqual([]);
     expect(
@@ -670,7 +723,7 @@ describe('the setup wizard', () => {
   });
 
   it('asks again rather than taking a port it could not read', async () => {
-    const wizard = await run(['', 'eight thousand', '9090', '', '', '', '', '', '']);
+    const wizard = await run(['', 'eight thousand', '9090', '', '', '', '', '', '', '']);
 
     expect(wizard.terminal.transcript).toContain(
       'eight thousand is not a port between 1 and 65535',

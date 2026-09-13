@@ -16,6 +16,28 @@ export {
 } from './beacon.js';
 export type { ServerBeacon } from './beacon.js';
 
+export {
+  DIRECTORY_ENTRIES_MAX,
+  directoryEntryKindSchema,
+  directoryEntrySchema,
+  directoryListFrameSchema,
+  directoryListingFrameSchema,
+  directorySchema,
+  normaliseDirectory,
+} from './directory.js';
+export type { DirectoryEntry, DirectoryEntryKind, DirectoryListingFrame } from './directory.js';
+
+export {
+  DOC_CONTENT_MAX_CHARS,
+  DOC_NAME_EXTENSIONS,
+  DOC_NAME_MAX_LENGTH,
+  docContentSchema,
+  docDirectorySchema,
+  docEntrySchema,
+  docNameSchema,
+} from './doc.js';
+export type { DocEntry, DocName } from './doc.js';
+
 export { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 export type { FrameId, ProtocolErrorFrame, RefusalCode } from './frames.js';
 
@@ -46,7 +68,12 @@ export type {
   StoreId,
 } from './identity.js';
 
-export { layoutNodeSchema, layoutSchema } from './layout.js';
+export {
+  layoutNodeSchema,
+  layoutSchema,
+  NODE_NAME_MAX_CHARS,
+  nodeNameTextSchema,
+} from './layout.js';
 export type { Layout, LayoutNode } from './layout.js';
 
 export {

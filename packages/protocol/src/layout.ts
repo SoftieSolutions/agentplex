@@ -61,3 +61,24 @@ export type LayoutNode = z.infer<typeof layoutNodeSchema>;
  */
 export const layoutSchema = z.array(layoutNodeSchema);
 export type Layout = z.infer<typeof layoutSchema>;
+
+/**
+ * How long a name a client may put on a node.
+ *
+ * A bound and not a judgement, which is the whole of why this schema is not the
+ * one the hub stores through. `paneLayoutTextSchema` above it makes the same
+ * split for the same reason: what the protocol states about a name is that it
+ * is text and that it is not a novel, so that an unbounded column filled by a
+ * bug has something to object to. Whether a particular name is *usable* -- a
+ * name of nothing but spaces is not -- is a judgement, and a judgement belongs
+ * where it can be answered in a sentence.
+ *
+ * The difference is what happens to a client that sends a blank name. A schema
+ * that refused one would refuse the *frame*, and an unparseable frame is a
+ * `protocol-error` and a closed socket: the hub cannot reply to a frame whose
+ * id it could not read. "You left the name blank" is a thing to say to a
+ * person, not to hang up over, so it is a `refusal` the hub writes and the
+ * form renders, and this schema lets the frame through to be refused.
+ */
+export const NODE_NAME_MAX_CHARS = 200;
+export const nodeNameTextSchema = z.string().max(NODE_NAME_MAX_CHARS);

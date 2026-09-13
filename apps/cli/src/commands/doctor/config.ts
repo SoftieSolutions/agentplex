@@ -58,6 +58,16 @@ export interface ServerConfig {
    */
   readonly binPath: readonly string[];
   /**
+   * The directories a client may browse under, absolute and deduplicated.
+   *
+   * Read here for the reason every other setting is: the doctor's question is
+   * what *this deployment* can do, and browsing is one of the two things a
+   * server can be configured into being unable to do at all. Empty is legal and
+   * is the default -- a machine nobody gave a root to refuses every browse and
+   * says so -- so the doctor reports the list rather than judging it.
+   */
+  readonly browseRoots: readonly string[];
+  /**
    * Where this server keeps its own identity: its `serverId` and the pairing
    * token the user types into the hub.
    *
@@ -161,6 +171,8 @@ const SETTINGS = {
   storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
   /** Repeatable, and ordered: the first directory holding a program wins. */
   binPath: { flag: '--bin-path', env: 'AGENTPLEX_BIN_PATH' },
+  /** Repeatable: a machine may offer more than one place to browse. */
+  browseRoot: { flag: '--browse-root', env: 'AGENTPLEX_BROWSE_ROOTS' },
   serverIdentityFile: {
     flag: '--server-identity-file',
     env: 'AGENTPLEX_SERVER_IDENTITY_FILE',
@@ -227,6 +239,13 @@ export function loadDoctorConfig({ argv, env }: ConfigSources): ConfigResult {
     problems,
   );
 
+  const browseRoots = readAbsolutePaths(
+    SETTINGS.browseRoot,
+    flags.values.get(SETTINGS.browseRoot.flag),
+    env[SETTINGS.browseRoot.env],
+    problems,
+  );
+
   const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
 
   const announce = readAnnounce(read(SETTINGS.announce), problems);
@@ -242,6 +261,7 @@ export function loadDoctorConfig({ argv, env }: ConfigSources): ConfigResult {
     port: serverPort,
     storePaths,
     binPath,
+    browseRoots,
     identityPath,
     terminalCap,
     announce,
