@@ -32,6 +32,20 @@ write the unit:
 curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh | bash -s -- --role=hub
 ```
 
+## The MCP endpoint
+
+An agent drives this hub the same way a person does, through `POST /mcp` --
+streamable HTTP, on the port that serves the web app, authorized by
+`Authorization: Bearer <client token>` and by nothing else. It is the same
+credential the browser presents, because MCP reaches exactly what the UI
+reaches: every tool calls a hub feature the client already has a screen for,
+there is no generic-command tool and there will not be one, and a separate token
+would be a second thing to rotate for no second capability. Same origin is the
+point rather than a convenience -- one port, one certificate, one secret -- which
+is why the hub serves the client itself. The endpoint keeps no session: each POST
+is answered on its own, so `GET` and `DELETE` are refused with `405` and there is
+nothing for an agent to hold open or clean up.
+
 ## What a hub does not carry
 
 Nothing in this package's dependency set reaches
