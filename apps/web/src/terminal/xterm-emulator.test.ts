@@ -2,10 +2,12 @@
 import { SearchAddon } from '@xterm/addon-search';
 import { Terminal, type ILink } from '@xterm/xterm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SearchResults, TerminalSearch } from './emulator.js';
+import { bracketedPasteChunks } from './bracketed-paste.fixture.js';
+import type { SearchResults, TerminalEmulator, TerminalSearch } from './emulator.js';
 import { ptyChunks } from './pty-chunks.fixture.js';
 import { unicodeChunks } from './unicode-widths.fixture.js';
 import {
+  createPaneEmulator,
   createPaneFit,
   createPaneSearch,
   createPaneTerminal,
@@ -466,5 +468,127 @@ describe('a find in the pane', () => {
       true,
     );
     expect(heard).toEqual([{ resultIndex: 0, resultCount: REFRESH_MATCHES }]);
+  });
+});
+
+/**
+ * What a paste puts on the wire, against bytes from a shell that really asked
+ * for bracketed paste.
+ *
+ * The wrapping is the whole reason this is tested against a capture rather
+ * than by asserting that the seam calls xterm's `paste`. Whether a paste is
+ * wrapped depends on a mode set by the program at the far end, and this pane
+ * learns about that mode only by parsing bytes somebody else sent. So the
+ * question worth asking is the round trip: replay what a real line editor
+ * printed, paste, and read what would go into a `terminal-input` frame. A
+ * hand-written `ESC[?2004h` would be this repository asking itself a question
+ * it had already answered -- and the fixture guard below is what keeps the
+ * capture honest if anybody ever re-runs it against a shell without a line
+ * editor.
+ *
+ * These open a terminal for the reason the find tests do, plus one of their
+ * own: a paste is delivered through the hidden textarea, which `open` creates.
+ */
+
+/** `ESC[200~` and `ESC[201~`: what brackets a paste for a program that asked. */
+const PASTE_START = '\u001b[200~';
+const PASTE_END = '\u001b[201~';
+
+/** Writes chunks and waits for the parser, rather than for a timer. */
+async function feed(terminal: PaneTerminal, chunks: readonly Uint8Array[]): Promise<void> {
+  for (const chunk of chunks) {
+    await new Promise<void>((resolve) => {
+      terminal.write(chunk, resolve);
+    });
+  }
+}
+
+interface PastePane {
+  readonly terminal: PaneTerminal;
+  readonly emulator: TerminalEmulator;
+  /** Everything the emulator has sent out through onData, in order. */
+  readonly sent: readonly string[];
+}
+
+async function openPaneEmulator(replay: readonly Uint8Array[]): Promise<PastePane> {
+  installMatchMedia();
+  const container = document.createElement('div');
+  document.body.append(container);
+  mounted.push(container);
+  const terminal = createPaneTerminal('dark');
+  open.push(terminal);
+  terminal.open(container);
+  // Replayed before the seam is wrapped around it, so the mode is already set
+  // by the time anything is pasted -- which is the order it happens in a pane,
+  // where output has been arriving for as long as the session has been open.
+  await feed(terminal, replay);
+  const emulator = createPaneEmulator(terminal, 'dark');
+  const sent: string[] = [];
+  emulator.onData((data) => sent.push(data));
+  return { terminal, emulator, sent };
+}
+
+describe('a paste into the pane', () => {
+  it('is what the capture is of: a real shell asking for bracketed paste', async () => {
+    // Guards the fixture, not the seam. A re-capture against a shell whose
+    // line editor never came up would write bytes that quietly test nothing,
+    // and every assertion below would go on passing by agreeing with itself.
+    const terminal = createPaneTerminal('dark');
+    open.push(terminal);
+
+    expect(terminal.modes.bracketedPasteMode).toBe(false);
+    await feed(terminal, bracketedPasteChunks);
+
+    expect(terminal.modes.bracketedPasteMode).toBe(true);
+  });
+
+  it('wraps the text the way the program that asked for it expects', async () => {
+    const pane = await openPaneEmulator(bracketedPasteChunks);
+
+    pane.emulator.paste('git commit --amend');
+
+    expect(pane.sent).toEqual([`${PASTE_START}git commit --amend${PASTE_END}`]);
+  });
+
+  it('sends the text bare when nothing asked for the markers', async () => {
+    // The same paste into a terminal nothing has configured: a program that
+    // never asked for bracketed paste must not be handed escape sequences it
+    // would print as text.
+    const pane = await openPaneEmulator([]);
+
+    pane.emulator.paste('git commit --amend');
+
+    expect(pane.sent).toEqual(['git commit --amend']);
+  });
+
+  it('normalises line endings to the carriage return a terminal sends', async () => {
+    // What comes off a clipboard is whatever produced it: a browser on Windows
+    // gives CRLF, an editor gives LF, and neither is what a terminal delivers
+    // for the Enter key. Inside the markers, so a shell still runs none of it
+    // until the whole paste has arrived.
+    const pane = await openPaneEmulator(bracketedPasteChunks);
+
+    pane.emulator.paste('first\nsecond\r\nthird');
+
+    expect(pane.sent).toEqual([`${PASTE_START}first\rsecond\rthird${PASTE_END}`]);
+  });
+
+  it('reads back the selection the user dragged out, and not the grid it was drawn on', async () => {
+    // The selection the copy chord copies. Made with the terminal's own select
+    // rather than a mouse drag, which is the browser's half; what this pins is
+    // that the seam answers text -- rows rejoined, without the spaces each one
+    // is padded out to the width of the screen with.
+    const pane = await openPaneEmulator(ptyChunks);
+
+    pane.terminal.selectAll();
+
+    expect(pane.emulator.selection()).toContain('refresh token rotates');
+    expect(pane.emulator.selection()).not.toContain('   \n');
+  });
+
+  it('has nothing selected to begin with, which is a copy with nothing to copy', async () => {
+    const pane = await openPaneEmulator(ptyChunks);
+
+    expect(pane.emulator.selection()).toBe('');
   });
 });
