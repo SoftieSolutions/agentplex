@@ -1,4 +1,5 @@
 import { useState, type JSX } from 'react';
+import type { ServerRegistrationId } from '@agentplex/protocol';
 import {
   Box,
   Button,
@@ -27,6 +28,9 @@ import {
   type StatusChip,
 } from './session-list-model.js';
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
+import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogue-store.js';
+import { MachineSelector } from '../machines/machine-selector.js';
+import { narrowedToMachine } from '../machines/machine-selector-model.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
 import { NodeMenu } from '../tree/node-menu.js';
 import { nodeForSession } from '../tree/tree-model.js';
@@ -55,6 +59,16 @@ import { stoppedNotice } from './stop-model.js';
  * the same breakpoint, and two panels rendered so one can be hidden would be
  * two catalogue queries for one screen.
  *
+ * The machine selector sits above both, and it is a narrowing rather than a
+ * place: a session is `{ storeId, sessionId }` and never a machine, so picking
+ * one sets the catalogue query's `filter.server` and the same constraint over
+ * the cards, and does nothing else. That is why the selection is held here and
+ * not in either column -- it is one fact about this screen, written by one
+ * function, and the panel carries no machine control of its own for the same
+ * reason. The catalogue store is built here for the same reason: the selection
+ * has to reach the query the panel is drawing, and a store the panel made
+ * privately could only be reached through an effect.
+ *
  * All UI state here is what the user did to this screen; everything derived
  * from the machine state comes from session-list-model.ts, and the snapshot
  * arrives through `useSyncExternalStore` -- no effects anywhere.
@@ -76,6 +90,10 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
   const [chip, setChip] = useState<StatusChip | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
+  const [machine, setMachine] = useState<ServerRegistrationId | null>(null);
+  // Built once and inert until something subscribes: creating a catalogue
+  // store dials nothing, and the panel's first subscriber is what asks.
+  const [catalogue] = useState<CatalogueStore>(() => createCatalogueStore({ hub: store }));
   const [creating, setCreating] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const [tab, setTab] = useState<Tab>('sessions');
@@ -108,7 +126,8 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
   const narrowed = everySession.filter(
     (item) =>
       (activeStore === null || item.storeId === activeStore) &&
-      (activeProvider === null || item.provider === activeProvider),
+      (activeProvider === null || item.provider === activeProvider) &&
+      (machine === null || item.server === machine),
   );
   const chips = chipCounts(narrowed);
   const activeChip = chip !== null && chips.some((entry) => entry.chip === chip) ? chip : null;
@@ -118,12 +137,28 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
     chip: activeChip,
     storeId: activeStore,
     provider: activeProvider,
+    server: machine,
   });
   const moment = now();
   // What the last stop landed on, from the reply's own payload. Kept brief and
   // kept at all because the answer reaches the client that asked: without it a
   // session stopped in another tab is a row that quietly stops being held.
   const stopped = stoppedNotice(state, snapshot.lastStopped);
+
+  /**
+   * The one place the selection moves from.
+   *
+   * Two things read it -- the cards above and the catalogue query the panel
+   * draws -- and they are written together here rather than kept in step
+   * afterwards. The query's copy is the filter field itself, because that is
+   * what goes on the wire, and nothing else in this screen sets it. It is in
+   * the body because it writes this screen's state and the store this screen
+   * holds; everything it decides is in the model it calls.
+   */
+  function pickMachine(next: ServerRegistrationId | null): void {
+    setMachine(next);
+    catalogue.reshape(narrowedToMachine(catalogue.getSnapshot().shape, next));
+  }
 
   return (
     <Stack component="main" p="md" gap="sm">
@@ -209,6 +244,8 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
         </Group>
       )}
 
+      <MachineSelector state={state} chosen={machine} onPick={pickMachine} scheme={scheme} />
+
       {/* Below the breakpoint the two columns are one at a time, and this is
           what chooses. Above it the control is not drawn and both are. */}
       <SegmentedControl
@@ -230,7 +267,13 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
           style={{ flexShrink: 0, minWidth: 0 }}
           {...(tab === 'projects' ? {} : { visibleFrom: 'md' as const })}
         >
-          <CataloguePanel store={store} state={state} layout={layout} scheme={scheme} />
+          <CataloguePanel
+            store={store}
+            state={state}
+            layout={layout}
+            scheme={scheme}
+            catalogue={catalogue}
+          />
         </Box>
 
         <Stack

@@ -187,6 +187,39 @@ describe('narrowings before the table', () => {
     });
     expect(narrowed.map((item) => item.name)).toEqual(['bench-tokenizer', 'session-train-lora']);
   });
+
+  it('narrows to the machine the selector picked, by the reading it is', () => {
+    // The same fact the catalogue query narrows by -- the server the chosen
+    // reading came from -- so the cards and the panel beside them answer the
+    // same question the same way.
+    const narrowed = visibleSessions(populated, {
+      ...NO_FILTERS,
+      server: 'registration-gpu-box-01',
+    });
+    expect(narrowed.map((item) => item.name)).toEqual([
+      'docs-sweep',
+      'bench-tokenizer',
+      'session-train-lora',
+    ]);
+  });
+
+  it("carries the reading's server on every item, holder or not", () => {
+    const items = listSessions(populated);
+    // fix-auth-refresh is held by the machine that read it; spike-wasm is held
+    // by nobody at all. Both narrow by the machine whose reading they are.
+    expect(new Set(items.map((item) => item.server))).toEqual(
+      new Set(['registration-mbp-robert', 'registration-gpu-box-01']),
+    );
+  });
+
+  it('shows nothing rather than everything for a machine the fleet dropped', () => {
+    // The catalogue query is narrowed to it at the same moment, and the hub
+    // answers that with no rows. A card list that widened on its own would
+    // disagree with the panel beside it.
+    expect(visibleSessions(populated, { ...NO_FILTERS, server: 'registration-unpaired' })).toEqual(
+      [],
+    );
+  });
 });
 
 describe('ages', () => {

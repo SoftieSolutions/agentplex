@@ -197,17 +197,9 @@ export function CataloguePanel({
         />
       ) : null}
 
-      {options.servers.length === 0 ? null : (
-        <Select
-          size="xs"
-          aria-label="Machine"
-          placeholder="Any machine"
-          data={[...options.servers]}
-          value={shape.filter.server ?? null}
-          onChange={(value) => reshape(withFilter(shape, { field: 'server', value }))}
-          clearable
-        />
-      )}
+      {/* No machine control: the selector above the tabs is the one control
+          for that, because the selection is one fact narrowing this query and
+          the cards beside it at once. See `filterOptions`. */}
       {options.providers.length === 0 ? null : (
         <Select
           size="xs"

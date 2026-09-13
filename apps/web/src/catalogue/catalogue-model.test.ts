@@ -402,15 +402,6 @@ describe('the quiet second line on a row', () => {
 describe('the narrowings the fleet offers', () => {
   const state = stateFrom(hubFrames.machineStatePopulated);
 
-  it('offers a machine by its id and draws it by its label', () => {
-    const options = filterOptions(state);
-    expect(options.servers.map((option) => option.label)).toEqual(['gpu-box-01', 'mbp-robert']);
-    expect(options.servers.map((option) => option.value)).toEqual([
-      'registration-gpu-box-01',
-      'registration-mbp-robert',
-    ]);
-  });
-
   it('offers the providers and statuses the fleet actually has', () => {
     const options = filterOptions(state);
     expect([...options.providers.map((option) => option.value)].sort()).toEqual([
@@ -421,8 +412,8 @@ describe('the narrowings the fleet offers', () => {
   });
 
   it('draws no control at all below two options, and none with no fleet', () => {
-    expect(filterOptions(stateFrom(hubFrames.machineStateSingle)).servers).toEqual([]);
-    expect(filterOptions(null)).toEqual({ servers: [], providers: [], statuses: [] });
+    expect(filterOptions(stateFrom(hubFrames.machineStateSingle)).providers).toEqual([]);
+    expect(filterOptions(null)).toEqual({ providers: [], statuses: [] });
   });
 
   it('shortens every machine in the fleet, keyed by the id a session row names', () => {

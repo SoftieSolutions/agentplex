@@ -376,7 +376,6 @@ export interface FilterOption {
 }
 
 export interface FilterOptions {
-  readonly servers: readonly FilterOption[];
   readonly providers: readonly FilterOption[];
   readonly statuses: readonly FilterOption[];
 }
@@ -389,12 +388,15 @@ export interface FilterOptions {
  * draw a control at all: a menu with one option in it is one effective choice
  * wearing a control, and picking that option narrows nothing.
  *
- * A server is offered by its registration id and drawn by its label, because
- * the filter names the machine the *reading* came from and a label is a name
- * somebody may change. There is deliberately no store control here, though the
- * session list has one: `catalogueFilterSchema` has no store constraint, and a
- * client-side store filter would leave the rows on screen disagreeing with the
- * `total` the hub counted them against.
+ * There is no machine control here, though the filter has a `server` field and
+ * this panel once drew a select for it: the machine selector above the tabs is
+ * that control now (AGX-123), and it is one control because the selection is
+ * one fact -- it narrows this query and the cards beside it together, and two
+ * controls writing it would be two places it could be moved from. There is
+ * deliberately no store control either, though the session list has one:
+ * `catalogueFilterSchema` has no store constraint, and a client-side store
+ * filter would leave the rows on screen disagreeing with the `total` the hub
+ * counted them against.
  *
  * Status is the five wire statuses and not the session list's four chips, for
  * the same reason in the other direction: the chips group `awaiting-permission`
@@ -403,7 +405,7 @@ export interface FilterOptions {
  * to be two queries whose `total`s could not be added up.
  */
 export function filterOptions(state: MachineState | null): FilterOptions {
-  if (state === null) return { servers: [], providers: [], statuses: [] };
+  if (state === null) return { providers: [], statuses: [] };
   const providers = new Set<Provider>();
   const statuses = new Set<SessionStatus>();
   for (const store of state.stores) {
@@ -412,12 +414,7 @@ export function filterOptions(state: MachineState | null): FilterOptions {
       statuses.add(row.descriptor.status);
     }
   }
-  const servers: readonly FilterOption[] = state.servers.map((server) => ({
-    value: server.registrationId,
-    label: server.label,
-  }));
   return {
-    servers: atLeastTwo(servers),
     providers: atLeastTwo([...providers].map((provider) => ({ value: provider, label: provider }))),
     statuses: atLeastTwo([...statuses].map((status) => ({ value: status, label: status }))),
   };
