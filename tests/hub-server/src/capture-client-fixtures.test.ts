@@ -160,6 +160,12 @@ function labelFor(text: string): string {
   if (frame.type === 'pane-layout') {
     return frame.layout === null ? 'paneLayoutEmpty' : 'paneLayout';
   }
+  if (frame.type === 'catalogue-page') {
+    // Labelled by whether the answer ended, because those are the two shapes a
+    // paging client has to handle: a page that is the whole answer, and one
+    // with a cursor on it that the store has to ask again with.
+    return frame.nextCursor === null ? 'cataloguePage' : 'cataloguePagePartial';
+  }
   if (frame.type === 'directory-listing') {
     // Labelled by which of the two shapes it is. The roots listing carries the
     // absolute paths of the roots as entry names and the other carries single
@@ -1021,6 +1027,63 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const layoutArranged = starter.received.findLast((text) => labelFor(text) === 'layout');
     if (layoutArranged === undefined) throw new Error('the second layout was not answered');
 
+    // The catalogue, over that same arranged tree: grouped by server, sorted by
+    // name, and cut at one so the store's tests get both shapes -- a page with
+    // a cursor on it and the page that ends the answer. The session rows on the
+    // items are the reducer's own, which is what makes "the client joins
+    // nothing" something the web tests can stand on rather than take on trust.
+    const catalogueQuery = {
+      type: 'catalogue-query',
+      view: 'list',
+      groupBy: 'server',
+      sort: { key: 'name', direction: 'asc' },
+      filter: {},
+      limit: 1,
+    };
+    starter.send({ ...catalogueQuery, id: 14, cursor: null });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'cataloguePagePartial'),
+      'the first catalogue page to be answered',
+    );
+    const cataloguePagePartial = starter.received.find(
+      (text) => labelFor(text) === 'cataloguePagePartial',
+    );
+    if (cataloguePagePartial === undefined) throw new Error('no catalogue page was answered');
+    const partial = parseTextFrame(parseHubFrame, cataloguePagePartial);
+    if (!partial.ok || partial.value.type !== 'catalogue-page') {
+      throw new Error('the catalogue page did not parse back');
+    }
+    starter.send({ ...catalogueQuery, id: 15, cursor: partial.value.nextCursor, limit: 10 });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'cataloguePage'),
+      'the last catalogue page to be answered',
+    );
+    const cataloguePage = starter.received.find((text) => labelFor(text) === 'cataloguePage');
+    if (cataloguePage === undefined) throw new Error('no final catalogue page was answered');
+
+    // A cursor the tree has moved past. Captured rather than written by hand,
+    // because what the store has to be able to read is the sentence this hub
+    // actually sends when it refuses one.
+    starter.send({ type: 'node-create-folder', id: 16, parentId: null, name: 'later' });
+    await until(
+      () => starter.received.filter((text) => labelFor(text) === 'nodeCreated').length > 1,
+      'the folder that moves the version to be made',
+    );
+    starter.send({ ...catalogueQuery, id: 17, cursor: partial.value.nextCursor });
+    await until(
+      () =>
+        starter.received.some((text) => {
+          const seen = parseTextFrame(parseHubFrame, text);
+          return seen.ok && seen.value.type === 'refusal' && seen.value.replyTo === 17;
+        }),
+      'the stale cursor to be refused',
+    );
+    const refusalStaleCursor = starter.received.find((text) => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'refusal' && seen.value.replyTo === 17;
+    });
+    if (refusalStaleCursor === undefined) throw new Error('the stale cursor was not refused');
+
     await singleHub.cleanup();
 
     // A machine holding one session it will stop and one it will not, for the
@@ -1448,6 +1511,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('nodeRemovalForgotten', nodeRemovalForgotten);
     captured.set('catalogueChanged', catalogueChanged);
     captured.set('layoutArranged', layoutArranged);
+    captured.set('cataloguePagePartial', cataloguePagePartial);
+    captured.set('cataloguePage', cataloguePage);
+    captured.set('refusalStaleCursor', refusalStaleCursor);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
     captured.set('machineStateDiscovered', machineStateDiscovered);

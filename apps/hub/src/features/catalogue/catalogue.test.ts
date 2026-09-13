@@ -70,6 +70,11 @@ function harness(options: { readonly failOn?: RegExp } = {}): Harness {
     clock,
     logger: createLogger('debug', (record) => logs.push(record)),
     readStore: (storeId) => stores.get(storeId) ?? null,
+    // Nothing in this file queries, and a query is the only reader of this.
+    // An empty fleet rather than no seam at all: a dependency this file does
+    // not exercise still has to be a real one, or the suite would be standing
+    // on a shape the hub does not build.
+    readFleet: () => ({ version: 0, stores: [], servers: [], candidates: [] }),
     projects,
     // Nothing in this file removes a node, and a holder is only ever read to
     // refuse one. `mutations.test` is where that question is asked.

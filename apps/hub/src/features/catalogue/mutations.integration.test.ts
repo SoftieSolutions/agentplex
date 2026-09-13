@@ -61,7 +61,9 @@ function catalogue(): Catalogue {
     readStore: (storeId) => stores.get(storeId) ?? null,
     projects: {
       findByDirectory: async (directory) => projectDirectories.get(directory) ?? null,
+      directories: async () => new Map(),
     },
+    readFleet: () => ({ version: 0, stores: [], servers: [], candidates: [] }),
     readHolder: (ref) => holders.get(ref.sessionId) ?? null,
   });
 }

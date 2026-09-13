@@ -969,6 +969,96 @@ describe('editing the tree', () => {
   });
 });
 
+describe('reading part of the catalogue', () => {
+  const A_QUERY = {
+    view: 'list' as const,
+    groupBy: 'server' as const,
+    sort: { key: 'name' as const, direction: 'asc' as const },
+    filter: { search: 'auth' },
+    cursor: null,
+    limit: 25,
+  };
+
+  it('passes the whole question down and answers the page to the client that asked', async () => {
+    const { broadcast, catalogue } = harness();
+    catalogue.answerPageWith({
+      ok: true,
+      items: [],
+      nextCursor: 'the-next-cursor',
+      total: 340,
+      version: 7,
+    });
+    const client = attach(broadcast);
+    const bystander = attach(broadcast);
+    await client.hello();
+    await bystander.hello();
+    const bystanderSaw = bystander.received.length;
+
+    await client.say({ type: 'catalogue-query', id: 2, ...A_QUERY });
+
+    // Every parameter reached the feature that owns the rows. This file's job
+    // is the socket: nothing here decides an order or cuts a page.
+    expect(catalogue.queried).toEqual([A_QUERY]);
+    expect(client.received.at(-1)).toEqual({
+      type: 'catalogue-page',
+      replyTo: 2,
+      items: [],
+      nextCursor: 'the-next-cursor',
+      total: 340,
+      version: 7,
+    });
+    // A page is one person's question, sorted the way they asked: nothing about
+    // the world changed because somebody read their own catalogue.
+    expect(bystander.received.length).toBe(bystanderSaw);
+  });
+
+  /**
+   * The one refusal a client acts on. `bad-request` and not `refused`, because
+   * the frame named something this hub cannot serve -- a position in an order
+   * that has moved -- rather than a state of the world saying no; and what the
+   * client does about it is ask for the first page again.
+   */
+  it('passes a stale cursor refusal through with the sentence that says so', async () => {
+    const { broadcast, catalogue } = harness();
+    catalogue.answerPageWith({
+      ok: false,
+      code: 'bad-request',
+      problem: 'that cursor is stale: ask for the first page again',
+    });
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'catalogue-query', id: 2, ...A_QUERY, cursor: 'an-old-cursor' });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'bad-request',
+      message: 'that cursor is stale: ask for the first page again',
+      holder: null,
+    });
+    expect(client.socket.closure).toBeNull();
+  });
+
+  it('refuses as internal when the catalogue cannot be read, and stays open', async () => {
+    const { broadcast, catalogue } = harness();
+    catalogue.failWith(new Error('database is locked'));
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'catalogue-query', id: 2, ...A_QUERY });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'internal',
+      message: 'the hub could not read its catalogue',
+      holder: null,
+    });
+    expect(client.socket.closure).toBeNull();
+  });
+});
+
 describe('the word that the tree changed', () => {
   it('reaches every established client, unasked, carrying the version', async () => {
     const { broadcast, catalogue } = harness();

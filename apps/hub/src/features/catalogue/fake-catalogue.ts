@@ -1,4 +1,10 @@
-import { nodeIdSchema, type Layout, type NodeId, type SessionRef } from '@agentplex/protocol';
+import {
+  nodeIdSchema,
+  type CatalogueQuery,
+  type Layout,
+  type NodeId,
+  type SessionRef,
+} from '@agentplex/protocol';
 import type {
   Catalogue,
   NewFolderRequest,
@@ -7,6 +13,7 @@ import type {
   TreeChanged,
   TreeRefusal,
 } from './catalogue.js';
+import type { CataloguePageOutcome } from './query.js';
 
 /**
  * The catalogue, driven by hand.
@@ -40,6 +47,10 @@ export interface FakeCatalogue extends Catalogue {
   failWith(error: Error | null): void;
   /** What every later layout request answers with. */
   answerWith(layout: Layout): void;
+  /** Every query asked for, in order, so a suite can assert on what crossed. */
+  readonly queried: readonly CatalogueQuery[];
+  /** What every later query answers with. */
+  answerPageWith(outcome: CataloguePageOutcome): void;
   /** Bumps the version and tells every watcher, as a real change would. */
   change(): void;
   /** The version this fake is at. */
@@ -59,12 +70,14 @@ export interface FakeCatalogueOptions {
 
 export function createFakeCatalogue(options: FakeCatalogueOptions = {}): FakeCatalogue {
   const asked: FakeMutation[] = [];
+  const queried: CatalogueQuery[] = [];
   const watchers = new Set<(version: number) => void>();
   let layout: Layout = options.layout ?? [];
   let refusal: TreeRefusal | null = null;
   let failure: Error | null = null;
   let version = 0;
   let minted = 0;
+  let page: CataloguePageOutcome = { ok: true, items: [], nextCursor: null, total: 0, version: 0 };
 
   const bump = (): void => {
     version += 1;
@@ -82,6 +95,12 @@ export function createFakeCatalogue(options: FakeCatalogueOptions = {}): FakeCat
   return {
     async readLayout(): Promise<Layout> {
       return layout;
+    },
+
+    async query(request: CatalogueQuery): Promise<CataloguePageOutcome> {
+      queried.push(request);
+      if (failure !== null) throw failure;
+      return page;
     },
 
     async observe(): Promise<void> {
@@ -137,10 +156,18 @@ export function createFakeCatalogue(options: FakeCatalogueOptions = {}): FakeCat
       layout = next;
     },
 
+    answerPageWith(next: CataloguePageOutcome): void {
+      page = next;
+    },
+
     change: bump,
 
     get asked(): readonly FakeMutation[] {
       return asked;
+    },
+
+    get queried(): readonly CatalogueQuery[] {
+      return queried;
     },
 
     get version(): number {

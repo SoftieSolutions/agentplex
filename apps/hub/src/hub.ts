@@ -240,13 +240,21 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     // handed to it, and projects has to exist after it, because a browse goes
     // out over a connection. Nothing asks this question until a store has been
     // reported, which is after `sync` far below.
-    projects: { findByDirectory: (directory) => projects.findByDirectory(directory) },
+    projects: {
+      findByDirectory: (directory) => projects.findByDirectory(directory),
+      directories: () => projects.directories(),
+    },
     // Who is running a session, asked at the moment a removal is decided. The
     // tree is durable and this is a claim about right now, which is the whole
     // reason it is a seam rather than a column: a node the user removed while
     // its process ran would be a process still going with nothing on any
     // screen pointing at it.
     readHolder: (ref) => state.sessionHolder(ref),
+    // The fleet as a client reads it, read at the moment a query is answered.
+    // A page carries the same `SessionRow` the machine state on the same screen
+    // carries, which is what makes "the client joins nothing" true rather than
+    // merely convenient.
+    readFleet: () => state.published(),
   });
 
   // Constructed here and dialling nothing yet. That is what the split between

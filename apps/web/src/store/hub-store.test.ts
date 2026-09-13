@@ -5,7 +5,9 @@ import {
   PROTOCOL_VERSION,
   sessionRefSchema,
   storeIdSchema,
+  type CatalogueQuery,
   type ClientFrame,
+  type FrameId,
 } from '@agentplex/protocol';
 import { createFrameIdCounter } from './frame-ids.js';
 import { createFakeSocketFactory, type FakeSocket } from './fake-socket.js';
@@ -836,5 +838,156 @@ describe('frame ids', () => {
     // exactly what shows: every id minted once, none repeated, none random.
     expect(ids).toEqual([1, 2, 4, 3]);
     expect([...ids].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+/**
+ * The catalogue query: the one request on this store shaped as a promise.
+ *
+ * Everything else here is intent whose answer belongs on the screen that asked,
+ * and this is a read whose caller has to do something with the answer before it
+ * can draw: keep the cursor, append to what it has, decide whether to ask
+ * again. So the correlation the store already does -- id out, `replyTo` back --
+ * is what settles the promise, and the page lands in the snapshot as well for
+ * the re-issue that has no caller.
+ */
+/**
+ * A captured frame re-addressed to the id this store actually minted.
+ *
+ * `replyTo` is the envelope's correlation id and not a word the hub said about
+ * the world, and it is the only field touched. The capture drives a long
+ * conversation and its ids are wherever that conversation reached; a test that
+ * had to mint fourteen frames to line them up would be a test about counting.
+ * Everything the store reads off the page is exactly what the hub sent.
+ */
+function addressedTo(frame: string, replyTo: FrameId): string {
+  return JSON.stringify({ ...(JSON.parse(frame) as Record<string, unknown>), replyTo });
+}
+
+/** The id of the last frame this store put on the wire. */
+function lastSentId(socket: FakeSocket): FrameId {
+  const sent = sentFrames(socket).at(-1);
+  if (sent === undefined || !('id' in sent)) throw new Error('nothing with an id was sent');
+  return sent.id;
+}
+
+const CATALOGUE: CatalogueQuery = {
+  view: 'list',
+  groupBy: 'server',
+  sort: { key: 'name', direction: 'asc' },
+  filter: {},
+  cursor: null,
+  limit: 1,
+};
+
+describe('the catalogue query', () => {
+  it('answers the caller that asked with the page the hub sent', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const asking = h.store.queryCatalogue(CATALOGUE);
+    expect(sentFrames(socket).at(-1)).toMatchObject({ type: 'catalogue-query', groupBy: 'server' });
+
+    socket.deliver(addressedTo(hubFrames.cataloguePagePartial, lastSentId(socket)));
+    const page = await asking;
+
+    // The session row rode along whole, which is what "the client joins
+    // nothing" means: the page carries the same reading the machine state does.
+    expect(page.total).toBe(2);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]?.session?.source).toBe('registration-mbp-robert');
+    expect(page.items[0]?.group).toEqual({
+      key: 'registration-mbp-robert',
+      label: 'mbp-robert',
+      unfiled: false,
+    });
+    expect(page.nextCursor).not.toBeNull();
+    expect(h.store.getSnapshot().catalogue).toEqual(page);
+  });
+
+  it('rejects with the hub sentence when the cursor has gone stale', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const asking = h.store.queryCatalogue(CATALOGUE);
+    socket.deliver(addressedTo(hubFrames.refusalStaleCursor, lastSentId(socket)));
+
+    await expect(asking).rejects.toThrow(/stale/);
+    // And the sentence is on the snapshot too, like every other no.
+    expect(h.store.getSnapshot().lastRefusal?.code).toBe('bad-request');
+  });
+
+  it('rejects at once while the connection is down rather than queueing a read of now', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const before = sentFrames(socket).length;
+    socket.drop();
+
+    await expect(h.store.queryCatalogue(CATALOGUE)).rejects.toThrow();
+    expect(sentFrames(socket).slice(before)).toEqual([]);
+    expect(h.store.getSnapshot().commandQueue.queued).toBe(0);
+  });
+
+  it('tells a caller the answer is not coming when the connection drops under it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const asking = h.store.queryCatalogue(CATALOGUE);
+    socket.drop();
+
+    await expect(asking).rejects.toThrow(/dropped/);
+  });
+
+  it('re-issues the last question from the first page when the tree changes', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const unwatch = h.store.subscribeCatalogue();
+
+    const asking = h.store.queryCatalogue(CATALOGUE);
+    socket.deliver(addressedTo(hubFrames.cataloguePagePartial, lastSentId(socket)));
+    const first = await asking;
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.catalogueChanged);
+
+    const reissued = sentFrames(socket).slice(before);
+    expect(reissued).toHaveLength(1);
+    // From the first page and never from the cursor the last one handed back:
+    // that cursor was minted at the version that just moved, and the hub
+    // refuses one from before a change by design.
+    expect(first.nextCursor).not.toBeNull();
+    expect(reissued[0]).toMatchObject({ type: 'catalogue-query', cursor: null });
+
+    unwatch();
+  });
+
+  it('asks nothing on a change when no screen is watching the catalogue', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const asking = h.store.queryCatalogue(CATALOGUE);
+    socket.deliver(addressedTo(hubFrames.cataloguePagePartial, lastSentId(socket)));
+    await asking;
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.catalogueChanged);
+
+    expect(sentFrames(socket).slice(before)).toEqual([]);
+  });
+
+  it('asks the question again on a reconnection, because the version may have moved', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeCatalogue();
+    const asking = h.store.queryCatalogue(CATALOGUE);
+    socket.deliver(addressedTo(hubFrames.cataloguePage, lastSentId(socket)));
+    await asking;
+
+    socket.drop();
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+
+    expect(sentFrames(next).filter((frame) => frame.type === 'catalogue-query')).toHaveLength(1);
   });
 });

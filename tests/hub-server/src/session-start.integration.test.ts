@@ -451,6 +451,9 @@ async function start(
     projects,
     // Nothing here removes a node, and a holder is only read to refuse one.
     readHolder: () => null,
+    // Nothing here queries the catalogue either; the fleet is the reducer's
+    // own published view, which is the one a query would read.
+    readFleet: () => state.published(),
   });
 
   const sessions = createSessions({ state, projects, connections, logger });

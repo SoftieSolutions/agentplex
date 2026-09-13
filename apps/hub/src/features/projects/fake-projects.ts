@@ -74,6 +74,10 @@ export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProje
       return directories.get(nodeId) ?? null;
     },
 
+    async directories(): Promise<ReadonlyMap<NodeId, string>> {
+      return new Map(directories);
+    },
+
     async findByDirectory(directory: string): Promise<NodeId | null> {
       looked.push(directory);
       for (const [nodeId, held] of directories) if (held === directory) return nodeId;

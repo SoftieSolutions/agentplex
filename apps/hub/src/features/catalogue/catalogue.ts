@@ -1,5 +1,7 @@
 import type {
+  CatalogueQuery,
   Layout,
+  MachineState,
   NodeId,
   RefusalCode,
   SessionDescriptor,
@@ -14,6 +16,7 @@ import type { Projects } from '../projects/projects.js';
 import { discoverNodes, type SessionPlacements } from './discovery.js';
 import { createTreeMutations } from './mutations.js';
 import { pruneNodes } from './prune.js';
+import { queryCatalogue, type CataloguePageOutcome } from './query.js';
 import { readLayout } from './reads.js';
 import type { TreeNode } from './rows.js';
 
@@ -184,6 +187,27 @@ export interface TreeMutations {
 }
 
 /**
+ * The catalogue as a client reads part of it: one page, shaped and sorted here.
+ *
+ * A second seam beside `TreeMutations` rather than a method on it, because the
+ * two are different acts on the same rows: an edit is a decision the feature
+ * that owns them makes, and a query is a reply built per request out of those
+ * rows *and* the fleet state, which the tree knows nothing about. A connection
+ * takes both and the broadcast takes neither.
+ */
+export interface CatalogueQueries {
+  /**
+   * One page of the catalogue, or why not.
+   *
+   * Refuses rather than throws for the one thing a client can do something
+   * about: a cursor from before a change. Everything else here is a read, and a
+   * read that fails is the database failing, which reaches the caller as a
+   * rejection and is answered `internal`.
+   */
+  query(query: CatalogueQuery): Promise<CataloguePageOutcome>;
+}
+
+/**
  * What the client broadcast needs of this feature: the edits, and word that the
  * tree changed.
  *
@@ -191,7 +215,7 @@ export interface TreeMutations {
  * through this -- that is a per-client reply and arrives as its own function --
  * and it has no business being handed the report seam a server's scan drives.
  */
-export interface ClientCatalogue extends TreeMutations {
+export interface ClientCatalogue extends TreeMutations, CatalogueQueries {
   /**
    * Told after every change to the tree, with the version it is now at.
    *
@@ -217,7 +241,7 @@ export interface CatalogueDependencies {
    * projects, projects reads nothing here -- which is what keeps two features
    * writing `nodes` from being two features writing each other.
    */
-  readonly projects: Pick<Projects, 'findByDirectory'>;
+  readonly projects: Pick<Projects, 'findByDirectory' | 'directories'>;
   /**
    * Who is running a session right now, read when a removal is decided.
    *
@@ -227,6 +251,20 @@ export interface CatalogueDependencies {
    * to. So the question is asked, at the moment it is answered.
    */
   readonly readHolder: HolderReader;
+  /**
+   * The fleet as a client reads it, read at the moment a query is answered.
+   *
+   * The published projection and not the reducer's own snapshot, because what
+   * a query puts on an item is exactly the `SessionRow` the machine state
+   * carries. Two shapes for one session -- one on a page, one in the state on
+   * the same screen -- would be two things free to disagree with nothing able
+   * to say which was right.
+   *
+   * A seam for the reason `readStore` and `readHolder` are seams: which
+   * sessions are reachable, how recently a provider wrote, and which machine
+   * read them are claims about this second, and the tree is the durable part.
+   */
+  readonly readFleet: () => MachineState;
 }
 
 export interface Catalogue extends ClientCatalogue {
@@ -276,6 +314,7 @@ export function createCatalogue({
   readStore,
   projects,
   readHolder,
+  readFleet,
 }: CatalogueDependencies): Catalogue {
   const log = logger.child({ part: 'catalogue' });
 
@@ -481,6 +520,27 @@ export function createCatalogue({
     ...mutations,
 
     readLayout: () => readLayout(database),
+
+    /**
+     * One page, over the rows this feature owns joined with a reading of the
+     * fleet taken now.
+     *
+     * The version handed down is this hub run's counter, which is what the
+     * cursor is pinned to and what `catalogue-changed` carries: a page and the
+     * broadcast that invalidates it name the same number, so a client can tell
+     * a page from before a change from one from after it.
+     */
+    async query(request: CatalogueQuery): Promise<CataloguePageOutcome> {
+      return queryCatalogue(
+        {
+          database,
+          fleet: readFleet(),
+          directories: await projects.directories(),
+          version,
+        },
+        request,
+      );
+    },
 
     observe,
 

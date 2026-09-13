@@ -12,7 +12,12 @@ import {
   type ServerInstruction,
 } from '../servers/servers.js';
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
-import { findProjectByDirectory, insertProject, readProjectDirectory } from './project-rows.js';
+import {
+  findProjectByDirectory,
+  insertProject,
+  readProjectDirectories,
+  readProjectDirectory,
+} from './project-rows.js';
 
 /**
  * Projects, from the hub's side: the rows, and the browse a directory is picked
@@ -143,6 +148,17 @@ export interface Projects {
    */
   findByDirectory(directory: string): Promise<NodeId | null>;
   /**
+   * Every project's directory, by node, in one read.
+   *
+   * The catalogue query's, and the reason it is on this interface rather than a
+   * `SELECT` in the catalogue: the `projects` table is this feature's, and a
+   * second reader of it would be a second answer to what a project is. What the
+   * query needs is the directory on a project item and nothing else, which is
+   * this map -- it makes no project, renames none, and the edge still runs one
+   * way.
+   */
+  directories(): Promise<ReadonlyMap<NodeId, string>>;
+  /**
    * Lists a directory on one paired server, or says why not.
    *
    * The server is named by the caller and is not the hub's to choose, which is
@@ -194,6 +210,8 @@ export function createProjects(dependencies: ProjectsDependencies): Projects {
     directoryOf: (nodeId: NodeId) => readProjectDirectory(database, nodeId),
 
     findByDirectory: (directory: string) => findProjectByDirectory(database, directory),
+
+    directories: () => readProjectDirectories(database),
 
     async listDirectory(
       server: ServerRegistrationId,

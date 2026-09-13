@@ -2,6 +2,8 @@ import {
   parseHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type CatalogueItem,
+  type CatalogueQuery,
   type ClientFrame,
   type DirectoryEntry,
   type FrameId,
@@ -187,6 +189,27 @@ export interface TreeChangeView {
   readonly nodeId: NodeId | null;
 }
 
+/**
+ * One page of the catalogue, as the hub answered it.
+ *
+ * `total` is the count before paging, so a screen can say "12 of 340" rather
+ * than "12 so far"; `nextCursor` is `null` when this page ends the answer, and
+ * a client that got one stops rather than polling for a page that will never
+ * come.
+ *
+ * `version` is the catalogue version the hub computed it at, and it is the same
+ * number `catalogue-changed` carries. It is what says a page is from before a
+ * change -- and what makes the cursor on it refusable, which is why a re-issue
+ * after a change starts from the first page rather than from where this one
+ * left off.
+ */
+export interface CataloguePageView {
+  readonly items: readonly CatalogueItem[];
+  readonly nextCursor: string | null;
+  readonly total: number;
+  readonly version: number;
+}
+
 export interface HubSnapshot {
   readonly phase: ConnectionPhase;
   /** What is degraded, in words, or `null` while nothing is. */
@@ -225,6 +248,16 @@ export interface HubSnapshot {
   readonly lastProjectCreated: ProjectCreatedView | null;
   /** The hub's most recent yes to a tree edit, kept until the next one. */
   readonly lastTreeChange: TreeChangeView | null;
+  /**
+   * The last catalogue page this store was answered, or `null` before the first.
+   *
+   * Kept in the snapshot as well as handed back from `queryCatalogue`, because
+   * the two have different readers. The promise answers the caller that asked;
+   * this is what a re-issue after `catalogue-changed` has to land in, since
+   * nobody is waiting on that one -- the change came from the hub, not from a
+   * screen.
+   */
+  readonly catalogue: CataloguePageView | null;
 }
 
 /**
@@ -324,6 +357,43 @@ export interface HubStore {
   subscribeLayout(): () => void;
   /** Standing interest in the stored pane layout, re-requested the same way. */
   subscribePaneLayout(): () => void;
+  /**
+   * Asks the hub for one page of the catalogue, and answers it.
+   *
+   * A promise rather than a snapshot field with a `replyTo` on it, and it is
+   * the one request on this store that is shaped that way. The others are
+   * intent -- start this, save that -- whose answer belongs on the screen that
+   * asked and nowhere else; a page is a *read*, and the caller almost always
+   * has to do something with it before it can draw anything: keep the cursor,
+   * append to what it already has, decide whether to ask for the next one. A
+   * caller that had to watch a snapshot field for its own answer would have to
+   * match on `replyTo` by hand, which is the correlation this store already
+   * does.
+   *
+   * It is never queued. A page is a read of the catalogue as it is now, pinned
+   * by the hub to a version; replaying one after a reconnection would send a
+   * cursor the hub has already decided is stale, and be refused for a reason
+   * the person who asked would not recognise. So a query issued while the
+   * connection is down rejects, at once, with the reason -- and the screen asks
+   * again when it is back.
+   *
+   * It rejects with the hub's own sentence when the hub refuses -- a stale
+   * cursor is the one a client acts on, by asking for the first page again.
+   */
+  queryCatalogue(query: CatalogueQuery): Promise<CataloguePageView>;
+  /**
+   * Standing interest in the catalogue, so a change re-issues the last query.
+   *
+   * The counterpart of `subscribeLayout`, and it does the same thing for the
+   * same reason: `catalogue-changed` carries a version and no rows, so the
+   * honest response is to re-read whatever this client is actually drawing. A
+   * client watching no catalogue does nothing at all.
+   *
+   * The re-issue starts from the first page, never from the cursor the last
+   * page handed back. That cursor was minted at the version that just moved,
+   * and the hub refuses it by design.
+   */
+  subscribeCatalogue(): () => void;
 }
 
 export interface HubStoreDependencies {
@@ -390,6 +460,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastListing: null,
     lastProjectCreated: null,
     lastTreeChange: null,
+    catalogue: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -417,6 +488,33 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
 
   let layoutWatchers = 0;
   let paneLayoutWatchers = 0;
+  let catalogueWatchers = 0;
+  /**
+   * The last catalogue query this store sent, so a change can re-issue it.
+   *
+   * The query and not the page: what has to survive a change is the question,
+   * and the answer to it is exactly what the change invalidated.
+   */
+  let lastQuery: CatalogueQuery | null = null;
+  /**
+   * Catalogue queries awaiting an answer, by the id the answer will name.
+   *
+   * Beside `pending` rather than in it, because the two are settled by
+   * different things: a command's entry is deleted when the reply arrives and
+   * the screen reads the outcome off the snapshot, and one of these has a
+   * caller blocked on it that must be told either way -- including when the
+   * connection drops with the question unanswered.
+   */
+  const pendingQueries = new Map<
+    FrameId,
+    { resolve(page: CataloguePageView): void; reject(error: Error): void }
+  >();
+
+  /** Tells every blocked caller the answer is not coming. */
+  function abandonQueries(why: string): void {
+    for (const waiting of [...pendingQueries.values()]) waiting.reject(new Error(why));
+    pendingQueries.clear();
+  }
   const sessionWatchers = new Map<string, { readonly ref: SessionRef; count: number }>();
 
   function update(changes: Partial<HubSnapshot>): void {
@@ -470,6 +568,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       const unanswered = pending.size;
       pending.clear();
       settleWaiting('the connection dropped before the hub answered');
+      abandonQueries('the connection dropped before the hub answered this catalogue query');
       if (unanswered > 0) {
         update({
           problem: `the connection dropped before the hub answered ${String(unanswered)} command${
@@ -635,12 +734,30 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({ lastRefusal: null, lastTreeChange: { replyTo: frame.replyTo, nodeId: null } });
         return;
       }
+      case 'catalogue-page': {
+        const waiting = pendingQueries.get(frame.replyTo);
+        pendingQueries.delete(frame.replyTo);
+        const page: CataloguePageView = {
+          items: frame.items,
+          nextCursor: frame.nextCursor,
+          total: frame.total,
+          version: frame.version,
+        };
+        // The snapshot carries it as well as the caller, because a re-issue on
+        // `catalogue-changed` has no caller: nobody asked for it, and the page
+        // has to land somewhere a screen is looking.
+        update({ catalogue: page });
+        waiting?.resolve(page);
+        return;
+      }
       case 'catalogue-changed': {
         // Unsolicited, and the only frame that makes this store ask for
         // something on its own account. It carries a version and no nodes, so
         // the honest response is to re-read what this client is actually
-        // drawing — and a client watching no layout does nothing at all.
+        // drawing — and a client watching neither a layout nor a catalogue does
+        // nothing at all.
         requestLayout();
+        requestCatalogue();
         return;
       }
       case 'refusal': {
@@ -650,6 +767,13 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // line shows the newest "no" whoever asked for it.
         waiting.get(frame.replyTo)?.({ ok: false, reason: frame.message });
         waiting.delete(frame.replyTo);
+        // A refused query has a caller blocked on it, and it is told first: the
+        // one refusal worth acting on here is a stale cursor, and what the
+        // caller does about it is ask for the first page again. The snapshot
+        // still carries the sentence, like every other no.
+        const refused = pendingQueries.get(frame.replyTo);
+        pendingQueries.delete(frame.replyTo);
+        refused?.reject(new Error(frame.message));
         update({
           lastRefusal: {
             replyTo: frame.replyTo,
@@ -688,6 +812,49 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     wire.send(encodeClientFrame({ type: 'layout-request', id: frameIds.next() }));
   }
 
+  /**
+   * Asks the catalogue question again, if anything is watching it.
+   *
+   * From the first page, never from the last cursor: the cursor was minted at
+   * the version that just moved, and the hub refuses one from before a change
+   * by design. A rejection here has no caller to reach, so it is swallowed into
+   * the snapshot's `problem` the way an unreadable frame is -- the degradation
+   * is visible rather than silent, and a page nobody asked for must not become
+   * an unhandled rejection.
+   */
+  function requestCatalogue(): void {
+    const question = lastQuery;
+    if (question === null || catalogueWatchers === 0) return;
+    issueQuery({ ...question, cursor: null }).catch((error: unknown) => {
+      update({ problem: `the catalogue could not be re-read: ${String(error)}` });
+    });
+  }
+
+  /**
+   * Sends one catalogue query and answers it, or rejects saying why not.
+   *
+   * The query is remembered before the send rather than after, so that a change
+   * arriving while this one is in flight re-issues the question that was asked
+   * rather than the one before it.
+   */
+  function issueQuery(query: CatalogueQuery): Promise<CataloguePageView> {
+    lastQuery = query;
+    const wire = socket;
+    if (!established || wire === null) {
+      return Promise.reject(
+        new Error(
+          snapshot.problem ??
+            'the connection is down: a catalogue page is a read of now and is not queued',
+        ),
+      );
+    }
+    const id = frameIds.next();
+    return new Promise<CataloguePageView>((resolve, reject) => {
+      pendingQueries.set(id, { resolve, reject });
+      wire.send(encodeClientFrame({ ...query, type: 'catalogue-query', id }));
+    });
+  }
+
   function replaySubscriptions(): void {
     const wire = socket;
     if (wire === null) return;
@@ -697,6 +864,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     if (paneLayoutWatchers > 0) {
       wire.send(encodeClientFrame({ type: 'pane-layout-request', id: frameIds.next() }));
     }
+    // The catalogue is standing interest too, and a reconnection is a change
+    // this client slept through: the hub's version may have moved any number of
+    // times while the socket was down, so the question is asked again from the
+    // first page rather than resumed.
+    requestCatalogue();
     const encode = dependencies.encodeSessionSubscription;
     if (encode !== undefined) {
       for (const { ref } of sessionWatchers.values()) {
@@ -731,6 +903,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     queue.length = 0;
     pending.clear();
     settleWaiting('the page stopped listening to the hub before it answered');
+    abandonQueries('nothing is looking at this store any more');
+    lastQuery = null;
     wire?.close();
     update({
       phase: 'idle',
@@ -739,6 +913,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // A listing describes somebody else's disk as it was; nothing is looking
       // any more, and the next page to look will ask again.
       lastListing: null,
+      // Same, and more so: a catalogue page is pinned to a version this hub run
+      // may not be at when somebody looks again.
+      catalogue: null,
     });
   }
 
@@ -881,6 +1058,24 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         if (!active) return;
         active = false;
         paneLayoutWatchers -= 1;
+      };
+    },
+
+    queryCatalogue(query: CatalogueQuery): Promise<CataloguePageView> {
+      return issueQuery(query);
+    },
+
+    subscribeCatalogue(): () => void {
+      // Nothing is sent on the first subscriber, unlike the two above. There is
+      // no question yet: a catalogue query carries a view, a sort and a filter
+      // that only the screen knows, and this store has nothing to ask for until
+      // that screen asks once.
+      catalogueWatchers += 1;
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        catalogueWatchers -= 1;
       };
     },
   };
