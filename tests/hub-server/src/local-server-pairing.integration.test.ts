@@ -24,6 +24,7 @@ import { createPtySupervisor } from '@agentplex/pty';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
 import { DEFAULT_DRAIN_MS } from '../../../apps/server/src/drain.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
+import { createFakeStoreWatcher } from '../../../apps/server/src/fake-store-watcher.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
 import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
@@ -87,6 +88,9 @@ async function startServer({
     host: '127.0.0.1',
     port: 0,
     storePaths: [],
+    // Nothing in this file writes into a store, so the watch is a seam that
+    // is handed over and never fires.
+    storeWatcher: createFakeStoreWatcher(),
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     grantFileSystem: grantFiles,

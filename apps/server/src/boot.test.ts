@@ -12,6 +12,7 @@ import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from './terminal-manager.js';
 import { createFakeDataRoot, type FakeDataRoot } from './fake-data-root.js';
+import { createFakeStoreWatcher } from './fake-store-watcher.js';
 import { createFakeProjectFiles } from './fake-project-files.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { createFakeWorkingTree } from './fake-working-tree.js';
@@ -32,6 +33,9 @@ function dependencies(
     ids,
     timers: createFakeTimers(),
     storeFileSystem,
+    // A filesystem that never interrupts: this file is about which halves start
+    // and stop, and nothing in it writes into a store.
+    storeWatcher: createFakeStoreWatcher(),
     dataRootFileSystem,
     // The grants file lives beside the identity file, so a runtime that starts
     // writes one here too: grant zero, for the token it just minted.
