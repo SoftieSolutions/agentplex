@@ -34,6 +34,12 @@ const START: HubCommand = {
   server: null,
 };
 
+const STOP: HubCommand = {
+  type: 'session-stop',
+  storeId: SESSION.storeId,
+  sessionId: SESSION.sessionId,
+};
+
 /** Lets the ticket promise inside `connect` settle. */
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -306,6 +312,43 @@ describe('commands', () => {
     expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
     socket.deliver(hubFrames.sessionStarted);
     expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('a session-stopped reply is kept whole, not dropped for its side effects', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    // Captured from a real stop: the reply names the session it landed on and
+    // the machine the hub resolved it to, neither of which the client sent.
+    socket.deliver(hubFrames.sessionStopped);
+    expect(h.store.getSnapshot().lastStopped).toEqual({
+      replyTo: 4,
+      storeId: 'store-agentplex',
+      sessionId: 'session-migrate-db',
+      server: 'registration-mbp-robert',
+    });
+  });
+
+  it('a session-stopped reply clears the refusal that preceded it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.sendCommand(STOP);
+
+    socket.deliver(hubFrames.refusalHeldBusy);
+    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
+    socket.deliver(hubFrames.sessionStopped);
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('keeps the holder a refusal names, which is what makes it more than a no', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.refusalHeldStoppable);
+    expect(h.store.getSnapshot().lastRefusal?.holder).toEqual({
+      server: 'registration-mbp-robert',
+      stoppable: true,
+    });
   });
 
   it('drops the queue when the last subscriber leaves', async () => {

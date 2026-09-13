@@ -2,10 +2,13 @@ import type {
   FrameId,
   MachineState,
   ServerRegistrationId,
+  SessionHolder,
   SessionRef,
   StoreId,
 } from '@agentplex/protocol';
 import type { ConnectionPhase, HubCommand, RefusalView, StartedView } from '../store/hub-store.js';
+import { sessionHash } from '../terminal/session-route.js';
+import { serverLabel } from './session-list-model.js';
 
 /**
  * Everything the new-session flow decides, as pure functions: which controls
@@ -132,9 +135,14 @@ export function deliveryWords(delivery: 'sent' | 'queued'): string | null {
     : null;
 }
 
-/** The session pane's address, the shape the terminal-pane route parses. */
+/**
+ * The session pane's address, encoded by the route module that parses it.
+ *
+ * Delegated rather than spelled out again: an address written in one place and
+ * read in another is one edit away from a link nothing matches.
+ */
 export function sessionPaneHash(ref: SessionRef): string {
-  return `#/session/${encodeURIComponent(ref.storeId)}/${encodeURIComponent(ref.sessionId)}`;
+  return sessionHash(ref);
 }
 
 /**
@@ -152,16 +160,59 @@ export type StartFollowUp =
   | { readonly kind: 'waiting' }
   | { readonly kind: 'navigate'; readonly hash: string }
   | { readonly kind: 'started'; readonly words: string }
-  | { readonly kind: 'refused'; readonly words: string };
+  | {
+      readonly kind: 'refused';
+      readonly words: string;
+      /** The machine already running it, when that is why the answer was no. */
+      readonly held: HeldElsewhere | null;
+    };
+
+/**
+ * A refusal that named a machine, ready to draw.
+ *
+ * This is what `refusal.holder` is for: "it is running over here" is a
+ * different answer from "no" and leads somewhere, and the way out is stopping
+ * the holder. So the machine is named -- through the lookup the list uses, not
+ * by reading the hub's sentence -- and the session a stop would be aimed at
+ * comes along with it.
+ *
+ * `session` is `null` whenever the start named none, which is every start this
+ * form sends today: a new session has no id until the provider writes one, and
+ * a session nobody has started is a session nobody is holding. A stop has to
+ * address `{ storeId, sessionId }`, so the button exists exactly when there is
+ * something to aim it at, and a resume -- a start that does name a session, and
+ * the only kind a holder can refuse -- is what makes it appear.
+ */
+export interface HeldElsewhere {
+  readonly holder: SessionHolder;
+  /** The holder's label, or its registration id when the frame describes none. */
+  readonly machine: string;
+  /** The session to aim a stop at, or `null` when the start named none. */
+  readonly session: SessionRef | null;
+}
 
 export function startFollowUp(
   pending: FrameId,
   lastStarted: StartedView | null,
   lastRefusal: RefusalView | null,
   state: MachineState | null,
+  /** The session the start named, or `null` for a fresh spawn. */
+  asked: SessionRef | null,
 ): StartFollowUp {
   if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message };
+    const { holder } = lastRefusal;
+    return {
+      kind: 'refused',
+      words: lastRefusal.message,
+      held:
+        holder === null
+          ? null
+          : {
+              holder,
+              machine: state === null ? holder.server : serverLabel(state, holder.server),
+              session: asked,
+            },
+    };
   }
   if (lastStarted !== null && lastStarted.replyTo === pending) {
     if (lastStarted.sessionId !== null) {
@@ -170,9 +221,7 @@ export function startFollowUp(
         hash: sessionPaneHash({ storeId: lastStarted.storeId, sessionId: lastStarted.sessionId }),
       };
     }
-    const label =
-      state?.servers.find((server) => server.registrationId === lastStarted.server)?.label ??
-      lastStarted.server;
+    const label = state === null ? lastStarted.server : serverLabel(state, lastStarted.server);
     return {
       kind: 'started',
       words: `started on ${label}; the session appears in the list once the provider writes its first turn`,

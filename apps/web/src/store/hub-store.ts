@@ -107,6 +107,24 @@ export interface StartedView {
   readonly server: ServerRegistrationId;
 }
 
+/**
+ * The hub's answer to a stop, kept so a screen can say what landed.
+ *
+ * Kept beside `lastStarted` and for the same reason: the reply names the
+ * machine the hub resolved, which the client never sent and cannot derive.
+ * It is also the one reply a screen renders for something it may not have
+ * asked for -- a stop from another tab is answered to that tab, and the row
+ * it landed on is what this frame names -- so the payload is held rather
+ * than dropped and the session row is read out of it.
+ */
+export interface StoppedView {
+  readonly replyTo: FrameId;
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  /** The machine the hub resolved the session to, hub-side. */
+  readonly server: ServerRegistrationId;
+}
+
 export interface HubSnapshot {
   readonly phase: ConnectionPhase;
   /** What is degraded, in words, or `null` while nothing is. */
@@ -137,6 +155,8 @@ export interface HubSnapshot {
   readonly lastRefusal: RefusalView | null;
   /** The hub's most recent yes to a start, kept until the next one. */
   readonly lastStarted: StartedView | null;
+  /** The hub's most recent yes to a stop, kept until the next one. */
+  readonly lastStopped: StoppedView | null;
 }
 
 /**
@@ -243,6 +263,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     terminalInput: INITIAL_TERMINAL,
     lastRefusal: null,
     lastStarted: null,
+    lastStopped: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -399,7 +420,15 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'session-stopped': {
         pending.delete(frame.replyTo);
-        update({ lastRefusal: null });
+        update({
+          lastRefusal: null,
+          lastStopped: {
+            replyTo: frame.replyTo,
+            storeId: frame.storeId,
+            sessionId: frame.sessionId,
+            server: frame.server,
+          },
+        });
         return;
       }
       case 'refusal': {

@@ -26,6 +26,7 @@ import {
 } from './session-list-model.js';
 import { NewSessionForm } from './new-session-form.js';
 import { SessionCard } from './session-card.js';
+import { stoppedNotice } from './stop-model.js';
 
 /**
  * The session list: flat, activity-ordered, needs-you first as a stable
@@ -94,6 +95,10 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
     provider: activeProvider,
   });
   const moment = now();
+  // What the last stop landed on, from the reply's own payload. Kept brief and
+  // kept at all because the answer reaches the client that asked: without it a
+  // session stopped in another tab is a row that quietly stops being held.
+  const stopped = stoppedNotice(state, snapshot.lastStopped);
 
   return (
     <Stack component="main" p="md" gap="sm">
@@ -105,6 +110,11 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
           {notice === null ? null : (
             <Text fz={12} c="dimmed">
               {notice}
+            </Text>
+          )}
+          {stopped === null ? null : (
+            <Text fz={12} c="dimmed" role="status">
+              {stopped}
             </Text>
           )}
         </Group>
@@ -188,7 +198,7 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
       ) : (
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
           {visible.map((item) => (
-            <SessionCard key={item.key} item={item} scheme={scheme} now={moment} />
+            <SessionCard key={item.key} item={item} scheme={scheme} now={moment} store={store} />
           ))}
         </SimpleGrid>
       )}

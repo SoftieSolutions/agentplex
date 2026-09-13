@@ -29,6 +29,7 @@ import {
   terminalInputNotice,
   toneForStatus,
 } from './presentation.js';
+import { StopButton } from '../sessions/stop-button.js';
 import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
 import { TerminalView } from './terminal-view.js';
 
@@ -231,6 +232,16 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
             {metadata}
           </Text>
         )}
+        {/* The same button the card carries, off the same published fact.
+            Nothing is drawn for a session nobody is running, or for a holder
+            mid-turn. */}
+        <StopButton
+          store={hub}
+          sessionRef={sessionRef}
+          holder={row?.holder ?? null}
+          scheme={scheme}
+          size="xs"
+        />
       </Group>
 
       {finding && (
