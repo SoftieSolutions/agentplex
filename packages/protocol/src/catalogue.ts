@@ -307,11 +307,12 @@ export const catalogueItemSchema = z.object({
   /**
    * For a doc node, the server holding the file. `null` for every other kind.
    *
-   * Present on the shape and filled by nothing in this build: the rows that
-   * make a node a doc are stack D's migration, and a hub that has none answers
-   * `null` here for every item. The field is on the frame now rather than
-   * later because it is what makes this item shape the answer for the whole
-   * tree rather than the answer for the part of it that exists today.
+   * Present on the shape and answered `null` by this build: the docs index
+   * knows which machine holds a file, and the catalogue query does not read it
+   * yet -- a document's machine is named on a listing today and not on a page.
+   * The field is on the frame rather than off it because it is what makes this
+   * item shape the answer for the whole tree rather than the answer for the
+   * part of it a query happens to join today.
    */
   server: serverRegistrationIdSchema.nullable(),
   /** Which group this item falls in, or `null` when `groupBy` is `'none'`. */

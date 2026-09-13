@@ -13,6 +13,7 @@ import {
 } from './identity.js';
 import { parseTextFrame } from './parse.js';
 import { encodeTerminalChunk } from './terminal.js';
+import { DOC_CONTENT_MAX_CHARS, docNameSchema } from './doc.js';
 
 describe('parseClientFrame', () => {
   it('accepts hello with a version', () => {
@@ -480,6 +481,16 @@ describe('client and hub round trips', () => {
       storeId: storeIdSchema.parse('store-work'),
       sessionId: sessionIdSchema.parse('session-1'),
     },
+    {
+      type: 'doc-create',
+      id: 23,
+      projectId: nodeIdSchema.parse('node-1'),
+      server: serverRegistrationIdSchema.parse('registration-2'),
+      name: docNameSchema.parse('plan.md'),
+      content: '# Plan\n\n- read the failing test\n',
+    },
+    { type: 'doc-save', id: 24, nodeId: nodeIdSchema.parse('node-3'), content: '' },
+    { type: 'doc-open', id: 25, nodeId: nodeIdSchema.parse('node-3') },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
   ];
 
@@ -710,6 +721,14 @@ describe('client and hub round trips', () => {
       ],
       truncated: true,
     },
+    { type: 'doc-created', replyTo: 16, nodeId: nodeIdSchema.parse('node-3') },
+    { type: 'doc-saved', replyTo: 17, updatedAt: 1_756_000_000_000 },
+    {
+      type: 'doc-content',
+      replyTo: 18,
+      content: '# Plan\n\n- read the failing test\n',
+      updatedAt: 1_756_000_000_000,
+    },
   ];
 
   it('sends terminal output with no replyTo either: a stream is nobody\u2019s reply', () => {
@@ -759,5 +778,85 @@ describe('client and hub round trips', () => {
     expect(parseHubFrame({ type: 'protocol-error', code: 'internal', message: 'no' }).ok).toBe(
       false,
     );
+  });
+});
+
+/**
+ * The client leg of the document frames, and what it will not take.
+ *
+ * The name and the content are the server leg's own schemas rather than a
+ * second pair, so what is proved here is that reuse: a name the hub accepts is
+ * one the machine at the far end accepts, and there is no shape a client can
+ * get past this parser and have refused a hop later for a reason nobody can
+ * see. The traversal cases live beside the schema in `doc.test.ts`; these are
+ * the two that would otherwise be restated on a frame.
+ */
+describe('parseClientFrame on the document frames', () => {
+  const PROJECT = nodeIdSchema.parse('node-1');
+  const SERVER = serverRegistrationIdSchema.parse('registration-2');
+
+  it('refuses a create whose name would leave the project folder', () => {
+    for (const name of ['../secrets.md', 'notes/plan.md', '.hidden.md', 'plan.sh']) {
+      expect(
+        parseClientFrame({
+          type: 'doc-create',
+          id: 1,
+          projectId: PROJECT,
+          server: SERVER,
+          name,
+          content: 'anything',
+        }).ok,
+      ).toBe(false);
+    }
+  });
+
+  it('refuses content past the cap on either write frame', () => {
+    const tooLong = 'x'.repeat(DOC_CONTENT_MAX_CHARS + 1);
+    expect(
+      parseClientFrame({
+        type: 'doc-create',
+        id: 1,
+        projectId: PROJECT,
+        server: SERVER,
+        name: 'plan.md',
+        content: tooLong,
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseClientFrame({ type: 'doc-save', id: 2, nodeId: PROJECT, content: tooLong }).ok,
+    ).toBe(false);
+  });
+
+  it('takes an empty document, because emptying a file is an edit', () => {
+    expect(parseClientFrame({ type: 'doc-save', id: 2, nodeId: PROJECT, content: '' }).ok).toBe(
+      true,
+    );
+  });
+
+  it('carries no directory on any of the three: the hub holds the rows', () => {
+    // The rule the amendment left standing. A client names a project node and
+    // a document node; the only party that turns either into a path is the one
+    // holding the database.
+    expect(
+      parseClientFrame({
+        type: 'doc-create',
+        id: 1,
+        projectId: PROJECT,
+        server: SERVER,
+        name: 'plan.md',
+        content: '',
+        directory: '/srv/work',
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        type: 'doc-create',
+        id: 1,
+        projectId: PROJECT,
+        server: SERVER,
+        name: 'plan.md',
+        content: '',
+      },
+    });
   });
 });

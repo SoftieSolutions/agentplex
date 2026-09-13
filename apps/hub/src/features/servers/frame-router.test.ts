@@ -93,6 +93,24 @@ describe('an answer to an instruction', () => {
       },
     ]);
   });
+
+  const documentReplies: readonly ServerToHubFrame[] = [
+    { type: 'doc-written', replyTo: 6, updatedAt: 1_756_000_000_000 },
+    { type: 'doc-content', replyTo: 7, content: '# Plan\n', updatedAt: 1_756_000_000_000 },
+    { type: 'doc-listing', replyTo: 8, entries: [] },
+  ];
+
+  it.each(documentReplies)('carries the $type back to whoever asked for it', (frame) => {
+    // A document reply is an answer like any other: it names the frame that
+    // asked, so it goes to the caller and this router says nothing more about
+    // documents than that.
+    const routed = route(frame);
+
+    expect(routed.answers).toEqual([
+      { replyTo: 'replyTo' in frame ? frame.replyTo : 0, outcome: { ok: true, answer: frame } },
+    ]);
+    expect(routed.logged).toEqual([]);
+  });
 });
 
 describe('a store report', () => {
@@ -155,9 +173,6 @@ describe('a frame this build has no handler for', () => {
       chunk: encodeTerminalChunk(new TextEncoder().encode('ok\r\n')),
       droppedChunks: 0,
     },
-    { type: 'doc-written', replyTo: 8, updatedAt: 1_700_000_000_000 },
-    { type: 'doc-content', replyTo: 9, content: '# plan\n', updatedAt: 1_700_000_000_000 },
-    { type: 'doc-listing', replyTo: 10, entries: [] },
   ];
 
   it.each(unhandled)('says so at debug rather than dropping $type in silence', (frame) => {

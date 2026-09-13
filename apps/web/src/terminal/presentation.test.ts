@@ -114,6 +114,9 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastTreeChange: null,
     catalogue: null,
     lastProjectCreated: null,
+    lastDocCreated: null,
+    lastDocSaved: null,
+    lastDocContent: null,
     ...overrides,
   };
 }

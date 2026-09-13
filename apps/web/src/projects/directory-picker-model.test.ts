@@ -42,6 +42,9 @@ function snapshot(over: Partial<HubSnapshot> = {}): HubSnapshot {
     lastTreeChange: null,
     catalogue: null,
     lastProjectCreated: null,
+    lastDocCreated: null,
+    lastDocSaved: null,
+    lastDocContent: null,
     ...over,
   };
 }

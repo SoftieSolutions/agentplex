@@ -29,6 +29,7 @@ import { createFleetState, type FleetState } from './features/fleet-state/fleet-
 import { createMcp } from './features/mcp/mcp.js';
 import { createPairing, type LocalServerEntry } from './features/pairing/pairing.js';
 import { createPaneLayout } from './features/pane-layout/pane-layout.js';
+import { createDocs } from './features/docs/docs.js';
 import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
@@ -316,6 +317,24 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
 
   const sessions = createSessions({ state, projects, connections: servers, logger });
 
+  // Documents: the index of files the hub does not hold, and the one path a
+  // write to one takes. It reads projects for the directory a frame is
+  // addressed to and nothing else of that feature, which is the same one-way
+  // edge the catalogue has -- the rows a document is are this feature's, and
+  // where a project is stays the projects feature's answer.
+  const docs = createDocs({
+    database,
+    ids,
+    clock,
+    state,
+    projects,
+    connections: servers,
+    logger,
+    // A document is a node, so making one changes the tree, and the tree has
+    // one version whoever wrote it -- the same wire a project create takes.
+    onTreeChanged: () => catalogue.changed(),
+  });
+
   // Read per request for the reason the tree above is, and durable for the
   // same one: an arrangement of panes outlives the process that was told it.
   const paneLayout = createPaneLayout({ database, clock });
@@ -342,6 +361,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     syncServers: () => servers.sync(),
     projects,
     catalogue,
+    docs,
   });
 
   // Not awaited past its first read of the pairing table, and started before
