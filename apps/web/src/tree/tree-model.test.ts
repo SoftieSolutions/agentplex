@@ -16,7 +16,6 @@ import {
   moveTargets,
   nodeForSession,
   parseNodeName,
-  projectNodes,
   sessionsNotInTree,
   stopOffer,
   treeFollowUp,
@@ -91,13 +90,6 @@ describe('reading the tree', () => {
         sessionRefSchema.parse({ storeId: 'store-universe', sessionId: 'session-fix-auth' }),
       ),
     ).toBeNull();
-  });
-
-  it('lists the projects, whatever they are called and wherever they sit', () => {
-    expect(projectNodes(ARRANGED).map((project) => project.name)).toEqual([
-      'agentplex (main checkout)',
-    ]);
-    expect(projectNodes(null)).toEqual([]);
   });
 });
 

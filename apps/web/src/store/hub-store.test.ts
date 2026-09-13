@@ -385,7 +385,7 @@ describe('commands', () => {
     // the machine the hub resolved it to, neither of which the client sent.
     socket.deliver(hubFrames.sessionStopped);
     expect(h.store.getSnapshot().lastStopped).toEqual({
-      replyTo: 5,
+      replyTo: 6,
       storeId: 'store-agentplex',
       sessionId: 'session-migrate-db',
       server: 'registration-mbp-robert',
@@ -903,6 +903,45 @@ describe('the catalogue query', () => {
     });
     expect(page.nextCursor).not.toBeNull();
     expect(h.store.getSnapshot().catalogue).toEqual(page);
+  });
+
+  it('reads a tree page as the hub sent it, parents before children and the depth on the row', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const asking = h.store.queryCatalogue({
+      ...CATALOGUE,
+      view: 'tree',
+      groupBy: 'none',
+      limit: 2,
+    });
+    socket.deliver(addressedTo(hubFrames.catalogueTreePagePartial, lastSentId(socket)));
+    const first = await asking;
+
+    expect(first.total).toBe(5);
+    expect(first.nextCursor).not.toBeNull();
+
+    const resuming = h.store.queryCatalogue({
+      ...CATALOGUE,
+      view: 'tree',
+      groupBy: 'none',
+      cursor: first.nextCursor,
+    });
+    socket.deliver(addressedTo(hubFrames.catalogueTreePage, lastSentId(socket)));
+    const rest = await resuming;
+
+    // A container and its child, on one page and in that order: the hub runs
+    // the cut forward rather than back, so a page boundary never falls between
+    // a parent and its first child -- which is what lets the client indent off
+    // the depth on the row instead of walking a parent chain it may not hold.
+    const folder = rest.items.findIndex((item) => item.kind === 'folder');
+    const child = rest.items.findIndex((item) => item.kind === 'project');
+    expect(folder).toBeGreaterThanOrEqual(0);
+    expect(child).toBe(folder + 1);
+    expect(rest.items[child]?.parentId).toBe(rest.items[folder]?.id);
+    expect(rest.items[child]?.depth).toBe(1);
+    // The list view drops containers; this is the view that does not.
+    expect(rest.items.some((item) => item.session !== null)).toBe(true);
   });
 
   it('rejects with the hub sentence when the cursor has gone stale', async () => {

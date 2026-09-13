@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { sessionRefSchema } from '@agentplex/protocol';
+import { nodeIdSchema, sessionRefSchema } from '@agentplex/protocol';
 import { createFakeTimers } from '../store/timers.js';
 import { createLayoutStore, type LayoutHub } from './layout-store.js';
-import { parsePaneLayout, serializePaneLayout, sessionPane } from './tree.js';
+import { DEFAULT_TREE, parsePaneLayout, serializePaneLayout, sessionPane } from './tree.js';
+import { parseWorkspace, serializeWorkspace } from './workspace.js';
 
 const SESSION = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-1' });
 const OTHER = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-2' });
@@ -80,6 +81,7 @@ describe('adopting the hub answer', () => {
       loaded: true,
       tree: { kind: 'pane', content: { type: 'empty' } },
       focus: [],
+      collapsed: [],
     });
   });
 
@@ -225,5 +227,70 @@ describe('showSession before the answer', () => {
     expect(h.store.getSnapshot().focus).toEqual(['second']);
     h.timers.fireAll();
     expect(h.saves).toHaveLength(0);
+  });
+});
+
+/**
+ * The catalogue's expansion state, which rides in the same blob.
+ *
+ * Under test here rather than beside the catalogue view because this is where
+ * it is written, and that placement is the decision: the hub echoes no save
+ * back, so a second writer of the blob would write a stale copy of the panes
+ * over an arrangement made a moment earlier. One store writes; the tree view
+ * asks it to.
+ */
+describe('what is collapsed', () => {
+  const FOLDER = nodeIdSchema.parse('hub-5');
+  const PROJECT = nodeIdSchema.parse('hub-4');
+
+  it('adopts what was stored and saves a collapse on the same debounce', () => {
+    const h = harness();
+    h.answer(serializeWorkspace({ panes: DEFAULT_TREE, collapsed: [PROJECT], rest: {} }));
+    expect(h.store.getSnapshot().collapsed).toEqual([PROJECT]);
+
+    h.store.toggleCollapsed(FOLDER);
+    expect(h.store.getSnapshot().collapsed).toEqual([PROJECT, FOLDER]);
+    expect(h.saves).toHaveLength(0);
+
+    h.timers.fireAll();
+    expect(parseWorkspace(h.saves.at(-1) ?? null).collapsed).toEqual([PROJECT, FOLDER]);
+  });
+
+  it('opens what was closed, and the save carries the panes with it', () => {
+    const h = harness();
+    h.answer(serializeWorkspace({ panes: sessionPane(SESSION), collapsed: [FOLDER], rest: {} }));
+    h.store.toggleCollapsed(FOLDER);
+    h.timers.fireAll();
+
+    const saved = parseWorkspace(h.saves.at(-1) ?? null);
+    expect(saved.collapsed).toEqual([]);
+    // The panes are the other half of the one blob: a save about the tree must
+    // not be how a person loses their arrangement.
+    expect(saved.panes).toEqual(sessionPane(SESSION));
+  });
+
+  it('writes back a section this build cannot read', () => {
+    const h = harness();
+    h.answer(
+      JSON.stringify({
+        v: 1,
+        root: { kind: 'pane', content: { type: 'empty' } },
+        somebodyElses: { keep: 'me' },
+      }),
+    );
+    h.store.toggleCollapsed(FOLDER);
+    h.timers.fireAll();
+    expect(JSON.parse(h.saves.at(-1) ?? 'null')).toMatchObject({ somebodyElses: { keep: 'me' } });
+  });
+
+  it('does nothing before the hub has answered, so a first click cannot outrank the store', () => {
+    const h = harness();
+    h.store.toggleCollapsed(FOLDER);
+    expect(h.store.getSnapshot().collapsed).toEqual([]);
+    h.timers.fireAll();
+    expect(h.saves).toHaveLength(0);
+
+    h.answer(serializeWorkspace({ panes: DEFAULT_TREE, collapsed: [PROJECT], rest: {} }));
+    expect(h.store.getSnapshot().collapsed).toEqual([PROJECT]);
   });
 });

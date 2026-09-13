@@ -1,4 +1,4 @@
-import type { SessionRef } from '@agentplex/protocol';
+import type { NodeId, SessionRef } from '@agentplex/protocol';
 import type { Timers } from '../store/timers.js';
 import {
   closePane,
@@ -13,22 +13,28 @@ import {
 } from './operations.js';
 import {
   DEFAULT_TREE,
-  parsePaneLayout,
-  serializePaneLayout,
   sessionPane,
   type LayoutTree,
   type PanePath,
   type SplitDirection,
 } from './tree.js';
+import { MAX_REMEMBERED_COLLAPSES, parseWorkspace, serializeWorkspace } from './workspace.js';
 
 /**
  * The layout as this tab lives with it: an external store, read through
  * `useSyncExternalStore` and never through an effect.
  *
- * Two facts live here and only one of them is ever saved:
+ * Three facts live here and one of them is never saved:
  *
  *   * the tree — splits, ratios, what each pane shows — which is the layout
  *     and goes to the hub, whole, on every structural change;
+ *   * which containers of the catalogue tree are collapsed, which the hub
+ *     stores in the same opaque blob as a section of its own (`workspace.ts`
+ *     argues why one blob and not two). It is here rather than beside the
+ *     catalogue view for the reason that file gives: the hub echoes no save
+ *     back, so a second writer would write a stale copy of this file's section
+ *     over a change made a moment earlier. One store writes the blob;
+ *     everything else asks it to;
  *   * focus, which is a fact about this tab. Two tabs on one hub share a
  *     layout and look at different panes of it, so focus is never serialized
  *     and no focus change ever schedules a save. The tests hold that line.
@@ -52,6 +58,14 @@ export interface LayoutSnapshot {
   readonly tree: LayoutTree;
   /** The focused pane. A fact about this tab; never part of a save. */
   readonly focus: PanePath;
+  /**
+   * The catalogue containers this user has closed, oldest first.
+   *
+   * Closed and not open: see `workspace.ts`. A folder nobody has said anything
+   * about is drawn open, so a folder that appears while you are looking at the
+   * tree shows what was just put in it.
+   */
+  readonly collapsed: readonly NodeId[];
 }
 
 /** The slice of the hub store the layout needs; `HubStore` satisfies it. */
@@ -91,6 +105,16 @@ export interface LayoutStore {
   focusMove(direction: FocusDirection): void;
   /** Focuses the pane at `path` (a click landed in it). Never saves. */
   focusPane(path: PanePath): void;
+  /**
+   * Opens a closed container of the catalogue tree, or closes an open one.
+   *
+   * A structural change like a split: it is the arrangement, and it saves on
+   * the same debounce. Asked before the hub has answered it does nothing --
+   * the same rule `showSession` follows, and for the same reason: writing this
+   * tab's first click over a stored arrangement that has not arrived yet is
+   * how a person loses one.
+   */
+  toggleCollapsed(nodeId: NodeId): void;
 }
 
 const DEFAULT_SAVE_DELAY_MS = 750;
@@ -100,7 +124,14 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
   const saveDelayMs = dependencies.saveDelayMs ?? DEFAULT_SAVE_DELAY_MS;
 
   const listeners = new Set<() => void>();
-  let snapshot: LayoutSnapshot = { loaded: false, tree: DEFAULT_TREE, focus: [] };
+  let snapshot: LayoutSnapshot = {
+    loaded: false,
+    tree: DEFAULT_TREE,
+    focus: [],
+    collapsed: [],
+  };
+  /** Sections of the blob this build does not read, kept to be written back. */
+  let rest: Readonly<Record<string, unknown>> = {};
   /** True once a hub answer has been adopted or a local edit outranks one. */
   let settled = false;
   let cancelSave: (() => void) | null = null;
@@ -125,16 +156,19 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     cancelSave = null;
     if (!dirty) return;
     dirty = false;
-    hub.sendCommand({ type: 'pane-layout-save', layout: serializePaneLayout(snapshot.tree) });
+    hub.sendCommand({
+      type: 'pane-layout-save',
+      layout: serializeWorkspace({ panes: snapshot.tree, collapsed: snapshot.collapsed, rest }),
+    });
   }
 
   /** A structural change happened: the tree is the user's now, and it saves. */
-  function structural(tree: LayoutTree, focus: PanePath): void {
+  function structural(changes: Partial<LayoutSnapshot>): void {
     settled = true;
     dirty = true;
     cancelSave?.();
     cancelSave = timers.schedule(saveDelayMs, saveNow);
-    update({ loaded: true, tree, focus });
+    update({ loaded: true, ...changes });
   }
 
   function adoptAnswer(): void {
@@ -142,9 +176,11 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     const answer = hub.getSnapshot().paneLayout;
     if (answer === null) return;
     settled = true;
-    const tree = parsePaneLayout(answer.layout);
+    const stored = parseWorkspace(answer.layout);
+    const tree = stored.panes;
+    rest = stored.rest;
     const firstPane = panes(tree)[0];
-    update({ loaded: true, tree, focus: firstPane?.path ?? [] });
+    update({ loaded: true, tree, focus: firstPane?.path ?? [], collapsed: stored.collapsed });
     const waiting = requested;
     requested = null;
     if (waiting !== null) show(waiting);
@@ -164,10 +200,10 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     // A focus that names no pane can only mean a snapshot nothing renders;
     // showing the session as the whole layout over-claims nothing.
     if (tree === null) {
-      structural(sessionPane(session), []);
+      structural({ tree: sessionPane(session), focus: [] });
       return;
     }
-    structural(tree, snapshot.focus);
+    structural({ tree });
   }
 
   return {
@@ -205,19 +241,19 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     split(direction: SplitDirection): void {
       const changed = splitPane(snapshot.tree, snapshot.focus, direction);
       if (changed === null) return;
-      structural(changed.tree, changed.focus);
+      structural({ tree: changed.tree, focus: changed.focus });
     },
 
     close(): void {
       const changed = closePane(snapshot.tree, snapshot.focus);
       if (changed === null) return;
-      structural(changed.tree, changed.focus);
+      structural({ tree: changed.tree, focus: changed.focus });
     },
 
     commitRatio(path: PanePath, ratio: number): void {
       const tree = setRatio(snapshot.tree, path, ratio);
       if (tree === null || tree === snapshot.tree) return;
-      structural(tree, snapshot.focus);
+      structural({ tree });
     },
 
     showSession(session: SessionRef): void {
@@ -241,6 +277,17 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     focusPane(path: PanePath): void {
       if (paneAt(snapshot.tree, path) === null) return;
       update({ focus: path });
+    },
+
+    toggleCollapsed(nodeId: NodeId): void {
+      if (!snapshot.loaded) return;
+      const closed = snapshot.collapsed.includes(nodeId);
+      // Appended rather than inserted, so the list stays oldest-first and the
+      // bound drops the stalest entry rather than an arbitrary one.
+      const collapsed = closed
+        ? snapshot.collapsed.filter((id) => id !== nodeId)
+        : [...snapshot.collapsed, nodeId].slice(-MAX_REMEMBERED_COLLAPSES);
+      structural({ collapsed });
     },
   };
 }

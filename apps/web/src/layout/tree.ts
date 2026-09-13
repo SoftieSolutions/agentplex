@@ -181,7 +181,20 @@ function encodeNode(node: LayoutTree): unknown {
   };
 }
 
-/** The characters a save carries. The inverse of `parsePaneLayout`. */
-export function serializePaneLayout(tree: LayoutTree): string {
-  return JSON.stringify({ v: FORMAT_VERSION, root: encodeNode(tree) });
+/**
+ * The characters a save carries. The inverse of `parsePaneLayout`.
+ *
+ * `sections` is everything else the one stored blob holds — the catalogue's
+ * expansion state, and any section written by a build this one has never met.
+ * They are written back around the panes rather than merged into them, and the
+ * panes always win the two keys they own: a section arriving with a `v` or a
+ * `root` on it was never this file's to read, and letting one overwrite the
+ * arrangement would lose a layout to a stranger's key collision. `workspace.ts`
+ * is where the sections are given their shape.
+ */
+export function serializePaneLayout(
+  tree: LayoutTree,
+  sections: Readonly<Record<string, unknown>> = {},
+): string {
+  return JSON.stringify({ ...sections, v: FORMAT_VERSION, root: encodeNode(tree) });
 }

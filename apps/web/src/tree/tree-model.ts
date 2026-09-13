@@ -81,11 +81,6 @@ export function nodeForSession(layout: Layout | null, ref: SessionRef): LayoutNo
   );
 }
 
-/** Every project in the tree, parents first, as the rows a menu hangs off. */
-export function projectNodes(layout: Layout | null): readonly LayoutNode[] {
-  return (layout ?? []).filter((node) => node.kind === PROJECT_KIND);
-}
-
 /**
  * One session the fleet has that the tree does not hold.
  *

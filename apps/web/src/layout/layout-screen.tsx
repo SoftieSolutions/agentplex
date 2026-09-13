@@ -1,11 +1,11 @@
 import { useCallback, useState, useSyncExternalStore, type JSX } from 'react';
 import type { SessionRef } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
-import { browserTimers } from '../store/timers.js';
 import { createShortcutRegistry, type ShortcutRegistry } from '../terminal/shortcuts.js';
 import { Stack, Text, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
-import { createLayoutStore, type LayoutStore } from './layout-store.js';
+import { appLayoutStore } from './app-layout.js';
+import { type LayoutStore } from './layout-store.js';
 import { NodeView, pathKey, type PaneViewDependencies } from './split-view.js';
 import type { FocusDirection } from './operations.js';
 
@@ -45,7 +45,10 @@ interface HeldStores {
  * Lives outside the component so nothing in here can close over a render.
  */
 function buildHeldStores(hub: HubStore, injected: LayoutStore | undefined): HeldStores {
-  const layout = injected ?? createLayoutStore({ hub, timers: browserTimers });
+  // The app's one layout store, never a new one per mount: the catalogue tree
+  // on the other screen writes the same stored blob, and two stores adopting
+  // one answer would each write their own half of it over the other's.
+  const layout = injected ?? appLayoutStore(hub);
   const registry = createShortcutRegistry();
 
   // Where each pane's element landed, so a focus change in the tree can move

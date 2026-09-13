@@ -2,6 +2,7 @@
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { CatalogueQuery } from '@agentplex/protocol';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
@@ -105,6 +106,25 @@ describe('the new-session form meeting a holder', () => {
   }
 
   /**
+   * The page's standing catalogue question, which the session list behind this
+   * modal is already holding open on the same store.
+   *
+   * It is here because the frame numbering is: this form is opened from the
+   * session list, so in the app its first command is numbered after the list's
+   * layout request and catalogue query. The captured refusals below answer
+   * those numbers, and a mount that skipped what the app always sends would be
+   * asserting against a conversation no browser has.
+   */
+  const LIST_QUERY: CatalogueQuery = {
+    view: 'list',
+    groupBy: 'none',
+    sort: { key: 'updatedAt', direction: 'desc' },
+    filter: {},
+    cursor: null,
+    limit: 50,
+  };
+
+  /**
    * The form open on a store whose connection has reached a captured state
    * with exactly one store in it -- one store is not a choice, so the only
    * thing left to pick is the provider, which `chooseProvider` below does.
@@ -131,6 +151,12 @@ describe('the new-session form meeting a holder', () => {
       socket.open();
       socket.deliver(hubFrames.welcome);
       socket.deliver(hubFrames.machineStateSingle);
+    });
+    // Never answered, and it does not need to be: what it is here for is the
+    // frame it occupies. It is abandoned when the store stops listening, which
+    // is a rejection nothing is waiting on.
+    await act(() => {
+      void store.queryCatalogue(LIST_QUERY).catch(() => undefined);
     });
     return socket;
   }
@@ -178,9 +204,9 @@ describe('the new-session form meeting a holder', () => {
     const socket = await mountForm();
     await chooseProvider('claude');
 
-    // The start this form sent is frame 3 -- the form asks for the tree first,
-    // to fill its project select -- which is the frame this captured refusal
-    // answers.
+    // The start this form sent is frame 4 -- the list behind it asks for the
+    // tree and a catalogue page first -- which is the frame this captured
+    // refusal answers.
     await submit();
     await act(() => {
       socket.deliver(hubFrames.refusalHeldBusy);
@@ -207,7 +233,7 @@ describe('the new-session form meeting a holder', () => {
   it('offers none either when the start named no session to aim one at', async () => {
     const socket = await mountForm();
     await chooseProvider('claude');
-    // The second start is frame 4, which the stoppable-holder refusal answers.
+    // The second start is frame 5, which the stoppable-holder refusal answers.
     await submit();
     await act(() => {
       socket.deliver(hubFrames.refusalHeldBusy);
