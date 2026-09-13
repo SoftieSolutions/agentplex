@@ -151,17 +151,39 @@ export function countsTowardAttention(report: ServerConnectionReport): boolean {
  * caller that supplied its own would be numbering frames on a socket it does
  * not own. Derived from the wire union rather than restated, so that a field
  * added to an instruction is a field this carries, without an edit.
+ *
+ * It was `ServerInstruction` until AGX-238 put a directory listing on the same
+ * channel, and the rename is the honest half of that: an `ask` that carries
+ * something which is not about a session should not be typed as though it were.
+ * The set is still a list rather than every frame with an id -- a handshake and
+ * a ping are the connection's own, not a caller's -- so adding one here stays a
+ * decision somebody takes. The three document frames are the second such
+ * addition, and the name has earned itself twice over.
  */
 type WithoutFrameId<Frame> = Frame extends { id: FrameId } ? Omit<Frame, 'id'> : never;
 
-export type SessionInstruction = WithoutFrameId<
-  Extract<HubToServerFrame, { type: 'session-start' | 'session-stop' }>
+export type ServerInstruction = WithoutFrameId<
+  Extract<
+    HubToServerFrame,
+    {
+      type:
+        'session-start' | 'session-stop' | 'directory-list' | 'doc-write' | 'doc-read' | 'doc-list';
+    }
+  >
 >;
 
 /** What a server answers an instruction with when it did it. */
-export type SessionAnswer = Extract<
+export type ServerAnswer = Extract<
   ServerToHubFrame,
-  { type: 'session-started' | 'session-stopped' }
+  {
+    type:
+      | 'session-started'
+      | 'session-stopped'
+      | 'directory-listing'
+      | 'doc-written'
+      | 'doc-content'
+      | 'doc-listing';
+  }
 >;
 
 /**
@@ -169,7 +191,7 @@ export type SessionAnswer = Extract<
  *
  * The four terminal frames the hub sends, minus the id, for the reason an
  * instruction is one: a frame id is unique within a connection and only the
- * connection can mint one. Kept apart from `SessionInstruction` because the two
+ * connection can mint one. Kept apart from `ServerInstruction` because the two
  * are answered differently -- a start has exactly one reply, and two of these
  * have no reply at all when they work.
  */
@@ -222,7 +244,7 @@ export type StreamOutcome =
  * that was the reason, exactly as the server sent it.
  */
 export type InstructionOutcome =
-  | { readonly ok: true; readonly answer: SessionAnswer }
+  | { readonly ok: true; readonly answer: ServerAnswer }
   | {
       readonly ok: false;
       readonly code: RefusalCode;
@@ -325,7 +347,7 @@ export interface Servers {
    */
   ask(
     registrationId: ServerRegistrationId,
-    instruction: SessionInstruction,
+    instruction: ServerInstruction,
   ): Promise<InstructionOutcome>;
   /**
    * Puts a terminal frame to one paired server, and calls back with what it
@@ -432,7 +454,7 @@ export function createServers(dependencies: ServersDependencies): Servers {
 
     ask(
       registrationId: ServerRegistrationId,
-      instruction: SessionInstruction,
+      instruction: ServerInstruction,
     ): Promise<InstructionOutcome> {
       const connection = connections.get(registrationId);
       if (connection === undefined) {

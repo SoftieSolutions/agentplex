@@ -69,8 +69,13 @@ describe('the node tree', () => {
   it('reads the kinds the migration seeded, as data rather than as an enum', async () => {
     const kinds = await listNodeKinds(db());
 
+    // Four now, and the two that were added cost an INSERT apiece: migration
+    // 0006 seeded `project` and `doc` without touching a table, which is the
+    // property `node_kinds` exists for.
     expect(kinds).toEqual([
+      { kind: 'doc', container: false, anchorsSession: false },
       { kind: 'folder', container: true, anchorsSession: false },
+      { kind: 'project', container: true, anchorsSession: false },
       { kind: 'session', container: false, anchorsSession: true },
     ]);
   });
@@ -90,7 +95,7 @@ describe('the node tree', () => {
 
   /** A rule SQL cannot state: a CHECK cannot consult another table's row. */
   it('refuses to put a node inside a kind that holds no children', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one', cwd: null }]);
     const session = await findNodeForSession(db(), ref('s1'));
     if (session === null) throw new Error('the node discovery just created is missing');
 
@@ -109,8 +114,8 @@ describe('the node tree', () => {
   it('places a moved node among its new siblings at the position asked for', async () => {
     const folder = await createFolder(db(), ids, clock, { parentId: null, name: 'folder' });
     await discoverNodes(db(), ids, clock, [
-      { ref: ref('s1'), title: 'one' },
-      { ref: ref('s2'), title: 'two' },
+      { ref: ref('s1'), title: 'one', cwd: null },
+      { ref: ref('s2'), title: 'two', cwd: null },
     ]);
     for (const sessionId of ['s1', 's2']) {
       const node = await findNodeForSession(db(), ref(sessionId));
@@ -139,9 +144,9 @@ describe('the node tree', () => {
 
   it('closes the gap a departure left, so positions stay dense', async () => {
     await discoverNodes(db(), ids, clock, [
-      { ref: ref('s1'), title: 'one' },
-      { ref: ref('s2'), title: 'two' },
-      { ref: ref('s3'), title: 'three' },
+      { ref: ref('s1'), title: 'one', cwd: null },
+      { ref: ref('s2'), title: 'two', cwd: null },
+      { ref: ref('s3'), title: 'three', cwd: null },
     ]);
     const folder = await createFolder(db(), ids, clock, { parentId: null, name: 'folder' });
     const middle = await findNodeForSession(db(), ref('s2'));
@@ -182,7 +187,7 @@ describe('the node tree', () => {
   it('remembers a session nested two folders deep when the outer one is removed', async () => {
     const outer = await createFolder(db(), ids, clock, { parentId: null, name: 'outer' });
     const inner = await createFolder(db(), ids, clock, { parentId: outer.id, name: 'inner' });
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one', cwd: null }]);
     const session = await findNodeForSession(db(), ref('s1'));
     if (session === null) throw new Error('the node discovery just created is missing');
     await moveNode(db(), session.id, { parentId: inner.id });
@@ -193,7 +198,7 @@ describe('the node tree', () => {
   });
 
   it('refuses a second node for the same session', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one', cwd: null }]);
 
     await expect(
       db().query(
@@ -217,7 +222,7 @@ describe('the node tree', () => {
   });
 
   it('stamps a removal with the injected clock, in epoch milliseconds', async () => {
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one', cwd: null }]);
     const node = await findNodeForSession(db(), ref('s1'));
     if (node === null) throw new Error('the node discovery just created is missing');
 
@@ -228,7 +233,7 @@ describe('the node tree', () => {
 
   it('publishes the tree parents-first, with only what a client needs', async () => {
     const folder = await createFolder(db(), ids, clock, { parentId: null, name: 'folder' });
-    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one' }]);
+    await discoverNodes(db(), ids, clock, [{ ref: ref('s1'), title: 'one', cwd: null }]);
     const session = await findNodeForSession(db(), ref('s1'));
     if (session === null) throw new Error('the node discovery just created is missing');
     await moveNode(db(), session.id, { parentId: folder.id });

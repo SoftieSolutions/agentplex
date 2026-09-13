@@ -25,6 +25,8 @@ import {
 } from '../../../apps/hub/src/features/discovery/fake-discovery.js';
 import { createFakeWebAssets } from '../../../apps/hub/src/features/web/fake-web.js';
 import { serveServerEnd } from './server-end.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import type { SessionOutcome, StoreReport } from '../../../apps/server/src/session-control.js';
 import {
@@ -149,12 +151,23 @@ function labelFor(text: string): string {
   if (frame.type === 'pane-layout') {
     return frame.layout === null ? 'paneLayoutEmpty' : 'paneLayout';
   }
+  if (frame.type === 'directory-listing') {
+    // Labelled by which of the two shapes it is. The roots listing carries the
+    // absolute paths of the roots as entry names and the other carries single
+    // segments, and the web's joining rule has to be tested against both.
+    return frame.directory === null ? 'directoryRoots' : 'directoryListing';
+  }
   const labels = new Map<string, string>([
     ['welcome', 'welcome'],
     ['pong', 'pong'],
     ['layout', 'layout'],
     ['pane-layout-saved', 'paneLayoutSaved'],
     ['session-started', 'sessionStarted'],
+    ['project-created', 'projectCreated'],
+    ['node-renamed', 'nodeRenamed'],
+    ['doc-created', 'docCreated'],
+    ['doc-saved', 'docSaved'],
+    ['doc-content', 'docContent'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -176,6 +189,19 @@ interface Machine {
   readonly providers: readonly ProviderReadiness[];
   /** What this machine's controller answers a start with. Default: a refusal. */
   readonly startOutcome?: SessionOutcome;
+  /**
+   * What a client may browse on this machine, and what is under it.
+   *
+   * Absent is a machine with no browse roots, which is the default a server
+   * ships with; the one machine that has them is the one the directory-listing
+   * fixture is captured from.
+   */
+  readonly browse?: {
+    readonly roots: readonly string[];
+    readonly directories: Readonly<
+      Record<string, readonly { name: string; kind: 'directory' | 'file' | 'other' }[]>
+    >;
+  };
 }
 
 const START = 1_756_000_000_000;
@@ -214,6 +240,10 @@ function fleetDialer(
         identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
         stores: machine.stores,
         providers: machine.providers,
+        browse: createDirectoryBrowser({
+          roots: [...(machine.browse?.roots ?? [])],
+          reader: createFakeDirectoryReader({ directories: machine.browse?.directories ?? {} }),
+        }),
         logger,
       });
       live.set(host, serverEnd);
@@ -319,10 +349,17 @@ async function startFleetHub(
     );
   }
   let nextTicket = 0;
+  // Counted rather than constant, because the hub's id source is also where a
+  // node in the tree gets its primary key: with discovery wired to the report
+  // seam (AGX-90), a fleet that reports two sessions mints two node ids, and a
+  // source that answered both with one string would have the second insert
+  // collide and take the whole reading down with it. The hub's own identity
+  // takes the first; every one after it is a node.
+  let minted = 0;
   const hub = await startHub({
     database,
     logger,
-    ids: { newId: () => 'hub-1' },
+    ids: { newId: () => `hub-${(minted += 1)}` },
     clock,
     clientToken: CLIENT_TOKEN,
     tokens: { newToken: () => `fleet-ticket-${(nextTicket += 1)}` },
@@ -427,6 +464,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       provider: 'claude',
       prompt: null,
       server: null,
+      project: null,
     });
     await first.framesReceived(7);
     first.sendText('definitely not a frame');
@@ -704,6 +742,20 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
               holding: [hold('session-fix-auth', false)],
             },
           ],
+          // The one machine in these captures with somewhere to browse, so the
+          // directory frames are captured from a real server answering out of
+          // real configuration rather than written by hand.
+          browse: {
+            roots: ['/Users/robert/code'],
+            directories: {
+              '/Users/robert/code': [
+                { name: '.config', kind: 'directory' },
+                { name: 'agentplex', kind: 'directory' },
+                { name: 'notes.md', kind: 'file' },
+                { name: 'scratch', kind: 'other' },
+              ],
+            },
+          },
           // Answers a start the way a real spawn does: ok, with no session id,
           // because the provider has not written one yet. The web form's
           // follow-up rules are tested against exactly this reply.
@@ -747,6 +799,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       provider: 'claude',
       prompt: 'fix the auth refresh loop',
       server: null,
+      project: null,
     });
     await until(
       () => starter.received.some((text) => labelFor(text) === 'sessionStarted'),
@@ -754,6 +807,132 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     const sessionStarted = starter.received.find((text) => labelFor(text) === 'sessionStarted');
     if (sessionStarted === undefined) throw new Error('the start was not answered');
+
+    // A browse of the same machine, both shapes. The roots listing is how a
+    // picker starts -- the client does not know what a machine will allow --
+    // and the directory listing under it is what every step after that looks
+    // like. Both travel the whole real path: the hub relays, the server answers
+    // out of the roots it was configured with, and the frames captured here are
+    // what a client actually reads.
+    starter.send({
+      type: 'directory-list',
+      id: 3,
+      server: 'registration-mbp-robert',
+      directory: null,
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'directoryRoots'),
+      'the roots browse to be answered',
+    );
+    starter.send({
+      type: 'directory-list',
+      id: 4,
+      server: 'registration-mbp-robert',
+      directory: '/Users/robert/code',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'directoryListing'),
+      'the directory browse to be answered',
+    );
+    const directoryRoots = starter.received.find((text) => labelFor(text) === 'directoryRoots');
+    const directoryListing = starter.received.find((text) => labelFor(text) === 'directoryListing');
+    if (directoryRoots === undefined || directoryListing === undefined) {
+      throw new Error('a browse was not answered');
+    }
+
+    // A project made out of the directory that was just browsed to, and then
+    // renamed. Both replies travel the whole real path -- the hub writes two
+    // rows in one transaction and answers -- so what the web's forms are tested
+    // against is what a hub actually says rather than what their author
+    // imagined. The node id in the reply is the one thing a client cannot work
+    // out for itself, which is why the frame carries it.
+    starter.send({
+      type: 'project-create',
+      id: 5,
+      name: 'agentplex',
+      directory: '/Users/robert/code/agentplex',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'projectCreated'),
+      'the project create to be answered',
+    );
+    const projectCreated = starter.received.find((text) => labelFor(text) === 'projectCreated');
+    if (projectCreated === undefined) throw new Error('the project create was not answered');
+    const created = parseTextFrame(parseHubFrame, projectCreated);
+    if (!created.ok || created.value.type !== 'project-created') {
+      throw new Error('the project create was answered with something else');
+    }
+
+    starter.send({
+      type: 'project-rename',
+      id: 6,
+      nodeId: created.value.nodeId,
+      name: 'agentplex (main checkout)',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'nodeRenamed'),
+      'the project rename to be answered',
+    );
+    const nodeRenamed = starter.received.find((text) => labelFor(text) === 'nodeRenamed');
+    if (nodeRenamed === undefined) throw new Error('the project rename was not answered');
+
+    // A document in that project, written, saved and read back. The whole real
+    // path again: the hub turns the node id into the project's directory out of
+    // its own rows, the server writes the file under its own data root, and the
+    // three replies captured here are what a client actually reads. The write
+    // times are the machine's -- the fake project disk counts its writes, so
+    // this fixture says "the second write on that machine" rather than a
+    // millisecond somebody typed.
+    starter.send({
+      type: 'doc-create',
+      id: 8,
+      projectId: created.value.nodeId,
+      server: 'registration-mbp-robert',
+      name: 'plan.md',
+      content: '# Plan\n\n- read the failing test\n- fix the refresh loop\n',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'docCreated'),
+      'the document create to be answered',
+    );
+    const docCreated = starter.received.find((text) => labelFor(text) === 'docCreated');
+    if (docCreated === undefined) throw new Error('the document create was not answered');
+    const madeDoc = parseTextFrame(parseHubFrame, docCreated);
+    if (!madeDoc.ok || madeDoc.value.type !== 'doc-created') {
+      throw new Error('the document create was answered with something else');
+    }
+
+    starter.send({
+      type: 'doc-save',
+      id: 9,
+      nodeId: madeDoc.value.nodeId,
+      content: '# Plan\n\n- read the failing test\n- fix the refresh loop\n- write it up\n',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'docSaved'),
+      'the document save to be answered',
+    );
+    const docSaved = starter.received.find((text) => labelFor(text) === 'docSaved');
+    if (docSaved === undefined) throw new Error('the document save was not answered');
+
+    starter.send({ type: 'doc-open', id: 10, nodeId: madeDoc.value.nodeId });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'docContent'),
+      'the document open to be answered',
+    );
+    const docContent = starter.received.find((text) => labelFor(text) === 'docContent');
+    if (docContent === undefined) throw new Error('the document open was not answered');
+
+    // The tree with that project in it, so the web's project picker has a
+    // captured layout to read rather than one somebody typed.
+    starter.send({ type: 'layout-request', id: 11 });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'layout'),
+      'the layout to be answered',
+    );
+    const layoutWithProject = starter.received.find((text) => labelFor(text) === 'layout');
+    if (layoutWithProject === undefined) throw new Error('the layout was not answered');
+
     await singleHub.cleanup();
 
     // A shared volume: two machines with the same store mounted. This is the
@@ -917,6 +1096,14 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStateStale', machineStateStale);
     captured.set('machineStateSingle', machineStateSingle);
     captured.set('sessionStarted', sessionStarted);
+    captured.set('directoryRoots', directoryRoots);
+    captured.set('directoryListing', directoryListing);
+    captured.set('projectCreated', projectCreated);
+    captured.set('nodeRenamed', nodeRenamed);
+    captured.set('docCreated', docCreated);
+    captured.set('docSaved', docSaved);
+    captured.set('docContent', docContent);
+    captured.set('layoutWithProject', layoutWithProject);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
     captured.set('machineStateDiscovered', machineStateDiscovered);

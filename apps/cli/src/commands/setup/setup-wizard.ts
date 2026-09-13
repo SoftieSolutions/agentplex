@@ -7,7 +7,12 @@ import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
 import { SETTINGS_FILE_NAME } from '../../installation/layout.js';
-import { LOCAL_SERVER_SETTINGS, upsertSettings } from './settings-file.js';
+import {
+  BROWSE_ROOTS_SETTING,
+  LOCAL_SERVER_SETTINGS,
+  pathListValue,
+  upsertSettings,
+} from './settings-file.js';
 import { describeProviderLogin, offerProviderLogin } from './provider-login.js';
 import type { SetupMachine } from './setup-machine.js';
 import {
@@ -69,6 +74,8 @@ const IDENTITY_FILE_NAME = 'server.json';
 const PLAN_FILE_NAME = 'setup-plan.json';
 /** The spelling of "no stores", so an empty answer is expressible in a prompt. */
 const NO_STORES = 'none';
+/** The same spelling for browse roots, which are empty far more often. */
+const NO_BROWSE_ROOTS = 'none';
 /** The spelling of "do not pair this machine", for an operator who will do it themselves. */
 const NO_SETTINGS_FILE = 'none';
 
@@ -319,6 +326,9 @@ async function askForPlan(
   const storePaths = await askStores(stores, terminal);
   if (storePaths.kind === 'ended') return storePaths;
 
+  const browseRoots = await askBrowseRoots(terminal);
+  if (browseRoots.kind === 'ended') return browseRoots;
+
   const chosen = await askProviders(surveyed, terminal);
   if (chosen.kind === 'ended') return chosen;
 
@@ -327,6 +337,7 @@ async function askForPlan(
   const server = {
     port: port.value,
     storePaths: [...storePaths.value],
+    browseRoots: [...browseRoots.value],
     binPath: [...adoptedDirectories(chosen.value, machine)],
     identityPath: join(prefix, IDENTITY_FILE_NAME),
     installPrefix: prefix,
@@ -429,6 +440,45 @@ async function askStores(
   if (relative.length > 0) {
     terminal.write(`A store path has to be absolute: ${relative.join(', ')}`);
     return askStores(discovered, terminal);
+  }
+
+  return { kind: 'answered', value: paths.map((path) => resolve(path)) };
+}
+
+/**
+ * The directories a client may browse under, offered as nothing.
+ *
+ * The offer is `none` and is deliberately not the machine's home directory or
+ * the store paths above. What a root grants is a listing of this machine's
+ * files to anybody who can reach a hub it is paired with, and an offer somebody
+ * accepts by pressing enter is a decision the wizard took rather than the
+ * operator. The prompt says what it is for, and an empty answer is the setting
+ * the server ships with.
+ *
+ * Absolute, refused rather than resolved, and re-asked, for the reason the
+ * store paths are: a relative path in an artifact names a different directory
+ * on every boot.
+ */
+async function askBrowseRoots(terminal: SetupTerminal): Promise<Asked<readonly string[]>> {
+  terminal.write(
+    'Which directories may somebody browse when they pick a project on this machine? ' +
+      'Absolute paths, separated by commas. Anything under one of these can be listed by ' +
+      'a client of any hub this server is paired with, and nothing else can.',
+  );
+  const answered = await askText(terminal, 'Browse roots', NO_BROWSE_ROOTS);
+  if (answered.kind === 'ended') return answered;
+
+  if (answered.value === NO_BROWSE_ROOTS) return { kind: 'answered', value: [] };
+
+  const paths = answered.value
+    .split(',')
+    .map((path) => path.trim())
+    .filter((path) => path.length > 0);
+
+  const relative = paths.filter((path) => !isAbsolute(path));
+  if (relative.length > 0) {
+    terminal.write(`A browse root has to be absolute: ${relative.join(', ')}`);
+    return askBrowseRoots(terminal);
   }
 
   return { kind: 'answered', value: paths.map((path) => resolve(path)) };
@@ -593,6 +643,9 @@ function describePlan(plan: SetupPlan): readonly string[] {
   lines.push(
     `server port: ${server.port}`,
     `stores: ${server.storePaths.length === 0 ? NO_STORES : server.storePaths.join(', ')}`,
+    `browse roots: ${
+      server.browseRoots.length === 0 ? NO_BROWSE_ROOTS : server.browseRoots.join(', ')
+    }`,
     `resolve programs in: ${setupBinPath(plan).join(', ')}`,
     `install into: ${server.installPrefix}`,
     `identity: ${server.identityPath}`,
@@ -717,6 +770,7 @@ async function recordLocalServer(
     return { kind: 'answered', value: { lines: [], recorded: false } };
   }
 
+  const browseRoots = pathListValue(server.browseRoots);
   const identity = server.identity;
   if (identity.problem !== null) {
     return {
@@ -762,6 +816,12 @@ async function recordLocalServer(
     upsertSettings(existing.kind === 'read' ? existing.contents : null, [
       { key: LOCAL_SERVER_SETTINGS.identityFile.env, value: identity.path },
       { key: LOCAL_SERVER_SETTINGS.port.env, value: String(server.port) },
+      // The server's half of the same file. Written only when the operator
+      // named a root: an empty list is what the server already does, and a
+      // `AGENTPLEX_BROWSE_ROOTS=` line saying so would replace the installer's
+      // commented-out line with one that means the same thing and reads as a
+      // decision somebody took.
+      ...(browseRoots === null ? [] : [{ key: BROWSE_ROOTS_SETTING.env, value: browseRoots }]),
     ]),
   );
   if (!written.ok) {

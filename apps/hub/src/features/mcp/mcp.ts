@@ -5,6 +5,10 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { sendJson, type Logger, type Timers } from '@agentplex/node-shared';
 import { PROTOCOL_VERSION, type HubId } from '@agentplex/protocol';
 import { NOT_AUTHORIZED } from '../client-auth/client-auth.js';
+import { docCreateTool, type DocCreates } from './doc-create.js';
+import { docListTool, type DocIndex } from './doc-list.js';
+import { docReadTool, type DocReads } from './doc-read.js';
+import { docUpdateTool, type DocSaves } from './doc-update.js';
 import type { FleetReads } from './fleet-view.js';
 import { hubInfoTool } from './hub-info.js';
 import { listServersTool } from './list-servers.js';
@@ -141,6 +145,19 @@ export interface McpDependencies {
    * the holder, and resolves a stop's owner hub-side.
    */
   readonly sessions: SessionStarts & SessionStops;
+  /**
+   * Documents: the docs feature's four functions, and nothing else.
+   *
+   * The whole of that feature's surface, which is the one place this endpoint
+   * takes everything a feature has rather than a narrowing of it -- and it is
+   * still the same argument. `docs.ts` exists to be the one write path a
+   * document takes, with the client connection and these tools as its two
+   * callers; a tool that reached a server itself would be a second answer to
+   * what a document write means. So the four functions are what MCP gets, and
+   * what it is denied is everything below them: no connection, no instruction,
+   * no row, and nowhere to put a path.
+   */
+  readonly docs: DocIndex & DocReads & DocCreates & DocSaves;
   /** The deadline a terminal read gives up after. */
   readonly timers: Timers;
   readonly logger: Logger;
@@ -175,6 +192,7 @@ export function createMcp({
   state,
   terminal,
   sessions,
+  docs,
   timers,
   logger,
 }: McpDependencies): Mcp {
@@ -183,10 +201,19 @@ export function createMcp({
    * server, because the list is a fact about the build and the server is a fact
    * about the request.
    *
-   * Five that read and three that act, and the split is in the annotations
-   * rather than in this list: each of the three below says `readOnlyHint:
-   * false`, and the stop says `destructiveHint: true`, which is what a client
-   * reads before deciding whether to ask a person first.
+   * Seven that read and five that act, and the split is in the annotations
+   * rather than in this list: each of the five says `readOnlyHint: false`, and
+   * the stop alone says `destructiveHint: true`, which is what a client reads
+   * before deciding whether to ask a person first.
+   *
+   * ## The document tools call a feature, like every other tool here
+   *
+   * `doc_list`, `doc_read`, `doc_create` and `doc_update` are the docs
+   * feature's four functions with schemas and sentences on them. They reach no
+   * server and hold no row: the index, the refusals and the one write path are
+   * that feature's, and these four are the same callers the client connection
+   * is. Which is why they can gain no capability the UI lacks -- the UI's own
+   * frames land on the same four functions.
    *
    * ## There is no `answer_permission`, and that is a finding rather than an
    * omission
@@ -215,6 +242,10 @@ export function createMcp({
     startSessionTool({ sessions }),
     sendInputTool({ terminal, logger }),
     stopSessionTool({ sessions }),
+    docListTool({ docs }),
+    docReadTool({ docs }),
+    docCreateTool({ docs }),
+    docUpdateTool({ docs }),
   ];
 
   /**

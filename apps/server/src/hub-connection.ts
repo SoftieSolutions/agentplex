@@ -23,8 +23,10 @@ import {
   type Logger,
 } from '@agentplex/node-shared';
 import type { GrantAuthority, GrantId, ServerIdentity } from '@agentplex/providers';
+import type { DirectoryBrowser } from './directory-browse.js';
 import type { HubAudience, HubMember } from './hub-audience.js';
 import type { MachineLoadReader } from './machine-load.js';
+import type { ProjectDocs } from './project-docs.js';
 import type { SessionController } from './session-control.js';
 import type { TerminalManager } from './terminal-manager.js';
 import {
@@ -170,6 +172,17 @@ export interface HubConnectionDependencies {
    */
   readonly terminals: TerminalManager;
   /**
+   * What a hub may look at on this machine's disk, and the rule that decides.
+   *
+   * A seam like the session controller beside it, and for the same two reasons:
+   * a test cannot supply a filesystem, and the answer is a fact about this
+   * machine rather than about this connection. It is built once per server over
+   * the roots that server's operator configured, so every hub browsing gets the
+   * same list and no connection can widen it -- which is the half of the
+   * amended directory rule that has teeth. See `directory-browse.ts`.
+   */
+  readonly browse: DirectoryBrowser;
+  /**
    * How this machine reads its own cpus, for the answer to a ping.
    *
    * The server's reader rather than one per connection, because the counters
@@ -177,6 +190,20 @@ export interface HubConnectionDependencies {
    * cpus, and each is told the window its own answer covers.
    */
   readonly machineLoad: MachineLoadReader;
+  /**
+   * The project document store, for the three frames that read and write it.
+   *
+   * The server's rather than the connection's, because the folders are the
+   * machine's: two hubs writing a project's notes are writing one folder,
+   * and a store per connection would suggest otherwise in the one place a
+   * reader looks to find out. Sharing it serialises nothing -- the store
+   * holds no state and takes no lock. What makes two writes landing at once
+   * leave one document whole rather than a mixture of both is the rename in
+   * `node-project-files.ts`, and that would hold with a store per socket
+   * too. Nothing on this seam starts a process; see `project-docs.ts` for
+   * why a document write is not an operation.
+   */
+  readonly docs: ProjectDocs;
   readonly logger: Logger;
 }
 
@@ -254,7 +281,9 @@ export function serveHubConnection(
     providers,
     sessions,
     terminals,
+    browse,
     machineLoad,
+    docs,
     logger,
   }: HubConnectionDependencies,
 ): HubConnection {
@@ -437,6 +466,9 @@ export function serveHubConnection(
           sessionId: frame.sessionId,
           provider: frame.provider,
           prompt: frame.prompt,
+          // Passed through untouched. Whether this machine will open it is the
+          // controller's question, asked of the same guard a browse passes.
+          directory: frame.directory,
         });
         return;
       }
@@ -447,6 +479,18 @@ export function serveHubConnection(
           return;
         }
         void runStop(frame.id, { storeId: frame.storeId, sessionId: frame.sessionId });
+        return;
+      }
+
+      case 'directory-list': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        // Not awaited, for the reason a start is not: a listing resolves paths
+        // and reads a directory, and awaiting it inside `onMessage` would stall
+        // every later frame on this socket behind one disk.
+        void runDirectoryList(frame.id, frame.directory);
         return;
       }
 
@@ -536,6 +580,41 @@ export function serveHubConnection(
           return;
         }
         answerStream(frame.id, streams.resize(frame.target, frame.size));
+        return;
+      }
+
+      case 'doc-write': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        // Not awaited, like a start: a write makes a folder and replaces a
+        // file, and awaiting it here would stall every later frame on this
+        // socket behind one disk. The three fields go to the store and
+        // nowhere else -- there is no process for them to reach.
+        void runDocWrite(frame.id, {
+          directory: frame.directory,
+          name: frame.name,
+          content: frame.content,
+        });
+        return;
+      }
+
+      case 'doc-read': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        void runDocRead(frame.id, { directory: frame.directory, name: frame.name });
+        return;
+      }
+
+      case 'doc-list': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        void runDocList(frame.id, { directory: frame.directory });
         return;
       }
 
@@ -703,6 +782,7 @@ export function serveHubConnection(
       readonly sessionId: SessionId | null;
       readonly provider: Provider;
       readonly prompt: string | null;
+      readonly directory: string | null;
     },
   ): Promise<void> {
     let outcome;
@@ -782,11 +862,147 @@ export function serveHubConnection(
     });
   }
 
+  /**
+   * Lists a directory and answers the hub that asked.
+   *
+   * The rule is not here. What is here is that this connection is the only
+   * thing that can decide whether the socket is still worth answering, and that
+   * a throw becomes a refusal rather than an unhandled rejection: the browser
+   * returns its refusals as values, so anything that reaches the catch is this
+   * server breaking on its own side.
+   */
+  async function runDirectoryList(replyTo: FrameId, directory: string | null): Promise<void> {
+    let outcome;
+    try {
+      outcome = await browse.list(directory);
+    } catch (error) {
+      logger.error('could not list a directory', { problem: String(error) });
+      if (state !== 'established') return;
+      send({
+        type: 'directory-refused',
+        replyTo,
+        code: 'internal',
+        message: 'this server could not list that directory',
+      });
+      return;
+    }
+
+    if (state !== 'established') return;
+
+    if (!outcome.ok) {
+      // Logged here, where the machine is, as well as sent. The sentence is
+      // safe to send -- it names the path the peer asked for and never what it
+      // resolved to -- and the operator reading this log is the one who can
+      // change the roots it is about.
+      logger.info('directory browse refused', { directory, problem: outcome.problem });
+      send({ type: 'directory-refused', replyTo, code: outcome.code, message: outcome.problem });
+      return;
+    }
+
+    send({
+      type: 'directory-listing',
+      replyTo,
+      directory: outcome.directory,
+      roots: [...outcome.roots],
+      entries: [...outcome.entries],
+      truncated: outcome.truncated,
+    });
+  }
+
   function answerFailure(replyTo: FrameId, message: string): void {
     if (state !== 'established') return;
     // `internal` rather than `refused`: this server broke on its own side, and
     // retrying may work. A refusal would say it understood and declined.
     send({ type: 'session-refused', replyTo, code: 'internal', message, hold: null });
+  }
+
+  /**
+   * The three document frames, each answered on its own socket and to nobody
+   * else.
+   *
+   * Unlike a start or a stop, a document changes what no other hub is
+   * watching -- there is no report to send around, because a document is not
+   * a running thing and the store has no subscribers -- so the answer is the
+   * whole of what happens. A refusal is `session-refused` with `hold: null`:
+   * that frame's contract is "this server said no, and to which frame", and
+   * the terminal frames already answer through it with no session in hand.
+   *
+   * Each catches what the store throws and answers `internal`, for the reason
+   * `runStart` does: a promise that rejected inside a socket handler is an
+   * unhandled rejection and a hub left waiting for an answer that never
+   * comes.
+   */
+  async function runDocWrite(
+    replyTo: FrameId,
+    request: Parameters<ProjectDocs['write']>[0],
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = await docs.write(request);
+    } catch (error) {
+      logger.error('could not write a document', { name: request.name, problem: String(error) });
+      answerFailure(replyTo, 'this server could not write that document');
+      return;
+    }
+    if (state !== 'established') return;
+    if (!outcome.ok) {
+      answerDocRefusal(replyTo, outcome);
+      return;
+    }
+    send({ type: 'doc-written', replyTo, updatedAt: outcome.updatedAt });
+  }
+
+  async function runDocRead(
+    replyTo: FrameId,
+    request: Parameters<ProjectDocs['read']>[0],
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = await docs.read(request);
+    } catch (error) {
+      logger.error('could not read a document', { name: request.name, problem: String(error) });
+      answerFailure(replyTo, 'this server could not read that document');
+      return;
+    }
+    if (state !== 'established') return;
+    if (!outcome.ok) {
+      answerDocRefusal(replyTo, outcome);
+      return;
+    }
+    send({ type: 'doc-content', replyTo, content: outcome.content, updatedAt: outcome.updatedAt });
+  }
+
+  async function runDocList(
+    replyTo: FrameId,
+    request: Parameters<ProjectDocs['list']>[0],
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = await docs.list(request);
+    } catch (error) {
+      logger.error('could not list a project', { problem: String(error) });
+      answerFailure(replyTo, 'this server could not list that project');
+      return;
+    }
+    if (state !== 'established') return;
+    if (!outcome.ok) {
+      answerDocRefusal(replyTo, outcome);
+      return;
+    }
+    send({ type: 'doc-listing', replyTo, entries: [...outcome.entries] });
+  }
+
+  function answerDocRefusal(
+    replyTo: FrameId,
+    refusal: { readonly code: 'refused' | 'internal'; readonly problem: string },
+  ): void {
+    send({
+      type: 'session-refused',
+      replyTo,
+      code: refusal.code,
+      message: refusal.problem,
+      hold: null,
+    });
   }
 
   /**
@@ -801,8 +1017,9 @@ export function serveHubConnection(
    *
    * Reports are sent when a hub connects and after anything this server does
    * that could change what is running. A store that changes because somebody
-   * worked in it outside agentplex is the store watcher's to notice, and it
-   * reports through this same path when it lands.
+   * worked in it outside agentplex is the store watcher's to notice, and
+   * `store-watch.ts` reports it through this same path rather than a second
+   * one.
    */
   async function reportStore(storeId: StoreId): Promise<void> {
     // The start tags this connection owes go with it, and they are taken by

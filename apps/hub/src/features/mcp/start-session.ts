@@ -25,12 +25,14 @@ import { acts, answers, defineMcpTool, type McpTool } from './tool-registry.js';
  * ## Where a session runs
  *
  * In the store, on the machine, and neither of those is a directory this tool
- * names. AGX-133 adds a `project` to `session-start` -- a node the hub already
- * holds, whose directory the server checks against the store it is under -- and
- * this tool gains that node id on the branch that adds the field to the frame.
- * It is not on this branch: the project lives on the catalogue stack, and a
- * directory argument invented here in the meantime would be the thing the frame
- * shape exists to make unrepresentable.
+ * names. AGX-133's `project` is on the frame now -- a node the hub already
+ * holds, whose directory the hub reads out of its own rows and the server
+ * checks against the roots its operator configured -- and this tool passes
+ * `null`: it starts in the store's own directory, which is the start that has
+ * always existed. Giving an agent a project to start in is its own ticket and
+ * its own question, because a project is a row a person made by browsing, and
+ * the thing that must never appear here either way is a directory argument --
+ * the frame shape exists to make that unrepresentable.
  *
  * ## What it does not take either
  *
@@ -111,6 +113,9 @@ export function startSessionTool({ sessions }: { readonly sessions: SessionStart
         // was not given is `null` on the frame.
         prompt: prompt ?? null,
         server: chosen,
+        // The store's own directory, resolved by the server that spawns. See
+        // the header: naming a project is not something this tool offers.
+        project: null,
       });
 
       if (!outcome.ok) return refusedSession(outcome);

@@ -151,6 +151,61 @@ describe('loadServerConfig store paths', () => {
   });
 });
 
+describe('loadServerConfig browse roots', () => {
+  function browseRoots(argv: string[], env: Record<string, string | undefined> = {}): unknown {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok ? result.config.browseRoots : undefined;
+  }
+
+  it('grants nothing by default, so a machine nobody configured browses nothing', () => {
+    // The direction that does not over-claim. What a root grants is a listing
+    // of this machine's files to anybody who can reach a paired hub.
+    expect(browseRoots([])).toEqual([]);
+  });
+
+  it('reads a browse root from a flag', () => {
+    expect(browseRoots(['--browse-root=/home/dev/code'])).toEqual(['/home/dev/code']);
+  });
+
+  it('takes one root per repeated flag, in the order they were given', () => {
+    expect(browseRoots(['--browse-root=/home/dev/code', '--browse-root', '/srv/work'])).toEqual([
+      '/home/dev/code',
+      '/srv/work',
+    ]);
+  });
+
+  it('splits the environment variable on the path delimiter, as the installer writes it', () => {
+    // The same spelling `settings-file.ts` joins on, which is the one place
+    // setup and this parser have to agree without being able to import each
+    // other.
+    const value = ['/home/dev/code', '/srv/work'].join(delimiter);
+    expect(browseRoots([], { AGENTPLEX_BROWSE_ROOTS: value })).toEqual([
+      '/home/dev/code',
+      '/srv/work',
+    ]);
+  });
+
+  it('refuses a relative root, which would mean a different directory per boot', () => {
+    const problems = expectProblems(load(['--browse-root=code']));
+    expect(problems[0]).toContain('absolute');
+  });
+
+  it('normalizes so the same directory named twice is one root, not two', () => {
+    expect(browseRoots(['--browse-root=/srv/work/', '--browse-root=/srv/agents/../work'])).toEqual([
+      '/srv/work',
+    ]);
+  });
+
+  it('is a separate list from the stores, which often name the same directory', () => {
+    // Different permissions: a store is a provider's volume this server
+    // watches, and a browse root is where somebody may look for a checkout.
+    const result = load(['--store-path=/volumes/claude', '--browse-root=/home/dev/code']);
+    expect(result.ok && result.config.storePaths).toEqual(['/volumes/claude']);
+    expect(result.ok && result.config.browseRoots).toEqual(['/home/dev/code']);
+  });
+});
+
 describe('loadServerConfig bin path', () => {
   function binPath(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);

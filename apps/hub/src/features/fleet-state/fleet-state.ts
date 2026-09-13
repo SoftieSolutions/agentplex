@@ -211,6 +211,28 @@ export interface FleetState {
   /** The whole state. The same object until something changes. */
   snapshot(): HubStateSnapshot;
   /**
+   * What the hub believes one store holds, merged across every server attached
+   * to it, or `null` when it knows of no such store.
+   *
+   * Here rather than assembled by whoever needs it, because it is the answer
+   * this feature exists to be the only one of. The catalogue is the caller: a
+   * store report arrives from one server, and the tree has to follow what the
+   * hub believes is in the store rather than what the one server that spoke
+   * last could see. Reading it off `snapshot().stores` at each call site would
+   * be a second merge of the same reports, and two merges are two answers
+   * waiting to differ.
+   *
+   * `null` means no server has this store mounted. An empty list means the
+   * servers that do have reported nothing in it -- which covers a store that
+   * was read and found empty *and* one mounted a moment ago and not yet
+   * scanned, and this cannot tell those apart. Its caller must not need it to:
+   * the catalogue asks only for a store a report has just arrived for, and
+   * that is what makes the list it gets back a reading rather than a silence.
+   * A caller that asked for an arbitrary store and swept against the answer
+   * would be spending the sweep's whole safeguard.
+   */
+  storeSessions(storeId: StoreId): readonly SessionDescriptor[] | null;
+  /**
    * The same state, projected onto the shape the wire carries.
    *
    * A method here rather than a function the broadcast imports, because the
@@ -392,6 +414,12 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
     },
 
     snapshot,
+
+    storeSessions(storeId: StoreId): readonly SessionDescriptor[] | null {
+      const view = snapshot().stores.find((candidate) => candidate.storeId === storeId);
+      if (view === undefined) return null;
+      return view.sessions.map((row) => row.descriptor);
+    },
 
     published(): MachineState {
       return toMachineState(snapshot());

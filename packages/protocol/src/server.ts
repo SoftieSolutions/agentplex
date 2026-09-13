@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  directoryListFrameSchema,
+  directoryListingFrameSchema,
+  directorySchema,
+} from './directory.js';
+import { docContentSchema, docDirectorySchema, docEntrySchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import {
   hubIdSchema,
@@ -53,13 +59,21 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
    * visible, because a hub with a view that is a second out of date must not be
    * able to talk a server into a second agent on one transcript.
    *
-   * Every field is a name, and none of them is an argument. `storeId` is a
-   * store this server said it had mounted, and the server turns it into a
-   * directory out of its own configuration -- a `{ cwd }` field here would be a
-   * remote code execution primitive wearing a path. `provider` selects a
-   * registered adapter and the adapter builds the argv. There is no operation
-   * name, no argv element and no environment variable on this frame, and the
-   * registry is what makes that possible rather than merely current policy.
+   * Every field but one is a name, and none of them is an argument. `storeId`
+   * is a store this server said it had mounted, and the server turns it into a
+   * directory out of its own configuration. `provider` selects a registered
+   * adapter and the adapter builds the argv. There is no operation name, no
+   * argv element and no environment variable on this frame, and the registry is
+   * what makes that possible rather than merely current policy.
+   *
+   * The one exception is `directory`, and it is the amended rule rather than a
+   * hole in the old one. `directory.ts` carries the argument; what makes this
+   * field not the `{ cwd }` the rule forbade is that it is parsed by
+   * `directorySchema`, that this server refuses it unless its real path sits
+   * under a root its own operator configured -- a list nothing on this wire can
+   * add to, empty by default -- and that the only spawn field it may ever reach
+   * is `cwd`, on a spawn the operation registry still builds with `shell:
+   * false` and an argv this process wrote.
    */
   z.object({
     type: z.literal('session-start'),
@@ -88,6 +102,20 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
     provider: providerSchema,
     /** User content, placed by the adapter as one argv element. Never an option. */
     prompt: z.string().min(1).nullable(),
+    /**
+     * Where to spawn, when the hub is starting this session in a project, and
+     * `null` for the start that has always existed -- the store's own path, as
+     * this server resolved it at boot.
+     *
+     * Only a spawn may carry one. A resume's directory is whatever the provider
+     * itself recorded in the transcript, and nobody gets to choose it: a
+     * session resumed elsewhere is a different session that happens to share a
+     * history. This server refuses the pair rather than quietly preferring one.
+     *
+     * `null` rather than an absent property, so that every start has one shape
+     * and no reader has to remember which kind carries a directory.
+     */
+    directory: directorySchema.nullable(),
   }),
   /**
    * Kill the process running this session.
@@ -121,6 +149,59 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
   serverTerminalFrames.unsubscribe,
   serverTerminalFrames.input,
   serverTerminalFrames.resize,
+  /**
+   * List a directory on this machine, for a user browsing for a project.
+   *
+   * The one instruction on this direction that carries a path, and the only
+   * one that ever will without amending the rule again: `directory.ts` holds
+   * the amendment and the argument for it. What arrives here is a claim like
+   * any other -- the server checks it against the browse roots its own
+   * operator configured, which is a list nothing on this wire can add to, and
+   * refuses anything else.
+   *
+   * Which server is not on it. The hub chose this connection before the frame
+   * was written, and a field naming the machine would be the hub telling a
+   * server which server it is.
+   */
+  directoryListFrameSchema,
+  /**
+   * A project's documents: replace one whole, read one back, list them.
+   *
+   * `directory` is the working tree the project is keyed by, and it is a key
+   * and not a cwd. The server derives a folder name from it by the one-way
+   * function `project-files.ts` describes and joins `name` -- one path segment
+   * from a closed list of extensions, see `doc.ts` -- onto that folder under
+   * its own data root. Nothing on these frames is handed to a process: a
+   * document write is a file the server writes on its own account, not a
+   * spawn, and it goes through no operation registry because there is no
+   * operation. The rule that no frame carries a cwd is about what reaches a
+   * child, and the test beside the server's handler holds that nothing here
+   * does.
+   *
+   * A write replaces the whole document. There is no patch form, so there is
+   * no way for the hub to hold a version the server never saw whole, and a
+   * write that lands is the document. The folder is made on the first write
+   * and never on a read: reading a project nobody has written to is an empty
+   * listing or a refusal, not a directory.
+   */
+  z.object({
+    type: z.literal('doc-write'),
+    id: frameIdSchema,
+    directory: docDirectorySchema,
+    name: docNameSchema,
+    content: docContentSchema,
+  }),
+  z.object({
+    type: z.literal('doc-read'),
+    id: frameIdSchema,
+    directory: docDirectorySchema,
+    name: docNameSchema,
+  }),
+  z.object({
+    type: z.literal('doc-list'),
+    id: frameIdSchema,
+    directory: docDirectorySchema,
+  }),
   protocolErrorFrameSchema,
 ]);
 export type HubToServerFrame = z.infer<typeof hubToServerFrameSchema>;
@@ -313,6 +394,69 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
   serverTerminalFrames.subscribed,
   serverTerminalFrames.unsubscribed,
   serverTerminalFrames.output,
+  /** What is in that directory. The same shape the hub answers a client with. */
+  directoryListingFrameSchema,
+  /**
+   * The server will not list that directory, and why.
+   *
+   * Its own frame rather than a second use of `session-refused`, and the
+   * difference is `hold`. A session refusal carries the live process when
+   * there is one, because "it is running over here" is an answer that leads
+   * somewhere; a directory has no process to name, so the field would be
+   * present, always null, and every reader would have to learn which refusals
+   * it means anything on. A frame that carries only what it can say is one
+   * fewer thing to check.
+   *
+   * The codes are the shared set. `refused` is the rule speaking -- no roots
+   * are configured, that path is not under one, that path is not a directory
+   * -- and retrying changes nothing. `internal` is this machine failing on its
+   * own side, a directory inside a root that it could not read, where a fixed
+   * permission makes the same request work.
+   */
+  z.object({
+    type: z.literal('directory-refused'),
+    replyTo: frameIdSchema,
+    code: refusalCodeSchema,
+    message: z.string(),
+  }),
+  /**
+   * The answers to the document frames.
+   *
+   * `updatedAt` on each is the write time the server's filesystem recorded,
+   * in milliseconds since the epoch on that machine's clock. It is carried
+   * rather than stamped by the hub, unlike a store report, because it is a
+   * fact about a file rather than about when a message arrived: a client
+   * showing "edited three minutes ago" is showing this number, and the hub's
+   * receipt time would be the wrong answer by however long the doc had been
+   * sitting there before anybody asked.
+   *
+   * A refusal on any of the three is `session-refused` with `hold: null`.
+   * That frame's contract is "the server said no, and to which frame", and
+   * the terminal frames already answer through it with no session in hand;
+   * its name predates this direction carrying anything but session
+   * instructions, and renaming it is a change to every peer for a word.
+   */
+  z.object({
+    type: z.literal('doc-written'),
+    replyTo: frameIdSchema,
+    updatedAt: z.int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal('doc-content'),
+    replyTo: frameIdSchema,
+    content: docContentSchema,
+    updatedAt: z.int().nonnegative(),
+  }),
+  /**
+   * Every document in the project's folder, whole. A file in the folder whose
+   * name the name parser would refuse is not a document and is not listed;
+   * one that could not be read costs itself and not the listing.
+   */
+  z.object({
+    type: z.literal('doc-listing'),
+    replyTo: frameIdSchema,
+    entries: z.array(docEntrySchema),
+  }),
   protocolErrorFrameSchema,
 ]);
 export type ServerToHubFrame = z.infer<typeof serverToHubFrameSchema>;

@@ -15,6 +15,10 @@ import {
   type MachineState,
   type ProviderReadiness,
   type ServerRegistrationId,
+  nodeIdSchema,
+  type Layout,
+  type LayoutNode,
+  type NodeId,
   type ServerToHubFrame,
   type SessionRow,
   type StartId,
@@ -30,6 +34,8 @@ import {
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
 import { serveServerEnd } from './server-end.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
@@ -39,7 +45,7 @@ import {
   createFakeProviderFiles,
   createFakeStoreFiles,
 } from '@agentplex/providers/testing';
-import { createProviderRegistry } from '@agentplex/providers';
+import { createProviderRegistry, type ProviderFiles } from '@agentplex/providers';
 import { createSessionController } from '../../../apps/server/src/session-control.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
 import {
@@ -63,6 +69,12 @@ import {
   createFleetState,
   type FleetState,
 } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
+import {
+  createCatalogue,
+  type Catalogue,
+} from '../../../apps/hub/src/features/catalogue/catalogue.js';
+import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
+import { createProjects, type Projects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 import { createTerminal } from '../../../apps/hub/src/features/terminal/terminal.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
@@ -92,38 +104,100 @@ const clock = { now: () => START };
 
 const WORK = storeIdSchema.parse('store-work');
 
+/**
+ * What every machine in this fleet will let a client browse.
+ *
+ * Named here because the wire-shape assertion at the bottom of the file is
+ * about it: the rule that lets a directory cross is that it is under a root the
+ * server operator configured, so the test that says no instruction carries a
+ * cwd now also says that every directory one does carry is under one of these.
+ */
+const BROWSE_ROOTS = ['/volumes/work'] as const;
+
+/**
+ * A checkout under the root, which is what a project is.
+ *
+ * Under `/volumes/work` and not equal to it, so that the two sessions already
+ * in the store -- which ran at the volume's own path -- stay at the root when
+ * this project is made. A project that swallowed them would make the placement
+ * assertion below true for the wrong reason.
+ */
+const PROJECT_DIRECTORY = '/volumes/work/agentplex';
+
+/**
+ * A directory that exists on these machines and is under no browse root.
+ *
+ * It exists deliberately. A path that was simply missing would be refused by
+ * the first check in the rule, and the refusal this file is about is the second
+ * one: the operator did not list this, so nothing spawns in it.
+ */
+const UNLISTED_DIRECTORY = '/elsewhere/secret';
+
 /** A store both machines have mounted: one volume, two servers attached. */
 function storeOn(path: string): StoreDescriptor {
   return { storeId: WORK, path };
 }
 
 /**
- * The transcripts both machines can see.
+ * The transcripts both machines can see when a hub first dials.
  *
  * `session-quiet` is waiting on a person, which is when stopping is safe.
- * `session-busy` is mid-turn. `session-fresh` stands in for the transcript a
- * provider writes as it starts: it is dated at the moment a spawn opens its
- * terminal, which is what lets the scan afterwards join the two.
+ * `session-busy` is mid-turn. Both ran at the volume's own path, which is what
+ * a session that belongs to no project looks like.
+ *
+ * Nothing here stands in for a session that has just been spawned. That one is
+ * written by `providerWrites` at the moment a test spawns, because when it
+ * appears is the whole of what the placement depends on: a transcript that was
+ * already on disk when the hub first read the store is a session the tree
+ * placed before anybody made a project, and it stays where it was put.
+ *
+ * It is also what the start-handle suite below needs, and from the other end:
+ * a spawn whose provider has not written a session id yet is a terminal the
+ * hub can only address by the name it minted itself. One absence serves both.
  */
-function transcripts(namesTheSpawn = true): Record<string, string> {
-  const at = (signal: string, updatedAt: number): string =>
-    JSON.stringify({ signal, updatedAt, cwd: '/volumes/work' });
+function transcripts(): Record<string, string> {
+  const at = (signal: string, updatedAt: number, cwd = '/volumes/work'): string =>
+    JSON.stringify({ signal, updatedAt, cwd });
 
   return {
     '/volumes/work/claude/sessions/session-quiet.json': at('awaiting-input', START - 5_000),
     '/volumes/work/claude/sessions/session-busy.json': at('progressing', START - 5_000),
-    // Left out when a test wants the gap this ticket is about: a live terminal
-    // with no session id, because the provider has not written one yet.
-    ...(namesTheSpawn
-      ? { '/volumes/work/claude/sessions/session-fresh.json': at('awaiting-input', START) }
-      : {}),
   };
+}
+
+/**
+ * The provider writing its transcript as a spawned session comes up.
+ *
+ * Dated at the moment a terminal opened, which is what lets the scan afterwards
+ * join the two: a session whose provider first wrote to it at or after a
+ * terminal started, that no live terminal already holds, is that terminal's.
+ *
+ * It is the disk both machines read, because both have the volume mounted.
+ */
+function providerWrites(sessionId: string, cwd: string): void {
+  for (const one of held().machines.values()) {
+    one.transcripts[`/volumes/work/claude/sessions/${sessionId}.json`] = JSON.stringify({
+      signal: 'awaiting-input',
+      updatedAt: START,
+      cwd,
+    });
+  }
 }
 
 interface Machine {
   readonly label: string;
   readonly terminals: TerminalManager;
   readonly ptys: FakePtyFactory;
+  /**
+   * The provider's files on this machine's volume, written to mid-run.
+   *
+   * On the machine and not on the connection, because that is what a disk is: a
+   * hub that reconnects finds the transcripts it left, not a fresh volume. It
+   * is read at each dial rather than captured once, because the interesting
+   * moment is a provider writing its session id while the hub is not connected
+   * -- which is exactly the gap a start handle has to survive.
+   */
+  readonly transcripts: Record<string, string>;
   /**
    * What this machine's startup preflight found, as its handshake reports it.
    *
@@ -132,14 +206,6 @@ interface Machine {
    * apart on the same volume.
    */
   providers: readonly ProviderReadiness[];
-  /**
-   * The transcripts this machine's store holds, as the adapter reads them.
-   *
-   * Mutable, and read at each dial rather than captured once, because the
-   * interesting moment is a provider writing its session id while the hub is
-   * not connected -- which is exactly the gap a start handle has to survive.
-   */
-  readonly sessionFiles: Record<string, string>;
   /**
    * The server end of the connection it is holding now, for a test that needs
    * the socket to go away without the machine going with it.
@@ -155,6 +221,8 @@ interface Harness {
   readonly sessions: Sessions;
   readonly clients: Clients;
   readonly connections: Servers;
+  readonly catalogue: Catalogue;
+  readonly projects: Projects;
   readonly machines: ReadonlyMap<string, Machine>;
   readonly timers: FakeTimers;
 }
@@ -192,17 +260,45 @@ function buildMachine(
     label,
     terminals,
     ptys,
+    transcripts: sessionFiles,
     providers,
-    sessionFiles,
     live: undefined,
     sentToHub: [],
     sentToServer: [],
   };
 }
 
+/**
+ * What these machines will let a hub look at, and spawn in.
+ *
+ * One browser per connection here rather than one per machine, because a
+ * connection is what a test re-opens; the roots are the same list either way,
+ * and the rule this file exercises is about the list rather than about who
+ * holds it.
+ */
+function directoryBrowser(): ReturnType<typeof createDirectoryBrowser> {
+  return createDirectoryBrowser({
+    roots: [...BROWSE_ROOTS],
+    reader: createFakeDirectoryReader({
+      directories: {
+        '/volumes/work': [{ name: 'agentplex', kind: 'directory' }],
+        [PROJECT_DIRECTORY]: [],
+        [UNLISTED_DIRECTORY]: [],
+      },
+    }),
+  });
+}
+
 /** One connection to that machine: a fresh socket, and the store as it reads it. */
 function serveMachine(machine: Machine): DialResult {
-  const files = createFakeProviderFiles({ files: machine.sessionFiles });
+  // Re-read on every call rather than snapshotted, which is what makes this a
+  // disk rather than a fixture: a scan after a spawn sees the transcript the
+  // provider has since written.
+  const files: ProviderFiles = {
+    readFile: (path) => createFakeProviderFiles({ files: machine.transcripts }).readFile(path),
+    listDirectory: (path) =>
+      createFakeProviderFiles({ files: machine.transcripts }).listDirectory(path),
+  };
   const adapter = createFakeProviderAdapter({ provider: 'claude', files });
   const stores = [storeOn('/volumes/work')];
   const { hubEnd, serverEnd } = createSocketPair();
@@ -213,6 +309,9 @@ function serveMachine(machine: Machine): DialResult {
       serverId: serverIdSchema.parse(`server-${machine.label}`),
       token: `tok-${machine.label}`,
     },
+    // The roots this fleet browses under, so that a directory on any frame in
+    // this file has something real to be checked against.
+    browse: directoryBrowser(),
     stores,
     providers: machine.providers,
     // The same terminals the controller starts into: a subscription resolves
@@ -224,6 +323,9 @@ function serveMachine(machine: Machine): DialResult {
       providers: createProviderRegistry([adapter]),
       terminals: machine.terminals,
       workingTree: createFakeWorkingTree(),
+      // The same rule the browse above passes, so a spawn in a project is
+      // bounded by the list this machine's operator wrote and by nothing else.
+      browse: directoryBrowser(),
       clock,
       logger,
     }),
@@ -255,7 +357,6 @@ function serveMachine(machine: Machine): DialResult {
  */
 async function start(
   preflightOf: (label: string) => readonly ProviderReadiness[] = () => [readyProvider('claude')],
-  options: { readonly namesTheSpawn?: boolean } = {},
 ): Promise<Harness> {
   suite += 1;
   migrated = await openMigratedSchema(`session-start-${suite}`);
@@ -263,10 +364,7 @@ async function start(
 
   const machines = new Map<string, Machine>();
   for (const label of ['attic', 'workshop']) {
-    machines.set(
-      label,
-      buildMachine(label, preflightOf(label), transcripts(options.namesTheSpawn)),
-    );
+    machines.set(label, buildMachine(label, preflightOf(label), transcripts()));
     await registerServer(
       database,
       { newId: () => registrationOf(label) },
@@ -290,6 +388,13 @@ async function start(
   const timers = createFakeTimers();
   const state = createFleetState({ logger });
 
+  // Counted rather than constant: one source mints the hub's node ids, and a
+  // fleet that reports three sessions and then has a project made in it mints
+  // four keys. A source that answered twice with one string would have the
+  // second insert collide and take a whole reading down with it.
+  let minted = 0;
+  const ids = { newId: () => `node-${String((minted += 1))}` };
+
   // Built before it dials, which is the same order `hub.ts` composes in: the
   // broadcast below has to be attached to the state before the first
   // connectivity change can reach it.
@@ -309,7 +414,7 @@ async function start(
     backoff: createExponentialBackoff({ baseMs: 500, maxMs: 8_000, random: () => 0 }),
     onChange: (report) => state.applyConnection(report),
     onReport: (report) => {
-      state.applySessions({
+      const accepted = state.applySessions({
         registrationId: report.registrationId,
         storeId: report.storeId,
         sessions: report.sessions,
@@ -317,6 +422,11 @@ async function start(
         reportedAt: clock.now(),
       });
       terminal.noteStarts(report.registrationId, report.storeId, report.starts);
+      // The same wiring `hub.ts` does, because the tree following a report is
+      // the half of the placement this file is about. Read through the closure
+      // rather than captured: the catalogue is built below, and nothing
+      // reports until `sync` at the end of this function.
+      if (accepted) void catalogue.observe(report.storeId);
     },
     onStream: (registrationId, output) => terminal.deliver(registrationId, output),
   });
@@ -328,13 +438,31 @@ async function start(
   // same code path a hub actually runs.
   const terminal = createTerminal({ state, servers: connections, logger });
 
-  // Counting rather than random, so a test can name the start the hub minted
-  // without matching a pattern -- the reason `IdGenerator` is a seam at all.
-  let minted = 0;
+  // The real feature over the real migrated schema, because the rows are the
+  // subject here: a project is made by a client frame in one of the suites
+  // below, and the directory a start carries is read back out of that row.
+  const projects = createProjects({ database, ids, clock, state, connections, logger });
+
+  // The tree, so that "the session appeared under the project" is something
+  // this file can read rather than something it has to take on trust.
+  const catalogue = createCatalogue({
+    database,
+    ids,
+    clock,
+    logger,
+    readStore: (storeId) => state.storeSessions(storeId),
+    projects,
+  });
+
+  // Its own counter, beside the node ids above rather than sharing one: a
+  // start is not a node, and a test that reads `start-2` off a frame should
+  // not have that number moved by a project somebody made first.
+  let started = 0;
   const sessions = createSessions({
     state,
+    projects,
     connections,
-    ids: { newId: () => `start-${(minted += 1)}` },
+    ids: { newId: () => `start-${(started += 1)}` },
     logger,
   });
 
@@ -343,16 +471,20 @@ async function start(
     state,
     timers,
     logger,
-    readLayout: async () => [],
+    readLayout: () => catalogue.readLayout(),
     readPaneLayout: async () => null,
     writePaneLayout: async () => undefined,
     sessions,
     terminal,
+    projects,
+    // Not the subject: a start is what this file is about, and the fake is what
+    // a suite stands on when a seam is not its subject.
+    docs: createFakeDocs(),
   });
 
   await connections.sync();
 
-  return { state, sessions, clients, connections, machines, timers };
+  return { state, sessions, clients, connections, catalogue, projects, machines, timers };
 }
 
 async function until(predicate: () => boolean, what: string): Promise<void> {
@@ -442,6 +574,37 @@ function launches(machine: Machine): readonly (readonly string[])[] {
   return machine.ptys.opened.map((request) => request.args);
 }
 
+/** Every instruction the hub put to that machine, as the server would read it. */
+function instructionsTo(label: string): readonly { type: string }[] {
+  return machine(label).sentToServer.map((text) => parsed(parseHubToServerFrame, text));
+}
+
+/** The tree as a client would be answered it, right now. */
+async function layoutNow(): Promise<Layout> {
+  return held().catalogue.readLayout();
+}
+
+/** One session's node in that tree, or `undefined` when nothing points at it. */
+async function nodeFor(sessionId: string): Promise<LayoutNode | undefined> {
+  return (await layoutNow()).find((node) => node.anchor?.sessionId === sessionId);
+}
+
+/**
+ * Waits for a session's node to be filed under one parent.
+ *
+ * Polled rather than awaited on a promise, because the tree write is
+ * deliberately behind the reply: the hub answers a report with the fleet state
+ * and the broadcast, and follows the tree after. A test that awaited the start
+ * and then read once would be racing the design.
+ */
+async function untilFiledUnder(sessionId: string, parentId: NodeId): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if ((await nodeFor(sessionId))?.parentId === parentId) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`timed out waiting for ${sessionId} to be filed under ${String(parentId)}`);
+}
+
 function machine(label: string): Machine {
   const found = held().machines.get(label);
   if (found === undefined) throw new Error(`no machine ${label}`);
@@ -459,7 +622,7 @@ describe('a client-initiated session start', () => {
       'both servers to be connected',
     );
     await until(
-      () => (held().state.snapshot().stores[0]?.sessions.length ?? 0) === 3,
+      () => (held().state.snapshot().stores[0]?.sessions.length ?? 0) === 2,
       'both servers to have reported the store',
     );
   });
@@ -483,6 +646,7 @@ describe('a client-initiated session start', () => {
       provider: 'claude',
       prompt: null,
       server: null,
+      project: null,
     });
 
     const answer = client.reply(2);
@@ -505,6 +669,10 @@ describe('a client-initiated session start', () => {
 
   it('starts a new session where the hub sent it, and finds the id the provider wrote', async () => {
     const client = await attach();
+    // The provider writes its transcript as it comes up, which is the only way
+    // a spawn ever acquires a session id: naming one up front would mean
+    // `--session-id`, the flag that splits a history in two.
+    providerWrites('session-fresh', '/volumes/work');
 
     await client.say({
       type: 'session-start',
@@ -514,6 +682,7 @@ describe('a client-initiated session start', () => {
       provider: 'claude',
       prompt: 'look at the failing test',
       server: registrationOf('workshop'),
+      project: null,
     });
 
     const answer = client.reply(2);
@@ -542,6 +711,7 @@ describe('a client-initiated session start', () => {
       provider: 'claude',
       prompt: null,
       server: registrationOf('attic'),
+      project: null,
     });
 
     expect(client.reply(2)).toMatchObject({
@@ -563,6 +733,7 @@ describe('a client-initiated session start', () => {
       provider: 'claude',
       prompt: null,
       server: registrationOf('attic'),
+      project: null,
     });
     expect(client.reply(2).type).toBe('session-started');
 
@@ -577,6 +748,7 @@ describe('a client-initiated session start', () => {
       provider: 'claude',
       prompt: null,
       server: registrationOf('workshop'),
+      project: null,
     });
 
     const refused = client.reply(3);
@@ -601,6 +773,7 @@ describe('a client-initiated session start', () => {
       provider: 'claude',
       prompt: null,
       server: registrationOf('attic'),
+      project: null,
     });
     expect(client.reply(2).type).toBe('session-started');
 
@@ -646,6 +819,7 @@ describe('a client-initiated session start', () => {
       provider: 'claude',
       prompt: null,
       server: registrationOf('workshop'),
+      project: null,
     });
     expect(client.reply(2).type).toBe('session-started');
 
@@ -682,6 +856,154 @@ describe('a client-initiated session start', () => {
       provider: 'claude',
       prompt: null,
       server: null,
+      project: null,
+    });
+
+    expect(client.reply(2)).toMatchObject({ type: 'refusal', code: 'refused', holder: null });
+    expect(launches(machine('attic'))).toEqual([]);
+    expect(launches(machine('workshop'))).toEqual([]);
+  });
+
+  /**
+   * The whole of AGX-133, in one conversation.
+   *
+   * A client makes a project, starts a session in it, and the session turns up
+   * in the tree underneath it. Every hop is the shipped code: the hub writes
+   * two rows and answers a node id, resolves that id to a directory, sends it
+   * on the instruction; the real server refuses it unless a root its operator
+   * configured is above it, and spawns there; the scan that follows reports the
+   * `cwd` the session ran in, and the tree files it under the project keyed by
+   * exactly that string.
+   */
+  it('starts a session in a project, and the tree files it under the project', async () => {
+    const client = await attach();
+
+    await client.say({
+      type: 'project-create',
+      id: 2,
+      name: 'agentplex',
+      directory: PROJECT_DIRECTORY,
+    });
+    const made = client.reply(2);
+    expect(made.type).toBe('project-created');
+    if (made.type !== 'project-created') return;
+
+    providerWrites('session-fresh', PROJECT_DIRECTORY);
+    await client.say({
+      type: 'session-start',
+      id: 3,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+      project: made.nodeId,
+    });
+
+    const answer = client.reply(3);
+    expect(answer.type).toBe('session-started');
+
+    // The instruction carried the directory, and only the directory: the client
+    // named a node, and the hub is the only party that turned one into a path.
+    const instruction = instructionsTo('workshop').find((frame) => frame.type === 'session-start');
+    expect(instruction).toMatchObject({ directory: PROJECT_DIRECTORY });
+
+    // And the spawn ran there. The pty request is the far end of the field:
+    // `cwd`, and nothing else on the plan came off a frame.
+    expect(machine('workshop').ptys.opened[0]).toMatchObject({ cwd: PROJECT_DIRECTORY, args: [] });
+    expect(launches(machine('attic'))).toEqual([]);
+
+    // The session the provider wrote as it came up reports that directory, and
+    // the next reading of the store puts its node inside the project.
+    await untilFiledUnder('session-fresh', made.nodeId);
+
+    // The sessions that were already in the store ran at the volume's own path
+    // and stay where they were put. Discovery writes placement once, at
+    // creation, and these were created before anybody made a project.
+    expect((await nodeFor('session-quiet'))?.parentId).toBeNull();
+  });
+
+  it('refuses a start in a project no machine will open, naming the directory', async () => {
+    const client = await attach();
+
+    await client.say({
+      type: 'project-create',
+      id: 2,
+      name: 'somewhere else',
+      directory: UNLISTED_DIRECTORY,
+    });
+    const made = client.reply(2);
+    // The hub took it. It names no server, holds nobody's root list, and a copy
+    // of one here would be a second answer to a question only a machine can
+    // answer -- so the refusal belongs at start time and not at create time.
+    expect(made.type).toBe('project-created');
+    if (made.type !== 'project-created') return;
+
+    await client.say({
+      type: 'session-start',
+      id: 3,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+      project: made.nodeId,
+    });
+
+    const refused = client.reply(3);
+    expect(refused).toMatchObject({ type: 'refusal', code: 'refused' });
+    if (refused.type !== 'refusal') return;
+    // The machine's own sentence, naming the path the person picked. The hub
+    // does not rewrite it: the words that know which box this was and which
+    // setting an operator would change are the only ones worth sending.
+    expect(refused.message).toContain(UNLISTED_DIRECTORY);
+    expect(launches(machine('workshop'))).toEqual([]);
+  });
+
+  it('refuses a resume in a project rather than choosing one of two directories', async () => {
+    const client = await attach();
+
+    await client.say({
+      type: 'project-create',
+      id: 2,
+      name: 'agentplex',
+      directory: PROJECT_DIRECTORY,
+    });
+    const made = client.reply(2);
+    if (made.type !== 'project-created') throw new Error('the project was not made');
+
+    await client.say({
+      type: 'session-start',
+      id: 3,
+      storeId: WORK,
+      sessionId: sessionIdSchema.parse('session-quiet'),
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+      project: made.nodeId,
+    });
+
+    expect(client.reply(3)).toMatchObject({ type: 'refusal', code: 'refused' });
+    expect(launches(machine('workshop'))).toEqual([]);
+    // Nothing was even asked: a resume's directory is its transcript's, so
+    // there was no version of this the machine could have been sent.
+    expect(instructionsTo('workshop').filter((frame) => frame.type === 'session-start')).toEqual(
+      [],
+    );
+  });
+
+  it('refuses a start naming a project this hub does not have', async () => {
+    const client = await attach();
+
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: nodeIdSchema.parse('node-nowhere'),
     });
 
     expect(client.reply(2)).toMatchObject({ type: 'refusal', code: 'refused', holder: null });
@@ -693,17 +1015,41 @@ describe('a client-initiated session start', () => {
     const client = await attach();
 
     await client.say({
-      type: 'session-start',
+      type: 'project-create',
       id: 2,
+      name: 'agentplex',
+      directory: PROJECT_DIRECTORY,
+    });
+    const made = client.reply(2);
+    if (made.type !== 'project-created') throw new Error('the project was not made');
+
+    // A start in a project, so that the directory assertion at the bottom
+    // stands over an instruction that actually carries one rather than over an
+    // absence.
+    await client.say({
+      type: 'session-start',
+      id: 5,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('attic'),
+      project: made.nodeId,
+    });
+
+    await client.say({
+      type: 'session-start',
+      id: 3,
       storeId: WORK,
       sessionId: sessionIdSchema.parse('session-quiet'),
       provider: 'claude',
       prompt: 'look at the failing test',
       server: registrationOf('workshop'),
+      project: null,
     });
     await client.say({
       type: 'session-stop',
-      id: 3,
+      id: 4,
       storeId: WORK,
       sessionId: sessionIdSchema.parse('session-quiet'),
     });
@@ -742,11 +1088,24 @@ describe('a client-initiated session start', () => {
 
     // `cwd` is the one word with two meanings, so it is checked by direction
     // rather than by name. A session descriptor carries it as a label the user
-    // reads; no instruction may carry it at all, because a directory off the
-    // wire is a remote code execution primitive wearing a path.
+    // reads; no instruction may carry it at all, because a `{ cwd }` field on an
+    // instruction is a remote code execution primitive wearing a path.
     for (const frame of [...clientToHub, ...hubToServer]) {
       expect(keysOf(frame), `${frame.type} carried a cwd`).not.toContain('cwd');
     }
+
+    // And the half of the amended rule that is not an absence. A directory may
+    // cross, as a `directory` field and only as one, and every such field on an
+    // instruction the hub puts to a server is either null or under a root that
+    // server's operator configured. The project start above is what makes this
+    // stand over a value rather than over an absence.
+    expect(
+      hubToServer.some(
+        (frame) =>
+          frame.type === 'session-start' && 'directory' in frame && frame.directory !== null,
+      ),
+    ).toBe(true);
+    expectDirectoriesWithin(hubToServer, BROWSE_ROOTS);
   });
 });
 
@@ -791,6 +1150,7 @@ describe('a session start against a machine with no such provider installed', ()
       provider: 'claude',
       prompt: 'look at the failing test',
       server: null,
+      project: null,
     });
 
     const answer = client.reply(2);
@@ -860,7 +1220,7 @@ describe('a spawn the hub lost the socket to', () => {
    * are. What is asserted here is the report, which is what the relay reads.
    */
   beforeEach(async () => {
-    harness = await start(() => [readyProvider('claude')], { namesTheSpawn: false });
+    harness = await start();
     await until(
       () =>
         held()
@@ -892,6 +1252,7 @@ describe('a spawn the hub lost the socket to', () => {
       provider: 'claude',
       prompt: 'look at the failing test',
       server: registrationOf('workshop'),
+      project: null,
     });
     expect(client.reply(2).type).toBe('session-started');
 
@@ -921,6 +1282,7 @@ describe('a spawn the hub lost the socket to', () => {
       provider: 'claude',
       prompt: null,
       server: registrationOf('workshop'),
+      project: null,
     });
     expect(client.reply(2).type).toBe('session-started');
 
@@ -928,7 +1290,7 @@ describe('a spawn the hub lost the socket to', () => {
     const startId = startIdOf(workshop);
     // The provider writes its transcript while the hub is away, so the scan on
     // the next connection is the first one that can join the two.
-    workshop.sessionFiles['/volumes/work/claude/sessions/session-fresh.json'] = JSON.stringify({
+    workshop.transcripts['/volumes/work/claude/sessions/session-fresh.json'] = JSON.stringify({
       signal: 'awaiting-input',
       updatedAt: START,
       cwd: '/volumes/work',
@@ -957,6 +1319,7 @@ describe('a spawn the hub lost the socket to', () => {
       provider: 'claude',
       prompt: null,
       server: registrationOf('workshop'),
+      project: null,
     });
     expect(client.reply(2).type).toBe('session-started');
 
@@ -999,6 +1362,47 @@ function startIdOf(target: Machine): StartId {
     .find((frame) => frame.type === 'session-start');
   if (instruction?.startId === undefined) throw new Error('that machine was told to start nothing');
   return startIdSchema.parse(instruction.startId);
+}
+
+/**
+ * Every `directory` field on an instruction is null or under one of these
+ * roots.
+ *
+ * The rule as the wire can see it. The server enforces it for real, against
+ * roots its own operator configured and with a `realpath` behind the check;
+ * this is the shape assertion that stands whether or not any particular suite
+ * remembered to browse -- so a frame that grows a directory field, anywhere,
+ * has to be under a root before this file goes green.
+ *
+ * A path-prefix test and not a resolved one, deliberately: a test that resolved
+ * paths would be a second implementation of the containment rule, and the one
+ * this file exists to hold is "the field is bounded", not "the bound is
+ * correct". `directory-browse.test.ts` holds the second.
+ */
+function expectDirectoriesWithin(
+  frames: readonly { type: string }[],
+  roots: readonly string[],
+): void {
+  for (const frame of frames) {
+    for (const directory of directoriesIn(frame)) {
+      if (directory === null) continue;
+      const within = roots.some((root) => directory === root || directory.startsWith(`${root}/`));
+      expect(
+        within,
+        `${frame.type} carried ${String(directory)}, which is under no browse root`,
+      ).toBe(true);
+    }
+  }
+}
+
+/** Every value under a `directory` key anywhere in a frame, however nested. */
+function directoriesIn(value: unknown): readonly (string | null)[] {
+  if (Array.isArray(value)) return value.flatMap(directoriesIn);
+  if (value === null || typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([key, nested]) => [
+    ...(key === 'directory' && (typeof nested === 'string' || nested === null) ? [nested] : []),
+    ...directoriesIn(nested),
+  ]);
 }
 
 function parsed<T>(parser: (raw: unknown) => { ok: boolean }, text: string): T & { type: string } {

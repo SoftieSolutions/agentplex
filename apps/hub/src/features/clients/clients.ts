@@ -6,6 +6,8 @@ import {
   type MessageSocket,
   type Timers,
 } from '@agentplex/node-shared';
+import type { Docs } from '../docs/docs.js';
+import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
 import type { FleetState } from '../fleet-state/fleet-state.js';
 import type { Terminal } from '../terminal/terminal.js';
@@ -78,6 +80,23 @@ export interface ClientsDependencies {
    */
   readonly terminal: Terminal;
   /**
+   * Browsing a server's directories, handed to every client this serves.
+   *
+   * One instance for the whole broadcast, for the reason the sessions seam is
+   * one: which machines are reachable is a fact about the fleet, and a
+   * per-socket copy of that would be a second answer waiting to differ.
+   */
+  readonly projects: Projects;
+  /**
+   * Documents, handed to every client this serves.
+   *
+   * One instance for the whole broadcast, for the reason the two seams above
+   * are one each: which machines are reachable is a fact about the fleet, and
+   * the index is one set of rows. A per-socket copy of either would be a
+   * second answer waiting to differ.
+   */
+  readonly docs: Docs;
+  /**
    * The deadline seam the flush is scheduled on.
    *
    * Injected rather than `setTimeout` because coalescing is exactly the
@@ -121,8 +140,18 @@ export interface Clients {
 const DEFAULT_COALESCE_MS = 0;
 
 export function createClients(dependencies: ClientsDependencies): Clients {
-  const { hubId, state, timers, readLayout, readPaneLayout, writePaneLayout, sessions, terminal } =
-    dependencies;
+  const {
+    hubId,
+    state,
+    timers,
+    readLayout,
+    readPaneLayout,
+    writePaneLayout,
+    sessions,
+    terminal,
+    projects,
+    docs,
+  } = dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
 
@@ -193,6 +222,8 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         writePaneLayout,
         sessions,
         terminal,
+        projects,
+        docs,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);
         },

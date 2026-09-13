@@ -20,6 +20,10 @@ import {
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
 import { serveServerEnd } from './server-end.js';
+import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake-projects.js';
+import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
@@ -166,6 +170,11 @@ async function start(): Promise<Harness> {
           ]),
           terminals,
           workingTree: createFakeWorkingTree(),
+          // No roots, which is the default a server ships with and the one a
+          // start that names no project never reaches: `browse.allow` decides
+          // only whether a directory on an instruction may be opened, and every
+          // start in this file carries `directory: null`.
+          browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
           clock,
           logger,
         }),
@@ -221,11 +230,19 @@ async function start(): Promise<Harness> {
     writePaneLayout: async () => undefined,
     sessions: createSessions({
       state,
+      // A start in this file names no project, so the fake answers nothing and
+      // is never asked. It is here because the seam is required, not because
+      // the suite has a project in it.
+      projects: createFakeProjects(),
       connections,
       ids: { newId: () => `start-${String((minted += 1))}` },
       logger,
     }),
     terminal,
+    projects: createFakeProjects(),
+    // Not the subject: terminals are, and the fakes are what a suite stands on
+    // where a seam is not what it is asserting about.
+    docs: createFakeDocs(),
   });
 
   await connections.sync();
@@ -274,6 +291,7 @@ async function startTheSession(): Promise<FakeMessageSocket> {
     provider: 'claude',
     prompt: null,
     server: ATTIC,
+    project: null,
   });
 
   const answered = socket.sent

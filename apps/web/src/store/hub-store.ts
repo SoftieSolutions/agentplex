@@ -3,10 +3,12 @@ import {
   parseTextFrame,
   PROTOCOL_VERSION,
   type ClientFrame,
+  type DirectoryEntry,
   type FrameId,
   type HubId,
   type Layout,
   type MachineState,
+  type NodeId,
   type RefusalCode,
   type ServerRegistrationId,
   type SessionHolder,
@@ -107,6 +109,82 @@ export interface StartedView {
   readonly server: ServerRegistrationId;
 }
 
+/**
+ * The hub's answer to a browse, kept so the picker that asked can render it.
+ *
+ * `replyTo` is what joins it to the request, because a picker may have more
+ * than one browse in flight -- a user who clicks twice while a slow disk is
+ * answering -- and a snapshot field with no id on it would show the first
+ * answer under the second directory.
+ *
+ * `directory` is `null` for the listing of roots, and the entries are then the
+ * roots themselves carrying their own absolute paths. Everywhere else an entry
+ * is one segment and is joined onto the directory. The store keeps both exactly
+ * as the hub sent them; the joining rule lives in `projects/directory-picker-model.ts`,
+ * where a test can reach it.
+ */
+export interface DirectoryListingView {
+  readonly replyTo: FrameId;
+  readonly directory: string | null;
+  readonly roots: readonly string[];
+  readonly entries: readonly DirectoryEntry[];
+  readonly truncated: boolean;
+}
+
+/**
+ * The hub's answer to a project create, kept so the form that asked can act.
+ *
+ * The node id is what makes it worth keeping. A project is named by its id from
+ * then on -- a start names one -- and a form that had to find its own project
+ * back out of the next tree by name would be matching on the one field the user
+ * is free to change.
+ */
+export interface ProjectCreatedView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+}
+
+/**
+ * The hub's answer to a document create, kept so the form that asked can act.
+ *
+ * The same shape and the same reason as a project's: every later frame about
+ * this document names the node, and a form that had to find its own back out
+ * of the next tree would be matching on a name the user may rename.
+ */
+export interface DocCreatedView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+}
+
+/**
+ * A document the hub answered with, whole, and when the machine holding it
+ * says it was written.
+ *
+ * `replyTo` is what joins it to the request for the reason a listing carries
+ * one: a person may open a second document while a slow disk is answering the
+ * first, and a snapshot field with no id on it would put the first document
+ * under the second name. The editor is AGX-243; what this store owes it is the
+ * characters and the time, kept exactly as they arrived.
+ */
+export interface DocContentView {
+  readonly replyTo: FrameId;
+  readonly content: string;
+  readonly updatedAt: number;
+}
+
+/**
+ * The hub's answer to a save: when the machine holding the document wrote it.
+ *
+ * Kept rather than discarded, because it is the only evidence a client has
+ * that a save landed on a disk rather than merely leaving the browser -- and
+ * it is the server's clock, so an editor showing "saved a moment ago" is
+ * showing what the machine said and not what this tab assumed.
+ */
+export interface DocSavedView {
+  readonly replyTo: FrameId;
+  readonly updatedAt: number;
+}
+
 export interface HubSnapshot {
   readonly phase: ConnectionPhase;
   /** What is degraded, in words, or `null` while nothing is. */
@@ -137,6 +215,16 @@ export interface HubSnapshot {
   readonly lastRefusal: RefusalView | null;
   /** The hub's most recent yes to a start, kept until the next one. */
   readonly lastStarted: StartedView | null;
+  /** The hub's most recent directory listing, kept until the next one. */
+  readonly lastListing: DirectoryListingView | null;
+  /** The hub's most recent yes to a project create, kept until the next one. */
+  readonly lastProjectCreated: ProjectCreatedView | null;
+  /** The hub's most recent yes to a document create, kept until the next one. */
+  readonly lastDocCreated: DocCreatedView | null;
+  /** The hub's most recent yes to a document save, kept until the next one. */
+  readonly lastDocSaved: DocSavedView | null;
+  /** The most recent document the hub answered with, kept until the next one. */
+  readonly lastDocContent: DocContentView | null;
 }
 
 /**
@@ -148,11 +236,28 @@ export interface HubSnapshot {
  * the user makes once. `pane-layout-save` is a command: a save is something
  * that happened once, and if the connection is down when it does, the queue
  * carries it — later saves replay after it, so the hub still ends on the
- * newest arrangement.
+ * newest arrangement. `directory-list` is a command too, and the queue is the
+ * right place for it rather than the wrong one: a person browsing while the
+ * connection blinks asked a question once, and the answer is as good a moment
+ * later. It is not standing interest — nothing re-lists a directory on every
+ * reconnection — so it is not a subscription. `project-create` and
+ * `project-rename` are commands for the plainest reason of all: each is
+ * something the user did once, and a queue is where a once-only intent waits.
  */
 type CommandFrame = Extract<
   ClientFrame,
-  { type: 'session-start' | 'session-stop' | 'pane-layout-save' }
+  {
+    type:
+      | 'session-start'
+      | 'session-stop'
+      | 'pane-layout-save'
+      | 'directory-list'
+      | 'project-create'
+      | 'project-rename'
+      | 'doc-create'
+      | 'doc-save'
+      | 'doc-open';
+  }
 >;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type HubCommand = DistributiveOmit<CommandFrame, 'id'>;
@@ -243,6 +348,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     terminalInput: INITIAL_TERMINAL,
     lastRefusal: null,
     lastStarted: null,
+    lastListing: null,
+    lastProjectCreated: null,
+    lastDocCreated: null,
+    lastDocSaved: null,
+    lastDocContent: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -402,6 +512,84 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({ lastRefusal: null });
         return;
       }
+      case 'directory-listing': {
+        pending.delete(frame.replyTo);
+        // The refusal is cleared for the reason a start clears it: the last
+        // thing the hub said is now a yes, and a picker showing both would be
+        // showing a sentence about a question that has since been answered.
+        update({
+          lastRefusal: null,
+          lastListing: {
+            replyTo: frame.replyTo,
+            directory: frame.directory,
+            roots: frame.roots,
+            entries: frame.entries,
+            truncated: frame.truncated,
+          },
+        });
+        return;
+      }
+      case 'project-created': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastProjectCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
+        });
+        // The tree just changed on this client's own account, and there is no
+        // broadcast that says so yet -- `catalogue-changed` is its own ticket.
+        // Asking again here is the honest minimum: the project this client just
+        // made is the one it is about to need in a picker, and a screen that
+        // showed every project but the newest would be describing a tree from
+        // before the click that produced it.
+        requestLayout();
+        return;
+      }
+      case 'doc-created': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastDocCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
+        });
+        // A node appeared in the tree on this client's own account, and there
+        // is no broadcast that says so yet -- `catalogue-changed` is AGX-239's
+        // and supersedes this. Asking again is the honest minimum, exactly as
+        // after a project create.
+        requestLayout();
+        return;
+      }
+      case 'doc-saved': {
+        pending.delete(frame.replyTo);
+        // No layout re-request. A save changes the file on a machine and the
+        // hub's index of when; it changes no row the layout carries, so asking
+        // for the tree again would be a round trip that could return nothing
+        // different. `catalogue-changed` is what will carry an edit time to
+        // the other clients, and it is AGX-239's to define.
+        update({
+          lastRefusal: null,
+          lastDocSaved: { replyTo: frame.replyTo, updatedAt: frame.updatedAt },
+        });
+        return;
+      }
+      case 'doc-content': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastDocContent: {
+            replyTo: frame.replyTo,
+            content: frame.content,
+            updatedAt: frame.updatedAt,
+          },
+        });
+        return;
+      }
+      case 'node-renamed': {
+        pending.delete(frame.replyTo);
+        // Same reason as above: the name on the screen came out of the layout,
+        // and the hub has just stored a different one.
+        update({ lastRefusal: null });
+        requestLayout();
+        return;
+      }
       case 'refusal': {
         pending.delete(frame.replyTo);
         update({
@@ -433,6 +621,13 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         return;
       }
     }
+  }
+
+  /** Asks for the tree again, if anything is watching it. */
+  function requestLayout(): void {
+    const wire = socket;
+    if (wire === null || !established || layoutWatchers === 0) return;
+    wire.send(encodeClientFrame({ type: 'layout-request', id: frameIds.next() }));
   }
 
   function replaySubscriptions(): void {
@@ -482,6 +677,13 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       phase: 'idle',
       commandQueue: queueView(null),
       terminalInput: INITIAL_TERMINAL,
+      // A listing describes somebody else's disk as it was; nothing is looking
+      // any more, and the next page to look will ask again.
+      lastListing: null,
+      // The same, and more so: a document is a file that may have been edited
+      // on its own machine while nothing here was connected, so holding the
+      // characters would be holding a copy this store cannot vouch for.
+      lastDocContent: null,
     });
   }
 

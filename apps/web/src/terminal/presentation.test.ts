@@ -102,6 +102,11 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     terminalInput: { discarded: 0, notice: null },
     lastRefusal: null,
     lastStarted: null,
+    lastListing: null,
+    lastProjectCreated: null,
+    lastDocCreated: null,
+    lastDocSaved: null,
+    lastDocContent: null,
     ...overrides,
   };
 }

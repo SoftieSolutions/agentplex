@@ -24,6 +24,10 @@ import {
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
 import { serveServerEnd } from './server-end.js';
+import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake-projects.js';
+import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import {
@@ -193,6 +197,11 @@ function serveMachine(machine: Machine): DialResult {
       providers: createProviderRegistry([adapter]),
       terminals: machine.terminals,
       workingTree: createFakeWorkingTree(),
+      // No roots, which is the default a server ships with and the one a
+      // start that names no project never reaches: `browse.allow` decides
+      // only whether a directory on an instruction may be opened, and every
+      // start in this file carries `directory: null`.
+      browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
       clock,
       logger,
     }),
@@ -292,6 +301,10 @@ async function start(
   let minted = 0;
   const sessions = createSessions({
     state,
+    // A start in this file names no project, so the fake answers nothing and
+    // is never asked. It is here because the seam is required, not because
+    // the suite has a project in it.
+    projects: createFakeProjects(),
     connections,
     ids: { newId: () => `start-${(minted += 1)}` },
     logger,
@@ -307,6 +320,10 @@ async function start(
     writePaneLayout: async () => undefined,
     sessions,
     terminal,
+    // Not the subject: the relay is, and the fakes are what a suite stands on
+    // where a seam is not what it is asserting about.
+    projects: createFakeProjects(),
+    docs: createFakeDocs(),
   });
 
   await connections.sync();
@@ -406,6 +423,7 @@ async function runQuietOn(client: Client, label: string, id: number): Promise<vo
     provider: 'claude',
     prompt: null,
     server: registrationOf(label),
+    project: null,
   });
   expect(client.reply(id).type).toBe('session-started');
 }
@@ -683,6 +701,7 @@ describe('a pane opened on a spawn the provider has not named', () => {
       provider: 'claude',
       prompt: 'look at the failing test',
       server: registrationOf('workshop'),
+      project: null,
     });
     const started = client.reply(2);
     expect(started).toMatchObject({ type: 'session-started', sessionId: null });
@@ -740,6 +759,7 @@ describe('a pane opened on a spawn the provider has not named', () => {
       provider: 'claude',
       prompt: null,
       server: registrationOf('workshop'),
+      project: null,
     });
     expect(owner.reply(2).type).toBe('session-started');
 

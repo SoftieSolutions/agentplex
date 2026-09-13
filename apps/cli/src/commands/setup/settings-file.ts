@@ -33,6 +33,41 @@ export const LOCAL_SERVER_SETTINGS = {
   port: { flag: '--local-server-port', env: 'AGENTPLEX_LOCAL_SERVER_PORT' },
 } as const;
 
+/**
+ * The server setting setup writes into the same file, and the only one it does.
+ *
+ * Setup's own copy of the name, for the reason above: setup may not import the
+ * server, and the server's `config.test.ts` asserts on the same literal, so two
+ * spellings fail there rather than as a machine that browses nothing after a
+ * run in which somebody named a root.
+ *
+ * It is here rather than left to the installer's commented-out line because it
+ * is the one server setting a person answers a question about: a store path is
+ * usually the provider directory the survey already found, and a browse root is
+ * a decision about what a client may see, asked in words and worth recording
+ * where the daemon will actually read it.
+ */
+export const BROWSE_ROOTS_SETTING = {
+  flag: '--browse-root',
+  env: 'AGENTPLEX_BROWSE_ROOTS',
+} as const;
+
+/**
+ * The separator a path list takes in this file: the platform's, which is what
+ * `readAbsolutePaths` splits an env var on.
+ *
+ * A colon on every platform agentplex runs a daemon on. It is written here
+ * rather than imported for the reason the names above are -- setup may not
+ * import the daemon that reads it -- and a value that disagreed would be a
+ * machine whose roots all parsed as one directory nobody has.
+ */
+const PATH_LIST_SEPARATOR = ':';
+
+/** A path list as one settings value, or `null` when there is nothing to say. */
+export function pathListValue(paths: readonly string[]): string | null {
+  return paths.length === 0 ? null : paths.join(PATH_LIST_SEPARATOR);
+}
+
 export interface Setting {
   /** An environment variable name: what the daemon's config parser reads. */
   readonly key: string;

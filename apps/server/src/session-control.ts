@@ -10,25 +10,41 @@ import type {
 } from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
 import { type ProviderRegistry, discoverStoreSessions } from '@agentplex/providers';
+import type { DirectoryGuard } from './directory-browse.js';
 import type { Terminal, TerminalManager, TerminalOutcome } from './terminal-manager.js';
 import { readWorkingTrees, type WorkingTree } from './working-tree.js';
 
 /**
  * What a server does when a hub tells it to run a session.
  *
- * The instruction that arrives names a store, a provider and at most a session
- * id. Everything a process actually needs -- an executable, an argv, a working
- * directory, an environment -- is resolved here, on this machine, out of the
- * two things that are allowed to produce it: the store this server has mounted,
- * and the adapter registered for that provider. Nothing off the wire reaches a
- * spawn, and there is no field on the frame through which it could.
+ * The instruction that arrives names a store, a provider, at most a session id
+ * and at most a directory. The executable, the argv and the environment are
+ * resolved here, on this machine, out of the two things that are allowed to
+ * produce them: the store this server has mounted, and the adapter registered
+ * for that provider. No argv element and no environment variable comes off the
+ * wire, and there is no field on the frame through which one could.
  *
- * The working directory is the clearest case. `SpawnRequest.cwd` is the store's
- * own path as this server resolved it at boot, and a resume's is whatever the
- * provider itself recorded in the transcript, read back by the adapter. A hub
- * cannot influence either, which is what makes a stolen client token worth a
- * session in a store somebody already mounted rather than a shell anywhere on
- * the machine.
+ * The working directory is the one that is not like the others, and it is worth
+ * reading the whole rule rather than the headline. Three of them exist:
+ *
+ *   * A resume runs where the provider itself recorded the session ran, read
+ *     back out of the transcript by the adapter. Nobody chooses it, and a start
+ *     that named both a session and a directory is refused rather than served
+ *     with one of the two.
+ *   * A plain spawn runs in the store's own path, as this server resolved it at
+ *     boot. That is the start that has always existed, and a frame could not
+ *     have supplied it.
+ *   * A spawn in a project runs in the directory on the instruction -- and only
+ *     if `browse.allow` says this machine will open it: an existing directory
+ *     whose real path sits under a root *this machine's operator* configured,
+ *     a list nothing on the wire can add to and which is empty by default. A
+ *     machine nobody has configured runs no project start at all, and says so.
+ *
+ * The third is the amended rule and not a hole in the old one. What a stolen
+ * client token is worth is still bounded by somebody's configuration: a session
+ * in a store already mounted, or a session in a directory an operator listed.
+ * It was never bounded by "no path crosses" alone -- it is bounded by there
+ * being nowhere a path can reach that this machine has not already agreed to.
  *
  * The one-live-process-per-session rule is enforced here as well as at the hub.
  * The hub refuses the case only it can see -- a session held by a different
@@ -51,6 +67,16 @@ export interface SessionControllerDependencies {
    * inherits, which only `main` may decide.
    */
   readonly workingTree: WorkingTree;
+  /**
+   * Whether this machine will open a directory that arrived on an instruction.
+   *
+   * The guard half of the browser and not the browser itself, so that nothing
+   * on a session start's path can list anybody's disk. The rule it applies is
+   * the same one a browse passes, over the same roots, in the same file -- a
+   * second containment test here would be a second answer to the question that
+   * decides whether a spawn is bounded.
+   */
+  readonly browse: DirectoryGuard;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -61,6 +87,14 @@ export interface StartSessionRequest {
   readonly sessionId: SessionId | null;
   readonly provider: Provider;
   readonly prompt: string | null;
+  /**
+   * Where to spawn, when the hub is starting this session in a project, and
+   * `null` for the store's own path.
+   *
+   * A claim like every other thing off a wire, and checked like one: it reaches
+   * a spawn only through `browse.allow`, and only as `cwd`.
+   */
+  readonly directory: string | null;
 }
 
 /**
@@ -121,7 +155,7 @@ export interface SessionController {
 export function createSessionController(
   dependencies: SessionControllerDependencies,
 ): SessionController {
-  const { stores, providers, terminals, workingTree, clock } = dependencies;
+  const { stores, providers, terminals, workingTree, browse, clock } = dependencies;
   const logger = dependencies.logger.child({ part: 'sessions' });
 
   const storeOf = (storeId: StoreId): StoreDescriptor | undefined =>
@@ -178,12 +212,39 @@ export function createSessionController(
       const { adapter } = found;
 
       if (request.sessionId === null) {
-        // The store's own path, resolved by this server at boot. The frame
-        // could not have supplied one, and this is the only value there is.
-        const launch = adapter.spawn({ store, cwd: store.path, prompt: request.prompt });
+        // The store's own path when the instruction named no directory, which
+        // is the start that has always existed; otherwise the project's, once
+        // this machine has agreed to open it.
+        const cwd = await spawnDirectory(store, request.directory);
+        if (!cwd.ok) {
+          logger.info('session spawn refused', {
+            storeId: store.storeId,
+            directory: request.directory,
+            problem: cwd.problem,
+          });
+          return { ok: false, code: cwd.code, problem: cwd.problem, hold: null };
+        }
+
+        const launch = adapter.spawn({ store, cwd: cwd.directory, prompt: request.prompt });
         const started = terminals.spawn(store, launch);
         logger.info('session spawn', { storeId: store.storeId, ok: started.ok });
         return answer(store.storeId, started);
+      }
+
+      if (request.directory !== null) {
+        // Refused rather than ignored. A resume runs where its own transcript
+        // says it ran, so an instruction carrying both was asking for two
+        // different directories, and serving either would be choosing one
+        // without saying so. The hub refuses this too; this is the half that
+        // holds when the hub's view is a version behind.
+        return {
+          ok: false,
+          code: 'refused',
+          problem:
+            'a session resumes in the directory its own transcript recorded, ' +
+            'so a resume cannot be started in a directory',
+          hold: null,
+        };
       }
 
       const session: SessionRef = { storeId: store.storeId, sessionId: request.sessionId };
@@ -264,6 +325,33 @@ export function createSessionController(
       };
     },
   };
+
+  /**
+   * Where a spawn runs: the store's own path, or a project's directory this
+   * machine has agreed to open.
+   *
+   * The allowed directory is the one that was asked for rather than the one it
+   * resolved to, which is the decision `directory-browse.ts` argues: the
+   * spawned session reports this string as its `cwd`, and the hub files it
+   * under the project keyed by exactly that string.
+   *
+   * Between this check and the spawn is a window in which the directory could
+   * be replaced, which is true of every check against a filesystem and is why
+   * the bound that matters is the root list rather than this instant: an
+   * operator configured a subtree, and nothing in that window moves the subtree.
+   */
+  async function spawnDirectory(
+    store: StoreDescriptor,
+    directory: string | null,
+  ): Promise<
+    | { readonly ok: true; readonly directory: string }
+    | { readonly ok: false; readonly code: RefusalCode; readonly problem: string }
+  > {
+    if (directory === null) return { ok: true, directory: store.path };
+    const allowed = await browse.allow(directory);
+    if (allowed.ok) return { ok: true, directory: allowed.directory };
+    return { ok: false, code: allowed.code, problem: allowed.problem };
+  }
 
   /**
    * The directory a session's branch and diffstat are about.

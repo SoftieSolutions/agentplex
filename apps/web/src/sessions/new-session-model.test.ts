@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   frameIdSchema,
+  nodeIdSchema,
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
@@ -91,6 +92,28 @@ describe('server override', () => {
   it('is not drawn before a store is chosen', () => {
     expect(serverOverrideChoices(shared, null)).toEqual([]);
   });
+
+  /**
+   * The narrowing a project start brings, which is the hub's rule reflected
+   * rather than a second one: the hub refuses a machine that does not run the
+   * provider, in that machine's own words, so a menu listing it would be a menu
+   * of one live option and one apology.
+   */
+  it('drops a machine that does not run the provider when a project was chosen', () => {
+    // Both machines have the shared volume; only one of them has codex.
+    expect(serverOverrideChoices(shared, SHARED, 'codex')).toEqual([]);
+    expect(serverOverrideChoices(shared, SHARED, 'claude')).toEqual([
+      { id: 'registration-gpu-box-01', label: 'gpu-box-01' },
+      { id: 'registration-mbp-robert', label: 'mbp-robert' },
+    ]);
+  });
+
+  it('narrows nothing when no project was chosen, which is how the hub schedules', () => {
+    // With no project the hub picks, and it already filters the candidates
+    // itself: an unusable machine costs its own machine a start and never the
+    // store.
+    expect(serverOverrideChoices(shared, SHARED)).toHaveLength(2);
+  });
 });
 
 describe('the frame', () => {
@@ -106,7 +129,14 @@ describe('the frame', () => {
       provider: 'claude',
       prompt: 'fix the auth refresh loop',
       server: null,
+      project: null,
     });
+  });
+
+  it('carries the project as a node id when one was picked, and never a path', () => {
+    const command = buildStart(AGENTPLEX, null, '', nodeIdSchema.parse('node-9'));
+    expect(command.type === 'session-start' && command.project).toBe('node-9');
+    expect(Object.keys(command)).not.toContain('directory');
   });
 
   it('carries the override when one was picked', () => {

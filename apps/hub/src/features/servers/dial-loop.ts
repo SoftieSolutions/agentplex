@@ -20,7 +20,7 @@ import type {
   ServerConnectionPhase,
   ServerConnectionReport,
   ServerStoreReport,
-  SessionInstruction,
+  ServerInstruction,
   StaleReason,
   StreamInstruction,
   StreamOutcome,
@@ -130,7 +130,7 @@ export interface DialLoop {
    * ten minutes later, on a session the user has since opened somewhere else,
    * is an instruction nobody would still authorise.
    */
-  ask(instruction: SessionInstruction): Promise<InstructionOutcome>;
+  ask(instruction: ServerInstruction): Promise<InstructionOutcome>;
   /**
    * Puts one terminal frame to this server and answers where the reply is read.
    *
@@ -432,7 +432,7 @@ export function startDialLoop(
     get report(): ServerConnectionReport {
       return report();
     },
-    ask(instruction: SessionInstruction): Promise<InstructionOutcome> {
+    ask(instruction: ServerInstruction): Promise<InstructionOutcome> {
       const transport = held;
       if (transport === null) {
         return Promise.resolve({

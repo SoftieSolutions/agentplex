@@ -24,7 +24,7 @@ import {
 } from './server-handshake.js';
 import type {
   InstructionOutcome,
-  SessionInstruction,
+  ServerInstruction,
   StreamInstruction,
   StreamOutcome,
   TerminalOutputFrame,
@@ -69,7 +69,7 @@ export interface ServerTransportHandlers {
 
 export interface ServerTransport {
   /** Puts one instruction to the server and waits for its answer. */
-  ask(instruction: SessionInstruction): Promise<InstructionOutcome>;
+  ask(instruction: ServerInstruction): Promise<InstructionOutcome>;
   /** Puts one terminal frame to the server and answers where the reply is read. */
   stream(frame: StreamInstruction, answer: (outcome: StreamOutcome) => void): void;
   /**

@@ -1,0 +1,410 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  parseHubFrame,
+  parseTextFrame,
+  serverIdSchema,
+  sessionIdSchema,
+  storeIdSchema,
+  PROTOCOL_VERSION,
+  type Layout,
+  type SessionDescriptor,
+  type StoreId,
+} from '@agentplex/protocol';
+import {
+  createLogger,
+  type DialResult,
+  type MessageSocket,
+  type SocketDialer,
+} from '@agentplex/node-shared';
+import { createSocketPair, createFakeTimers } from '@agentplex/node-shared/testing';
+import { createFakeStoreFiles, readyProvider } from '@agentplex/providers/testing';
+import {
+  createFakeSessionController,
+  type FakeSessionController,
+} from '../../../apps/server/src/fake-session-controller.js';
+import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { createHubAudience, type HubAudience } from '../../../apps/server/src/hub-audience.js';
+import { serveServerEnd } from './server-end.js';
+import { createFakeBeaconSource } from '../../../apps/hub/src/features/discovery/fake-discovery.js';
+import { createFakeWebAssets } from '../../../apps/hub/src/features/web/fake-web.js';
+import { createSqliteDatabase } from '../../../apps/hub/src/db/sqlite.js';
+import { loadMigrations } from '../../../apps/hub/src/db/migration-files.js';
+import { migrate } from '../../../apps/hub/src/db/migrations.js';
+import { nodeMigrationFileSystem } from '../../../apps/hub/src/db/node-migration-files.js';
+import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
+import { newServerRegistrationSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
+import { startHub, type Hub } from '../../../apps/hub/src/hub.js';
+
+/**
+ * The tree a client is actually answered with, over a fleet that reports.
+ *
+ * Before AGX-90 nothing called discovery or the prune, so a live hub answered
+ * every `layout-request` with an empty tree however many sessions were on the
+ * machines -- and answered it confidently, which is the over-claim rather than
+ * the gap. The suite drives the whole path the wiring joined: two servers scan,
+ * their reports travel the real protocol, the reducer merges them, the
+ * catalogue follows what it merged, and a client asks for the layout and is
+ * told what is there.
+ *
+ * The prune's half is the same path run twice. A store that reports again
+ * without a session it used to have is evidence that the session is gone, and
+ * its node goes; a store nobody reached is not, and its nodes stay. The second
+ * is the case worth having an integration test for, because the cost of
+ * getting it wrong is a user's arrangement dismantling itself while a laptop
+ * is shut.
+ */
+
+const logger = createLogger('error', () => {});
+const START = 1_756_000_000_000;
+const clock = { now: () => START };
+const CLIENT_TOKEN = 'the-client-token-typed-on-the-device';
+const HOST = '127.0.0.1';
+
+const AGENTPLEX = storeIdSchema.parse('store-agentplex');
+const UNIVERSE = storeIdSchema.parse('store-universe');
+
+function descriptor(storeId: StoreId, sessionId: string, title: string | null): SessionDescriptor {
+  return {
+    storeId,
+    sessionId: sessionIdSchema.parse(sessionId),
+    provider: 'claude',
+    status: 'idle',
+    updatedAt: START,
+    cwd: null,
+    branch: null,
+    title,
+    uncommitted: null,
+  };
+}
+
+/** One machine in the fleet, and the handle a test drives its next scan with. */
+interface Machine {
+  readonly label: string;
+  readonly host: string;
+  readonly serverId: string;
+  readonly storeId: StoreId;
+  readonly path: string;
+  readonly controller: FakeSessionController;
+  /** The connected hubs, once one has dialled. What `reportToAll` is called on. */
+  audience: HubAudience | null;
+  socket: MessageSocket | null;
+}
+
+function machine(
+  label: string,
+  serverId: string,
+  storeId: StoreId,
+  path: string,
+  sessions: readonly SessionDescriptor[],
+): Machine {
+  return {
+    label,
+    host: `${label}.example`,
+    serverId,
+    storeId,
+    path,
+    controller: createFakeSessionController({ reports: [{ storeId, sessions, holding: [] }] }),
+    audience: null,
+    socket: null,
+  };
+}
+
+function fleetDialer(machines: readonly Machine[]): SocketDialer {
+  return {
+    dial: async (address: string): Promise<DialResult> => {
+      const host = new URL(address).hostname;
+      const found = machines.find((candidate) => candidate.host === host);
+      if (found === undefined) return { ok: false, problem: 'connection refused' };
+
+      const { hubEnd, serverEnd } = createSocketPair();
+      // A real scan reads a disk and takes event-loop turns; a fake that
+      // resolved in the same microtask as the handshake would race its report
+      // past the hub attaching its listener, an ordering no real store scan
+      // can produce.
+      const sessions = {
+        ...found.controller,
+        report: async (storeId: StoreId) => {
+          await new Promise((resolve) => setImmediate(resolve));
+          return found.controller.report(storeId);
+        },
+      };
+      // The server's own audience, held by the test: `reportToAll` is how a
+      // machine tells every connected hub that what is in a store changed, and
+      // a second scan is exactly what this suite needs to drive.
+      const audience = createHubAudience({ sessions, logger });
+      found.audience = audience;
+      serveServerEnd(serverEnd, {
+        sessions,
+        audience,
+        terminals: createFakeTerminals().terminals,
+        machineLoad: createFakeMachineLoadReader(),
+        identity: { serverId: serverIdSchema.parse(found.serverId), token: `tok-${host}` },
+        stores: [{ storeId: found.storeId, path: found.path }],
+        providers: [readyProvider()],
+        logger,
+      });
+      found.socket = serverEnd;
+      return { ok: true, socket: hubEnd };
+    },
+  };
+}
+
+interface Fleet {
+  readonly hub: Hub;
+  readonly cleanup: () => Promise<void>;
+}
+
+async function startFleetHub(machines: readonly Machine[]): Promise<Fleet> {
+  const directory = await mkdtemp(join(tmpdir(), 'agentplex-catalogue-'));
+  const database = createSqliteDatabase(join(directory, 'hub.db'));
+  const migrationsDirectory = fileURLToPath(
+    new URL('../../../apps/hub/migrations', import.meta.url),
+  );
+  await migrate(
+    database,
+    await loadMigrations(migrationsDirectory, nodeMigrationFileSystem),
+    logger,
+    clock,
+  );
+  for (const found of machines) {
+    await registerServer(
+      database,
+      { newId: () => `registration-${found.label}` },
+      clock,
+      newServerRegistrationSchema.parse({
+        label: found.label,
+        address: `wss://${found.host}:8443`,
+        token: `tok-${found.host}`,
+      }),
+    );
+  }
+
+  // Counted, so a node id names the order it was minted in. The hub's own
+  // identity takes the first; every one after it is a node.
+  let minted = 0;
+  const hub = await startHub({
+    database,
+    logger,
+    ids: { newId: () => `id-${(minted += 1)}` },
+    clock,
+    clientToken: CLIENT_TOKEN,
+    tokens: { newToken: () => 'unused' },
+    dialer: fleetDialer(machines),
+    discovery: createFakeBeaconSource(),
+    timers: createFakeTimers(),
+    migrationsDirectory,
+    migrationFileSystem: nodeMigrationFileSystem,
+    webAssets: createFakeWebAssets(),
+    host: HOST,
+    port: 0,
+    localServer: null,
+    files: createFakeStoreFiles(),
+  });
+
+  return {
+    hub,
+    cleanup: async () => {
+      await hub.stop();
+      await database.close();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+/**
+ * A client on a linked socket pair rather than over the port.
+ *
+ * The ticket exchange and the websocket upgrade have their own suites, and
+ * `clients.attach` takes a socket that has already passed both. What this
+ * suite is about starts after that: a `layout-request` and what comes back.
+ */
+interface Client {
+  layout(): Promise<Layout>;
+}
+
+async function openClient(hub: Hub): Promise<Client> {
+  const { hubEnd, serverEnd } = createSocketPair();
+  const received: string[] = [];
+  const waiting: (() => void)[] = [];
+  serverEnd.onMessage((text) => {
+    received.push(text);
+    for (const wake of waiting.splice(0)) wake();
+  });
+  hub.clients.attach(hubEnd);
+
+  let nextId = 0;
+  const frameFor = async (replyTo: number): Promise<Layout> => {
+    for (;;) {
+      for (const text of received) {
+        const parsed = parseTextFrame(parseHubFrame, text);
+        if (!parsed.ok) throw new Error(`the hub sent something unreadable: ${parsed.reason}`);
+        if (parsed.value.type !== 'layout') continue;
+        if (parsed.value.replyTo !== replyTo) continue;
+        return parsed.value.nodes;
+      }
+      await new Promise<void>((resolve) => waiting.push(resolve));
+    }
+  };
+
+  serverEnd.send(
+    JSON.stringify({ type: 'hello', id: (nextId += 1), protocolVersion: PROTOCOL_VERSION }),
+  );
+
+  return {
+    async layout(): Promise<Layout> {
+      const id = (nextId += 1);
+      serverEnd.send(JSON.stringify({ type: 'layout-request', id }));
+      return frameFor(id);
+    },
+  };
+}
+
+/** What one node points at, as one string, for a test that is about which sessions are in the tree. */
+function anchor(node: Layout[number]): string {
+  return `${String(node.anchor?.storeId)}/${String(node.anchor?.sessionId)}`;
+}
+
+/**
+ * What the tree anchors, sorted.
+ *
+ * Sorted rather than in tree order, and that is a fact about the subject rather
+ * than a convenience: two servers scan independently, so which store's report
+ * reaches the hub first decides which sessions take the low root positions.
+ * Asserting the order would be asserting a race.
+ */
+function anchored(layout: Layout): readonly string[] {
+  return layout.map(anchor).sort();
+}
+
+async function until(predicate: () => Promise<boolean>, what: () => string): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`timed out waiting for ${what()}`);
+}
+
+/** Waits for the tree to hold exactly this, so a pass that has not run yet is not read as a failure. */
+async function settles(client: Client, expected: readonly string[]): Promise<Layout> {
+  const wanted = [...expected].sort();
+  let last: Layout = [];
+  await until(
+    async () => {
+      last = await client.layout();
+      return anchored(last).join() === wanted.join();
+    },
+    () => `the tree to hold ${wanted.join(', ')}; it holds ${anchored(last).join(', ')}`,
+  );
+  return last;
+}
+
+let fleet: Fleet | null = null;
+
+afterEach(async () => {
+  await fleet?.cleanup();
+  fleet = null;
+});
+
+describe('the tree a reporting fleet fills in', () => {
+  it('answers a layout request with one node per session the fleet reported', async () => {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+      descriptor(AGENTPLEX, 'session-spike-wasm', 'spike-wasm'),
+    ]);
+    const box = machine('gpu-box-01', 'server-gpu', UNIVERSE, '/mnt/volumes/universe', [
+      descriptor(UNIVERSE, 'session-bench-tokenizer', null),
+    ]);
+    fleet = await startFleetHub([laptop, box]);
+    const client = await openClient(fleet.hub);
+
+    const layout = await settles(client, [
+      'store-agentplex/session-fix-auth',
+      'store-agentplex/session-spike-wasm',
+      'store-universe/session-bench-tokenizer',
+    ]);
+
+    // Named by the transcript title, and nothing invented for the one whose
+    // provider records none: null is what a client draws its own answer from.
+    const byAnchor = new Map(layout.map((node) => [anchor(node), node]));
+    expect(byAnchor.get('store-agentplex/session-fix-auth')?.name).toBe('fix-auth-refresh');
+    expect(byAnchor.get('store-agentplex/session-spike-wasm')?.name).toBe('spike-wasm');
+    expect(byAnchor.get('store-universe/session-bench-tokenizer')?.name).toBeNull();
+    // Every one of them at the root, of the session kind, and none of them
+    // named by a user: discovery places, and that is all it does.
+    expect(layout.every((node) => node.kind === 'session')).toBe(true);
+    expect(layout.every((node) => node.parentId === null)).toBe(true);
+    expect(layout.every((node) => !node.named)).toBe(true);
+  });
+
+  it('prunes the node of a session a later report of that store no longer has', async () => {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+      descriptor(AGENTPLEX, 'session-spike-wasm', 'spike-wasm'),
+    ]);
+    const box = machine('gpu-box-01', 'server-gpu', UNIVERSE, '/mnt/volumes/universe', [
+      descriptor(UNIVERSE, 'session-bench-tokenizer', null),
+    ]);
+    fleet = await startFleetHub([laptop, box]);
+    const client = await openClient(fleet.hub);
+    await settles(client, [
+      'store-agentplex/session-fix-auth',
+      'store-agentplex/session-spike-wasm',
+      'store-universe/session-bench-tokenizer',
+    ]);
+
+    // The transcript was deleted. The machine scans again and says so, which is
+    // evidence rather than absence: this store was reached and that session is
+    // not in it.
+    laptop.controller.setReport({
+      storeId: AGENTPLEX,
+      sessions: [descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh')],
+      holding: [],
+    });
+    await laptop.audience?.reportToAll(AGENTPLEX);
+
+    // The other store was not in that reading and keeps everything it had.
+    await settles(client, [
+      'store-agentplex/session-fix-auth',
+      'store-universe/session-bench-tokenizer',
+    ]);
+  });
+
+  it('keeps the nodes of a store nobody could reach', async () => {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+    ]);
+    const box = machine('gpu-box-01', 'server-gpu', UNIVERSE, '/mnt/volumes/universe', [
+      descriptor(UNIVERSE, 'session-bench-tokenizer', null),
+    ]);
+    fleet = await startFleetHub([laptop, box]);
+    const client = await openClient(fleet.hub);
+    await settles(client, [
+      'store-agentplex/session-fix-auth',
+      'store-universe/session-bench-tokenizer',
+    ]);
+
+    // The machine goes away without saying so. Nothing reached its store, so
+    // nothing is evidence about what is in it, and the sweep is never run for
+    // it. The laptop reporting again must not take the absent machine's node
+    // with it.
+    box.socket?.close({ code: 1006, reason: 'the machine went away' });
+    await until(
+      async () =>
+        fleet?.hub.connections
+          .snapshot()
+          .some((report) => report.label === 'gpu-box-01' && report.phase === 'stale') === true,
+      () => 'the gpu box to go stale',
+    );
+    await laptop.audience?.reportToAll(AGENTPLEX);
+
+    await settles(client, [
+      'store-agentplex/session-fix-auth',
+      'store-universe/session-bench-tokenizer',
+    ]);
+  });
+});

@@ -11,6 +11,10 @@ import type { InstructionOutcome, StreamAnswer, TerminalOutputFrame } from './se
  * handshake frames belong to a handshake that is already over. `pong` is the
  * heartbeat's, which reads the socket itself.
  *
+ * A document reply is an answer like any other: the three of them address the
+ * frame that asked, so they go to whoever asked and this file says nothing
+ * about documents beyond that.
+ *
  * The switch is exhaustive, and that is the reason this is a file rather than
  * a closure. Before it was, the four frames of the terminal relay parsed
  * cleanly and fell out of the bottom, and nothing -- not a log line, not a type
@@ -61,6 +65,10 @@ export function routeServerFrame(
   switch (frame.type) {
     case 'session-started':
     case 'session-stopped':
+    case 'directory-listing':
+    case 'doc-written':
+    case 'doc-content':
+    case 'doc-listing':
       handlers.onAnswer(frame.replyTo, { ok: true, answer: frame });
       return;
     case 'session-refused':
@@ -69,6 +77,18 @@ export function routeServerFrame(
         code: frame.code,
         problem: frame.message,
         hold: frame.hold,
+      });
+      return;
+    case 'directory-refused':
+      // The same outcome shape with no hold to put in it, which is why the
+      // frame is its own: a directory has no live process to name, and a field
+      // that was always null on half the refusals would be one every reader had
+      // to learn when it means anything.
+      handlers.onAnswer(frame.replyTo, {
+        ok: false,
+        code: frame.code,
+        problem: frame.message,
+        hold: null,
       });
       return;
     case 'store-report':
