@@ -12,12 +12,7 @@ import {
   type ServerInstruction,
 } from '../servers/servers.js';
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
-import {
-  findProjectByDirectory,
-  insertProject,
-  readProjectDirectory,
-  renameProject,
-} from './project-rows.js';
+import { findProjectByDirectory, insertProject, readProjectDirectory } from './project-rows.js';
 
 /**
  * Projects, from the hub's side: the rows, and the browse a directory is picked
@@ -75,6 +70,17 @@ export interface ProjectsDependencies {
     ): Promise<InstructionOutcome>;
   };
   readonly logger: Logger;
+  /**
+   * Told when a project was made, because a project is a node and the tree just
+   * changed.
+   *
+   * A callback rather than this feature holding the catalogue, and the
+   * direction is the point: the catalogue reads projects (to file a session
+   * under the one whose directory it ran in) and projects reads nothing of the
+   * catalogue's. What crosses here is one fact with no return value, wired in
+   * `hub.ts`, which is the only file that knows both exist.
+   */
+  readonly onTreeChanged: () => void;
 }
 
 /**
@@ -96,8 +102,7 @@ export type DirectoryOutcome =
   | { readonly ok: false; readonly code: RefusalCode; readonly problem: string };
 
 /**
- * What making or renaming a project came to, in the terms a client is answered
- * in.
+ * What making a project came to, in the terms a client is answered in.
  *
  * The refusal carries a sentence and no node id. Naming the project that
  * already holds a directory was the other option -- a session refusal names its
@@ -121,8 +126,6 @@ export interface Projects {
    * here at all rather than failing the frame's parser.
    */
   create(request: { readonly name: string; readonly directory: string }): Promise<ProjectOutcome>;
-  /** Renames a project. Refuses a node that is not one, or is not there. */
-  rename(nodeId: NodeId, name: string): Promise<ProjectOutcome>;
   /**
    * Where that project is, or `null` when the node is not a project.
    *
@@ -155,7 +158,7 @@ export interface Projects {
 }
 
 export function createProjects(dependencies: ProjectsDependencies): Projects {
-  const { database, ids, clock, state, connections } = dependencies;
+  const { database, ids, clock, state, connections, onTreeChanged } = dependencies;
   const logger = dependencies.logger.child({ part: 'projects' });
 
   return {
@@ -184,20 +187,8 @@ export function createProjects(dependencies: ProjectsDependencies): Projects {
       }
 
       logger.info('project created', { nodeId: inserted.nodeId, directory: request.directory });
+      onTreeChanged();
       return { ok: true, nodeId: inserted.nodeId };
-    },
-
-    async rename(nodeId: NodeId, name: string): Promise<ProjectOutcome> {
-      const trimmed = name.trim();
-      if (trimmed === '') {
-        return { ok: false, code: 'refused', problem: 'a project needs a name' };
-      }
-
-      const renamed = await renameProject(database, nodeId, trimmed);
-      if (!renamed) {
-        return { ok: false, code: 'refused', problem: 'this hub has no project by that id' };
-      }
-      return { ok: true, nodeId };
     },
 
     directoryOf: (nodeId: NodeId) => readProjectDirectory(database, nodeId),

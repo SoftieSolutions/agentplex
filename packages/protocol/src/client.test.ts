@@ -235,6 +235,77 @@ describe('parseHubFrame on the pairing replies', () => {
   });
 });
 
+describe('parseClientFrame on the tree frames', () => {
+  const A_MOVE = {
+    type: 'node-move',
+    id: 1,
+    nodeId: 'node-1',
+    parentId: 'node-2',
+    position: 0,
+  };
+
+  it('accepts a folder at the root, which is not a node and has no id', () => {
+    expect(
+      parseClientFrame({ type: 'node-create-folder', id: 1, parentId: null, name: 'a' }).ok,
+    ).toBe(true);
+  });
+
+  /**
+   * The bound is the protocol's and the judgement is not. A blank name reaches
+   * the hub and is refused in a sentence -- see `layout.ts` for why refusing
+   * the frame instead would be hanging up on somebody who left a field empty.
+   */
+  it('lets a blank name through to be refused, and stops a name that is a novel', () => {
+    expect(parseClientFrame({ type: 'node-rename', id: 1, nodeId: 'node-1', name: '   ' }).ok).toBe(
+      true,
+    );
+    const novel = 'x'.repeat(201);
+    expect(parseClientFrame({ type: 'node-rename', id: 1, nodeId: 'node-1', name: novel }).ok).toBe(
+      false,
+    );
+  });
+
+  it('rejects a position that is not a whole count of siblings', () => {
+    expect(parseClientFrame(A_MOVE).ok).toBe(true);
+    expect(parseClientFrame({ ...A_MOVE, position: -1 }).ok).toBe(false);
+    expect(parseClientFrame({ ...A_MOVE, position: 1.5 }).ok).toBe(false);
+  });
+
+  /**
+   * A forgetting names a session and never a node: the node is gone, so an id
+   * naming it would name nothing. Both halves are required, because a session
+   * id is unique only inside its store.
+   */
+  it('rejects a forgetting with half a session identity', () => {
+    expect(
+      parseClientFrame({
+        type: 'node-forget-removal',
+        id: 1,
+        storeId: 'store-work',
+        sessionId: 'session-1',
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseClientFrame({ type: 'node-forget-removal', id: 1, sessionId: 'session-1' }).ok,
+    ).toBe(false);
+    expect(parseClientFrame({ type: 'node-forget-removal', id: 1, storeId: 'store-work' }).ok).toBe(
+      false,
+    );
+  });
+
+  /**
+   * The project-scoped rename is gone, folded into the generic one. Two frames
+   * with the same three fields, answered by the same `node-renamed`, were two
+   * ways to say one thing -- and once the tree's own menu sends the generic
+   * one, the other has no sender.
+   */
+  it('no longer knows a project-scoped rename', () => {
+    expect(
+      parseClientFrame({ type: 'project-rename', id: 1, nodeId: 'node-1', name: 'x' }).ok,
+    ).toBe(false);
+  });
+});
+
 describe('parseHubFrame', () => {
   it('accepts a welcome', () => {
     const result = parseHubFrame({
@@ -380,6 +451,35 @@ describe('client and hub round trips', () => {
       server: serverRegistrationIdSchema.parse('registration-2'),
       directory: '/Users/dev/code',
     },
+    { type: 'node-create-folder', id: 16, parentId: null, name: 'this week' },
+    {
+      type: 'node-create-folder',
+      id: 17,
+      parentId: nodeIdSchema.parse('node-1'),
+      name: 'inside',
+    },
+    { type: 'node-rename', id: 18, nodeId: nodeIdSchema.parse('node-1'), name: 'last week' },
+    {
+      type: 'node-move',
+      id: 19,
+      nodeId: nodeIdSchema.parse('node-2'),
+      parentId: nodeIdSchema.parse('node-1'),
+      position: 0,
+    },
+    {
+      type: 'node-move',
+      id: 20,
+      nodeId: nodeIdSchema.parse('node-2'),
+      parentId: null,
+      position: 3,
+    },
+    { type: 'node-remove', id: 21, nodeId: nodeIdSchema.parse('node-1') },
+    {
+      type: 'node-forget-removal',
+      id: 22,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
   ];
 
@@ -452,6 +552,12 @@ describe('client and hub round trips', () => {
     { type: 'pane-layout', replyTo: 7, layout: '{"v":1,"root":{"kind":"pane"}}' },
     { type: 'pane-layout', replyTo: 7, layout: null },
     { type: 'pane-layout-saved', replyTo: 8 },
+    { type: 'node-created', replyTo: 16, nodeId: nodeIdSchema.parse('node-3') },
+    { type: 'node-renamed', replyTo: 18 },
+    { type: 'node-moved', replyTo: 19 },
+    { type: 'node-removed', replyTo: 21 },
+    { type: 'node-removal-forgotten', replyTo: 22 },
+    { type: 'catalogue-changed', version: 12 },
     {
       type: 'machine-state',
       state: {

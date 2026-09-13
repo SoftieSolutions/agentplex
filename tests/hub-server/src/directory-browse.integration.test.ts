@@ -27,6 +27,7 @@ import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directo
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
 import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
 import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
@@ -194,6 +195,8 @@ async function start(roots: readonly string[]): Promise<Harness> {
     state,
     connections,
     logger,
+    // Nothing in this file draws a tree, and no catalogue is running here.
+    onTreeChanged: () => undefined,
   });
 
   const clients = createClients({
@@ -204,6 +207,7 @@ async function start(roots: readonly string[]): Promise<Harness> {
     readLayout: async () => [],
     readPaneLayout: async () => null,
     writePaneLayout: async () => undefined,
+    catalogue: createFakeCatalogue(),
     sessions: createSessions({ state, projects, connections, logger }),
     // The same two seams `hub.ts` hands the broadcast. Pairing is not this
     // file's subject, but a broadcast built without them would be a different

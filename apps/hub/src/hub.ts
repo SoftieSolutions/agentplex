@@ -241,6 +241,12 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     // out over a connection. Nothing asks this question until a store has been
     // reported, which is after `sync` far below.
     projects: { findByDirectory: (directory) => projects.findByDirectory(directory) },
+    // Who is running a session, asked at the moment a removal is decided. The
+    // tree is durable and this is a claim about right now, which is the whole
+    // reason it is a seam rather than a column: a node the user removed while
+    // its process ran would be a process still going with nothing on any
+    // screen pointing at it.
+    readHolder: (ref) => state.sessionHolder(ref),
   });
 
   // Constructed here and dialling nothing yet. That is what the split between
@@ -286,7 +292,19 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // feature adds is the one fact a server cannot have: whether the hub holds a
   // connection to ask down at all. What it owns outright is the record: a name,
   // a directory, and the node the tree shows it as.
-  const projects = createProjects({ database, ids, clock, state, connections: servers, logger });
+  const projects = createProjects({
+    database,
+    ids,
+    clock,
+    state,
+    connections: servers,
+    logger,
+    // A project is a node, so making one changes the tree, and the tree has one
+    // version whoever wrote it. See `project-rows.ts` for why this feature
+    // writes `nodes` at all, and `catalogue.ts` for why the number is the
+    // catalogue's to keep.
+    onTreeChanged: () => catalogue.changed(),
+  });
 
   const sessions = createSessions({ state, projects, connections: servers, logger });
 
@@ -315,6 +333,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     // a settings screen whose successful answer is followed by nothing.
     syncServers: () => servers.sync(),
     projects,
+    catalogue,
   });
 
   // Not awaited past its first read of the pairing table, and started before

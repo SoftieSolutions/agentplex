@@ -9,7 +9,6 @@ import {
   type HubFrame,
   type HubId,
   type Layout,
-  type NodeId,
   type RefusalCode,
   type ServerRegistrationId,
   type SessionHolder,
@@ -22,6 +21,7 @@ import {
   type MessageSocket,
   type SocketClosure,
 } from '@agentplex/node-shared';
+import type { TreeChanged, TreeMutations } from '../catalogue/catalogue.js';
 import { newServerRegistrationSchema, type Pairing } from '../pairing/pairing.js';
 import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
@@ -74,6 +74,16 @@ export interface EncodedMachineState {
 
 export interface ClientConnection {
   readonly state: ClientConnectionState;
+  /**
+   * Tells this client the tree changed, if it is established.
+   *
+   * Unsolicited and sent to every client, like the machine state -- and unlike
+   * it, not encoded once for everybody, because there is nothing to encode:
+   * two fields, one of which is an integer. What the rule about identical
+   * characters protects is a state two clients could disagree about, and there
+   * is no disagreeing about "it changed, and it is now at 7".
+   */
+  catalogueChanged(version: number): void;
   /**
    * Sends the state, unless this client is not established or already has this
    * version.
@@ -156,6 +166,15 @@ export interface ClientConnectionDependencies {
    * path can widen it.
    */
   readonly projects: Projects;
+  /**
+   * The five edits a client may make to the tree.
+   *
+   * Narrower than the catalogue, and deliberately not the same seam the layout
+   * arrives on: reading the tree is a reply built per client, and editing it is
+   * a decision the feature that owns the rows makes. What this file does with
+   * either is the same -- answer the client that asked, and nobody else.
+   */
+  readonly catalogue: TreeMutations;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -178,6 +197,7 @@ export function serveClientConnection(
     pairing,
     syncServers,
     projects,
+    catalogue,
     onClosed,
   }: ClientConnectionDependencies,
 ): ClientConnection {
@@ -392,12 +412,74 @@ export function serveClientConnection(
         return;
       }
 
-      case 'project-rename': {
+      case 'node-create-folder': {
         if (state !== 'established') {
           helloFirst(frame.id);
           return;
         }
-        void answerProjectRename(frame.id, frame.nodeId, frame.name);
+        // Not awaited, for the reason a layout read is not: these are
+        // statements against the database, and awaiting one here would stall
+        // every later frame on this socket behind it.
+        void answerCreateFolder(frame.id, { parentId: frame.parentId, name: frame.name });
+        return;
+      }
+
+      case 'node-rename': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // One frame for every kind, which is why there is no second case here
+        // for a project: renaming is one act on the tree whatever the node is,
+        // and the feature that owns the tree is the one that does it.
+        void answerTreeChange(
+          frame.id,
+          'node-renamed',
+          'rename that node',
+          catalogue.rename(frame.nodeId, frame.name),
+        );
+        return;
+      }
+
+      case 'node-move': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerTreeChange(
+          frame.id,
+          'node-moved',
+          'move that node',
+          catalogue.move(frame.nodeId, { parentId: frame.parentId, position: frame.position }),
+        );
+        return;
+      }
+
+      case 'node-remove': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerTreeChange(
+          frame.id,
+          'node-removed',
+          'remove that node',
+          catalogue.remove(frame.nodeId),
+        );
+        return;
+      }
+
+      case 'node-forget-removal': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerTreeChange(
+          frame.id,
+          'node-removal-forgotten',
+          'forget that removal',
+          catalogue.forgetRemoval({ storeId: frame.storeId, sessionId: frame.sessionId }),
+        );
         return;
       }
 
@@ -683,24 +765,63 @@ export function serveClientConnection(
     }
   }
 
-  /** Renames a project and answers the client that asked. */
-  async function answerProjectRename(
+  /**
+   * Makes a folder and answers the client that asked.
+   *
+   * Its own function rather than a case of the one below, because the yes is
+   * different: a create answers with the id of what it made, which is the one
+   * thing the client could not have worked out for itself.
+   */
+  async function answerCreateFolder(
     replyTo: FrameId,
-    nodeId: NodeId,
-    name: string,
+    request: Parameters<TreeMutations['createFolder']>[0],
   ): Promise<void> {
     try {
-      const outcome = await projects.rename(nodeId, name);
+      const outcome = await catalogue.createFolder(request);
       if (state !== 'established') return;
       if (!outcome.ok) {
-        refuse(replyTo, outcome.code, outcome.problem);
+        refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
         return;
       }
-      send({ type: 'node-renamed', replyTo });
+      send({ type: 'node-created', replyTo, nodeId: outcome.nodeId });
     } catch (error) {
-      logger.error('could not rename a project', { problem: String(error) });
+      logger.error('could not create a folder', { problem: String(error) });
       if (state !== 'established') return;
-      refuse(replyTo, 'internal', 'the hub could not rename that project');
+      refuse(replyTo, 'internal', 'the hub could not create that folder');
+    }
+  }
+
+  /**
+   * The other four tree edits, each answered by one word and nothing else.
+   *
+   * One function for four frames, and the reply name is an argument rather than
+   * a branch, because the shape of the answer really is identical: the tree did
+   * what was asked, and what the client reads next is the layout it asks for.
+   * A refusal is passed through whole, `holder` included -- a removal refused
+   * because a session is still running names the machine, so the client can
+   * offer the stop rather than only the sentence.
+   *
+   * `doing` is the verb for the internal-error sentence, so a hub that broke
+   * says which act broke rather than "something went wrong".
+   */
+  async function answerTreeChange(
+    replyTo: FrameId,
+    reply: 'node-renamed' | 'node-moved' | 'node-removed' | 'node-removal-forgotten',
+    doing: string,
+    pending: Promise<TreeChanged>,
+  ): Promise<void> {
+    try {
+      const outcome = await pending;
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
+        return;
+      }
+      send({ type: reply, replyTo });
+    } catch (error) {
+      logger.error(`could not ${doing}`, { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', `the hub could not ${doing}`);
     }
   }
 
@@ -745,6 +866,10 @@ export function serveClientConnection(
       return state;
     },
     deliver,
+    catalogueChanged(version: number): void {
+      if (state !== 'established') return;
+      send({ type: 'catalogue-changed', version });
+    },
     close: end,
   };
 }

@@ -15,6 +15,7 @@ export {
   Button,
   Group,
   MantineProvider,
+  Menu,
   Modal,
   Paper,
   PasswordInput,

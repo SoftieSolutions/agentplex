@@ -1,4 +1,4 @@
-import { type JSX } from 'react';
+import { type JSX, type ReactNode } from 'react';
 import { Box, Group, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import type { HubStore } from '../store/hub-store.js';
@@ -31,9 +31,19 @@ export interface SessionCardProps {
   readonly now: number;
   /** The page's one hub store, for the stop this card may offer. */
   readonly store: HubStore;
+  /**
+   * What can be done to this card's node, or nothing when the tree does not
+   * hold one.
+   *
+   * Passed in rather than built here, so this stays a component that draws a
+   * session and knows nothing about the tree: a session the tree has no node
+   * for is a card with no menu, and that is a decision the screen holding the
+   * layout makes.
+   */
+  readonly actions?: ReactNode;
 }
 
-export function SessionCard({ item, scheme, now, store }: SessionCardProps): JSX.Element {
+export function SessionCard({ item, scheme, now, store, actions }: SessionCardProps): JSX.Element {
   const border = item.needsYou ? colorForTone('needs-you', scheme) : colorForRole('border', scheme);
   const muted = colorForRole('textMuted', scheme);
   const age = ageLabel(now, item.updatedAt);
@@ -74,6 +84,7 @@ export function SessionCard({ item, scheme, now, store }: SessionCardProps): JSX
         <Text ff="monospace" fz={10} fw={500} c={muted}>
           {item.machine}
         </Text>
+        {actions}
       </Group>
       <SessionSummaryLine text={item.summary} scheme={scheme} />
       <Group gap={8} wrap="nowrap" justify="space-between" align="center">

@@ -36,13 +36,16 @@ import type { Database, Queryable } from '../../db/database.js';
  * project whose directory it ran in) and this feature reads nothing of the
  * catalogue's.
  *
- * ## Why the rename here is its own statement
+ * ## Why there is no rename here
  *
- * `project-rename` renames a project, and the WHERE clause says so: a node id
- * that is not a project's is refused rather than silently renaming a folder.
- * AGX-239's generic `node-rename` is the catalogue's and answers the same
- * `node-renamed` frame; two statements with two different scopes is not the
- * same thing as two answers to one question.
+ * There was one, scoped to project nodes by its WHERE clause, so that a node
+ * id that was not a project's was refused rather than silently renaming a
+ * folder. It is gone, along with the `project-rename` frame it served, because
+ * the refusal it bought protects nobody: a client sending an id meant to
+ * rename *that node*, and the catalogue's `node-rename` renames it. Keeping
+ * both would have left two statements writing one column, answered by one
+ * frame, with the tree's own context menu sending only the generic one -- a
+ * second way to say one thing, and then a statement with no caller.
  */
 
 /** The kind a project node gets. Seeded by migration 0006, not by this. */
@@ -118,27 +121,6 @@ export async function insertProject(
     ]);
     return { ok: true, nodeId };
   });
-}
-
-/**
- * Renames a project, answering whether there was one to rename.
- *
- * One statement, so the check and the write cannot come apart, and scoped to
- * project nodes so that a stale client naming a folder is told no rather than
- * renaming something it did not mean.
- */
-export async function renameProject(
-  database: Queryable,
-  nodeId: NodeId,
-  name: string,
-): Promise<boolean> {
-  const parsed = projectNameSchema.parse(name);
-  const result = await database.query(
-    `UPDATE nodes SET name = ?, name_source = 'user'
-      WHERE id = ? AND id IN (SELECT node_id FROM projects)`,
-    [parsed, nodeId],
-  );
-  return result.rowCount > 0;
 }
 
 /** One project's directory, or `null` when that node is not a project. */

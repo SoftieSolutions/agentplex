@@ -176,7 +176,12 @@ function labelFor(text: string): string {
     ['server-paired', 'serverPaired'],
     ['server-unpaired', 'serverUnpaired'],
     ['project-created', 'projectCreated'],
+    ['node-created', 'nodeCreated'],
     ['node-renamed', 'nodeRenamed'],
+    ['node-moved', 'nodeMoved'],
+    ['node-removed', 'nodeRemoved'],
+    ['node-removal-forgotten', 'nodeRemovalForgotten'],
+    ['catalogue-changed', 'catalogueChanged'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -897,7 +902,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     }
 
     starter.send({
-      type: 'project-rename',
+      type: 'node-rename',
       id: 6,
       nodeId: created.value.nodeId,
       name: 'agentplex (main checkout)',
@@ -918,6 +923,103 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     const layoutWithProject = starter.received.find((text) => labelFor(text) === 'layout');
     if (layoutWithProject === undefined) throw new Error('the layout was not answered');
+    const tree = parseTextFrame(parseHubFrame, layoutWithProject);
+    if (!tree.ok || tree.value.type !== 'layout') {
+      throw new Error('the layout was answered with something else');
+    }
+    const nodeFor = (sessionId: string): string => {
+      if (tree.value.type !== 'layout')
+        throw new Error('the layout was answered with something else');
+      const node = tree.value.nodes.find((candidate) => candidate.anchor?.sessionId === sessionId);
+      if (node === undefined) throw new Error(`no node was placed for ${sessionId}`);
+      return node.id;
+    };
+
+    // The five tree edits, in an order a person could have performed: make a
+    // folder, put the project in it, try to remove a session somebody is
+    // running, remove one nobody is, and then change your mind about it. Every
+    // reply here is a frame the web store has to read, and the refusal in the
+    // middle is the one with a machine named on it.
+    starter.send({ type: 'node-create-folder', id: 8, parentId: null, name: 'this week' });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'nodeCreated'),
+      'the folder to be made',
+    );
+    const nodeCreated = starter.received.find((text) => labelFor(text) === 'nodeCreated');
+    if (nodeCreated === undefined) throw new Error('the folder create was not answered');
+    const folder = parseTextFrame(parseHubFrame, nodeCreated);
+    if (!folder.ok || folder.value.type !== 'node-created') {
+      throw new Error('the folder create was answered with something else');
+    }
+
+    starter.send({
+      type: 'node-move',
+      id: 9,
+      nodeId: created.value.nodeId,
+      parentId: folder.value.nodeId,
+      position: 0,
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'nodeMoved'),
+      'the move to be answered',
+    );
+    const nodeMoved = starter.received.find((text) => labelFor(text) === 'nodeMoved');
+    if (nodeMoved === undefined) throw new Error('the move was not answered');
+
+    // This machine reports itself as holding `session-fix-auth`, so the tree
+    // will not let go of it: the refusal names the machine, and that is what
+    // the client offers a stop against.
+    starter.send({ type: 'node-remove', id: 10, nodeId: nodeFor('session-fix-auth') });
+    // Found by "a refusal that names a holder" rather than by one label, because
+    // `labelFor` splits those in two -- a holder that can be stopped and one
+    // that cannot -- and which of the two this is is the machine's to say.
+    const namesAHolder = (text: string): boolean => {
+      const label = labelFor(text);
+      return label === 'refusalHeldStoppable' || label === 'refusalHeldBusy';
+    };
+    await until(() => starter.received.some(namesAHolder), 'the removal to be refused');
+    const refusalHolder = starter.received.find(namesAHolder);
+    if (refusalHolder === undefined) throw new Error('the removal was not refused');
+
+    starter.send({ type: 'node-remove', id: 11, nodeId: nodeFor('session-spike-wasm') });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'nodeRemoved'),
+      'the removal to be answered',
+    );
+    const nodeRemoved = starter.received.find((text) => labelFor(text) === 'nodeRemoved');
+    if (nodeRemoved === undefined) throw new Error('the removal was not answered');
+
+    starter.send({
+      type: 'node-forget-removal',
+      id: 12,
+      storeId: 'store-agentplex',
+      sessionId: 'session-spike-wasm',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'nodeRemovalForgotten'),
+      'the forgetting to be answered',
+    );
+    const nodeRemovalForgotten = starter.received.find(
+      (text) => labelFor(text) === 'nodeRemovalForgotten',
+    );
+    if (nodeRemovalForgotten === undefined) throw new Error('the forgetting was not answered');
+
+    // Unsolicited, and it arrived on this socket because the tree changed --
+    // not because this client asked. It is the frame the store re-requests a
+    // layout on.
+    const catalogueChanged = starter.received.find((text) => labelFor(text) === 'catalogueChanged');
+    if (catalogueChanged === undefined) throw new Error('no catalogue-changed was broadcast');
+
+    // The tree after all of that: a folder, a project inside it, and the
+    // sessions. It is the one captured layout with a container in it, which is
+    // what the web's "move to a folder" menu is built out of.
+    starter.send({ type: 'layout-request', id: 13 });
+    await until(
+      () => starter.received.filter((text) => labelFor(text) === 'layout').length > 1,
+      'the arranged tree to be answered',
+    );
+    const layoutArranged = starter.received.findLast((text) => labelFor(text) === 'layout');
+    if (layoutArranged === undefined) throw new Error('the second layout was not answered');
 
     await singleHub.cleanup();
 
@@ -1339,6 +1441,13 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('projectCreated', projectCreated);
     captured.set('nodeRenamed', nodeRenamed);
     captured.set('layoutWithProject', layoutWithProject);
+    captured.set('nodeCreated', nodeCreated);
+    captured.set('nodeMoved', nodeMoved);
+    captured.set('refusalHolder', refusalHolder);
+    captured.set('nodeRemoved', nodeRemoved);
+    captured.set('nodeRemovalForgotten', nodeRemovalForgotten);
+    captured.set('catalogueChanged', catalogueChanged);
+    captured.set('layoutArranged', layoutArranged);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
     captured.set('machineStateDiscovered', machineStateDiscovered);

@@ -22,8 +22,6 @@ export interface FakeProjects extends Projects {
   readonly listed: readonly { server: ServerRegistrationId; directory: string | null }[];
   /** Every project made through this fake, newest last. */
   readonly created: readonly { nodeId: NodeId; name: string; directory: string }[];
-  /** Every rename asked for, in order. */
-  readonly renamed: readonly { nodeId: NodeId; name: string }[];
   /** Every directory looked up, in order: what the tree asked as it placed. */
   readonly looked: readonly string[];
   /** What every later browse answers with. */
@@ -39,7 +37,6 @@ export interface FakeProjectsOptions {
 export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProjects {
   const listed: { server: ServerRegistrationId; directory: string | null }[] = [];
   const created: { nodeId: NodeId; name: string; directory: string }[] = [];
-  const renamed: { nodeId: NodeId; name: string }[] = [];
   const looked: string[] = [];
   const directories = new Map<NodeId, string>();
   let minted = 0;
@@ -70,18 +67,6 @@ export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProje
       const nodeId = nodeIdSchema.parse(`project-${String((minted += 1))}`);
       directories.set(nodeId, request.directory);
       created.push({ nodeId, name, directory: request.directory });
-      return { ok: true, nodeId };
-    },
-
-    async rename(nodeId: NodeId, name: string): Promise<ProjectOutcome> {
-      const trimmed = name.trim();
-      if (trimmed === '') {
-        return { ok: false, code: 'refused', problem: 'a project needs a name' };
-      }
-      if (!directories.has(nodeId)) {
-        return { ok: false, code: 'refused', problem: 'this hub has no project by that id' };
-      }
-      renamed.push({ nodeId, name: trimmed });
       return { ok: true, nodeId };
     },
 
@@ -117,10 +102,6 @@ export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProje
 
     get created(): readonly { nodeId: NodeId; name: string; directory: string }[] {
       return created;
-    },
-
-    get renamed(): readonly { nodeId: NodeId; name: string }[] {
-      return renamed;
     },
 
     get looked(): readonly string[] {

@@ -430,7 +430,15 @@ async function start(
   // The real feature over the real migrated schema, because the rows are the
   // subject here: a project is made by a client frame in one of the suites
   // below, and the directory a start carries is read back out of that row.
-  const projects = createProjects({ database, ids, clock, state, connections, logger });
+  const projects = createProjects({
+    database,
+    ids,
+    clock,
+    state,
+    connections,
+    logger,
+    onTreeChanged: () => catalogue.changed(),
+  });
 
   // The tree, so that "the session appeared under the project" is something
   // this file can read rather than something it has to take on trust.
@@ -441,6 +449,8 @@ async function start(
     logger,
     readStore: (storeId) => state.storeSessions(storeId),
     projects,
+    // Nothing here removes a node, and a holder is only read to refuse one.
+    readHolder: () => null,
   });
 
   const sessions = createSessions({ state, projects, connections, logger });
@@ -460,6 +470,7 @@ async function start(
     pairing,
     syncServers: () => connections.sync(),
     projects,
+    catalogue,
   });
 
   await connections.sync();

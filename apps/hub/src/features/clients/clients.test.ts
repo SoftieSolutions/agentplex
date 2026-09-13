@@ -31,6 +31,7 @@ import { createClients, type Clients } from './clients.js';
 import { createFakePairing, type FakePairing } from '../pairing/fake-pairing.js';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
 import { createFakeProjects, type FakeProjects } from '../projects/fake-projects.js';
+import { createFakeCatalogue, type FakeCatalogue } from '../catalogue/fake-catalogue.js';
 
 /**
  * The pipeline, with the real reducer above it and fake sockets below.
@@ -112,6 +113,8 @@ interface Harness {
   readonly syncs: () => number;
   /** The browse this broadcast was built on, for the same reason. */
   readonly projects: FakeProjects;
+  /** The tree this broadcast was built on, for the same reason. */
+  readonly catalogue: FakeCatalogue;
 }
 
 /**
@@ -130,6 +133,7 @@ function harness(
   } = {},
   pairing: FakePairing = createFakePairing(),
   projects: FakeProjects = createFakeProjects(),
+  catalogue: FakeCatalogue = createFakeCatalogue(),
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
@@ -148,8 +152,9 @@ function harness(
       syncs += 1;
     },
     projects,
+    catalogue,
   });
-  return { state, timers, broadcast, sessions, pairing, syncs: () => syncs, projects };
+  return { state, timers, broadcast, sessions, pairing, syncs: () => syncs, projects, catalogue };
 }
 
 /**
@@ -816,28 +821,6 @@ describe('making and renaming a project', () => {
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 3, code: 'refused' });
   });
 
-  it('answers a rename with the frame that names the act rather than the kind', async () => {
-    const { broadcast, projects } = harness();
-    const client = attach(broadcast);
-    await client.hello();
-    await client.say({ type: 'project-create', id: 2, name: 'agentplex', directory: '/srv/work' });
-
-    await client.say({ type: 'project-rename', id: 3, nodeId: 'project-1', name: 'the checkout' });
-
-    expect(projects.renamed).toEqual([{ nodeId: 'project-1', name: 'the checkout' }]);
-    expect(client.received.at(-1)).toEqual({ type: 'node-renamed', replyTo: 3 });
-  });
-
-  it('refuses a rename of a node this hub does not have', async () => {
-    const { broadcast } = harness();
-    const client = attach(broadcast);
-    await client.hello();
-
-    await client.say({ type: 'project-rename', id: 2, nodeId: 'project-nowhere', name: 'x' });
-
-    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 2, code: 'refused' });
-  });
-
   it('refuses a project frame that arrives before hello, and makes nothing', async () => {
     const { broadcast, projects } = harness();
     const client = attach(broadcast);
@@ -847,6 +830,217 @@ describe('making and renaming a project', () => {
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
     expect(projects.created).toEqual([]);
     expect(client.socket.closure).not.toBeNull();
+  });
+});
+
+describe('editing the tree', () => {
+  it('makes a folder and answers the id the client could not have worked out', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'node-create-folder', id: 2, parentId: null, name: 'this week' });
+
+    expect(catalogue.asked).toEqual([
+      { act: 'create-folder', request: { parentId: null, name: 'this week' } },
+    ]);
+    expect(client.received.at(-1)).toEqual({
+      type: 'node-created',
+      replyTo: 2,
+      nodeId: 'folder-1',
+    });
+  });
+
+  it('renames any node through the one frame that names the act rather than a kind', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'node-rename', id: 2, nodeId: 'node-1', name: 'the checkout' });
+
+    expect(catalogue.asked).toEqual([{ act: 'rename', nodeId: 'node-1', name: 'the checkout' }]);
+    expect(client.received.at(-1)).toEqual({ type: 'node-renamed', replyTo: 2 });
+  });
+
+  it('moves a node and answers the word for the act', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'node-move',
+      id: 2,
+      nodeId: 'node-1',
+      parentId: 'node-folder',
+      position: 3,
+    });
+
+    expect(catalogue.asked).toEqual([
+      { act: 'move', nodeId: 'node-1', placement: { parentId: 'node-folder', position: 3 } },
+    ]);
+    expect(client.received.at(-1)).toEqual({ type: 'node-moved', replyTo: 2 });
+  });
+
+  it('removes a node', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'node-remove', id: 2, nodeId: 'node-1' });
+
+    expect(catalogue.asked).toEqual([{ act: 'remove', nodeId: 'node-1' }]);
+    expect(client.received.at(-1)).toEqual({ type: 'node-removed', replyTo: 2 });
+  });
+
+  it('forgets a removal, addressed by the session and never by a node', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'node-forget-removal',
+      id: 2,
+      storeId: 'store-work',
+      sessionId: 'session-1',
+    });
+
+    expect(catalogue.asked).toEqual([
+      { act: 'forget-removal', ref: { storeId: 'store-work', sessionId: 'session-1' } },
+    ]);
+    expect(client.received.at(-1)).toEqual({ type: 'node-removal-forgotten', replyTo: 2 });
+  });
+
+  /**
+   * The refusal that leads somewhere. Every other no on this direction carries
+   * `holder: null`; a removal refused because a session is still running names
+   * the machine, so the client can offer the stop rather than only a sentence.
+   */
+  it('passes a removal refusal back whole, holder and all, to the client that asked', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+    const bystander = attach(broadcast);
+    await client.hello();
+    await bystander.hello();
+    catalogue.refuseWith({
+      ok: false,
+      code: 'refused',
+      problem: 'this session is still running; stop it first, and then remove it',
+      holder: { server: 'registration-workshop' as ServerRegistrationId, stoppable: true },
+    });
+
+    await client.say({ type: 'node-remove', id: 2, nodeId: 'node-1' });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+      message: 'this session is still running; stop it first, and then remove it',
+      holder: { server: 'registration-workshop', stoppable: true },
+    });
+    // A refusal is a reply. The other client did not ask, and nothing about
+    // the world changed because this one was told no.
+    expect(bystander.received.map((frame) => frame.type)).toEqual(['welcome', 'machine-state']);
+  });
+
+  it('answers internal, not refused, when the tree itself throws', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    catalogue.failWith(new Error('database is locked'));
+
+    await client.say({ type: 'node-remove', id: 2, nodeId: 'node-1' });
+    await Promise.resolve();
+
+    // `refused` says the hub understood and declined, which invites nothing;
+    // `internal` says it broke and retrying may work, which is true here. What
+    // broke inside the database is not sent -- it is not a client's to render.
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 2, code: 'internal' });
+  });
+
+  it('refuses a tree frame that arrives before hello, and edits nothing', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+
+    await client.say({ type: 'node-remove', id: 1, nodeId: 'node-1' });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+    expect(catalogue.asked).toEqual([]);
+    expect(client.socket.closure).not.toBeNull();
+  });
+});
+
+describe('the word that the tree changed', () => {
+  it('reaches every established client, unasked, carrying the version', async () => {
+    const { broadcast, catalogue } = harness();
+    const one = attach(broadcast);
+    const two = attach(broadcast);
+    await one.hello();
+    await two.hello();
+
+    catalogue.change();
+
+    for (const client of [one, two]) {
+      expect(client.received.at(-1)).toEqual({ type: 'catalogue-changed', version: 1 });
+    }
+  });
+
+  it('is not sent to a socket that has not said hello', async () => {
+    const { broadcast, catalogue } = harness();
+    const quiet = attach(broadcast);
+
+    catalogue.change();
+
+    expect(quiet.socket.sent).toEqual([]);
+  });
+
+  /**
+   * Not coalesced, which is the one place this differs from the state. The
+   * state is read at flush time, so waiting a turn buys a newer reading; this
+   * carries a version and no content, so a delay would buy nothing and cost
+   * the promptness that is the whole reason it exists.
+   */
+  it('is one frame per change rather than one frame per turn of the loop', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    catalogue.change();
+    catalogue.change();
+    catalogue.change();
+
+    expect(
+      client.received
+        .filter((frame) => frame.type === 'catalogue-changed')
+        .map((frame) => frame.version),
+    ).toEqual([1, 2, 3]);
+  });
+
+  it('costs one client its own word, not everybody theirs, when its socket throws', async () => {
+    const { broadcast, catalogue } = harness();
+    const broken = attach(broadcast);
+    const working = attach(broadcast);
+    await broken.hello();
+    await working.hello();
+    const failing = broken.socket as { send: (text: string) => void };
+    failing.send = () => {
+      throw new Error('socket is closing');
+    };
+
+    catalogue.change();
+
+    expect(working.received.at(-1)).toEqual({ type: 'catalogue-changed', version: 1 });
+  });
+
+  it('stops when the broadcast does, so a late change reaches nobody', async () => {
+    const { broadcast, catalogue } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    const sent = client.socket.sent.length;
+
+    broadcast.stop();
+    catalogue.change();
+
+    expect(client.socket.sent.length).toBe(sent);
   });
 });
 

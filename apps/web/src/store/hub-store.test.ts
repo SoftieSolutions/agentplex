@@ -652,14 +652,19 @@ describe('subscriptions', () => {
 });
 
 /**
- * The project frames, and the one thing the store does beyond remembering them.
+ * The project frames, and the tree frames beside them.
  *
- * A project made by this client changes the tree, and there is no broadcast
- * saying so yet -- `catalogue-changed` is its own ticket. So the store asks for
- * the tree again, and only when something is watching it: a re-ask nobody is
+ * What the store does beyond remembering an answer is ask for the layout
+ * again, and it does that on one frame only: `catalogue-changed`, which the
+ * hub broadcasts after every change to the tree whoever made it. It used to
+ * ask on each reply instead, which had the shape of the problem wrong in both
+ * directions -- the client that made the change got two asks once the
+ * broadcast existed, and every other tab got none at all.
+ *
+ * It asks only when something is watching the tree: a re-ask nobody is
  * listening for is a frame sent for nothing.
  */
-describe('projects', () => {
+describe('projects and the tree', () => {
   const CREATE: HubCommand = {
     type: 'project-create',
     name: 'agentplex',
@@ -677,13 +682,13 @@ describe('projects', () => {
     expect(h.store.getSnapshot().lastRefusal).toBeNull();
   });
 
-  it('asks for the tree again once a project has been made, if anybody is looking', async () => {
+  it('asks for the tree again when the hub says the tree changed', async () => {
     const h = harness();
     const { socket } = await establish(h);
     h.store.subscribeLayout();
     const before = sentFrames(socket).length;
 
-    socket.deliver(hubFrames.projectCreated);
+    socket.deliver(hubFrames.catalogueChanged);
 
     expect(sentFrames(socket).slice(before)).toEqual([{ type: 'layout-request', id: 3 }]);
   });
@@ -693,21 +698,78 @@ describe('projects', () => {
     const { socket } = await establish(h);
     const before = sentFrames(socket).length;
 
-    socket.deliver(hubFrames.projectCreated);
-    socket.deliver(hubFrames.nodeRenamed);
+    socket.deliver(hubFrames.catalogueChanged);
 
     expect(sentFrames(socket).slice(before)).toEqual([]);
   });
 
-  it('asks for the tree again after a rename, because the name on it changed', async () => {
+  it('asks nothing on a reply, because the broadcast is what says the tree moved', async () => {
     const h = harness();
     const { socket } = await establish(h);
     h.store.subscribeLayout();
     const before = sentFrames(socket).length;
 
-    socket.deliver(hubFrames.nodeRenamed);
+    for (const frame of [
+      hubFrames.projectCreated,
+      hubFrames.nodeCreated,
+      hubFrames.nodeRenamed,
+      hubFrames.nodeMoved,
+      hubFrames.nodeRemoved,
+      hubFrames.nodeRemovalForgotten,
+    ]) {
+      socket.deliver(frame);
+    }
 
-    expect(sentFrames(socket).slice(before)).toEqual([{ type: 'layout-request', id: 3 }]);
+    expect(sentFrames(socket).slice(before)).toEqual([]);
+  });
+
+  it('keeps the id of a folder it made, and nothing for the four edits that make none', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.nodeCreated);
+    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 8, nodeId: 'hub-5' });
+
+    socket.deliver(hubFrames.nodeMoved);
+    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 9, nodeId: null });
+
+    socket.deliver(hubFrames.nodeRemoved);
+    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 11, nodeId: null });
+
+    socket.deliver(hubFrames.nodeRemovalForgotten);
+    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 12, nodeId: null });
+  });
+
+  it('keeps the machine on a refusal that names one, so a stop can be offered', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.refusalHolder);
+
+    expect(h.store.getSnapshot().lastRefusal).toEqual({
+      replyTo: 10,
+      code: 'refused',
+      message: 'this session is still running; stop it first, and then remove it',
+      holder: { server: 'registration-mbp-robert', stoppable: false },
+    });
+
+    // A later yes clears it: the last thing the hub said is no longer a no.
+    socket.deliver(hubFrames.nodeRemoved);
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('queues a tree edit while the connection is down, like any other once-only intent', async () => {
+    const h = harness();
+    h.store.subscribe(() => {});
+    await settle();
+
+    const outcome = h.store.sendCommand({ type: 'node-remove', nodeId: 'hub-2' as never });
+
+    expect(outcome).toMatchObject({ accepted: true, delivery: 'queued' });
+    const socket = h.sockets.sockets[0] as FakeSocket;
+    socket.open();
+    socket.deliver(hubFrames.welcome);
+    expect(sentFrames(socket).at(-1)).toEqual({ type: 'node-remove', id: 1, nodeId: 'hub-2' });
   });
 
   it('reads a tree with a project in it, exactly as the hub sent it', async () => {
