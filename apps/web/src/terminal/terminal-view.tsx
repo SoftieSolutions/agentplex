@@ -91,6 +91,29 @@ export function TerminalView({
         minHeight: 0,
         padding: '14px 18px',
         background: colorForRole('terminalBackground', scheme),
+        /**
+         * The browser has no gesture to make on this box, because this box has
+         * none to give it. xterm 6 keeps no scroll container -- its
+         * `.xterm-viewport` is an empty element and the screen sits in a
+         * scrollable element whose position is a number the renderer repaints
+         * from -- so a pan handed to the browser here reaches nothing and is
+         * offered to the page instead, which on a phone is the shell moving
+         * when somebody meant to read what an agent printed.
+         *
+         * `none` rather than `pan-y`, and that is the difference between a
+         * gesture that works and one that does not. Under `pan-y` the browser
+         * may start a pan of its own and stop letting the page cancel the
+         * touch, and the touch watch `attachEmulator` puts on this element has
+         * to cancel it -- to keep the page still, and to suppress the
+         * compatibility mouse events xterm would otherwise read as the start
+         * of a text selection drag.
+         *
+         * It says nothing about the divider, whose own `none` is its own
+         * decision. `touch-action` is not inherited, which was checked against
+         * the built app rather than assumed: the divider computed `none` while
+         * this element, inside it, computed `auto`.
+         */
+        touchAction: 'none',
       }}
     />
   );

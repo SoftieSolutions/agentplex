@@ -91,6 +91,16 @@ export interface FakeEmulator extends TerminalEmulator {
   readonly pasted: readonly string[];
   readonly focused: number;
   readonly disposed: boolean;
+  /**
+   * Every distance the pane asked this emulator to move through the
+   * scrollback, in CSS pixels and in order.
+   *
+   * Pixels and not lines, because pixels are what crosses the seam: what a
+   * drag of 40px is in lines depends on a cell height only a real layout has,
+   * and a fake that answered with lines would be inventing the one number
+   * this seam exists to keep on the emulator's side.
+   */
+  readonly scrolledPixels: readonly number[];
   /** How many times the pane asked this emulator to re-measure its box. */
   readonly fitted: number;
   /**
@@ -132,6 +142,7 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
       let fitsBeforeFirstWrite: number | null = null;
       let disposed = false;
       let selected = '';
+      const scrolledPixels: number[] = [];
       const search = createFakeSearch();
       const emulator: FakeEmulator = {
         search,
@@ -153,6 +164,9 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
         },
         focus(): void {
           focused += 1;
+        },
+        scrollPixels(pixels: number): void {
+          scrolledPixels.push(pixels);
         },
         dispose(): void {
           disposed = true;
@@ -180,6 +194,9 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
         },
         get focused(): number {
           return focused;
+        },
+        get scrolledPixels(): readonly number[] {
+          return [...scrolledPixels];
         },
         get fitted(): number {
           return fitted;

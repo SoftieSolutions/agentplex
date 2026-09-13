@@ -10,10 +10,38 @@ import type { BoxObservers, FrameScheduler } from './resize.js';
 
 /**
  * The lifecycle through the seam, with a fake emulator: no xterm, no DOM.
- * The container argument is ignored by the fake, so a placeholder stands in
- * for the element the real factory would render into.
+ *
+ * The container is a stand-in rather than a real element, because the two
+ * things the attach does with it are hand it to the factory -- which the fake
+ * ignores -- and hang listeners on it, which is a pair of calls this can
+ * count. jsdom would supply an element and hide that count behind a real
+ * event target; what is worth asserting here is that the listening starts and
+ * stops with the pane, and `touch-scroll.test.ts` is where a gesture is held
+ * to what it scrolls.
  */
-const NO_CONTAINER = null as unknown as HTMLElement;
+interface PretendContainer {
+  readonly element: HTMLElement;
+  /** How many listeners are on it now, which the teardown has to bring to zero. */
+  readonly listening: number;
+}
+
+function pretendContainer(): PretendContainer {
+  let listening = 0;
+  const element = {
+    addEventListener: (): void => {
+      listening += 1;
+    },
+    removeEventListener: (): void => {
+      listening -= 1;
+    },
+  };
+  return {
+    element: element as unknown as HTMLElement,
+    get listening(): number {
+      return listening;
+    },
+  };
+}
 
 /**
  * A box nothing is watching, and frames that run the moment they are asked
@@ -54,9 +82,10 @@ function harness() {
   const announced: (TerminalEmulator | null)[] = [];
   const observed = pretendBoxes();
   const timers = createFakeTimers();
+  const container = pretendContainer();
   const cleanup = attachEmulator({
     emulators,
-    container: NO_CONTAINER,
+    container: container.element,
     feed,
     onData: (data) => typed.push(data),
     onResize: (size) => sizes.push(size),
@@ -67,7 +96,7 @@ function harness() {
   });
   const emulator = emulators.created[0];
   if (emulator === undefined) throw new Error('the factory built nothing');
-  return { feed, typed, sizes, announced, cleanup, emulator, observed, timers };
+  return { feed, typed, sizes, announced, cleanup, emulator, observed, timers, container };
 }
 
 describe('attachEmulator', () => {
@@ -80,7 +109,7 @@ describe('attachEmulator', () => {
 
     attachEmulator({
       emulators,
-      container: NO_CONTAINER,
+      container: pretendContainer().element,
       feed,
       onData: () => {},
       onResize: () => {},
@@ -146,7 +175,7 @@ describe('attachEmulator', () => {
 
     attachEmulator({
       emulators,
-      container: NO_CONTAINER,
+      container: pretendContainer().element,
       feed,
       onData: () => {},
       onResize: () => {},
@@ -184,6 +213,19 @@ describe('attachEmulator', () => {
     // The first went at once; the second was still inside the settle window,
     // and by the time it would have gone the pane it describes is gone.
     expect(sizes).toEqual([{ cols: 120, rows: 40 }]);
+  });
+
+  it('gives a finger somewhere to land, and takes it back with the element', () => {
+    // The gesture is the pane's own rather than the browser's: xterm 6 keeps
+    // no scroll container and registers no touch listener, so without this
+    // there is nothing on a phone to move the scrollback with.
+    const { container, emulator, cleanup } = harness();
+    expect(container.listening).toBeGreaterThan(0);
+
+    cleanup();
+
+    expect(container.listening).toBe(0);
+    expect(emulator.scrolledPixels).toEqual([]);
   });
 
   it('tears down in the safe order: announce null, stop bytes, stop fitting, dispose', () => {
