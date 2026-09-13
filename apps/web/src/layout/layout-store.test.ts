@@ -2,11 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { nodeIdSchema, sessionRefSchema } from '@agentplex/protocol';
 import { createFakeTimers } from '../store/timers.js';
 import { createLayoutStore, type LayoutHub } from './layout-store.js';
-import { DEFAULT_TREE, parsePaneLayout, serializePaneLayout, sessionPane } from './tree.js';
+import {
+  DEFAULT_TREE,
+  docPane,
+  parsePaneLayout,
+  serializePaneLayout,
+  sessionPane,
+} from './tree.js';
 import { parseWorkspace, serializeWorkspace } from './workspace.js';
 
 const SESSION = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-1' });
 const OTHER = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-2' });
+const DOC = nodeIdSchema.parse('hub-5');
 
 /**
  * The hub as the layout store sees it: an answer that can arrive, and a place
@@ -147,6 +154,35 @@ describe('what saves and what never does', () => {
     expect(h.store.getSnapshot().focus).toEqual(['first']);
     h.timers.fireAll();
     expect(h.saves).toHaveLength(savesSoFar);
+  });
+
+  it('shows a document by the same three rules a session is shown by', () => {
+    const h = harness();
+    h.answer(null);
+    h.store.showDoc(DOC);
+    h.timers.fireAll();
+    expect(h.saves).toEqual([serializePaneLayout(docPane(DOC))]);
+
+    h.store.split('row');
+    h.timers.fireAll();
+    const savesSoFar = h.saves.length;
+    // The document is already on screen: focusing it is not an arrangement.
+    h.store.showDoc(DOC);
+    expect(h.store.getSnapshot().focus).toEqual(['first']);
+    h.timers.fireAll();
+    expect(h.saves).toHaveLength(savesSoFar);
+
+    // A session into the focused pane does not disturb the document beside it.
+    h.store.focusPane(['second']);
+    h.store.showSession(SESSION);
+    h.timers.fireAll();
+    expect(h.store.getSnapshot().tree).toEqual({
+      kind: 'split',
+      direction: 'row',
+      ratio: 0.5,
+      first: docPane(DOC),
+      second: sessionPane(SESSION),
+    });
   });
 
   it('never saves on focus movement or a click into a pane', () => {

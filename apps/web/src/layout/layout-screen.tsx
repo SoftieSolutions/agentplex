@@ -1,5 +1,5 @@
 import { useCallback, useState, useSyncExternalStore, type JSX } from 'react';
-import type { SessionRef } from '@agentplex/protocol';
+import type { NodeId, SessionRef } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { createShortcutRegistry, type ShortcutRegistry } from '../terminal/shortcuts.js';
 import { Stack, Text, useComputedColorScheme } from '../ui/components.js';
@@ -20,10 +20,11 @@ import type { FocusDirection } from './operations.js';
  * are layout verbs (split, close, move focus); everything inside a pane stays
  * the pane's.
  *
- * The route's session is declared to the layout through the subscription
- * callback rather than an effect: `useSyncExternalStore` re-subscribes when
- * the callback's identity changes, the parsed session ref is memoized on the
- * hash, so "the address names a session" reaches the store exactly when the
+ * The route's session -- or its document, which arrives the same way -- is
+ * declared to the layout through the subscription callback rather than an
+ * effect: `useSyncExternalStore` re-subscribes when the callback's identity
+ * changes, and each route hook memoizes its parsed value on the hash, so "the
+ * address names a session" (or a document) reaches the store exactly when the
  * address changes, and outside render.
  */
 
@@ -128,12 +129,19 @@ function buildHeldStores(hub: HubStore, injected: LayoutStore | undefined): Held
 export interface LayoutScreenProps {
   /** The session the address names, or `null` for no session route. */
   readonly session: SessionRef | null;
+  /** The document the address names, or `null` for no document route. */
+  readonly doc?: NodeId | null;
   /** The page's one hub store, handed down from the root. */
   readonly store: HubStore;
   readonly layoutStore?: LayoutStore;
 }
 
-export function LayoutScreen({ session, store: hub, layoutStore }: LayoutScreenProps): JSX.Element {
+export function LayoutScreen({
+  session,
+  doc = null,
+  store: hub,
+  layoutStore,
+}: LayoutScreenProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const [held] = useState<HeldStores>(() => buildHeldStores(hub, layoutStore));
   const { layout, registry, registerPane } = held;
@@ -146,9 +154,10 @@ export function LayoutScreen({ session, store: hub, layoutStore }: LayoutScreenP
     (listener: () => void) => {
       const detach = layout.subscribe(listener);
       if (session !== null) layout.showSession(session);
+      if (doc !== null) layout.showDoc(doc);
       return detach;
     },
-    [layout, session],
+    [layout, session, doc],
   );
   const snapshot = useSyncExternalStore(subscribe, layout.getSnapshot);
 

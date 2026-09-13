@@ -1,4 +1,5 @@
 import { useRef, useState, type JSX, type PointerEvent } from 'react';
+import { DocPane } from '../docs/doc-pane.js';
 import type { HubStore } from '../store/hub-store.js';
 import { SessionPane } from '../terminal/session-pane.js';
 import { sessionHash } from '../terminal/session-route.js';
@@ -190,6 +191,11 @@ function PaneContentView({
           store={view.hub}
         />
       );
+    case 'doc':
+      // Keyed on the node for the reason a session pane is keyed on its
+      // session: the editor store holding unsaved text belongs to one
+      // document, and a pane whose content changed must not carry it over.
+      return <DocPane key={content.nodeId} nodeId={content.nodeId} store={view.hub} />;
     case 'empty':
       return (
         <Placeholder scheme={view.scheme} title="No session here yet">

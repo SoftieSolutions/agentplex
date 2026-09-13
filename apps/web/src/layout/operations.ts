@@ -1,4 +1,3 @@
-import type { SessionRef } from '@agentplex/protocol';
 import {
   RATIO_BOUNDS,
   emptyPane,
@@ -53,16 +52,35 @@ export function panes(tree: LayoutTree): readonly { path: PanePath; leaf: PaneLe
   return [...prefix('first'), ...prefix('second')];
 }
 
-/** Where this session is already showing, or `null` when it is not. */
-export function findSessionPane(tree: LayoutTree, session: SessionRef): PanePath | null {
+/**
+ * Whether two panes show the same thing.
+ *
+ * Identity of what is shown, and nothing structural: a session is its store
+ * and its id, a document is its node. An empty pane and an unreadable one are
+ * never "the same thing" as anything, including each other -- this exists to
+ * answer "is this already on screen", and the answer for a pane showing
+ * nothing is no.
+ */
+export function samePaneContent(one: PaneContent, other: PaneContent): boolean {
+  switch (one.type) {
+    case 'session':
+      return (
+        other.type === 'session' &&
+        one.session.storeId === other.session.storeId &&
+        one.session.sessionId === other.session.sessionId
+      );
+    case 'doc':
+      return other.type === 'doc' && one.nodeId === other.nodeId;
+    case 'empty':
+    case 'unknown':
+      return false;
+  }
+}
+
+/** Where this is already showing, or `null` when it is not. */
+export function findPaneShowing(tree: LayoutTree, content: PaneContent): PanePath | null {
   for (const { path, leaf } of panes(tree)) {
-    if (
-      leaf.content.type === 'session' &&
-      leaf.content.session.storeId === session.storeId &&
-      leaf.content.session.sessionId === session.sessionId
-    ) {
-      return path;
-    }
+    if (samePaneContent(leaf.content, content)) return path;
   }
   return null;
 }

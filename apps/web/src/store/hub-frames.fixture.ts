@@ -51,10 +51,13 @@ export const hubFrames = {
   nodeRenamed: '{"type":"node-renamed","replyTo":6}',
   docCreated: '{"type":"doc-created","replyTo":8,"nodeId":"hub-5"}',
   docSaved: '{"type":"doc-saved","replyTo":9,"updatedAt":3}',
+  docSavedAfterOpen: '{"type":"doc-saved","replyTo":11,"updatedAt":4}',
+  refusalDocAway:
+    '{"type":"refusal","replyTo":12,"code":"refused","message":"mbp-robert is not connected right now, and the hub holds no copy of its documents: the machine that wrote a document is the only one that can answer for it","holder":null}',
   docContent:
     '{"type":"doc-content","replyTo":10,"content":"# Plan\\n\\n- read the failing test\\n- fix the refresh loop\\n- write it up\\n","updatedAt":3}',
   layoutWithProject:
-    '{"type":"layout","replyTo":11,"nodes":[{"id":"hub-2","parentId":null,"kind":"session","position":0,"name":"fix-auth-refresh","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-fix-auth"}},{"id":"hub-3","parentId":null,"kind":"session","position":1,"name":"spike-wasm","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-spike-wasm"}},{"id":"hub-4","parentId":null,"kind":"project","position":2,"name":"agentplex (main checkout)","named":true,"anchor":null},{"id":"hub-5","parentId":"hub-4","kind":"doc","position":0,"name":"plan.md","named":true,"anchor":null}]}',
+    '{"type":"layout","replyTo":13,"nodes":[{"id":"hub-2","parentId":null,"kind":"session","position":0,"name":"fix-auth-refresh","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-fix-auth"}},{"id":"hub-3","parentId":null,"kind":"session","position":1,"name":"spike-wasm","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-spike-wasm"}},{"id":"hub-4","parentId":null,"kind":"project","position":2,"name":"agentplex (main checkout)","named":true,"anchor":null},{"id":"hub-5","parentId":"hub-4","kind":"doc","position":0,"name":"plan.md","named":true,"anchor":null}]}',
   nodeCreated: '{"type":"node-created","replyTo":8,"nodeId":"hub-6"}',
   nodeMoved: '{"type":"node-moved","replyTo":9}',
   refusalHolder:

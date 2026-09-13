@@ -2,7 +2,7 @@ import type { NodeId, SessionRef } from '@agentplex/protocol';
 import type { Timers } from '../store/timers.js';
 import {
   closePane,
-  findSessionPane,
+  findPaneShowing,
   moveFocus,
   paneAt,
   panes,
@@ -13,8 +13,8 @@ import {
 } from './operations.js';
 import {
   DEFAULT_TREE,
-  sessionPane,
   type LayoutTree,
+  type PaneContent,
   type PanePath,
   type SplitDirection,
 } from './tree.js';
@@ -101,6 +101,12 @@ export interface LayoutStore {
    * which a save would then write over the real arrangement.
    */
   showSession(session: SessionRef): void;
+  /**
+   * Shows a document, by the same three rules a session is shown by: focus the
+   * pane already holding it, or put it in the focused pane, and wait for the
+   * hub's answer rather than arranging a screen over the stored one.
+   */
+  showDoc(nodeId: NodeId): void;
   /** Moves focus to the pane across the boundary. Never saves. */
   focusMove(direction: FocusDirection): void;
   /** Focuses the pane at `path` (a click landed in it). Never saves. */
@@ -137,8 +143,8 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
   let cancelSave: (() => void) | null = null;
   /** True while an edit has happened that no save has carried yet. */
   let dirty = false;
-  /** A session asked for before the answer arrived, waiting for it. */
-  let requested: SessionRef | null = null;
+  /** Something asked for before the answer arrived, waiting for it. */
+  let requested: PaneContent | null = null;
 
   let detachHub: (() => void) | null = null;
   let detachInterest: (() => void) | null = null;
@@ -187,8 +193,8 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
   }
 
   /** The showing rules, shared by the live call and the deferred one. */
-  function show(session: SessionRef): void {
-    const showing = findSessionPane(snapshot.tree, session);
+  function show(content: PaneContent): void {
+    const showing = findPaneShowing(snapshot.tree, content);
     if (showing !== null) {
       // Already on screen: this is a focus change, which never saves.
       if (JSON.stringify(showing) !== JSON.stringify(snapshot.focus)) {
@@ -196,14 +202,28 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
       }
       return;
     }
-    const tree = setPaneContent(snapshot.tree, snapshot.focus, { type: 'session', session });
+    const tree = setPaneContent(snapshot.tree, snapshot.focus, content);
     // A focus that names no pane can only mean a snapshot nothing renders;
-    // showing the session as the whole layout over-claims nothing.
+    // showing it as the whole layout over-claims nothing.
     if (tree === null) {
-      structural({ tree: sessionPane(session), focus: [] });
+      structural({ tree: { kind: 'pane', content }, focus: [] });
       return;
     }
     structural({ tree });
+  }
+
+  /**
+   * Not before the hub has answered: replacing the default pane now and
+   * marking the tree the user's would outrank the stored layout the moment
+   * before it arrived, and then save one pane over it. The request waits
+   * instead, applied by `adoptAnswer`.
+   */
+  function showOrWait(content: PaneContent): void {
+    if (!snapshot.loaded) {
+      requested = content;
+      return;
+    }
+    show(content);
   }
 
   return {
@@ -257,15 +277,11 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     },
 
     showSession(session: SessionRef): void {
-      // Not before the hub has answered: replacing the default pane now and
-      // marking the tree the user's would outrank the stored layout the
-      // moment before it arrived, and then save one pane over it. The
-      // request waits instead, applied by `adoptAnswer`.
-      if (!snapshot.loaded) {
-        requested = session;
-        return;
-      }
-      show(session);
+      showOrWait({ type: 'session', session });
+    },
+
+    showDoc(nodeId: NodeId): void {
+      showOrWait({ type: 'doc', nodeId });
     },
 
     focusMove(direction: FocusDirection): void {

@@ -490,17 +490,6 @@ export function matchWords(matched: CatalogueMatchField | null): string | null {
 }
 
 /**
- * What this build can honestly say about a doc it meets in the tree.
- *
- * A doc is a node kind the hub's own table already names, and the rows that
- * make one, plus the frames that open one, are stack D's. So the tree draws
- * the leaf -- it is in the catalogue and leaving it out would be a tree that
- * disagrees with the hub about what is in it -- and says what it cannot do
- * with it, rather than offering a click that goes nowhere.
- */
-export const DOC_NOTE = 'a doc: opening one needs the docs stack, which this build does not carry';
-
-/**
  * The quiet second line on a row: what a client can say that the name cannot.
  *
  * Two things, and both are absences rather than facts about the session. A
@@ -512,8 +501,7 @@ export const DOC_NOTE = 'a doc: opening one needs the docs stack, which this bui
  */
 export function rowNotes(item: CatalogueItem): readonly string[] {
   const notes: string[] = [];
-  if (isDoc(item.kind)) notes.push(DOC_NOTE);
-  else if (item.anchor !== null && item.session === null) {
+  if (item.anchor !== null && item.session === null) {
     notes.push('no server is reporting this session');
   }
   const match = matchWords(item.matched);

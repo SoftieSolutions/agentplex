@@ -19,11 +19,10 @@ import { PROJECT_KIND } from '../projects/project-kind.js';
 export const FOLDER_KIND: NodeKind = nodeKindSchema.parse('folder');
 export const SESSION_KIND: NodeKind = nodeKindSchema.parse('session');
 /**
- * The doc kind, which the hub's `node_kinds` table already names and nothing
- * in this build can open: the rows that make a node a doc, and the frames that
- * read one, are stack D's. It is named here so the tree can draw such a node
- * as the leaf it is and say what it needs, rather than meeting an unknown
- * string and drawing a doc as a plain node with no explanation on it.
+ * The doc kind, which the hub's `node_kinds` table names and this build can
+ * open. It is named here so the tree can draw such a node as the leaf it is
+ * and address it, rather than meeting an unknown string and drawing a
+ * document as a plain node with nothing to click.
  */
 export const DOC_KIND: NodeKind = nodeKindSchema.parse('doc');
 export { PROJECT_KIND };

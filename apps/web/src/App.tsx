@@ -1,6 +1,7 @@
 import { type JSX } from 'react';
 
 import type { TokenStore } from './auth/token.js';
+import { useDocRoute } from './docs/doc-route.js';
 import { LayoutScreen } from './layout/layout-screen.js';
 import { SessionListScreen } from './sessions/session-list-screen.js';
 import { SettingsRoute } from './settings/settings-route.js';
@@ -48,11 +49,12 @@ export function App({ hub, tokens }: AppProps): JSX.Element {
  */
 function AppShell({ hub, tokens }: AppProps): JSX.Element {
   const sessionRef = useSessionRoute();
-  if (sessionRef !== null) {
+  const doc = useDocRoute();
+  if (sessionRef !== null || doc !== null) {
     // Deliberately not keyed on the route: the layout outlives navigation,
-    // and the screen shows the addressed session in its focused pane. The
-    // panes key their own session mounts.
-    return <LayoutScreen session={sessionRef} store={hub} />;
+    // and the screen shows the addressed session -- or document -- in its
+    // focused pane. The panes key their own mounts.
+    return <LayoutScreen session={sessionRef} doc={doc} store={hub} />;
   }
   return (
     <Stack component="main" gap="md">
