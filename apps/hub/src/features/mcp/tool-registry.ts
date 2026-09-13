@@ -116,10 +116,9 @@ export interface McpTool {
   /**
    * What this tool does to the world, as the protocol's own hints.
    *
-   * Required rather than optional, so that a tool author has to state it.
-   * `readOnly` below is the whole of what this build has; the acting tools
-   * AGX-44 adds will have to say something else here, in the one field a client
-   * reads before deciding whether to ask a person first.
+   * Required rather than optional, so that a tool author has to state it. It
+   * is the one field a client reads before deciding whether to ask a person
+   * first, and the three constants below are the whole vocabulary this hub has.
    */
   readonly annotations: ToolAnnotations;
   run(args: unknown): Promise<McpAnswer<McpToolAnswer>>;
@@ -134,6 +133,44 @@ export interface McpTool {
  * reader can be misled by.
  */
 export const readOnly: ToolAnnotations = { readOnlyHint: true };
+
+/**
+ * A tool that changes something, and nothing it changes was there before.
+ *
+ * Starting a session and typing into one: both alter the world and neither
+ * takes anything away, which is exactly what `destructiveHint: false` says. It
+ * is stated rather than left off because with `readOnlyHint: false` the field
+ * has a meaning and a default -- the specification's default is `true` -- so
+ * silence here would tell a client that these tools destroy things.
+ *
+ * `idempotentHint: false` for the same reason it is honest: calling either of
+ * these twice does it twice. Two starts are two agents, and a prompt sent again
+ * is a prompt typed again.
+ */
+export const acts: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+};
+
+/**
+ * A tool that ends something somebody may be in the middle of.
+ *
+ * Stopping a session kills a process that was working, and the transcript it
+ * leaves behind is not the work it was doing. The hub refuses a stop aimed at a
+ * busy holder -- `session-routing.ts` carries that argument -- and this is the
+ * half of it a client can act on before the call is made, which is the whole
+ * point of the hint: a client that asks a person first should be asking here.
+ *
+ * Not idempotent either. A second stop of a session that has since been started
+ * again would stop that one, and a client told otherwise might retry a call it
+ * only thought had failed.
+ */
+export const destroys: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+};
 
 export interface McpToolDefinition<Input extends McpToolInput, Output extends McpToolOutput> {
   readonly name: string;

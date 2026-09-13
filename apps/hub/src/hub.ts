@@ -415,12 +415,14 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // feature is: this file is the only one that knows the concrete set. It holds
   // no session and nothing durable, so it is the last thing that has to be
   // built and the first of the two that has to be stopped.
-  // The two features its tools read are handed in narrowed: the fleet state as
-  // the projection it publishes to clients, and the relay as subscribe and
-  // detach. That is where "MCP gains no capability the UI lacks" is enforced
-  // rather than asserted -- a tool cannot reach the reducer's own snapshot or
-  // type into a terminal, because neither is on the seam it was given.
-  const mcp = createMcp({ hubId, clientToken, state, terminal, timers, logger });
+  // The three features its tools use are handed in narrowed: the fleet state as
+  // the projection it publishes to clients, the relay as subscribe, type and
+  // detach, and sessions as start and stop. That is where "MCP gains no
+  // capability the UI lacks" is enforced rather than asserted -- a tool cannot
+  // reach the reducer's own snapshot, cannot resize somebody's terminal and
+  // cannot put a frame on a socket, because none of it is on the seams it was
+  // given. Every one of these is a call a client's own frame already makes.
+  const mcp = createMcp({ hubId, clientToken, state, terminal, sessions, timers, logger });
 
   const web = createWeb({ files: webAssets, logger });
 
