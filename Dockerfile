@@ -672,11 +672,34 @@ ENV PATH=/home/alice/.agentplex/bin:/home/alice/.agentplex/node/bin:/usr/local/s
 
 # The hub's own doctor, which is the end-to-end statement: a program that loads
 # every bundled package, reports a machine that opens no terminals, and exits 0
-# on a box with no compiler on it. Exit 0 is the assertion here, unlike the
-# server stage above, because on a hub there is nothing left that could be
-# unusable.
-RUN agentplex doctor --role=hub | tee /tmp/hub-doctor.log
-RUN grep -q 'opens no terminals' /tmp/hub-doctor.log
+# on a box with no compiler on it.
+#
+# The two hub settings are supplied on the command line, the way the server
+# stage above supplies the identity file its role cannot do without. They are
+# what a hub has *after setup* and not what `install.sh` leaves behind: the
+# script writes both keys commented out, because guessing a database path is
+# worse than leaving one absent, so a machine that has only been bootstrapped
+# genuinely has neither. `agentplex doctor` reports that as two findings and
+# exits 1, which is a true statement about a half-finished hub (AGX-228) and the
+# wrong machine for this stage to be describing -- what is under test here is a
+# packaging claim, and it needs a hub configured the way a running one is.
+#
+# The database is named at the path `install.sh` suggests in that file, under
+# the prefix it created, so the check that answers `ready` is answering about a
+# directory this install really made. The token is a fake with no secret in it;
+# what the hub requires of one is a length.
+#
+# Exit 0 is the assertion, unlike the server stage above: every hub check can
+# pass on this machine, including the client package, which resolves here as two
+# siblings under one global root and nowhere in a checkout.
+RUN agentplex doctor --role=hub \
+    --database-file="$HOME/.agentplex/hub.sqlite" \
+    --client-token=bootstrap-client-token-not-a-secret \
+    | tee /tmp/hub-doctor.log
+RUN grep -q 'opens no terminals' /tmp/hub-doctor.log \
+    && grep -Eq '^  database +ready +/home/alice/\.agentplex/hub\.sqlite$' /tmp/hub-doctor.log \
+    && grep -Eq '^  client token +ready$' /tmp/hub-doctor.log \
+    && grep -Eq '^  web client +present$' /tmp/hub-doctor.log
 
 # The other half of the same decision is deliberately not asserted here. A
 # `--role=server` run on this machine would install the toolchain through the
