@@ -94,6 +94,17 @@ export interface FakeEmulator extends TerminalEmulator {
   /** How many times the pane asked this emulator to re-measure its box. */
   readonly fitted: number;
   /**
+   * The fit count as it stood when the first byte arrived, or `null` while
+   * nothing has been written.
+   *
+   * A count frozen at a moment rather than a log of calls, because the only
+   * ordering worth holding the attach to is this one: a replay written into
+   * an emulator nobody has fitted is reflowed at 80x24 and then again at the
+   * size the pane actually has, and a user sees it straighten itself out.
+   * Zero here is that bug; anything else is the pane having measured first.
+   */
+  readonly fitsBeforeFirstWrite: number | null;
+  /**
    * The emulator having taken a new size: fires whatever onResize listener
    * the view wired up.
    *
@@ -118,12 +129,14 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
       const pasted: string[] = [];
       let focused = 0;
       let fitted = 0;
+      let fitsBeforeFirstWrite: number | null = null;
       let disposed = false;
       let selected = '';
       const search = createFakeSearch();
       const emulator: FakeEmulator = {
         search,
         write(chunk: Uint8Array): void {
+          fitsBeforeFirstWrite ??= fitted;
           written.push(chunk);
         },
         onData(listener: (data: string) => void): void {
@@ -170,6 +183,9 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
         },
         get fitted(): number {
           return fitted;
+        },
+        get fitsBeforeFirstWrite(): number | null {
+          return fitsBeforeFirstWrite;
         },
         get disposed(): boolean {
           return disposed;

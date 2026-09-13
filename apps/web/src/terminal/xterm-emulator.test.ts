@@ -7,6 +7,7 @@ import type { SearchResults, TerminalEmulator, TerminalSearch } from './emulator
 import { ptyChunks } from './pty-chunks.fixture.js';
 import { unicodeChunks } from './unicode-widths.fixture.js';
 import {
+  canMeasureGrid,
   createPaneEmulator,
   createPaneFit,
   createPaneSearch,
@@ -188,6 +189,44 @@ async function writeLine(terminal: PaneTerminal, text: string): Promise<void> {
     terminal.write(`${text}\r\n`, resolve);
   });
 }
+
+/**
+ * The box half of the fit, which is the half a test can reach.
+ *
+ * Opening a terminal needs a renderer and jsdom has none, so the addon's own
+ * arithmetic cannot be run here. What can be run is the question asked before
+ * it, and that is where the decision is: the addon floors a box of nothing at
+ * two columns by one row and resizes to it, so whether a box is real is not
+ * something it can be asked afterwards.
+ */
+describe('whether there is a box to measure at all', () => {
+  function boxed(width: number, height: number): HTMLElement {
+    const element = document.createElement('div');
+    // jsdom lays nothing out, so the numbers a browser would compute are set
+    // here directly. The predicate reads two numbers and this supplies them.
+    Object.defineProperty(element, 'clientWidth', { value: width });
+    Object.defineProperty(element, 'clientHeight', { value: height });
+    return element;
+  }
+
+  it('takes a box with room in it', () => {
+    expect(canMeasureGrid(boxed(640, 480))).toBe(true);
+  });
+
+  it('refuses a collapsed cell, which is not a two-column terminal', () => {
+    // A split dragged shut, or a pane under `display: none`. The agent on the
+    // far end would redraw its whole screen for a window nobody has, and the
+    // pane would come back to output written for it.
+    expect(canMeasureGrid(boxed(0, 0))).toBe(false);
+    expect(canMeasureGrid(boxed(640, 0))).toBe(false);
+    expect(canMeasureGrid(boxed(0, 480))).toBe(false);
+  });
+
+  it('refuses an element that is not there, which is a terminal never opened', () => {
+    expect(canMeasureGrid(null)).toBe(false);
+    expect(canMeasureGrid(undefined)).toBe(false);
+  });
+});
 
 describe('fitting the pane to its box', () => {
   it('measures nothing it cannot measure, and leaves the grid where it was', () => {

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, type JSX } from 'react';
 import type { TerminalSize } from '@agentplex/protocol';
 
+import { browserTimers } from '../store/timers.js';
 import { Box } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { attachEmulator } from './attach.js';
@@ -42,10 +43,10 @@ export interface TerminalViewProps {
  *
  * The same callback is where the box gets watched. A `ResizeObserver` on the
  * element, one fit per animation frame, and the size the emulator settles on
- * going straight out as a frame — all of it attached and detached with the
- * element, which is the one lifetime it can correctly have. An effect would
- * tie it to a render instead, and a pane is resized by a window drag that no
- * render is involved in.
+ * going out as a frame at a rate a pty on another machine can be told at —
+ * all of it attached and detached with the element, which is the one lifetime
+ * it can correctly have. An effect would tie it to a render instead, and a
+ * pane is resized by a divider drag that no render is involved in.
  *
  * Every prop the callback closes over is in its dependency list, so a change
  * of feed, scheme or factory rebuilds the emulator — correct, since all
@@ -76,6 +77,7 @@ export function TerminalView({
         onResize,
         boxes: browserBoxObservers,
         frames: browserFrames,
+        timers: browserTimers,
         emulatorReady,
       }),
     [factory, feed, onData, onResize, emulatorReady],
