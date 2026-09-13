@@ -9,6 +9,11 @@ import {
 } from './identity.js';
 import { layoutSchema } from './layout.js';
 import { machineStateSchema, sessionHolderSchema } from './machine-state.js';
+import {
+  SERVER_ADDRESS_MAX_CHARS,
+  SERVER_LABEL_MAX_CHARS,
+  SERVER_TOKEN_MAX_CHARS,
+} from './pairing.js';
 import { frameParser } from './parse.js';
 import {
   sessionSubscribeFrameSchema,
@@ -180,6 +185,48 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
   sessionUnsubscribeFrameSchema,
   terminalInputFrameSchema,
   terminalResizeFrameSchema,
+  /**
+   * Pairs a server: dial this address, with this token, and call it this.
+   *
+   * The token is the only credential a client frame ever carries, and this is
+   * the one direction it may travel. The hub stores it and never says it
+   * again: no reply carries it, no `machine-state` row has a field for it, and
+   * no log line here names it. A frame that echoed a token back would put a
+   * secret into every client's copy of the state to answer a question the
+   * client that typed it already knows the answer to.
+   *
+   * The three fields are bounded and otherwise unparsed, which is deliberate
+   * and is the opposite of what the rest of this file does. Every content rule
+   * -- `wss://` only, no credentials in the URL, a label with something in it,
+   * a token that is not empty -- lives in `pairing.ts` and is applied by the
+   * hub's handler, because the answer to a typed address that is not an
+   * address has to be a refusal the person reads. A schema strict enough to
+   * reject it here would make the answer a `protocol-error` and a closed
+   * socket: the client would be disconnected for a typo, with the words for it
+   * in a frame that names no request. The bounds stay because they are about
+   * what a socket may carry rather than about what a pairing may say.
+   */
+  z.object({
+    type: z.literal('server-pair'),
+    id: frameIdSchema,
+    label: z.string().max(SERVER_LABEL_MAX_CHARS),
+    address: z.string().max(SERVER_ADDRESS_MAX_CHARS),
+    token: z.string().max(SERVER_TOKEN_MAX_CHARS),
+  }),
+  /**
+   * Revokes one pairing, by the hub's own name for it.
+   *
+   * `registrationId` and not an address or a `ServerId`: the registration is
+   * the unit an operator revokes, it is the key every row on the settings
+   * screen already carries, and it is the only one of the three that names one
+   * pairing rather than possibly two. A server paired with two hubs holds two
+   * tokens, and revoking by machine would be an instruction nobody could aim.
+   */
+  z.object({
+    type: z.literal('server-unpair'),
+    id: frameIdSchema,
+    registrationId: serverRegistrationIdSchema,
+  }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
 ]);
@@ -316,6 +363,37 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
   sessionSubscribedFrameSchema,
   sessionUnsubscribedFrameSchema,
   terminalOutputFrameSchema,
+  /**
+   * The pairing was recorded, and here is the hub's name for it.
+   *
+   * `registrationId` is the whole of the answer, and it is what the client
+   * needs: it is the key the row arriving in the next `machine-state` is drawn
+   * under, so a client that wants to follow what it just paired has the id
+   * before the state carrying it lands.
+   *
+   * What this does not carry is the label, the address or the token. The first
+   * two the client sent and already has; the third it sent and must never be
+   * told again -- a reply that echoed it would spread a secret to answer
+   * nothing. Nothing about the connection is claimed here either: recording a
+   * pairing is not reaching the machine, and whether the hub can is the row's
+   * `phase` to say a moment later.
+   */
+  z.object({
+    type: z.literal('server-paired'),
+    replyTo: frameIdSchema,
+    registrationId: serverRegistrationIdSchema,
+  }),
+  /**
+   * The pairing is revoked: its token is gone and the hub has stopped dialling.
+   *
+   * Nothing to carry. The client named the registration, the row leaves the
+   * next `machine-state`, and an answer that restated the id would be a second
+   * copy of what the request said.
+   */
+  z.object({
+    type: z.literal('server-unpaired'),
+    replyTo: frameIdSchema,
+  }),
   protocolErrorFrameSchema,
 ]);
 export type HubFrame = z.infer<typeof hubFrameSchema>;

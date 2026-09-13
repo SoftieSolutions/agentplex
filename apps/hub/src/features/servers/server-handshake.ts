@@ -6,6 +6,7 @@ import {
   type HubId,
   type HubToServerFrame,
   type ProviderReadiness,
+  type ServerAddress,
   type ServerId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
@@ -18,7 +19,6 @@ import {
   type SocketDialer,
   type Timers,
 } from '@agentplex/node-shared';
-import type { ServerAddress } from '../pairing/pairing.js';
 
 /**
  * The hub's half of the handshake: dial a paired server and find out what is

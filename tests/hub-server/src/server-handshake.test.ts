@@ -4,6 +4,7 @@ import {
   parseTextFrame,
   PROTOCOL_VERSION,
   type HubId,
+  type ServerAddress,
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
@@ -25,7 +26,6 @@ import {
   handshakeWithServer,
   type DialTarget,
 } from '../../../apps/hub/src/features/servers/server-handshake.js';
-import type { ServerAddress } from '../../../apps/hub/src/features/pairing/pairing.js';
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 

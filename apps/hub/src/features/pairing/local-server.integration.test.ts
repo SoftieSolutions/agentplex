@@ -1,11 +1,10 @@
-import { serverIdSchema } from '@agentplex/protocol';
+import { loopbackServerAddress, serverAddressSchema, serverIdSchema } from '@agentplex/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLogger, type Clock, type IdGenerator, type LogRecord } from '@agentplex/node-shared';
 import { createFakeStoreFiles } from '@agentplex/providers/testing';
 import type { Queryable } from '../../db/database.js';
-import { loopbackServerAddress } from './server-address.js';
 import { listServers, registerServer, revokeServer } from './server-registrations.js';
-import { serverAddressSchema, type LiveServerRegistration } from './pairing.js';
+import type { LiveServerRegistration } from './pairing.js';
 import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-schema.js';
 import {
   reconcileLocalServer,

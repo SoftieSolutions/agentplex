@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from './version.js';
 import { parseClientFrame, parseHubFrame, type ClientFrame, type HubFrame } from './client.js';
+import { pairedServerAddressSchema } from './pairing.js';
 import {
   hubIdSchema,
   nodeIdSchema,
@@ -126,6 +127,104 @@ describe('parseClientFrame on the pane layout frames', () => {
   });
 });
 
+describe('parseClientFrame on the pairing frames', () => {
+  const A_PAIR = {
+    type: 'server-pair',
+    id: 1,
+    label: 'gpu-box-01',
+    address: 'wss://gpu-box-01.example:8443',
+    token: 'printed-by-the-server',
+  };
+
+  it('accepts a pairing a person typed', () => {
+    expect(parseClientFrame(A_PAIR).ok).toBe(true);
+  });
+
+  it('accepts an address it will not dial, so the hub can refuse it in words', () => {
+    // The deliberate looseness. Every content rule lives in `pairing.ts` and is
+    // applied by the hub's handler, because a typed address that is not an
+    // address has to come back as a refusal somebody reads -- and a schema
+    // strict enough to reject it here would answer a typo with a closed socket.
+    for (const address of ['ws://gpu-box-01.example:8443', 'not an address', '']) {
+      expect(parseClientFrame({ ...A_PAIR, address }).ok).toBe(true);
+    }
+    expect(parseClientFrame({ ...A_PAIR, label: '   ' }).ok).toBe(true);
+  });
+
+  it('rejects what no pairing form could have submitted', () => {
+    // The bound is about what a socket may carry, not about what a pairing may
+    // say: nobody types four thousand characters of label by accident.
+    expect(parseClientFrame({ ...A_PAIR, label: 'n'.repeat(201) }).ok).toBe(false);
+    expect(parseClientFrame({ ...A_PAIR, address: `wss://${'a'.repeat(4_000)}` }).ok).toBe(false);
+    expect(parseClientFrame({ ...A_PAIR, token: 't'.repeat(4_097) }).ok).toBe(false);
+  });
+
+  it('rejects a pairing with no token: the credential is the point of the frame', () => {
+    const { token: _token, ...withoutToken } = A_PAIR;
+    expect(parseClientFrame(withoutToken).ok).toBe(false);
+  });
+
+  it('drops anything smuggled beside the three fields a pairing has', () => {
+    const smuggled = parseClientFrame({
+      ...A_PAIR,
+      clientToken: 'the-hub-token',
+      serverId: 'server-1',
+      registrationId: 'registration-1',
+    });
+    expect(smuggled.ok).toBe(true);
+    if (!smuggled.ok) return;
+    for (const forbidden of ['clientToken', 'serverId', 'registrationId']) {
+      expect(smuggled.value).not.toHaveProperty(forbidden);
+    }
+  });
+
+  it('takes an unpair by registration and by nothing else', () => {
+    expect(parseClientFrame({ type: 'server-unpair', id: 2, registrationId: 'r-1' }).ok).toBe(true);
+    // Not by address and not by the machine's own id: one names a pairing,
+    // the other two can name two of them or none.
+    expect(
+      parseClientFrame({ type: 'server-unpair', id: 2, address: 'wss://box.example' }).ok,
+    ).toBe(false);
+    const byServer = parseClientFrame({
+      type: 'server-unpair',
+      id: 2,
+      registrationId: 'r-1',
+      serverId: 'server-1',
+    });
+    expect(byServer.ok).toBe(true);
+    if (byServer.ok) expect(byServer.value).not.toHaveProperty('serverId');
+  });
+});
+
+describe('parseHubFrame on the pairing replies', () => {
+  it('answers a pairing with the hub\u2019s own name for it', () => {
+    expect(parseHubFrame({ type: 'server-paired', replyTo: 1, registrationId: 'r-1' }).ok).toBe(
+      true,
+    );
+  });
+
+  it('has nowhere to put the token, so no reply can ever echo one', () => {
+    // Not a rule the hub remembers: the reply shape has no field for a
+    // credential, and a parser that met one drops it on the way through.
+    const echoed = parseHubFrame({
+      type: 'server-paired',
+      replyTo: 1,
+      registrationId: 'r-1',
+      token: 'printed-by-the-server',
+      address: 'wss://gpu-box-01.example:8443',
+    });
+    expect(echoed.ok).toBe(true);
+    if (!echoed.ok) return;
+    expect(JSON.stringify(echoed.value)).not.toContain('printed-by-the-server');
+    expect(echoed.value).not.toHaveProperty('token');
+  });
+
+  it('answers an unpair with nothing but the frame it answers', () => {
+    expect(parseHubFrame({ type: 'server-unpaired', replyTo: 2 }).ok).toBe(true);
+    expect(parseHubFrame({ type: 'server-unpaired' }).ok).toBe(false);
+  });
+});
+
 describe('parseHubFrame', () => {
   it('accepts a welcome', () => {
     const result = parseHubFrame({
@@ -245,6 +344,18 @@ describe('client and hub round trips', () => {
       },
       size: { cols: 96, rows: 30 },
     },
+    {
+      type: 'server-pair',
+      id: 14,
+      label: 'gpu-box-01',
+      address: 'wss://gpu-box-01.example:8443',
+      token: 'printed-by-the-server',
+    },
+    {
+      type: 'server-unpair',
+      id: 15,
+      registrationId: serverRegistrationIdSchema.parse('registration-1'),
+    },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
   ];
 
@@ -362,6 +473,7 @@ describe('client and hub round trips', () => {
           {
             registrationId: serverRegistrationIdSchema.parse('registration-1'),
             label: 'workshop',
+            address: pairedServerAddressSchema.parse('wss://workshop.example:8443'),
             serverId: serverIdSchema.parse('server-1'),
             phase: 'connected',
             stores: [storeIdSchema.parse('store-work')],
@@ -409,6 +521,12 @@ describe('client and hub round trips', () => {
       chunk: encodeTerminalChunk(new TextEncoder().encode('\u001b[2K\u2819 thinking')),
       droppedChunks: 0,
     },
+    {
+      type: 'server-paired',
+      replyTo: 14,
+      registrationId: serverRegistrationIdSchema.parse('registration-2'),
+    },
+    { type: 'server-unpaired', replyTo: 15 },
     { type: 'protocol-error', code: 'protocol-version', message: 'this hub speaks version 2' },
   ];
 

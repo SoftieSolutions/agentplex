@@ -1,11 +1,27 @@
-import { checkProtocolVersion, type MachineState, type ServerCandidate } from '@agentplex/protocol';
-import { parseServerAddress } from './server-address.js';
+import {
+  checkProtocolVersion,
+  serverAddressSchema,
+  serverLabelSchema,
+  serverTokenSchema,
+  SERVER_LABEL_MAX_CHARS,
+  type MachineState,
+  type ServerAddress,
+  type ServerCandidate,
+} from '@agentplex/protocol';
 
 /**
  * What the pairing form collects and how it is checked before anything is
  * submitted. Pairing is always the user typing that server's token into the
  * hub: a name for the row, the address the hub will dial, and the token the
  * server printed.
+ *
+ * Every rule here is the protocol's, applied to what was typed. This file used
+ * to carry its own copy of the address rules, with a header saying they
+ * mirrored the hub's and had to be kept in step by hand; they are one parser
+ * now, in the package both ends share, because an address is on the wire in
+ * both directions. What the form still does is run it before anything is sent,
+ * so the user hears "no" from the field they typed rather than from a round
+ * trip.
  */
 
 export interface PairingFormInput {
@@ -21,10 +37,18 @@ export interface PairingFormProblems {
   readonly token?: string;
 }
 
-/** What a checked form submits. The same shape the hub's pairing table takes. */
+/**
+ * What a checked form submits. The same shape the hub's pairing table takes.
+ *
+ * `address` keeps the brand the protocol's parser puts on it, so nothing can
+ * reach `pairServer` with an address that has not been through it. The label
+ * and the token are plain strings: what makes one of those acceptable is a
+ * bound, not a shape, and there is nothing downstream that could be misled by
+ * one that is merely short.
+ */
 export interface PairingRequest {
   readonly label: string;
-  readonly address: string;
+  readonly address: ServerAddress;
   readonly token: string;
 }
 
@@ -32,33 +56,38 @@ export type PairingFormResult =
   | { readonly ok: true; readonly request: PairingRequest }
   | { readonly ok: false; readonly problems: PairingFormProblems };
 
-/** Matches the hub's own bound on a pairing label. */
-const MAX_NAME_LENGTH = 200;
-
 /**
  * Checks the whole form at once, so the user is told every problem in one
  * pass rather than fixing them serially against a form that reveals one "no"
  * at a time.
+ *
+ * The sentences for the address are the protocol parser's own, because they
+ * were written to be read by whoever typed one and that is exactly who is
+ * looking at this field. The other two are this form's, for the same reason in
+ * reverse: "expected a string of at least 1 character" is what a schema says,
+ * and it is not what a person needs to be told about an empty box.
  */
 export function parsePairingForm(input: PairingFormInput): PairingFormResult {
   const problems: { name?: string; address?: string; token?: string } = {};
 
-  const name = input.name.trim();
-  if (name.length === 0) problems.name = 'expected a name for this server';
-  else if (name.length > MAX_NAME_LENGTH) {
-    problems.name = `expected a name of at most ${String(MAX_NAME_LENGTH)} characters`;
+  const name = serverLabelSchema.safeParse(input.name);
+  if (!name.success) {
+    problems.name =
+      input.name.trim().length === 0
+        ? 'expected a name for this server'
+        : `expected a name of at most ${String(SERVER_LABEL_MAX_CHARS)} characters`;
   }
 
-  const address = parseServerAddress(input.address);
-  if (!address.ok) problems.address = address.reason;
-
-  const token = input.token.trim();
-  if (token.length === 0) problems.token = 'expected the token this server printed';
-
-  if (!address.ok || problems.name !== undefined || problems.token !== undefined) {
-    return { ok: false, problems };
+  const address = serverAddressSchema.safeParse(input.address);
+  if (!address.success) {
+    problems.address = address.error.issues.map((issue) => issue.message).join('; ');
   }
-  return { ok: true, request: { label: name, address: address.value, token } };
+
+  const token = serverTokenSchema.safeParse(input.token);
+  if (!token.success) problems.token = 'expected the token this server printed';
+
+  if (!name.success || !address.success || !token.success) return { ok: false, problems };
+  return { ok: true, request: { label: name.data, address: address.data, token: token.data } };
 }
 
 /**
@@ -173,6 +202,6 @@ function unusableBecause(candidate: ServerCandidate, address: string | null): st
  */
 function dialableAddress(host: string, port: number): string | null {
   const authority = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  const parsed = parseServerAddress(`wss://${authority}:${String(port)}`);
-  return parsed.ok ? parsed.value : null;
+  const parsed = serverAddressSchema.safeParse(`wss://${authority}:${String(port)}`);
+  return parsed.success ? parsed.data : null;
 }

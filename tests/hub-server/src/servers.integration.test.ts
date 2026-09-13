@@ -76,6 +76,13 @@ function pairing(): Pairing {
   });
 }
 
+/** Several turns of the loop: long enough for a database round trip to land. */
+async function idle(): Promise<void> {
+  for (let turn = 0; turn < 50; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 async function until(predicate: () => boolean, what: string): Promise<void> {
   for (let attempt = 0; attempt < 500; attempt += 1) {
     if (predicate()) return;
@@ -252,6 +259,64 @@ describe('createServers', () => {
 
     expect(running.snapshot()).toHaveLength(1);
     expect(phaseOf(running, 'laptop')).toBe('connected');
+  });
+
+  it('never lets two syncs overlap, so the newest view of the table is the one that holds', async () => {
+    // Now that a client can pair and unpair, two of these arrive in one turn of
+    // the loop as a matter of course -- one person pairing a box and changing
+    // their mind, or two tabs. Overlapping them would let a sync that read the
+    // table before a revocation finish after the one that saw it, and start
+    // dialling a pairing the operator had just ended with nothing left to stop
+    // it again until a restart.
+    //
+    // The read is held open rather than raced, because a test that depended on
+    // which promise resolved first would pass here and fail on a loaded machine.
+    const departing = await register('laptop');
+    const table = pairing();
+    let reads = 0;
+    let releaseRead: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const slowRead: Pairing = {
+      ...table,
+      listServers: async () => {
+        const rows = await table.listServers();
+        reads += 1;
+        if (reads === 1) await held;
+        return rows;
+      },
+    };
+    const running = createServers({
+      pairing: slowRead,
+      dialer,
+      hubId,
+      timers,
+      clock,
+      logger,
+      backoff: createExponentialBackoff({ baseMs: 500, maxMs: 8000, random: () => 0 }),
+    });
+    supervisor = running;
+
+    const first = running.sync();
+    await until(() => reads === 1, 'the first read of the pairing table');
+
+    // The world changes under the held read, and a second sync is asked for.
+    await revokeServer(db(), clock, departing.id);
+    await register('box');
+    const second = running.sync();
+    await idle();
+
+    // It has not read anything: it is waiting for the sync in front of it.
+    expect(reads).toBe(1);
+
+    releaseRead();
+    await Promise.all([first, second]);
+
+    // Both ran, and what the supervisor is left dialling is what the second
+    // sync read rather than what the first one did.
+    expect(reads).toBe(2);
+    expect(running.snapshot().map((report) => report.label)).toEqual(['box']);
   });
 
   it('stops dialling a pairing the operator revoked', async () => {

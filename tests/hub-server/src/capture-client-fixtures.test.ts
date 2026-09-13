@@ -164,6 +164,8 @@ function labelFor(text: string): string {
     ['pane-layout-saved', 'paneLayoutSaved'],
     ['session-started', 'sessionStarted'],
     ['session-stopped', 'sessionStopped'],
+    ['server-paired', 'serverPaired'],
+    ['server-unpaired', 'serverUnpaired'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -306,6 +308,12 @@ async function startFleetHub(
   registrations: readonly { label: string; host: string }[],
   live: Map<string, MessageSocket>,
   discovery: FakeBeaconSource = createFakeBeaconSource(),
+  /**
+   * What a pairing made over the wire is keyed by. Only the pairing capture
+   * needs one: every other hub here has its registrations written before it
+   * starts, with the id spelled out at the call site.
+   */
+  newRegistrationId: () => string = () => 'hub-1',
 ): Promise<{ hub: Hub; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(join(tmpdir(), 'agentplex-capture-'));
   const database = createSqliteDatabase(join(directory, 'hub.db'));
@@ -331,7 +339,7 @@ async function startFleetHub(
   const hub = await startHub({
     database,
     logger,
-    ids: { newId: () => 'hub-1' },
+    ids: { newId: newRegistrationId },
     clock,
     clientToken: CLIENT_TOKEN,
     tokens: { newToken: () => `fleet-ticket-${(nextTicket += 1)}` },
@@ -968,6 +976,92 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const machineStateSharedDegraded = await captureState(sharedHub.hub);
     await sharedHub.cleanup();
 
+    // A client pairing a machine over the socket, on a hub that starts with an
+    // empty pairing table: the refusal a mistyped address earns, the answer to
+    // a pairing the hub accepts, and the answer to unpairing it again. These
+    // are the frames the settings screen's own tests stand on, and they have to
+    // be the hub's rather than anybody's idea of them -- the refusal's words in
+    // particular are the address parser's, and the screen shows them verbatim.
+    const pairable = new Map<string, Machine>([
+      [
+        'mbp-robert.example',
+        {
+          serverId: 'server-mbp',
+          providers: [readyProvider('claude')],
+          stores: [
+            {
+              storeId: storeIdSchema.parse('store-agentplex'),
+              path: '/Users/robert/code/agentplex',
+            },
+          ],
+          reports: [{ storeId: storeIdSchema.parse('store-agentplex'), sessions: [], holding: [] }],
+        },
+      ],
+    ]);
+    // The hub's own identity is the first id it asks for, at boot; everything
+    // after it is a pairing somebody made.
+    let minted = 0;
+    const pairingHub = await startFleetHub(
+      pairable,
+      [],
+      new Map(),
+      createFakeBeaconSource(),
+      () => {
+        minted += 1;
+        return minted === 1 ? 'hub-1' : `registration-${String(minted - 1)}`;
+      },
+    );
+    const pairer = await openClient(pairingHub.hub);
+    pairer.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await pairer.framesReceived(2);
+    pairer.send({
+      type: 'server-pair',
+      id: 2,
+      label: 'gpu-box-01',
+      // Plaintext to a machine that is not this one: refused in the parser's
+      // own words, and the socket stays open.
+      address: 'ws://gpu-box-01.example:8443',
+      token: 'the-token-the-server-printed',
+    });
+    await until(
+      () => pairer.received.some((text) => labelFor(text) === 'refusal'),
+      'the mistyped address to be refused',
+    );
+    const refusalPairing = pairer.received.find((text) => labelFor(text) === 'refusal');
+    pairer.send({
+      type: 'server-pair',
+      id: 3,
+      label: 'mbp-robert',
+      address: 'wss://mbp-robert.example:8443',
+      token: 'tok-mbp-robert.example',
+    });
+    await until(
+      () => pairer.received.some((text) => labelFor(text) === 'serverPaired'),
+      () => `the pairing to be answered: ${pairer.received.join(' | ')}`,
+    );
+    const serverPaired = pairer.received.find((text) => labelFor(text) === 'serverPaired');
+    // Paired and then dialled, with no restart in between: the state below is
+    // the one the settings list draws after somebody types a token.
+    await until(
+      () => pairingHub.hub.connections.snapshot().some((report) => report.phase === 'connected'),
+      () => `the new pairing to connect: ${JSON.stringify(pairingHub.hub.connections.snapshot())}`,
+    );
+    const machineStateJustPaired = await captureState(pairingHub.hub);
+    pairer.send({ type: 'server-unpair', id: 4, registrationId: 'registration-1' });
+    await until(
+      () => pairer.received.some((text) => labelFor(text) === 'serverUnpaired'),
+      'the unpairing to be answered',
+    );
+    const serverUnpaired = pairer.received.find((text) => labelFor(text) === 'serverUnpaired');
+    await pairingHub.cleanup();
+    if (
+      refusalPairing === undefined ||
+      serverPaired === undefined ||
+      serverUnpaired === undefined
+    ) {
+      throw new Error('the pairing conversation was not answered');
+    }
+
     // A hub that has heard two machines announce themselves and is paired with
     // neither. The beacons are formatted by the protocol's own formatter --
     // the function an announcing server calls -- and travel the whole real
@@ -1046,6 +1140,10 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
     captured.set('machineStateDiscovered', machineStateDiscovered);
+    captured.set('refusalPairing', refusalPairing);
+    captured.set('serverPaired', serverPaired);
+    captured.set('serverUnpaired', serverUnpaired);
+    captured.set('machineStateJustPaired', machineStateJustPaired);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)

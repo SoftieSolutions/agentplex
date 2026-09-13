@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { storeIdSchema, type ServerRegistrationId, type StoreId } from '@agentplex/protocol';
+import {
+  serverAddressSchema,
+  storeIdSchema,
+  type ServerRegistrationId,
+  type StoreId,
+} from '@agentplex/protocol';
 import { readyProvider } from '@agentplex/providers/testing';
-import { serverAddressSchema } from '../pairing/pairing.js';
 import { attentionEligibleStores, unreachableStores } from './attention.js';
 import {
   countsTowardAttention,

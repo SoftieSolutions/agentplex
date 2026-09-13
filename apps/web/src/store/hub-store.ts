@@ -4,6 +4,7 @@ import {
   PROTOCOL_VERSION,
   type ClientFrame,
   type FrameId,
+  type HubFrame,
   type HubId,
   type Layout,
   type MachineState,
@@ -42,6 +43,15 @@ import type { Timers } from './timers.js';
  *     user was not looking at, so it is discarded — and the discard is said in
  *     the snapshot in words, because a keystroke that silently goes nowhere
  *     reads as a hung terminal.
+ *
+ * There is a fourth, and it is the pairing frames. A pair carries the token a
+ * server printed, which is the one credential a client frame ever carries, and
+ * a queue is exactly where it must not sit: a command waiting for a connection
+ * that may not come back is a secret held in the memory of a tab nobody is
+ * watching, for as long as that tab is open. So it is refused while the
+ * connection is down and said in words, and the caller waits for the hub's own
+ * answer rather than for a snapshot field — a pairing has a reply that names
+ * it, and the screen that submitted the form is the one thing that needs it.
  */
 
 /** What the store sends when it can, injected so a test can hand it a fake. */
@@ -181,6 +191,32 @@ export type CommandOutcome =
   | { readonly accepted: true; readonly id: FrameId; readonly delivery: 'sent' | 'queued' }
   | { readonly accepted: false; readonly reason: string };
 
+/**
+ * A request the store sends now or not at all, and then waits for.
+ *
+ * The pairing frames and nothing else so far: they carry a credential, which
+ * is why they may not queue, and they change what the hub may dial, which is
+ * why the screen that sent one waits for the answer rather than inferring it
+ * from the next state.
+ */
+type RequestFrame = Extract<ClientFrame, { type: 'server-pair' | 'server-unpair' }>;
+export type HubRequest = DistributiveOmit<RequestFrame, 'id'>;
+
+/**
+ * What the hub answered, as a value.
+ *
+ * A refusal is not a failure to send: the hub read the frame and said no, and
+ * its words are what the screen shows. `reason` therefore covers both -- the
+ * hub's refusal and the store's own "there is no connection to send this on" --
+ * because to whoever submitted the form they are the same kind of sentence.
+ */
+export type RequestOutcome =
+  | {
+      readonly ok: true;
+      readonly reply: Extract<HubFrame, { type: 'server-paired' | 'server-unpaired' }>;
+    }
+  | { readonly ok: false; readonly reason: string };
+
 export type TerminalInputOutcome =
   { readonly delivered: true } | { readonly delivered: false; readonly reason: string };
 
@@ -193,6 +229,17 @@ export interface HubStore {
   getSnapshot(): HubSnapshot;
   /** Sends now, or queues while the connection is down. Never silently drops. */
   sendCommand(command: HubCommand): CommandOutcome;
+  /**
+   * Sends now and resolves with the hub's own answer; refuses in words when
+   * there is nothing to send on.
+   *
+   * Never queued, and that is the whole difference from `sendCommand`: what
+   * goes out this way carries a credential, and a queued one would be a secret
+   * kept in memory with nobody watching it. A connection that drops before the
+   * answer arrives resolves with what happened rather than leaving a promise
+   * nothing will ever settle -- the screen has a button that is spinning.
+   */
+  request(request: HubRequest): Promise<RequestOutcome>;
   /** Sends now, or discards while the connection is down. Never queues. */
   sendTerminalInput(ref: SessionRef, data: string): TerminalInputOutcome;
   /** Standing interest in one session, replayed on every reconnection. */
@@ -280,6 +327,14 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   const queue: { readonly id: FrameId; readonly command: HubCommand }[] = [];
   /** Sent commands awaiting a reply, by the id the reply will name. */
   const pending = new Set<FrameId>();
+  /**
+   * Requests whose caller is waiting, by the id the answer will name.
+   *
+   * Settled by the reply, by a refusal, or by the connection going away --
+   * never left pending, because on the other end of each of these is a button
+   * that is spinning.
+   */
+  const waiting = new Map<FrameId, (outcome: RequestOutcome) => void>();
 
   let layoutWatchers = 0;
   let paneLayoutWatchers = 0;
@@ -335,6 +390,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       established = false;
       const unanswered = pending.size;
       pending.clear();
+      settleWaiting('the connection dropped before the hub answered');
       if (unanswered > 0) {
         update({
           problem: `the connection dropped before the hub answered ${String(unanswered)} command${
@@ -344,6 +400,20 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       scheduleRetry();
     });
+  }
+
+  /**
+   * Answers everybody still waiting, with the same sentence.
+   *
+   * Called when the socket goes and when the store is torn down. A request that
+   * was in flight may or may not have reached the hub, and this says exactly
+   * that rather than guessing: the screen re-reads the state, which is the one
+   * thing that can settle what actually happened.
+   */
+  function settleWaiting(reason: string): void {
+    const stranded = [...waiting.values()];
+    waiting.clear();
+    for (const settle of stranded) settle({ ok: false, reason });
   }
 
   function scheduleRetry(): void {
@@ -431,8 +501,19 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         });
         return;
       }
+      case 'server-paired':
+      case 'server-unpaired': {
+        waiting.get(frame.replyTo)?.({ ok: true, reply: frame });
+        waiting.delete(frame.replyTo);
+        return;
+      }
       case 'refusal': {
         pending.delete(frame.replyTo);
+        // A refusal answers a request as surely as a reply does, and its words
+        // are the hub's own. It still goes into `lastRefusal`: the connection
+        // line shows the newest "no" whoever asked for it.
+        waiting.get(frame.replyTo)?.({ ok: false, reason: frame.message });
+        waiting.delete(frame.replyTo);
         update({
           lastRefusal: {
             replyTo: frame.replyTo,
@@ -506,6 +587,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     // a hub that moved on is the surprise the bound exists to prevent.
     queue.length = 0;
     pending.clear();
+    settleWaiting('the page stopped listening to the hub before it answered');
     wire?.close();
     update({
       phase: 'idle',
@@ -561,6 +643,25 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       queue.push({ id, command });
       update({ commandQueue: queueView(snapshot.commandQueue.overflowed) });
       return { accepted: true, id, delivery: 'queued' };
+    },
+
+    request(request: HubRequest): Promise<RequestOutcome> {
+      const wire = socket;
+      if (!established || wire === null) {
+        // Refused rather than queued, and said in words the screen shows. The
+        // pair frame carries the token a server printed; a queued one would be
+        // that credential sitting in this tab's memory until the connection
+        // came back, which may be never.
+        return Promise.resolve({
+          ok: false,
+          reason:
+            snapshot.problem ??
+            'this page is not connected to the hub; nothing was sent, and nothing is queued',
+        });
+      }
+      const id = frameIds.next();
+      wire.send(encodeClientFrame({ ...request, id }));
+      return new Promise<RequestOutcome>((resolve) => waiting.set(id, resolve));
     },
 
     sendTerminalInput(ref: SessionRef, data: string): TerminalInputOutcome {

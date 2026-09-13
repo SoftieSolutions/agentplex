@@ -36,6 +36,31 @@ describe('the paired-server rows', () => {
     expect(row.phase).toBe('unreachable');
     expect(row.problem).toBe('connection refused');
     expect(row.stores).toEqual([]);
+    // The address the pairing was made with, which is how a person tells this
+    // row from another one they also called `gpu-box-01`.
+    expect(row.address).toBe('wss://gpu-box-01.example:8443');
+  });
+
+  it('draws the machine somebody just paired over the socket', () => {
+    // Captured from a hub a client paired and that then dialled the machine
+    // without a restart -- the row the settings list shows a moment after
+    // somebody types a token.
+    const rows = serverRows(stateFrom(hubFrames.machineStateJustPaired));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      label: 'mbp-robert',
+      address: 'wss://mbp-robert.example:8443',
+      serverId: 'server-mbp',
+      phase: 'connected',
+      tone: 'running',
+      problem: null,
+    });
+  });
+
+  it('carries no token on any row, because no frame the hub sends has one', () => {
+    const drawn = JSON.stringify(serverRows(stateFrom(hubFrames.machineStateJustPaired)));
+    expect(drawn).not.toContain('tok-');
+    expect(drawn).not.toContain('token');
   });
 
   it('shows a connected server as running and a dialling one as idle', () => {

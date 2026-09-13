@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   sessionIdSchema,
   storeIdSchema,
+  serverAddressSchema,
   type ProviderReadiness,
   type ServerRegistrationId,
   type SessionDescriptor,
@@ -12,7 +13,6 @@ import {
 import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
-import { serverAddressSchema } from '../pairing/pairing.js';
 import { createFleetState, type HubStateSnapshot } from '../fleet-state/fleet-state.js';
 import { routeStart, routeStop } from './session-routing.js';
 

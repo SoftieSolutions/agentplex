@@ -259,14 +259,16 @@ async function start(
   // Built before it dials, which is the same order `hub.ts` composes in: the
   // broadcast below has to be attached to the state before the first
   // connectivity change can reach it.
+  const pairing = createPairing({
+    database,
+    files: createFakeStoreFiles(),
+    ids: { newId: () => 'unused' },
+    clock,
+    logger,
+  });
+
   const connections = createServers({
-    pairing: createPairing({
-      database,
-      files: createFakeStoreFiles(),
-      ids: { newId: () => 'unused' },
-      clock,
-      logger,
-    }),
+    pairing,
     dialer,
     hubId: 'hub-under-test' as never,
     timers,
@@ -295,6 +297,11 @@ async function start(
     readPaneLayout: async () => null,
     writePaneLayout: async () => undefined,
     sessions,
+    // The same two seams `hub.ts` hands the broadcast. Pairing is not this
+    // file's subject -- it is the one the client-pairing suite is about -- but
+    // a broadcast built without them would be a different broadcast.
+    pairing,
+    syncServers: () => connections.sync(),
   });
 
   await connections.sync();

@@ -1,14 +1,16 @@
 import { z } from 'zod';
 import {
+  pairedServerAddressSchema,
   serverIdSchema,
   serverRegistrationIdSchema,
+  serverTokenSchema,
+  type ServerAddress,
   type ServerId,
   type ServerRegistrationId,
 } from '@agentplex/protocol';
 import type { Queryable } from '../../db/database.js';
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
-import type { LiveServerRegistration, NewServerRegistration, ServerAddress } from './pairing.js';
-import { storedServerAddressSchema } from './server-address.js';
+import type { LiveServerRegistration, NewServerRegistration } from './pairing.js';
 
 /**
  * Pairing, as rows: which servers this hub may dial, and with what token.
@@ -21,16 +23,6 @@ import { storedServerAddressSchema } from './server-address.js';
  * built on, and keeping it ignorant of them is what lets it be tested against
  * a database and nothing else.
  */
-
-/**
- * The token the server printed and the user pasted.
- *
- * This parser rejects the empty and the absurd and stops there. How much
- * entropy a token carries is the minting side's business -- the server is what
- * generates it -- and a length rule invented here would only be a rule the
- * thing that mints tokens has never heard of.
- */
-export const serverTokenSchema = z.string().trim().min(1).max(4096);
 
 /**
  * Timestamps are epoch milliseconds in the column, on the protocol, and here.
@@ -50,7 +42,7 @@ const serverRowSchema = z.object({
    * that no form could have submitted, and a row parser that refused it would
    * refuse to read back what setup wrote a moment earlier.
    */
-  address: storedServerAddressSchema,
+  address: pairedServerAddressSchema,
   server_id: serverIdSchema.nullable(),
   created_at: timestampSchema,
   /**

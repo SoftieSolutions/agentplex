@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { HubId } from '@agentplex/protocol';
+import { serverAddressSchema, type HubId } from '@agentplex/protocol';
 import {
   createFakeGrantFiles,
   createFakeProcessRunner,
@@ -34,7 +34,6 @@ import {
   handshakeWithServer,
   type DialTarget,
 } from '../../../apps/hub/src/features/servers/server-handshake.js';
-import { serverAddressSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
 
 /**
  * The `--role=both` box, end to end, across the change that introduced grants.

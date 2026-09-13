@@ -4,6 +4,7 @@ import type {
   HubToServerFrame,
   ProviderReadiness,
   RefusalCode,
+  ServerAddress,
   ServerId,
   ServerRegistrationId,
   ServerToHubFrame,
@@ -12,7 +13,7 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import type { Clock, Logger, SocketDialer, Timers } from '@agentplex/node-shared';
-import type { Pairing, ServerAddress } from '../pairing/pairing.js';
+import type { Pairing } from '../pairing/pairing.js';
 import { createExponentialBackoff, type BackoffPolicy } from './backoff.js';
 import { startDialLoop, type DialLoop } from './dial-loop.js';
 import type { HandshakeFailureReason } from './server-handshake.js';
@@ -234,6 +235,15 @@ export interface Servers {
    * Nothing is dialled until it is first called. That is what lets the hub
    * build everything that watches a connectivity change before the first one
    * can happen, without anybody holding a half-built reference to this.
+   *
+   * Callable as often as anything changes, and syncs never overlap: each waits
+   * for the one before it to finish. Until a client could pair, this was called
+   * once at startup and the question never came up; now two clients unpairing
+   * and pairing in the same turn of the loop is an ordinary afternoon. The race
+   * it closes is narrow and real -- stopping a departed connection is awaited,
+   * so a second sync could read the table in that gap and start a second dial
+   * loop for a pairing the first was about to start, leaving a server dialled
+   * twice with only one loop reachable to stop.
    */
   sync(): Promise<void>;
   /** What every paired server's connectivity is, right now. */
@@ -285,50 +295,71 @@ export function createServers(dependencies: ServersDependencies): Servers {
   const connections = new Map<ServerRegistrationId, DialLoop>();
   let stopped = false;
 
+  /**
+   * The tail of the sync queue: what a new sync waits for before it reads the
+   * table.
+   *
+   * Settled rather than fulfilled, so one sync that throws does not strand
+   * every later one; the failure still reaches the caller that asked for it,
+   * through the promise `sync` hands back rather than through this one.
+   */
+  let syncing: Promise<unknown> = Promise.resolve();
+
+  /**
+   * One pass: read the table, stop what is no longer paired, dial what is not
+   * yet connected. `sync` is the queue around it, and the two are apart so that
+   * the ordering rule lives in one place rather than inside the work it orders.
+   */
+  async function reconcile(): Promise<void> {
+    if (stopped) return;
+
+    // Live pairings only: a revoked registration has no token, which is
+    // exactly the shape that cannot be dialled, and the pairing feature is
+    // where that narrowing is done.
+    const registrations = await pairing.listServers();
+    const live = new Set(registrations.map((registration) => registration.id));
+
+    // Gone first: a revoked pairing must stop being dialled before anything
+    // else happens, because the operator's revocation is the one instruction
+    // here that is about denying access.
+    const departing = [...connections].filter(([id]) => !live.has(id));
+    for (const [id, connection] of departing) {
+      connections.delete(id);
+      logger.info('pairing gone; stopping', { registrationId: id });
+      await connection.stop();
+    }
+
+    for (const registration of registrations) {
+      if (connections.has(registration.id)) continue;
+
+      logger.info('dialling', {
+        registrationId: registration.id,
+        server: registration.label,
+      });
+      connections.set(
+        registration.id,
+        startDialLoop(registration, {
+          pairing,
+          transports,
+          timers,
+          clock,
+          logger,
+          backoff,
+          ...(dependencies.refusedRetryMs === undefined
+            ? {}
+            : { refusedRetryMs: dependencies.refusedRetryMs }),
+          ...(dependencies.onChange === undefined ? {} : { onChange: dependencies.onChange }),
+          ...(dependencies.onReport === undefined ? {} : { onReport: dependencies.onReport }),
+        }),
+      );
+    }
+  }
+
   return {
-    async sync(): Promise<void> {
-      if (stopped) return;
-
-      // Live pairings only: a revoked registration has no token, which is
-      // exactly the shape that cannot be dialled, and the pairing feature is
-      // where that narrowing is done.
-      const registrations = await pairing.listServers();
-      const live = new Set(registrations.map((registration) => registration.id));
-
-      // Gone first: a revoked pairing must stop being dialled before anything
-      // else happens, because the operator's revocation is the one instruction
-      // here that is about denying access.
-      const departing = [...connections].filter(([id]) => !live.has(id));
-      for (const [id, connection] of departing) {
-        connections.delete(id);
-        logger.info('pairing gone; stopping', { registrationId: id });
-        await connection.stop();
-      }
-
-      for (const registration of registrations) {
-        if (connections.has(registration.id)) continue;
-
-        logger.info('dialling', {
-          registrationId: registration.id,
-          server: registration.label,
-        });
-        connections.set(
-          registration.id,
-          startDialLoop(registration, {
-            pairing,
-            transports,
-            timers,
-            clock,
-            logger,
-            backoff,
-            ...(dependencies.refusedRetryMs === undefined
-              ? {}
-              : { refusedRetryMs: dependencies.refusedRetryMs }),
-            ...(dependencies.onChange === undefined ? {} : { onChange: dependencies.onChange }),
-            ...(dependencies.onReport === undefined ? {} : { onReport: dependencies.onReport }),
-          }),
-        );
-      }
+    sync(): Promise<void> {
+      const next = syncing.then(reconcile, reconcile);
+      syncing = next.catch(() => undefined);
+      return next;
     },
 
     snapshot(): readonly ServerConnectionReport[] {

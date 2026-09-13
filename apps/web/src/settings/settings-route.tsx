@@ -3,7 +3,7 @@ import type { TokenStore } from '../auth/token.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { discoveredCandidates } from './pairing-form.js';
-import { createBrowserPairingOperations } from './pairing-operations.js';
+import { createBrowserPairingOperations, type PairingOperations } from './pairing-operations.js';
 import { SettingsScreen } from './settings-screen.js';
 
 /**
@@ -15,7 +15,24 @@ import { SettingsScreen } from './settings-screen.js';
  * in words -- which is the connection line this screen draws.
  */
 
-const pairing = createBrowserPairingOperations();
+/**
+ * Pairing over the same store, and therefore over the same socket.
+ *
+ * Built once per store rather than inside the screen because it belongs to
+ * the store's lifetime and not to a component's: a pairing in flight when a
+ * render throws away its component is still a pairing the hub is answering.
+ * The store arrives as a prop (the page builds exactly one), so the memo is
+ * keyed by it rather than held at module scope.
+ */
+const pairingByStore = new WeakMap<HubStore, PairingOperations>();
+
+function pairingFor(store: HubStore): PairingOperations {
+  const existing = pairingByStore.get(store);
+  if (existing !== undefined) return existing;
+  const built = createBrowserPairingOperations(store);
+  pairingByStore.set(store, built);
+  return built;
+}
 
 export interface SettingsRouteProps {
   readonly store: HubStore;
@@ -28,7 +45,7 @@ export function SettingsRoute({ store, tokens }: SettingsRouteProps): JSX.Elemen
     <SettingsScreen
       snapshot={snapshot}
       tokens={tokens}
-      pairing={pairing}
+      pairing={pairingFor(store)}
       candidates={discoveredCandidates(snapshot.machineState)}
     />
   );

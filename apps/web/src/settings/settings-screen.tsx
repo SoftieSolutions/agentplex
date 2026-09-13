@@ -505,6 +505,9 @@ function ServerRow({
             </Text>
           </Group>
           <Text size="xs" ff="monospace" c="dimmed">
+            {row.address}
+          </Text>
+          <Text size="xs" ff="monospace" c="dimmed">
             {row.phase}
             {row.stores.length > 0 &&
               ` · ${String(row.stores.length)} store${row.stores.length === 1 ? '' : 's'}`}

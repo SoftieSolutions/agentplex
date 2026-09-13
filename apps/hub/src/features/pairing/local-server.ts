@@ -1,15 +1,18 @@
-import type { ServerId } from '@agentplex/protocol';
+import {
+  loopbackServerAddress,
+  serverTokenSchema,
+  type ServerAddress,
+  type ServerId,
+} from '@agentplex/protocol';
 import { type Clock, type IdGenerator, type Logger, tokenMatches } from '@agentplex/node-shared';
 import { readServerIdentity, type StoreFileSystem } from '@agentplex/providers';
 import type { Queryable } from '../../db/database.js';
-import type { LocalServerEntry, ServerAddress } from './pairing.js';
-import { loopbackServerAddress } from './server-address.js';
+import type { LocalServerEntry } from './pairing.js';
 import {
   listServers,
   reconcileServerRegistration,
   recordServerIdentity,
   registerServer,
-  serverTokenSchema,
   type ServerRegistration,
 } from './server-registrations.js';
 

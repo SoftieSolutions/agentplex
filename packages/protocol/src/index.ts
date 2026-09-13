@@ -55,6 +55,16 @@ export type {
   StoreId,
 } from './identity.js';
 
+export {
+  loopbackServerAddress,
+  pairedServerAddressSchema,
+  serverAddressSchema,
+  serverLabelSchema,
+  serverTokenSchema,
+  SERVER_LABEL_MAX_CHARS,
+} from './pairing.js';
+export type { ServerAddress } from './pairing.js';
+
 export { layoutNodeSchema, layoutSchema } from './layout.js';
 export type { Layout, LayoutNode } from './layout.js';
 

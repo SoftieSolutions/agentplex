@@ -1,21 +1,21 @@
 import type { ServerRegistrationId } from '@agentplex/protocol';
+import type { HubStore } from '../store/hub-store.js';
 import type { PairingRequest } from './pairing-form.js';
 
 /**
- * The seam between the settings screen and whatever will one day carry a
- * pairing to the hub.
+ * Pairing and unpairing, over the socket this page already holds.
  *
- * The hub has the whole pairing surface server-side — registerServer,
- * revokeServer, the handshake — but as of protocol version 4 nothing
- * client-reachable drives it: the client frame union has no pair or unpair
- * frame and the HTTP surface is the health check and the ticket exchange.
- * Inventing a frame the protocol does not define is exactly what this
- * codebase's rules forbid, so the screen talks to this interface instead,
- * and the one implementation below refuses honestly, in words the screen
- * shows verbatim.
+ * The screen talks to this interface rather than to the store directly, and
+ * the interface is narrower than what it is built on for one reason: what the
+ * settings screen does is pair a server and revoke a pairing, and a screen
+ * holding the whole store could also start a session or close the connection.
  *
- * When the hub grows the operation (its own ticket), the real implementation
- * replaces `createBrowserPairingOperations` and nothing in the screen moves.
+ * Both go out on the store's request path, which never queues. The pairing
+ * frame carries the token that server printed -- the one credential a client
+ * frame ever carries -- and a queued one would be that secret sitting in this
+ * tab's memory waiting for a connection that may never come back, with nobody
+ * watching it. So a disconnected page refuses in words the user can read, and
+ * the words say that nothing was sent.
  */
 
 export type PairingOutcome =
@@ -29,18 +29,29 @@ export interface PairingOperations {
 }
 
 /**
- * Refusal in words, not silence: a button that does nothing reads as broken,
- * and a button that pretends the pairing happened over-claims. The reason
- * names what is missing so the words stay true when a user reads them off a
- * released build.
+ * The one implementation, over a live hub store.
+ *
+ * The outcomes collapse to "yes" or "words", which is all the screen draws.
+ * The hub's answer to a pairing names the registration it recorded, and this
+ * deliberately drops it: the row arrives in the next machine state keyed by
+ * that same id, so a screen holding the id would be holding a second copy of
+ * something already on its way.
  */
-const NOT_YET =
-  'this hub build has no client-reachable pairing operation yet; ' +
-  'nothing was sent, and the pairing must be made on the hub itself';
-
-export function createBrowserPairingOperations(): PairingOperations {
+export function createBrowserPairingOperations(store: HubStore): PairingOperations {
   return {
-    pairServer: () => Promise.resolve({ ok: false, reason: NOT_YET }),
-    unpairServer: () => Promise.resolve({ ok: false, reason: NOT_YET }),
+    async pairServer(request: PairingRequest): Promise<PairingOutcome> {
+      const outcome = await store.request({
+        type: 'server-pair',
+        label: request.label,
+        address: request.address,
+        token: request.token,
+      });
+      return outcome.ok ? { ok: true } : { ok: false, reason: outcome.reason };
+    },
+
+    async unpairServer(registrationId: ServerRegistrationId): Promise<PairingOutcome> {
+      const outcome = await store.request({ type: 'server-unpair', registrationId });
+      return outcome.ok ? { ok: true } : { ok: false, reason: outcome.reason };
+    },
   };
 }

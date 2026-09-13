@@ -263,6 +263,12 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     readPaneLayout: () => paneLayout.read(),
     writePaneLayout: (layout) => paneLayout.write(layout),
     sessions,
+    pairing,
+    // The other half of a pairing frame: the row is the pairing feature's to
+    // write, and dialling what the row now says is the supervisor's to do. A
+    // hub that recorded a pairing and waited for a restart to dial it would be
+    // a settings screen whose successful answer is followed by nothing.
+    syncServers: () => servers.sync(),
   });
 
   // Not awaited past its first read of the pairing table, and started before
