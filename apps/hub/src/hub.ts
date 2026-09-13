@@ -386,7 +386,21 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // reach the reducer's own snapshot, cannot resize somebody's terminal and
   // cannot put a frame on a socket, because none of it is on the seams it was
   // given. Every one of these is a call a client's own frame already makes.
-  const mcp = createMcp({ hubId, clientToken, state, terminal, sessions, timers, logger });
+  // The docs feature whole, and it is the one seam MCP is handed entire. That
+  // feature is four functions and no more, and its whole point is being the
+  // one path a document write takes -- so the tools and the client connection
+  // above them are two callers of one thing rather than two ways to write a
+  // file. Nothing else reaches MCP that did not before.
+  const mcp = createMcp({
+    hubId,
+    clientToken,
+    state,
+    terminal,
+    sessions,
+    docs,
+    timers,
+    logger,
+  });
 
   const web = createWeb({ files: webAssets, logger });
 

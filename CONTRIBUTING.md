@@ -174,8 +174,8 @@ a server — and neither is silence.
 
 **A feature with two callers is what a feature is for.** `features/docs/docs.ts`
 exposes four functions and reaches a server through the connections seam;
-`client-connection.ts` calls them on a frame and the MCP tools will call the
-same four in the same process. Neither reaches a connection itself, and that is
+`client-connection.ts` calls them on a frame and the four MCP document tools
+call the same four in the same process. Neither reaches a connection itself, and that is
 the point rather than a tidiness: a second caller putting its own `doc-write` on
 a socket would be a second answer to what a document write means -- which index
 rows it touches, which refusals it produces, what happens when the machine is
