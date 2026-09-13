@@ -263,25 +263,67 @@ export function createPaneSearch(terminal: Terminal, scheme: Scheme): TerminalSe
 }
 
 /**
+ * Whether an element is a box a grid can be measured against at all.
+ *
+ * The question is not how big the pane is; it is whether it is anywhere. An
+ * element in a collapsed layout cell, one under a `display: none` ancestor,
+ * one in a document fragment -- each reports a client box of zero, and zero
+ * is not a small terminal.
+ *
+ * It exists as a predicate rather than an `if` inside the fit because it is
+ * the one half of that fit a test can reach. Opening a real terminal needs a
+ * renderer, and jsdom has none; a box is two numbers.
+ */
+export function canMeasureGrid(element: Element | null | undefined): boolean {
+  if (element === null || element === undefined) return false;
+  return element.clientWidth > 0 && element.clientHeight > 0;
+}
+
+/**
  * Fitting one terminal to the box it is drawn in.
  *
  * The addon is loaded here rather than in the factory, beside the search for
  * the same reason: loading is the parser-and-bookkeeping half, which a test
  * can drive, and only `fit` itself needs a terminal that was opened. What the
  * returned function guarantees is that it is safe to call when nothing can be
- * measured -- a pane in a collapsed cell, a terminal never opened -- because
- * the addon answers a size of `undefined` and returns without resizing.
+ * measured -- a pane in a collapsed cell, a terminal never opened -- and
+ * leaves the grid where it was.
  *
- * That guarantee is the reason this is worth a named function at all. The
- * alternative most people write is a fit followed by reading `cols`/`rows`
- * and sending them, which on an unmeasurable pane sends the size the terminal
- * still had, unprompted, as if it had just changed. Nothing here reports a
- * size; `onResize` does, and it fires only when one actually changed.
+ * The addon delivers half of that guarantee and not the other half, which is
+ * why the check above is here. `proposeDimensions` returns nothing when the
+ * terminal has no element or no measured cell, and `fit` then does nothing:
+ * that is the never-opened case, and it is the one the addon covers. The
+ * collapsed-cell case it does not cover. A terminal that HAS been opened has
+ * a measured cell whatever its container is doing, so the addon reads a box
+ * of zero, subtracts the padding, divides a negative number by a cell width
+ * and floors the result at its own minimum -- two columns by one row, which
+ * it then resizes to. Verified by reading 0.11.0: `Math.max(2, ...)` and
+ * `Math.max(1, ...)` are the floors, and nothing above them asks whether the
+ * box was real.
+ *
+ * That matters because the size this produces is the size a process on
+ * another machine lays its screen out against. A pane that is momentarily
+ * collapsed -- a split being dragged shut, a tab hidden -- would tell the
+ * agent to redraw at 2x1, and the agent would, and the pane would come back
+ * to a screen that had been rewritten for a window nobody ever had. Being
+ * left where it was is strictly better than a guess, so a box of nothing is
+ * not measured at all.
+ *
+ * Nothing here reports a size; `onResize` does, and it fires only when one
+ * actually changed. That is the second half of why this is a named function:
+ * the alternative most people write is a fit followed by reading
+ * `cols`/`rows` and sending them, which on an unmeasurable pane sends the
+ * size the terminal still had, unprompted, as if it had just changed.
  */
 export function createPaneFit(terminal: Terminal): () => void {
   const addon = new FitAddon();
   terminal.loadAddon(addon);
-  return () => addon.fit();
+  return () => {
+    // The container the pane handed `open`, which is the box the addon
+    // measures against and the one this has to be able to vouch for.
+    if (!canMeasureGrid(terminal.element?.parentElement)) return;
+    addon.fit();
+  };
 }
 
 /**
