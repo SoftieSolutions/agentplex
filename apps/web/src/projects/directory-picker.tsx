@@ -22,9 +22,9 @@ import {
  * another `directory-list` through the store's command path, answered by the
  * server that owns the disk.
  *
- * Not mounted anywhere yet, on purpose. AGX-133 puts it in the project form,
- * which is the screen that has somewhere to put the answer; shipping it wired
- * to a form that cannot save one would be a control that does nothing.
+ * It is mounted in `new-project-form.tsx`, which is the screen that has
+ * somewhere to put the answer, and nowhere else: a picker wired to a form that
+ * could not save a directory would be a control that does nothing.
  *
  * Every rule is in `directory-picker-model.ts`: what a breadcrumb step is, what
  * descending into an entry means, and which answer belongs to which question.

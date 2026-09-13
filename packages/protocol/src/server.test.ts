@@ -77,6 +77,7 @@ describe('parseHubToServerFrame on the session instructions', () => {
     sessionId: null,
     provider: 'claude',
     prompt: null,
+    directory: null,
   };
 
   it('accepts a start that names a store and a provider, and nothing else', () => {
@@ -84,12 +85,27 @@ describe('parseHubToServerFrame on the session instructions', () => {
     expect(parseHubToServerFrame({ ...A_START, sessionId: 'session-1' }).ok).toBe(true);
   });
 
+  it('accepts a start in a project, whose directory is parsed like every other', () => {
+    expect(parseHubToServerFrame({ ...A_START, directory: '/srv/work/agentplex' }).ok).toBe(true);
+  });
+
+  it('refuses a project directory that is relative or holds a NUL', () => {
+    // The frame's half of the amended rule. What it cannot check is whose disk
+    // this is, which is why the server checks the value again against the roots
+    // its own operator configured -- see `directory-browse.ts`.
+    expect(parseHubToServerFrame({ ...A_START, directory: 'work/agentplex' }).ok).toBe(false);
+    expect(parseHubToServerFrame({ ...A_START, directory: '/srv/\u0000/x' }).ok).toBe(false);
+    expect(parseHubToServerFrame({ ...A_START, directory: '' }).ok).toBe(false);
+  });
+
   it('strips a cwd, an argv, an env or an operation name off an instruction', () => {
-    // The rule this frame exists to keep: the server owns the spawn. A
-    // directory off the wire is a remote code execution primitive wearing a
-    // path, and an argv element off the wire is one without the disguise.
-    // Neither survives the parser, so the server's handler has no field to be
-    // talked into reading.
+    // The rule this frame exists to keep: the server owns the spawn. An argv
+    // element off the wire is the `{ command }` frame without a disguise, and a
+    // `cwd` is one wearing a path -- neither survives the parser, so the
+    // server's handler has no field to be talked into reading. A directory does
+    // cross, under its own name and its own schema, and it is the one value on
+    // this frame that is checked twice: parsed here, and refused by the machine
+    // unless its operator listed a root above it.
     const smuggled = parseHubToServerFrame({
       ...A_START,
       cwd: '/srv/work',
@@ -422,6 +438,7 @@ describe('hub and server round trips', () => {
       sessionId: null,
       provider: 'claude',
       prompt: 'look at the failing test',
+      directory: null,
     },
     {
       type: 'session-start',
@@ -430,6 +447,7 @@ describe('hub and server round trips', () => {
       sessionId: sessionIdSchema.parse('session-1'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     },
     {
       type: 'session-stop',

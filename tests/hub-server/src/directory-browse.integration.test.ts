@@ -182,6 +182,18 @@ async function start(roots: readonly string[]): Promise<Harness> {
     onChange: (report) => state.applyConnection(report),
   });
 
+  // The whole feature over the real migrated schema, though this file only
+  // exercises the browse half of it: one instance for the broadcast, which is
+  // how the hub composes it too.
+  const projects = createProjects({
+    database,
+    ids: { newId: () => 'unused' },
+    clock,
+    state,
+    connections,
+    logger,
+  });
+
   const clients = createClients({
     hubId: 'hub-under-test' as never,
     state,
@@ -190,8 +202,8 @@ async function start(roots: readonly string[]): Promise<Harness> {
     readLayout: async () => [],
     readPaneLayout: async () => null,
     writePaneLayout: async () => undefined,
-    sessions: createSessions({ state, connections, logger }),
-    projects: createProjects({ state, connections, logger }),
+    sessions: createSessions({ state, projects, connections, logger }),
+    projects,
   });
 
   await connections.sync();

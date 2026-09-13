@@ -170,6 +170,7 @@ async function start(test: Harness, startId: number): Promise<FakePty> {
     sessionId: null,
     provider: 'claude',
     prompt: null,
+    directory: null,
   });
   const pty = test.factory.last;
   if (pty === undefined) throw new Error('the spawn opened no pty');

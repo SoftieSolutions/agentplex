@@ -232,6 +232,14 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     clock,
     logger,
     readStore: (storeId) => state.storeSessions(storeId),
+    // Which project a directory is, so that a session reported from one is
+    // filed under it. Reached through a call rather than by holding the
+    // feature, and that is this file's ordering rather than a seam of its own:
+    // the tree has to exist before the servers feature, because a report is
+    // handed to it, and projects has to exist after it, because a browse goes
+    // out over a connection. Nothing asks this question until a store has been
+    // reported, which is after `sync` far below.
+    projects: { findByDirectory: (directory) => projects.findByDirectory(directory) },
   });
 
   // Constructed here and dialling nothing yet. That is what the split between
@@ -271,14 +279,15 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     },
   });
 
-  const sessions = createSessions({ state, connections: servers, logger });
+  // Projects: the rows a user makes, and the browse a directory is picked with.
+  // The rule about which directories may be browsed is not this hub's -- it is
+  // checked against roots that machine's operator configured -- so what this
+  // feature adds is the one fact a server cannot have: whether the hub holds a
+  // connection to ask down at all. What it owns outright is the record: a name,
+  // a directory, and the node the tree shows it as.
+  const projects = createProjects({ database, ids, clock, state, connections: servers, logger });
 
-  // Browsing a server's directories, so that a project can hold one. The rule
-  // about which directories is the server's and not this hub's -- it is checked
-  // against roots that machine's operator configured -- so what this feature
-  // adds is the one fact a server cannot have: whether the hub holds a
-  // connection to ask down at all.
-  const projects = createProjects({ state, connections: servers, logger });
+  const sessions = createSessions({ state, projects, connections: servers, logger });
 
   // Read per request for the reason the tree above is, and durable for the
   // same one: an arrangement of panes outlives the process that was told it.

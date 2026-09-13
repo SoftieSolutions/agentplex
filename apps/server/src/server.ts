@@ -397,6 +397,15 @@ export async function startSessionServer(
   let readiness = await preflight.run(providers);
   reportUnusable(readiness);
 
+  // What any hub may look at on this machine's disk, and what it may spawn in,
+  // built once over the roots the operator configured. One browser for the
+  // server rather than one per connection, because the roots are a fact about
+  // the machine: two hubs browsing are two questions about the same disk, and a
+  // per-connection copy would be a second place the list could differ from the
+  // first. The session controller below takes the guard half of it, so a start
+  // can ask the rule without being able to list anything.
+  const browse = createDirectoryBrowser({ roots: browseRoots, reader: directoryReader });
+
   // The one thing here that turns a store id and a provider name into a running
   // agent. It is built once and outlives every hub connection: a socket comes
   // and goes, and the sessions this server started go on running across both.
@@ -405,6 +414,9 @@ export async function startSessionServer(
     providers,
     terminals,
     workingTree,
+    // The same guard a browse passes, so that "this machine will open that
+    // directory" has one answer whether it is being listed or spawned in.
+    browse,
     clock,
     logger,
   });
@@ -453,13 +465,6 @@ export async function startSessionServer(
     // stays pinned against eviction for the life of the process.
     onLeave: (member) => terminals.release(member.connectionId),
   });
-
-  // What any hub may look at on this machine's disk, built once over the roots
-  // the operator configured. One browser for the server rather than one per
-  // connection, because the roots are a fact about the machine: two hubs
-  // browsing are two questions about the same disk, and a per-connection copy
-  // would be a second place the list could differ from the first.
-  const browse = createDirectoryBrowser({ roots: browseRoots, reader: directoryReader });
 
   // The one thing a hub can do with this server before it has proved itself:
   // open a socket. Everything past that is the handshake's to allow.

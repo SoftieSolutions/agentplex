@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { DIRECTORY_ENTRIES_MAX, type DirectoryEntry } from '@agentplex/protocol';
-import { createDirectoryBrowser, type DirectoryOutcome } from './directory-browse.js';
+import {
+  createDirectoryBrowser,
+  type DirectoryAllowance,
+  type DirectoryOutcome,
+} from './directory-browse.js';
 import { createFakeDirectoryReader } from './fake-directory-reader.js';
 
 const WORK = '/srv/work';
@@ -10,7 +14,7 @@ function entries(outcome: DirectoryOutcome): readonly DirectoryEntry[] {
   return outcome.entries;
 }
 
-function problem(outcome: DirectoryOutcome): string {
+function problem(outcome: DirectoryOutcome | DirectoryAllowance): string {
   if (outcome.ok) throw new Error('expected a refusal');
   return outcome.problem;
 }
@@ -306,5 +310,94 @@ describe('the entry cap', () => {
     // Sorted before it was cut, so what survives is the first page of one
     // order rather than the first page of whatever the kernel handed back.
     expect(entries(outcome)[0]?.name).toBe('entry-00000');
+  });
+});
+
+/**
+ * The rule on its own, which is what a session start asks.
+ *
+ * Every refusal here is the same refusal a browse gets, from the same code, and
+ * the tests say so by asserting the same sentences. What is different is what a
+ * yes hands back: the path as it was asked for, because that is the string the
+ * spawned session will report as its `cwd` and the string the hub keys a
+ * project by. A spawn in the resolved path would file every session behind a
+ * symlink under no project at all.
+ */
+describe('the guard a spawn asks', () => {
+  it('allows a directory under a root, answering the path that was asked for', async () => {
+    const browser = createDirectoryBrowser({
+      roots: [WORK],
+      reader: createFakeDirectoryReader({ directories: { [WORK]: [], [`${WORK}/agentplex`]: [] } }),
+    });
+
+    expect(await browser.allow(`${WORK}/agentplex`)).toEqual({
+      ok: true,
+      directory: `${WORK}/agentplex`,
+    });
+  });
+
+  it('answers the asked-for spelling even when the real path is elsewhere', async () => {
+    // A link inside a root pointing at another place inside the same root. The
+    // containment test runs on what the kernel reaches; what comes back is what
+    // the user picked, because that is what the session will report.
+    const browser = createDirectoryBrowser({
+      roots: [WORK],
+      reader: createFakeDirectoryReader({
+        directories: { [WORK]: [], [`${WORK}/real`]: [] },
+        links: { [`${WORK}/link`]: `${WORK}/real` },
+      }),
+    });
+
+    expect(await browser.allow(`${WORK}/link`)).toEqual({ ok: true, directory: `${WORK}/link` });
+  });
+
+  it('refuses a directory outside every root, in the same words a browse gets', async () => {
+    const browser = createDirectoryBrowser({
+      roots: [WORK],
+      reader: createFakeDirectoryReader({ directories: { [WORK]: [], '/etc': [] } }),
+    });
+
+    const refused = await browser.allow('/etc');
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.code).toBe('refused');
+    expect(refused.problem).toContain('not under a directory');
+  });
+
+  it('refuses a symlink out of a root, which no string comparison would catch', async () => {
+    const browser = createDirectoryBrowser({
+      roots: [WORK],
+      reader: createFakeDirectoryReader({
+        directories: { [WORK]: [], '/elsewhere/secrets': [] },
+        links: { [`${WORK}/away`]: '/elsewhere/secrets' },
+      }),
+    });
+
+    expect(problem(await browser.allow(`${WORK}/away`))).toContain('not under a directory');
+  });
+
+  it('refuses a path with nothing at it, and a path that is a file', async () => {
+    const browser = createDirectoryBrowser({
+      roots: [WORK],
+      reader: createFakeDirectoryReader({
+        directories: { [WORK]: [] },
+        files: [`${WORK}/notes.md`],
+      }),
+    });
+
+    expect(problem(await browser.allow(`${WORK}/gone`))).toContain('there is nothing at');
+    expect(problem(await browser.allow(`${WORK}/notes.md`))).toContain('is not a directory');
+  });
+
+  it('refuses everything on a machine nobody configured, and names the setting', async () => {
+    // The default a server ships with. A machine with no roots spawns in no
+    // directory an instruction names, which is the direction that does not
+    // over-claim: the operator has not said this box may run anybody's project.
+    const browser = createDirectoryBrowser({
+      roots: [],
+      reader: createFakeDirectoryReader({ directories: { [WORK]: [] } }),
+    });
+
+    expect(problem(await browser.allow(WORK))).toContain('AGENTPLEX_BROWSE_ROOTS');
   });
 });

@@ -37,6 +37,22 @@ import {
  * own root is configured, which is the operator making that decision rather
  * than the link making it for them.
  *
+ * ## Two callers, one rule
+ *
+ * `allow` is the rule on its own: is this an existing directory under a root
+ * this machine's operator configured? `list` is that answer plus a read. The
+ * second caller is a session start carrying a project's directory, which needs
+ * exactly the first half -- it is not listing anything, it is about to spawn
+ * there -- and a start that reimplemented the containment test would be a
+ * second answer to the question this file exists to answer once.
+ *
+ * `allow` answers the path as it was asked for, not as it resolved. What is
+ * checked is the real path, because that is what the kernel will use; what is
+ * handed back is the caller's own spelling, because that is the string the
+ * session will report as its `cwd` and the string a project is keyed by. A
+ * start that spawned in the resolved path would file every session behind a
+ * symlink under no project at all.
+ *
  * ## Why containment is checked and the entries are not
  *
  * Only the directory being listed is checked. The entries inside it are
@@ -115,7 +131,24 @@ export interface DirectoryRefusal {
 
 export type DirectoryOutcome = DirectoryListing | DirectoryRefusal;
 
-export interface DirectoryBrowser {
+/** A directory this machine will act in, or why it will not. */
+export type DirectoryAllowance =
+  { readonly ok: true; readonly directory: string } | DirectoryRefusal;
+
+/**
+ * The containment rule alone: what a browse and a spawn both have to ask.
+ *
+ * Separate from the browser it is half of, so that a caller which must not be
+ * able to read somebody's disk cannot: `session-control.ts` takes this and not
+ * a `DirectoryBrowser`, and there is therefore no `list` reachable from a
+ * session start.
+ */
+export interface DirectoryGuard {
+  /** Whether this machine will act in that directory, and why not when it will not. */
+  allow(directory: string): Promise<DirectoryAllowance>;
+}
+
+export interface DirectoryBrowser extends DirectoryGuard {
   list(directory: BrowseRequest): Promise<DirectoryOutcome>;
 }
 
@@ -135,7 +168,75 @@ export function createDirectoryBrowser({
   roots,
   reader,
 }: DirectoryBrowseDependencies): DirectoryBrowser {
+  /**
+   * The rule, once, for both verbs.
+   *
+   * The resolved path is kept beside the asked-for one because `list` needs it
+   * -- reading the directory the kernel actually reaches is the only read that
+   * describes what is there -- while everything said to the caller names the
+   * path they asked about.
+   */
+  const resolve = async (
+    directory: string,
+  ): Promise<DirectoryRefusal | { readonly ok: true; readonly real: string }> => {
+    if (roots.length === 0) return { ok: false, code: 'refused', problem: NO_ROOTS };
+
+    // Parsed again here, and not because the frame's parser is in doubt. This
+    // is a library function with one rule in it, and a caller that reached it
+    // from somewhere other than a parsed frame -- a test, a later feature --
+    // must not be the thing that decides whether `\0` is checked.
+    if (!directorySchema.safeParse(directory).success) {
+      return {
+        ok: false,
+        code: 'refused',
+        problem: `${directory} is not an absolute path this server will open`,
+      };
+    }
+
+    const asked = await reader.realPath(directory);
+    if (asked.kind === 'missing') {
+      return {
+        ok: false,
+        code: 'refused',
+        problem: `there is nothing at ${directory} on this machine`,
+      };
+    }
+    if (asked.kind === 'not-a-directory') {
+      return { ok: false, code: 'refused', problem: `${directory} is not a directory` };
+    }
+    if (asked.kind === 'failed') {
+      // Before containment, and that is the one ordering decision here that
+      // could have gone the other way. A path this process cannot resolve is
+      // a path it cannot place under a root either, so the honest answer is
+      // that it could not look -- and saying "not under a root" instead would
+      // be a claim nothing checked.
+      return {
+        ok: false,
+        code: 'internal',
+        problem: `this server could not resolve ${directory}: ${asked.reason}`,
+      };
+    }
+
+    if (!(await contains(roots, asked.path, reader))) {
+      // Named as the path the user asked for and not as the path it resolved
+      // to. The second would tell whoever sent this where a link on this
+      // machine points, which is a fact about a disk they were just refused.
+      return {
+        ok: false,
+        code: 'refused',
+        problem: `${directory} is not under a directory this server will browse`,
+      };
+    }
+
+    return { ok: true, real: asked.path };
+  };
+
   return {
+    async allow(directory: string): Promise<DirectoryAllowance> {
+      const resolved = await resolve(directory);
+      return resolved.ok ? { ok: true, directory } : resolved;
+    },
+
     async list(directory: BrowseRequest): Promise<DirectoryOutcome> {
       if (roots.length === 0) return { ok: false, code: 'refused', problem: NO_ROOTS };
 
@@ -154,55 +255,10 @@ export function createDirectoryBrowser({
         };
       }
 
-      // Parsed again here, and not because the frame's parser is in doubt. This
-      // is a library function with one rule in it, and a caller that reached it
-      // from somewhere other than a parsed frame -- a test, a later feature,
-      // whatever AGX-133 turns out to need -- must not be the thing that
-      // decides whether `\0` is checked.
-      if (!directorySchema.safeParse(directory).success) {
-        return {
-          ok: false,
-          code: 'refused',
-          problem: `${directory} is not an absolute path this server will list`,
-        };
-      }
+      const resolved = await resolve(directory);
+      if (!resolved.ok) return resolved;
 
-      const asked = await reader.realPath(directory);
-      if (asked.kind === 'missing') {
-        return {
-          ok: false,
-          code: 'refused',
-          problem: `there is nothing at ${directory} on this machine`,
-        };
-      }
-      if (asked.kind === 'not-a-directory') {
-        return { ok: false, code: 'refused', problem: `${directory} is not a directory` };
-      }
-      if (asked.kind === 'failed') {
-        // Before containment, and that is the one ordering decision here that
-        // could have gone the other way. A path this process cannot resolve is
-        // a path it cannot place under a root either, so the honest answer is
-        // that it could not look -- and saying "not under a root" instead would
-        // be a claim nothing checked.
-        return {
-          ok: false,
-          code: 'internal',
-          problem: `this server could not resolve ${directory}: ${asked.reason}`,
-        };
-      }
-
-      if (!(await contains(roots, asked.path, reader))) {
-        // Named as the path the user asked for and not as the path it resolved
-        // to. The second would tell whoever sent this where a link on this
-        // machine points, which is a fact about a disk they were just refused.
-        return {
-          ok: false,
-          code: 'refused',
-          problem: `${directory} is not under a directory this server will browse`,
-        };
-      }
-
-      const read = await reader.read(asked.path);
+      const read = await reader.read(resolved.real);
       if (read.kind === 'failed') {
         // `internal` and not `refused`: the rule said yes, this machine failed
         // on its own side, and a fixed permission makes the same request work.

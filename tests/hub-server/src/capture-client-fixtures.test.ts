@@ -163,6 +163,8 @@ function labelFor(text: string): string {
     ['layout', 'layout'],
     ['pane-layout-saved', 'paneLayoutSaved'],
     ['session-started', 'sessionStarted'],
+    ['project-created', 'projectCreated'],
+    ['node-renamed', 'nodeRenamed'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -459,6 +461,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       provider: 'claude',
       prompt: null,
       server: null,
+      project: null,
     });
     await first.framesReceived(7);
     first.sendText('definitely not a frame');
@@ -793,6 +796,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       provider: 'claude',
       prompt: 'fix the auth refresh loop',
       server: null,
+      project: null,
     });
     await until(
       () => starter.received.some((text) => labelFor(text) === 'sessionStarted'),
@@ -832,6 +836,53 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     if (directoryRoots === undefined || directoryListing === undefined) {
       throw new Error('a browse was not answered');
     }
+
+    // A project made out of the directory that was just browsed to, and then
+    // renamed. Both replies travel the whole real path -- the hub writes two
+    // rows in one transaction and answers -- so what the web's forms are tested
+    // against is what a hub actually says rather than what their author
+    // imagined. The node id in the reply is the one thing a client cannot work
+    // out for itself, which is why the frame carries it.
+    starter.send({
+      type: 'project-create',
+      id: 5,
+      name: 'agentplex',
+      directory: '/Users/robert/code/agentplex',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'projectCreated'),
+      'the project create to be answered',
+    );
+    const projectCreated = starter.received.find((text) => labelFor(text) === 'projectCreated');
+    if (projectCreated === undefined) throw new Error('the project create was not answered');
+    const created = parseTextFrame(parseHubFrame, projectCreated);
+    if (!created.ok || created.value.type !== 'project-created') {
+      throw new Error('the project create was answered with something else');
+    }
+
+    starter.send({
+      type: 'project-rename',
+      id: 6,
+      nodeId: created.value.nodeId,
+      name: 'agentplex (main checkout)',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'nodeRenamed'),
+      'the project rename to be answered',
+    );
+    const nodeRenamed = starter.received.find((text) => labelFor(text) === 'nodeRenamed');
+    if (nodeRenamed === undefined) throw new Error('the project rename was not answered');
+
+    // The tree with that project in it, so the web's project picker has a
+    // captured layout to read rather than one somebody typed.
+    starter.send({ type: 'layout-request', id: 7 });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'layout'),
+      'the layout to be answered',
+    );
+    const layoutWithProject = starter.received.find((text) => labelFor(text) === 'layout');
+    if (layoutWithProject === undefined) throw new Error('the layout was not answered');
+
     await singleHub.cleanup();
 
     // A shared volume: two machines with the same store mounted. This is the
@@ -997,6 +1048,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('sessionStarted', sessionStarted);
     captured.set('directoryRoots', directoryRoots);
     captured.set('directoryListing', directoryListing);
+    captured.set('projectCreated', projectCreated);
+    captured.set('nodeRenamed', nodeRenamed);
+    captured.set('layoutWithProject', layoutWithProject);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
     captured.set('machineStateDiscovered', machineStateDiscovered);

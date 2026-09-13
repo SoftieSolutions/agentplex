@@ -48,6 +48,7 @@ describe('parseClientFrame on the session frames', () => {
     provider: 'claude',
     prompt: null,
     server: null,
+    project: null,
   };
 
   it('accepts a start that names a store and lets the hub schedule it', () => {
@@ -77,6 +78,15 @@ describe('parseClientFrame on the session frames', () => {
     for (const forbidden of ['cwd', 'args', 'env', 'command', 'operation']) {
       expect(smuggled.value).not.toHaveProperty(forbidden);
     }
+  });
+
+  it('accepts a start in a project, which names a node and never a path', () => {
+    expect(parseClientFrame({ ...A_START, project: 'node-7' }).ok).toBe(true);
+  });
+
+  it('rejects a start whose project is not an id', () => {
+    expect(parseClientFrame({ ...A_START, project: '' }).ok).toBe(false);
+    expect(parseClientFrame({ ...A_START, project: 12 }).ok).toBe(false);
   });
 
   it('rejects a start for a provider nothing implements', () => {
@@ -196,6 +206,7 @@ describe('client and hub round trips', () => {
       provider: 'claude',
       prompt: 'take a look at the failing test',
       server: null,
+      project: null,
     },
     {
       type: 'session-start',
@@ -205,6 +216,7 @@ describe('client and hub round trips', () => {
       provider: 'claude',
       prompt: null,
       server: serverRegistrationIdSchema.parse('registration-2'),
+      project: null,
     },
     {
       type: 'session-stop',

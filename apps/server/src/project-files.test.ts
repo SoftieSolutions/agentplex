@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   PROJECT_FILES_DIRECTORY,
@@ -11,6 +11,7 @@ import {
   projectPath,
 } from './project-files.js';
 import type { ProjectKey } from './project-files.js';
+import { normaliseDirectory } from '@agentplex/protocol';
 import { createFakeProjectFiles } from './fake-project-files.js';
 
 const DATA_ROOT = '/var/lib/agentplex';
@@ -172,6 +173,42 @@ describe('projectKeyFor', () => {
 
   it('derives without touching the disk, so a removed working tree keeps its folder', () => {
     expect(derivedKey('/srv/gone-yesterday')).toBe(derivedKey('/srv/gone-yesterday'));
+  });
+
+  /**
+   * The claim the hub's placement rests on, run rather than asserted.
+   *
+   * A session started in a project is filed under it because the `cwd` it
+   * reports normalises to the project's directory, and the key this module
+   * derives has to agree with that or one project would be two things. It
+   * agrees because both call `normaliseDirectory`; what this checks is that
+   * `normaliseDirectory` is what it says it is -- POSIX path normalisation --
+   * against the implementation that defines it. The protocol may import no Node
+   * builtin, so the comparison lives here, where one may.
+   */
+  it('normalises a working tree exactly as POSIX path normalisation does', () => {
+    const cases = [
+      '/',
+      '//',
+      '/srv',
+      '/srv/',
+      '/srv//work',
+      '/srv/./work',
+      '/srv/work/..',
+      '/srv/work/../other',
+      '/..',
+      '/a/b/../../c',
+      '/a//b//',
+      '/a/./b/../c/./',
+      '/Users/robert/code/agentplex',
+      '/srv/work-secrets',
+      '/...',
+      '/a/..b/c',
+    ];
+    for (const directory of cases) {
+      const trimmed = posix.normalize(directory).replace(/\/+$/, '');
+      expect(normaliseDirectory(directory), directory).toBe(trimmed === '' ? '/' : trimmed);
+    }
   });
 });
 

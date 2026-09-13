@@ -351,6 +351,7 @@ describe('a draining shutdown', () => {
       sessionId: null,
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
     const refusal = await hub.next('session-refused');
 
