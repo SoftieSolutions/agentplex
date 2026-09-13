@@ -26,15 +26,7 @@ import {
   SERVER_TOKEN_MAX_CHARS,
 } from './pairing.js';
 import { frameParser } from './parse.js';
-import {
-  sessionSubscribeFrameSchema,
-  sessionSubscribedFrameSchema,
-  sessionUnsubscribeFrameSchema,
-  sessionUnsubscribedFrameSchema,
-  terminalInputFrameSchema,
-  terminalOutputFrameSchema,
-  terminalResizeFrameSchema,
-} from './terminal.js';
+import { clientTerminalFrames } from './terminal.js';
 
 /**
  * The client-facing half of the protocol: browser (or MCP caller) to hub.
@@ -58,9 +50,11 @@ import {
  * purpose: `terminal-output` is unsolicited like `machine-state` but goes to
  * the clients watching that session rather than to all of them, because a
  * client that is not looking at a terminal has no use for its bytes. They are
- * defined in `terminal.ts` and shared with the server direction unchanged --
- * a terminal frame is relayed, not answered, and one shape for both legs is
- * what keeps the relay from being two shapes that drift.
+ * defined in `terminal.ts`, written once for both legs and instantiated here
+ * with this leg's start handle -- a terminal frame is relayed, not answered,
+ * and one definition for both legs is what keeps the relay from being two
+ * shapes that drift. On this leg a start handle is the client's own
+ * `session-start` frame id; see `terminal.ts` for why the server leg's is not.
  */
 
 /**
@@ -213,10 +207,10 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
    * bytes a user pastes are the bytes a user typed; scroll is scrollback,
    * which is its own ticket. Resize is the one that genuinely crosses.
    */
-  sessionSubscribeFrameSchema,
-  sessionUnsubscribeFrameSchema,
-  terminalInputFrameSchema,
-  terminalResizeFrameSchema,
+  clientTerminalFrames.subscribe,
+  clientTerminalFrames.unsubscribe,
+  clientTerminalFrames.input,
+  clientTerminalFrames.resize,
   /**
    * Pairs a server: dial this address, with this token, and call it this.
    *
@@ -645,9 +639,9 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
    * that session, which is the one thing here that is neither a broadcast to
    * everybody nor an answer to one asker.
    */
-  sessionSubscribedFrameSchema,
-  sessionUnsubscribedFrameSchema,
-  terminalOutputFrameSchema,
+  clientTerminalFrames.subscribed,
+  clientTerminalFrames.unsubscribed,
+  clientTerminalFrames.output,
   /**
    * The pairing was recorded, and here is the hub's name for it.
    *

@@ -1,13 +1,14 @@
 import type {
-  FrameId,
+  ServerTerminalTarget,
   SessionId,
   SessionStartTag,
+  StartId,
   StoreId,
   TerminalSize,
-  TerminalTarget,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
-import type { Terminal, TerminalManager, WatcherId } from './terminal-manager.js';
+import type { GrantId } from '@agentplex/providers';
+import type { Terminal, TerminalManager, TerminalStart, WatcherId } from './terminal-manager.js';
 
 /**
  * One hub connection's standing interest in this server's terminals.
@@ -15,7 +16,16 @@ import type { Terminal, TerminalManager, WatcherId } from './terminal-manager.js
  * The terminals themselves outlive every connection -- a socket comes and
  * goes, and the agents this server forked go on running across both -- so what
  * belongs to a connection is exactly this: which terminals it is watching,
- * which starts it made, and the detaches it owes back.
+ * and the detaches it owes back.
+ *
+ * The starts are not among them, and that is the change this file no longer
+ * makes. A start tag used to be the id of the `session-start` frame on this
+ * socket, which meant a hub that dropped between forking a spawn and the
+ * provider naming it came back to a terminal it had started and could no
+ * longer address. The tag is the hub's own `StartId` now and it lives on the
+ * terminal manager; what is left here is per connection because it genuinely
+ * is -- which of that grant's starts this socket has already been told the
+ * session id for.
  *
  * Three rules hold it together.
  *
@@ -42,8 +52,8 @@ export interface TerminalOutput {
   readonly storeId: StoreId;
   /** `null` while the provider has not named the session yet. */
   readonly sessionId: SessionId | null;
-  /** The start this connection made, when it made it, and `null` otherwise. */
-  readonly startId: FrameId | null;
+  /** The start the asking hub made, if it made one, and `null` otherwise. */
+  readonly startId: StartId | null;
   readonly chunk: Uint8Array;
   /**
    * Chunks this stream threw away before this one, over the life of the stream.
@@ -85,7 +95,7 @@ export type TerminalDelivery = 'sent' | 'dropped';
 export interface TerminalAttachment {
   readonly storeId: StoreId;
   readonly sessionId: SessionId | null;
-  readonly startId: FrameId | null;
+  readonly startId: StartId | null;
   /** Bytes printed before `replay` begins, so the peer can size what is gone. */
   readonly droppedBytes: number;
   readonly replay: readonly Uint8Array[];
@@ -113,6 +123,21 @@ export interface TerminalStreamsDependencies {
    */
   readonly watcher: WatcherId;
   /**
+   * The grant this connection authenticated with, or `null` before it has.
+   *
+   * A function rather than a value because the grant is resolved by the
+   * handshake and this is built before it, on a socket that has proved nothing
+   * yet. Nothing that reads it is reachable until the connection is
+   * established, so `null` is a state no start ever observes -- and answering
+   * it as "this grant has no such start" rather than throwing keeps that true
+   * even if some later frame path forgets to check the state first.
+   *
+   * It is what scopes every start here: a start id is minted by one hub and
+   * means nothing to another, so a connection may only name, and may only be
+   * told about, the starts made under its own grant.
+   */
+  readonly grant: () => GrantId | null;
+  /**
    * Where a chunk goes. The connection turns it into a frame; this does not.
    *
    * Answers whether it actually went, because a sink that cannot say so leaves
@@ -127,22 +152,28 @@ export interface TerminalStreamsDependencies {
 
 export interface TerminalStreams {
   /**
-   * Records that a start on this connection produced a terminal.
+   * Records that a start this connection carried produced a terminal.
    *
-   * The start handle is the id of the frame that asked, which makes it local
-   * to this connection and meaningless on another. That is what makes it safe
-   * to answer subscriptions with, and why nothing keeps it once the session
-   * has a name of its own.
+   * The handle is the hub's, not this socket's, so the record goes to the
+   * terminal manager and is found again by the next connection this grant
+   * makes. This is the call, and the grant it is filed under is this
+   * connection's.
    */
-  noteStart(startId: FrameId, terminalId: string): void;
-  subscribe(target: TerminalTarget): AttachOutcome;
-  unsubscribe(target: TerminalTarget): StreamOutcome;
-  write(target: TerminalTarget, data: string): StreamOutcome;
-  resize(target: TerminalTarget, size: TerminalSize): StreamOutcome;
+  noteStart(startId: StartId, terminalId: string): void;
+  subscribe(target: ServerTerminalTarget): AttachOutcome;
+  unsubscribe(target: ServerTerminalTarget): StreamOutcome;
+  write(target: ServerTerminalTarget, data: string): StreamOutcome;
+  resize(target: ServerTerminalTarget, size: TerminalSize): StreamOutcome;
   /**
    * The start provenance to put in this store's next report, and the taking is
-   * the point: a start is reported until it has been reported with the session
-   * id the provider wrote, and not one report longer.
+   * the point: a start is reported to this connection until it has been
+   * reported with the session id the provider wrote, and not one report longer.
+   *
+   * Per connection rather than per start, which is what a tag on the terminal
+   * manager makes possible and what a reconnecting hub needs: the start itself
+   * is still held, so the next connection this grant makes is told about it
+   * again -- once, with whatever name the session has by then -- rather than
+   * finding a spawn it started and cannot address.
    */
   takeStartTags(storeId: StoreId): readonly SessionStartTag[];
   /** The socket went away. Every watch this connection held is given back. */
@@ -157,29 +188,27 @@ interface Stream {
   droppedChunks: number;
 }
 
-/** A start this connection made, and whether its session has been reported. */
-interface StartRecord {
-  readonly terminalId: string;
-  identified: boolean;
-}
-
 export function createTerminalStreams({
   terminals,
   watcher,
+  grant,
   onOutput,
   logger,
 }: TerminalStreamsDependencies): TerminalStreams {
   const streams = new Map<string, Stream>();
   /** The same streams, by the target that asked, so a detach needs no lookup. */
   const byTarget = new Map<string, Stream>();
-  const starts = new Map<FrameId, StartRecord>();
+  /** Starts this connection has already been sent with a session id on them. */
+  const identified = new Set<StartId>();
 
-  const startIdOf = (terminalId: string): FrameId | null => {
-    for (const [startId, record] of starts) {
-      if (record.terminalId === terminalId) return startId;
-    }
-    return null;
+  /** This grant's starts, as the manager holds them. Empty before the handshake. */
+  const starts = (): readonly TerminalStart[] => {
+    const grantId = grant();
+    return grantId === null ? [] : terminals.starts(grantId);
   };
+
+  const startIdOf = (terminalId: string): StartId | null =>
+    starts().find((start) => start.terminalId === terminalId)?.startId ?? null;
 
   /**
    * The terminal a frame is about, or nothing.
@@ -189,10 +218,10 @@ export function createTerminalStreams({
    * wants to read is frequently the one that just stopped, and its bytes are
    * here rather than in the transcript.
    */
-  const resolve = (target: TerminalTarget): Terminal | undefined => {
+  const resolve = (target: ServerTerminalTarget): Terminal | undefined => {
     if (target.by === 'start') {
-      const record = starts.get(target.startId);
-      return record === undefined ? undefined : terminals.terminal(record.terminalId);
+      const start = starts().find((held) => held.startId === target.startId);
+      return start === undefined ? undefined : terminals.terminal(start.terminalId);
     }
     const held = terminals.terminals.filter(
       (terminal) =>
@@ -201,15 +230,15 @@ export function createTerminalStreams({
     return held.find((terminal) => terminal.run.exit === null) ?? held[0];
   };
 
-  const describe = (target: TerminalTarget): string =>
+  const describe = (target: ServerTerminalTarget): string =>
     target.by === 'start'
-      ? `this server has no terminal for start ${String(target.startId)}`
+      ? `this server has no terminal for start ${target.startId}`
       : `this server is not running session ${target.sessionId}`;
 
   /** A target's name, so two frames naming one thing count as one subscriber. */
-  const keyOf = (target: TerminalTarget): string =>
+  const keyOf = (target: ServerTerminalTarget): string =>
     target.by === 'start'
-      ? `start ${String(target.startId)}`
+      ? `start ${target.startId}`
       : `session ${target.storeId} ${target.sessionId}`;
 
   /**
@@ -246,11 +275,19 @@ export function createTerminalStreams({
   });
 
   return {
-    noteStart(startId: FrameId, terminalId: string): void {
-      starts.set(startId, { terminalId, identified: false });
+    noteStart(startId: StartId, terminalId: string): void {
+      const grantId = grant();
+      // Unreachable while a start can only arrive on an established
+      // connection, and refused rather than asserted because the alternative
+      // is a tag filed under nobody.
+      if (grantId === null) {
+        logger.warn('a start arrived before this connection had a grant', { terminalId });
+        return;
+      }
+      terminals.noteStart(terminalId, startId, grantId);
     },
 
-    subscribe(target: TerminalTarget): AttachOutcome {
+    subscribe(target: ServerTerminalTarget): AttachOutcome {
       const terminal = resolve(target);
       if (terminal === undefined) return { ok: false, problem: describe(target) };
 
@@ -311,7 +348,7 @@ export function createTerminalStreams({
       return { ok: true, attachment: attachmentOf(terminal, replay, droppedBytes) };
     },
 
-    unsubscribe(target: TerminalTarget): StreamOutcome {
+    unsubscribe(target: ServerTerminalTarget): StreamOutcome {
       const key = keyOf(target);
       if (!byTarget.has(key)) {
         return { ok: false, problem: 'this connection is not watching that session' };
@@ -320,7 +357,7 @@ export function createTerminalStreams({
       return { ok: true };
     },
 
-    write(target: TerminalTarget, data: string): StreamOutcome {
+    write(target: ServerTerminalTarget, data: string): StreamOutcome {
       const terminal = resolve(target);
       if (terminal === undefined) return { ok: false, problem: describe(target) };
       if (terminal.run.exit !== null) {
@@ -333,7 +370,7 @@ export function createTerminalStreams({
       return { ok: true };
     },
 
-    resize(target: TerminalTarget, size: TerminalSize): StreamOutcome {
+    resize(target: ServerTerminalTarget, size: TerminalSize): StreamOutcome {
       const terminal = resolve(target);
       if (terminal === undefined) return { ok: false, problem: describe(target) };
       if (terminal.run.exit !== null) {
@@ -345,22 +382,21 @@ export function createTerminalStreams({
 
     takeStartTags(storeId: StoreId): readonly SessionStartTag[] {
       const tags: SessionStartTag[] = [];
-      for (const [startId, record] of [...starts]) {
-        const terminal = terminals.terminal(record.terminalId);
-        if (terminal === undefined) {
-          // Evicted, or forgotten at shutdown. A handle pointing at nothing is
-          // worse than no handle: it names a start that is not running here.
-          starts.delete(startId);
-          continue;
-        }
-        if (record.identified || terminal.storeId !== storeId) continue;
+      for (const { startId, terminalId } of starts()) {
+        // The manager forgets a start when it closes the terminal it named, so
+        // this cannot be undefined. Skipped rather than asserted because the
+        // cost of being wrong is a report with one tag missing, and the cost of
+        // asserting is a store report nobody gets.
+        const terminal = terminals.terminal(terminalId);
+        if (terminal === undefined) continue;
+        if (identified.has(startId) || terminal.storeId !== storeId) continue;
 
         const sessionId = terminal.session?.sessionId ?? null;
         tags.push({ startId, sessionId });
-        // Reported with an id once, and then never again: the reader has the
-        // pair it needed, and a handle local to one connection is not a name
-        // to keep repeating.
-        if (sessionId !== null) record.identified = true;
+        // Reported to this connection with an id once, and then never again:
+        // this reader has the pair it needed. The start itself stays on the
+        // manager, so the next connection this grant makes is told once too.
+        if (sessionId !== null) identified.add(startId);
       }
       return tags;
     },

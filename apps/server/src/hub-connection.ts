@@ -11,6 +11,7 @@ import {
   type ServerToHubFrame,
   type SessionId,
   type SessionRef,
+  type StartId,
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
@@ -293,13 +294,13 @@ export function serveHubConnection(
   const send = (frame: ServerToHubFrame): void => void socket.send(JSON.stringify(frame));
 
   /**
-   * This connection's subscriptions, its start handles, and the one place a
-   * watch is given back.
+   * This connection's subscriptions, and the one place a watch is given back.
    *
-   * Per connection rather than per server, because a start handle is the id of
-   * a frame on this socket and means nothing on another one, and because the
-   * watches this connection took are exactly what has to be released when it
-   * ends.
+   * Per connection because the watches this connection took are exactly what
+   * has to be released when it ends. The starts are not per connection any
+   * more -- they are the asking hub's own ids, held against the terminals so a
+   * hub that redialled can still name a spawn the provider has not named --
+   * and this reaches them through the grant below.
    */
   const streams = createTerminalStreams({
     terminals,
@@ -307,6 +308,11 @@ export function serveHubConnection(
     // against, so that one socket closing hands back its own watches and not
     // another connection's. The same id the audience knows this member by.
     watcher: connectionId,
+    // Read rather than captured, because the handshake has not run yet and it
+    // is the handshake that resolves the grant. Every start is scoped to it:
+    // a start id is minted by one hub, and the starts a connection may name
+    // and be told about are its own grant's.
+    grant: () => grantId,
     onOutput: sendOutput,
     logger,
   });
@@ -455,7 +461,7 @@ export function serveHubConnection(
         // Not awaited: a start scans a store and forks a process, and awaiting
         // it inside `onMessage` would stall every later frame on this socket
         // behind one launch.
-        void runStart(frame.id, {
+        void runStart(frame.id, frame.startId, {
           storeId: frame.storeId,
           sessionId: frame.sessionId,
           provider: frame.provider,
@@ -770,6 +776,7 @@ export function serveHubConnection(
    */
   async function runStart(
     replyTo: FrameId,
+    startId: StartId,
     request: {
       readonly storeId: StoreId;
       readonly sessionId: SessionId | null;
@@ -790,7 +797,12 @@ export function serveHubConnection(
     // Before the report, because the report is where the tag goes: the hub is
     // owed "this start is running here" in the same breath as the start, so a
     // pending pane has something to be while the provider is still starting.
-    if (outcome.ok) streams.noteStart(replyTo, outcome.terminalId);
+    //
+    // Tagged with the hub's own name for the start and not with the id of the
+    // frame it arrived on, which is what makes the tag outlive this socket: a
+    // hub that drops before the provider writes a session id redials and is
+    // told again which terminal its start produced.
+    if (outcome.ok) streams.noteStart(startId, outcome.terminalId);
 
     await reportStore(request.storeId);
     if (state !== 'established') return;

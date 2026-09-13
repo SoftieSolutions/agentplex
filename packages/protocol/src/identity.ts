@@ -10,6 +10,30 @@ export type StoreId = z.infer<typeof storeIdSchema>;
 export const sessionIdSchema = opaqueId.brand<'SessionId'>();
 export type SessionId = z.infer<typeof sessionIdSchema>;
 
+/**
+ * One act of starting a session, as the hub that asked for it names it.
+ *
+ * Minted by the hub when it builds a `session-start` instruction, and carried
+ * on that frame so the server can tag the terminal it forks with it. It is the
+ * name a spawn has in the gap between the fork and the moment the provider
+ * writes its own session id -- see `terminal.ts` for what that gap is and why
+ * something has to fill it.
+ *
+ * An opaque id rather than a frame id, and that is the whole of this type. A
+ * frame id is unique within one connection and means nothing on the next one,
+ * so a hub that redialled between the fork and the first scan could no longer
+ * name the spawn it had just asked for -- and if the provider never named the
+ * session, could never name it again. This survives the redial because nothing
+ * about it is per connection.
+ *
+ * It is the hub's name and not the world's. Another hub paired with the same
+ * server did not mint it, cannot have one of its own that means the same
+ * thing, and is told nothing about it: the server reports a start only to the
+ * connections holding the grant the start was made under.
+ */
+export const startIdSchema = opaqueId.brand<'StartId'>();
+export type StartId = z.infer<typeof startIdSchema>;
+
 /** Identifies one paired server process, across restarts and address changes. */
 export const serverIdSchema = opaqueId.brand<'ServerId'>();
 export type ServerId = z.infer<typeof serverIdSchema>;

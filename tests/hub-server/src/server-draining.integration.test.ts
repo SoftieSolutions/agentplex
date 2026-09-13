@@ -246,11 +246,21 @@ async function start(): Promise<Harness> {
   });
 
   await connections.sync();
+  // Counting rather than random: a start handle is minted per start, and this
+  // suite is about what a draining machine reports rather than about the name,
+  // so the seam is filled with the cheapest thing that satisfies it.
+  let minted = 0;
   return {
     state,
     // A fake project table: nothing here starts in a project, and the rows are
     // the project suites' subject.
-    sessions: createSessions({ state, projects: createFakeProjects(), connections, logger }),
+    sessions: createSessions({
+      state,
+      projects: createFakeProjects(),
+      connections,
+      ids: { newId: () => `start-${(minted += 1)}` },
+      logger,
+    }),
     connections,
     machine,
     timers,

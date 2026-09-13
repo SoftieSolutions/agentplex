@@ -7,6 +7,7 @@ import {
   nodeIdSchema,
   nodeKindSchema,
   sessionIdSchema,
+  startIdSchema,
   storeIdSchema,
   type HubFrame,
   serverAddressSchema,
@@ -650,6 +651,7 @@ describe('starting and stopping a session', () => {
         storeId: store(STORE),
         sessionId: sessionIdSchema.parse(SESSION),
         server: 'registration-workshop' as ServerRegistrationId,
+        startId: startIdSchema.parse('start-2f9c'),
       },
     });
     const { broadcast } = harness(async () => [], sessions);
@@ -732,6 +734,7 @@ describe('starting and stopping a session', () => {
         storeId: store(STORE),
         sessionId: sessionIdSchema.parse(SESSION),
         server: 'registration-workshop' as ServerRegistrationId,
+        startId: startIdSchema.parse('start-2f9c'),
       },
     });
     const { broadcast } = harness(async () => [], sessions);

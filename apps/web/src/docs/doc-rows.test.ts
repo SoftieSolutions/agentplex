@@ -28,9 +28,9 @@ describe('the documents under a project', () => {
   it('groups the tree by project, keeping the hub order', () => {
     expect(projectDocuments(withProject)).toEqual([
       {
-        projectId: 'hub-4',
+        projectId: 'hub-5',
         label: 'agentplex (main checkout)',
-        docs: [{ nodeId: 'hub-5', name: 'plan.md' }],
+        docs: [{ nodeId: 'hub-6', name: 'plan.md' }],
       },
     ]);
   });
@@ -40,7 +40,7 @@ describe('the documents under a project', () => {
     // nothing yet is exactly the row somebody needs to find.
     const noDocs = withProject.filter((node) => node.kind !== 'doc');
     expect(projectDocuments(noDocs)).toEqual([
-      { projectId: 'hub-4', label: 'agentplex (main checkout)', docs: [] },
+      { projectId: 'hub-5', label: 'agentplex (main checkout)', docs: [] },
     ]);
   });
 
@@ -57,19 +57,19 @@ describe('the documents under a project', () => {
       node.kind === 'doc' ? { ...node, parentId: nodeIdSchema.parse('hub-404') } : node,
     );
     expect(projectDocuments(orphaned)).toEqual([
-      { projectId: 'hub-4', label: 'agentplex (main checkout)', docs: [] },
+      { projectId: 'hub-5', label: 'agentplex (main checkout)', docs: [] },
     ]);
   });
 });
 
 describe('naming one document', () => {
   it('answers with the file name the tree carries', () => {
-    expect(documentName(withProject, nodeIdSchema.parse('hub-5'))).toBe('plan.md');
+    expect(documentName(withProject, nodeIdSchema.parse('hub-6'))).toBe('plan.md');
   });
 
   it('answers null for a node that is not a document, and for no tree', () => {
-    expect(documentName(withProject, nodeIdSchema.parse('hub-4'))).toBeNull();
+    expect(documentName(withProject, nodeIdSchema.parse('hub-5'))).toBeNull();
     expect(documentName(withProject, nodeIdSchema.parse('hub-404'))).toBeNull();
-    expect(documentName(null, nodeIdSchema.parse('hub-5'))).toBeNull();
+    expect(documentName(null, nodeIdSchema.parse('hub-6'))).toBeNull();
   });
 });

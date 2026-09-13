@@ -8,6 +8,7 @@ import {
   PROTOCOL_VERSION,
   serverIdSchema,
   sessionIdSchema,
+  startIdSchema,
   storeIdSchema,
   type ClientFrame,
   type HubFrame,
@@ -21,6 +22,7 @@ import {
   type LayoutNode,
   type NodeId,
   type SessionRow,
+  type StartId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import {
@@ -207,9 +209,10 @@ interface Machine {
    *
    * The one thing a machine needs that is not durable, and it is here for the
    * case the durable half exists for: pulling the wire on a machine with an
-   * agent alive on it. A test can close a socket and a test cannot close a
-   * connection any other way -- the hub's own `stop()` is a shutdown and never
-   * comes back.
+   * agent alive on it, or losing it in the gap between a fork and the
+   * transcript that names it. A test can close a socket and a test cannot
+   * close a connection any other way -- the hub's own `stop()` is a shutdown
+   * and never comes back.
    */
   socket: FakeMessageSocket | null;
   /** Every frame this machine sent to the hub, and every one it received. */
@@ -457,7 +460,10 @@ async function start(
     readFleet: () => state.published(),
   });
 
-  const sessions = createSessions({ state, projects, connections, logger });
+  // The same id source the tree is built from, because `hub.ts` hands
+  // `createSessions` that one: a start handle and a node id are both names this
+  // hub mints, and two sources would be two answers to "who names a thing here".
+  const sessions = createSessions({ state, projects, connections, ids, logger });
 
   const clients = createClients({
     hubId: 'hub-under-test' as never,
@@ -1600,6 +1606,129 @@ describe('a machine that goes away with a start in flight', () => {
   });
 });
 
+describe('a spawn the hub lost the socket to', () => {
+  /**
+   * The gap this ticket is about, made into a scenario.
+   *
+   * The store holds no transcript for the session about to be spawned, so the
+   * scan after the fork finds nothing to join it to and the terminal stays
+   * unnamed -- which is the real state of a provider that has been forked and
+   * has not written its session id yet. The socket then dies in that gap.
+   *
+   * Before a hub-minted start id, the only name that spawn had was the id of
+   * the `session-start` frame on the connection that had just ended, so the
+   * hub came back to an agent it had started and could no longer address --
+   * forever, if the provider never named the session. The assertion below is
+   * that the name survives the socket.
+   *
+   * Subscribing by that handle is not asserted here: the hub does not relay
+   * terminal frames yet, which is AGX-212. What is asserted is the report,
+   * which is what the relay will read.
+   */
+  beforeEach(async () => {
+    harness = await start(() => [readyProvider('claude')]);
+    await until(
+      () =>
+        held()
+          .connections.snapshot()
+          .every((report) => report.phase === 'connected'),
+      'both servers to be connected',
+    );
+    await until(
+      () => (held().state.snapshot().stores[0]?.sessions.length ?? 0) === 2,
+      'both servers to have reported the store',
+    );
+  });
+
+  afterEach(async () => {
+    await harness?.connections.stop();
+    harness?.clients.stop();
+    await migrated?.close();
+    harness = null;
+    migrated = null;
+  });
+
+  it('is still named to the hub on the connection after the one that started it', async () => {
+    const client = await attach();
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: 'look at the failing test',
+      server: registrationOf('workshop'),
+      project: null,
+    });
+    expect(client.reply(2).type).toBe('session-started');
+
+    const workshop = machine('workshop');
+    const startId = startIdOf(workshop);
+    // Nothing named it, which is the state the reconnect has to survive.
+    expect(startsIn(workshop).at(-1)).toEqual([{ startId, sessionId: null }]);
+
+    const mark = workshop.sentToHub.length;
+    await redial('workshop', mark);
+
+    // The agent is the same one: a dropped socket closes no terminal.
+    expect(workshop.ptys.ptys).toHaveLength(1);
+    expect(workshop.ptys.ptys[0]?.kills).toBe(0);
+    // And the new connection is told what the old one started, under the name
+    // the hub itself minted before either socket existed.
+    expect(startsIn(workshop, mark)[0]).toEqual([{ startId, sessionId: null }]);
+  });
+
+  it('is reported once more, with its session, when the provider finally names it', async () => {
+    const client = await attach();
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+      project: null,
+    });
+    expect(client.reply(2).type).toBe('session-started');
+
+    const workshop = machine('workshop');
+    const startId = startIdOf(workshop);
+    // The provider writes its transcript while the hub is away, so the scan on
+    // the next connection is the first one that can join the two.
+    providerWrites('session-fresh', '/volumes/work');
+
+    const mark = workshop.sentToHub.length;
+    await redial('workshop', mark);
+
+    // Told the pair once, on the connection that could learn it, and the hub
+    // can join the pending pane to the session without guessing by time.
+    const reported = startsIn(workshop, mark);
+    expect(reported[0]).toEqual([{ startId, sessionId: sessionIdSchema.parse('session-fresh') }]);
+    expect(reported.slice(1).flat()).toEqual([]);
+  });
+
+  it('says nothing about that start to a hub that did not make it', async () => {
+    // The other machine is the same volume and the same hub here, so the
+    // honest check of the scoping is the store the start was not made in:
+    // attic forked nothing, and reports no start of anybody's.
+    const client = await attach();
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+      project: null,
+    });
+    expect(client.reply(2).type).toBe('session-started');
+
+    expect(startsIn(machine('attic')).flat()).toEqual([]);
+  });
+});
+
 /** What the supervisor says about one machine's connection, by label. */
 function connectionTo(label: string): ServerConnectionReport | undefined {
   return held()
@@ -1696,6 +1825,43 @@ function directoriesIn(value: unknown): readonly (string | null)[] {
     ...(key === 'directory' && (typeof nested === 'string' || nested === null) ? [nested] : []),
     ...directoriesIn(nested),
   ]);
+}
+
+/** Drops the socket a machine is holding and waits for the hub to come back. */
+async function redial(label: string, from: number): Promise<void> {
+  const report = () =>
+    held()
+      .connections.snapshot()
+      .find((candidate) => candidate.registrationId === registrationOf(label));
+
+  machine(label).socket?.close(PEER_GONE);
+  await until(() => report()?.phase === 'stale', `${label} to go stale`);
+  held().timers.fireAll();
+  await until(() => report()?.phase === 'connected', `${label} to be dialled again`);
+  // The report the server sends a hub that has only just connected is written
+  // after the handshake, so the connection being up is not yet the frame.
+  await until(
+    () => startsIn(machine(label), from).length > 0,
+    `${label} to report its store on the new connection`,
+  );
+}
+
+/** The `starts` list off every store report a machine sent, in order. */
+function startsIn(target: Machine, from = 0): readonly (readonly unknown[])[] {
+  return target.sentToHub
+    .slice(from)
+    .map((text) => parsed<ServerToHubFrame>(parseServerToHubFrame, text))
+    .filter((frame) => frame.type === 'store-report')
+    .map((frame) => frame.starts);
+}
+
+/** The one start handle a machine was asked with, as the hub minted it. */
+function startIdOf(target: Machine): StartId {
+  const instruction = target.sentToServer
+    .map((text) => parsed<{ type: string; startId?: string }>(parseHubToServerFrame, text))
+    .find((frame) => frame.type === 'session-start');
+  if (instruction?.startId === undefined) throw new Error('that machine was told to start nothing');
+  return startIdSchema.parse(instruction.startId);
 }
 
 function parsed<T>(parser: (raw: unknown) => { ok: boolean }, text: string): T & { type: string } {
