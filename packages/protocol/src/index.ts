@@ -27,6 +27,17 @@ export {
 } from './directory.js';
 export type { DirectoryEntry, DirectoryEntryKind, DirectoryListingFrame } from './directory.js';
 
+export {
+  DOC_CONTENT_MAX_CHARS,
+  DOC_NAME_EXTENSIONS,
+  DOC_NAME_MAX_LENGTH,
+  docContentSchema,
+  docDirectorySchema,
+  docEntrySchema,
+  docNameSchema,
+} from './doc.js';
+export type { DocEntry, DocName } from './doc.js';
+
 export { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 export type { FrameId, ProtocolErrorFrame, RefusalCode } from './frames.js';
 

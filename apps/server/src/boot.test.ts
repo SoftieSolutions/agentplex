@@ -12,6 +12,8 @@ import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from './terminal-manager.js';
 import { createFakeDataRoot, type FakeDataRoot } from './fake-data-root.js';
+import { createFakeStoreWatcher } from './fake-store-watcher.js';
+import { createFakeProjectFiles } from './fake-project-files.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { createFakeWorkingTree } from './fake-working-tree.js';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
@@ -32,6 +34,9 @@ function dependencies(
     ids,
     timers: createFakeTimers(),
     storeFileSystem,
+    // A filesystem that never interrupts: this file is about which halves start
+    // and stop, and nothing in it writes into a store.
+    storeWatcher: createFakeStoreWatcher(),
     dataRootFileSystem,
     // A disk with nothing on it: the configuration below browses nothing, so
     // this seam is never reached and a reader that could be is the honest
@@ -40,6 +45,7 @@ function dependencies(
     // The grants file lives beside the identity file, so a runtime that starts
     // writes one here too: grant zero, for the token it just minted.
     grantFileSystem: createFakeGrantFiles(),
+    projectFiles: createFakeProjectFiles(),
     tokens: { newToken: () => 'token-under-test' },
     // No adapters: this file is about which halves start and stop, and a
     // registry with a real one in it would put a provider's disk layout into

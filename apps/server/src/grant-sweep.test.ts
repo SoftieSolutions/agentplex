@@ -26,6 +26,12 @@ function audience(grants: readonly string[]) {
     get grants(): readonly GrantId[] {
       return [...new Set(live)] as GrantId[];
     },
+    // One connection per grant here, which is all the sweep is about: nothing
+    // in this file asks who is connected, and the count is the store watcher's
+    // question.
+    get connected(): number {
+      return live.length;
+    },
   };
   return { audience: value, closed };
 }

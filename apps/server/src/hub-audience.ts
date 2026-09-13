@@ -101,6 +101,16 @@ export interface HubAudience {
   reportTo(member: HubMember, storeId: StoreId): Promise<void>;
   /** Closes every connection holding this grant, and says how many there were. */
   disconnect(grantId: GrantId, reason: string): number;
+  /**
+   * How many hubs are connected right now.
+   *
+   * Asked by the one reporter that nobody prompted: the store watcher scans on
+   * a change in the filesystem rather than on a frame, so it is the only path
+   * that can find itself reading a store for an empty room. Everything else
+   * here reports because a hub did something, and a hub that did something is a
+   * hub that is connected.
+   */
+  readonly connected: number;
   /** The grants the live connections authenticated with, each once. */
   readonly grants: readonly GrantId[];
 }
@@ -189,6 +199,10 @@ export function createHubAudience({
       // to remember to do both.
       for (const member of holders) member.close(reason);
       return holders.length;
+    },
+
+    get connected(): number {
+      return members.size;
     },
 
     get grants(): readonly GrantId[] {

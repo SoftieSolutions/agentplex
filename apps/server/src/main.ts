@@ -26,6 +26,8 @@ import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
 import { nodeDataRoot } from './node-data-root.js';
 import { nodeDirectoryReader } from './node-directory-reader.js';
+import { nodeProjectFiles } from './node-project-files.js';
+import { nodeStoreWatcher } from './node-store-watcher.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { createMachineLoadReader, createNodeMachineProbe } from './machine-load.js';
 import { createGitWorkingTree } from './working-tree.js';
@@ -141,15 +143,25 @@ async function main(): Promise<void> {
       logger,
       ids: randomIdGenerator,
       storeFileSystem: nodeStoreFileSystem,
+      // The one place `fs.watch` is called. It is what makes a session
+      // somebody started in a terminal reach a hub without waiting for that
+      // hub to ask; what an event is worth -- the burst window, the fan-out,
+      // the backoff -- is decided above it, where a test can reach it.
+      storeWatcher: nodeStoreWatcher,
       // The one place this process may create a directory of its own. It is a
       // separate seam from the store volumes above because it is a separate
       // permission: a store is read, and this is written.
       dataRootFileSystem: nodeDataRoot,
-      // The one place this process resolves a link. A fourth filesystem seam
-      // because it is a fourth permission: browsing walks the machine rather
-      // than reading a provider's volume, and the rule that bounds where it may
-      // walk is `directory-browse.ts` over the configured roots.
+      // The one place this process resolves a link. A filesystem seam of its
+      // own because it is a permission of its own: browsing walks the machine
+      // rather than reading a provider's volume, and the rule that bounds
+      // where it may walk is `directory-browse.ts` over the configured roots.
       directoryReader: nodeDirectoryReader,
+      // The disk under the project folders, below the root above. The one
+      // place this process replaces a file of its own whole -- a project's
+      // documents -- and separate from the data root seam because a replace
+      // does not belong beside a `mkdir` that has to be refusable.
+      projectFiles: nodeProjectFiles,
       grantFileSystem: nodeGrantFileSystem,
       // The only place a secret is generated, and the CSPRNG is the whole
       // implementation: the server's pairing token, once, on its first start.

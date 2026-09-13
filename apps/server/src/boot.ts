@@ -2,6 +2,7 @@ import type { ServerConfig } from './config.js';
 import { ensureDataRoot, type DataRootFileSystem } from './data-root.js';
 import type { DirectoryReader } from './directory-browse.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
+import type { ProjectFileSystem } from './project-files.js';
 import type {
   GrantFileSystem,
   ProviderPreflight,
@@ -9,6 +10,7 @@ import type {
   StoreFileSystem,
 } from '@agentplex/providers';
 import type { BeaconNetwork } from './server-beacon.js';
+import type { StoreWatcher } from './store-watch.js';
 import { startSessionServer, type SessionServer } from './server.js';
 import type { MachineLoadReader } from './machine-load.js';
 import type { WorkingTree } from './working-tree.js';
@@ -28,6 +30,15 @@ export interface RuntimeDependencies {
   readonly ids: IdGenerator;
   /** The store volumes, injected so that a test runs on a volume it wrote down. */
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * How the server hears that a store changed with nobody asking it to look.
+   *
+   * A fifth seam onto the filesystem, and the only one that is not a read or a
+   * write: it is the machine interrupting. Injected because `fs.watch` cannot
+   * be made to fire on cue, so a test drives every rule above it -- the burst
+   * window, the fan-out, the backoff -- against events it produced itself.
+   */
+  readonly storeWatcher: StoreWatcher;
   /**
    * The disk under this server's own data root, which is a different seam from
    * the store volumes above and not an oversight.
@@ -57,6 +68,17 @@ export interface RuntimeDependencies {
    * provider's volume: a store is read as files, and this walks a machine.
    */
   readonly directoryReader: DirectoryReader;
+  /**
+   * The disk under the project file store, below the data root.
+   *
+   * A fifth seam, and for the reason each of the others is its own: this
+   * one replaces files whole and lists folders, and neither belongs on the
+   * seam that makes the data root, whose one job is a `mkdir` it has to be
+   * able to refuse. It is handed the root the data root seam ensured, so a
+   * test that says "this folder cannot be made" is describing this disk and
+   * not the one above it.
+   */
+  readonly projectFiles: ProjectFileSystem;
   /**
    * Where a secret comes from when nothing supplied one: the pairing token on
    * a first start.
@@ -170,9 +192,11 @@ export async function startRuntime(
     logger,
     ids,
     storeFileSystem,
+    storeWatcher,
     dataRootFileSystem,
     grantFileSystem,
     directoryReader,
+    projectFiles,
     tokens,
     providers,
     preflight,
@@ -203,6 +227,7 @@ export async function startRuntime(
     port: config.port,
     storePaths: config.storePaths,
     storeFileSystem,
+    storeWatcher,
     // The setting decides, in the one place that has read it. A server nobody
     // gave a root to browses nothing and says so.
     browseRoots: config.browseRoots,
@@ -221,6 +246,11 @@ export async function startRuntime(
     operations,
     workingTree,
     machineLoad,
+    // The root as ensured above and not as configured: the two are the same
+    // string today, and the day they differ the server should be writing
+    // where it proved it could.
+    dataRoot: dataRoot.path,
+    projectFiles,
     clock,
     timers,
     // The setting decides, in the one place that has read it. A server that

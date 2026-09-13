@@ -13,6 +13,7 @@ import { createTerminalManager } from '../../../apps/server/src/terminal-manager
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
+import { createFakeStoreWatcher } from '../../../apps/server/src/fake-store-watcher.js';
 import {
   createLogger,
   closure,
@@ -27,6 +28,7 @@ import {
 } from '../../../apps/hub/src/features/servers/server-handshake.js';
 import { serverAddressSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
 
 /**
  * The handshake over a real socket, against the real server role.
@@ -65,6 +67,10 @@ async function startServer(storePaths: readonly string[] = []) {
     // server ships with is no roots at all.
     browseRoots: [],
     directoryReader: createFakeDirectoryReader(),
+    // No store, so nothing to watch: this suite is about what the two apps
+    // say to each other over a real socket, and a watch on a fake volume would
+    // be a seam nothing in it fires.
+    storeWatcher: createFakeStoreWatcher(),
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     // The grants file lands beside the identity file, on the same fake volume.
@@ -95,6 +101,8 @@ async function startServer(storePaths: readonly string[] = []) {
     drainMs: 0,
     operations: createOperationRegistry(createFakeProcessRunner()),
     machineLoad: createFakeMachineLoadReader(),
+    dataRoot: '/var/lib/agentplex',
+    projectFiles: createFakeProjectFiles(),
     timers: systemTimers,
     // This suite opens real sockets on loopback on purpose, and a broadcast is
     // the one thing it will not open: the handshake is what is under test, and
