@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from './database.js';
-import { openMigratedSchema, type MigratedSchema } from '../pairing/test-migrated-schema.js';
+import { openMigratedSchema, type MigratedSchema } from './test-migrated-schema.js';
 
 /**
  * Rules about the shape of the schema, asserted by reading the schema back.

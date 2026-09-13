@@ -1,0 +1,157 @@
+import { type Layout, type NodeId, type NodeKind, type SessionRef } from '@agentplex/protocol';
+import type { Queryable } from '../../db/database.js';
+import {
+  COLUMNS,
+  nodeKindRowSchema,
+  nodeRowSchema,
+  removalRowSchema,
+  type NodeKindRow,
+  type RememberedRemoval,
+  type TreeNode,
+} from './rows.js';
+
+/**
+ * The node tree, read.
+ *
+ * Everything here is one statement and takes a `Queryable`, so a caller can put
+ * several in one transaction. `rows.ts` says what a row is; `writes.ts` is the
+ * other half.
+ */
+
+/**
+ * Every kind this database knows about.
+ *
+ * The list is data, which is the ticket: a build meeting a database with a kind
+ * it has never heard of reads it here rather than failing to parse an enum.
+ */
+export async function listNodeKinds(database: Queryable): Promise<readonly NodeKindRow[]> {
+  const result = await database.query(
+    'SELECT kind, container, anchors_session FROM node_kinds ORDER BY kind',
+  );
+  return result.rows.map((row) => nodeKindRowSchema.parse(row));
+}
+
+/** One kind, or `null` when this database has no such row. */
+export async function findNodeKind(
+  database: Queryable,
+  kind: NodeKind,
+): Promise<NodeKindRow | null> {
+  const result = await database.query(
+    'SELECT kind, container, anchors_session FROM node_kinds WHERE kind = ?',
+    [kind],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : nodeKindRowSchema.parse(row);
+}
+
+/**
+ * Every node, in no particular order.
+ *
+ * The tree order is applied by `orderDepthFirst` rather than by the database:
+ * a depth-first order is a recursive CTE with a lexicographically sortable path
+ * built out of `printf`-padded positions, and the padding width is a silent
+ * upper bound on how many siblings a folder may have before the order goes
+ * wrong. One user's tree is small; sorting it where a test can read the rule is
+ * worth more than sorting it in SQL.
+ */
+export async function listNodes(database: Queryable): Promise<readonly TreeNode[]> {
+  const result = await database.query(`SELECT ${COLUMNS} FROM nodes ORDER BY position, id`);
+  return result.rows.map((row) => nodeRowSchema.parse(row));
+}
+
+/** One node by id, or `null`. */
+export async function findNode(database: Queryable, id: NodeId): Promise<TreeNode | null> {
+  const result = await database.query(`SELECT ${COLUMNS} FROM nodes WHERE id = ?`, [id]);
+  const row = result.rows[0];
+  return row === undefined ? null : nodeRowSchema.parse(row);
+}
+
+/** The node pointing at one session, or `null` when nothing does. */
+export async function findNodeForSession(
+  database: Queryable,
+  ref: SessionRef,
+): Promise<TreeNode | null> {
+  const result = await database.query(
+    `SELECT ${COLUMNS} FROM nodes WHERE anchor_store_id = ? AND anchor_session_id = ?`,
+    [ref.storeId, ref.sessionId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : nodeRowSchema.parse(row);
+}
+
+/**
+ * Parents before children, siblings in order, and nothing dropped.
+ *
+ * Reachability from the root is what a tree means, and this walks from there.
+ * A node that the walk never reaches has an ancestry that does not terminate at
+ * the root, which nothing in this module can write: `moveNode` refuses a cycle
+ * and the foreign key refuses a missing parent. If one appears anyway it is
+ * appended rather than discarded -- an unreadable item in a listing costs
+ * itself, not the listing, and a tree that silently lost a subtree is a bug
+ * nobody can see.
+ */
+export function orderDepthFirst(nodes: readonly TreeNode[]): readonly TreeNode[] {
+  const children = new Map<NodeId | null, TreeNode[]>();
+  for (const node of nodes) {
+    const siblings = children.get(node.parentId);
+    if (siblings === undefined) children.set(node.parentId, [node]);
+    else siblings.push(node);
+  }
+  for (const siblings of children.values()) {
+    siblings.sort((left, right) => left.position - right.position || compare(left.id, right.id));
+  }
+
+  const ordered: TreeNode[] = [];
+  const seen = new Set<NodeId>();
+  const visit = (parentId: NodeId | null): void => {
+    for (const node of children.get(parentId) ?? []) {
+      // A cycle cannot be written through this module; if one exists anyway,
+      // this is what stops the walk rather than recursing forever.
+      if (seen.has(node.id)) continue;
+      seen.add(node.id);
+      ordered.push(node);
+      visit(node.id);
+    }
+  };
+  visit(null);
+
+  const unreachable = nodes.filter((node) => !seen.has(node.id));
+  unreachable.sort((left, right) => compare(left.id, right.id));
+  return [...ordered, ...unreachable];
+}
+
+function compare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** The tree as a client reads it: ordered, with what only the hub needs dropped. */
+export async function readLayout(database: Queryable): Promise<Layout> {
+  return orderDepthFirst(await listNodes(database)).map((node) => ({
+    id: node.id,
+    parentId: node.parentId,
+    kind: node.kind,
+    position: node.position,
+    name: node.name,
+    named: node.named,
+    anchor: node.anchor,
+  }));
+}
+
+export async function listChildren(
+  database: Queryable,
+  parentId: NodeId | null,
+): Promise<readonly TreeNode[]> {
+  const result = await database.query(
+    `SELECT ${COLUMNS} FROM nodes WHERE parent_id IS ? ORDER BY position, id`,
+    [parentId],
+  );
+  return result.rows.map((row) => nodeRowSchema.parse(row));
+}
+
+/** Every removal this hub remembers, oldest first. */
+export async function listRemovals(database: Queryable): Promise<readonly RememberedRemoval[]> {
+  const result = await database.query(
+    'SELECT store_id, session_id, removed_at FROM node_removals ORDER BY removed_at, store_id, session_id',
+  );
+  return result.rows.map((row) => removalRowSchema.parse(row));
+}

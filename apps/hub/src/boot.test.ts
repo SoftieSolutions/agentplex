@@ -6,8 +6,8 @@ import { startHubRuntime, type HubRuntime } from './boot.js';
 import type { HubConfig } from './config.js';
 import { createFakeDatabase } from './db/fake-database.js';
 import type { MigrationFileSystem } from './db/migration-files.js';
-import { createFakeBeaconSource } from './discovery/fake-beacon-source.js';
-import { createFakeWebAssets } from './web/fake-web-assets.js';
+import { createFakeBeaconSource } from './features/discovery/fake-discovery.js';
+import { createFakeWebAssets } from './features/web/fake-web.js';
 
 /**
  * The hub as `main` composes it, against fakes: which things come up, in what

@@ -27,12 +27,12 @@ import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tre
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
-import { localServerPairing } from '../../../apps/hub/src/pairing/local-server.js';
+import { localServerPairing } from '../../../apps/hub/src/features/pairing/local-server.js';
 import {
   handshakeWithServer,
   type DialTarget,
-} from '../../../apps/hub/src/pairing/server-handshake.js';
-import { serverAddressSchema } from '../../../apps/hub/src/pairing/server-address.js';
+} from '../../../apps/hub/src/features/servers/server-handshake.js';
+import { serverAddressSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
 
 /**
  * The `--role=both` box, end to end, across the change that introduced grants.

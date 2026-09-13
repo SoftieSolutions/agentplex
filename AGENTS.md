@@ -22,9 +22,13 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 
 ## FOLDER STRUCTURE
 
-- `apps/` holds deployables: `hub`, `server`, `cli`, `web`. An app is a thing
-  that runs. `apps/cli` owns the bin and `apps/cli/src/commands/` holds a
-  subcommand. Nothing imports an app, and nothing reaches into one by path.
+- `apps/` holds deployables: `hub`, `server`, `cli`, `web`. `apps/cli` owns the
+  bin and `apps/cli/src/commands/` holds a subcommand. Nothing imports an app,
+  and nothing reaches into one by path.
+- `apps/hub/src/features/` is a folder per feature, each with one entry file
+  `<feature>.ts` exporting `<Name>` and `create<Name>`. Another feature imports
+  that file and nothing else in the folder; `pnpm lint` enforces it and
+  `CONTRIBUTING.md` argues it.
 - `apps/web` carries its published name in the workspace, because the hub finds
   the client by resolving that one specifier — the same in a checkout, the image
   and `lib/node_modules`. A file location, not an import: the hub loads no
@@ -114,8 +118,8 @@ carries the argument for each.
 - **Degrade in the direction that does not over-claim.** A stale cache is
   labelled with its age. An unreadable item in a listing costs itself, not the
   listing.
-- **One parser per protocol direction**, and nothing downstream re-checks a
-  frame's `type` by hand.
+- **One parser per protocol direction**, ending in one `assertNever` switch.
+  Nothing downstream re-checks a frame's `type` by hand.
 - **No frame carries an operation name, an argv element, an env var, or a cwd.**
   Every spawn goes through the operation registry, `shell: false` always.
 - **Migrations are forward-only and append-only.** There is no `down`. An

@@ -81,6 +81,60 @@ migration is history: add a new one rather than editing it.
 
 **No emojis in code or UI copy.**
 
+## Features
+
+`apps/hub/src/features/` is one folder per feature: the fleet state, the paired
+servers, pairing, sessions, the catalogue, the pane layout, the clients, client
+auth, discovery, and the web assets. Four rules hold it together, and `pnpm
+lint` enforces the first one.
+
+**A feature is a folder with one entry file.** `features/catalogue/catalogue.ts`
+exports the interface `Catalogue` and `createCatalogue(deps)`, and another
+feature imports that file and nothing else from the folder. It is not a barrel:
+it defines the interface and the factory and re-exports nothing, so what is on
+it is a decision somebody made rather than the accumulated surface of every file
+behind it. The rule is what makes a move inside a folder free — splitting
+`node-tree.ts` into `rows.ts`, `reads.ts` and `writes.ts` changed no import
+outside `catalogue/` — and it is the reason a vocabulary type lives on the entry
+file rather than in whichever file happens to produce it. `ServerConnectionReport`
+is defined in `servers/servers.ts` and not in the dial loop that builds one.
+
+The lint rule is in `eslint.config.js` and names the feature folders, so adding
+a feature means adding a line. Forgetting the line fails closed — nothing may
+import the new feature — which is the right direction for a rule about who may
+reach whom. A rule that fails open is one nobody notices has stopped holding.
+
+**Dependencies are interfaces.** A feature takes other features, and seams —
+`Database`, `Clock`, `Timers`, `IdGenerator`, `Logger`, `SocketDialer` — and
+nothing concrete. `hub.ts` is the only file that knows the whole set, and it is
+composition and nothing else. The servers feature takes `Pairing` rather than
+the `Database`, because which servers may be dialled is the pairing feature's
+answer and a second reader of that table would be a second answer to it.
+
+**A fake beside the entry file.** `fake-<feature>.ts` sits next to
+`<feature>.ts`, and a suite in another feature stands on the fake rather than on
+the real thing. Test files may import one and service modules may not, which is
+the one place the lint rule above is looser for a test.
+
+**Frames enter through one switch per direction, and the switch is exhaustive.**
+`features/clients/client-connection.ts` and `features/servers/frame-router.ts`
+both end in `assertNever`, so a frame added to the protocol with no case fails
+typecheck. Neither did, and the cost was not a crash: the four client terminal
+frames and four of the server's parsed cleanly, matched no case, and fell out of
+the bottom with no reply, no log line and nothing to find. A client was left
+holding a frame id that would never be answered. What this build cannot serve it
+now says so — a refusal in words to a client, a debug line naming the frame from
+a server — and neither is silence.
+
+One file is deliberately thin. `features/servers/transport.ts` is how the hub
+speaks to a server once it is connected, and it declares only what the dial loop
+actually uses: `ask`, the handlers for what arrives unprompted, and `close`. The
+stream half a terminal relay needs is named in a comment and not declared,
+because an interface that promised a stream nothing implements would be a
+promise the loop could be written against and then broken. It is the one file
+the Connect-over-HTTP/2 epic replaces, which is why the dial loop above it never
+sees a socket.
+
 ## Workspace boundaries
 
 Both apps may depend on `@agentplex/protocol`. Nothing else crosses a package
@@ -145,7 +199,7 @@ the unhappy path is describing the common case as an exception.
 **Reachability is the operator's problem.** The hub has to be able to open a
 connection to the address it was given, and getting it there is a forwarded
 port, or both ends on one network over a VPN, or a tunnel. The protocol is
-deliberately indifferent between them — `apps/hub/src/pairing/server-address.ts`
+deliberately indifferent between them — `apps/hub/src/features/pairing/server-address.ts`
 parses a URL and never a route — and agentplex neither solves this nor pretends
 to. Saying so is the same rule as the rest of the codebase: degrade in the
 direction that does not over-claim.

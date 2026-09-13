@@ -16,9 +16,9 @@ import { startHubRuntime } from './boot.js';
 import { hubUsage, loadHubConfig } from './config.js';
 import { nodeMigrationFileSystem } from './db/node-migration-files.js';
 import { createSqliteDatabase } from './db/sqlite.js';
-import { createNodeBeaconSource } from './discovery/node-beacon-listener.js';
-import { createNodeWebAssets } from './web/node-web-assets.js';
-import { missingWebPackage, resolveWebRoot } from './web/web-package.js';
+import { createNodeBeaconSource } from './features/discovery/node-beacon-listener.js';
+import { createNodeWebAssets } from './features/web/node-web-assets.js';
+import { missingWebPackage, resolveWebRoot } from './features/web/web-package.js';
 
 /**
  * The hub's entrypoint: wiring and process concerns only. argv, env, stdout,
