@@ -64,6 +64,7 @@ import {
   type FleetState,
 } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
+import { createTerminal } from '../../../apps/hub/src/features/terminal/terminal.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**
@@ -307,15 +308,25 @@ async function start(
     logger,
     backoff: createExponentialBackoff({ baseMs: 500, maxMs: 8_000, random: () => 0 }),
     onChange: (report) => state.applyConnection(report),
-    onReport: (report) =>
-      void state.applySessions({
+    onReport: (report) => {
+      state.applySessions({
         registrationId: report.registrationId,
         storeId: report.storeId,
         sessions: report.sessions,
         holding: report.holding,
         reportedAt: clock.now(),
-      }),
+      });
+      terminal.noteStarts(report.registrationId, report.storeId, report.starts);
+    },
+    onStream: (registrationId, output) => terminal.deliver(registrationId, output),
   });
+
+  // The relay, composed as `hub.ts` composes it. This suite asserts nothing
+  // about terminals -- `terminal-relay.integration.test.ts` is where those
+  // scenarios are -- but it runs the real thing rather than a fake, so that a
+  // start's answer and the handle the relay files under it are produced by the
+  // same code path a hub actually runs.
+  const terminal = createTerminal({ state, servers: connections, logger });
 
   // Counting rather than random, so a test can name the start the hub minted
   // without matching a pattern -- the reason `IdGenerator` is a seam at all.
@@ -336,6 +347,7 @@ async function start(
     readPaneLayout: async () => null,
     writePaneLayout: async () => undefined,
     sessions,
+    terminal,
   });
 
   await connections.sync();
@@ -843,9 +855,9 @@ describe('a spawn the hub lost the socket to', () => {
    * forever, if the provider never named the session. The assertion below is
    * that the name survives the socket.
    *
-   * Subscribing by that handle is not asserted here: the hub does not relay
-   * terminal frames yet, which is AGX-212. What is asserted is the report,
-   * which is what the relay will read.
+   * Subscribing by that handle is asserted in
+   * `terminal-relay.integration.test.ts`, which is where the relay's scenarios
+   * are. What is asserted here is the report, which is what the relay reads.
    */
   beforeEach(async () => {
     harness = await start(() => [readyProvider('claude')], { namesTheSpawn: false });

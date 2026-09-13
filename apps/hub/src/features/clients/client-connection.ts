@@ -21,6 +21,7 @@ import {
   type SocketClosure,
 } from '@agentplex/node-shared';
 import type { Sessions } from '../sessions/sessions.js';
+import type { Terminal, TerminalClient } from '../terminal/terminal.js';
 
 /**
  * One client on one socket.
@@ -122,6 +123,17 @@ export interface ClientConnectionDependencies {
    * lives: the routing sees the whole fleet, and a connection sees one socket.
    */
   readonly sessions: Sessions;
+  /**
+   * The terminal relay, which this connection is one end of.
+   *
+   * A seam rather than a set of subscriptions held here, because a subscription
+   * is not a property of a socket: one terminal may be watched by two of them,
+   * the bytes cross the server leg once, and the thing that decides which
+   * sockets a chunk reaches has to see all of them. What this file owns is the
+   * other half of that -- handing the relay a frame, and telling it when this
+   * socket goes away.
+   */
+  readonly terminal: Terminal;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -141,6 +153,7 @@ export function serveClientConnection(
     readPaneLayout,
     writePaneLayout,
     sessions,
+    terminal,
     onClosed,
   }: ClientConnectionDependencies,
 ): ClientConnection {
@@ -148,6 +161,29 @@ export function serveClientConnection(
   let lastVersion: number | null = null;
 
   const send = (frame: HubFrame): void => void socket.send(encodeHubFrame(frame));
+
+  /**
+   * This socket, as the relay addresses it.
+   *
+   * One object for the life of the connection, because it is the identity the
+   * relay files subscriptions and start handles under: a fresh one per frame
+   * would be a new client every time somebody typed. It is narrower than this
+   * connection deliberately -- the relay may put a frame on this socket and ask
+   * how far behind it is, and may not close it or decide what it has proved.
+   *
+   * `bufferedBytes` is read through rather than captured: it is the reading the
+   * relay drops against, and a number copied once would be the backlog as it
+   * stood when the client said hello.
+   */
+  const watcher: TerminalClient = {
+    send(frame: HubFrame): void {
+      if (state !== 'established') return;
+      send(frame);
+    },
+    get bufferedBytes(): number {
+      return socket.bufferedBytes;
+    },
+  };
 
   const refuse = (
     replyTo: FrameId,
@@ -164,6 +200,13 @@ export function serveClientConnection(
   socket.onClose((ended) => {
     const wasEstablished = state === 'established';
     state = 'closed';
+    // A socket closing is a detach, and it is the same detach the
+    // `session-unsubscribe` frame takes. Nothing here closes a terminal: the
+    // agents this client was watching go on working, which is the whole
+    // difference between closing a tab and stopping a session. It is also the
+    // only path a client that crashed ever takes, so it is where the count a
+    // server evicts by is given back.
+    terminal.forget(watcher);
     logger.info('client connection closed', {
       code: ended.code,
       reason: ended.reason,
@@ -303,21 +346,43 @@ export function serveClientConnection(
         return;
       }
 
-      case 'session-subscribe':
-      case 'session-unsubscribe':
-      case 'terminal-input':
+      case 'session-subscribe': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Handed over rather than answered here, and not awaited either: the
+        // relay answers where the server's reply is read, because a
+        // subscription's history follows its reply in the same turn and a
+        // promise would put the two out of order. See `terminal.ts`.
+        terminal.subscribe(watcher, frame.id, frame.target);
+        return;
+      }
+
+      case 'session-unsubscribe': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        terminal.unsubscribe(watcher, frame.id, frame.target);
+        return;
+      }
+
+      case 'terminal-input': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        terminal.input(watcher, frame.id, frame.target, frame.data);
+        return;
+      }
+
       case 'terminal-resize': {
         if (state !== 'established') {
           helloFirst(frame.id);
           return;
         }
-        // Parsed, understood, and declined. The terminal relay is AGX-102's
-        // stack; until it lands there is nothing on the other end of these,
-        // and the honest answer is a refusal the client can render rather
-        // than a frame that falls out of the bottom of this switch and leaves
-        // a spinner nothing will ever resolve. `refused` and not `internal`:
-        // the hub is working exactly as built, and retrying changes nothing.
-        refuse(frame.id, 'refused', 'this hub build does not relay terminal frames yet');
+        terminal.resize(watcher, frame.id, frame.target, frame.size);
         return;
       }
 
@@ -424,6 +489,16 @@ export function serveClientConnection(
         refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
         return;
       }
+      // Before the reply, so that a client which subscribes the moment it reads
+      // one finds the handle already written. The map from this client's frame
+      // id to the name the hub minted lives in the relay and dies with this
+      // socket: it is what lets a pane watch a spawn that has no session id
+      // yet, and it is meaningless on any other connection.
+      terminal.noteStart(watcher, replyTo, {
+        registrationId: outcome.server,
+        startId: outcome.startId,
+        storeId: outcome.storeId,
+      });
       send({
         type: 'session-started',
         replyTo,

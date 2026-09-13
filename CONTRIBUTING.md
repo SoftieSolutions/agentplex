@@ -84,9 +84,9 @@ migration is history: add a new one rather than editing it.
 ## Features
 
 `apps/hub/src/features/` is one folder per feature: the fleet state, the paired
-servers, pairing, sessions, the catalogue, the pane layout, the clients, client
-auth, discovery, and the web assets. Four rules hold it together, and `pnpm
-lint` enforces the first one.
+servers, pairing, sessions, the terminal relay, the catalogue, the pane layout,
+the clients, client auth, discovery, and the web assets. Four rules hold it
+together, and `pnpm lint` enforces the first one.
 
 **A feature is a folder with one entry file.** `features/catalogue/catalogue.ts`
 exports the interface `Catalogue` and `createCatalogue(deps)`, and another
@@ -127,13 +127,24 @@ now says so — a refusal in words to a client, a debug line naming the frame fr
 a server — and neither is silence.
 
 One file is deliberately thin. `features/servers/transport.ts` is how the hub
-speaks to a server once it is connected, and it declares only what the dial loop
-actually uses: `ask`, the handlers for what arrives unprompted, and `close`. The
-stream half a terminal relay needs is named in a comment and not declared,
-because an interface that promised a stream nothing implements would be a
-promise the loop could be written against and then broken. It is the one file
-the Connect-over-HTTP/2 epic replaces, which is why the dial loop above it never
-sees a socket.
+speaks to a server once it is connected, and it declares only what is actually
+used: `ask`, `stream`, the handlers for what arrives unprompted, and `close`.
+The stream half was named in a comment and not declared until there was a relay
+to stand behind it, because an interface that promised a stream nothing
+implements would be a promise the loop could be written against and then broken.
+It is the one file the Connect-over-HTTP/2 epic replaces, which is why the dial
+loop above it never sees a socket.
+
+The two halves are two methods rather than one with a wider frame union, and
+that is the terminal relay's one structural demand on this seam. `ask` is unary
+and awaited: one instruction, one answer. A terminal frame is answered on a
+different schedule, sometimes not at all — an input and a resize are silent
+when they work — and, decisively, its answer has to be delivered where the
+frame was read. A server writes a subscription's reply and the scrollback it
+just promised in the same turn, so a relay built on a promise would settle a
+microtask later and hand a client its history before the frame that counts it.
+`stream` therefore takes a callback, and the ordering is a property of the seam
+rather than something each caller has to remember.
 
 ## Workspace boundaries
 

@@ -8,6 +8,7 @@ import {
 } from '@agentplex/node-shared';
 import type { Sessions } from '../sessions/sessions.js';
 import type { FleetState } from '../fleet-state/fleet-state.js';
+import type { Terminal } from '../terminal/terminal.js';
 import {
   encodeHubFrame,
   serveClientConnection,
@@ -67,6 +68,16 @@ export interface ClientsDependencies {
    */
   readonly sessions: Sessions;
   /**
+   * The terminal relay every client this serves is one end of.
+   *
+   * One instance for the whole broadcast, like the session control above it and
+   * for a sharper reason: two browsers watching one session share a single
+   * subscription to the server holding it, and a relay per socket would be one
+   * subscription per tab -- which is the copy-per-viewer this whole path is
+   * built to avoid.
+   */
+  readonly terminal: Terminal;
+  /**
    * The deadline seam the flush is scheduled on.
    *
    * Injected rather than `setTimeout` because coalescing is exactly the
@@ -110,7 +121,7 @@ export interface Clients {
 const DEFAULT_COALESCE_MS = 0;
 
 export function createClients(dependencies: ClientsDependencies): Clients {
-  const { hubId, state, timers, readLayout, readPaneLayout, writePaneLayout, sessions } =
+  const { hubId, state, timers, readLayout, readPaneLayout, writePaneLayout, sessions, terminal } =
     dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
@@ -181,6 +192,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         readPaneLayout,
         writePaneLayout,
         sessions,
+        terminal,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);
         },
