@@ -9,6 +9,7 @@ import {
   type BoxObservers,
   type FrameScheduler,
 } from './resize.js';
+import { watchTouchScroll } from './touch-scroll.js';
 
 /**
  * The attach lifecycle, as one function whose return value undoes it.
@@ -26,6 +27,11 @@ import {
  * The size listener is wired before the watch starts, because the watch's
  * first fit is synchronous and a listener attached after it would miss the
  * one size the far end most needs — the one the pane opened at.
+ *
+ * The touch watch is not one of those orderings. It is attached beside the
+ * fit because it has the same lifetime -- the element's -- and for no other
+ * reason: a finger cannot arrive before the element it lands on exists, and
+ * what it scrolls is the emulator's own view rather than anything on the wire.
  *
  * The watch starts before the feed is attached, because the feed writes
  * whatever the subscription replayed the moment it has an emulator, and an
@@ -76,11 +82,13 @@ export function attachEmulator({
     if (settled !== null) sizes.report(settled);
   });
   const unfit = watchFit({ element: container, emulator, boxes, frames });
+  const untouch = watchTouchScroll({ element: container, emulator, frames });
   const detach = feed.attach(emulator);
   emulatorReady?.(emulator);
   return () => {
     emulatorReady?.(null);
     detach();
+    untouch();
     unfit();
     sizes.stop();
     emulator.dispose();
