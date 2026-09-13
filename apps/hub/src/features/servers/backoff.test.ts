@@ -75,6 +75,17 @@ describe('createExponentialBackoff', () => {
     expect(backoff.delayMs(-3)).toBe(500);
   });
 
+  it('says what its longest wait is, for a caller with a wait of its own to bound', () => {
+    // A server that announces a drain says when to come back, and the dial
+    // loop honours that up to here. The number is read off the policy rather
+    // than written down a second time at the call site, because two answers to
+    // "how long is too long" are two answers free to drift apart.
+    const backoff = createExponentialBackoff({ baseMs: 500, maxMs: 4000, random: noJitter });
+
+    expect(backoff.ceilingMs).toBe(4000);
+    expect(backoff.delayMs(400)).toBe(backoff.ceilingMs);
+  });
+
   it('answers in whole milliseconds, because that is what a timer takes', () => {
     const backoff = createExponentialBackoff({
       baseMs: 1000,

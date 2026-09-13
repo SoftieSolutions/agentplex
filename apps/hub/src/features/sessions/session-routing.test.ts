@@ -4,6 +4,7 @@ import {
   storeIdSchema,
   serverAddressSchema,
   type ProviderReadiness,
+  type ServerDraining,
   type ServerRegistrationId,
   type SessionDescriptor,
   type SessionHold,
@@ -45,6 +46,7 @@ function connection(
   phase: ServerConnectionPhase,
   stores: readonly StoreId[],
   providers: readonly ProviderReadiness[] = [readyProvider()],
+  draining: ServerDraining | null = null,
 ): ServerConnectionReport {
   return {
     registrationId: registration(label),
@@ -60,6 +62,7 @@ function connection(
     failedAttempts: phase === 'stale' ? 1 : 0,
     problem: null,
     staleReason: phase === 'stale' ? 'unreachable' : null,
+    draining,
   };
 }
 
@@ -83,6 +86,8 @@ interface Machine {
   readonly stores: readonly StoreId[];
   /** What that machine's preflight found. A ready `claude` unless a test says otherwise. */
   readonly providers?: readonly ProviderReadiness[];
+  /** The shutdown it announced, for the machine that is on its way down. */
+  readonly draining?: ServerDraining | null;
   /** What that machine reports per store: the sessions it sees and what it holds. */
   readonly reports?: readonly {
     readonly storeId: StoreId;
@@ -95,7 +100,13 @@ function fleet(machines: readonly Machine[]): HubStateSnapshot {
   const reducer = createFleetState({ logger });
   for (const machine of machines) {
     reducer.applyConnection(
-      connection(machine.label, machine.phase, machine.stores, machine.providers),
+      connection(
+        machine.label,
+        machine.phase,
+        machine.stores,
+        machine.providers,
+        machine.draining ?? null,
+      ),
     );
   }
   for (const machine of machines) {
@@ -154,6 +165,88 @@ describe('routeStart', () => {
     });
 
     expect(routed).toMatchObject({ ok: false, code: 'refused' });
+  });
+
+  it('schedules around a machine that has said it is shutting down', () => {
+    // The drain is the only thing separating them: both are connected, both
+    // have the store, both can run claude. A server that has sealed its
+    // terminals would refuse this start, and it is the hub that knows there is
+    // somewhere else for it to go.
+    const state = fleet([
+      {
+        label: 'attic',
+        phase: 'connected',
+        stores: [WORK],
+        draining: { since: START, graceMs: 15_000, sessions: [] },
+      },
+      { label: 'workshop', phase: 'connected', stores: [WORK] },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
+
+    expect(routed.ok && routed.server.label).toBe('workshop');
+  });
+
+  it('refuses a start when the only machine on the store is shutting down, and says so', () => {
+    // Not "no server is connected", which is the sentence for a machine that
+    // is asleep: this one is answering, and what it is doing is leaving. The
+    // two are different things for a person to wait for.
+    const state = fleet([
+      {
+        label: 'attic',
+        phase: 'connected',
+        stores: [WORK],
+        draining: {
+          since: START,
+          graceMs: 15_000,
+          sessions: [{ storeId: WORK, sessionId: sessionId('session-1') }],
+        },
+      },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: null,
+    });
+
+    expect(routed).toMatchObject({ ok: false, code: 'refused', holder: null });
+    expect(routed.ok ? '' : routed.problem).toBe(
+      'attic is shutting down and is not taking new sessions',
+    );
+  });
+
+  it('refuses an override onto a draining machine in its own words', () => {
+    // A user who picked this box gets the reason it was refused rather than
+    // the hub quietly sending the start somewhere else: an override is a
+    // decision somebody made, and the answer to it is why, not a substitute.
+    const state = fleet([
+      {
+        label: 'attic',
+        phase: 'connected',
+        stores: [WORK],
+        draining: { since: START, graceMs: 15_000, sessions: [] },
+      },
+      { label: 'workshop', phase: 'connected', stores: [WORK] },
+    ]);
+
+    const routed = routeStart(state, {
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      server: registration('attic'),
+    });
+
+    expect(routed).toMatchObject({ ok: false, code: 'refused', holder: null });
+    expect(routed.ok ? '' : routed.problem).toBe(
+      'attic is shutting down and is not taking new sessions',
+    );
   });
 
   it('honours the machine the user chose over the one it would have picked', () => {

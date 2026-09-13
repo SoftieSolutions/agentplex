@@ -14,7 +14,7 @@ import type {
   Timers,
 } from '@agentplex/node-shared';
 import { startHeartbeat } from './connection-heartbeat.js';
-import { routeServerFrame, type StoreReport } from './frame-router.js';
+import { routeServerFrame, type DrainingNotice, type StoreReport } from './frame-router.js';
 import { createInstructionChannel } from './instruction-channel.js';
 import {
   handshakeWithServer,
@@ -44,6 +44,17 @@ import type { InstructionOutcome, SessionInstruction } from './servers.js';
 export interface ServerTransportHandlers {
   /** A store report the server sent unsolicited: its whole view of one store. */
   onReport(report: StoreReport): void;
+  /**
+   * The server says it is shutting down and is waiting for its turns to end.
+   *
+   * On the handlers rather than on `closed`, because it is not the end of
+   * anything: everything this transport can do it can still do, and the close
+   * that follows is an ordinary close that the loop above now has a reason to
+   * expect. A transport that folded the two together would have to hold the
+   * notice until the socket went, which is precisely the delay this frame
+   * exists to remove.
+   */
+  onDraining(notice: DrainingNotice): void;
 }
 
 export interface ServerTransport {
@@ -156,6 +167,7 @@ function overSocket(
       {
         onAnswer: channel.answer,
         onReport: (report) => handlers?.onReport(report),
+        onDraining: (notice) => handlers?.onDraining(notice),
       },
       logger,
     );

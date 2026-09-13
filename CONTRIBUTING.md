@@ -121,7 +121,10 @@ the one place the lint rule above is looser for a test.
 both end in `assertNever`, so a frame added to the protocol with no case fails
 typecheck. Neither did, and the cost was not a crash: the four client terminal
 frames and four of the server's parsed cleanly, matched no case, and fell out of
-the bottom with no reply, no log line and nothing to find. A client was left
+the bottom with no reply, no log line and nothing to find. The drain notice was
+one of them, and it is the one that shows what silence cost: a server
+announcing a graceful shutdown and a server whose battery died produced the
+same screen, because the frame that told them apart was being dropped. A client was left
 holding a frame id that would never be answered. What this build cannot serve it
 now says so — a refusal in words to a client, a debug line naming the frame from
 a server — and neither is silence.

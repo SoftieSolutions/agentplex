@@ -5,6 +5,7 @@ import type {
   ProviderReadiness,
   RefusalCode,
   ServerAddress,
+  ServerDraining,
   ServerId,
   ServerRegistrationId,
   ServerToHubFrame,
@@ -56,14 +57,16 @@ export type ServerConnectionPhase = 'connecting' | 'connected' | 'stale' | 'stop
 /**
  * Why a server is stale.
  *
- * The handshake's own failures, plus the three the dial loop can produce: a
- * connection that was up and ended, a server that answered with a different
- * identity than the one paired, and the hub failing on its own side. They are
- * kept apart because they are different things for a person to do -- wait,
- * re-pair, or look at the hub -- and because only some of them are worth
- * retrying quickly.
+ * The handshake's own failures, plus the four the dial loop can produce: a
+ * connection that was up and ended, one that ended after the server said it
+ * was going down, a server that answered with a different identity than the
+ * one paired, and the hub failing on its own side. They are kept apart because
+ * they are different things for a person to do -- wait, re-pair, or look at the
+ * hub -- and because they are not retried on the same schedule: `draining` is
+ * the one case where the machine itself said when to come back.
  */
-export type StaleReason = HandshakeFailureReason | 'dropped' | 'identity-changed' | 'hub-error';
+export type StaleReason =
+  HandshakeFailureReason | 'dropped' | 'identity-changed' | 'hub-error' | 'draining';
 
 /**
  * Everything the rest of the hub may know about one server's connectivity.
@@ -121,6 +124,24 @@ export interface ServerConnectionReport {
   /** What went wrong, in words, for a log line and the pairing screen. */
   readonly problem: string | null;
   readonly staleReason: StaleReason | null;
+  /**
+   * The shutdown this machine announced, or `null` for one that has announced
+   * none.
+   *
+   * Set while the phase is still `connected`, and that is the decision this
+   * field exists to record. A drain is not a connection ending: the server
+   * keeps its sockets open through it deliberately, so that whoever is watching
+   * an agent sees the last of its output, and the hub goes on asking and being
+   * answered. Folding it into the phase would take a live connection off every
+   * screen to describe something that has not happened yet, and would leave
+   * nothing to say when the close actually comes.
+   *
+   * Kept through that close, beside `staleReason: 'draining'`, for the reason
+   * the store list is kept: it is the last thing the machine actually said, and
+   * a row that dropped it would read as a machine that simply vanished. A
+   * handshake clears it -- a server that is answering again is not going down.
+   */
+  readonly draining: ServerDraining | null;
 }
 
 /**

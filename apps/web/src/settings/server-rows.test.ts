@@ -97,6 +97,66 @@ describe('the paired-server rows', () => {
     expect(connecting[0]?.phase).toBe('connecting');
   });
 
+  it('says a machine is shutting down, and how many sessions are finishing', () => {
+    // Captured while a real server was draining: the row is still connected,
+    // because the socket is up and the hub is still being answered, so the
+    // words and the tone come from the shutdown beside the phase rather than
+    // from the phase. "unreachable" would be wrong twice over -- the machine
+    // is answering, and it is going away on purpose.
+    const rows = serverRows(stateFrom(hubFrames.machineStateDraining));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      label: 'mbp-robert',
+      tone: 'needs-you',
+      phase: 'shutting down, 1 session finishing',
+      problem: null,
+    });
+  });
+
+  it('says only that a machine with nothing running is shutting down', () => {
+    // No count, because there is nothing to count: a drain with no sessions is
+    // a machine to leave alone rather than one with work on it.
+    const captured = stateFrom(hubFrames.machineStateDraining);
+    const row = captured.servers[0];
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+
+    const [projected] = serverRows({
+      ...captured,
+      servers: [{ ...row, draining: { since: 1_756_000_000_000, graceMs: 15_000, sessions: [] } }],
+    });
+    expect(projected?.phase).toBe('shutting down');
+    expect(projected?.tone).toBe('needs-you');
+  });
+
+  it('says a machine that drained is shut down rather than unreachable', () => {
+    // The close a drain warned about, which is the whole point of having been
+    // warned: the same row as any other stale one, with the one word that says
+    // waiting is the answer.
+    const captured = stateFrom(hubFrames.machineStateDraining);
+    const row = captured.servers[0];
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+
+    const [projected] = serverRows({
+      ...captured,
+      servers: [
+        {
+          ...row,
+          phase: 'stale',
+          staleReason: 'draining',
+          connectedSince: null,
+          staleSince: 1_756_000_015_000,
+          problem:
+            'the server said it was shutting down with 1 session finishing, and then closed the connection',
+        },
+      ],
+    });
+    expect(projected?.phase).toBe('shut down');
+    expect(projected?.tone).toBe('blocked');
+    expect(projected?.problem).toContain('shutting down');
+  });
+
   it('draws a provider that cannot be started, with the machine reason beside it', () => {
     // The captured fleet has a box whose codex is not installed. This is the
     // fact that used to arrive as a session that appeared and vanished; here it

@@ -25,6 +25,7 @@ import {
 } from '../../../apps/hub/src/features/discovery/fake-discovery.js';
 import { createFakeWebAssets } from '../../../apps/hub/src/features/web/fake-web.js';
 import { serveServerEnd } from './server-end.js';
+import type { HubConnection } from '../../../apps/server/src/hub-connection.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import type { SessionOutcome, StoreReport } from '../../../apps/server/src/session-control.js';
 import {
@@ -196,6 +197,13 @@ const logger = createLogger('error', () => {});
 function fleetDialer(
   machines: Map<string, Machine>,
   live: Map<string, MessageSocket>,
+  /**
+   * Each machine's end of the connection, for the one capture where the server
+   * speaks first: a drain is the only thing a server says that nobody asked
+   * for and that is not a report, and the only way to capture the state it
+   * produces is to have the real server end send the real frame.
+   */
+  served: Map<string, HubConnection>,
 ): SocketDialer {
   return {
     dial: async (address: string): Promise<DialResult> => {
@@ -208,7 +216,7 @@ function fleetDialer(
           ? { reports: machine.reports }
           : { reports: machine.reports, outcome: machine.startOutcome },
       );
-      serveServerEnd(serverEnd, {
+      const connection = serveServerEnd(serverEnd, {
         // A real scan reads a disk and takes event-loop turns; a fake that
         // resolved in the same microtask as the handshake would race its
         // report past the hub attaching its listener, an ordering no real
@@ -228,6 +236,7 @@ function fleetDialer(
         logger,
       });
       live.set(host, serverEnd);
+      served.set(host, connection);
       return { ok: true, socket: hubEnd };
     },
   };
@@ -314,6 +323,8 @@ async function startFleetHub(
    * starts, with the id spelled out at the call site.
    */
   newRegistrationId: () => string = () => 'hub-1',
+  /** Each machine's own end, for the capture that needs a server to announce a drain. */
+  served: Map<string, HubConnection> = new Map(),
 ): Promise<{ hub: Hub; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(join(tmpdir(), 'agentplex-capture-'));
   const database = createSqliteDatabase(join(directory, 'hub.db'));
@@ -343,7 +354,7 @@ async function startFleetHub(
     clock,
     clientToken: CLIENT_TOKEN,
     tokens: { newToken: () => `fleet-ticket-${(nextTicket += 1)}` },
-    dialer: fleetDialer(machines, live),
+    dialer: fleetDialer(machines, live, served),
     discovery,
     timers: createFakeTimers(),
     migrationsDirectory,
@@ -886,6 +897,42 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const refusalHeldStoppable = fromStopper('refusalHeldStoppable');
     const sessionStopped = fromStopper('sessionStopped');
     await heldHub.cleanup();
+    // A machine that says it is going down, captured while it still is. The
+    // real server end sends the real `server-draining` frame, so this is the
+    // state a client is sent during a drain rather than anybody's idea of it:
+    // the row is still `connected`, because the socket is up and the hub is
+    // still being answered, and the shutdown sits beside the phase with the
+    // sessions that are finishing named on it. Both halves are the reading --
+    // the phase alone says nothing is happening, and a phase that said
+    // otherwise would take a live connection off the screen. The settings
+    // screen's draining row is drawn from this frame.
+    const drainingServed = new Map<string, HubConnection>();
+    const drainingHub = await startFleetHub(
+      single,
+      [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
+      new Map(),
+      createFakeBeaconSource(),
+      () => 'hub-1',
+      drainingServed,
+    );
+    await until(
+      () =>
+        drainingHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sessionCount(drainingHub.hub) === 2,
+      'the machine that is about to drain to connect and report',
+    );
+    drainingServed.get('mbp-robert.example')?.announceDraining(15_000, [
+      {
+        storeId: storeIdSchema.parse('store-agentplex'),
+        sessionId: sessionIdSchema.parse('session-fix-auth'),
+      },
+    ]);
+    await until(
+      () => drainingHub.hub.connections.snapshot().some((report) => report.draining !== null),
+      'the hub to hear the drain',
+    );
+    const machineStateDraining = await captureState(drainingHub.hub);
+    await drainingHub.cleanup();
 
     // A shared volume: two machines with the same store mounted. This is the
     // state in which the new-session server override is drawn -- more than one
@@ -1133,6 +1180,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStatePopulated', machineStatePopulated);
     captured.set('machineStateStale', machineStateStale);
     captured.set('machineStateSingle', machineStateSingle);
+    captured.set('machineStateDraining', machineStateDraining);
     captured.set('sessionStarted', sessionStarted);
     captured.set('sessionStopped', sessionStopped);
     captured.set('refusalHeldBusy', refusalHeldBusy);
