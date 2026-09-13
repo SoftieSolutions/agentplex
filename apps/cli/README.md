@@ -15,9 +15,9 @@ units `install.sh` writes are what start them.
 | `agentplex help`           | this list, or `help <command>` for one of them          |
 
 `doctor` and `status` answer different questions and neither is the other.
-`doctor` asks whether this machine _can_ do the work -- providers, stores, a
-pseudoterminal -- and `status` asks what is installed and whether it is
-_running_. Each command takes its own options, and `agentplex <command> --help`
+`doctor` asks whether this machine _can_ do the work -- a database it may
+write, a token, a free port, providers, stores, a pseudoterminal -- and
+`status` asks what is installed and whether it is _running_. Each command takes its own options, and `agentplex <command> --help`
 lists them.
 
 ```sh
@@ -195,15 +195,40 @@ executes at install time:
 ## Checking a machine
 
 `agentplex doctor` reads the settings the installer wrote and reports what
-they can actually start: whether a pseudoterminal can be opened at all; per
-provider the version, the directory it resolved from and whether it says it is
-logged in; per store, whether the path is there. It binds no port, opens no
-database, opens no pty and writes nothing -- it asks whether node-pty loads,
-which maps a file and starts nothing. It exits `0` when everything it looked at
-is usable and `1` when anything is not, so it can be a check in a script.
+they can actually start. It asks the half of the machine the role runs, and
+both halves on `--role=both`.
 
-On a `--role=hub` machine it reports all three as questions that do not apply,
-because a hub starts no sessions, mounts no stores and opens no terminals.
+A hub, which has to boot before anything else on the machine matters:
+
+- the database file -- whether the setting names one, and whether this process
+  could write it or create it in the directory above it. It never opens one:
+  opening is what _creates_ a database, and a mistyped path would be minted and
+  then reported healthy.
+- the client token -- present, and at least the 32 characters the hub refuses
+  anything under. The token itself reaches no line of the report.
+- the port -- the configured host and port, and whether something already
+  listens there. This is the one thing the doctor opens: it binds the address
+  and closes it again, because that is the only portable way to ask. The answer
+  is about the moment it looked, not a reservation.
+- the built client, `@softiesolutions/agentplex-web` -- a **warning** and never
+  a failure, because a hub with no client package starts, serves its API, and
+  answers every page with 503.
+- the server on this machine, when the settings name its identity file --
+  whether that file is there and parses. A hub that cannot read it boots and
+  logs one line, and then the server beside it silently never appears.
+
+A server: whether a pseudoterminal can be opened at all; per provider the
+version, the directory it resolved from and whether it says it is logged in;
+per store, whether the path is there.
+
+Apart from that one bind it changes nothing -- it opens no database, opens no
+pty and writes nothing, and it asks whether node-pty loads, which maps a file
+and starts nothing. It exits `0` when everything it looked at is usable and `1`
+when anything is not, so it can be a check in a script.
+
+Each half says so plainly on a machine that does not run it: a `--role=hub`
+machine starts no sessions, mounts no stores and opens no terminals, and a
+`--role=server` machine opens no database and serves no client.
 
 ## License
 

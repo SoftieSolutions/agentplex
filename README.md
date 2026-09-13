@@ -136,9 +136,13 @@ Every setting has one flag and one environment variable; the flag wins.
 ### Checking a machine
 
 `agentplex doctor`, with the settings the daemons would take, reports what
-that machine can actually start: per provider, the version, the directory it
-resolved from and whether it is logged in; per store path, whether it is there.
-It changes nothing and exits `1` when anything it looked at is unusable. The
+that machine can actually start: for a hub, a database file it may write, a
+client token, a port nothing else holds and the client package it serves; for a
+server, per provider the version, the directory it resolved from and whether it
+is logged in, and per store path whether it is there. It writes nothing -- the
+one thing it opens is the hub's port, bound and released, because nothing else
+answers whether something already has it -- and exits `1` when anything it
+looked at is unusable. The
 same check runs at server startup and its result travels in the handshake, so a
 provider that is missing or logged out is a named fact on the settings screen
 and a refused start, rather than a session that appears and vanishes.

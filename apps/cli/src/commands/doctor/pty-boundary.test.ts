@@ -338,6 +338,12 @@ describe('everything the doctor can reach', () => {
     expect(DOCTOR.modules).toEqual(
       expect.arrayContaining([
         path.join('apps', 'cli', 'src', 'commands', 'doctor', 'doctor.ts'),
+        // The hub half and the calls it is composed from. Named here so that a
+        // clean verdict above is one that walked through them: they are the
+        // newest modules in the program and the ones a future import is most
+        // likely to arrive in.
+        path.join('apps', 'cli', 'src', 'commands', 'doctor', 'hub.ts'),
+        path.join('apps', 'cli', 'src', 'commands', 'doctor', 'node-hub-probes.ts'),
         path.join('packages', 'node-shared', 'src', 'index.ts'),
         path.join('packages', 'providers', 'src', 'index.ts'),
       ]),

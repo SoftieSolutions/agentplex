@@ -1,6 +1,6 @@
 import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadDoctorConfig, doctorUsage, type ConfigResult } from './config.js';
+import { loadDoctorConfig, doctorUsage, type ConfigResult, type HubConfig } from './config.js';
 
 const IDENTITY_FILE = '/etc/agentplex/server.json';
 
@@ -377,5 +377,96 @@ describe('loadDoctorConfig host', () => {
   it('is listed in the usage message like every other setting', () => {
     expect(doctorUsage()).toContain('--host');
     expect(doctorUsage()).toContain('AGENTPLEX_HOST');
+  });
+});
+
+/**
+ * The hub's settings, read the way the hub reads them, because the doctor's
+ * question is what *this* deployment starts. The rules they feed are in
+ * `hub.test.ts`; what these cases pin is which of them stop a run and which
+ * become a finding.
+ */
+describe('loadDoctorConfig hub settings', () => {
+  function hubHalf(result: ConfigResult): HubConfig {
+    expect(result.ok).toBe(true);
+    if (!result.ok || !('hub' in result.config)) throw new Error('no hub half was parsed');
+    return result.config.hub;
+  }
+
+  it('reads the database file, the port, the token and the local server', () => {
+    const result = load(['--role=hub'], {
+      AGENTPLEX_DATABASE_FILE: '/var/lib/agentplex/agentplex.db',
+      AGENTPLEX_HUB_PORT: '9090',
+      AGENTPLEX_CLIENT_TOKEN: 'a-token-long-enough-for-anybody',
+      AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE: IDENTITY_FILE,
+    });
+
+    expect(hubHalf(result)).toEqual({
+      port: 9090,
+      databaseFile: '/var/lib/agentplex/agentplex.db',
+      clientToken: 'a-token-long-enough-for-anybody',
+      localServerIdentityPath: IDENTITY_FILE,
+    });
+  });
+
+  it('defaults the hub port so a first run needs no port decision', () => {
+    expect(hubHalf(load(['--role=hub']))).toMatchObject({ port: 8080 });
+  });
+
+  it('carries settings nobody set rather than refusing to inspect the machine', () => {
+    // A half-finished hub is the machine somebody runs a doctor on. Answering
+    // with a usage message instead of a report would refuse the one question
+    // they asked.
+    expect(hubHalf(load(['--role=hub']))).toMatchObject({
+      databaseFile: null,
+      clientToken: null,
+      localServerIdentityPath: null,
+    });
+  });
+
+  it('still refuses a database path that is not absolute, which is a typo and not a finding', () => {
+    const problems = expectProblems(load(['--role=hub', '--database-file=agentplex.db']));
+    expect(problems[0]).toContain('absolute path');
+  });
+
+  it('refuses a local server identity path that is not absolute', () => {
+    const problems = expectProblems(
+      load(['--role=hub', '--local-server-identity-file=server.json']),
+    );
+    expect(problems[0]).toContain('absolute path');
+  });
+
+  it('gives the both role both halves to inspect', () => {
+    const result = load(['--role=both'], { AGENTPLEX_DATABASE_FILE: '/srv/agentplex.db' });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: { role: 'both', hub: { databaseFile: '/srv/agentplex.db' }, server: { port: 8081 } },
+    });
+  });
+
+  it('gives a server-only machine no hub half at all', () => {
+    const result = load(['--role=server']);
+    expect(result.ok && 'hub' in result.config).toBe(false);
+  });
+
+  it('does not hold a hub setting against a machine that runs no hub', () => {
+    // The environment of a `both` machine, read with `--role=server`: the
+    // settings file is one file, and a path this run never uses must not be
+    // able to refuse the run.
+    const result = load(['--role=server'], { AGENTPLEX_DATABASE_FILE: 'relative.db' });
+    expect(result).toMatchObject({ ok: true, config: { role: 'server' } });
+  });
+
+  it('lists every hub setting in the usage message', () => {
+    for (const flag of [
+      '--hub-port',
+      '--database-file',
+      '--client-token',
+      '--local-server-identity-file',
+    ]) {
+      expect(doctorUsage()).toContain(flag);
+    }
+    expect(doctorUsage()).toContain('AGENTPLEX_DATABASE_FILE');
   });
 });

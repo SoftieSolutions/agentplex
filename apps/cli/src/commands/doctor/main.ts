@@ -18,15 +18,22 @@ import {
 import { checkNodePty } from '@agentplex/pty';
 import { doctorUsage, loadDoctorConfig } from './config.js';
 import { formatDoctorReport, inspectMachine } from './doctor.js';
+import { nodePathAccess, nodePortProbe } from './node-hub-probes.js';
 
 /**
  * `agentplex doctor`: read the settings, inspect the machine, print the
- * report, exit. It binds no port, opens no database, opens no pty and writes
- * nothing, and this program cannot: it depends on nothing that provisions, and
- * the one thing it borrows from `pty` is the question of whether the addon
- * loads -- `createPtySupervisor` is not reachable from here, so there is no
- * expression in this program that could open one. A check is easier to trust
- * when the program running it cannot change what it checks.
+ * report, exit. It opens no database, opens no pty and writes nothing, and this
+ * program cannot: it depends on nothing that provisions, and the one thing it
+ * borrows from `pty` is the question of whether the addon loads --
+ * `createPtySupervisor` is not reachable from here, so there is no expression in
+ * this program that could open one. A check is easier to trust when the program
+ * running it cannot change what it checks.
+ *
+ * It does open one socket, which it used not to: `nodePortProbe` binds the
+ * address the hub would bind and closes it again, because that is the only
+ * portable way to answer whether something already holds it. Nothing is left
+ * behind and nothing is written; what the report claims from it is that the
+ * port was free at the moment it looked.
  *
  * "Not reachable from here" is a claim about every module this file can reach
  * rather than about this file, and `pty-boundary.test.ts` beside it is what
@@ -113,6 +120,14 @@ export async function main(): Promise<void> {
     // The same call the server makes before it will start, so the two can never
     // disagree about whether this machine can run a session at all.
     terminals: checkNodePty,
+    access: nodePathAccess,
+    ports: nodePortProbe,
+    // `import.meta.resolve` is meaningful only in the module it is evaluated
+    // in: it resolves against *this* file's URL. So it is passed from here,
+    // which is the file whose position is the doctor's, rather than reached for
+    // in `hub.ts`, which would answer for wherever that module happened to be.
+    // The hub passes its own in for the same reason, from its own entrypoint.
+    resolve: (specifier) => import.meta.resolve(specifier),
   });
   for (const line of formatDoctorReport(report)) write(line);
   if (!report.usable) process.exitCode = EXIT_NOT_READY;
