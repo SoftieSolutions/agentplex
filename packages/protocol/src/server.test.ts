@@ -9,7 +9,7 @@ import {
 import { hubIdSchema, serverIdSchema, sessionIdSchema, storeIdSchema } from './identity.js';
 import { parseTextFrame } from './parse.js';
 import { encodeTerminalChunk } from './terminal.js';
-import { docNameSchema } from './doc.js';
+import { DOC_CONTENT_MAX_CHARS, docNameSchema } from './doc.js';
 
 const HUB_ID = hubIdSchema.parse('hub-1');
 
@@ -169,6 +169,43 @@ describe('parseHubToServerFrame on the document frames', () => {
 
   it('refuses content past the cap rather than truncating it', () => {
     expect(parseHubToServerFrame({ ...A_WRITE, content: 'x'.repeat(256_001) }).ok).toBe(false);
+  });
+
+  /**
+   * The reason the cap is the number it is. `DOC_CONTENT_MAX_CHARS` is chosen
+   * so that a maximal document of text is a frame the socket will carry, and
+   * that is an arithmetic claim about JSON and UTF-8 rather than an opinion:
+   * this measures it. The ceiling is `DEFAULT_MAX_PAYLOAD_BYTES` in
+   * `packages/node-shared/src/ws-message-socket.ts`, spelled again here
+   * because this package may not import another workspace package.
+   */
+  it('serialises a maximal document of text as a frame the socket will carry', () => {
+    const SOCKET_CEILING_BYTES = 1_000_000;
+    const encoder = new TextEncoder();
+    const bytesOf = (content: string): number =>
+      encoder.encode(JSON.stringify({ ...A_WRITE, content })).length;
+
+    for (const [why, character] of [
+      ['ascii', 'x'],
+      ['a two-byte letter', 'д'],
+      ['the worst of the Basic Multilingual Plane', '漢'],
+      ['a quote, which JSON escapes', '"'],
+      ['a newline, which JSON escapes', '\n'],
+    ] as const) {
+      const content = character.repeat(DOC_CONTENT_MAX_CHARS);
+      expect(parseHubToServerFrame({ ...A_WRITE, content }).ok, why).toBe(true);
+      expect(bytesOf(content), why).toBeLessThan(SOCKET_CEILING_BYTES);
+    }
+
+    // A surrogate pair is two code units of two bytes each, so a document of
+    // emoji is cheaper per code unit than one of CJK, not dearer.
+    expect(bytesOf('\u{1F600}'.repeat(DOC_CONTENT_MAX_CHARS / 2))).toBeLessThan(
+      SOCKET_CEILING_BYTES,
+    );
+
+    // And the exception the constant's comment names: a file of control codes
+    // is not a document, and it is the case the cap does not cover.
+    expect(bytesOf('\u0001'.repeat(DOC_CONTENT_MAX_CHARS))).toBeGreaterThan(SOCKET_CEILING_BYTES);
   });
 
   it('refuses a write with no content: a document is replaced whole or not at all', () => {

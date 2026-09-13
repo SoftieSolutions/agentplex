@@ -182,9 +182,13 @@ export interface HubConnectionDependencies {
    *
    * The server's rather than the connection's, because the folders are the
    * machine's: two hubs writing a project's notes are writing one folder,
-   * and the store is what makes the second write replace the first rather
-   * than race it. Nothing on this seam starts a process; see
-   * `project-docs.ts` for why a document write is not an operation.
+   * and a store per connection would suggest otherwise in the one place a
+   * reader looks to find out. Sharing it serialises nothing -- the store
+   * holds no state and takes no lock. What makes two writes landing at once
+   * leave one document whole rather than a mixture of both is the rename in
+   * `node-project-files.ts`, and that would hold with a store per socket
+   * too. Nothing on this seam starts a process; see `project-docs.ts` for
+   * why a document write is not an operation.
    */
   readonly docs: ProjectDocs;
   readonly logger: Logger;
