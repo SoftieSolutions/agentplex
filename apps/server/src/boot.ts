@@ -9,6 +9,7 @@ import type {
   StoreFileSystem,
 } from '@agentplex/providers';
 import type { BeaconNetwork } from './server-beacon.js';
+import type { StoreWatcher } from './store-watch.js';
 import { startSessionServer, type SessionServer } from './server.js';
 import type { MachineLoadReader } from './machine-load.js';
 import type { WorkingTree } from './working-tree.js';
@@ -28,6 +29,15 @@ export interface RuntimeDependencies {
   readonly ids: IdGenerator;
   /** The store volumes, injected so that a test runs on a volume it wrote down. */
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * How the server hears that a store changed with nobody asking it to look.
+   *
+   * A fifth seam onto the filesystem, and the only one that is not a read or a
+   * write: it is the machine interrupting. Injected because `fs.watch` cannot
+   * be made to fire on cue, so a test drives every rule above it -- the burst
+   * window, the fan-out, the backoff -- against events it produced itself.
+   */
+  readonly storeWatcher: StoreWatcher;
   /**
    * The disk under this server's own data root, which is a different seam from
    * the store volumes above and not an oversight.
@@ -172,6 +182,7 @@ export async function startRuntime(
     logger,
     ids,
     storeFileSystem,
+    storeWatcher,
     dataRootFileSystem,
     grantFileSystem,
     projectFiles,
@@ -205,6 +216,7 @@ export async function startRuntime(
     port: config.port,
     storePaths: config.storePaths,
     storeFileSystem,
+    storeWatcher,
     identityPath: config.identityPath,
     grantFileSystem,
     tokens,

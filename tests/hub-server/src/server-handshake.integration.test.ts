@@ -12,6 +12,7 @@ import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
+import { createFakeStoreWatcher } from '../../../apps/server/src/fake-store-watcher.js';
 import {
   createLogger,
   closure,
@@ -61,6 +62,10 @@ async function startServer(storePaths: readonly string[] = []) {
     // Port 0: the OS picks, so two suites running at once cannot collide.
     port: 0,
     storePaths,
+    // No store, so nothing to watch: this suite is about what the two apps
+    // say to each other over a real socket, and a watch on a fake volume would
+    // be a seam nothing in it fires.
+    storeWatcher: createFakeStoreWatcher(),
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     // The grants file lands beside the identity file, on the same fake volume.
