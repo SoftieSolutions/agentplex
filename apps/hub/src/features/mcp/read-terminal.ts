@@ -157,10 +157,22 @@ export function readTerminalTool({ terminal, timers }: ReadTerminalDependencies)
       // strings and the relay addresses a terminal by two branded ids; a cast
       // here would be this endpoint deciding that whatever a model typed is an
       // id.
+      //
+      // `safeParse`, so that a string that is not an id is refused the way
+      // everything else here is refused -- in a sentence. A throw would be
+      // caught by the SDK and answered as a failed call either way, but with
+      // zod's words in it rather than a hub's, which is the rule this file's
+      // own registry states and would then be the one place breaking.
+      const store = storeIdSchema.safeParse(storeId);
+      const session = sessionIdSchema.safeParse(sessionId);
+      if (!store.success || !session.success) {
+        return refuses('a store id and a session id are each one to two hundred characters');
+      }
+
       const target: ClientTerminalTarget = {
         by: 'session',
-        storeId: storeIdSchema.parse(storeId),
-        sessionId: sessionIdSchema.parse(sessionId),
+        storeId: store.data,
+        sessionId: session.data,
       };
 
       const replayed = await replayOf(terminal, timers, target);

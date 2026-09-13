@@ -298,6 +298,9 @@ describe('read_terminal', () => {
     const result = await reading(relay, { storeId: '' });
 
     expect(result.isError).toBe(true);
+    // A sentence rather than whatever a parser would have thrown. Refusals are
+    // values here, and this is the one place a string off a model becomes an id.
+    expect(result.text).toBe('a store id and a session id are each one to two hundred characters');
     expect(relay.subscribers).toHaveLength(0);
   });
 
