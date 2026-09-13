@@ -130,8 +130,8 @@ migration is history: add a new one rather than editing it.
 ## Features
 
 `apps/hub/src/features/` is one folder per feature: the fleet state, the paired
-servers, pairing, sessions, projects, the catalogue, the pane layout, the
-clients, client auth, discovery, and the web assets. Four rules hold it together, and `pnpm
+servers, pairing, sessions, projects, documents, the catalogue, the pane layout,
+the clients, client auth, discovery, and the web assets. Four rules hold it together, and `pnpm
 lint` enforces the first one.
 
 **A feature is a folder with one entry file.** `features/catalogue/catalogue.ts`
@@ -171,6 +171,15 @@ the bottom with no reply, no log line and nothing to find. A client was left
 holding a frame id that would never be answered. What this build cannot serve it
 now says so — a refusal in words to a client, a debug line naming the frame from
 a server — and neither is silence.
+
+**A feature with two callers is what a feature is for.** `features/docs/docs.ts`
+exposes four functions and reaches a server through the connections seam;
+`client-connection.ts` calls them on a frame and the MCP tools will call the
+same four in the same process. Neither reaches a connection itself, and that is
+the point rather than a tidiness: a second caller putting its own `doc-write` on
+a socket would be a second answer to what a document write means -- which index
+rows it touches, which refusals it produces, what happens when the machine is
+away -- and the two would part company the first time one of them was fixed.
 
 One file is deliberately thin. `features/servers/transport.ts` is how the hub
 speaks to a server once it is connected, and it declares only what the dial loop

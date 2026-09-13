@@ -11,6 +11,10 @@ import type { InstructionOutcome } from './servers.js';
  * that is already over. `pong` is the heartbeat's, which reads the socket
  * itself.
  *
+ * A document reply is an answer like any other: the three of them address the
+ * frame that asked, so they go to whoever asked and this file says nothing
+ * about documents beyond that.
+ *
  * The switch is exhaustive, and that is the reason this is a file rather than
  * a closure. Before it was, the four frames of the terminal relay parsed
  * cleanly and fell out of the bottom, and nothing -- not a log line, not a type
@@ -38,6 +42,9 @@ export function routeServerFrame(
     case 'session-started':
     case 'session-stopped':
     case 'directory-listing':
+    case 'doc-written':
+    case 'doc-content':
+    case 'doc-listing':
       handlers.onAnswer(frame.replyTo, { ok: true, answer: frame });
       return;
     case 'session-refused':
@@ -72,13 +79,10 @@ export function routeServerFrame(
     case 'session-subscribed':
     case 'session-unsubscribed':
     case 'terminal-output':
-    case 'doc-written':
-    case 'doc-content':
-    case 'doc-listing':
-      // Parsed, and dropped on purpose. The drain is AGX-83's stack, the
-      // terminal relay is AGX-102's and the document replies are AGX-242's;
-      // until those land, a server that sends these is ahead of this hub, and
-      // the line below is the only evidence there will be.
+      // Parsed, and dropped on purpose. The drain is AGX-83's stack and the
+      // terminal relay is AGX-102's; until those land, a server that sends
+      // these is ahead of this hub, and the line below is the only evidence
+      // there will be.
       logger.debug('frame dropped: this hub build does not handle it yet', { type: frame.type });
       return;
     default:

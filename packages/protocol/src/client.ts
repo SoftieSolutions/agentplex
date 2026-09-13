@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { directoryListingFrameSchema, directorySchema } from './directory.js';
+import { docContentSchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import {
   hubIdSchema,
@@ -273,6 +274,63 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     nodeId: nodeIdSchema,
     name: nodeNameTextSchema,
   }),
+  /**
+   * Makes a document in a project, on one machine, with its first content.
+   *
+   * Three of the fields are the decision. `projectId` is a node id and never a
+   * directory, for the reason a start's `project` is one: the client names a
+   * row, the hub turns it into a path out of its own database, and no client
+   * can choose where a write lands. `server` is named by the user and is not
+   * the hub's to choose, like a browse and unlike a start -- a document is a
+   * file on one machine's disk, and the hub holds no copy to serve from a
+   * second one. `name` and `content` are the server leg's own schemas, reused
+   * rather than restated: what the hub may forward is exactly what a server
+   * will accept, so a name this hub takes and that server refuses is a state
+   * neither end can reach.
+   *
+   * There is no `doc-remove` and no `doc-rename` here. Both are the
+   * catalogue's frames over a node once AGX-239 lands, and minting a second
+   * word for either would be a second answer to what removing a node means.
+   */
+  z.object({
+    type: z.literal('doc-create'),
+    id: frameIdSchema,
+    projectId: nodeIdSchema,
+    server: serverRegistrationIdSchema,
+    name: docNameSchema,
+    content: docContentSchema,
+  }),
+  /**
+   * Replaces a document's content, whole.
+   *
+   * The node is the whole address: which project, which machine and what the
+   * file is called are the hub's rows, and a client that could restate any of
+   * them would be a client that could redirect a write. There is no patch
+   * form, for the reason the server leg has none -- a write that lands is the
+   * document, and no version the hub never saw whole can be half-applied.
+   */
+  z.object({
+    type: z.literal('doc-save'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+    content: docContentSchema,
+  }),
+  /**
+   * Reads a document back.
+   *
+   * It carries no content bound and no range, because the hub holds no copy to
+   * serve part of: the file is on the machine that wrote it, the whole of it
+   * comes back or a refusal does, and a document on a machine that is not
+   * connected is that refusal with the machine named in it. That is the cost
+   * of content never being in the hub's database, taken deliberately -- an
+   * index the hub can list while the machine is away, and content only the
+   * machine that has it can answer for.
+   */
+  z.object({
+    type: z.literal('doc-open'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
 ]);
@@ -448,6 +506,48 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('node-renamed'),
     replyTo: frameIdSchema,
+  }),
+  /**
+   * The document exists, and this is the node it is.
+   *
+   * The id is carried for the reason `project-created` carries one: every
+   * later frame about this document names the node, and a client that had to
+   * find its own back out of a tree would be matching on a name the user is
+   * free to change.
+   */
+  z.object({
+    type: z.literal('doc-created'),
+    replyTo: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
+  /**
+   * The document was written, and this is when the machine that holds it says
+   * it was.
+   *
+   * Carried rather than left for the client to stamp, and it is the server's
+   * clock rather than the hub's: "edited two minutes ago" is a fact about a
+   * file, and the hub's receipt time would be the wrong answer by however long
+   * the write took to cross two machines.
+   */
+  z.object({
+    type: z.literal('doc-saved'),
+    replyTo: frameIdSchema,
+    updatedAt: z.int().nonnegative(),
+  }),
+  /**
+   * A document, whole, with the write time the machine holding it reported.
+   *
+   * The same name as the server leg's reply and the same two fields, because
+   * it is the same answer relayed: the hub reads no document and rewrites
+   * none, so a second shape here would be a second thing to keep in step for
+   * no gain. A refusal travels as `refusal` with `holder: null`, like every
+   * other no on this direction.
+   */
+  z.object({
+    type: z.literal('doc-content'),
+    replyTo: frameIdSchema,
+    content: docContentSchema,
+    updatedAt: z.int().nonnegative(),
   }),
   protocolErrorFrameSchema,
 ]);

@@ -5,6 +5,7 @@ import {
   parseTextFrame,
   PROTOCOL_VERSION,
   type ClientFrame,
+  type DocName,
   type FrameId,
   type HubFrame,
   type HubId,
@@ -22,6 +23,7 @@ import {
   type MessageSocket,
   type SocketClosure,
 } from '@agentplex/node-shared';
+import type { Docs } from '../docs/docs.js';
 import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
 
@@ -136,6 +138,16 @@ export interface ClientConnectionDependencies {
    * path can widen it.
    */
   readonly projects: Projects;
+  /**
+   * Documents: the index, and the one path a write to one takes.
+   *
+   * A seam beside projects rather than a method on it, because they own
+   * different rows and answer different questions -- which directory is this,
+   * and what is in it. What matters more here is what this file may not do: it
+   * calls the four functions and reaches no server, so the MCP tools of
+   * AGX-244 calling the same four are the same write path and not a second one.
+   */
+  readonly docs: Docs;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -156,6 +168,7 @@ export function serveClientConnection(
     writePaneLayout,
     sessions,
     projects,
+    docs,
     onClosed,
   }: ClientConnectionDependencies,
 ): ClientConnection {
@@ -350,6 +363,36 @@ export function serveClientConnection(
           return;
         }
         void answerProjectRename(frame.id, frame.nodeId, frame.name);
+        return;
+      }
+
+      case 'doc-create': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a browse is not: a create writes a file
+        // on another machine, and awaiting it here would stall every later
+        // frame on this socket behind one disk somewhere else.
+        void answerDocCreate(frame.id, frame.projectId, frame.server, frame.name, frame.content);
+        return;
+      }
+
+      case 'doc-save': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerDocSave(frame.id, frame.nodeId, frame.content);
+        return;
+      }
+
+      case 'doc-open': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerDocOpen(frame.id, frame.nodeId);
         return;
       }
 
@@ -573,6 +616,89 @@ export function serveClientConnection(
       logger.error('could not rename a project', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not rename that project');
+    }
+  }
+
+  /**
+   * Makes a document on one machine and answers the client that asked.
+   *
+   * The reply carries the node and nothing else. There is no broadcast saying
+   * the tree changed -- `catalogue-changed` is AGX-239's frame and supersedes
+   * this -- so what keeps the screen honest until then is the client asking
+   * for the layout again, exactly as it does after a project create.
+   */
+  async function answerDocCreate(
+    replyTo: FrameId,
+    projectId: NodeId,
+    server: ServerRegistrationId,
+    name: DocName,
+    content: string,
+  ): Promise<void> {
+    try {
+      const outcome = await docs.create(projectId, server, name, content);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'doc-created', replyTo, nodeId: outcome.nodeId });
+    } catch (error) {
+      logger.error('could not create a document', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not create that document');
+    }
+  }
+
+  /**
+   * Replaces a document and answers the client that asked.
+   *
+   * `updatedAt` is the machine's, relayed rather than stamped here: a client
+   * showing when a document was last written is describing a file, and the
+   * hub's receipt time would be that answer plus however long two machines
+   * took to talk.
+   */
+  async function answerDocSave(replyTo: FrameId, nodeId: NodeId, content: string): Promise<void> {
+    try {
+      const outcome = await docs.save(nodeId, content);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'doc-saved', replyTo, updatedAt: outcome.updatedAt });
+    } catch (error) {
+      logger.error('could not save a document', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not save that document');
+    }
+  }
+
+  /**
+   * Reads a document back and answers the client that asked.
+   *
+   * A document on a machine that is not connected is a refusal naming that
+   * machine, and the sentence comes from the feature rather than from here:
+   * the hub holds no copy, and what a client renders is the reason it cannot
+   * have one right now.
+   */
+  async function answerDocOpen(replyTo: FrameId, nodeId: NodeId): Promise<void> {
+    try {
+      const outcome = await docs.open(nodeId);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'doc-content',
+        replyTo,
+        content: outcome.content,
+        updatedAt: outcome.updatedAt,
+      });
+    } catch (error) {
+      logger.error('could not open a document', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not open that document');
     }
   }
 

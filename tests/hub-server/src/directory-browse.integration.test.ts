@@ -43,6 +43,7 @@ import {
   createFleetState,
   type FleetState,
 } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
+import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
 import { createProjects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 
@@ -204,6 +205,10 @@ async function start(roots: readonly string[]): Promise<Harness> {
     writePaneLayout: async () => undefined,
     sessions: createSessions({ state, projects, connections, logger }),
     projects,
+    // Nothing here is about documents, and the fake is what a suite stands on
+    // when a seam is not its subject. The real one is driven end to end in
+    // `docs.integration.test.ts`.
+    docs: createFakeDocs(),
   });
 
   await connections.sync();

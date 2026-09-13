@@ -30,6 +30,7 @@ import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js
 import { createClients, type Clients } from './clients.js';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
 import { createFakeProjects, type FakeProjects } from '../projects/fake-projects.js';
+import { createFakeDocs, type FakeDocs } from '../docs/fake-docs.js';
 
 /**
  * The pipeline, with the real reducer above it and fake sockets below.
@@ -106,6 +107,8 @@ interface Harness {
   readonly sessions: FakeSessions;
   /** The browse this broadcast was built on, for the same reason. */
   readonly projects: FakeProjects;
+  /** The documents this broadcast was built on, for the same reason. */
+  readonly docs: FakeDocs;
 }
 
 /**
@@ -123,6 +126,7 @@ function harness(
     write?: (layout: string) => Promise<void>;
   } = {},
   projects: FakeProjects = createFakeProjects(),
+  docs: FakeDocs = createFakeDocs(),
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
@@ -136,8 +140,9 @@ function harness(
     writePaneLayout: paneLayout.write ?? (async () => undefined),
     sessions,
     projects,
+    docs,
   });
-  return { state, timers, broadcast, sessions, projects };
+  return { state, timers, broadcast, sessions, projects, docs };
 }
 
 /**
@@ -834,6 +839,129 @@ describe('making and renaming a project', () => {
 
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
     expect(projects.created).toEqual([]);
+    expect(client.socket.closure).not.toBeNull();
+  });
+});
+
+describe('the document frames', () => {
+  const PROJECT = 'project-1';
+
+  /**
+   * A hello, a project, and a document in it.
+   *
+   * The project is made through the same socket rather than put in the fake by
+   * hand, because that is the order a client does it in: a document is created
+   * in a project the client has just been handed the id of.
+   */
+  async function withDocument(): Promise<{ harness: Harness; client: Client; nodeId: string }> {
+    const held = harness();
+    const client = attach(held.broadcast);
+    await client.hello();
+    await client.say({ type: 'project-create', id: 2, name: 'agentplex', directory: '/srv/work' });
+    await client.say({
+      type: 'doc-create',
+      id: 3,
+      projectId: PROJECT,
+      server: 'registration-attic',
+      name: 'plan.md',
+      content: '# Plan\n',
+    });
+    const created = client.received.at(-1);
+    if (created?.type !== 'doc-created') throw new Error('the create was not answered');
+    return { harness: held, client, nodeId: created.nodeId };
+  }
+
+  it('answers a create with the node the document will be named by', async () => {
+    const { harness: held, nodeId } = await withDocument();
+
+    expect(held.docs.created).toEqual([
+      {
+        nodeId,
+        projectId: PROJECT,
+        server: 'registration-attic',
+        name: 'plan.md',
+        content: '# Plan\n',
+      },
+    ]);
+  });
+
+  it('answers a save with the machine\u2019s write time and not the hub\u2019s', async () => {
+    const { client, nodeId } = await withDocument();
+
+    await client.say({ type: 'doc-save', id: 4, nodeId, content: '# Plan\n\n- one more\n' });
+
+    const saved = client.received.at(-1);
+    expect(saved).toMatchObject({ type: 'doc-saved', replyTo: 4 });
+    if (saved?.type !== 'doc-saved') return;
+    // Whatever the far end said. The hub relays it rather than stamping its
+    // own receipt, which would be this number plus two machines' latency.
+    expect(saved.updatedAt).toBe(1_756_000_000_001);
+  });
+
+  it('answers an open with the document whole', async () => {
+    const { client, nodeId } = await withDocument();
+
+    await client.say({ type: 'doc-open', id: 4, nodeId });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'doc-content',
+      replyTo: 4,
+      content: '# Plan\n',
+      updatedAt: 1_756_000_000_000,
+    });
+  });
+
+  it('refuses an open in words when the machine that has it is away', async () => {
+    const { harness: held, client, nodeId } = await withDocument();
+    held.docs.refuseWith({
+      code: 'refused',
+      problem: 'attic is not connected right now, and the hub holds no copy of its documents',
+    });
+
+    await client.say({ type: 'doc-open', id: 4, nodeId });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 4,
+      code: 'refused',
+      message: 'attic is not connected right now, and the hub holds no copy of its documents',
+      // A document has no live process to name, so `holder` is null, like every
+      // refusal but a session's.
+      holder: null,
+    });
+    expect(client.socket.closure).toBeNull();
+  });
+
+  it('refuses a document frame that arrives before hello, and writes nothing', async () => {
+    const { broadcast, docs } = harness();
+    const client = attach(broadcast);
+
+    await client.say({ type: 'doc-open', id: 1, nodeId: 'doc-1' });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+    expect(docs.opened).toEqual([]);
+    expect(client.socket.closure).not.toBeNull();
+  });
+
+  it('closes on a name the protocol will not take, because the frame has no id to answer', async () => {
+    const { broadcast, docs } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'doc-create',
+      id: 2,
+      projectId: PROJECT,
+      server: 'registration-attic',
+      name: '../escape.md',
+      content: '',
+    });
+
+    // The name is the one string that ends up joined onto a path, so it is a
+    // parser and not a judgement: an unreadable frame is a protocol error and
+    // a closed socket, and nothing reached the feature.
+    expect(client.received.at(-1)).toMatchObject({ type: 'protocol-error', code: 'bad-request' });
+    expect(docs.created).toEqual([]);
     expect(client.socket.closure).not.toBeNull();
   });
 });

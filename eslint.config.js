@@ -73,6 +73,7 @@ const HUB_FEATURES = [
   'client-auth',
   'clients',
   'discovery',
+  'docs',
   'fleet-state',
   'pairing',
   'pane-layout',

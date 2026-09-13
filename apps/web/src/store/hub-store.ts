@@ -144,6 +144,47 @@ export interface ProjectCreatedView {
   readonly nodeId: NodeId;
 }
 
+/**
+ * The hub's answer to a document create, kept so the form that asked can act.
+ *
+ * The same shape and the same reason as a project's: every later frame about
+ * this document names the node, and a form that had to find its own back out
+ * of the next tree would be matching on a name the user may rename.
+ */
+export interface DocCreatedView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+}
+
+/**
+ * A document the hub answered with, whole, and when the machine holding it
+ * says it was written.
+ *
+ * `replyTo` is what joins it to the request for the reason a listing carries
+ * one: a person may open a second document while a slow disk is answering the
+ * first, and a snapshot field with no id on it would put the first document
+ * under the second name. The editor is AGX-243; what this store owes it is the
+ * characters and the time, kept exactly as they arrived.
+ */
+export interface DocContentView {
+  readonly replyTo: FrameId;
+  readonly content: string;
+  readonly updatedAt: number;
+}
+
+/**
+ * The hub's answer to a save: when the machine holding the document wrote it.
+ *
+ * Kept rather than discarded, because it is the only evidence a client has
+ * that a save landed on a disk rather than merely leaving the browser -- and
+ * it is the server's clock, so an editor showing "saved a moment ago" is
+ * showing what the machine said and not what this tab assumed.
+ */
+export interface DocSavedView {
+  readonly replyTo: FrameId;
+  readonly updatedAt: number;
+}
+
 export interface HubSnapshot {
   readonly phase: ConnectionPhase;
   /** What is degraded, in words, or `null` while nothing is. */
@@ -178,6 +219,12 @@ export interface HubSnapshot {
   readonly lastListing: DirectoryListingView | null;
   /** The hub's most recent yes to a project create, kept until the next one. */
   readonly lastProjectCreated: ProjectCreatedView | null;
+  /** The hub's most recent yes to a document create, kept until the next one. */
+  readonly lastDocCreated: DocCreatedView | null;
+  /** The hub's most recent yes to a document save, kept until the next one. */
+  readonly lastDocSaved: DocSavedView | null;
+  /** The most recent document the hub answered with, kept until the next one. */
+  readonly lastDocContent: DocContentView | null;
 }
 
 /**
@@ -206,7 +253,10 @@ type CommandFrame = Extract<
       | 'pane-layout-save'
       | 'directory-list'
       | 'project-create'
-      | 'project-rename';
+      | 'project-rename'
+      | 'doc-create'
+      | 'doc-save'
+      | 'doc-open';
   }
 >;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -300,6 +350,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastStarted: null,
     lastListing: null,
     lastProjectCreated: null,
+    lastDocCreated: null,
+    lastDocSaved: null,
+    lastDocContent: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -491,6 +544,44 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         requestLayout();
         return;
       }
+      case 'doc-created': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastDocCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
+        });
+        // A node appeared in the tree on this client's own account, and there
+        // is no broadcast that says so yet -- `catalogue-changed` is AGX-239's
+        // and supersedes this. Asking again is the honest minimum, exactly as
+        // after a project create.
+        requestLayout();
+        return;
+      }
+      case 'doc-saved': {
+        pending.delete(frame.replyTo);
+        // No layout re-request. A save changes the file on a machine and the
+        // hub's index of when; it changes no row the layout carries, so asking
+        // for the tree again would be a round trip that could return nothing
+        // different. `catalogue-changed` is what will carry an edit time to
+        // the other clients, and it is AGX-239's to define.
+        update({
+          lastRefusal: null,
+          lastDocSaved: { replyTo: frame.replyTo, updatedAt: frame.updatedAt },
+        });
+        return;
+      }
+      case 'doc-content': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastDocContent: {
+            replyTo: frame.replyTo,
+            content: frame.content,
+            updatedAt: frame.updatedAt,
+          },
+        });
+        return;
+      }
       case 'node-renamed': {
         pending.delete(frame.replyTo);
         // Same reason as above: the name on the screen came out of the layout,
@@ -589,6 +680,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // A listing describes somebody else's disk as it was; nothing is looking
       // any more, and the next page to look will ask again.
       lastListing: null,
+      // The same, and more so: a document is a file that may have been edited
+      // on its own machine while nothing here was connected, so holding the
+      // characters would be holding a copy this store cannot vouch for.
+      lastDocContent: null,
     });
   }
 

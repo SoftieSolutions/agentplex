@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  docNameSchema,
+  nodeIdSchema,
   parseClientFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  serverRegistrationIdSchema,
   sessionRefSchema,
   storeIdSchema,
   type ClientFrame,
@@ -618,6 +621,31 @@ describe('projects', () => {
     expect(sentFrames(socket).slice(before)).toEqual([{ type: 'layout-request', id: 3 }]);
   });
 
+  it('reads the document node the hub put under that project', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeLayout();
+
+    socket.deliver(hubFrames.layoutWithProject);
+
+    const layout = h.store.getSnapshot().layout ?? [];
+    expect(layout.filter((node) => node.kind === 'doc')).toEqual([
+      {
+        id: 'hub-5',
+        parentId: 'hub-4',
+        kind: 'doc',
+        position: 0,
+        // The file's name, and `named` because the user typed it: nothing
+        // discovered a document, so nothing may retitle one.
+        name: 'plan.md',
+        named: true,
+        // A document anchors no session. It is a file on a machine, and the
+        // anchor is the tree's pointer at a transcript.
+        anchor: null,
+      },
+    ]);
+  });
+
   it('reads a tree with a project in it, exactly as the hub sent it', async () => {
     const h = harness();
     const { socket } = await establish(h);
@@ -682,5 +710,110 @@ describe('frame ids', () => {
     // exactly what shows: every id minted once, none repeated, none random.
     expect(ids).toEqual([1, 2, 4, 3]);
     expect([...ids].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+/**
+ * The document frames, and what the store owes an editor that has not been
+ * written yet.
+ *
+ * AGX-243 is the editor; what is here is the three commands and the three
+ * answers, kept as the hub sent them. The one behaviour beyond remembering is
+ * the same one a project create has and for the same reason: a document create
+ * puts a node in the tree, there is no broadcast saying so, so the store asks
+ * for the tree again -- and a save does not, because a save changes no row the
+ * layout carries.
+ */
+describe('documents', () => {
+  const CREATE: HubCommand = {
+    type: 'doc-create',
+    // The project the captured fixtures were made in, so the ids in this
+    // suite are the ones a real hub minted rather than ones invented here.
+    projectId: nodeIdSchema.parse('hub-4'),
+    server: serverRegistrationIdSchema.parse('registration-mbp-robert'),
+    name: docNameSchema.parse('plan.md'),
+    content: '# Plan\n',
+  };
+
+  it('sends a create as a command, so a blink queues it rather than dropping it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const outcome = h.store.sendCommand(CREATE);
+
+    expect(outcome).toEqual({ accepted: true, id: 2, delivery: 'sent' });
+    expect(sentFrames(socket).at(-1)).toEqual({ ...CREATE, id: 2 });
+  });
+
+  it('keeps the answer with the node the document will be named by', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.sendCommand(CREATE);
+
+    socket.deliver(hubFrames.docCreated);
+
+    expect(h.store.getSnapshot().lastDocCreated).toEqual({ replyTo: 8, nodeId: 'hub-5' });
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('asks for the tree again once a document has been made, if anybody is looking', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeLayout();
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.docCreated);
+
+    expect(sentFrames(socket).slice(before)).toEqual([{ type: 'layout-request', id: 3 }]);
+  });
+
+  it('keeps the machine\u2019s write time from a save, and asks for no tree', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeLayout();
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.docSaved);
+
+    expect(h.store.getSnapshot().lastDocSaved).toEqual({ replyTo: 9, updatedAt: 3 });
+    // A save changed a file on a machine and the hub's note of when. It changed
+    // no node, so the tree is the same tree.
+    expect(sentFrames(socket).slice(before)).toEqual([]);
+  });
+
+  it('keeps a document whole, exactly as the hub sent it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.docContent);
+
+    expect(h.store.getSnapshot().lastDocContent).toEqual({
+      replyTo: 10,
+      content: '# Plan\n\n- read the failing test\n- fix the refresh loop\n- write it up\n',
+      updatedAt: 3,
+    });
+  });
+
+  it('forgets a document it is holding when the connection goes', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.docContent);
+    expect(h.store.getSnapshot().lastDocContent).not.toBeNull();
+
+    unsubscribe();
+
+    // The file may be edited on its own machine while nothing here is
+    // connected, so characters kept across a disconnection would be a copy
+    // this store cannot vouch for.
+    expect(h.store.getSnapshot().lastDocContent).toBeNull();
+  });
+
+  it('renders a refusal for a document whose machine is away, like any other no', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.refusal);
+
+    expect(h.store.getSnapshot().lastRefusal).toMatchObject({ code: 'refused', holder: null });
   });
 });
