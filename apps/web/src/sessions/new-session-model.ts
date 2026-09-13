@@ -1,3 +1,4 @@
+import { readinessRefusal } from '@agentplex/protocol';
 import type {
   FrameId,
   MachineState,
@@ -5,6 +6,7 @@ import type {
   Provider,
   ServerRegistrationId,
   SessionHolder,
+  ServerView,
   SessionRef,
   StoreId,
 } from '@agentplex/protocol';
@@ -20,19 +22,25 @@ import { serverLabel } from './session-list-model.js';
  * captured state against it.
  *
  * The controls follow the one-option rule the session list already applies: a
- * store picker with one store is not drawn (the store is named in words), and
- * the server override appears only when more than one connected server could
- * actually run the chosen store. The provider is on the frame -- it is a field
- * of every session -- but v2 ships one adapter, so it is named in words and
- * never drawn as a choice.
+ * store picker with one store is not drawn (the store is named in words), the
+ * server override appears only when more than one connected server could
+ * actually run the chosen store, and the provider is named in words when the
+ * machines on offer can start exactly one of them.
+ *
+ * The provider used to be neither of those: it was the literal `'claude'` on
+ * the frame, so every session started from this client was a claude session
+ * whatever the machine actually had. It is a choice now, and the list it is
+ * chosen from is a fact about the fleet rather than a constant -- `providerOffer`
+ * is the whole of that, and `serverOverrideChoices` is the same rule read the
+ * other way, so the two selects constrain each other.
  *
  * The project picker follows the same rule from the other end: it is drawn when
  * there is at least one project, because "in a project" and "wherever the store
  * is" are two different starts and a form with no way to say which would only
- * ever make the second. Choosing one narrows the machine list, and the
- * narrowing is the hub's rule reflected rather than a second one: a start in a
- * project is refused by a machine that cannot run the provider, so a menu
- * offering such a machine would be offering a refusal.
+ * ever make the second. It narrows neither of the other two controls, and that
+ * is not an omission: nothing on the wire ties a project to a machine. A
+ * project is a node with a directory, and whether that directory sits under a
+ * root is answered by the machine that has the disk, at the moment it is asked.
  */
 
 /** Every store a session could start in, in the order the hub sent them. */
@@ -47,55 +55,194 @@ export interface ServerChoice {
 }
 
 /**
- * The machines the user could override the hub's pick with, or `[]` when the
- * control is not drawn.
+ * The machines the hub could route this start to, in the store's own order.
  *
- * Only servers that are attached to the store *and* connected right now: an
- * override naming a stale machine would be refused, and offering a choice that
- * can only be refused is worse than no control. Below two live candidates
- * there is no decision to override -- the hub's pick is the one machine -- so
- * the control is not drawn, which is `[]` here.
- *
- * `provider` narrows it further and is passed only when a project was chosen.
- * The narrowing is not extra caution: a machine that reported the provider
- * missing is a machine the hub refuses the start on, with that machine's own
- * sentence, and a menu that listed it would be a menu of one live option and
- * one apology. It is applied for a project start and not for every start
- * because a project start is the one the user is steering -- when the hub is
- * choosing, it already filters the candidates itself and an unusable machine
- * costs its own machine a start and never the store.
+ * Only servers that are attached to the store *and* connected right now: a
+ * start routed at a stale machine would be refused, and a form built on rows
+ * the hub will not use is a form whose every answer is an apology. The stale
+ * row keeps its providers -- that is what keeping it is for -- and none of them
+ * is on offer here.
  */
-export function serverOverrideChoices(
-  state: MachineState,
-  storeId: StoreId | null,
-  provider: Provider | null = null,
-): readonly ServerChoice[] {
-  if (storeId === null) return [];
+function liveServers(state: MachineState | null, storeId: StoreId | null): readonly ServerView[] {
+  if (state === null || storeId === null) return [];
   const store = state.stores.find((view) => view.storeId === storeId);
   if (store === undefined) return [];
-  const choices: ServerChoice[] = [];
+  const servers: ServerView[] = [];
   for (const id of store.servers) {
     const server = state.servers.find((view) => view.registrationId === id);
     if (server === undefined || server.phase !== 'connected') continue;
-    if (provider !== null && !runs(server.providers, provider)) continue;
-    choices.push({ id, label: server.label });
+    servers.push(server);
   }
-  return choices.length < 2 ? [] : choices;
+  return servers;
 }
 
 /**
- * Whether that machine said it can run this provider.
+ * Whether that machine said it can start this provider.
  *
- * `ready` and nothing else. A provider a server never mentioned is one it does
- * not run, and one it reported as missing or broken is one the start is refused
- * on -- the hub says so in the machine's own words, and this is the client
- * declining to offer the question.
+ * `readinessRefusal` and nothing of this file's own, which is the point: the
+ * hub decides a start with that same function, so a client with its own notion
+ * of startable would be a second rule free to drift from the one that actually
+ * answers. It is also why `unknown` counts -- the binary resolved, the hub will
+ * route to it, and a client that hid the machine would be stricter than the
+ * thing it is trying to agree with.
+ *
+ * A provider a server never mentioned is one it does not run: `undefined` here
+ * is a no, and the hub says the same in words.
  */
-function runs(
-  providers: readonly { readonly provider: Provider; readonly state: string }[],
-  provider: Provider,
-): boolean {
-  return providers.some((entry) => entry.provider === provider && entry.state === 'ready');
+function canStart(view: ServerView, provider: Provider): boolean {
+  const readiness = view.providers.find((entry) => entry.provider === provider);
+  return readiness !== undefined && readinessRefusal(readiness) === null;
+}
+
+/**
+ * The machines the user could override the hub's pick with, or `[]` when the
+ * control is not drawn.
+ *
+ * Below two live candidates there is no decision to override -- the hub's pick
+ * is the one machine -- so the control is not drawn, which is `[]` here.
+ *
+ * `provider` narrows what the drawn control offers, and it narrows it for every
+ * start rather than only for one in a project: the provider is the user's own
+ * choice now, and a machine that cannot honour it is a machine whose start the
+ * hub refuses in that machine's own words. The count is taken before the
+ * narrowing on purpose. A fleet where only one of four machines can run the
+ * chosen provider is worth seeing, and dropping the control instead would
+ * silently unchoose the machine the user had already picked.
+ *
+ * The narrowing can never drop that machine, because the provider on offer came
+ * from that machine: see `providerOffer`, and the order the form resolves the
+ * two choices in.
+ */
+export function serverOverrideChoices(
+  state: MachineState | null,
+  storeId: StoreId | null,
+  provider: Provider | null = null,
+): readonly ServerChoice[] {
+  const candidates = liveServers(state, storeId);
+  if (candidates.length < 2) return [];
+  return candidates
+    .filter((view) => provider === null || canStart(view, provider))
+    .map((view) => ({ id: view.registrationId, label: view.label }));
+}
+
+/** One provider the form may start, and what is odd about it. */
+export interface ProviderOption {
+  readonly provider: Provider;
+  /**
+   * What a machine could not tell about it, or `null`.
+   *
+   * Beside the option rather than in place of it. A provider whose version
+   * probe did not answer is still startable -- the program resolved -- and
+   * dropping it would turn "could not tell" into "no", which is the over-claim
+   * `readinessRefusal` exists to refuse. So it is offered, with the machine's
+   * own sentence next to it, and the person decides.
+   */
+  readonly caveat: string | null;
+}
+
+/**
+ * What the provider control may offer, and what to say about the rest.
+ *
+ * Both halves, because an empty list is not an answer a person can act on. A
+ * machine with no adapters in its build, a machine nobody has installed the
+ * program on, and a machine that is logged out are three different things to go
+ * and do, and each of them arrives here as the sentence the machine that took
+ * the reading wrote.
+ */
+export interface ProviderOffer {
+  /** What can be started, first seen first, in the hub's order of machines. */
+  readonly options: readonly ProviderOption[];
+  /** Why each provider that is not on the list is not, in the machine's words. */
+  readonly problems: readonly string[];
+}
+
+/**
+ * What the chosen machine -- or the whole store, when the hub is placing --
+ * says it can start.
+ *
+ * The union and not a static list, which is the ticket in one line: a server
+ * reports its readiness in its handshake, the hub holds it per server, and this
+ * is the first surface that asks it what to offer rather than assuming. With no
+ * machine chosen the union is over every live machine on the store, because
+ * that is exactly the set the hub will schedule onto; with one chosen it is
+ * that machine's own answer, because that is the only machine the start can
+ * reach.
+ *
+ * `problems` is reported for a provider nothing here can start, and not for one
+ * that some other machine can: a codex that is missing on one of three machines
+ * is not a problem to read about, it is a machine the list below has already
+ * dropped. The no-adapters line is held to the same rule -- it appears only when
+ * nothing at all is on offer, which is the one case where a build carrying no
+ * adapters is the answer rather than a detail.
+ */
+export function providerOffer(
+  state: MachineState | null,
+  storeId: StoreId | null,
+  server: ServerRegistrationId | null,
+): ProviderOffer {
+  const candidates = liveServers(state, storeId).filter(
+    (view) => server === null || view.registrationId === server,
+  );
+
+  const startable: Provider[] = [];
+  const caveats = new Map<Provider, string[]>();
+  for (const view of candidates) {
+    for (const readiness of view.providers) {
+      if (readinessRefusal(readiness) !== null) continue;
+      if (!startable.includes(readiness.provider)) startable.push(readiness.provider);
+      if (readiness.state === 'unknown' && readiness.problem !== null) {
+        caveats.set(readiness.provider, [
+          ...(caveats.get(readiness.provider) ?? []),
+          `${view.label}: ${readiness.problem}`,
+        ]);
+      }
+    }
+  }
+
+  const problems: string[] = [];
+  for (const view of candidates) {
+    if (view.providers.length === 0) {
+      // A build with no adapters, which is not a machine to go and fix: it is
+      // an agentplex that was built without them, and saying "claude is
+      // missing" about it would send somebody to install a program that would
+      // change nothing.
+      if (startable.length === 0) {
+        problems.push(
+          `${view.label} reports no providers: that build carries no provider adapters`,
+        );
+      }
+      continue;
+    }
+    for (const readiness of view.providers) {
+      if (startable.includes(readiness.provider)) continue;
+      const refusal = readinessRefusal(readiness);
+      if (refusal === null) continue;
+      problems.push(`${view.label} cannot run ${readiness.provider}: ${refusal}`);
+    }
+  }
+
+  return {
+    options: startable.map((provider) => ({
+      provider,
+      caveat: caveats.get(provider)?.join('; ') ?? null,
+    })),
+    problems,
+  };
+}
+
+/**
+ * Which provider this start carries, or `null` while the answer is not settled.
+ *
+ * The one-option rule, applied where the store picker applies it: a list with
+ * one entry is not a question, so it is the answer whatever was clicked before.
+ * Anything the current offer does not list is forgotten rather than sent -- the
+ * component keeps the click in case its option returns, and a choice that is
+ * not on offer is a start the hub would refuse.
+ */
+export function resolveProvider(offer: ProviderOffer, choice: string | null): Provider | null {
+  const [only] = offer.options;
+  if (offer.options.length === 1 && only !== undefined) return only.provider;
+  return offer.options.find((option) => option.provider === choice)?.provider ?? null;
 }
 
 /**
@@ -113,12 +260,17 @@ export function parsePrompt(text: string): string | null {
  *
  * `sessionId` is `null` because this flow only ever starts new sessions, and a
  * new session has no id to name: the provider mints its own and writes it, and
- * the hub learns it from the next scan. `provider` is fixed to claude -- on
- * the frame because every session names its provider, not drawn because a
- * control with one option is not drawn.
+ * the hub learns it from the next scan.
+ *
+ * `provider` is a parameter and sits next to the store, because those two are
+ * what this frame cannot be built without. It was the literal `'claude'` here,
+ * which made every session this client started a claude session however the
+ * machine was provisioned; `resolveProvider` decides it now, out of what the
+ * chosen machine says it can start.
  */
 export function buildStart(
   storeId: StoreId,
+  provider: Provider,
   server: ServerRegistrationId | null,
   promptText: string,
   project: NodeId | null = null,
@@ -127,7 +279,7 @@ export function buildStart(
     type: 'session-start',
     storeId,
     sessionId: null,
-    provider: 'claude',
+    provider,
     prompt: parsePrompt(promptText),
     server,
     // A node id and never a path. Which directory that project is, is the hub's
@@ -150,6 +302,8 @@ export function submitBlockedReason(
   phase: ConnectionPhase,
   stores: readonly StoreId[],
   chosen: StoreId | null,
+  offer: ProviderOffer,
+  provider: Provider | null,
 ): string | null {
   switch (phase) {
     case 'idle':
@@ -165,6 +319,10 @@ export function submitBlockedReason(
   }
   if (stores.length === 0) return 'no paired server reports a store to start in';
   if (chosen === null) return 'choose a store to start in';
+  // One sentence for the button, naming the controls it is about; what to go
+  // and do about it is `offer.problems`, drawn where the list would have been.
+  if (offer.options.length === 0) return 'no provider can be started with these choices';
+  if (provider === null) return 'choose a provider to run';
   return null;
 }
 

@@ -176,6 +176,44 @@ export function missingProvider(provider: Provider = 'claude'): ProviderReadines
 }
 
 /**
+ * What a preflight reports for a provider that is installed and logged out.
+ *
+ * Beside `missingProvider` because it is the other refusal, and a different
+ * thing for a person to do: the program is there, its version answered, and
+ * what is wanted is a login on that machine rather than an install. A caller
+ * that only ever built the missing reading would be testing one half of the
+ * refusal and imagining the other.
+ */
+export function unauthenticatedProvider(provider: Provider = 'claude'): ProviderReadiness {
+  return {
+    provider,
+    state: 'unauthenticated',
+    version: '9.9.9',
+    directory: '/home/robert/.agentplex/bin',
+    problem: `${provider} is installed and logged out; run its login on that machine`,
+  };
+}
+
+/**
+ * What a preflight reports for a provider it found and could not question.
+ *
+ * The reading that is deliberately not a refusal: the binary resolved, so a
+ * start reaches a program, and what could not be read is a version. A helper
+ * for the same reason the other two are -- every surface that offers a
+ * provider has to offer this one with its problem beside it, and a
+ * hand-written copy in each of them would drift.
+ */
+export function unknownProvider(provider: Provider = 'claude'): ProviderReadiness {
+  return {
+    provider,
+    state: 'unknown',
+    version: null,
+    directory: '/home/robert/.agentplex/bin',
+    problem: `${provider} could not report its version: it exited 1`,
+  };
+}
+
+/**
  * Provisioning for a provider that does not exist, installed by a package
  * manager that does not exist either.
  *

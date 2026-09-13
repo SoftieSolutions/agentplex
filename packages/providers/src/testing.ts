@@ -9,6 +9,8 @@ export {
   createFakeProviderAdapter,
   missingProvider,
   readyProvider,
+  unauthenticatedProvider,
+  unknownProvider,
 } from './fake-provider-adapter.js';
 export type { FakeProviderAdapter, FakeProviderAdapterOptions } from './fake-provider-adapter.js';
 
