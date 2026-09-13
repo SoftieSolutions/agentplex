@@ -9,6 +9,7 @@ import {
   type HubFrame,
   type HubId,
   type Layout,
+  type NodeId,
   type RefusalCode,
   type ServerRegistrationId,
   type SessionHolder,
@@ -145,7 +146,8 @@ export interface ClientConnectionDependencies {
    */
   readonly syncServers: () => Promise<void>;
   /**
-   * Browsing a server's directories, so the user can pick a project's.
+   * Projects: the rows a client makes and renames, and the browse a directory
+   * is picked with.
    *
    * A seam beside the sessions one and not folded into it, because they answer
    * different questions: which machine runs this, and which directory is this.
@@ -325,6 +327,7 @@ export function serveClientConnection(
           provider: frame.provider,
           prompt: frame.prompt,
           server: frame.server,
+          project: frame.project,
         });
         return;
       }
@@ -374,6 +377,27 @@ export function serveClientConnection(
         // stall every later frame on this socket behind it -- including this
         // client's own next step up the tree.
         void answerDirectoryList(frame.id, frame.server, frame.directory);
+        return;
+      }
+
+      case 'project-create': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a layout read is not: two statements
+        // against the database, and awaiting them here would stall every later
+        // frame on this socket behind one write.
+        void answerProjectCreate(frame.id, frame.name, frame.directory);
+        return;
+      }
+
+      case 'project-rename': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerProjectRename(frame.id, frame.nodeId, frame.name);
         return;
       }
 
@@ -628,6 +652,55 @@ export function serveClientConnection(
       logger.error('could not list a directory', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not list that directory');
+    }
+  }
+
+  /**
+   * Makes a project and answers the client that asked.
+   *
+   * The refusal carries no holder, like every refusal but a session's: a
+   * project has no live process to name. A throw is `internal` for the reason
+   * every other answer here gives -- the hub broke, retrying may work, and what
+   * broke inside its database is not a client's to render.
+   */
+  async function answerProjectCreate(
+    replyTo: FrameId,
+    name: string,
+    directory: string,
+  ): Promise<void> {
+    try {
+      const outcome = await projects.create({ name, directory });
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'project-created', replyTo, nodeId: outcome.nodeId });
+    } catch (error) {
+      logger.error('could not create a project', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not create that project');
+    }
+  }
+
+  /** Renames a project and answers the client that asked. */
+  async function answerProjectRename(
+    replyTo: FrameId,
+    nodeId: NodeId,
+    name: string,
+  ): Promise<void> {
+    try {
+      const outcome = await projects.rename(nodeId, name);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'node-renamed', replyTo });
+    } catch (error) {
+      logger.error('could not rename a project', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not rename that project');
     }
   }
 

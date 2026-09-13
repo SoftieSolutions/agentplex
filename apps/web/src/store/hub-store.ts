@@ -9,6 +9,7 @@ import {
   type HubId,
   type Layout,
   type MachineState,
+  type NodeId,
   type RefusalCode,
   type ServerRegistrationId,
   type SessionHolder,
@@ -158,6 +159,19 @@ export interface DirectoryListingView {
   readonly truncated: boolean;
 }
 
+/**
+ * The hub's answer to a project create, kept so the form that asked can act.
+ *
+ * The node id is what makes it worth keeping. A project is named by its id from
+ * then on -- a start names one -- and a form that had to find its own project
+ * back out of the next tree by name would be matching on the one field the user
+ * is free to change.
+ */
+export interface ProjectCreatedView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+}
+
 export interface HubSnapshot {
   readonly phase: ConnectionPhase;
   /** What is degraded, in words, or `null` while nothing is. */
@@ -192,6 +206,8 @@ export interface HubSnapshot {
   readonly lastStopped: StoppedView | null;
   /** The hub's most recent directory listing, kept until the next one. */
   readonly lastListing: DirectoryListingView | null;
+  /** The hub's most recent yes to a project create, kept until the next one. */
+  readonly lastProjectCreated: ProjectCreatedView | null;
 }
 
 /**
@@ -207,11 +223,21 @@ export interface HubSnapshot {
  * right place for it rather than the wrong one: a person browsing while the
  * connection blinks asked a question once, and the answer is as good a moment
  * later. It is not standing interest — nothing re-lists a directory on every
- * reconnection — so it is not a subscription.
+ * reconnection — so it is not a subscription. `project-create` and
+ * `project-rename` are commands for the plainest reason of all: each is
+ * something the user did once, and a queue is where a once-only intent waits.
  */
 type CommandFrame = Extract<
   ClientFrame,
-  { type: 'session-start' | 'session-stop' | 'pane-layout-save' | 'directory-list' }
+  {
+    type:
+      | 'session-start'
+      | 'session-stop'
+      | 'pane-layout-save'
+      | 'directory-list'
+      | 'project-create'
+      | 'project-rename';
+  }
 >;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type HubCommand = DistributiveOmit<CommandFrame, 'id'>;
@@ -341,6 +367,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastStarted: null,
     lastStopped: null,
     lastListing: null,
+    lastProjectCreated: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -554,6 +581,29 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         });
         return;
       }
+      case 'project-created': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastProjectCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
+        });
+        // The tree just changed on this client's own account, and there is no
+        // broadcast that says so yet -- `catalogue-changed` is its own ticket.
+        // Asking again here is the honest minimum: the project this client just
+        // made is the one it is about to need in a picker, and a screen that
+        // showed every project but the newest would be describing a tree from
+        // before the click that produced it.
+        requestLayout();
+        return;
+      }
+      case 'node-renamed': {
+        pending.delete(frame.replyTo);
+        // Same reason as above: the name on the screen came out of the layout,
+        // and the hub has just stored a different one.
+        update({ lastRefusal: null });
+        requestLayout();
+        return;
+      }
       case 'refusal': {
         pending.delete(frame.replyTo);
         // A refusal answers a request as surely as a reply does, and its words
@@ -590,6 +640,13 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         return;
       }
     }
+  }
+
+  /** Asks for the tree again, if anything is watching it. */
+  function requestLayout(): void {
+    const wire = socket;
+    if (wire === null || !established || layoutWatchers === 0) return;
+    wire.send(encodeClientFrame({ type: 'layout-request', id: frameIds.next() }));
   }
 
   function replaySubscriptions(): void {

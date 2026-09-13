@@ -3,6 +3,7 @@ import {
   DIRECTORY_ENTRIES_MAX,
   directoryListingFrameSchema,
   directorySchema,
+  normaliseDirectory,
 } from './directory.js';
 
 describe('directorySchema', () => {
@@ -76,5 +77,47 @@ describe('directoryListingFrameSchema', () => {
     expect(directoryListingFrameSchema.safeParse({ ...listing, roots: ['work'] }).success).toBe(
       false,
     );
+  });
+});
+
+/**
+ * The spelling two peers compare by.
+ *
+ * The claim that this is "the same normalisation the server's project key uses"
+ * is not made by a test here: it is made by `project-files.ts` calling this
+ * function, and checked against `node:path`'s own POSIX `normalize` in
+ * `apps/server/src/project-files.test.ts`, which is somewhere a Node builtin
+ * may be imported. This package is bundled into a browser and may import none.
+ */
+describe('normaliseDirectory', () => {
+  it('drops a trailing separator, so one directory is one project', () => {
+    expect(normaliseDirectory('/srv/work/')).toBe('/srv/work');
+    expect(normaliseDirectory('/srv/work')).toBe('/srv/work');
+  });
+
+  it('collapses a repeated separator and a redundant dot', () => {
+    expect(normaliseDirectory('/srv//work')).toBe('/srv/work');
+    expect(normaliseDirectory('/srv/./work')).toBe('/srv/work');
+  });
+
+  it('resolves a parent reference as a path resolver does', () => {
+    expect(normaliseDirectory('/srv/work/../other')).toBe('/srv/other');
+    // Past the root is the root, not a climb out of it. Nothing here touches a
+    // disk, so this is string semantics and not a containment decision -- the
+    // server's rule is what decides whether `/` may be spawned in.
+    expect(normaliseDirectory('/../..')).toBe('/');
+  });
+
+  it('leaves case, Unicode spelling and near-misses alone', () => {
+    // Folding any of these would put one project's sessions under another's on
+    // the systems where the paths are genuinely distinct.
+    expect(normaliseDirectory('/srv/Work')).toBe('/srv/Work');
+    expect(normaliseDirectory('/srv/work-secrets')).toBe('/srv/work-secrets');
+    expect(normaliseDirectory('/srv/..work')).toBe('/srv/..work');
+  });
+
+  it('answers the root for the paths that collapse to nothing', () => {
+    expect(normaliseDirectory('/')).toBe('/');
+    expect(normaliseDirectory('//')).toBe('/');
   });
 });

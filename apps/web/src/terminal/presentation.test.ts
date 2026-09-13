@@ -111,6 +111,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastStarted: null,
     lastStopped: null,
     lastListing: null,
+    lastProjectCreated: null,
     ...overrides,
   };
 }

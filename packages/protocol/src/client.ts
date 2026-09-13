@@ -3,12 +3,13 @@ import { directoryListingFrameSchema, directorySchema } from './directory.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import {
   hubIdSchema,
+  nodeIdSchema,
   providerSchema,
   serverRegistrationIdSchema,
   sessionIdSchema,
   storeIdSchema,
 } from './identity.js';
-import { layoutSchema } from './layout.js';
+import { layoutSchema, nodeNameTextSchema } from './layout.js';
 import { machineStateSchema, sessionHolderSchema } from './machine-state.js';
 import {
   SERVER_ADDRESS_MAX_CHARS,
@@ -153,6 +154,23 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     prompt: z.string().min(1).nullable(),
     /** The user's choice of machine, or `null` to let the hub schedule it. */
     server: serverRegistrationIdSchema.nullable(),
+    /**
+     * The project to start in, or `null` for the store's own directory.
+     *
+     * A node id and not a directory, which is the difference between this and
+     * `directory-list` above. A project is a row this hub owns: the client
+     * names it, the hub resolves the directory out of its own database, and the
+     * directory that reaches a server is one that was chosen by browsing that
+     * server's roots rather than typed into a frame. A client that could put
+     * the path here would be a client choosing the cwd, which is the surface
+     * the rule exists to keep shut -- so the field that crosses is an id, and
+     * the only party that turns one into a path is the party holding the rows.
+     *
+     * `null` is what a start has always been: the server resolves the store's
+     * own directory and spawns there. Both remain, because a session that
+     * belongs to no project is the ordinary case and not a degraded one.
+     */
+    project: nodeIdSchema.nullable(),
   }),
   /**
    * Asks the hub to stop a session.
@@ -254,6 +272,53 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     id: frameIdSchema,
     server: serverRegistrationIdSchema,
     directory: directorySchema.nullable(),
+  }),
+  /**
+   * Makes a project: a name, and a directory on some machine.
+   *
+   * No server is named, and that is the decision rather than an omission. A
+   * project is a directory, and a directory is a path -- more than one machine
+   * may have the same checkout at the same path, and a laptop that is asleep
+   * when the project is made is a machine that may run it tomorrow. Binding a
+   * project to the machine its directory happened to be browsed on would make
+   * the project as reachable as that one box, which is not what the user chose.
+   *
+   * So the directory is not checked against any server's roots here. It cannot
+   * be: no server is named, and the hub does not hold anybody else's root list
+   * -- that list is the server operator's and a copy of it here would be a
+   * second answer to a question only one machine can answer. The check happens
+   * where it can, at the moment a session is actually started in the project,
+   * on the machine that is about to spawn.
+   *
+   * `directory` is parsed by `directorySchema` like every other one on this
+   * wire: absolute, no NUL. The hub normalises it before storing, so that one
+   * directory is one project however it was spelled.
+   */
+  z.object({
+    type: z.literal('project-create'),
+    id: frameIdSchema,
+    name: nodeNameTextSchema,
+    directory: directorySchema,
+  }),
+  /**
+   * Renames a project, and nothing else about it.
+   *
+   * The directory is not here and never will be. A project's directory is what
+   * the project *is* -- the sessions under it are the ones reported from it,
+   * and the file store on the server is keyed by it -- so changing it would not
+   * be an edit to a project but a different project wearing the old one's
+   * children. Making another is the honest way to say that, and it is one
+   * frame away.
+   *
+   * It is answered with `node-renamed`, which names no kind: renaming is one
+   * act on the tree whatever the node is, and AGX-239's generic node mutations
+   * reuse this reply rather than minting a second word for the same yes.
+   */
+  z.object({
+    type: z.literal('project-rename'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+    name: nodeNameTextSchema,
   }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
@@ -436,6 +501,32 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
    * renders the sentence.
    */
   directoryListingFrameSchema,
+  /**
+   * The project exists, and this is the node it is.
+   *
+   * The id is carried rather than left to be found in the next layout, because
+   * it is the one thing the client cannot work out for itself: a project is
+   * named by a node id from here on -- a start names one -- and a client that
+   * had to match its own project back out of a tree by name would be matching
+   * on the one field the user is free to change.
+   */
+  z.object({
+    type: z.literal('project-created'),
+    replyTo: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
+  /**
+   * The node is now called what was asked, and there is nothing else to say.
+   *
+   * It carries no name, because the client sent it and the hub stored exactly
+   * that; and no kind, because a rename is one act on the tree whatever the
+   * node is. AGX-239 answers its own renames with this frame rather than a
+   * second one, which is why it is named for the act and not for the caller.
+   */
+  z.object({
+    type: z.literal('node-renamed'),
+    replyTo: frameIdSchema,
+  }),
   protocolErrorFrameSchema,
 ]);
 export type HubFrame = z.infer<typeof hubFrameSchema>;

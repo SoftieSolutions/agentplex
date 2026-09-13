@@ -152,3 +152,48 @@ export const directoryListingFrameSchema = z.object({
   truncated: z.boolean(),
 });
 export type DirectoryListingFrame = z.infer<typeof directoryListingFrameSchema>;
+
+/**
+ * The one spelling of a directory two peers compare by.
+ *
+ * `directorySchema` says what a directory may be; this says which of several
+ * spellings of one directory is the one anything stores or compares. They are
+ * different jobs and the second only exists because two things now have to
+ * agree about sameness across a wire: the hub files a session under a project
+ * when the `cwd` the server reported *is* the project's directory, and the
+ * server derives a project file store's key from the same string. A comparison
+ * of raw paths would make `/srv/work` and `/srv/work/` two projects, which is
+ * a distinction no filesystem draws and no person intends.
+ *
+ * Only the normalisation POSIX itself defines is applied -- a redundant `.`, a
+ * resolved `..`, a repeated or trailing separator -- because that is string
+ * semantics rather than a guess about a filesystem. Nothing here touches a
+ * disk, and that is deliberate in both directions: a project whose directory
+ * has been deleted still has a directory, and `..` past the root resolves to
+ * the root the way every POSIX path resolver does rather than climbing out.
+ *
+ * What is deliberately *not* folded: case, Unicode spelling, and symlinks.
+ * `/srv/Work` and `/srv/work` are one directory on macOS and two on Linux, the
+ * two byte spellings of `café` likewise, and two paths through a link to one
+ * directory are one directory to the kernel. Folding any of them would put one
+ * project's sessions under another's on the systems where they are genuinely
+ * distinct, which is a leak; keeping them apart costs a duplicate project on
+ * the systems where they are not, which is visible and harmless.
+ *
+ * Written as string work rather than as `node:path`, because this module is
+ * bundled into a browser as well as loaded by both services -- and checked
+ * against `node:path`'s POSIX `normalize` at the origin, over the cases in
+ * `directory.test.ts`.
+ */
+export function normaliseDirectory(directory: string): string {
+  const segments: string[] = [];
+  for (const segment of directory.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return `/${segments.join('/')}`;
+}

@@ -29,6 +29,9 @@ import { drainingSessions } from '../../../apps/server/src/drain.js';
 import type { HubConnection } from '../../../apps/server/src/hub-connection.js';
 import { createSessionController } from '../../../apps/server/src/session-control.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
+import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake-projects.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 import {
   createTerminalManager,
@@ -182,6 +185,9 @@ function serveMachine(machine: Machine): DialResult {
       providers: createProviderRegistry([createFakeProviderAdapter({ provider: 'claude', files })]),
       terminals: machine.terminals,
       workingTree: createFakeWorkingTree(),
+      // No roots, which is the default a server ships with: this suite is about
+      // draining, and a start here names no project to be bounded against.
+      browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
       clock,
       logger,
     }),
@@ -242,7 +248,9 @@ async function start(): Promise<Harness> {
   await connections.sync();
   return {
     state,
-    sessions: createSessions({ state, connections, logger }),
+    // A fake project table: nothing here starts in a project, and the rows are
+    // the project suites' subject.
+    sessions: createSessions({ state, projects: createFakeProjects(), connections, logger }),
     connections,
     machine,
     timers,
@@ -301,6 +309,7 @@ async function startSession(sessionId = BUSY): Promise<void> {
     provider: 'claude',
     prompt: null,
     server: null,
+    project: null,
   });
   if (!outcome.ok) throw new Error(`the start was refused: ${outcome.problem}`);
   await until(() => sessionRow(sessionId)?.holder !== null, `${sessionId} to be held`);
@@ -366,6 +375,7 @@ describe('a server that says it is shutting down', () => {
       provider: 'claude',
       prompt: null,
       server: null,
+      project: null,
     });
     const overridden = await held().sessions.start({
       storeId: WORK,
@@ -373,6 +383,7 @@ describe('a server that says it is shutting down', () => {
       provider: 'claude',
       prompt: null,
       server: ATTIC,
+      project: null,
     });
 
     for (const refused of [scheduled, overridden]) {

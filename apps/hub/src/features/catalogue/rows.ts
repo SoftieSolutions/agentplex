@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  NODE_NAME_MAX_CHARS,
   nodeIdSchema,
   nodeKindSchema,
   sessionIdSchema,
@@ -113,8 +114,15 @@ export const SESSION_KIND: NodeKind = nodeKindSchema.parse('session');
 /** The kind the user's containers get. */
 export const FOLDER_KIND: NodeKind = nodeKindSchema.parse('folder');
 
-/** What a node may be called. Trimmed, because a name of spaces is not a name. */
-export const nodeNameSchema = z.string().trim().min(1).max(200);
+/**
+ * What a node may be called. Trimmed, because a name of spaces is not a name.
+ *
+ * The bound is the protocol's, so that the wire and the column agree about how
+ * long a name may be; the trim and the minimum are this side's, because they
+ * are a judgement and a frame's parser refusing one would be a closed socket
+ * rather than a sentence. `layout.ts` in the protocol carries that argument.
+ */
+export const nodeNameSchema = z.string().trim().min(1).max(NODE_NAME_MAX_CHARS);
 
 export const removalRowSchema = z
   .object({

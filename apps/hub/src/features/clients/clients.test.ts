@@ -644,6 +644,7 @@ describe('starting and stopping a session', () => {
       provider: 'claude',
       prompt: null,
       server: null,
+      project: null,
     });
 
     expect(client.received.at(-1)).toEqual({
@@ -661,6 +662,7 @@ describe('starting and stopping a session', () => {
         provider: 'claude',
         prompt: null,
         server: null,
+        project: null,
       },
     ]);
   });
@@ -688,6 +690,7 @@ describe('starting and stopping a session', () => {
       provider: 'claude',
       prompt: null,
       server: null,
+      project: null,
     });
 
     expect(asking.received.at(-1)).toEqual({
@@ -738,10 +741,111 @@ describe('starting and stopping a session', () => {
       provider: 'claude',
       prompt: null,
       server: null,
+      project: null,
     });
 
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
     expect(sessions.starts).toEqual([]);
+    expect(client.socket.closure).not.toBeNull();
+  });
+});
+
+/**
+ * The project frames, as this socket sees them.
+ *
+ * What the rows actually do is the projects feature's own suite, against a real
+ * schema, and end to end in `tests/hub-server`. What is asked here is the part
+ * only a connection can answer: which client is told, in what words, and that a
+ * refusal is a reply rather than a closed socket.
+ */
+describe('making and renaming a project', () => {
+  it('answers the client that asked with the node id it will name it by', async () => {
+    const { broadcast, projects } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'project-create',
+      id: 2,
+      name: 'agentplex',
+      directory: '/srv/work/agentplex',
+    });
+
+    expect(projects.created).toEqual([
+      { nodeId: 'project-1', name: 'agentplex', directory: '/srv/work/agentplex' },
+    ]);
+    expect(client.received.at(-1)).toEqual({
+      type: 'project-created',
+      replyTo: 2,
+      nodeId: 'project-1',
+    });
+  });
+
+  /**
+   * A blank name is a refusal in words and not a closed connection.
+   *
+   * The wire schema bounds a name's length and judges nothing else, precisely
+   * so that this case can be answered: a parser that refused it would refuse
+   * the frame, and a frame the hub cannot read has an id the hub cannot reply
+   * to. See `layout.ts` for the argument.
+   */
+  it('refuses a blank name in a sentence, leaving the connection open', async () => {
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'project-create', id: 2, name: '   ', directory: '/srv/work' });
+
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+      holder: null,
+    });
+    expect(client.socket.closure).toBeNull();
+  });
+
+  it('passes the duplicate refusal back, naming nothing else', async () => {
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'project-create', id: 2, name: 'one', directory: '/srv/work' });
+    await client.say({ type: 'project-create', id: 3, name: 'two', directory: '/srv/work' });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 3, code: 'refused' });
+  });
+
+  it('answers a rename with the frame that names the act rather than the kind', async () => {
+    const { broadcast, projects } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    await client.say({ type: 'project-create', id: 2, name: 'agentplex', directory: '/srv/work' });
+
+    await client.say({ type: 'project-rename', id: 3, nodeId: 'project-1', name: 'the checkout' });
+
+    expect(projects.renamed).toEqual([{ nodeId: 'project-1', name: 'the checkout' }]);
+    expect(client.received.at(-1)).toEqual({ type: 'node-renamed', replyTo: 3 });
+  });
+
+  it('refuses a rename of a node this hub does not have', async () => {
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'project-rename', id: 2, nodeId: 'project-nowhere', name: 'x' });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 2, code: 'refused' });
+  });
+
+  it('refuses a project frame that arrives before hello, and makes nothing', async () => {
+    const { broadcast, projects } = harness();
+    const client = attach(broadcast);
+
+    await client.say({ type: 'project-create', id: 1, name: 'agentplex', directory: '/srv/work' });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+    expect(projects.created).toEqual([]);
     expect(client.socket.closure).not.toBeNull();
   });
 });
