@@ -11,6 +11,7 @@ import type {
   ServerToHubFrame,
   SessionDescriptor,
   SessionHold,
+  SessionStartTag,
   StoreId,
 } from '@agentplex/protocol';
 import type { Clock, Logger, SocketDialer, Timers } from '@agentplex/node-shared';
@@ -208,6 +209,55 @@ export type ServerAnswer = Extract<
 >;
 
 /**
+ * What the hub puts to a server about one of its terminals.
+ *
+ * The four terminal frames the hub sends, minus the id, for the reason an
+ * instruction is one: a frame id is unique within a connection and only the
+ * connection can mint one. Kept apart from `ServerInstruction` because the two
+ * are answered differently -- a start has exactly one reply, and two of these
+ * have no reply at all when they work.
+ */
+export type StreamInstruction = WithoutFrameId<
+  Extract<
+    HubToServerFrame,
+    { type: 'session-subscribe' | 'session-unsubscribe' | 'terminal-input' | 'terminal-resize' }
+  >
+>;
+
+/** What a server answers a subscribe or an unsubscribe with when it did it. */
+export type StreamAnswer = Extract<
+  ServerToHubFrame,
+  { type: 'session-subscribed' | 'session-unsubscribed' }
+>;
+
+/**
+ * One chunk of a terminal's output, exactly as the frame carries it.
+ *
+ * On the entry file because the relay reads one, and a feature reaches this one
+ * through this file alone. Derived from the wire union rather than restated,
+ * which is the same reason the instructions above are: a field added to the
+ * frame is a field this carries, without an edit and without a second shape to
+ * keep in step with the first.
+ */
+export type TerminalOutputFrame = Extract<ServerToHubFrame, { type: 'terminal-output' }>;
+
+/**
+ * What came back about a terminal frame, as a value.
+ *
+ * `answer` is `null` when the server said nothing at all, which is what success
+ * looks like for an input and a resize: a terminal acknowledges a keystroke by
+ * echoing it, and only a write that could not be delivered gets a frame. So
+ * that case is settled by a deadline rather than by a reply, and whoever wanted
+ * to hear about a failure has by then heard everything there was.
+ *
+ * It carries no `hold`. A hold names the machine already running a session,
+ * which is an answer to "may I start this" and never to "may I watch it".
+ */
+export type StreamOutcome =
+  | { readonly ok: true; readonly answer: StreamAnswer | null }
+  | { readonly ok: false; readonly code: RefusalCode; readonly problem: string };
+
+/**
  * What came back, as a value.
  *
  * A refusal is not an exception: a server saying "that session is already
@@ -230,6 +280,17 @@ export interface ServerStoreReport {
   readonly storeId: StoreId;
   readonly sessions: readonly SessionDescriptor[];
   readonly holding: readonly SessionHold[];
+  /**
+   * Which of this hub's starts produced which session, for as long as that is
+   * not obvious.
+   *
+   * Carried through rather than dropped here because it has a reader now: the
+   * relay watches a spawn by the start handle that asked for it, and this is
+   * the frame that says which session that start became. The reducer wants
+   * none of it -- a start is not a session and a tag is not a row -- so it goes
+   * past the reducer to the one feature that needs it.
+   */
+  readonly starts: readonly SessionStartTag[];
 }
 
 export interface ServersDependencies {
@@ -261,6 +322,18 @@ export interface ServersDependencies {
   readonly onChange?: (report: ServerConnectionReport) => void;
   /** Called with every store report any server sends. The fleet state's other seam. */
   readonly onReport?: (report: ServerStoreReport) => void;
+  /**
+   * Called with every chunk of terminal output any server sends. The relay's
+   * seam.
+   *
+   * Synchronous, and it matters here more than anywhere else in this file: the
+   * history a subscription replays travels on this frame, in order, straight
+   * after the reply that says how many frames of it there are. Anything that
+   * deferred one of these would reorder a terminal, and a terminal read out of
+   * order is not a slightly wrong terminal -- an escape sequence that arrives
+   * after what it was meant to position paints somewhere else.
+   */
+  readonly onStream?: (registrationId: ServerRegistrationId, output: TerminalOutputFrame) => void;
   readonly instructionTimeoutMs?: number;
 }
 
@@ -307,6 +380,27 @@ export interface Servers {
     registrationId: ServerRegistrationId,
     instruction: ServerInstruction,
   ): Promise<InstructionOutcome>;
+  /**
+   * Puts a terminal frame to one paired server, and calls back with what it
+   * said.
+   *
+   * A callback and not a promise, which is the one thing about this seam worth
+   * arguing. A promise settles on a microtask, and a server writes a
+   * subscription's reply and the scrollback it promised in the same turn: a
+   * relay that resolved a promise would send a client its history before the
+   * frame that says how much history there is, and the count on that frame
+   * would be a lie about frames the client had already been given. Answering
+   * where the frame is read keeps the relay in the order the wire was in.
+   *
+   * A server this hub has no connection to is a refusal rather than a throw,
+   * for the reason `ask` gives: there is a client waiting for a sentence either
+   * way, and a machine that is asleep is the ordinary state of a laptop.
+   */
+  stream(
+    registrationId: ServerRegistrationId,
+    frame: StreamInstruction,
+    answer: (outcome: StreamOutcome) => void,
+  ): void;
   stop(): Promise<void>;
 }
 
@@ -393,6 +487,7 @@ export function createServers(dependencies: ServersDependencies): Servers {
             : { refusedRetryMs: dependencies.refusedRetryMs }),
           ...(dependencies.onChange === undefined ? {} : { onChange: dependencies.onChange }),
           ...(dependencies.onReport === undefined ? {} : { onReport: dependencies.onReport }),
+          ...(dependencies.onStream === undefined ? {} : { onStream: dependencies.onStream }),
         }),
       );
     }
@@ -423,6 +518,19 @@ export function createServers(dependencies: ServersDependencies): Servers {
         });
       }
       return connection.ask(instruction);
+    },
+
+    stream(
+      registrationId: ServerRegistrationId,
+      frame: StreamInstruction,
+      answer: (outcome: StreamOutcome) => void,
+    ): void {
+      const connection = connections.get(registrationId);
+      if (connection === undefined) {
+        answer({ ok: false, code: 'refused', problem: 'this hub has no such server paired' });
+        return;
+      }
+      connection.stream(frame, answer);
     },
 
     async stop(): Promise<void> {

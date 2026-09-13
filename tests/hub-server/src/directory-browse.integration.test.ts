@@ -27,6 +27,7 @@ import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directo
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake-terminal.js';
 import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
 import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
@@ -229,6 +230,9 @@ async function start(roots: readonly string[]): Promise<Harness> {
     // when a seam is not its subject. The real one is driven end to end in
     // `docs.integration.test.ts`.
     docs: createFakeDocs(),
+    // Nothing in this file subscribes to a terminal; the relay is here because
+    // a broadcast without one is not the broadcast the hub builds.
+    terminal: createFakeTerminal(),
   });
 
   await connections.sync();

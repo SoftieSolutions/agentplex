@@ -33,6 +33,7 @@ import { createDocs } from './features/docs/docs.js';
 import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
+import { createTerminal } from './features/terminal/terminal.js';
 import { createWeb, type WebAssetFileSystem } from './features/web/web.js';
 import { createHubRoutes } from './http/routes.js';
 import { ensureHubIdentity } from './hub-identity.js';
@@ -292,8 +293,21 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // what happens after that. A failed one costs this store's tree update
       // and is logged where it happened.
       if (accepted) void catalogue.observe(report.storeId);
+      // The one part of a report the reducer wants nothing to do with: a start
+      // is not a session and a tag is not a row. It goes to the relay, which is
+      // the only thing that has been waiting to hear which session a spawn it
+      // is already showing turned out to be.
+      terminal.noteStarts(report.registrationId, report.storeId, report.starts);
     },
+    onStream: (registrationId, output) => terminal.deliver(registrationId, output),
   });
+
+  // Named in the closures above before it is built, which is the shape of the
+  // one knot in this file: the relay puts frames to servers and the servers
+  // hand it what arrives, so one of the two has to be written down first.
+  // Neither closure can run before both exist -- a server says nothing until
+  // `sync` below dials one.
+  const terminal = createTerminal({ state, servers, logger });
 
   // Projects: the rows a user makes, and the browse a directory is picked with.
   // The rule about which directories may be browsed is not this hub's -- it is
@@ -362,6 +376,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     projects,
     catalogue,
     docs,
+    terminal,
   });
 
   // Not awaited past its first read of the pairing table, and started before

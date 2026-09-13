@@ -5,19 +5,24 @@ import {
   storeIdSchema,
   type ServerToHubFrame,
 } from '@agentplex/protocol';
-import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { routeServerFrame, type DrainingNotice, type StoreReport } from './frame-router.js';
-import type { InstructionOutcome } from './servers.js';
+import type { InstructionOutcome, StreamAnswer, TerminalOutputFrame } from './servers.js';
 
 /**
  * What a server says, and where each of it goes.
  *
- * The half of this suite that is about silence is the half worth having. Three
- * frames in the protocol have no handler in this build -- the ones the terminal
- * relay is made of -- and until the switch became exhaustive they parsed
- * cleanly and vanished with nothing anywhere saying so. A drop is now a debug
- * line that names the frame, which is the difference between "this build does
- * not do that yet" and "something ate a frame".
+ * Every frame the protocol carries now has somewhere to go, and the thing
+ * worth asserting about them is that they go to different places: a document
+ * reply and a start's are both answers to whoever asked, a drain notice is the
+ * dial loop's, a subscription's reply is settled by whoever asked for the
+ * watch, and a chunk of output is a stream nobody asked for. Telling those
+ * apart is this file's job, not the transport's.
+ *
+ * What used to be the half of this suite worth having was the half about
+ * silence: frames that parsed cleanly and vanished, and the debug line that
+ * said so. There is nothing left for this build to drop, so that half is gone
+ * and the exhaustiveness check is what stands in its place -- a frame added to
+ * the protocol with no case fails typecheck rather than a test.
  */
 
 const STORE = storeIdSchema.parse('store-work');
@@ -27,27 +32,26 @@ interface Routed {
   readonly answers: readonly { replyTo: number; outcome: InstructionOutcome }[];
   readonly reports: readonly StoreReport[];
   readonly drains: readonly DrainingNotice[];
-  readonly logged: readonly LogRecord[];
+  readonly streamAnswers: readonly { replyTo: number; answer: StreamAnswer }[];
+  readonly output: readonly TerminalOutputFrame[];
 }
 
 function route(frame: ServerToHubFrame): Routed {
   const answers: { replyTo: number; outcome: InstructionOutcome }[] = [];
   const reports: StoreReport[] = [];
   const drains: DrainingNotice[] = [];
-  const logged: LogRecord[] = [];
-  const logger = createLogger('debug', (record) => logged.push(record));
+  const streamAnswers: { replyTo: number; answer: StreamAnswer }[] = [];
+  const output: TerminalOutputFrame[] = [];
 
-  routeServerFrame(
-    frame,
-    {
-      onAnswer: (replyTo, outcome) => answers.push({ replyTo, outcome }),
-      onReport: (report) => reports.push(report),
-      onDraining: (notice) => drains.push(notice),
-    },
-    logger,
-  );
+  routeServerFrame(frame, {
+    onAnswer: (replyTo, outcome) => answers.push({ replyTo, outcome }),
+    onReport: (report) => reports.push(report),
+    onDraining: (notice) => drains.push(notice),
+    onStreamAnswer: (replyTo, answer) => streamAnswers.push({ replyTo, answer }),
+    onOutput: (chunk) => output.push(chunk),
+  });
 
-  return { answers, reports, drains, logged };
+  return { answers, reports, drains, streamAnswers, output };
 }
 
 describe('an answer to an instruction', () => {
@@ -109,7 +113,6 @@ describe('an answer to an instruction', () => {
     expect(routed.answers).toEqual([
       { replyTo: 'replyTo' in frame ? frame.replyTo : 0, outcome: { ok: true, answer: frame } },
     ]);
-    expect(routed.logged).toEqual([]);
   });
 });
 
@@ -146,47 +149,52 @@ describe('a drain notice', () => {
     expect(routed.drains).toEqual([frame]);
     expect(routed.answers).toEqual([]);
     expect(routed.reports).toEqual([]);
-    // Not a drop, so nothing says it was one: the debug line below means "this
-    // build is behind that server", and a drain that logged it would make the
-    // line mean nothing.
-    expect(routed.logged).toEqual([]);
   });
 });
 
-describe('a frame this build has no handler for', () => {
-  const unhandled: readonly ServerToHubFrame[] = [
+describe("a subscription's reply", () => {
+  const replies: readonly StreamAnswer[] = [
     {
       type: 'session-subscribed',
       replyTo: 6,
       storeId: STORE,
       sessionId: SESSION,
       startId: null,
-      replayChunks: 0,
-      droppedBytes: 0,
+      replayChunks: 2,
+      droppedBytes: 4_096,
     },
     { type: 'session-unsubscribed', replyTo: 7 },
-    {
+  ];
+
+  it.each(replies)('goes to whoever asked, and not to the instruction channel', (frame) => {
+    const routed = route(frame);
+
+    expect(routed.streamAnswers).toEqual([{ replyTo: frame.replyTo, answer: frame }]);
+    // The one thing worth stating twice: a subscription is not an instruction,
+    // and a hub that settled one with the other would resolve a start with a
+    // reply to a watch.
+    expect(routed.answers).toEqual([]);
+  });
+});
+
+describe('a chunk of terminal output', () => {
+  it('goes to the relay whole, answers nobody, and is not read on the way', () => {
+    const chunk = encodeTerminalChunk(new TextEncoder().encode('ok\r\n'));
+    const frame: TerminalOutputFrame = {
       type: 'terminal-output',
       storeId: STORE,
       sessionId: SESSION,
       startId: null,
-      chunk: encodeTerminalChunk(new TextEncoder().encode('ok\r\n')),
+      chunk,
       droppedChunks: 0,
-    },
-  ];
+    };
 
-  it.each(unhandled)('says so at debug rather than dropping $type in silence', (frame) => {
     const routed = route(frame);
 
+    expect(routed.output).toEqual([frame]);
+    expect(routed.output[0]?.chunk).toBe(chunk);
     expect(routed.answers).toEqual([]);
-    expect(routed.reports).toEqual([]);
-    expect(routed.logged).toEqual([
-      {
-        level: 'debug',
-        message: 'frame dropped: this hub build does not handle it yet',
-        fields: { type: frame.type },
-      },
-    ]);
+    expect(routed.streamAnswers).toEqual([]);
   });
 });
 
@@ -206,13 +214,11 @@ describe('a frame that belongs to something other than this switch', () => {
 
   it.each(elsewhere)('passes over $type without a word, because it is not a drop', (frame) => {
     // The handshake's frames belong to a handshake that is over and `pong`
-    // belongs to the heartbeat reading the same socket. Logging these would
-    // make the drop line above mean nothing: it is meant to be read as "this
-    // build is behind that server", and a line per heartbeat would bury it.
+    // belongs to the heartbeat reading the same socket. Neither is this
+    // switch's, and passing over one is not the same as losing it.
     const routed = route(frame);
 
     expect(routed.answers).toEqual([]);
     expect(routed.reports).toEqual([]);
-    expect(routed.logged).toEqual([]);
   });
 });
