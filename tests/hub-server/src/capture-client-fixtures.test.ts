@@ -311,6 +311,21 @@ async function until(predicate: () => boolean, what: string | (() => string)): P
   throw new Error(`timed out waiting for ${typeof what === 'function' ? what() : what}`);
 }
 
+/**
+ * A hub id source that counts, which is what every capture but one wants.
+ *
+ * Counted rather than constant, because the hub's id source is also where a
+ * node in the tree gets its primary key: with discovery wired to the report
+ * seam (AGX-90), a fleet that reports two sessions mints two node ids, and a
+ * source that answered both with one string would have the second insert
+ * collide and take the whole reading down with it. The hub's own identity takes
+ * the first; every one after it is a node.
+ */
+function countingHubIds(): () => string {
+  let minted = 0;
+  return () => `hub-${(minted += 1)}`;
+}
+
 /** A hub over a real migrated SQLite file, dialling the given fleet. */
 async function startFleetHub(
   machines: Map<string, Machine>,
@@ -318,11 +333,11 @@ async function startFleetHub(
   live: Map<string, MessageSocket>,
   discovery: FakeBeaconSource = createFakeBeaconSource(),
   /**
-   * What a pairing made over the wire is keyed by. Only the pairing capture
-   * needs one: every other hub here has its registrations written before it
-   * starts, with the id spelled out at the call site.
+   * The hub's id source. Only the pairing capture supplies one: every other hub
+   * here wants the counter below, which is what the hub is given when it starts
+   * for real.
    */
-  newRegistrationId: () => string = () => 'hub-1',
+  newRegistrationId: () => string = countingHubIds(),
   /** Each machine's own end, for the capture that needs a server to announce a drain. */
   served: Map<string, HubConnection> = new Map(),
 ): Promise<{ hub: Hub; cleanup: () => Promise<void> }> {
@@ -912,7 +927,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
       new Map(),
       createFakeBeaconSource(),
-      () => 'hub-1',
+      countingHubIds(),
       drainingServed,
     );
     await until(

@@ -5,7 +5,7 @@ import {
   type SessionId,
   type SessionRef,
 } from '@agentplex/protocol';
-import type { Database, Queryable } from '../../db/database.js';
+import type { Queryable } from '../../db/database.js';
 import type { PruneOutcome, StoreScan } from './catalogue.js';
 
 /**
@@ -58,9 +58,13 @@ const NOTHING: PruneOutcome = { pruned: [], forgotten: [] };
  * it would mean that a store which came back -- restored from a backup,
  * re-attached after a rebuild -- had every one of its sessions permanently
  * suppressed by an outage.
+ *
+ * A `Queryable` and not a `Database`, so the transaction is the caller's:
+ * `catalogue.ts` runs the placements and this sweep in one, because they are
+ * two halves of one reading.
  */
 export async function pruneNodes(
-  database: Database,
+  database: Queryable,
   scan: readonly StoreScan[],
 ): Promise<PruneOutcome> {
   // The named case, and it is already implied by the loop below: with no stores
@@ -70,17 +74,15 @@ export async function pruneNodes(
   // edit can lose without noticing.
   if (scan.length === 0) return NOTHING;
 
-  return database.transaction(async (tx) => {
-    const pruned: SessionRef[] = [];
-    const forgotten: SessionRef[] = [];
+  const pruned: SessionRef[] = [];
+  const forgotten: SessionRef[] = [];
 
-    for (const store of scan) {
-      pruned.push(...(await sweepNodes(tx, store)));
-      forgotten.push(...(await sweepRemovals(tx, store)));
-    }
+  for (const store of scan) {
+    pruned.push(...(await sweepNodes(database, store)));
+    forgotten.push(...(await sweepRemovals(database, store)));
+  }
 
-    return { pruned, forgotten };
-  });
+  return { pruned, forgotten };
 }
 
 /**
