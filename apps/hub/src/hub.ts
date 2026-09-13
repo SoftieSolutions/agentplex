@@ -214,6 +214,25 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   const beacons = createDiscovery({ source: discovery, clock, timers, logger });
   beacons.subscribe((candidates) => void state.applyCandidates(candidates));
 
+  // The tree, read from the database per request rather than held in memory
+  // beside the fleet state. It is durable and the fleet state is not: where the
+  // user put things survives a restart, and which sessions are reachable this
+  // second does not.
+  //
+  // Built before the servers feature for the reason the fleet state is: it is
+  // told about a store the moment one is read, and a report that arrived before
+  // there was anywhere to put it would leave the tree behind until the next
+  // one. It reads a store through the reducer rather than from the report,
+  // which is the decision `catalogue.ts` argues: the tree follows what the hub
+  // believes is in a store, not what the one server that spoke last could see.
+  const catalogue = createCatalogue({
+    database,
+    ids,
+    clock,
+    logger,
+    readStore: (storeId) => state.storeSessions(storeId),
+  });
+
   // Constructed here and dialling nothing yet. That is what the split between
   // building this and calling `sync` below buys: everything that has to see a
   // connectivity change -- the fleet state, and the broadcast attached to it --
@@ -227,26 +246,34 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     clock,
     logger,
     onChange: (report) => state.applyConnection(report),
-    // Stamped with the hub's clock and not the server's. Two machines' clocks
-    // disagree, and a hub comparing readings dated by the machines that made
-    // them is comparing two different times.
-    onReport: (report) =>
-      void state.applySessions({
+    onReport: (report) => {
+      // Stamped with the hub's clock and not the server's. Two machines' clocks
+      // disagree, and a hub comparing readings dated by the machines that made
+      // them is comparing two different times.
+      const accepted = state.applySessions({
         registrationId: report.registrationId,
         storeId: report.storeId,
         sessions: report.sessions,
         holding: report.holding,
         reportedAt: clock.now(),
-      }),
+      });
+      // Only what the reducer took. A report from a server the hub holds no
+      // connection to, or for a store that server has not mounted, is refused
+      // there because the hub cannot place it -- and a tree built on one would
+      // name sessions the state on the same screen does not have.
+      //
+      // Not awaited, and nothing on this path may await it: a server's report
+      // is answered by the fleet state and the broadcast, and the tree write is
+      // what happens after that. A failed one costs this store's tree update
+      // and is logged where it happened.
+      if (accepted) void catalogue.observe(report.storeId);
+    },
   });
 
   const sessions = createSessions({ state, connections: servers, logger });
 
-  // The tree and the pane arrangement are read from the database per request
-  // rather than held in memory beside the fleet state. They are durable and it
-  // is not: where the user put things survives a restart, and which sessions
-  // are reachable this second does not.
-  const catalogue = createCatalogue({ database, ids, clock });
+  // Read per request for the reason the tree above is, and durable for the
+  // same one: an arrangement of panes outlives the process that was told it.
   const paneLayout = createPaneLayout({ database, clock });
 
   // Subscribed before the first server is dialled, so that the first

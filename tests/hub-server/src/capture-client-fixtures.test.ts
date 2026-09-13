@@ -319,10 +319,17 @@ async function startFleetHub(
     );
   }
   let nextTicket = 0;
+  // Counted rather than constant, because the hub's id source is also where a
+  // node in the tree gets its primary key: with discovery wired to the report
+  // seam (AGX-90), a fleet that reports two sessions mints two node ids, and a
+  // source that answered both with one string would have the second insert
+  // collide and take the whole reading down with it. The hub's own identity
+  // takes the first; every one after it is a node.
+  let minted = 0;
   const hub = await startHub({
     database,
     logger,
-    ids: { newId: () => 'hub-1' },
+    ids: { newId: () => `hub-${(minted += 1)}` },
     clock,
     clientToken: CLIENT_TOKEN,
     tokens: { newToken: () => `fleet-ticket-${(nextTicket += 1)}` },
