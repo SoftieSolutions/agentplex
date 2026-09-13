@@ -1,19 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clientTerminalFrames,
+  clientTerminalTargetSchema,
   decodeTerminalChunk,
   encodeTerminalChunk,
-  sessionSubscribedFrameSchema,
+  serverTerminalFrames,
+  serverTerminalTargetSchema,
   TERMINAL_INPUT_MAX_CHARS,
   TERMINAL_MAX_COLS,
   terminalChunkSchema,
   terminalInputSchema,
   terminalSizeSchema,
-  terminalTargetSchema,
 } from './terminal.js';
 
-describe('terminalTargetSchema', () => {
+describe('clientTerminalTargetSchema', () => {
   it('addresses a session by its store and its id', () => {
-    const parsed = terminalTargetSchema.safeParse({
+    const parsed = clientTerminalTargetSchema.safeParse({
       by: 'session',
       storeId: 'store-1',
       sessionId: 'session-1',
@@ -22,13 +24,13 @@ describe('terminalTargetSchema', () => {
   });
 
   it('addresses a session the provider has not named yet by the start that made it', () => {
-    expect(terminalTargetSchema.safeParse({ by: 'start', startId: 12 }).success).toBe(true);
+    expect(clientTerminalTargetSchema.safeParse({ by: 'start', startId: 12 }).success).toBe(true);
   });
 
   it('refuses a target that names a start and a session at once', () => {
     // The discriminant is what makes "either" a parse rather than a guess: a
     // reader never has to decide which half of an ambiguous object to believe.
-    const parsed = terminalTargetSchema.safeParse({
+    const parsed = clientTerminalTargetSchema.safeParse({
       by: 'session',
       storeId: 'store-1',
       sessionId: 'session-1',
@@ -40,25 +42,25 @@ describe('terminalTargetSchema', () => {
   });
 
   it('refuses a target with no discriminant at all', () => {
-    expect(terminalTargetSchema.safeParse({ storeId: 'store-1', sessionId: 'x' }).success).toBe(
-      false,
-    );
+    expect(
+      clientTerminalTargetSchema.safeParse({ storeId: 'store-1', sessionId: 'x' }).success,
+    ).toBe(false);
   });
 
   it('refuses a session target missing its store', () => {
-    expect(terminalTargetSchema.safeParse({ by: 'session', sessionId: 'session-1' }).success).toBe(
-      false,
-    );
+    expect(
+      clientTerminalTargetSchema.safeParse({ by: 'session', sessionId: 'session-1' }).success,
+    ).toBe(false);
   });
 
   it('refuses a start handle that is not a frame id', () => {
-    expect(terminalTargetSchema.safeParse({ by: 'start', startId: 0 }).success).toBe(false);
-    expect(terminalTargetSchema.safeParse({ by: 'start', startId: -3 }).success).toBe(false);
-    expect(terminalTargetSchema.safeParse({ by: 'start', startId: 1.5 }).success).toBe(false);
+    expect(clientTerminalTargetSchema.safeParse({ by: 'start', startId: 0 }).success).toBe(false);
+    expect(clientTerminalTargetSchema.safeParse({ by: 'start', startId: -3 }).success).toBe(false);
+    expect(clientTerminalTargetSchema.safeParse({ by: 'start', startId: 1.5 }).success).toBe(false);
   });
 
   it('carries no cwd, no argv and no operation name', () => {
-    const parsed = terminalTargetSchema.safeParse({
+    const parsed = clientTerminalTargetSchema.safeParse({
       by: 'session',
       storeId: 'store-1',
       sessionId: 'session-1',
@@ -69,6 +71,61 @@ describe('terminalTargetSchema', () => {
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
     expect(parsed.data).toEqual({ by: 'session', storeId: 'store-1', sessionId: 'session-1' });
+  });
+});
+
+describe("the two legs' start handles", () => {
+  // The one field these frames do not share, and the reason the shapes are
+  // written once and instantiated twice. A client's handle is its own frame
+  // id, which is all it ever needs: it dies with the socket, and so does the
+  // pane waiting on it. The hub's handle outlives the socket it was sent on,
+  // because a hub that redialled between the fork and the provider naming the
+  // session would otherwise have lost the only name that spawn had.
+  it('names a start by a frame id on the client leg and by an opaque id on the server leg', () => {
+    expect(clientTerminalTargetSchema.safeParse({ by: 'start', startId: 12 }).success).toBe(true);
+    expect(
+      serverTerminalTargetSchema.safeParse({ by: 'start', startId: 'start-2f9c' }).success,
+    ).toBe(true);
+  });
+
+  it("refuses each leg the other leg's handle, rather than coercing it", () => {
+    expect(
+      clientTerminalTargetSchema.safeParse({ by: 'start', startId: 'start-2f9c' }).success,
+    ).toBe(false);
+    expect(serverTerminalTargetSchema.safeParse({ by: 'start', startId: 12 }).success).toBe(false);
+  });
+
+  it('carries the same handle through the reply and the output of its own leg', () => {
+    // Written once means the rest of these frames cannot drift between the
+    // legs; this is the check that the one field that does differ differs
+    // everywhere it appears, rather than only on the target.
+    expect(
+      serverTerminalFrames.subscribed.safeParse({
+        type: 'session-subscribed',
+        replyTo: 5,
+        storeId: 'store-1',
+        sessionId: null,
+        startId: 12,
+        replayChunks: 0,
+        droppedBytes: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      serverTerminalFrames.output.safeParse({
+        type: 'terminal-output',
+        storeId: 'store-1',
+        sessionId: null,
+        startId: 12,
+        chunk: '',
+        droppedChunks: 0,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('lets either leg address a session, which is the name that is the same everywhere', () => {
+    const session = { by: 'session', storeId: 'store-1', sessionId: 'session-1' };
+    expect(clientTerminalTargetSchema.safeParse(session).success).toBe(true);
+    expect(serverTerminalTargetSchema.safeParse(session).success).toBe(true);
   });
 });
 
@@ -165,9 +222,9 @@ describe('terminalSizeSchema', () => {
   });
 });
 
-describe('sessionSubscribedFrameSchema', () => {
+describe('the subscribe reply', () => {
   const subscribed = (fields: Record<string, unknown>): unknown =>
-    sessionSubscribedFrameSchema.safeParse({
+    clientTerminalFrames.subscribed.safeParse({
       type: 'session-subscribed',
       replyTo: 5,
       storeId: 'store-1',
@@ -182,7 +239,7 @@ describe('sessionSubscribedFrameSchema', () => {
     // The pair of opposite facts this frame exists to keep apart. A pane that
     // renders them the same way is claiming a silent session and a session
     // whose first hour was discarded are the same thing.
-    const silent = sessionSubscribedFrameSchema.parse({
+    const silent = clientTerminalFrames.subscribed.parse({
       type: 'session-subscribed',
       replyTo: 5,
       storeId: 'store-1',
@@ -191,7 +248,7 @@ describe('sessionSubscribedFrameSchema', () => {
       replayChunks: 0,
       droppedBytes: 0,
     });
-    const tail = sessionSubscribedFrameSchema.parse({
+    const tail = clientTerminalFrames.subscribed.parse({
       type: 'session-subscribed',
       replyTo: 6,
       storeId: 'store-1',
@@ -211,7 +268,7 @@ describe('sessionSubscribedFrameSchema', () => {
     // Two fields for one fact is two fields to fall out of step, and the
     // number is strictly the more useful of the two: `droppedBytes > 0` is the
     // flag, and the flag can never say how much.
-    const parsed = sessionSubscribedFrameSchema.safeParse({
+    const parsed = clientTerminalFrames.subscribed.safeParse({
       type: 'session-subscribed',
       replyTo: 5,
       storeId: 'store-1',

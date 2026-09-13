@@ -240,7 +240,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       }),
   });
 
-  const sessions = createSessions({ state, connections: servers, logger });
+  const sessions = createSessions({ state, connections: servers, ids, logger });
 
   // The tree and the pane arrangement are read from the database per request
   // rather than held in memory beside the fleet state. They are durable and it

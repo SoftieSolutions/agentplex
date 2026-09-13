@@ -1,9 +1,14 @@
-import { sessionRefSchema, storeDescriptorSchema, type SessionId } from '@agentplex/protocol';
+import {
+  sessionRefSchema,
+  startIdSchema,
+  storeDescriptorSchema,
+  type SessionId,
+} from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor, type PtySupervisor } from '@agentplex/pty';
-import type { Launch, LaunchPlan } from '@agentplex/providers';
+import type { GrantId, Launch, LaunchPlan } from '@agentplex/providers';
 import { createTerminalManager, type TerminalManager } from './terminal-manager.js';
 
 const STORE = storeDescriptorSchema.parse({ storeId: 'store-a', path: '/volumes/claude' });
@@ -73,6 +78,92 @@ function open(manager: TerminalManager): string {
   if (!opened.ok) throw new Error(`the spawn should have opened: ${opened.problem}`);
   return opened.terminal.terminalId;
 }
+
+/** Two hubs, each with a grant this server minted, and one start each. */
+const A_GRANT = 'grant-one' as GrantId;
+const ANOTHER_GRANT = 'grant-two' as GrantId;
+const A_START = startIdSchema.parse('start-one');
+const ANOTHER_START = startIdSchema.parse('start-two');
+
+describe('createTerminalManager start tags', () => {
+  it('holds a start against the terminal, not against whoever asked for it', () => {
+    // The reason these live here at all. A connection comes and goes while the
+    // agent it forked goes on running, so a name for that spawn that lived on
+    // the connection would be lost exactly when the hub needs it most: after a
+    // drop, with the provider still not having written a session id.
+    const { manager } = harness();
+    const terminalId = open(manager);
+
+    manager.noteStart(terminalId, A_START, A_GRANT);
+
+    expect(manager.starts(A_GRANT)).toEqual([{ startId: A_START, terminalId }]);
+  });
+
+  it("keeps two hubs' starts apart, because a start id means nothing to the other", () => {
+    const { manager } = harness();
+    const mine = open(manager);
+    const theirs = open(manager);
+
+    manager.noteStart(mine, A_START, A_GRANT);
+    manager.noteStart(theirs, ANOTHER_START, ANOTHER_GRANT);
+
+    expect(manager.starts(A_GRANT)).toEqual([{ startId: A_START, terminalId: mine }]);
+    expect(manager.starts(ANOTHER_GRANT)).toEqual([{ startId: ANOTHER_START, terminalId: theirs }]);
+  });
+
+  it('says a grant that has started nothing has started nothing', () => {
+    const { manager } = harness();
+
+    expect(manager.starts(A_GRANT)).toEqual([]);
+  });
+
+  it('forgets a start when the terminal it named is evicted', () => {
+    // A handle pointing at nothing is worse than no handle: it names a start
+    // that is not running here, and the hub would wait on a terminal that no
+    // longer exists.
+    const { manager } = harness(1);
+    const first = open(manager);
+    manager.noteStart(first, A_START, A_GRANT);
+
+    open(manager);
+
+    expect(manager.terminal(first)).toBeUndefined();
+    expect(manager.starts(A_GRANT)).toEqual([]);
+  });
+
+  it('forgets every start at shutdown', () => {
+    const { manager } = harness();
+    const terminalId = open(manager);
+    manager.noteStart(terminalId, A_START, A_GRANT);
+
+    manager.closeAll();
+
+    expect(manager.starts(A_GRANT)).toEqual([]);
+  });
+
+  it('records nothing for a terminal that is already gone', () => {
+    const { manager } = harness();
+    const terminalId = open(manager);
+    manager.closeAll();
+
+    manager.noteStart(terminalId, A_START, A_GRANT);
+
+    expect(manager.starts(A_GRANT)).toEqual([]);
+  });
+
+  it('keeps the start after the process exits, because the bytes are still here', () => {
+    // A terminal outlives its process -- the session somebody most wants to
+    // read is frequently the one that just stopped -- so the name for it
+    // outlives the process too.
+    const { manager, factory } = harness();
+    const terminalId = open(manager);
+    manager.noteStart(terminalId, A_START, A_GRANT);
+
+    factory.ptys[0]?.close({ exitCode: 0, signal: null });
+
+    expect(manager.starts(A_GRANT)).toEqual([{ startId: A_START, terminalId }]);
+  });
+});
 
 describe('createTerminalManager one live process per session', () => {
   it('refuses a resume for a session that already has a live terminal, and names the holder', () => {

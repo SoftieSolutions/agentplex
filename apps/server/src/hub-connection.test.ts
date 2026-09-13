@@ -721,6 +721,7 @@ describe('two hubs on one server', () => {
       JSON.stringify({
         type: 'session-start',
         id: 2,
+        startId: 'start-basement-1',
         storeId: 'store-a',
         sessionId: null,
         provider: 'claude',

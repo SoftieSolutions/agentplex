@@ -8,19 +8,24 @@ import {
   PROTOCOL_VERSION,
   serverIdSchema,
   sessionIdSchema,
+  startIdSchema,
   storeIdSchema,
   type ClientFrame,
   type HubFrame,
   type MachineState,
   type ProviderReadiness,
   type ServerRegistrationId,
+  type ServerToHubFrame,
   type SessionRow,
+  type StartId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import {
   createFakeMessageSocket,
   createSocketPair,
   createFakeTimers,
+  PEER_GONE,
+  type FakeMessageSocket,
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
@@ -99,14 +104,18 @@ function storeOn(path: string): StoreDescriptor {
  * provider writes as it starts: it is dated at the moment a spawn opens its
  * terminal, which is what lets the scan afterwards join the two.
  */
-function transcripts(): Readonly<Record<string, string>> {
+function transcripts(namesTheSpawn = true): Record<string, string> {
   const at = (signal: string, updatedAt: number): string =>
     JSON.stringify({ signal, updatedAt, cwd: '/volumes/work' });
 
   return {
     '/volumes/work/claude/sessions/session-quiet.json': at('awaiting-input', START - 5_000),
     '/volumes/work/claude/sessions/session-busy.json': at('progressing', START - 5_000),
-    '/volumes/work/claude/sessions/session-fresh.json': at('awaiting-input', START),
+    // Left out when a test wants the gap this ticket is about: a live terminal
+    // with no session id, because the provider has not written one yet.
+    ...(namesTheSpawn
+      ? { '/volumes/work/claude/sessions/session-fresh.json': at('awaiting-input', START) }
+      : {}),
   };
 }
 
@@ -122,6 +131,19 @@ interface Machine {
    * apart on the same volume.
    */
   providers: readonly ProviderReadiness[];
+  /**
+   * The transcripts this machine's store holds, as the adapter reads them.
+   *
+   * Mutable, and read at each dial rather than captured once, because the
+   * interesting moment is a provider writing its session id while the hub is
+   * not connected -- which is exactly the gap a start handle has to survive.
+   */
+  readonly sessionFiles: Record<string, string>;
+  /**
+   * The server end of the connection it is holding now, for a test that needs
+   * the socket to go away without the machine going with it.
+   */
+  live: FakeMessageSocket | undefined;
   /** Every frame this machine sent to the hub, and every one it received. */
   readonly sentToHub: string[];
   readonly sentToServer: string[];
@@ -151,7 +173,11 @@ function registrationOf(label: string): ServerRegistrationId {
  * hub that reconnects finds the agents it left running, not a fresh manager
  * that has forgotten them.
  */
-function buildMachine(label: string, providers: readonly ProviderReadiness[]): Machine {
+function buildMachine(
+  label: string,
+  providers: readonly ProviderReadiness[],
+  sessionFiles: Record<string, string>,
+): Machine {
   const ptys = createFakePtyFactory();
   const supervisor = createPtySupervisor({
     pty: ptys,
@@ -166,6 +192,8 @@ function buildMachine(label: string, providers: readonly ProviderReadiness[]): M
     terminals,
     ptys,
     providers,
+    sessionFiles,
+    live: undefined,
     sentToHub: [],
     sentToServer: [],
   };
@@ -173,10 +201,11 @@ function buildMachine(label: string, providers: readonly ProviderReadiness[]): M
 
 /** One connection to that machine: a fresh socket, and the store as it reads it. */
 function serveMachine(machine: Machine): DialResult {
-  const files = createFakeProviderFiles({ files: transcripts() });
+  const files = createFakeProviderFiles({ files: machine.sessionFiles });
   const adapter = createFakeProviderAdapter({ provider: 'claude', files });
   const stores = [storeOn('/volumes/work')];
   const { hubEnd, serverEnd } = createSocketPair();
+  machine.live = serverEnd;
 
   serveServerEnd(serverEnd, {
     identity: {
@@ -225,6 +254,7 @@ function serveMachine(machine: Machine): DialResult {
  */
 async function start(
   preflightOf: (label: string) => readonly ProviderReadiness[] = () => [readyProvider('claude')],
+  options: { readonly namesTheSpawn?: boolean } = {},
 ): Promise<Harness> {
   suite += 1;
   migrated = await openMigratedSchema(`session-start-${suite}`);
@@ -232,7 +262,10 @@ async function start(
 
   const machines = new Map<string, Machine>();
   for (const label of ['attic', 'workshop']) {
-    machines.set(label, buildMachine(label, preflightOf(label)));
+    machines.set(
+      label,
+      buildMachine(label, preflightOf(label), transcripts(options.namesTheSpawn)),
+    );
     await registerServer(
       database,
       { newId: () => registrationOf(label) },
@@ -284,7 +317,15 @@ async function start(
       }),
   });
 
-  const sessions = createSessions({ state, connections, logger });
+  // Counting rather than random, so a test can name the start the hub minted
+  // without matching a pattern -- the reason `IdGenerator` is a seam at all.
+  let minted = 0;
+  const sessions = createSessions({
+    state,
+    connections,
+    ids: { newId: () => `start-${(minted += 1)}` },
+    logger,
+  });
 
   const clients = createClients({
     hubId: 'hub-under-test' as never,
@@ -786,6 +827,167 @@ describe('a session start against a machine with no such provider installed', ()
     ]);
   });
 });
+
+describe('a spawn the hub lost the socket to', () => {
+  /**
+   * The gap this ticket is about, made into a scenario.
+   *
+   * The store holds no transcript for the session about to be spawned, so the
+   * scan after the fork finds nothing to join it to and the terminal stays
+   * unnamed -- which is the real state of a provider that has been forked and
+   * has not written its session id yet. The socket then dies in that gap.
+   *
+   * Before a hub-minted start id, the only name that spawn had was the id of
+   * the `session-start` frame on the connection that had just ended, so the
+   * hub came back to an agent it had started and could no longer address --
+   * forever, if the provider never named the session. The assertion below is
+   * that the name survives the socket.
+   *
+   * Subscribing by that handle is not asserted here: the hub does not relay
+   * terminal frames yet, which is AGX-212. What is asserted is the report,
+   * which is what the relay will read.
+   */
+  beforeEach(async () => {
+    harness = await start(() => [readyProvider('claude')], { namesTheSpawn: false });
+    await until(
+      () =>
+        held()
+          .connections.snapshot()
+          .every((report) => report.phase === 'connected'),
+      'both servers to be connected',
+    );
+    await until(
+      () => (held().state.snapshot().stores[0]?.sessions.length ?? 0) === 2,
+      'both servers to have reported the store',
+    );
+  });
+
+  afterEach(async () => {
+    await harness?.connections.stop();
+    harness?.clients.stop();
+    await migrated?.close();
+    harness = null;
+    migrated = null;
+  });
+
+  it('is still named to the hub on the connection after the one that started it', async () => {
+    const client = await attach();
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: 'look at the failing test',
+      server: registrationOf('workshop'),
+    });
+    expect(client.reply(2).type).toBe('session-started');
+
+    const workshop = machine('workshop');
+    const startId = startIdOf(workshop);
+    // Nothing named it, which is the state the reconnect has to survive.
+    expect(startsIn(workshop).at(-1)).toEqual([{ startId, sessionId: null }]);
+
+    const mark = workshop.sentToHub.length;
+    await redial('workshop', mark);
+
+    // The agent is the same one: a dropped socket closes no terminal.
+    expect(workshop.ptys.ptys).toHaveLength(1);
+    expect(workshop.ptys.ptys[0]?.kills).toBe(0);
+    // And the new connection is told what the old one started, under the name
+    // the hub itself minted before either socket existed.
+    expect(startsIn(workshop, mark)[0]).toEqual([{ startId, sessionId: null }]);
+  });
+
+  it('is reported once more, with its session, when the provider finally names it', async () => {
+    const client = await attach();
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+    });
+    expect(client.reply(2).type).toBe('session-started');
+
+    const workshop = machine('workshop');
+    const startId = startIdOf(workshop);
+    // The provider writes its transcript while the hub is away, so the scan on
+    // the next connection is the first one that can join the two.
+    workshop.sessionFiles['/volumes/work/claude/sessions/session-fresh.json'] = JSON.stringify({
+      signal: 'awaiting-input',
+      updatedAt: START,
+      cwd: '/volumes/work',
+    });
+
+    const mark = workshop.sentToHub.length;
+    await redial('workshop', mark);
+
+    // Told the pair once, on the connection that could learn it, and the hub
+    // can join the pending pane to the session without guessing by time.
+    const reported = startsIn(workshop, mark);
+    expect(reported[0]).toEqual([{ startId, sessionId: sessionIdSchema.parse('session-fresh') }]);
+    expect(reported.slice(1).flat()).toEqual([]);
+  });
+
+  it('says nothing about that start to a hub that did not make it', async () => {
+    // The other machine is the same volume and the same hub here, so the
+    // honest check of the scoping is the store the start was not made in:
+    // attic forked nothing, and reports no start of anybody's.
+    const client = await attach();
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+    });
+    expect(client.reply(2).type).toBe('session-started');
+
+    expect(startsIn(machine('attic')).flat()).toEqual([]);
+  });
+});
+
+/** Drops the socket a machine is holding and waits for the hub to come back. */
+async function redial(label: string, from: number): Promise<void> {
+  const report = () =>
+    held()
+      .connections.snapshot()
+      .find((candidate) => candidate.registrationId === registrationOf(label));
+
+  machine(label).live?.close(PEER_GONE);
+  await until(() => report()?.phase === 'stale', `${label} to go stale`);
+  held().timers.fireAll();
+  await until(() => report()?.phase === 'connected', `${label} to be dialled again`);
+  // The report the server sends a hub that has only just connected is written
+  // after the handshake, so the connection being up is not yet the frame.
+  await until(
+    () => startsIn(machine(label), from).length > 0,
+    `${label} to report its store on the new connection`,
+  );
+}
+
+/** The `starts` list off every store report a machine sent, in order. */
+function startsIn(target: Machine, from = 0): readonly (readonly unknown[])[] {
+  return target.sentToHub
+    .slice(from)
+    .map((text) => parsed<ServerToHubFrame>(parseServerToHubFrame, text))
+    .filter((frame) => frame.type === 'store-report')
+    .map((frame) => frame.starts);
+}
+
+/** The one start handle a machine was asked with, as the hub minted it. */
+function startIdOf(target: Machine): StartId {
+  const instruction = target.sentToServer
+    .map((text) => parsed<{ type: string; startId?: string }>(parseHubToServerFrame, text))
+    .find((frame) => frame.type === 'session-start');
+  if (instruction?.startId === undefined) throw new Error('that machine was told to start nothing');
+  return startIdSchema.parse(instruction.startId);
+}
 
 function parsed<T>(parser: (raw: unknown) => { ok: boolean }, text: string): T & { type: string } {
   const result = parseTextFrame(parser as never, text) as
