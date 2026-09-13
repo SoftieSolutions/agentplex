@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { Terminal, type ILink } from '@xterm/xterm';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { unicodeChunks } from './unicode-widths.fixture.js';
-import { createPaneTerminal } from './xterm-emulator.js';
+import { createPaneTerminal, createWebLinkHandler, type WindowOpener } from './xterm-emulator.js';
 
 /**
  * What the pane makes of real bytes that are wider than one column each.
@@ -36,6 +37,7 @@ const open: PaneTerminal[] = [];
 
 afterEach(() => {
   while (open.length > 0) open.pop()?.dispose();
+  vi.restoreAllMocks();
 });
 
 /**
@@ -135,5 +137,114 @@ describe('the pane terminal', () => {
     expect(cellAt(terminal, ZWJ_LINE, 0).width).toBe(2);
     expect(cellAt(terminal, ZWJ_LINE, 2)).toEqual({ chars: '\u{1F4BB}', width: 2 });
     expect(cellAt(terminal, ZWJ_LINE, 4).chars).toBe('│');
+  });
+});
+
+/** One call to `window.open`, as the emulator made it. */
+interface OpenedWindow {
+  readonly url: string;
+  readonly target: string;
+  readonly features: string;
+}
+
+interface RecordingOpener extends WindowOpener {
+  readonly opened: readonly OpenedWindow[];
+}
+
+function createRecordingOpener(): RecordingOpener {
+  const opened: OpenedWindow[] = [];
+  return {
+    open(url: string, target: string, features: string): void {
+      opened.push({ url, target, features });
+    },
+    get opened(): readonly OpenedWindow[] {
+      return [...opened];
+    },
+  };
+}
+
+/** What a click on a link the pane drew should produce, every time. */
+function inNewTab(url: string): OpenedWindow {
+  return { url, target: '_blank', features: 'noopener,noreferrer' };
+}
+
+async function writeLine(terminal: PaneTerminal, text: string): Promise<void> {
+  await new Promise<void>((resolve) => {
+    terminal.write(`${text}\r\n`, resolve);
+  });
+}
+
+describe('a link in terminal output', () => {
+  it('opens http and https in a new tab the opened page cannot reach back through', () => {
+    const opener = createRecordingOpener();
+    const click = createWebLinkHandler(opener);
+
+    click(new MouseEvent('click'), 'https://example.com/repo/pull/1?tab=files');
+    click(new MouseEvent('click'), 'http://127.0.0.1:8080/health');
+    // A scheme is case-insensitive, and the parser is what says so: the pane
+    // does not lowercase anything itself.
+    click(new MouseEvent('click'), 'HTTPS://example.com');
+
+    expect(opener.opened).toEqual([
+      inNewTab('https://example.com/repo/pull/1?tab=files'),
+      inNewTab('http://127.0.0.1:8080/health'),
+      // The parsed URL, not the matched text: normalising is the parser's,
+      // and what reaches the browser is what the parser accepted.
+      inNewTab('https://example.com/'),
+    ]);
+  });
+
+  it('opens nothing else, whatever an agent printed', () => {
+    const opener = createRecordingOpener();
+    const click = createWebLinkHandler(opener);
+
+    // Terminal output is another program's bytes. These are what a click
+    // would have to refuse if one of them ever reached the handler: script in
+    // this origin, a local read, an inline document, a mail client, and text
+    // that is not a URL at all.
+    for (const uri of [
+      'javascript:alert(document.cookie)',
+      'JavaScript:alert(1)',
+      'file:///etc/passwd',
+      'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+      'mailto:someone@example.com',
+      'vscode://file/Users/someone/secrets',
+      'example.com/not-a-url',
+      '',
+    ]) {
+      click(new MouseEvent('click'), uri);
+    }
+
+    expect(opener.opened).toEqual([]);
+  });
+
+  it('is found in the buffer by the provider the pane registers, and opened by that click', async () => {
+    const opener = createRecordingOpener();
+    // The registration is the half this module owns that no buffer shows:
+    // what the addon does on load is call this, and a pane that loaded no
+    // addon would leave a URL as the inert text this ticket came from. xterm
+    // offers no way to ask a terminal which providers it holds, so the call
+    // is watched where it is made. The count matters as much as the argument:
+    // one provider, the addon's.
+    const registrations = vi.spyOn(Terminal.prototype, 'registerLinkProvider');
+    const terminal = createPaneTerminal('dark', opener);
+    open.push(terminal);
+
+    await writeLine(terminal, 'cloning https://example.com/some/repo and then building');
+
+    expect(registrations).toHaveBeenCalledTimes(1);
+    const provider = registrations.mock.calls[0]?.[0];
+    if (!provider) throw new Error('the pane registered no link provider');
+    // Rows are 1-based here, unlike the buffer's own indexing above.
+    const links = await new Promise<ILink[] | undefined>((resolve) => {
+      provider.provideLinks(1, resolve);
+    });
+
+    expect(links?.map((link) => link.text)).toEqual(['https://example.com/some/repo']);
+    const link = links?.[0];
+    if (!link) throw new Error('the provider found no link in the line it was given');
+    link.activate(new MouseEvent('click'), link.text);
+
+    expect(opener.opened).toEqual([inNewTab('https://example.com/some/repo')]);
   });
 });
