@@ -152,6 +152,9 @@ importers:
       '@mantine/hooks':
         specifier: 9.6.0
         version: 9.6.0(react@19.2.8)
+      '@xterm/addon-fit':
+        specifier: 0.11.0
+        version: 0.11.0
       '@xterm/addon-search':
         specifier: 0.16.0
         version: 0.16.0
@@ -1104,6 +1107,9 @@ packages:
 
   '@vitest/utils@3.2.7':
     resolution: {integrity: sha512-x6BDOd7dyo3PFLY3I9/HJ25X/6OurhGXk2/B9gOZNPF7XDVjeBK4k01lQE5uvDpbuheErh91qYuE1E2OEjK3Rw==}
+
+  '@xterm/addon-fit@0.11.0':
+    resolution: {integrity: sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==}
 
   '@xterm/addon-search@0.16.0':
     resolution: {integrity: sha512-9OeuBFu0/uZJPu+9AHKY6g/w0Czyb/Ut0A5t79I4ULoU4IfU5BEpPFVGQxP4zTTMdfZEYkVIRYbHBX1xWwjeSA==}
@@ -3085,6 +3091,8 @@ snapshots:
       '@vitest/pretty-format': 3.2.7
       loupe: 3.2.1
       tinyrainbow: 2.0.0
+
+  '@xterm/addon-fit@0.11.0': {}
 
   '@xterm/addon-search@0.16.0': {}
 
