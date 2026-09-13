@@ -98,10 +98,22 @@ export const docDirectorySchema = z
  * more than a note, a plan or a specification ever is and enough that nobody
  * has to think about it. The bound is there for the socket: a frame is held
  * whole by the peer that reads it, and the message socket drops a connection
- * over a frame past a megabyte. Ordinary text is one byte per character on the
- * wire and any character in the Basic Multilingual Plane is at most three, so
- * a document at this cap arrives as one frame under that ceiling rather than
- * as a dropped connection nothing explains.
+ * over a frame past 1,000,000 bytes.
+ *
+ * A code unit of text costs at most three bytes in the frame: three for the
+ * worst of the Basic Multilingual Plane, two for either half of a surrogate
+ * pair, one for the ASCII most of a document is, and two for the quote and
+ * the backslash JSON escapes. So a document of text at this cap is a frame of
+ * at most 768 KB, and a maximal write arrives rather than dropping a
+ * connection for a reason nothing explains.
+ *
+ * Text is the whole of that claim, and the exception says why the cap is not
+ * larger. JSON escapes a C0 control character to six bytes, so 256,000 of
+ * them would be a 1.5 MB frame the socket refuses -- and that is a file of
+ * control codes rather than a document, on a store whose names end in `.md`,
+ * `.txt`, `.json` and `.csv`. The cap that would cover even that is a third
+ * of this one, which would refuse real documents to accommodate a file this
+ * store is not for.
  */
 export const DOC_CONTENT_MAX_CHARS = 256_000;
 

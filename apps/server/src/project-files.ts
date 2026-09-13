@@ -282,10 +282,17 @@ export type FileCreate =
  * a reader that opens the file at any moment sees the old document or the new
  * one and never the first half of the new one, and a process killed mid-write
  * leaves a hidden temporary file and an intact document rather than a
- * truncated document. `updatedAt` is what the filesystem then recorded as
- * the write time, so the answer to "when was this written" is read off the
- * disk that will answer it next time rather than off a clock that may not
- * agree with it.
+ * truncated document. Nothing above this seam serialises two writes to one
+ * document -- the store takes no lock, and two hubs may ask at once -- and the
+ * rename is what makes that survivable: one of the two wins whole, and the
+ * folder is left holding a document rather than a mixture of both.
+ *
+ * `updatedAt` is what the filesystem then recorded as the write time, so the
+ * answer to "when was this written" is read off the disk that will answer it
+ * next time rather than off a clock that may not agree with it. It is read by
+ * a separate stat after the rename, so in that same race it is the time of
+ * whichever rename landed last: the file's write time, which is the honest
+ * answer, and not a promise that this call is the one that wrote it.
  */
 export type FileWrite =
   | { readonly kind: 'written'; readonly updatedAt: number }

@@ -110,6 +110,30 @@ describe('nodeProjectFiles on documents', () => {
     await expect(readdir(scratch)).resolves.toEqual(['notes.txt']);
   });
 
+  /**
+   * The claim the whole temporary-name-and-rename dance is for, against a real
+   * filesystem. Nothing serialises two writes to one document -- the store
+   * takes no lock, and two hubs may ask at once -- so what has to hold is that
+   * one of them wins whole: never a mixture of the two, never a prefix of
+   * either, and never a temporary file left in the folder afterwards.
+   *
+   * Ten writers of different lengths, so a torn result could not pass for an
+   * intact one: a file that was half of the longest and half of the shortest
+   * is neither.
+   */
+  it('leaves one document whole when many writes land at once, and nothing beside it', async () => {
+    const path = join(scratch, 'plan.md');
+    const contents = Array.from({ length: 10 }, (_, index) => `${String(index)}`.repeat(index + 1));
+
+    const written = await Promise.all(
+      contents.map((body) => nodeProjectFiles.writeFile(path, body)),
+    );
+
+    expect(written.map((result) => result.kind)).toEqual(Array(contents.length).fill('written'));
+    expect(contents).toContain(await readFile(path, 'utf8'));
+    await expect(readdir(scratch)).resolves.toEqual(['plan.md']);
+  });
+
   it('says a file is missing rather than failing over one nobody has written', async () => {
     await expect(nodeProjectFiles.readFile(join(scratch, 'plan.md'))).resolves.toEqual({
       kind: 'missing',

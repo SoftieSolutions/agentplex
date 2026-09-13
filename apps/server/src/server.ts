@@ -436,10 +436,12 @@ export async function startSessionServer(
    */
   const connections = new Set<HubConnection>();
 
-  // The document store, one per server and shared by every connection: two
-  // hubs writing one project's notes are writing one folder, and the store
-  // is what makes the second write replace the first. Nothing in it starts a
-  // process; `project-docs.ts` says why it is not an operation.
+  // The document store, one per server and shared by every connection,
+  // because a project's folder is the machine's and not a socket's. It takes
+  // no lock and holds no state, so sharing it serialises nothing: what a
+  // concurrent second write owes to the first is the rename in
+  // `node-project-files.ts`. Nothing in it starts a process;
+  // `project-docs.ts` says why it is not an operation.
   const docs = createProjectDocs({ dataRoot, files: projectFiles, logger });
 
   // Every hub connected at once, which is what makes a stop by one of them
