@@ -11,7 +11,10 @@ import { listServersTool } from './list-servers.js';
 import { listSessionsTool } from './list-sessions.js';
 import { admitsMcpRequest } from './mcp-auth.js';
 import { readTerminalTool, type TerminalReads } from './read-terminal.js';
+import { sendInputTool, type TerminalWrites } from './send-input.js';
 import { sessionStatusTool } from './session-status.js';
+import { startSessionTool, type SessionStarts } from './start-session.js';
+import { stopSessionTool, type SessionStops } from './stop-session.js';
 import { registerTool, type McpTool } from './tool-registry.js';
 
 /**
@@ -117,12 +120,27 @@ export interface McpDependencies {
    */
   readonly state: FleetReads;
   /**
-   * The terminal relay, narrowed to what a reader needs: subscribe, and give
-   * the subscription back. There is no path from a tool to `input` or to
-   * `resize`, and AGX-44 will have to widen this seam in a diff somebody reads
-   * rather than inherit the whole feature from here.
+   * The terminal relay, narrowed to what these tools do with one: subscribe,
+   * type, and give the client back.
+   *
+   * Widened by exactly one method since the read tools, which is what AGX-43
+   * asked of this ticket: `send_input` needs `input` and nothing else needed
+   * anything. There is still no path from a tool to `resize` -- a screen size
+   * is a fact about a viewer and an agent is not one -- nor to `deliver`,
+   * `noteStart` or `noteStarts`, which are the relay's own wiring to the
+   * servers feature.
    */
-  readonly terminal: TerminalReads;
+  readonly terminal: TerminalReads & TerminalWrites;
+  /**
+   * Starting and stopping, narrowed to the two methods the feature has anyway.
+   *
+   * Declared as what the tools use rather than taken as `Sessions`, so that a
+   * method added to that feature is not a capability this endpoint silently
+   * acquires. Both go through the same routing a client's own frame does: the
+   * hub picks the machine, refuses a session that is already running and names
+   * the holder, and resolves a stop's owner hub-side.
+   */
+  readonly sessions: SessionStarts & SessionStops;
   /** The deadline a terminal read gives up after. */
   readonly timers: Timers;
   readonly logger: Logger;
@@ -156,19 +174,37 @@ export function createMcp({
   clientToken,
   state,
   terminal,
+  sessions,
   timers,
   logger,
 }: McpDependencies): Mcp {
   /**
-   * Every tool this build has. A later ticket adds a line: AGX-44 the acting
-   * ones, AGX-244 after them. Built once and registered onto each request's
+   * Every tool this build has. Built once and registered onto each request's
    * server, because the list is a fact about the build and the server is a fact
    * about the request.
    *
-   * Read tools only, and every one of them annotated `readOnlyHint`. Nothing
-   * here starts, stops, types into or writes anything: the five below are the
-   * fleet, its sessions, one session, and what one terminal has printed, each a
-   * projection of something a client is already shown.
+   * Five that read and three that act, and the split is in the annotations
+   * rather than in this list: each of the three below says `readOnlyHint:
+   * false`, and the stop says `destructiveHint: true`, which is what a client
+   * reads before deciding whether to ask a person first.
+   *
+   * ## There is no `answer_permission`, and that is a finding rather than an
+   * omission
+   *
+   * AGX-44 names one. This build has nothing honest to put behind it: there is
+   * no permission frame on either leg of the protocol, no field on any frame
+   * that carries an approval, and nothing in `@agentplex/providers` that maps
+   * "allow" or "deny" onto anything a provider understands -- the adapters
+   * derive `awaiting-permission` as a *status* and stop there. A tool that
+   * typed a guessed keystroke at a prompt it could not see would be answering
+   * on a user's behalf without being able to say what it had agreed to, which
+   * is the one thing an approval must never be. Approvals are epic AGX-104 and
+   * the frame that carries one is theirs to design.
+   *
+   * What is here in the meantime is the truth rather than a stand-in: a
+   * terminal prompt is answered by typing, `send_input` types, and an agent
+   * that knows what a provider is asking can answer it exactly as a person at
+   * the keyboard would -- with the same and only the same information.
    */
   const tools: readonly McpTool[] = [
     hubInfoTool({ hubId }),
@@ -176,6 +212,9 @@ export function createMcp({
     listSessionsTool({ state }),
     sessionStatusTool({ state }),
     readTerminalTool({ terminal, timers }),
+    startSessionTool({ sessions }),
+    sendInputTool({ terminal, logger }),
+    stopSessionTool({ sessions }),
   ];
 
   /**

@@ -11,6 +11,7 @@ import { createFakeDatabase } from '../../db/fake-database.js';
 import type { MigrationFileSystem } from '../../db/migration-files.js';
 import { startHub, type Hub } from '../../hub.js';
 import { createFakeBeaconSource } from '../discovery/fake-discovery.js';
+import { createFakeSessions } from '../sessions/fake-sessions.js';
 import { createFakeWebAssets } from '../web/fake-web.js';
 import { createMcp, MCP_PATH } from './mcp.js';
 
@@ -56,7 +57,8 @@ afterEach(async () => {
  * when nothing should be asking a feature anything.
  */
 const emptyFleet = { published: () => ({ version: 0, stores: [], servers: [], candidates: [] }) };
-const noTerminal = { subscribe: () => {}, forget: () => {} };
+const noTerminal = { subscribe: () => {}, input: () => {}, forget: () => {} };
+const noSessions = createFakeSessions();
 
 /**
  * One pairing in the hub's table, so the fleet an agent lists is not empty.
@@ -198,10 +200,49 @@ describe('the hub MCP endpoint', () => {
       'list_servers',
       'list_sessions',
       'read_terminal',
+      'send_input',
+      'session_status',
+      'start_session',
+      'stop_session',
+    ]);
+    // The split a client reads before it decides whether to ask a person: five
+    // that only read, three that act, and exactly one of those that destroys.
+    const readers = tools.filter((tool) => tool.annotations?.readOnlyHint === true);
+    expect(readers.map((tool) => tool.name).sort()).toEqual([
+      'hub_info',
+      'list_servers',
+      'list_sessions',
+      'read_terminal',
       'session_status',
     ]);
-    // Every one of them, because this build has no tool that changes anything.
-    expect(tools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+    expect(tools.filter((tool) => tool.annotations?.destructiveHint === true)).toHaveLength(1);
+    // And no tool takes a command, an argv, an environment or a directory, on
+    // this build or any later one. The rule is the endpoint's whole claim, and
+    // this is the listing a model is actually handed.
+    const named = JSON.stringify(tools.map((tool) => tool.inputSchema));
+    for (const forbidden of ['command', 'argv', 'args', 'env', 'cwd', 'directory', 'path']) {
+      expect(named).not.toContain(`"${forbidden}"`);
+    }
+  });
+
+  it('refuses a start on a fleet nobody can reach, in the fleet own words', async () => {
+    // The act tools mounted, over a real port, answering out of the same
+    // routing a client frame reaches. Nothing here is reachable, so what an
+    // agent gets is a sentence about the store rather than a session that never
+    // appears.
+    const started = await startTestHub();
+    const connected = await connect(started);
+
+    const refused = await connected.callTool({
+      name: 'start_session',
+      arguments: { storeId: 'store-work', provider: 'claude' },
+    });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.structuredContent).toBeUndefined();
+    expect((refused.content as { text: string }[])[0]?.text).toBe(
+      'no server the hub is paired with has that store mounted',
+    );
   });
 
   it('answers hub_info with the two facts a client already gets in welcome', async () => {
@@ -413,6 +454,7 @@ describe('the MCP endpoint while the hub is stopping', () => {
       clientToken: CLIENT_TOKEN,
       state: emptyFleet,
       terminal: noTerminal,
+      sessions: noSessions,
       timers: createFakeTimers(),
       logger: createLogger('debug', () => {}),
     });
@@ -459,6 +501,7 @@ describe('the MCP endpoint while the hub is stopping', () => {
       clientToken: CLIENT_TOKEN,
       state: emptyFleet,
       terminal: noTerminal,
+      sessions: noSessions,
       timers: createFakeTimers(),
       logger: createLogger('debug', () => {}),
     });
