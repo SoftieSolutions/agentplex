@@ -1,10 +1,13 @@
 import {
+  assertNever,
+  decodeTerminalChunk,
   parseHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
   type CatalogueItem,
   type CatalogueQuery,
   type ClientFrame,
+  type ClientTerminalTarget,
   type DirectoryEntry,
   type FrameId,
   type HubFrame,
@@ -18,7 +21,13 @@ import {
   type SessionId,
   type SessionRef,
   type StoreId,
+  type TerminalSize,
 } from '@agentplex/protocol';
+import {
+  createTerminalFeed,
+  DEFAULT_FEED_BYTES,
+  type TerminalFeed,
+} from '../terminal/chunk-feed.js';
 import type { FrameIds } from './frame-ids.js';
 import type { Timers } from './timers.js';
 
@@ -90,6 +99,79 @@ export interface TerminalInputView {
   readonly discarded: number;
   /** The sentence to show beside a terminal while keystrokes go nowhere. */
   readonly notice: string | null;
+}
+
+/**
+ * One watched terminal, as a pane reads it.
+ *
+ * Everything here is a fact about what the pane is being shown, and there is
+ * exactly one thing on it that is not a number: the feed. Bytes go into that
+ * and never into a snapshot field — a value that changed on every pty read
+ * would re-render the app at output speed, which is the rule this whole path
+ * is built around. What the snapshot carries instead is the handful of facts
+ * that change rarely and that a pane has to be able to state: whether it is
+ * attached, what it is attached to, and how much of the session it is not
+ * being shown.
+ *
+ * ## Three losses, kept apart
+ *
+ * A pane showing less than everything can be short in three different places,
+ * and they are three different things to do about it:
+ *
+ *   * `droppedBytes` is history the *terminal* evicted before this pane
+ *     attached. A property of the session, the same for every viewer, fixed
+ *     at the moment of attaching.
+ *   * `droppedChunks` is output that existed and did not fit down the link to
+ *     *this browser* — both legs, summed by the hub. A property of one
+ *     connection, different for two viewers of the same session, growing
+ *     while the stream runs.
+ *   * `evicted` is this browser's own buffer having thrown away its oldest
+ *     chunks. A property of this tab.
+ *
+ * `protocol/terminal.ts` argues the first two at length and refuses to sum
+ * them; this refuses to sum the third for the same reason.
+ *
+ * ## And the fact that renders identically to all three
+ *
+ * `replayChunks === 0` with `droppedBytes === 0` says outright that this
+ * session has printed nothing. A pane that silently starts mid-stream and a
+ * pane showing a session that has done nothing draw the same empty rectangle
+ * and mean opposite things, which is why both numbers are here rather than
+ * one boolean derived from them.
+ */
+export interface TerminalWatchView {
+  /** What this pane asked to watch: a session, or a start it has not been named. */
+  readonly target: ClientTerminalTarget;
+  /**
+   * The bytes, buffered so a late emulator catches up.
+   *
+   * One per target and not one per pane: two panes on one session are one
+   * subscription — the hub refuses a second from the same connection — so a
+   * second pane replays from this rather than opening blank.
+   */
+  readonly feed: TerminalFeed;
+  /** Whether the hub has answered this subscription. */
+  readonly attached: boolean;
+  /**
+   * The session this turned out to be, or `null`.
+   *
+   * The answer to "which terminal did I just attach to" for a pane that asked
+   * by start handle: `null` until the provider names the session, and the ref
+   * from the moment the hub says so.
+   */
+  readonly session: SessionRef | null;
+  /** Frames of history the reply promised. Zero says the session has printed nothing. */
+  readonly replayChunks: number;
+  /** Bytes the terminal had already evicted when the replay began. */
+  readonly droppedBytes: number;
+  /** Chunks lost on the way here, both legs, over this connection's life. */
+  readonly droppedChunks: number;
+  /** Whether this browser's own buffer has evicted its oldest chunks. */
+  readonly evicted: boolean;
+  /** Whether any output at all has reached this pane. */
+  readonly printed: boolean;
+  /** The hub's most recent "no" about this terminal, in its words, or `null`. */
+  readonly problem: string | null;
 }
 
 export interface PaneLayoutAnswer {
@@ -276,6 +358,14 @@ export interface HubSnapshot {
    */
   readonly paneLayout: PaneLayoutAnswer | null;
   readonly commandQueue: CommandQueueView;
+  /**
+   * Every terminal this client is watching, by the key of the target it named.
+   *
+   * A map rather than a field per pane because a target is not a component:
+   * the layout may show one session in two panes and the address bar may open
+   * a third, and all of them are one subscription and one buffer.
+   */
+  readonly terminals: ReadonlyMap<string, TerminalWatchView>;
   readonly terminalInput: TerminalInputView;
   /** The hub's most recent "no", kept until a later command is answered yes. */
   readonly lastRefusal: RefusalView | null;
@@ -401,9 +491,27 @@ export interface HubStore {
    */
   request(request: HubRequest): Promise<RequestOutcome>;
   /** Sends now, or discards while the connection is down. Never queues. */
-  sendTerminalInput(ref: SessionRef, data: string): TerminalInputOutcome;
-  /** Standing interest in one session, replayed on every reconnection. */
-  subscribeSession(ref: SessionRef): () => void;
+  sendTerminalInput(target: ClientTerminalTarget, data: string): TerminalInputOutcome;
+  /**
+   * Tells the session how big the viewer is, and remembers it.
+   *
+   * Not a command and not a keystroke: a size is standing interest of a sort
+   * the other two are not — it is a fact about the viewer that stays true
+   * until the next one, so the last one sent is replayed with the
+   * subscription on every reconnection. Silent on success, like the wire:
+   * what a pane can see for itself is not worth a frame back.
+   */
+  sendTerminalResize(target: ClientTerminalTarget, size: TerminalSize): void;
+  /**
+   * Standing interest in one terminal, replayed on every reconnection.
+   *
+   * The returned function gives the watch back; the last one to leave is what
+   * sends `session-unsubscribe`. The bytes and the facts about them are in
+   * the snapshot, under `terminalKey(target)` — not returned here, because a
+   * pane re-reads them on every render and a value handed over once would be
+   * the version that was true at mount.
+   */
+  watchTerminal(target: ClientTerminalTarget): () => void;
   /** Standing interest in the stored layout, re-requested on every reconnection. */
   subscribeLayout(): () => void;
   /** Standing interest in the stored pane layout, re-requested the same way. */
@@ -455,16 +563,12 @@ export interface HubStoreDependencies {
   readonly timers: Timers;
   readonly frameIds: FrameIds;
   /**
-   * How a session subscription goes on the wire, already encoded.
+   * How big one watched terminal's buffer may get, in bytes.
    *
-   * The protocol has no session-subscribe frame yet — terminal frames arrive
-   * with the milestone that implements them — so the replay machinery takes
-   * the encoding as a seam. Until the seam is filled, interest is tracked and
-   * replay sends nothing, which is the honest half of the behaviour.
+   * Injected only so a test can make a feed drop something with three chunks;
+   * the app takes the default, which `chunk-feed.ts` argues.
    */
-  encodeSessionSubscription?: (ref: SessionRef, id: FrameId) => string;
-  /** How a terminal keystroke goes on the wire. The same seam, the same reason. */
-  encodeTerminalInput?: (ref: SessionRef, data: string, id: FrameId) => string;
+  readonly terminalFeedBytes?: number;
   /** Bounds the offline command queue. The default is deliberate; see below. */
   readonly maxQueuedCommands?: number;
   /** Reconnect backoff, first try to steady state. The last entry repeats. */
@@ -487,6 +591,61 @@ export function encodeClientFrame(frame: ClientFrame): string {
   return JSON.stringify(frame);
 }
 
+/**
+ * One name for one terminal, so two frames naming it are one subscription.
+ *
+ * JSON and not a joined string, for the reason the session key it replaces
+ * was: a store id and a session id are opaque, and a separator that can
+ * appear inside one of them is a collision waiting for the store that uses
+ * it. The `by` discriminator is part of the key because a start handle and a
+ * session are two different things to watch, right up until the hub says
+ * which session a start became — and even then the pane goes on being
+ * answered under the name it asked with.
+ */
+export function terminalKey(target: ClientTerminalTarget): string {
+  return target.by === 'start'
+    ? JSON.stringify(['start', target.startId])
+    : JSON.stringify(['session', target.storeId, target.sessionId]);
+}
+
+/** The same key for a session named by a frame rather than by a target. */
+function sessionTerminalKey(storeId: StoreId, sessionId: SessionId): string {
+  return JSON.stringify(['session', storeId, sessionId]);
+}
+
+/**
+ * One watched terminal as the store holds it: the published facts, plus the
+ * bookkeeping a subscription needs and a pane has no use for.
+ */
+interface TerminalRecord {
+  readonly key: string;
+  readonly target: ClientTerminalTarget;
+  readonly feed: TerminalFeed;
+  /** How many panes are looking. The last one leaving sends the unsubscribe. */
+  watchers: number;
+  attached: boolean;
+  session: SessionRef | null;
+  replayChunks: number;
+  droppedBytes: number;
+  droppedChunks: number;
+  printed: boolean;
+  problem: string | null;
+  /**
+   * The last size sent for this terminal, replayed with the subscription.
+   *
+   * A size is not a keystroke and not a command: it stays true until the next
+   * one, so a reconnection that did not carry it would leave the process on
+   * the far end laying its screen out against a window that is no longer
+   * there.
+   */
+  size: TerminalSize | null;
+  /** The session key this was indexed under as well, once a reply named one. */
+  bound: string | null;
+}
+
+/** What a terminal frame this client sent is waiting to be told about. */
+type TerminalAsk = 'subscribe' | 'unsubscribe' | 'input' | 'resize';
+
 const INITIAL_QUEUE: Omit<CommandQueueView, 'capacity'> = { queued: 0, overflowed: null };
 const INITIAL_TERMINAL: TerminalInputView = { discarded: 0, notice: null };
 
@@ -494,6 +653,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   const { timers, frameIds } = dependencies;
   const capacity = dependencies.maxQueuedCommands ?? DEFAULT_MAX_QUEUED_COMMANDS;
   const delays = dependencies.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
+  const feedBytes = dependencies.terminalFeedBytes ?? DEFAULT_FEED_BYTES;
 
   const listeners = new Set<() => void>();
   let snapshot: HubSnapshot = {
@@ -504,6 +664,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     layout: null,
     paneLayout: null,
     commandQueue: { ...INITIAL_QUEUE, capacity },
+    terminals: new Map(),
     terminalInput: INITIAL_TERMINAL,
     lastRefusal: null,
     lastStarted: null,
@@ -569,15 +730,122 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     for (const waiting of [...pendingQueries.values()]) waiting.reject(new Error(why));
     pendingQueries.clear();
   }
-  const sessionWatchers = new Map<string, { readonly ref: SessionRef; count: number }>();
+  /** Every watched terminal, by the key of the target the pane named. */
+  const terminals = new Map<string, TerminalRecord>();
+  /**
+   * Start-addressed records, indexed again by the session they turned out to
+   * be, so output carrying only a session id still finds them.
+   *
+   * A second index rather than a re-keyed map, because both names stay true:
+   * the hub goes on stamping this client's own start handle on every frame
+   * for that watch, and the pane goes on being answered under the name it
+   * asked with. The hub's relay keeps the same two names for the same reason.
+   */
+  const rebound = new Map<string, Set<TerminalRecord>>();
+  /** Terminal frames this client sent, by the id a refusal would name. */
+  const terminalReplies = new Map<FrameId, { readonly key: string; readonly ask: TerminalAsk }>();
 
   function update(changes: Partial<HubSnapshot>): void {
     snapshot = { ...snapshot, ...changes };
     for (const listener of [...listeners]) listener();
   }
 
+  /**
+   * Publishes the terminal facts, and nothing else.
+   *
+   * Called only when one of them actually changed. A chunk arriving is not
+   * one of them: bytes go to the feed, and the pane's emulator reads them
+   * from there without React ever hearing about it.
+   */
+  function publishTerminals(): void {
+    const views = new Map<string, TerminalWatchView>();
+    for (const [key, record] of terminals) {
+      views.set(key, {
+        target: record.target,
+        feed: record.feed,
+        attached: record.attached,
+        session: record.session,
+        replayChunks: record.replayChunks,
+        droppedBytes: record.droppedBytes,
+        droppedChunks: record.droppedChunks,
+        evicted: record.feed.truncated,
+        printed: record.printed,
+        problem: record.problem,
+      });
+    }
+    update({ terminals: views });
+  }
+
   function queueView(overflowed: string | null): CommandQueueView {
     return { queued: queue.length, capacity, overflowed };
+  }
+
+  /**
+   * Puts one terminal frame on the wire and remembers what it was, so that a
+   * refusal reaches the pane that asked rather than the screen-wide "the hub
+   * said no" that every other command shares.
+   *
+   * Answered with the id, or `null` when there was nothing to send it on.
+   */
+  function sendTerminalFrame(
+    ask: TerminalAsk,
+    key: string,
+    build: (id: FrameId) => ClientFrame,
+  ): FrameId | null {
+    const wire = socket;
+    if (!established || wire === null) return null;
+    const id = frameIds.next();
+    terminalReplies.set(id, { key, ask });
+    wire.send(encodeClientFrame(build(id)));
+    return id;
+  }
+
+  /** Asks for one terminal, and for the size the viewer already has. */
+  function subscribeTerminal(record: TerminalRecord): void {
+    sendTerminalFrame('subscribe', record.key, (id) => ({
+      type: 'session-subscribe',
+      id,
+      target: record.target,
+    }));
+    const size = record.size;
+    if (size === null) return;
+    // After the subscribe, never before: a resize for a terminal this
+    // connection is not yet watching is a frame the hub can only refuse.
+    sendTerminalFrame('resize', record.key, (id) => ({
+      type: 'terminal-resize',
+      id,
+      target: record.target,
+      size,
+    }));
+  }
+
+  /** Every terminal a chunk belongs to, each once however many names found it. */
+  function recipientsOf(
+    storeId: StoreId,
+    sessionId: SessionId | null,
+    startId: FrameId | null,
+  ): Set<TerminalRecord> {
+    const matched = new Set<TerminalRecord>();
+    if (startId !== null) {
+      const byStart = terminals.get(terminalKey({ by: 'start', startId }));
+      if (byStart !== undefined) matched.add(byStart);
+    }
+    if (sessionId !== null) {
+      const key = sessionTerminalKey(storeId, sessionId);
+      const bySession = terminals.get(key);
+      if (bySession !== undefined) matched.add(bySession);
+      for (const record of rebound.get(key) ?? []) matched.add(record);
+    }
+    return matched;
+  }
+
+  /** Forgets the second name a start-addressed record was given. */
+  function unbind(record: TerminalRecord): void {
+    if (record.bound === null) return;
+    const held = rebound.get(record.bound);
+    held?.delete(record);
+    if (held?.size === 0) rebound.delete(record.bound);
+    record.bound = null;
   }
 
   function connect(): void {
@@ -623,6 +891,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       pending.clear();
       settleWaiting('the connection dropped before the hub answered');
       abandonQueries('the connection dropped before the hub answered this catalogue query');
+      detachTerminals();
       if (unanswered > 0) {
         update({
           problem: `the connection dropped before the hub answered ${String(unanswered)} command${
@@ -849,7 +1118,81 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         requestCatalogue();
         return;
       }
+      case 'session-subscribed': {
+        const asked = terminalReplies.get(frame.replyTo);
+        terminalReplies.delete(frame.replyTo);
+        // A reply to a subscription this client has since given back, or to
+        // one from a connection that has already gone: there is nothing left
+        // to attach, and the history behind it belongs to nobody.
+        const record = asked === undefined ? undefined : terminals.get(asked.key);
+        if (record === undefined) return;
+
+        record.attached = true;
+        record.problem = null;
+        record.replayChunks = frame.replayChunks;
+        record.droppedBytes = frame.droppedBytes;
+        record.session =
+          frame.sessionId === null ? null : { storeId: frame.storeId, sessionId: frame.sessionId };
+
+        // The moment a pending pane becomes a session's pane. The record keeps
+        // its start-addressed key -- the hub still answers to it -- and gains a
+        // second name, so a chunk carrying only the session id reaches it too.
+        // Taken off the hub's own answer rather than guessed from what arrived
+        // around the same time: a spawn and a scan racing is exactly the case
+        // where guessing by timing attaches a pane to somebody else's agent.
+        if (record.target.by === 'start' && frame.sessionId !== null) {
+          unbind(record);
+          const key = sessionTerminalKey(frame.storeId, frame.sessionId);
+          record.bound = key;
+          const held = rebound.get(key) ?? new Set<TerminalRecord>();
+          held.add(record);
+          rebound.set(key, held);
+        }
+        publishTerminals();
+        return;
+      }
+      case 'session-unsubscribed': {
+        // The books were closed when the last pane left; this says the hub
+        // agrees. Nothing to publish: a pane that is gone has no notice to
+        // show, and one still here never asked for this.
+        terminalReplies.delete(frame.replyTo);
+        return;
+      }
+      case 'terminal-output': {
+        const chunk = decodeTerminalChunk(frame.chunk);
+        for (const record of recipientsOf(frame.storeId, frame.sessionId, frame.startId)) {
+          const evicted = record.feed.truncated;
+          record.feed.push(chunk);
+          // Only the facts, and only when one of them moved. The bytes went
+          // to the feed above and the emulator has them already; publishing
+          // per chunk would re-render the app at the speed the agent prints.
+          const changed =
+            !record.printed ||
+            record.droppedChunks !== frame.droppedChunks ||
+            evicted !== record.feed.truncated;
+          record.printed = true;
+          // Cumulative and only ever increasing, so the newest frame is the
+          // whole count; a reader comparing it with the last one it saw gets
+          // the size of the gap.
+          record.droppedChunks = frame.droppedChunks;
+          if (changed) publishTerminals();
+        }
+        return;
+      }
       case 'refusal': {
+        const asked = terminalReplies.get(frame.replyTo);
+        if (asked !== undefined) {
+          terminalReplies.delete(frame.replyTo);
+          const record = terminals.get(asked.key);
+          if (record === undefined) return;
+          // Said on the pane rather than in the screen-wide refusal: this is
+          // a no about one terminal, and the user is looking at it. A blank
+          // rectangle and a machine that is asleep draw the same thing.
+          record.problem = frame.message;
+          if (asked.ask === 'subscribe') record.attached = false;
+          publishTerminals();
+          return;
+        }
         pending.delete(frame.replyTo);
         // A refusal answers a request as surely as a reply does, and its words
         // are the hub's own. It still goes into `lastRefusal`: the connection
@@ -891,6 +1234,13 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         });
         return;
       }
+      default:
+        // Exhaustive, the way the hub's two switches are. A frame added to
+        // the protocol with no case here is a type error rather than a
+        // silence: the four terminal frames parsed cleanly for a milestone
+        // and fell out of the bottom of a switch exactly like this one, with
+        // no log line and nothing to find.
+        return assertNever(frame, 'hub frame');
     }
   }
 
@@ -958,12 +1308,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     // times while the socket was down, so the question is asked again from the
     // first page rather than resumed.
     requestCatalogue();
-    const encode = dependencies.encodeSessionSubscription;
-    if (encode !== undefined) {
-      for (const { ref } of sessionWatchers.values()) {
-        wire.send(encode(ref, frameIds.next()));
-      }
-    }
+    for (const record of terminals.values()) subscribeTerminal(record);
   }
 
   function flushQueue(): void {
@@ -995,6 +1340,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     abandonQueries('nothing is looking at this store any more');
     lastQuery = null;
     wire?.close();
+    detachTerminals();
     update({
       phase: 'idle',
       commandQueue: queueView(null),
@@ -1012,9 +1358,27 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     });
   }
 
-  function sessionKey(ref: SessionRef): string {
-    // JSON, not a joined string: an opaque id may contain any separator.
-    return JSON.stringify([ref.storeId, ref.sessionId]);
+  /**
+   * The connection is gone: every watch is standing interest again rather
+   * than an attachment.
+   *
+   * The records survive, because the panes do — a subscription is interest
+   * and not a request, and the next welcome replays it. What does not survive
+   * is everything that was true of *that* connection: nothing is attached to
+   * a socket that is closed, `droppedChunks` counts one link's losses and the
+   * link is gone, and a refusal the last connection gave is not a fact about
+   * the next one. The buffered bytes stay: they are what the emulator is
+   * showing, and a pane does not go blank because a socket did.
+   */
+  function detachTerminals(): void {
+    terminalReplies.clear();
+    if (terminals.size === 0) return;
+    for (const record of terminals.values()) {
+      record.attached = false;
+      record.droppedChunks = 0;
+      record.problem = null;
+    }
+    publishTerminals();
   }
 
   return {
@@ -1080,14 +1444,18 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       return new Promise<RequestOutcome>((resolve) => waiting.set(id, resolve));
     },
 
-    sendTerminalInput(ref: SessionRef, data: string): TerminalInputOutcome {
-      const wire = socket;
-      if (established && wire !== null) {
-        const encode = dependencies.encodeTerminalInput;
-        if (encode === undefined) {
-          return { delivered: false, reason: 'this build cannot send terminal input yet' };
-        }
-        wire.send(encode(ref, data, frameIds.next()));
+    sendTerminalInput(target: ClientTerminalTarget, data: string): TerminalInputOutcome {
+      if (established && socket !== null) {
+        // Answered only when it fails, which is the wire's rule and this
+        // one's: a terminal acknowledges input by echoing it, so `delivered`
+        // means it went out. A write that could not be made still comes back,
+        // as a refusal naming this frame, and lands on the pane.
+        sendTerminalFrame('input', terminalKey(target), (id) => ({
+          type: 'terminal-input',
+          id,
+          target,
+          data,
+        }));
         return { delivered: true };
       }
       const discarded = snapshot.terminalInput.discarded + 1;
@@ -1103,28 +1471,77 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       return { delivered: false, reason: 'the connection is down; keystrokes are discarded' };
     },
 
-    subscribeSession(ref: SessionRef): () => void {
-      const key = sessionKey(ref);
-      const existing = sessionWatchers.get(key);
+    sendTerminalResize(target: ClientTerminalTarget, size: TerminalSize): void {
+      const key = terminalKey(target);
+      // Remembered whether or not it can be sent, and remembered even for a
+      // target nothing is watching: the size is what the pane currently is,
+      // and the connection returning is when the far end gets to hear it.
+      const record = terminals.get(key);
+      if (record !== undefined) record.size = size;
+      if (record === undefined || record.attached) {
+        sendTerminalFrame('resize', key, (id) => ({
+          type: 'terminal-resize',
+          id,
+          target,
+          size,
+        }));
+      }
+    },
+
+    watchTerminal(target: ClientTerminalTarget): () => void {
+      const key = terminalKey(target);
+      const existing = terminals.get(key);
       if (existing !== undefined) {
-        existing.count += 1;
+        // One subscription per target, however many panes. The hub refuses a
+        // second subscribe to one terminal from one connection -- a second
+        // asks for a second replay -- so the right answer for a second pane
+        // is the buffer the first one filled.
+        existing.watchers += 1;
       } else {
-        sessionWatchers.set(key, { ref, count: 1 });
+        const record: TerminalRecord = {
+          key,
+          target,
+          feed: createTerminalFeed({ maxBytes: feedBytes }),
+          watchers: 1,
+          attached: false,
+          session:
+            target.by === 'session'
+              ? { storeId: target.storeId, sessionId: target.sessionId }
+              : null,
+          replayChunks: 0,
+          droppedBytes: 0,
+          droppedChunks: 0,
+          printed: false,
+          problem: null,
+          size: null,
+          bound: null,
+        };
+        terminals.set(key, record);
         // New interest on a live connection is sent now; on a dead one it is
         // not queued — the replay on the next welcome is what carries it.
-        const encode = dependencies.encodeSessionSubscription;
-        if (established && socket !== null && encode !== undefined) {
-          socket.send(encode(ref, frameIds.next()));
-        }
+        subscribeTerminal(record);
+        publishTerminals();
       }
       let active = true;
       return () => {
         if (!active) return;
         active = false;
-        const entry = sessionWatchers.get(key);
-        if (entry === undefined) return;
-        entry.count -= 1;
-        if (entry.count === 0) sessionWatchers.delete(key);
+        const record = terminals.get(key);
+        if (record === undefined) return;
+        record.watchers -= 1;
+        if (record.watchers > 0) return;
+        terminals.delete(key);
+        unbind(record);
+        // The partner of the subscribe, and the whole difference between
+        // closing a tab and killing an agent: the count this gives back is
+        // the one the server evicts terminals by, and detaching closes
+        // nothing.
+        sendTerminalFrame('unsubscribe', key, (id) => ({
+          type: 'session-unsubscribe',
+          id,
+          target,
+        }));
+        publishTerminals();
       };
     },
 

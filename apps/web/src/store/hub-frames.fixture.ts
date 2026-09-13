@@ -91,4 +91,15 @@ export const hubFrames = {
   serverUnpaired: '{"type":"server-unpaired","replyTo":4}',
   machineStateJustPaired:
     '{"type":"machine-state","state":{"version":2,"stores":[{"storeId":"store-agentplex","servers":["registration-1"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[]}],"servers":[{"registrationId":"registration-1","label":"mbp-robert","address":"wss://mbp-robert.example:8443","serverId":"server-mbp","phase":"connected","stores":["store-agentplex"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null}],"candidates":[]}}',
+  sessionSubscribed:
+    '{"type":"session-subscribed","replyTo":2,"storeId":"store-work","sessionId":"session-build","startId":null,"replayChunks":2,"droppedBytes":0}',
+  sessionSubscribedTruncated:
+    '{"type":"session-subscribed","replyTo":2,"storeId":"store-work","sessionId":"session-build","startId":null,"replayChunks":2,"droppedBytes":3145754}',
+  terminalOutput:
+    '{"type":"terminal-output","storeId":"store-work","sessionId":"session-build","startId":null,"chunk":"YnVpbGRpbmcNCg==","droppedChunks":0}',
+  terminalOutputDropped:
+    '{"type":"terminal-output","storeId":"store-work","sessionId":"session-build","startId":null,"chunk":"ZG9uZQ0K","droppedChunks":30}',
+  sessionUnsubscribed: '{"type":"session-unsubscribed","replyTo":3}',
+  refusalTerminal:
+    '{"type":"refusal","replyTo":2,"code":"refused","message":"the hub cannot reach mbp-robert right now","holder":null}',
 } as const;
