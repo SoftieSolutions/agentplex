@@ -74,6 +74,7 @@ const HUB_FEATURES = [
   'clients',
   'discovery',
   'fleet-state',
+  'mcp',
   'pairing',
   'pane-layout',
   'servers',

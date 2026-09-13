@@ -85,7 +85,7 @@ migration is history: add a new one rather than editing it.
 
 `apps/hub/src/features/` is one folder per feature: the fleet state, the paired
 servers, pairing, sessions, the catalogue, the pane layout, the clients, client
-auth, discovery, and the web assets. Four rules hold it together, and `pnpm
+auth, discovery, the web assets, and MCP. Four rules hold it together, and `pnpm
 lint` enforces the first one.
 
 **A feature is a folder with one entry file.** `features/catalogue/catalogue.ts`
