@@ -699,3 +699,45 @@ describe('discovered candidates', () => {
     expect(snapshot.candidates).toHaveLength(1);
   });
 });
+
+describe('the reading one store is believed to hold', () => {
+  it('merges what every attached server reported into one list', () => {
+    const reducer = reduce();
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+    reducer.applyConnection(connection('box', 'connected', ['store-work']));
+    reducer.applySessions({
+      holding: [],
+      registrationId: 'registration-laptop' as ServerRegistrationId,
+      storeId: store('store-work'),
+      sessions: [session('session-1')],
+      reportedAt: START,
+    });
+    // The box has the same volume and has got as far as one more session. The
+    // reading is what the hub believes is in the store, which is both of them:
+    // the catalogue prunes against this, and pruning against either server's
+    // half would take the node the other one had just placed.
+    reducer.applySessions({
+      holding: [],
+      registrationId: 'registration-box' as ServerRegistrationId,
+      storeId: store('store-work'),
+      sessions: [session('session-1'), session('session-2')],
+      reportedAt: START,
+    });
+
+    expect(
+      reducer.storeSessions(store('store-work'))?.map((descriptor) => descriptor.sessionId),
+    ).toEqual(['session-1', 'session-2']);
+  });
+
+  it('answers null for a store nothing has mounted', () => {
+    const reducer = reduce();
+    expect(reducer.storeSessions(store('store-work'))).toBeNull();
+
+    // Mounted and not yet scanned reads as an empty list, which this cannot
+    // distinguish from scanned and empty. That is why the catalogue asks only
+    // for a store a report has just arrived for: being told is what makes the
+    // answer a reading rather than a silence.
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+    expect(reducer.storeSessions(store('store-work'))).toEqual([]);
+  });
+});

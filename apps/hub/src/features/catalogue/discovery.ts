@@ -1,5 +1,5 @@
 import type { SessionRef } from '@agentplex/protocol';
-import type { Database, Queryable } from '../../db/database.js';
+import type { Queryable } from '../../db/database.js';
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import type { DiscoveredSession, DiscoveryOutcome } from './catalogue.js';
 import { findNodeForSession } from './reads.js';
@@ -25,42 +25,42 @@ import { SESSION_KIND, type TreeNode } from './rows.js';
 /**
  * Places what is new, retitles what still follows its title, restores nothing.
  *
- * One transaction for the batch. A scan is one reading of one store, and half
- * of it committed is a tree that agrees with no scan that ever happened.
+ * A `Queryable` and not a `Database`, so the transaction is the caller's. A
+ * scan is one reading of one store and half of it committed is a tree that
+ * agrees with no scan that ever happened -- and the sweep that follows it in
+ * `catalogue.ts` is the other half of the same reading, so the batch that has
+ * to commit whole is larger than this function can see. `catalogue.ts` opens
+ * the one transaction both of them run in.
  */
 export async function discoverNodes(
-  database: Database,
+  database: Queryable,
   ids: IdGenerator,
   clock: Clock,
   sessions: readonly DiscoveredSession[],
 ): Promise<DiscoveryOutcome> {
-  if (sessions.length === 0) return { created: [], retitled: [], suppressed: [] };
+  const created: TreeNode[] = [];
+  const retitled: TreeNode[] = [];
+  const suppressed: SessionRef[] = [];
 
-  return database.transaction(async (tx) => {
-    const created: TreeNode[] = [];
-    const retitled: TreeNode[] = [];
-    const suppressed: SessionRef[] = [];
+  for (const session of sessions) {
+    const existing = await findNodeForSession(database, session.ref);
 
-    for (const session of sessions) {
-      const existing = await findNodeForSession(tx, session.ref);
-
-      if (existing !== null) {
-        // The node is here, so its placement is settled -- by the user if they
-        // moved it, by the creation below if they did not, and either way not
-        // by this scan. The only column discovery may still write is the name,
-        // and only while the name is still following the title.
-        const followed = await followTitle(tx, existing, session.title);
-        if (followed !== null) retitled.push(followed);
-        continue;
-      }
-
-      const placed = await placeSession(tx, ids, clock, session);
-      if (placed === null) suppressed.push(session.ref);
-      else created.push(placed);
+    if (existing !== null) {
+      // The node is here, so its placement is settled -- by the user if they
+      // moved it, by the creation below if they did not, and either way not
+      // by this scan. The only column discovery may still write is the name,
+      // and only while the name is still following the title.
+      const followed = await followTitle(database, existing, session.title);
+      if (followed !== null) retitled.push(followed);
+      continue;
     }
 
-    return { created, retitled, suppressed };
-  });
+    const placed = await placeSession(database, ids, clock, session);
+    if (placed === null) suppressed.push(session.ref);
+    else created.push(placed);
+  }
+
+  return { created, retitled, suppressed };
 }
 
 /**
