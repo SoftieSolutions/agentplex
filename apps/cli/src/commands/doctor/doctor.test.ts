@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { PtyAvailability } from '@agentplex/pty';
-import type { Config } from './config.js';
+import { MIN_TOKEN_LENGTH } from '@agentplex/node-shared';
+import type { Config, HubConfig } from './config.js';
 import { formatDoctorReport, inspectMachine } from './doctor.js';
+import type { HubChecks } from './hub.js';
+import {
+  createFakeModuleResolver,
+  createFakePathAccess,
+  createFakePortProbe,
+} from './fake-hub-probes.js';
 import {
   createFakeStoreFiles,
   createFakeProviderAdapter,
@@ -22,6 +29,43 @@ import { createProviderRegistry } from '@agentplex/providers';
 
 const HOST = '127.0.0.1';
 const IDENTITY_PATH = '/etc/agentplex/server.json';
+const DATABASE = '/var/lib/agentplex/agentplex.db';
+const DATABASE_DIRECTORY = '/var/lib/agentplex';
+const WEB_MANIFEST = '@softiesolutions/agentplex-web/package.json';
+
+/**
+ * The hub half of a machine where everything a hub needs is there. Its own
+ * rules have their own suite next door; what these cases are about is which
+ * half of a machine gets inspected at all.
+ */
+const workingHub = {
+  access: createFakePathAccess({ writable: [DATABASE_DIRECTORY] }),
+  ports: createFakePortProbe(),
+  resolve: createFakeModuleResolver({ [WEB_MANIFEST]: 'file:///opt/web/package.json' }),
+};
+
+const hubSettings: HubConfig = {
+  port: 8080,
+  databaseFile: DATABASE,
+  clientToken: 'x'.repeat(MIN_TOKEN_LENGTH),
+  localServerIdentityPath: null,
+};
+
+/** The volume a hub check looks at: the directory its database would go in. */
+function hubFiles(): ReturnType<typeof createFakeStoreFiles> {
+  return createFakeStoreFiles({ directories: [DATABASE_DIRECTORY] });
+}
+
+/** A hub with nothing wrong with it, for the cases that are about the printing. */
+function readyHub(): HubChecks {
+  return {
+    database: { path: DATABASE, state: 'ready', problem: null },
+    clientToken: { state: 'ready', problem: null },
+    port: { host: HOST, port: 8080, state: 'free', problem: null },
+    client: { state: 'present', problem: null },
+    localServer: null,
+  };
+}
 
 function serverConfig(storePaths: readonly string[]): Config {
   return {
@@ -39,7 +83,13 @@ function serverConfig(storePaths: readonly string[]): Config {
   };
 }
 
-const hubConfig: Config = { role: 'hub', logLevel: 'error', host: HOST };
+const hubConfig: Config = { role: 'hub', logLevel: 'error', host: HOST, hub: hubSettings };
+
+function bothConfig(storePaths: readonly string[]): Config {
+  const server = serverConfig(storePaths);
+  if (!('server' in server)) throw new Error('serverConfig builds a server half');
+  return { role: 'both', logLevel: 'error', host: HOST, hub: hubSettings, server: server.server };
+}
 
 const providers = createProviderRegistry([createFakeProviderAdapter({ provider: 'claude' })]);
 
@@ -62,6 +112,7 @@ describe('inspectMachine', () => {
 
     const report = await inspectMachine(serverConfig([]), {
       providers,
+      ...workingHub,
       preflight: { run: async () => found },
       files: createFakeStoreFiles(),
       terminals: workingPty,
@@ -78,6 +129,7 @@ describe('inspectMachine', () => {
 
     const report = await inspectMachine(serverConfig(['/volumes/work', '/volumes/gone']), {
       providers,
+      ...workingHub,
       preflight: { run: async () => [] },
       files,
       terminals: workingPty,
@@ -96,6 +148,7 @@ describe('inspectMachine', () => {
 
     const report = await inspectMachine(serverConfig(['/volumes/work']), {
       providers,
+      ...workingHub,
       preflight: { run: async () => [] },
       files,
       terminals: workingPty,
@@ -113,6 +166,7 @@ describe('inspectMachine', () => {
 
     await inspectMachine(serverConfig(['/volumes/work']), {
       providers,
+      ...workingHub,
       preflight: { run: async () => [] },
       files,
       terminals: workingPty,
@@ -124,12 +178,13 @@ describe('inspectMachine', () => {
   it('reports a hub-only machine as one that starts no sessions', async () => {
     const report = await inspectMachine(hubConfig, {
       providers,
+      ...workingHub,
       preflight: {
         run: async () => {
           throw new Error('a hub-only machine has no providers to probe');
         },
       },
-      files: createFakeStoreFiles(),
+      files: hubFiles(),
       terminals: workingPty,
     });
 
@@ -144,6 +199,7 @@ describe('inspectMachine', () => {
   it('is not usable when node-pty will not load, on a role that runs sessions', async () => {
     const report = await inspectMachine(serverConfig(['/volumes/work']), {
       providers,
+      ...workingHub,
       preflight: { run: async () => [readyProvider('claude')] },
       files: createFakeStoreFiles({ directories: ['/volumes/work'] }),
       terminals: brokenPty,
@@ -159,8 +215,9 @@ describe('inspectMachine', () => {
   it('asks nothing about terminals on a hub, which opens none', async () => {
     const report = await inspectMachine(hubConfig, {
       providers,
+      ...workingHub,
       preflight: { run: async () => [] },
-      files: createFakeStoreFiles(),
+      files: hubFiles(),
       terminals: () => {
         throw new Error('a hub-only machine has no pty to ask about');
       },
@@ -173,6 +230,7 @@ describe('inspectMachine', () => {
   it('is usable when everything it checked is', async () => {
     const report = await inspectMachine(serverConfig(['/volumes/work']), {
       providers,
+      ...workingHub,
       preflight: { run: async () => [readyProvider('claude')] },
       files: createFakeStoreFiles({ directories: ['/volumes/work'] }),
       terminals: workingPty,
@@ -184,6 +242,7 @@ describe('inspectMachine', () => {
   it('is not usable when a provider cannot be started', async () => {
     const report = await inspectMachine(serverConfig([]), {
       providers,
+      ...workingHub,
       preflight: { run: async () => [missingProvider('claude')] },
       files: createFakeStoreFiles(),
       terminals: workingPty,
@@ -195,6 +254,7 @@ describe('inspectMachine', () => {
   it('is not usable when a configured store is not there', async () => {
     const report = await inspectMachine(serverConfig(['/volumes/gone']), {
       providers,
+      ...workingHub,
       preflight: { run: async () => [readyProvider('claude')] },
       files: createFakeStoreFiles(),
       terminals: workingPty,
@@ -202,12 +262,76 @@ describe('inspectMachine', () => {
 
     expect(report.usable).toBe(false);
   });
+
+  /**
+   * The claim AGX-228 removed. `--role=hub` returned `usable: true` before
+   * anything had been looked at, so every way a hub fails at boot -- this one
+   * included -- was reported as a healthy machine.
+   */
+  it('is not usable when the hub has nowhere to put its database', async () => {
+    const report = await inspectMachine(hubConfig, {
+      providers,
+      ...workingHub,
+      preflight: { run: async () => [] },
+      // No directory for the database, which is a hub that does not start.
+      files: createFakeStoreFiles(),
+      terminals: workingPty,
+    });
+
+    expect(report.hub?.database).toMatchObject({ state: 'missing' });
+    expect(report.usable).toBe(false);
+  });
+
+  it('asks nothing about a hub on a machine that runs none', async () => {
+    const report = await inspectMachine(serverConfig([]), {
+      providers,
+      ...workingHub,
+      ports: () => {
+        throw new Error('a server-only machine binds no hub port');
+      },
+      preflight: { run: async () => [readyProvider('claude')] },
+      files: createFakeStoreFiles(),
+      terminals: workingPty,
+    });
+
+    expect(report.hub).toBeNull();
+    expect(report.usable).toBe(true);
+  });
+
+  it('runs both halves on a machine that is both, and either half can fail it', async () => {
+    const both = await inspectMachine(bothConfig(['/volumes/work']), {
+      providers,
+      ...workingHub,
+      preflight: { run: async () => [readyProvider('claude')] },
+      files: createFakeStoreFiles({ directories: [DATABASE_DIRECTORY, '/volumes/work'] }),
+      terminals: workingPty,
+    });
+
+    expect(both.hub?.database).toMatchObject({ state: 'ready' });
+    expect(both.stores).toHaveLength(1);
+    expect(both.usable).toBe(true);
+
+    const heldPort = await inspectMachine(bothConfig(['/volumes/work']), {
+      providers,
+      ...workingHub,
+      ports: createFakePortProbe({ taken: [`${HOST}:8080`] }),
+      preflight: { run: async () => [readyProvider('claude')] },
+      files: createFakeStoreFiles({ directories: [DATABASE_DIRECTORY, '/volumes/work'] }),
+      terminals: workingPty,
+    });
+
+    // Everything the server half looks at is fine, and the machine still is
+    // not: the hub on it would not start.
+    expect(heldPort.stores).toEqual([{ path: '/volumes/work', state: 'present', problem: null }]);
+    expect(heldPort.usable).toBe(false);
+  });
 });
 
 describe('formatDoctorReport', () => {
   it('names the directory a provider came from, which is the question being asked', () => {
     const printed = formatDoctorReport({
       role: 'server',
+      hub: null,
       usable: true,
       providers: [readyProvider('claude')],
       stores: [],
@@ -223,6 +347,7 @@ describe('formatDoctorReport', () => {
   it('prints the problem beside the provider that has one', () => {
     const printed = formatDoctorReport({
       role: 'server',
+      hub: null,
       usable: false,
       providers: [missingProvider('claude')],
       stores: [],
@@ -240,6 +365,7 @@ describe('formatDoctorReport', () => {
     // every session on the machine with it.
     const printed = formatDoctorReport({
       role: 'server',
+      hub: null,
       usable: true,
       providers: [readyProvider('claude')],
       stores: [],
@@ -254,6 +380,7 @@ describe('formatDoctorReport', () => {
     // naming a unit this machine does not run would be advice that fails.
     const printed = formatDoctorReport({
       role: 'hub',
+      hub: readyHub(),
       usable: true,
       providers: [],
       stores: [],
@@ -266,6 +393,7 @@ describe('formatDoctorReport', () => {
   it('prints each store path and what it turned out to be', () => {
     const printed = formatDoctorReport({
       role: 'server',
+      hub: null,
       usable: false,
       providers: [],
       stores: [
@@ -283,6 +411,7 @@ describe('formatDoctorReport', () => {
   it('prints the load failure and what to install beneath it', () => {
     const printed = formatDoctorReport({
       role: 'server',
+      hub: null,
       usable: false,
       providers: [],
       stores: [],
@@ -299,6 +428,7 @@ describe('formatDoctorReport', () => {
   it('says so plainly when a role has nothing of its own to check', () => {
     const printed = formatDoctorReport({
       role: 'hub',
+      hub: readyHub(),
       usable: true,
       providers: [],
       stores: [],
@@ -308,5 +438,34 @@ describe('formatDoctorReport', () => {
     // An empty section reads as a listing that failed. Words say which it is.
     expect(printed).toContain('runs no server');
     expect(printed).toContain('opens no terminals');
+  });
+
+  it('says the same of a machine that runs no hub', () => {
+    const printed = formatDoctorReport({
+      role: 'server',
+      hub: null,
+      usable: true,
+      providers: [],
+      stores: [],
+      terminals: { state: 'ready', problem: null },
+    }).join('\n');
+
+    expect(printed).toContain('runs no hub');
+  });
+
+  it('prints what the hub needs, on the machine that runs one', () => {
+    const printed = formatDoctorReport({
+      role: 'hub',
+      hub: readyHub(),
+      usable: true,
+      providers: [],
+      stores: [],
+      terminals: null,
+    }).join('\n');
+
+    expect(printed).toContain('database');
+    expect(printed).toContain(DATABASE);
+    expect(printed).toContain('client token');
+    expect(printed).toContain(`${HOST}:8080`);
   });
 });

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  DEFAULT_HUB_PORT,
   DEFAULT_SERVER_PORT,
   LOG_LEVELS,
   readAbsolutePath,
@@ -10,6 +11,7 @@ import {
   settingValue,
   usageLines,
   type LogLevel,
+  type Setting,
 } from '@agentplex/node-shared';
 
 /**
@@ -102,19 +104,67 @@ export interface ServerConfig {
 }
 
 /**
- * A union rather than a record with an optional half: in `--role=hub` there
- * is no server to inspect, and the type should be what makes that true.
+ * What a hub needs before it can boot, as the settings name it.
+ *
+ * Three of these four are `null`-able, and that is the difference between this
+ * half and the server half above. A server with no identity file is a
+ * configuration the doctor refuses to run against, because there is nothing to
+ * inspect. A hub with no database file or no client token is a machine in a
+ * state an operator asked about: it is the most common way a half-finished hub
+ * fails, and the doctor's job is to print that as a line rather than to answer
+ * a usage message instead of the report.
+ *
+ * A setting that is present and *malformed* -- a relative path, a port that is
+ * not a number -- still stops the run with a usage error, the way it does for
+ * every other setting in this program. Those are typos in what was typed, and
+ * the reader that catches them says so better than a check could.
+ */
+export interface HubConfig {
+  /** The port the hub serves the client and the API on. */
+  readonly port: number;
+  /** The SQLite file, absolute, or `null` when no setting names one. */
+  readonly databaseFile: string | null;
+  /**
+   * The client credential, or `null` when no setting carries one.
+   *
+   * Carried as the word it is rather than as a length, because it is read the
+   * way the hub reads it. It reaches no report line: `checkClientToken` in
+   * `hub.ts` reads its length and returns a verdict that has nowhere to put a
+   * value.
+   */
+  readonly clientToken: string | null;
+  /**
+   * Where the server on this machine keeps its identity, when the settings name
+   * one, and `null` for the hub that has none -- which is most hubs.
+   */
+  readonly localServerIdentityPath: string | null;
+}
+
+/**
+ * A union rather than a record with optional halves: in `--role=hub` there is
+ * no server to inspect and in `--role=server` there is no hub, and the type
+ * should be what makes each true. `both` is the one that carries the two, and
+ * it is spelled out rather than folded into either so that neither half can be
+ * reached on a role that does not run it.
  */
 export type Config =
   | {
       readonly role: 'hub';
       readonly logLevel: LogLevel;
       readonly host: string;
+      readonly hub: HubConfig;
     }
   | {
-      readonly role: 'server' | 'both';
+      readonly role: 'server';
       readonly logLevel: LogLevel;
       readonly host: string;
+      readonly server: ServerConfig;
+    }
+  | {
+      readonly role: 'both';
+      readonly logLevel: LogLevel;
+      readonly host: string;
+      readonly hub: HubConfig;
       readonly server: ServerConfig;
     };
 
@@ -156,6 +206,19 @@ const SETTINGS = {
   role: { flag: '--role', env: 'AGENTPLEX_ROLE' },
   logLevel: { flag: '--log-level', env: 'AGENTPLEX_LOG_LEVEL' },
   host: { flag: '--host', env: 'AGENTPLEX_HOST' },
+  hubPort: { flag: '--hub-port', env: 'AGENTPLEX_HUB_PORT' },
+  databaseFile: { flag: '--database-file', env: 'AGENTPLEX_DATABASE_FILE' },
+  clientToken: { flag: '--client-token', env: 'AGENTPLEX_CLIENT_TOKEN' },
+  /**
+   * The server on this machine, which the hub pairs at boot from the token in
+   * that file. The hub's own settings carry a port beside it; this program does
+   * not read one, because a setting it read and never checked would be a
+   * setting an operator could type at a doctor and learn nothing from.
+   */
+  localServerIdentityFile: {
+    flag: '--local-server-identity-file',
+    env: 'AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE',
+  },
   serverPort: { flag: '--server-port', env: 'AGENTPLEX_SERVER_PORT' },
   /** Repeatable: a server may mount more than one store. */
   storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
@@ -233,9 +296,15 @@ export function loadDoctorConfig({ argv, env }: ConfigSources): ConfigResult {
 
   const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), role, problems);
 
+  // A server-only machine runs no hub, so a hub setting that a `both` machine's
+  // settings file left in the environment is read and then dropped rather than
+  // held against the run: a relative `AGENTPLEX_DATABASE_FILE` is not this
+  // machine's problem, and refusing to inspect a server over it would be.
+  const hub = readHubConfig(read, role === 'server' ? [] : problems);
+
   if (role === undefined || problems.length > 0) return { ok: false, problems };
 
-  if (role === 'hub') return { ok: true, config: { role, logLevel, host } };
+  if (role === 'hub') return { ok: true, config: { role, logLevel, host, hub } };
 
   if (identityPath === undefined) return { ok: false, problems: [MISSING_IDENTITY_FILE] };
   const server: ServerConfig = {
@@ -246,7 +315,40 @@ export function loadDoctorConfig({ argv, env }: ConfigSources): ConfigResult {
     terminalCap,
     announce,
   };
-  return { ok: true, config: { role, logLevel, host, server } };
+  if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
+  return { ok: true, config: { role, logLevel, host, hub, server } };
+}
+
+/**
+ * The hub's half of the settings.
+ *
+ * The paths go through the same reader every other path here does, so a
+ * relative one is a refusal and not a check that fails later with less to say.
+ * An *absent* path is not a refusal: see `HubConfig` on why a hub with no
+ * database file is a line in the report rather than a usage message.
+ */
+function readHubConfig(
+  read: (setting: Setting) => string | undefined,
+  problems: string[],
+): HubConfig {
+  const rawDatabase = read(SETTINGS.databaseFile);
+  const databaseFile =
+    rawDatabase === undefined
+      ? null
+      : (readAbsolutePath(rawDatabase, SETTINGS.databaseFile.flag, problems) ?? null);
+
+  const rawLocalServer = read(SETTINGS.localServerIdentityFile);
+  const localServerIdentityPath =
+    rawLocalServer === undefined
+      ? null
+      : (readAbsolutePath(rawLocalServer, SETTINGS.localServerIdentityFile.flag, problems) ?? null);
+
+  return {
+    port: readPort(read(SETTINGS.hubPort), SETTINGS.hubPort.flag, DEFAULT_HUB_PORT, problems),
+    databaseFile,
+    clientToken: read(SETTINGS.clientToken) ?? null,
+    localServerIdentityPath,
+  };
 }
 
 /**

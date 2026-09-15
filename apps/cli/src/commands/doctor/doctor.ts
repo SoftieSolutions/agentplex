@@ -1,6 +1,7 @@
 import type { ProviderReadiness } from '@agentplex/protocol';
 import { NODE_PTY_REMEDY, type PtyAvailability } from '@agentplex/pty';
 import type { Config, Role } from './config.js';
+import { hubLines, hubUsable, inspectHub, type HubChecks, type HubDependencies } from './hub.js';
 import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 
 /**
@@ -13,11 +14,16 @@ import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agen
  * happens is the one where somebody is already staring at a machine trying to
  * work out why a session will not start.
  *
- * Read-only, and structurally so. Nothing here can mint a store file, because
- * the only filesystem call it makes is `statDirectory` -- `ensureStores`, which
- * is what mints, is not reachable from this file. A doctor that changed the
- * machine it was asked to describe would be worse than no doctor: it would make
- * "run doctor first" a thing you have to think about.
+ * Read-only, and structurally so. Nothing here can mint a store file or a
+ * server identity, because the filesystem calls it makes are `statDirectory`
+ * and `readFile` -- `ensureStores` and `ensureServerIdentity`, which are what
+ * mint, are not reachable from this file. A doctor that changed the machine it
+ * was asked to describe would be worse than no doctor: it would make "run
+ * doctor first" a thing you have to think about.
+ *
+ * The hub half has one bounded exception, in `hub.ts` and stated there: asking
+ * whether the hub's port is already held means binding it and letting go, which
+ * is the only portable way to get an answer. It leaves nothing behind.
  *
  * It asks whether node-pty loads, which is not the same as opening one: the
  * addon is a file the process maps, and mapping it changes nothing. The
@@ -29,7 +35,7 @@ import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agen
  * start.
  */
 
-export interface DoctorDependencies {
+export interface DoctorDependencies extends HubDependencies {
   readonly providers: ProviderRegistry;
   readonly preflight: ProviderPreflight;
   readonly files: StoreFileSystem;
@@ -53,6 +59,8 @@ export interface DoctorReport {
    * not have to grep prose to find out.
    */
   readonly usable: boolean;
+  /** What the hub needs at boot, or `null` on a role that runs none. */
+  readonly hub: HubChecks | null;
   /** One per registered provider, exactly as the preflight found it. */
   readonly providers: readonly ProviderReadiness[];
   /** One per configured store path, in the order they were configured. */
@@ -96,13 +104,25 @@ export type StoreState = 'present' | 'missing' | 'unusable';
 
 export async function inspectMachine(
   config: Config,
-  { providers, preflight, files, terminals }: DoctorDependencies,
+  dependencies: DoctorDependencies,
 ): Promise<DoctorReport> {
-  // A hub-only machine starts no sessions, mounts no stores and drives no
-  // providers. Probing them anyway would report on a machine this deployment
-  // never touches.
+  const { providers, preflight, files, terminals } = dependencies;
+
+  // A machine that runs no hub opens no database, holds no client token and
+  // serves no client; a machine that runs no server starts no sessions, mounts
+  // no stores and drives no providers. Probing either anyway would report on a
+  // machine this deployment never touches.
+  const hub = 'hub' in config ? await inspectHub(config.hub, config.host, dependencies) : null;
+
   if (!('server' in config)) {
-    return { role: config.role, usable: true, providers: [], stores: [], terminals: null };
+    return {
+      role: config.role,
+      usable: hub === null || hubUsable(hub),
+      hub,
+      providers: [],
+      stores: [],
+      terminals: null,
+    };
   }
 
   const readiness = await preflight.run(providers);
@@ -112,9 +132,11 @@ export async function inspectMachine(
   return {
     role: config.role,
     usable:
+      (hub === null || hubUsable(hub)) &&
       readiness.every((provider) => provider.state === 'ready') &&
       stores.every((store) => store.state === 'present') &&
       pty.state === 'ready',
+    hub,
     providers: readiness,
     stores,
     terminals: pty,
@@ -152,9 +174,20 @@ async function checkStore(path: string, files: StoreFileSystem): Promise<StoreCh
 export function formatDoctorReport(report: DoctorReport): readonly string[] {
   const lines = [`agentplex doctor  role=${report.role}`, ''];
 
-  // First, because it gates the rest: a provider that is installed and logged
-  // in still starts nothing on a machine that cannot open a pseudoterminal.
-  lines.push('terminals');
+  // First, because on the machine this section is about it is the whole report
+  // and on a server it is one line. The other order makes a hub operator read
+  // three "runs no server" lines before reaching anything about their machine.
+  lines.push('hub');
+  if (report.hub === null) {
+    lines.push('  this machine runs no hub, so it opens no database and serves no client');
+  } else {
+    lines.push(...hubLines(report.hub));
+  }
+
+  // Before the providers, because it gates them: a provider that is installed
+  // and logged in still starts nothing on a machine that cannot open a
+  // pseudoterminal.
+  lines.push('', 'terminals');
   if (report.terminals === null) {
     lines.push('  this machine runs no server, so it opens no terminals');
   } else {
