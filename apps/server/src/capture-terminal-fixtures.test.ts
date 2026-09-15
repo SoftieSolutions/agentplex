@@ -129,7 +129,7 @@ ${entries}
 export const ptyChunks: readonly Uint8Array[] = encoded.map(decode);
 `;
 
-    const target = new URL('../../../web/src/terminal/pty-chunks.fixture.ts', import.meta.url);
+    const target = new URL('../../web/src/terminal/pty-chunks.fixture.ts', import.meta.url);
     await mkdir(new URL('.', target), { recursive: true });
     await writeFile(target, module, 'utf8');
     process.stdout.write(`wrote ${String(chunks.length)} chunks to ${fileURLToPath(target)}\n`);
