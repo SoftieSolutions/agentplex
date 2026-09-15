@@ -89,15 +89,25 @@ a directory a server-side setup action, and the decision the catalogue rests on
 is that the user browses for one — an operator editing a settings file to make a
 checkout pickable is the workflow the browse exists to remove.
 
-Two uses are already covered by the amended wording, and they were argued
-separately: `directory-list` (AGX-238) is a browse request, and the document
-frames (AGX-241) carry a `directory` as the key of a per-project file store. The
-second never reaches a spawn at all. One rule covers both because what bounds
-them is the same thing — a parser that can say no, and a root list only the
-machine's operator writes.
+Three uses are covered by the amended wording, and each was argued separately.
+`directory-list` (AGX-238) is a browse request. `project-create` (AGX-133)
+records a directory in a hub row, and the `session-start` that names that
+project is the only one of the three that reaches a spawn — as `cwd`, and
+nothing else. The document frames (AGX-241) carry a `directory` as the key of a
+per-project file store and reach no spawn at all. One rule covers all three
+because what bounds them is the same thing — a parser that can say no, and a
+root list only the machine's operator writes.
+
+A client never sends the path a session spawns in, and that is the shape of the
+project frames rather than a habit of the code: `session-start` carries a
+`project` node id, the hub resolves the directory out of its own rows, and the
+machine refuses it unless a root is above it. The party that types a path and
+the party that runs a process are two hops apart, with a parser and a root list
+between them.
 
 `apps/server/src/directory-browse.ts` holds the containment rule and the reason
-it runs on `fs.realpath` rather than on the string, and
+it runs on `fs.realpath` rather than on the string. Its `allow` is that rule
+alone — a session start asks it, and takes no listing with it — and
 `tests/hub-server/src/session-start.integration.test.ts` is where the wire shape
 is asserted: `args`, `argv`, `env`, `command`, `operation`, `pid` and
 `terminalId` absent everywhere, and every `directory` on a hub-to-server

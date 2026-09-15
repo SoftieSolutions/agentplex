@@ -157,8 +157,9 @@ describe('the new-session form meeting a holder', () => {
   it('names the machine already running the session it was refused for', async () => {
     const socket = await mountForm();
 
-    // The start this form sent is frame 2, which is the frame this captured
-    // refusal answers.
+    // The start this form sent is frame 3 -- the form asks for the tree first,
+    // to fill its project select -- which is the frame this captured refusal
+    // answers.
     await submit();
     await act(() => {
       socket.deliver(hubFrames.refusalHeldBusy);
@@ -183,7 +184,7 @@ describe('the new-session form meeting a holder', () => {
 
   it('offers none either when the start named no session to aim one at', async () => {
     const socket = await mountForm();
-    // The second start is frame 3, which the stoppable-holder refusal answers.
+    // The second start is frame 4, which the stoppable-holder refusal answers.
     await submit();
     await act(() => {
       socket.deliver(hubFrames.refusalHeldBusy);

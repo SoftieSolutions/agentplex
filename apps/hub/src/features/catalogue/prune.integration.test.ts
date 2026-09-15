@@ -52,10 +52,10 @@ function ref(storeId: typeof STORE_A, sessionId: string): SessionRef {
 /** Two stores with two sessions each, all four placed in the tree. */
 async function twoStoresOfTwo(): Promise<void> {
   await discoverNodes(db(), ids, clock, [
-    { ref: ref(STORE_A, 'a1'), title: 'a one' },
-    { ref: ref(STORE_A, 'a2'), title: 'a two' },
-    { ref: ref(STORE_B, 'b1'), title: 'b one' },
-    { ref: ref(STORE_B, 'b2'), title: 'b two' },
+    { ref: ref(STORE_A, 'a1'), title: 'a one', cwd: null },
+    { ref: ref(STORE_A, 'a2'), title: 'a two', cwd: null },
+    { ref: ref(STORE_B, 'b1'), title: 'b one', cwd: null },
+    { ref: ref(STORE_B, 'b2'), title: 'b two', cwd: null },
   ]);
 }
 
@@ -147,7 +147,7 @@ describe('pruning the node tree', () => {
     // And the proof that it is not remembered: the store comes back with the
     // session still in it, and the node returns.
     const outcome = await discoverNodes(db(), ids, clock, [
-      { ref: ref(STORE_A, 'a1'), title: 'a one' },
+      { ref: ref(STORE_A, 'a1'), title: 'a one', cwd: null },
     ]);
     expect(outcome.created).toHaveLength(1);
   });

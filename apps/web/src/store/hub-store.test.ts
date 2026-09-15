@@ -32,6 +32,7 @@ const START: HubCommand = {
   provider: 'claude',
   prompt: null,
   server: null,
+  project: null,
 };
 
 const STOP: HubCommand = {
@@ -382,7 +383,7 @@ describe('commands', () => {
     // the machine the hub resolved it to, neither of which the client sent.
     socket.deliver(hubFrames.sessionStopped);
     expect(h.store.getSnapshot().lastStopped).toEqual({
-      replyTo: 4,
+      replyTo: 5,
       storeId: 'store-agentplex',
       sessionId: 'session-migrate-db',
       server: 'registration-mbp-robert',
@@ -647,6 +648,87 @@ describe('subscriptions', () => {
     // milestone that gives it a frame.
     expect(sentFrames(socket)).toHaveLength(1);
     expect(h.store.getSnapshot().commandQueue.queued).toBe(0);
+  });
+});
+
+/**
+ * The project frames, and the one thing the store does beyond remembering them.
+ *
+ * A project made by this client changes the tree, and there is no broadcast
+ * saying so yet -- `catalogue-changed` is its own ticket. So the store asks for
+ * the tree again, and only when something is watching it: a re-ask nobody is
+ * listening for is a frame sent for nothing.
+ */
+describe('projects', () => {
+  const CREATE: HubCommand = {
+    type: 'project-create',
+    name: 'agentplex',
+    directory: '/Users/robert/code/agentplex',
+  };
+
+  it('keeps the answer with the node id the project will be named by', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.sendCommand(CREATE);
+
+    socket.deliver(hubFrames.projectCreated);
+
+    expect(h.store.getSnapshot().lastProjectCreated).toEqual({ replyTo: 5, nodeId: 'hub-4' });
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('asks for the tree again once a project has been made, if anybody is looking', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeLayout();
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.projectCreated);
+
+    expect(sentFrames(socket).slice(before)).toEqual([{ type: 'layout-request', id: 3 }]);
+  });
+
+  it('asks for nothing when no screen is watching the tree', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.projectCreated);
+    socket.deliver(hubFrames.nodeRenamed);
+
+    expect(sentFrames(socket).slice(before)).toEqual([]);
+  });
+
+  it('asks for the tree again after a rename, because the name on it changed', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeLayout();
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.nodeRenamed);
+
+    expect(sentFrames(socket).slice(before)).toEqual([{ type: 'layout-request', id: 3 }]);
+  });
+
+  it('reads a tree with a project in it, exactly as the hub sent it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeLayout();
+
+    socket.deliver(hubFrames.layoutWithProject);
+
+    const layout = h.store.getSnapshot().layout ?? [];
+    expect(layout.filter((node) => node.kind === 'project')).toEqual([
+      {
+        id: 'hub-4',
+        parentId: null,
+        kind: 'project',
+        position: 2,
+        name: 'agentplex (main checkout)',
+        named: true,
+        anchor: null,
+      },
+    ]);
   });
 });
 

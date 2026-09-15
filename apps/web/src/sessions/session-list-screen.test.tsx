@@ -215,7 +215,7 @@ describe('the session list', () => {
     expect(sentFrames(socket).filter((frame) => frame.type === 'session-stop')).toEqual([
       {
         type: 'session-stop',
-        id: 2,
+        id: 3,
         storeId: 'store-agentplex',
         sessionId: 'session-migrate-db',
       },
@@ -245,8 +245,8 @@ describe('the session list', () => {
 
     // The race the hub refuses on purpose: the holder went mid-turn between
     // the button being drawn and the button being pressed. Captured from a
-    // real hub answering a real stop, and it answers frame 2 -- the stop this
-    // card just sent.
+    // real hub answering a real stop, and it answers frame 3 -- the stop this
+    // card just sent, after the layout this screen asks for on connecting.
     await act(() => {
       socket.deliver(hubFrames.refusalHeldBusy);
     });
@@ -262,7 +262,7 @@ describe('the session list', () => {
   it('says what a landed stop landed on, whoever asked for it', async () => {
     const socket = await mountWith(hubFrames.machineStatePopulated);
 
-    // Nothing on this screen asked: the reply answers frame 4, which this
+    // Nothing on this screen asked: the reply answers frame 5, which this
     // store never sent. A stop from another tab is exactly this.
     await act(() => {
       socket.deliver(hubFrames.sessionStopped);

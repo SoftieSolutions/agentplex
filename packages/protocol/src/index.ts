@@ -23,6 +23,7 @@ export {
   directoryListFrameSchema,
   directoryListingFrameSchema,
   directorySchema,
+  normaliseDirectory,
 } from './directory.js';
 export type { DirectoryEntry, DirectoryEntryKind, DirectoryListingFrame } from './directory.js';
 
@@ -75,7 +76,12 @@ export {
 } from './pairing.js';
 export type { ServerAddress } from './pairing.js';
 
-export { layoutNodeSchema, layoutSchema } from './layout.js';
+export {
+  layoutNodeSchema,
+  layoutSchema,
+  NODE_NAME_MAX_CHARS,
+  nodeNameTextSchema,
+} from './layout.js';
 export type { Layout, LayoutNode } from './layout.js';
 
 export {

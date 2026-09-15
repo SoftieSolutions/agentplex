@@ -1,4 +1,5 @@
 import type {
+  NodeId,
   Provider,
   RefusalCode,
   ServerRegistrationId,
@@ -7,6 +8,7 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
+import type { Projects } from '../projects/projects.js';
 import type { InstructionOutcome, ServerInstruction } from '../servers/servers.js';
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
 import { routeStart, routeStop } from './session-routing.js';
@@ -22,16 +24,29 @@ import { routeStart, routeStop } from './session-routing.js';
  *
  * What never happens here is any building of a command. The instruction names a
  * store, a provider and at most a session; there is nowhere in it to put an
- * argv element, an environment variable or a working directory, and the server
- * resolves all three from its own configuration and its own registry. That is
- * the same rule stated in three places -- the frame has no field, the hub has
- * no value to put in one, and the server takes none -- and it holds because
- * each of them holds alone.
+ * argv element or an environment variable, and the server resolves both from
+ * its own configuration and its own registry.
+ *
+ * The one field that is a value rather than a name is `directory`, and the
+ * shape of this file is what keeps it narrow. A client names a *project*, which
+ * is a row this hub owns; the directory is read out of that row here and
+ * nowhere else, so there is no path by which a path a client typed reaches a
+ * server. And what arrives at the far end is still a claim: the server refuses
+ * it unless its real path sits under a root that machine's own operator
+ * configured. Three parties, and the value is checked by two of them.
  */
 
 export interface SessionsDependencies {
   /** The state the routing decision is made against, read per request. */
   readonly state: { snapshot(): HubStateSnapshot };
+  /**
+   * Where a project id becomes a directory.
+   *
+   * The read half only. Starting a session in a project must not be able to
+   * make one, and a seam that offered `create` would be a seam through which a
+   * start could.
+   */
+  readonly projects: Pick<Projects, 'directoryOf'>;
   /** How an instruction reaches one paired server. */
   readonly connections: {
     ask(
@@ -50,6 +65,14 @@ export interface StartSessionRequest {
   readonly prompt: string | null;
   /** The user's override, or `null` to let the hub schedule it. */
   readonly server: ServerRegistrationId | null;
+  /**
+   * The project to start in, or `null` for the store's own directory.
+   *
+   * An id, never a path. The directory is resolved here, out of this hub's own
+   * rows, which is what makes the value that eventually reaches a server one
+   * that a person chose by browsing that server rather than one a client wrote.
+   */
+  readonly project: NodeId | null;
 }
 
 export interface StopSessionRequest {
@@ -84,11 +107,45 @@ export interface Sessions {
 }
 
 export function createSessions(dependencies: SessionsDependencies): Sessions {
-  const { state, connections } = dependencies;
+  const { state, projects, connections } = dependencies;
   const logger = dependencies.logger.child({ part: 'sessions' });
 
   return {
     async start(request: StartSessionRequest): Promise<SessionOutcome> {
+      // Resolved before the routing, because a project nobody has is not a
+      // placement problem: there is no machine that would make it right, and
+      // the sentence a person needs is about the project rather than about the
+      // fleet.
+      //
+      // A resume with a project is refused rather than quietly ignored. The
+      // directory a session resumes in is the one its own transcript records --
+      // nobody gets to choose it, here or on the server -- so a start that
+      // named both was asking for two different directories, and answering it
+      // with either would be picking one of them without saying so.
+      let directory: string | null = null;
+      if (request.project !== null) {
+        if (request.sessionId !== null) {
+          return {
+            ok: false,
+            code: 'refused',
+            problem:
+              'a session resumes in the directory its own transcript recorded, ' +
+              'so a resume cannot be started in a project',
+            holder: null,
+          };
+        }
+        directory = await projects.directoryOf(request.project);
+        if (directory === null) {
+          logger.info('start refused', { project: request.project, problem: 'no such project' });
+          return {
+            ok: false,
+            code: 'refused',
+            problem: 'this hub has no project by that id',
+            holder: null,
+          };
+        }
+      }
+
       const routed = routeStart(state.snapshot(), {
         storeId: request.storeId,
         sessionId: request.sessionId,
@@ -111,6 +168,7 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
         sessionId: request.sessionId,
         provider: request.provider,
         prompt: request.prompt,
+        directory,
       });
 
       if (!answered.ok) {

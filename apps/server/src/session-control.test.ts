@@ -10,6 +10,8 @@ import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testin
 import { createPtySupervisor } from '@agentplex/pty';
 import { createFakeProviderAdapter, createFakeProviderFiles } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
+import { createDirectoryBrowser } from './directory-browse.js';
+import { createFakeDirectoryReader } from './fake-directory-reader.js';
 import { createFakeWorkingTree, type FakeWorkingTree } from './fake-working-tree.js';
 import { createSessionController, type SessionController } from './session-control.js';
 import { createTerminalManager, type TerminalManager } from './terminal-manager.js';
@@ -57,7 +59,32 @@ interface MachineOptions {
   readonly noAdapter?: boolean;
   /** What git found, by directory. Anything not in here was not readable. */
   readonly workingTree?: FakeWorkingTree;
+  /**
+   * What this machine's operator configured as browsable, or none at all.
+   *
+   * Default is none, which is what a server ships with: a machine nobody has
+   * configured will spawn in no directory an instruction names, and that is the
+   * refusal worth having by default in a suite about what this server says no
+   * to.
+   */
+  readonly browseRoots?: readonly string[];
 }
+
+/**
+ * The disk the browse rule is applied against.
+ *
+ * `/checkouts/agentplex` is a directory under a root; `/checkouts/away` is a
+ * link out of one, which is the case no string comparison can see and the
+ * reason the rule runs on `realpath`.
+ */
+const DISK = createFakeDirectoryReader({
+  directories: {
+    '/checkouts': [{ name: 'agentplex', kind: 'directory' }],
+    '/checkouts/agentplex': [],
+    '/elsewhere/secrets': [],
+  },
+  links: { '/checkouts/away': '/elsewhere/secrets' },
+});
 
 function machine(options: MachineOptions = {}): Machine {
   const files = createFakeProviderFiles({
@@ -109,6 +136,13 @@ function machine(options: MachineOptions = {}): Machine {
       ),
       terminals,
       workingTree,
+      // The real rule over a written-down disk, not a stub that says yes: what
+      // a start has to get right is what it does when the directory is outside
+      // every root, and a fake that answered by agreement would assert nothing.
+      browse: createDirectoryBrowser({
+        roots: [...(options.browseRoots ?? [])],
+        reader: DISK,
+      }),
       clock,
       logger,
     }),
@@ -124,6 +158,7 @@ describe('a start this server will not run', () => {
       sessionId: null,
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     expect(outcome).toMatchObject({ ok: false, code: 'refused', hold: null });
@@ -138,6 +173,7 @@ describe('a start this server will not run', () => {
       sessionId: null,
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     expect(outcome).toMatchObject({ ok: false, code: 'refused' });
@@ -152,6 +188,7 @@ describe('a start this server will not run', () => {
       sessionId: session('session-gone'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     expect(outcome).toMatchObject({ ok: false, code: 'refused' });
@@ -166,6 +203,7 @@ describe('a start this server will not run', () => {
       sessionId: session('session-homeless'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     expect(outcome.ok).toBe(false);
@@ -184,6 +222,7 @@ describe('a start this server runs', () => {
       sessionId: session('session-1'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     expect(outcome).toMatchObject({ ok: true, sessionId: 'session-1' });
@@ -201,6 +240,7 @@ describe('a start this server runs', () => {
       sessionId: null,
       provider: 'claude',
       prompt: 'look at the failing test',
+      directory: null,
     });
 
     // No session id yet: the provider mints its own and the next scan finds it.
@@ -211,6 +251,101 @@ describe('a start this server runs', () => {
     });
   });
 
+  /**
+   * The amended rule, on the machine that enforces it.
+   *
+   * The directory came off a frame, which is why every assertion here is about
+   * what bounds it: an operator listed `/checkouts`, this path is inside it,
+   * and the value reaches exactly one spawn field.
+   */
+  it('spawns in a project directory its operator listed a root above', async () => {
+    const { sessions, ptys } = machine({ browseRoots: ['/checkouts'] });
+
+    const outcome = await sessions.start({
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      directory: '/checkouts/agentplex',
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(ptys.opened[0]).toMatchObject({ cwd: '/checkouts/agentplex', args: [] });
+  });
+
+  it('refuses a directory under no root, and forks nothing', async () => {
+    const { sessions, ptys } = machine({ browseRoots: ['/checkouts'] });
+
+    const outcome = await sessions.start({
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      directory: '/elsewhere/secrets',
+    });
+
+    expect(outcome).toMatchObject({ ok: false, code: 'refused', hold: null });
+    if (outcome.ok) return;
+    // The sentence names the path that was asked for, because that is what the
+    // person who picked it will recognise.
+    expect(outcome.problem).toContain('/elsewhere/secrets');
+    expect(ptys.opened).toEqual([]);
+  });
+
+  it('refuses a link out of a root, which the string alone cannot see', async () => {
+    const { sessions, ptys } = machine({ browseRoots: ['/checkouts'] });
+
+    const outcome = await sessions.start({
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      directory: '/checkouts/away',
+    });
+
+    expect(outcome).toMatchObject({ ok: false, code: 'refused' });
+    expect(ptys.opened).toEqual([]);
+  });
+
+  it('refuses a project start on a machine with no roots, whatever the path', async () => {
+    // The default a server ships with: nobody has said this box may run
+    // anybody's project, so it runs none and says which setting to change.
+    const { sessions, ptys } = machine();
+
+    const outcome = await sessions.start({
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      directory: '/checkouts/agentplex',
+    });
+
+    expect(outcome).toMatchObject({ ok: false, code: 'refused' });
+    if (outcome.ok) return;
+    expect(outcome.problem).toContain('AGENTPLEX_BROWSE_ROOTS');
+    expect(ptys.opened).toEqual([]);
+  });
+
+  /**
+   * The hub refuses this too. This is the half that holds when the hub's view
+   * is a version behind: a resume runs where its own transcript says it ran,
+   * and an instruction asking for two directories gets neither.
+   */
+  it('refuses a resume that also names a directory, rather than choosing one', async () => {
+    const { sessions, ptys } = machine({ browseRoots: ['/checkouts'] });
+
+    const outcome = await sessions.start({
+      storeId: WORK,
+      sessionId: session('session-1'),
+      provider: 'claude',
+      prompt: null,
+      directory: '/checkouts/agentplex',
+    });
+
+    expect(outcome).toMatchObject({ ok: false, code: 'refused' });
+    expect(ptys.opened).toEqual([]);
+  });
+
   it('refuses a second start on a session it is already running, and names the hold', async () => {
     const { sessions, ptys } = machine();
     await sessions.start({
@@ -218,6 +353,7 @@ describe('a start this server runs', () => {
       sessionId: session('session-1'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     // The hub refuses this too, from its own state. This is the same rule where
@@ -227,6 +363,7 @@ describe('a start this server runs', () => {
       sessionId: session('session-1'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     expect(second).toMatchObject({
@@ -246,6 +383,7 @@ describe('a report', () => {
       sessionId: session('session-1'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     const report = await sessions.report(WORK);
@@ -265,6 +403,7 @@ describe('a report', () => {
       sessionId: session('session-busy'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     // The status is the adapter's, derived on the scan the report makes, and
@@ -358,6 +497,7 @@ describe('a stop', () => {
       sessionId: session('session-1'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
 
     const outcome = sessions.stop({ storeId: WORK, sessionId: session('session-1') });
@@ -381,6 +521,7 @@ describe('a stop', () => {
       sessionId: session('session-1'),
       provider: 'claude',
       prompt: null,
+      directory: null,
     });
     terminals.observe({ storeId: WORK, sessionId: session('session-1') }, 'working');
 

@@ -1011,6 +1011,7 @@ describe('two hubs on one server', () => {
         sessionId: null,
         provider: 'claude',
         prompt: null,
+        directory: null,
       }),
     );
     await settle();

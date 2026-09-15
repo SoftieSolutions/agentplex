@@ -460,6 +460,9 @@ export function serveHubConnection(
           sessionId: frame.sessionId,
           provider: frame.provider,
           prompt: frame.prompt,
+          // Passed through untouched. Whether this machine will open it is the
+          // controller's question, asked of the same guard a browse passes.
+          directory: frame.directory,
         });
         return;
       }
@@ -772,6 +775,7 @@ export function serveHubConnection(
       readonly sessionId: SessionId | null;
       readonly provider: Provider;
       readonly prompt: string | null;
+      readonly directory: string | null;
     },
   ): Promise<void> {
     let outcome;

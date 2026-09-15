@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { directoryListFrameSchema, directoryListingFrameSchema } from './directory.js';
+import {
+  directoryListFrameSchema,
+  directoryListingFrameSchema,
+  directorySchema,
+} from './directory.js';
 import { docContentSchema, docDirectorySchema, docEntrySchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import {
@@ -62,13 +66,21 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
    * visible, because a hub with a view that is a second out of date must not be
    * able to talk a server into a second agent on one transcript.
    *
-   * Every field is a name, and none of them is an argument. `storeId` is a
-   * store this server said it had mounted, and the server turns it into a
-   * directory out of its own configuration -- a `{ cwd }` field here would be a
-   * remote code execution primitive wearing a path. `provider` selects a
-   * registered adapter and the adapter builds the argv. There is no operation
-   * name, no argv element and no environment variable on this frame, and the
-   * registry is what makes that possible rather than merely current policy.
+   * Every field but one is a name, and none of them is an argument. `storeId`
+   * is a store this server said it had mounted, and the server turns it into a
+   * directory out of its own configuration. `provider` selects a registered
+   * adapter and the adapter builds the argv. There is no operation name, no
+   * argv element and no environment variable on this frame, and the registry is
+   * what makes that possible rather than merely current policy.
+   *
+   * The one exception is `directory`, and it is the amended rule rather than a
+   * hole in the old one. `directory.ts` carries the argument; what makes this
+   * field not the `{ cwd }` the rule forbade is that it is parsed by
+   * `directorySchema`, that this server refuses it unless its real path sits
+   * under a root its own operator configured -- a list nothing on this wire can
+   * add to, empty by default -- and that the only spawn field it may ever reach
+   * is `cwd`, on a spawn the operation registry still builds with `shell:
+   * false` and an argv this process wrote.
    */
   z.object({
     type: z.literal('session-start'),
@@ -79,6 +91,20 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
     provider: providerSchema,
     /** User content, placed by the adapter as one argv element. Never an option. */
     prompt: z.string().min(1).nullable(),
+    /**
+     * Where to spawn, when the hub is starting this session in a project, and
+     * `null` for the start that has always existed -- the store's own path, as
+     * this server resolved it at boot.
+     *
+     * Only a spawn may carry one. A resume's directory is whatever the provider
+     * itself recorded in the transcript, and nobody gets to choose it: a
+     * session resumed elsewhere is a different session that happens to share a
+     * history. This server refuses the pair rather than quietly preferring one.
+     *
+     * `null` rather than an absent property, so that every start has one shape
+     * and no reader has to remember which kind carries a directory.
+     */
+    directory: directorySchema.nullable(),
   }),
   /**
    * Kill the process running this session.

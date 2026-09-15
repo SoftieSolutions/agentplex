@@ -24,6 +24,7 @@ import {
   type ChipCount,
   type StatusChip,
 } from './session-list-model.js';
+import { NewProjectForm } from '../projects/new-project-form.js';
 import { NewSessionForm } from './new-session-form.js';
 import { SessionCard } from './session-card.js';
 import { stoppedNotice } from './stop-model.js';
@@ -54,6 +55,7 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
   const [storeId, setStoreId] = useState<string | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
 
   const state = snapshot.machineState;
   const notice = connectionNotice(snapshot.phase, snapshot.problem, state !== null);
@@ -122,9 +124,18 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
             live in this milestone, and a menu with one live option is not
             drawn, so New is a direct button. On small screens the same action
             is the mockup's floating button, bottom-right (7e). */}
-        <Button size="xs" visibleFrom="sm" onClick={() => setCreating(true)}>
-          New session
-        </Button>
+        {/* Two buttons and not a menu, for the reason the one above is a
+            button: a popover over two options is a click in front of every
+            click. A project is where sessions get started from, so it sits
+            beside the thing that starts them. */}
+        <Group gap={8} visibleFrom="sm">
+          <Button size="xs" variant="default" onClick={() => setCreatingProject(true)}>
+            New project
+          </Button>
+          <Button size="xs" onClick={() => setCreating(true)}>
+            New session
+          </Button>
+        </Group>
         <Button
           hiddenFrom="sm"
           size="md"
@@ -139,6 +150,12 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
         store={store}
         opened={creating}
         onClose={() => setCreating(false)}
+        scheme={scheme}
+      />
+      <NewProjectForm
+        store={store}
+        opened={creatingProject}
+        onClose={() => setCreatingProject(false)}
         scheme={scheme}
       />
 

@@ -7,6 +7,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { createFakeDatabase, type FakeDatabase } from '../../db/fake-database.js';
+import { createFakeProjects, type FakeProjects } from '../projects/fake-projects.js';
 import { createCatalogue, type Catalogue } from './catalogue.js';
 
 /**
@@ -25,14 +26,19 @@ const clock = { now: () => NOW };
 const STORE_A = storeIdSchema.parse('store-a');
 const STORE_B = storeIdSchema.parse('store-b');
 
-function descriptor(storeId: StoreId, sessionId: string, title: string | null): SessionDescriptor {
+function descriptor(
+  storeId: StoreId,
+  sessionId: string,
+  title: string | null,
+  cwd: string | null = null,
+): SessionDescriptor {
   return {
     storeId,
     sessionId: sessionIdSchema.parse(sessionId),
     provider: 'claude',
     status: 'idle',
     updatedAt: NOW,
-    cwd: null,
+    cwd,
     branch: null,
     title,
     uncommitted: null,
@@ -41,6 +47,7 @@ function descriptor(storeId: StoreId, sessionId: string, title: string | null): 
 
 interface Harness {
   readonly catalogue: Catalogue;
+  readonly projects: FakeProjects;
   readonly database: FakeDatabase;
   readonly logs: readonly LogRecord[];
   /** What each store currently reads as, which a test changes between passes. */
@@ -53,14 +60,19 @@ function harness(options: { readonly failOn?: RegExp } = {}): Harness {
   );
   const logs: LogRecord[] = [];
   const stores = new Map<StoreId, readonly SessionDescriptor[] | null>();
+  // Where the directories are, driven by hand. The placement itself is written
+  // against a real schema in `discovery.integration.test`; what this file can
+  // see that that one cannot is when the question gets asked.
+  const projects = createFakeProjects();
   const catalogue = createCatalogue({
     database,
     ids: { newId: () => 'node-1' },
     clock,
     logger: createLogger('debug', (record) => logs.push(record)),
     readStore: (storeId) => stores.get(storeId) ?? null,
+    projects,
   });
-  return { catalogue, database, logs, stores };
+  return { catalogue, projects, database, logs, stores };
 }
 
 /** The transactions a run opened, in order, with the statements each held. */
@@ -92,6 +104,33 @@ describe('the catalogue following what a store was read to hold', () => {
     expect(statements.some((text) => text.includes('DELETE FROM nodes'))).toBe(true);
     expect(statements.some((text) => text.includes('DELETE FROM node_removals'))).toBe(true);
     expect(test.database.issued.every((statement) => statement.transaction !== null)).toBe(true);
+  });
+
+  /**
+   * The lookup is the tree's question and the transaction is the tree's write,
+   * and they are deliberately not the same moment.
+   *
+   * Asking inside the transaction would mean another feature's statements
+   * running on a handle it was never given -- one connection, so they would
+   * land inside this `BEGIN` -- and that is a second owner of one transaction
+   * rather than a seam. The window it opens is argued where it is opened.
+   */
+  it('asks where a directory is before it opens the transaction it writes in', async () => {
+    const test = harness();
+    test.stores.set(STORE_A, [
+      descriptor(STORE_A, 's1', 'in a checkout', '/srv/work/agentplex'),
+      // A provider that records no working directory. There is nothing to ask
+      // about, and guessing the store's own path would file sessions under a
+      // project nobody started them in.
+      descriptor(STORE_A, 's2', 'nowhere in particular'),
+    ]);
+
+    await test.catalogue.observe(STORE_A);
+
+    expect(test.projects.looked).toEqual(['/srv/work/agentplex']);
+    // The write is still one transaction, and the lookup was not in it: the
+    // fake projects hold no database, so nothing it did could be.
+    expect(transactions(test.database).size).toBe(1);
   });
 
   it('sweeps against the sessions the reading named', async () => {

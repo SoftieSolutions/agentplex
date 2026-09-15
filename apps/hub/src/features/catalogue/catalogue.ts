@@ -1,5 +1,6 @@
 import type {
   Layout,
+  NodeId,
   SessionDescriptor,
   SessionId,
   SessionRef,
@@ -7,7 +8,8 @@ import type {
 } from '@agentplex/protocol';
 import type { Clock, IdGenerator, Logger } from '@agentplex/node-shared';
 import type { Database, Queryable } from '../../db/database.js';
-import { discoverNodes } from './discovery.js';
+import type { Projects } from '../projects/projects.js';
+import { discoverNodes, type SessionPlacements } from './discovery.js';
 import { pruneNodes } from './prune.js';
 import { readLayout } from './reads.js';
 import type { TreeNode } from './rows.js';
@@ -32,6 +34,16 @@ export interface DiscoveredSession {
   readonly ref: SessionRef;
   /** The provider's title, or `null` when it names its sessions nothing. */
   readonly title: string | null;
+  /**
+   * Where the session ran, as its own transcript recorded it, or `null` when
+   * the provider records none.
+   *
+   * Carried because it is what decides the node's place: a session whose `cwd`
+   * is a project's directory belongs in that project. It is a claim off another
+   * machine's disk and is treated as one -- the only thing done with it here is
+   * an equality against a directory a person chose by browsing.
+   */
+  readonly cwd: string | null;
 }
 
 export interface DiscoveryOutcome {
@@ -107,6 +119,16 @@ export interface CatalogueDependencies {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly readStore: StoreReader;
+  /**
+   * Which project a directory is, if any.
+   *
+   * The whole of what the tree needs from projects, and deliberately only the
+   * read: this feature places a session inside a project and never makes,
+   * renames or removes one. The edge runs one way -- the catalogue reads
+   * projects, projects reads nothing here -- which is what keeps two features
+   * writing `nodes` from being two features writing each other.
+   */
+  readonly projects: Pick<Projects, 'findByDirectory'>;
 }
 
 export interface Catalogue {
@@ -143,6 +165,7 @@ export function createCatalogue({
   clock,
   logger,
   readStore,
+  projects,
 }: CatalogueDependencies): Catalogue {
   const log = logger.child({ part: 'catalogue' });
 
@@ -175,11 +198,26 @@ export function createCatalogue({
       return;
     }
 
+    // Resolved before the transaction opens rather than inside it. The lookup
+    // belongs to another feature, which holds the database rather than this
+    // transaction's handle, and a feature reaching into a transaction it was
+    // not given is how two owners of one connection start to matter.
+    //
+    // What that costs is a window: a project removed between this and the
+    // insert below leaves a parent that is gone, the foreign key refuses the
+    // row, and the whole pass for this store is logged and dropped. The next
+    // report brings another whole reading, so it is a stale tree for a few
+    // seconds and never a wrong one -- the same bargain the catch below
+    // already makes.
+    const placements = await placementsFor(sessions);
+
     try {
       // One transaction for the pair. A reading is one reading, and a tree with
       // the placements committed and the sweep not is a tree that agrees with
       // no reading that ever happened.
-      const outcome = await database.transaction((tx) => bringInLine(tx, storeId, sessions));
+      const outcome = await database.transaction((tx) =>
+        bringInLine(tx, storeId, sessions, placements),
+      );
       const counts = {
         created: outcome.created.length,
         retitled: outcome.retitled.length,
@@ -205,10 +243,34 @@ export function createCatalogue({
     }
   };
 
+  /**
+   * The project each of these sessions belongs in, for the ones that belong in
+   * any.
+   *
+   * A session with no `cwd` is a session the provider never said where it ran,
+   * and the honest answer is the root: a guess at the store's own directory
+   * would file sessions under a project nobody started them in.
+   *
+   * Absent from the map is the root, which is why this is a map of the ones
+   * that matched rather than one entry per session.
+   */
+  const placementsFor = async (
+    sessions: readonly SessionDescriptor[],
+  ): Promise<SessionPlacements> => {
+    const placements = new Map<SessionId, NodeId>();
+    for (const descriptor of sessions) {
+      if (descriptor.cwd === null) continue;
+      const project = await projects.findByDirectory(descriptor.cwd);
+      if (project !== null) placements.set(descriptor.sessionId, project);
+    }
+    return placements;
+  };
+
   const bringInLine = async (
     tx: Queryable,
     storeId: StoreId,
     sessions: readonly SessionDescriptor[],
+    placements: SessionPlacements,
   ): Promise<DiscoveryOutcome & PruneOutcome> => {
     // Filed under the store that was read and never under the descriptor's own
     // claim, for the reason the reducer files a row that way: a descriptor
@@ -217,8 +279,9 @@ export function createCatalogue({
     const found = sessions.map((descriptor) => ({
       ref: { storeId, sessionId: descriptor.sessionId },
       title: descriptor.title,
+      cwd: descriptor.cwd,
     }));
-    const discovered = await discoverNodes(tx, ids, clock, found);
+    const discovered = await discoverNodes(tx, ids, clock, found, placements);
     const swept = await pruneNodes(tx, [
       { storeId, sessions: found.map((session) => session.ref.sessionId) },
     ]);

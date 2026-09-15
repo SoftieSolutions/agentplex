@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { basename, isAbsolute, join, normalize } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
+import { normaliseDirectory } from '@agentplex/protocol';
 import type { DirectoryCreate } from './data-root.js';
 
 /**
@@ -480,9 +481,12 @@ function canonicalWorkingTree(workingTree: string): CanonicalPath {
     };
   }
 
-  const normalised = normalize(workingTree);
-  const trimmed = normalised.replace(/\/+$/, '');
-  return { ok: true, path: trimmed === '' ? '/' : trimmed };
+  // The protocol's own, rather than `node:path`'s. Two things now have to agree
+  // about when two paths are one directory -- this key, and the hub filing a
+  // session under the project whose directory its `cwd` is -- and a second
+  // implementation would be a second answer. It is the same POSIX
+  // normalisation, and `project-files.test.ts` checks it against `node:path`.
+  return { ok: true, path: normaliseDirectory(workingTree) };
 }
 
 /**

@@ -1,8 +1,9 @@
 import { useEffect, useState, type JSX } from 'react';
-import { storeIdSchema, serverRegistrationIdSchema } from '@agentplex/protocol';
-import type { SessionRef, StoreId } from '@agentplex/protocol';
+import { nodeIdSchema, storeIdSchema, serverRegistrationIdSchema } from '@agentplex/protocol';
+import type { NodeId, SessionRef, StoreId } from '@agentplex/protocol';
+import { projectChoices } from '../projects/new-project-model.js';
 import type { HubStore } from '../store/hub-store.js';
-import { useHubSnapshot } from '../store/use-hub-store.js';
+import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import { Button, Group, Modal, Select, Stack, Text, Textarea } from '../ui/components.js';
 import { colorForTone, type Scheme } from '../ui/tokens.js';
 import { StopButton } from './stop-button.js';
@@ -32,6 +33,13 @@ interface PendingStart {
  * The mockup's New popover lists five node kinds, but only Session is live in
  * this milestone, and a menu with one live option is not drawn: the button
  * opens this form directly.
+ *
+ * The project control is drawn only once there is a project to pick, and
+ * picking one changes two things: the start carries the project's id, and the
+ * machine list narrows to the machines that could actually run it. Both are the
+ * hub's rules reflected rather than invented here -- the hub resolves the
+ * directory out of its own rows, and refuses a machine that does not run the
+ * provider -- which is why the reasons live in `new-session-model.ts`.
  */
 export interface NewSessionFormProps {
   readonly store: HubStore;
@@ -55,7 +63,11 @@ export function NewSessionForm({
   navigate = assignHash,
 }: NewSessionFormProps): JSX.Element {
   const snapshot = useHubSnapshot(store);
+  // Interest in the tree, declared for as long as this form is mounted: the
+  // projects it offers are nodes in it, and nothing else on this screen asks.
+  const layout = useHubLayout(store);
   const [storeChoice, setStoreChoice] = useState<string | null>(null);
+  const [projectChoice, setProjectChoice] = useState<string | null>(null);
   const [serverChoice, setServerChoice] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
   /**
@@ -79,7 +91,18 @@ export function NewSessionForm({
   const chosenStore: StoreId | null =
     stores.length === 1 ? (stores[0] ?? null) : offered ? storeIdSchema.parse(storeChoice) : null;
 
-  const overrides = state === null ? [] : serverOverrideChoices(state, chosenStore);
+  const projects = projectChoices(layout);
+  const chosenProject: NodeId | null =
+    projectChoice !== null && projects.some((choice) => choice.id === projectChoice)
+      ? nodeIdSchema.parse(projectChoice)
+      : null;
+
+  // Narrowed by the provider only when a project is chosen: see
+  // `serverOverrideChoices` for why the hub's own filtering covers the rest.
+  const overrides =
+    state === null
+      ? []
+      : serverOverrideChoices(state, chosenStore, chosenProject === null ? null : 'claude');
   const chosenServer =
     serverChoice !== null && overrides.some((choice) => choice.id === serverChoice)
       ? serverRegistrationIdSchema.parse(serverChoice)
@@ -113,6 +136,7 @@ export function NewSessionForm({
     setRejected(null);
     setPrompt('');
     setServerChoice(null);
+    setProjectChoice(null);
   }
 
   function close(): void {
@@ -123,7 +147,7 @@ export function NewSessionForm({
   function submit(): void {
     if (chosenStore === null) return;
     setRejected(null);
-    const command = buildStart(chosenStore, chosenServer, prompt);
+    const command = buildStart(chosenStore, chosenServer, prompt, chosenProject);
     const outcome = store.sendCommand(command);
     if (!outcome.accepted) {
       setRejected(outcome.reason);
@@ -168,6 +192,21 @@ export function NewSessionForm({
           <Text fz={13} c="dimmed">
             no paired server reports a store to start in
           </Text>
+        )}
+
+        {projects.length === 0 ? null : (
+          // Drawn from the first project onwards, because "in this project" and
+          // "wherever the store is" are two different starts. Clearable, and
+          // empty is the second of them rather than a missing answer.
+          <Select
+            label="Project"
+            aria-label="Project"
+            placeholder="No project"
+            data={projects.map((choice) => ({ value: choice.id, label: choice.label }))}
+            value={chosenProject}
+            onChange={setProjectChoice}
+            clearable
+          />
         )}
 
         {overrides.length === 0 ? null : (

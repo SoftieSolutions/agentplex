@@ -175,6 +175,8 @@ function labelFor(text: string): string {
     ['session-stopped', 'sessionStopped'],
     ['server-paired', 'serverPaired'],
     ['server-unpaired', 'serverUnpaired'],
+    ['project-created', 'projectCreated'],
+    ['node-renamed', 'nodeRenamed'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -495,6 +497,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       provider: 'claude',
       prompt: null,
       server: null,
+      project: null,
     });
     await first.framesReceived(7);
     first.sendText('definitely not a frame');
@@ -829,6 +832,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       provider: 'claude',
       prompt: 'fix the auth refresh loop',
       server: null,
+      project: null,
     });
     await until(
       () => starter.received.some((text) => labelFor(text) === 'sessionStarted'),
@@ -868,6 +872,53 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     if (directoryRoots === undefined || directoryListing === undefined) {
       throw new Error('a browse was not answered');
     }
+
+    // A project made out of the directory that was just browsed to, and then
+    // renamed. Both replies travel the whole real path -- the hub writes two
+    // rows in one transaction and answers -- so what the web's forms are tested
+    // against is what a hub actually says rather than what their author
+    // imagined. The node id in the reply is the one thing a client cannot work
+    // out for itself, which is why the frame carries it.
+    starter.send({
+      type: 'project-create',
+      id: 5,
+      name: 'agentplex',
+      directory: '/Users/robert/code/agentplex',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'projectCreated'),
+      'the project create to be answered',
+    );
+    const projectCreated = starter.received.find((text) => labelFor(text) === 'projectCreated');
+    if (projectCreated === undefined) throw new Error('the project create was not answered');
+    const created = parseTextFrame(parseHubFrame, projectCreated);
+    if (!created.ok || created.value.type !== 'project-created') {
+      throw new Error('the project create was answered with something else');
+    }
+
+    starter.send({
+      type: 'project-rename',
+      id: 6,
+      nodeId: created.value.nodeId,
+      name: 'agentplex (main checkout)',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'nodeRenamed'),
+      'the project rename to be answered',
+    );
+    const nodeRenamed = starter.received.find((text) => labelFor(text) === 'nodeRenamed');
+    if (nodeRenamed === undefined) throw new Error('the project rename was not answered');
+
+    // The tree with that project in it, so the web's project picker has a
+    // captured layout to read rather than one somebody typed.
+    starter.send({ type: 'layout-request', id: 7 });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'layout'),
+      'the layout to be answered',
+    );
+    const layoutWithProject = starter.received.find((text) => labelFor(text) === 'layout');
+    if (layoutWithProject === undefined) throw new Error('the layout was not answered');
+
     await singleHub.cleanup();
 
     // A machine holding one session it will stop and one it will not, for the
@@ -941,9 +992,20 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const stopper = await openClient(heldHub.hub);
     stopper.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
     await stopper.framesReceived(2);
+    // The frame a real client sends next, and the reason it is here: the web
+    // client asks for the tree as soon as it is connected, so every command it
+    // then sends is numbered one higher than it would be in a capture that
+    // skipped this. The refusals below are matched to a pending command by
+    // `replyTo`, so a capture whose numbering was not the client's would answer
+    // a frame no screen ever sent.
+    stopper.send({ type: 'layout-request', id: 2 });
+    await until(
+      () => stopper.received.some((text) => labelFor(text) === 'layout'),
+      'the tree a client asks for on connecting',
+    );
     stopper.send({
       type: 'session-stop',
-      id: 2,
+      id: 3,
       storeId: 'store-agentplex',
       sessionId: 'session-fix-auth',
     });
@@ -953,12 +1015,13 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     stopper.send({
       type: 'session-start',
-      id: 3,
+      id: 4,
       storeId: 'store-agentplex',
       sessionId: 'session-migrate-db',
       provider: 'codex',
       prompt: null,
       server: null,
+      project: null,
     });
     await until(
       () => stopper.received.some((text) => labelFor(text) === 'refusalHeldStoppable'),
@@ -966,7 +1029,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     stopper.send({
       type: 'session-stop',
-      id: 4,
+      id: 5,
       storeId: 'store-agentplex',
       sessionId: 'session-migrate-db',
     });
@@ -1273,6 +1336,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('refusalHeldStoppable', refusalHeldStoppable);
     captured.set('directoryRoots', directoryRoots);
     captured.set('directoryListing', directoryListing);
+    captured.set('projectCreated', projectCreated);
+    captured.set('nodeRenamed', nodeRenamed);
+    captured.set('layoutWithProject', layoutWithProject);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
     captured.set('machineStateDiscovered', machineStateDiscovered);
