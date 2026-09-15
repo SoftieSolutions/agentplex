@@ -1,8 +1,17 @@
 // @vitest-environment jsdom
+import { SearchAddon } from '@xterm/addon-search';
 import { Terminal, type ILink } from '@xterm/xterm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { SearchResults, TerminalSearch } from './emulator.js';
+import { ptyChunks } from './pty-chunks.fixture.js';
 import { unicodeChunks } from './unicode-widths.fixture.js';
-import { createPaneTerminal, createWebLinkHandler, type WindowOpener } from './xterm-emulator.js';
+import {
+  createPaneSearch,
+  createPaneTerminal,
+  createWebLinkHandler,
+  paneSearchDecorations,
+  type WindowOpener,
+} from './xterm-emulator.js';
 
 /**
  * What the pane makes of real bytes that are wider than one column each.
@@ -34,10 +43,13 @@ const ZWJ_LINE = 3;
 const RIGHT_BORDER = 11;
 
 const open: PaneTerminal[] = [];
+const mounted: HTMLElement[] = [];
 
 afterEach(() => {
   while (open.length > 0) open.pop()?.dispose();
+  while (mounted.length > 0) mounted.pop()?.remove();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 /**
@@ -246,5 +258,177 @@ describe('a link in terminal output', () => {
     link.activate(new MouseEvent('click'), link.text);
 
     expect(opener.opened).toEqual([inNewTab('https://example.com/some/repo')]);
+  });
+});
+
+/**
+ * What a find in a pane turns up, driven against the same captured pty output
+ * the chunk feed's tests replay.
+ *
+ * These open a terminal, which the tests above deliberately do not: a search
+ * selects what it finds, and selection is a thing only an opened terminal
+ * has -- unopened, `findNext` reaches for a selection service that is not
+ * there. Opening in jsdom costs a `matchMedia` stub and a warning about
+ * canvas from the renderer, and gives a real buffer with real scrollback
+ * above it, which is the half being searched.
+ *
+ * The fixture is replayed five times over, the way a command re-run leaves
+ * five of its output in a session. Five copies of a six-line capture in a
+ * twenty-four-row terminal is the point: the early matches are above the
+ * screen, so a search that only looked at what is visible would report fewer
+ * than it finds here.
+ */
+
+const REPLAYS = 5;
+/** How many times the fixture says `refresh`, once per replay. */
+const REFRESH_MATCHES = REPLAYS;
+
+/** Mantine and xterm both consult the media query; jsdom implements none. */
+function installMatchMedia(): void {
+  vi.stubGlobal('matchMedia', (query: string): MediaQueryList => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
+
+interface SearchablePane {
+  readonly terminal: PaneTerminal;
+  readonly search: TerminalSearch;
+  /** Every result the search published, in order. */
+  readonly results: readonly SearchResults[];
+  readonly latest: () => SearchResults | undefined;
+}
+
+async function replayIntoOpenPane(): Promise<SearchablePane> {
+  installMatchMedia();
+  const container = document.createElement('div');
+  document.body.append(container);
+  mounted.push(container);
+  const terminal = createPaneTerminal('dark');
+  open.push(terminal);
+  terminal.open(container);
+  const search = createPaneSearch(terminal, 'dark');
+  const results: SearchResults[] = [];
+  search.onResults((next) => results.push(next));
+  for (let replay = 0; replay < REPLAYS; replay += 1) {
+    for (const chunk of ptyChunks) {
+      await new Promise<void>((resolve) => {
+        terminal.write(chunk, resolve);
+      });
+    }
+  }
+  return { terminal, search, results, latest: () => results.at(-1) };
+}
+
+describe('a find in the pane', () => {
+  it('reaches the scrollback, not just the screen', async () => {
+    const pane = await replayIntoOpenPane();
+
+    expect(pane.search.findNext('refresh')).toBe(true);
+    expect(pane.latest()).toEqual({ index: 0, count: REFRESH_MATCHES });
+    expect(pane.terminal.getSelection()).toBe('refresh');
+    // The first match is above the viewport: `baseY` is where the screen
+    // starts in the buffer, and the selected row is before it. This is the
+    // whole claim of the ticket in one assertion.
+    const position = pane.terminal.getSelectionPosition();
+    expect(position?.start.y).toBeLessThan(pane.terminal.buffer.active.baseY);
+  });
+
+  it('steps forward and back through the matches it found', async () => {
+    const pane = await replayIntoOpenPane();
+
+    pane.search.findNext('refresh');
+    expect(pane.search.findNext('refresh')).toBe(true);
+    expect(pane.latest()).toEqual({ index: 1, count: REFRESH_MATCHES });
+    expect(pane.search.findPrevious('refresh')).toBe(true);
+    expect(pane.latest()).toEqual({ index: 0, count: REFRESH_MATCHES });
+  });
+
+  it('ignores case unless asked, and then means it', async () => {
+    const pane = await replayIntoOpenPane();
+
+    expect(pane.search.findNext('REFRESH')).toBe(true);
+    expect(pane.latest()).toEqual({ index: 0, count: REFRESH_MATCHES });
+
+    // The same term, case-sensitive: the capture is lowercase, so there is
+    // nothing to find and nothing to count. Without the clear the seam does
+    // before an options change this reports five matches while finding none
+    // -- the addon stores the new options as the last options before asking
+    // whether they changed, so its own answer is always no.
+    expect(pane.search.findNext('REFRESH', { caseSensitive: true })).toBe(false);
+    expect(pane.latest()).toEqual({ index: -1, count: 0 });
+
+    expect(pane.search.findNext('REFRESH')).toBe(true);
+    expect(pane.latest()).toEqual({ index: 0, count: REFRESH_MATCHES });
+  });
+
+  it('says nothing was found rather than nothing at all', async () => {
+    const pane = await replayIntoOpenPane();
+
+    expect(pane.search.findNext('a word this session never printed')).toBe(false);
+    expect(pane.latest()).toEqual({ index: -1, count: 0 });
+  });
+
+  it('clearing takes back the highlights, the selection and the count', async () => {
+    const pane = await replayIntoOpenPane();
+    pane.search.findNext('refresh');
+
+    pane.search.clear();
+
+    expect(pane.latest()).toEqual({ index: -1, count: 0 });
+    // Clearing the addon's decorations leaves the match selected; the seam
+    // clears the selection too, so a closed find bar leaves no trace.
+    expect(pane.terminal.getSelection()).toBe('');
+  });
+
+  it('stops publishing to a listener that unsubscribed, as a closed bar does', async () => {
+    const pane = await replayIntoOpenPane();
+    const heard: SearchResults[] = [];
+    const stop = pane.search.onResults((results) => heard.push(results));
+
+    pane.search.findNext('refresh');
+    stop();
+    pane.search.findNext('refresh');
+
+    expect(heard).toEqual([{ index: 0, count: REFRESH_MATCHES }]);
+  });
+
+  it('counts nothing without decorations, which is why the seam always sends them', async () => {
+    // Upstream behaviour, pinned rather than argued with: the result event
+    // fires only for a search that carried decoration options, and the index
+    // it reports is read off the decoration created for the selected match.
+    // A find bar showing "3 of 12" is therefore a find bar that highlights;
+    // there is no third option, and this test fails the day there is one.
+    const pane = await replayIntoOpenPane();
+    const bare = new SearchAddon();
+    pane.terminal.loadAddon(bare);
+    const heardBare: unknown[] = [];
+    bare.onDidChangeResults((event) => heardBare.push(event));
+
+    expect(bare.findNext('refresh')).toBe(true);
+    expect(heardBare).toEqual([]);
+
+    // A second addon rather than a second call on that one: the addon caches
+    // the term it highlighted and will not recompute for the same term, so
+    // the same instance asked again with decorations answers zero. The seam
+    // works around that by clearing; this test is about the decorations, so
+    // it asks something that has never been asked. The selection goes first
+    // because a search starts from it, and the search above left one behind.
+    pane.terminal.clearSelection();
+    const decorated = new SearchAddon();
+    pane.terminal.loadAddon(decorated);
+    const heard: unknown[] = [];
+    decorated.onDidChangeResults((event) => heard.push(event));
+
+    expect(decorated.findNext('refresh', { decorations: paneSearchDecorations('dark') })).toBe(
+      true,
+    );
+    expect(heard).toEqual([{ resultIndex: 0, resultCount: REFRESH_MATCHES }]);
   });
 });

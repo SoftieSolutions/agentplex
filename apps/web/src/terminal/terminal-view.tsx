@@ -14,8 +14,12 @@ export interface TerminalViewProps {
   onData(data: string): void;
   /** The live emulator, for the focus shortcut. Called with null on teardown. */
   emulatorReady?(emulator: TerminalEmulator | null): void;
-  /** Injected by tests; the real default is the xterm factory. */
-  readonly emulators?: EmulatorFactory;
+  /**
+   * Injected by tests; the real default is the xterm factory. Spelt with the
+   * `undefined` as well as the `?` because the pane forwards its own optional
+   * prop into it, and exactOptionalPropertyTypes keeps those apart.
+   */
+  readonly emulators?: EmulatorFactory | undefined;
 }
 
 /**

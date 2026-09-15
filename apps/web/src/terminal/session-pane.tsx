@@ -21,7 +21,8 @@ import {
 } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import { createTerminalFeed, DEFAULT_FEED_BYTES, type TerminalFeed } from './chunk-feed.js';
-import type { TerminalEmulator } from './emulator.js';
+import type { EmulatorFactory, TerminalEmulator } from './emulator.js';
+import { FindBar } from './find-bar.js';
 import {
   findSessionRow,
   machineLabel,
@@ -62,9 +63,16 @@ export interface SessionPaneProps {
   readonly sessionRef: SessionRef;
   /** The page's one hub store, handed down through the layout. */
   readonly store: HubStore;
+  /**
+   * Injected by tests and by nothing else; the real default is the xterm
+   * factory `TerminalView` reaches for. The same seam that view already
+   * declares, forwarded one level up, because the chords and the find bar are
+   * the pane's and a test of them wants an emulator it can read.
+   */
+  readonly emulators?: EmulatorFactory | undefined;
 }
 
-export function SessionPane({ sessionRef, store: hub }: SessionPaneProps): JSX.Element {
+export function SessionPane({ sessionRef, store: hub, emulators }: SessionPaneProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const snapshot = useHubSnapshot(hub);
   useSessionInterest(hub, sessionRef);
@@ -75,7 +83,11 @@ export function SessionPane({ sessionRef, store: hub }: SessionPaneProps): JSX.E
   // ones.
   const emulatorRef = useRef<TerminalEmulator | null>(null);
   const steerRef = useRef<HTMLInputElement | null>(null);
+  const findRef = useRef<HTMLInputElement | null>(null);
   const [feed] = useState<TerminalFeed>(() => createTerminalFeed({ maxBytes: DEFAULT_FEED_BYTES }));
+  // Whether the find bar is drawn. State and not a ref: it is the one thing
+  // about the terminal that the pane renders differently.
+  const [finding, setFinding] = useState(false);
   const [registry] = useState<ShortcutRegistry>(() => {
     const bindings = createShortcutRegistry();
     // The minimal real bindings; the layout ticket (AGX-34) registers its
@@ -89,6 +101,17 @@ export function SessionPane({ sessionRef, store: hub }: SessionPaneProps): JSX.E
       key: 's',
       description: 'focus the steer input',
       run: () => steerRef.current?.focus(),
+    });
+    bindings.register({
+      key: 'f',
+      description: 'find in the terminal output',
+      run: () => {
+        setFinding(true);
+        // Opening focuses through the bar's own ref callback; this is the
+        // second press, on a bar that is already open, which should put the
+        // caret back in it rather than do nothing.
+        findRef.current?.focus();
+      },
     });
     return bindings;
   });
@@ -107,6 +130,24 @@ export function SessionPane({ sessionRef, store: hub }: SessionPaneProps): JSX.E
 
   const emulatorReady = useCallback((emulator: TerminalEmulator | null) => {
     emulatorRef.current = emulator;
+    // A find bar outlives no emulator. The emulator is rebuilt whenever a
+    // constructor-time fact changes -- the colour scheme, today -- and the
+    // rebuilt one starts on an empty buffer, so a bar still listening to the
+    // disposed one would go on showing a count of matches that are no longer
+    // anywhere. Teardown always precedes the rebuild, so this is the moment.
+    if (emulator === null) setFinding(false);
+  }, []);
+
+  // The find bar's three seams onto the pane, stable so the bar's own ref
+  // callback is not torn down and rebuilt on every keystroke.
+  const paneSearch = useCallback(() => emulatorRef.current?.search ?? null, []);
+  const feedTruncated = useCallback(() => feed.truncated, [feed]);
+  const closeFind = useCallback(() => {
+    // The find is over: the highlights and the selection go, and so does the
+    // caret -- back to the terminal, which is where it was before the chord.
+    emulatorRef.current?.search.clear();
+    setFinding(false);
+    emulatorRef.current?.focus();
   }, []);
 
   // Steer, honestly: there is no steer frame in the protocol, so the words
@@ -192,7 +233,23 @@ export function SessionPane({ sessionRef, store: hub }: SessionPaneProps): JSX.E
         )}
       </Group>
 
-      <TerminalView feed={feed} scheme={scheme} onData={sendInput} emulatorReady={emulatorReady} />
+      {finding && (
+        <FindBar
+          search={paneSearch}
+          truncated={feedTruncated}
+          scheme={scheme}
+          onClose={closeFind}
+          inputRef={findRef}
+        />
+      )}
+
+      <TerminalView
+        feed={feed}
+        scheme={scheme}
+        onData={sendInput}
+        emulatorReady={emulatorReady}
+        emulators={emulators}
+      />
 
       {notice !== null && (
         <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>

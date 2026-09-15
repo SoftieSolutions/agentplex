@@ -1,6 +1,7 @@
 import type { MachineState, SessionRef, SessionRow, SessionStatus } from '@agentplex/protocol';
 import type { HubSnapshot } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
+import { EMULATOR_SCROLLBACK_LINES, type SearchResults } from './emulator.js';
 
 /**
  * Pure derivations the session pane renders: which row a route names, what
@@ -69,4 +70,38 @@ export function terminalInputNotice(
     return `typing goes nowhere: ${undelivered}`;
   }
   return null;
+}
+
+/**
+ * The find bar's count, in the fewest words that are still true.
+ *
+ * Three states worth keeping apart. Nothing typed is not a result and says
+ * nothing at all. A search whose matches are known but which is standing on
+ * none of them -- what the addon reports as index -1, the state right after
+ * the last match was passed or a query was retyped -- says how many there
+ * are and does not invent a position. Anything else is "3 of 12".
+ */
+export function matchSummary(query: string, results: SearchResults | null): string {
+  if (query.length === 0 || results === null) return '';
+  if (results.count === 0) return 'no matches';
+  if (results.index < 0)
+    return `${String(results.count)} ${results.count === 1 ? 'match' : 'matches'}`;
+  return `${String(results.index + 1)} of ${String(results.count)}`;
+}
+
+/**
+ * What the bar has to say about the question it could not answer, or `null`
+ * when it answered the whole of it.
+ *
+ * A find reaches what this pane holds and nothing further: the emulator keeps
+ * a bounded scrollback, and the feed that replayed into it dropped its oldest
+ * chunks once it passed its byte cap. Either way the beginning of a long
+ * session is gone, and "no matches" over a truncated buffer is a claim about
+ * output that was never searched. The bar says the bound out loud instead --
+ * the honest direction, since a user who knows the window can go look
+ * elsewhere, and a user told "no matches" stops looking.
+ */
+export function searchScopeNotice(truncated: boolean): string | null {
+  if (!truncated) return null;
+  return `the last ${String(EMULATOR_SCROLLBACK_LINES)} lines only: earlier output is no longer held here, so a miss is not proof of absence`;
 }
