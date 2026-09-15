@@ -929,8 +929,9 @@ export function serveHubConnection(
    *
    * Reports are sent when a hub connects and after anything this server does
    * that could change what is running. A store that changes because somebody
-   * worked in it outside agentplex is the store watcher's to notice, and it
-   * reports through this same path when it lands.
+   * worked in it outside agentplex is the store watcher's to notice, and
+   * `store-watch.ts` reports it through this same path rather than a second
+   * one.
    */
   async function reportStore(storeId: StoreId): Promise<void> {
     // The start tags this connection owes go with it, and they are taken by

@@ -26,6 +26,7 @@ import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
 import { nodeDataRoot } from './node-data-root.js';
 import { nodeProjectFiles } from './node-project-files.js';
+import { nodeStoreWatcher } from './node-store-watcher.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { createMachineLoadReader, createNodeMachineProbe } from './machine-load.js';
 import { createGitWorkingTree } from './working-tree.js';
@@ -141,6 +142,11 @@ async function main(): Promise<void> {
       logger,
       ids: randomIdGenerator,
       storeFileSystem: nodeStoreFileSystem,
+      // The one place `fs.watch` is called. It is what makes a session
+      // somebody started in a terminal reach a hub without waiting for that
+      // hub to ask; what an event is worth -- the burst window, the fan-out,
+      // the backoff -- is decided above it, where a test can reach it.
+      storeWatcher: nodeStoreWatcher,
       // The one place this process may create a directory of its own. It is a
       // separate seam from the store volumes above because it is a separate
       // permission: a store is read, and this is written.

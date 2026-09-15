@@ -40,6 +40,7 @@ import { createProjectDocs } from './project-docs.js';
 import type { ProjectFileSystem } from './project-files.js';
 import type { WorkingTree } from './working-tree.js';
 import type { TerminalManager } from './terminal-manager.js';
+import { watchStores, type StoreWatcher } from './store-watch.js';
 
 /**
  * The server role.
@@ -60,6 +61,17 @@ export interface SessionServerDependencies {
   /** Store roots from configuration, already absolute and deduplicated. */
   readonly storePaths: readonly string[];
   readonly storeFileSystem: StoreFileSystem;
+  /**
+   * How this server finds out that a store changed without being told.
+   *
+   * A separate seam from the store filesystem above, and not an oversight: that
+   * one reads a volume when somebody asks, and this one is the machine
+   * interrupting. It is injected for the reason the beacon's socket is --
+   * `fs.watch` is a kernel facility a test cannot make fire on cue, so
+   * everything that decides what an event is worth lives above it in
+   * `store-watch.ts`.
+   */
+  readonly storeWatcher: StoreWatcher;
   /**
    * Where this server's own identity and pairing token live, absolute.
    *
@@ -260,6 +272,7 @@ export async function startSessionServer(
     ids,
     storePaths,
     storeFileSystem,
+    storeWatcher,
     identityPath,
     grantFileSystem,
     tokens,
@@ -493,6 +506,17 @@ export async function startSessionServer(
   // the hub that reconnects; this covers the one that does not have to.
   const sweep = sweepGrants({ grants: grants.store, audience, timers, logger });
 
+  // The one reporter on this server that no hub prompted, and the answer to the
+  // staleness the scan above is careful not to claim it fixed: a session
+  // somebody starts in a terminal changes a store, and until this nothing told
+  // a hub so until the next handshake, start or stop. It is started after the
+  // first scan rather than before it, so a store is reported once at boot by
+  // the pass that logs it and not twice.
+  //
+  // It reports through the audience -- the same `reportToAll` a start and a
+  // stop reach -- so there is one way a store report leaves this server.
+  const watching = watchStores({ stores, watcher: storeWatcher, audience, timers, logger });
+
   const listener: HttpListener = await startHttpServer(
     port,
     host,
@@ -670,6 +694,12 @@ export async function startSessionServer(
       // The sweep next, because a pending timer is a process that will not
       // exit, and there is nothing left for it to revoke access to.
       sweep.stop();
+      // Then the watches, before the drain rather than after it. Everything
+      // the drain does writes into a store -- it is closing sessions -- so a
+      // watch left open would spend the shutdown scanning stores on behalf of
+      // hubs that have just been told this server is going away. The drain's
+      // own polling is the reporting a shutdown needs, and it is bounded.
+      watching.stop();
       // Then nothing new. This is what makes the wait below terminate at all:
       // a drain that is still accepting starts is not draining. It closes
       // nothing, which is the point -- the agents already running go on

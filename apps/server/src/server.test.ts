@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   parseServerToHubFrame,
   parseTextFrame,
@@ -9,7 +9,7 @@ import {
   type ServerToHubFrame,
 } from '@agentplex/protocol';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
-import { createFakeTimers } from '@agentplex/node-shared/testing';
+import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
 import { createProviderRegistry, type ProviderPreflight } from '@agentplex/providers';
 import {
   createFakeGrantFiles,
@@ -28,6 +28,7 @@ import { createFakeWorkingTree } from './fake-working-tree.js';
 import { createFakeTerminals, type FakeTerminals } from './fake-terminals.js';
 import { createFakeMachineLoadReader } from './fake-machine-probe.js';
 import { createFakeProjectFiles, type FakeProjectFiles } from './fake-project-files.js';
+import { createFakeStoreWatcher, type FakeStoreWatcher } from './fake-store-watcher.js';
 import { PROJECT_FILES_DIRECTORY } from './project-files.js';
 
 /**
@@ -93,6 +94,10 @@ interface World {
   readonly runner: FakeProcessRunner;
   /** The disk under the project folders, so a write is a path in here. */
   readonly projectFiles: FakeProjectFiles;
+  /** The store watch, so a change under a store is an event this file fires. */
+  readonly watcher: FakeStoreWatcher;
+  /** The clock the burst window is on, so the wait is ended rather than sat through. */
+  readonly timers: FakeTimers;
 }
 
 /**
@@ -157,17 +162,22 @@ afterEach(async () => {
   world = undefined;
 });
 
-async function start(reading: readonly ProviderReadiness[] = []): Promise<World> {
+async function start(
+  reading: readonly ProviderReadiness[] = [],
+  watcher: FakeStoreWatcher = createFakeStoreWatcher(),
+): Promise<World> {
   const terminals = createFakeTerminals();
   const records: LogRecord[] = [];
   const preflight = createFakePreflight(reading);
   const runner = createFakeProcessRunner();
   const projectFiles = createFakeProjectFiles();
+  const timers = createFakeTimers();
   const runtime = await startRuntime(config, {
     logger: createLogger('info', (record) => records.push(record)),
     ids: { newId: () => 'id-under-test' },
-    timers: createFakeTimers(),
+    timers,
     storeFileSystem: createFakeStoreFiles(),
+    storeWatcher: watcher,
     dataRootFileSystem: createFakeDataRoot(),
     grantFileSystem: createFakeGrantFiles(),
     projectFiles,
@@ -188,7 +198,7 @@ async function start(reading: readonly ProviderReadiness[] = []): Promise<World>
     },
     clock: { now: () => 1_756_000_000_000 },
   });
-  world = { runtime, terminals, records, preflight, runner, projectFiles };
+  world = { runtime, terminals, records, preflight, runner, projectFiles, watcher, timers };
   return world;
 }
 
@@ -576,5 +586,67 @@ describe('the document frames', () => {
     expect(refusal).toMatchObject({ replyTo: 2, code: 'refused', hold: null });
     expect(started.runner.requests).toEqual([]);
     hub.close();
+  });
+});
+
+/**
+ * The store watcher, as `main` assembles it: a change on a real volume would
+ * arrive at the seam, and what the server does with it is the wiring this file
+ * exists to check. The unit half -- the window, the fan-out, the backoff --
+ * is `store-watch.test.ts`, and the real `fs.watch` is
+ * `node-store-watcher.integration.test.ts`.
+ */
+describe('a store that changes with nobody asking', () => {
+  /** Every whole-store report this hub has been sent, handshake included. */
+  const reports = (hub: FakeHub): readonly ServerToHubFrame[] =>
+    hub.frames.filter((frame) => frame.type === 'store-report');
+
+  it('reports it to a connected hub, on the path a start already uses', async () => {
+    const started = await start();
+    const hub = await dial(started);
+    await hub.next('store-report');
+    const atHandshake = reports(hub).length;
+
+    // Somebody ran `claude` in a terminal on this machine. No frame arrived and
+    // nothing here was asked anything; the only event is the filesystem.
+    started.watcher.change(STORE_PATH);
+    started.timers.fireAll();
+
+    await vi.waitFor(() => expect(reports(hub).length).toBe(atHandshake + 1));
+    expect(reports(hub)[atHandshake]).toMatchObject({
+      type: 'store-report',
+      storeId: storeOf(started).storeId,
+    });
+    hub.close();
+  });
+
+  it('starts anyway when a store cannot be watched, and says which one', async () => {
+    const started = await start([], createFakeStoreWatcher({ refuse: [STORE_PATH] }));
+
+    // The store costs itself and nothing else: the server is up, it serves, and
+    // the reports a hub asks for are unaffected. What was lost is freshness
+    // between them, which is exactly what the line says.
+    const refusal = started.records.find((record) =>
+      record.message.startsWith('not watching a store'),
+    );
+    expect(refusal?.level).toBe('warn');
+    expect(refusal?.fields).toMatchObject({ path: STORE_PATH });
+
+    const hub = await dial(started);
+    expect(await hub.next('store-report')).toMatchObject({ storeId: storeOf(started).storeId });
+    hub.close();
+  });
+
+  it('stops watching when the server stops', async () => {
+    const started = await start();
+    expect(started.watcher.watching).toEqual([STORE_PATH]);
+
+    await started.runtime.stop();
+
+    // Before the drain, not after it: a drain closes sessions, which writes
+    // into the store, and a watch left open would spend a shutdown scanning
+    // for hubs that have just been told this server is going away.
+    expect(started.watcher.watching).toEqual([]);
+    expect(started.watcher.closed).toEqual([STORE_PATH]);
   });
 });
