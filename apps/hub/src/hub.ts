@@ -26,6 +26,7 @@ import { createCatalogue } from './features/catalogue/catalogue.js';
 import { createClients, type Clients } from './features/clients/clients.js';
 import { createDiscovery, type BeaconSource } from './features/discovery/discovery.js';
 import { createFleetState, type FleetState } from './features/fleet-state/fleet-state.js';
+import { createMcp } from './features/mcp/mcp.js';
 import { createPairing, type LocalServerEntry } from './features/pairing/pairing.js';
 import { createPaneLayout } from './features/pane-layout/pane-layout.js';
 import { createServers, type Servers } from './features/servers/servers.js';
@@ -302,6 +303,13 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     },
   });
 
+  // Behind the same token the exchange above checks, on the same port, and
+  // built here rather than inside the route chain for the reason every other
+  // feature is: this file is the only one that knows the concrete set. It holds
+  // no session and nothing durable, so it is the last thing that has to be
+  // built and the first of the two that has to be stopped.
+  const mcp = createMcp({ hubId, clientToken, logger });
+
   const web = createWeb({ files: webAssets, logger });
 
   // Asked once, before the port is open, so that a hub with nothing to serve
@@ -315,7 +323,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   const listener: HttpListener = await startHttpServer(
     port,
     host,
-    createHubRoutes({ clientAuth, web, logger }),
+    createHubRoutes({ clientAuth, mcp, web, logger }),
     HTTP_TIMEOUTS,
     // The same port the health check is on. One inbound port per process is the
     // promise both roles make to whoever opens the firewall, and the client
@@ -350,6 +358,11 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // it, and a live websocket would hold the process open after everything
       // it could ask about had stopped.
       sockets.close();
+      // Then whatever an agent was in the middle of asking. An MCP request has
+      // a server and a transport behind it that closing the listener does not
+      // reach, and a tool still running would be one reading a fleet state
+      // whose parts are being stopped underneath it.
+      await mcp.close();
       // Then outbound. The dials are what hold sockets open and what would
       // otherwise still be retrying while the listener is closing.
       await servers.stop();
