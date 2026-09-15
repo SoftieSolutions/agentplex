@@ -536,3 +536,118 @@ describe('taking a session out of the tree', () => {
     ]);
   });
 });
+
+/**
+ * The catalogue query over a fleet that reports, paged and grouped by server.
+ *
+ * The one thing this suite can say that `query.test` cannot: that the grouping
+ * is over readings that arrived the only way a reading ever does -- a store
+ * scan, over the real protocol, merged by the reducer -- and that the server
+ * label on a heading is the label of the pairing this hub actually holds. A
+ * unit test hands the query a machine state it wrote itself, which is exactly
+ * the shape a hub might never produce.
+ *
+ * The paging half is here for the same reason the prune's is: what it costs to
+ * get wrong is a client that pages forever or silently skips somebody's work,
+ * and that only shows up against a hub whose version moves under the cursor.
+ */
+describe('paging the catalogue of a reporting fleet', () => {
+  /** One page, or the refusal that came instead. */
+  async function pageOf(client: Client, query: Record<string, unknown>): Promise<HubFrame> {
+    return client.ask({
+      type: 'catalogue-query',
+      view: 'list',
+      groupBy: 'server',
+      sort: { key: 'name', direction: 'asc' },
+      filter: {},
+      cursor: null,
+      limit: 10,
+      ...query,
+    });
+  }
+
+  it('answers one page per server heading, and walks the rest through the cursor', async () => {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+      descriptor(AGENTPLEX, 'session-spike-wasm', 'spike-wasm'),
+    ]);
+    const box = machine('gpu-box-01', 'server-gpu', UNIVERSE, '/mnt/volumes/universe', [
+      descriptor(UNIVERSE, 'session-bench-tokenizer', 'bench-tokenizer'),
+    ]);
+    fleet = await startFleetHub([laptop, box]);
+    const client = await openClient(fleet.hub);
+    await settles(client, [
+      'store-agentplex/session-fix-auth',
+      'store-agentplex/session-spike-wasm',
+      'store-universe/session-bench-tokenizer',
+    ]);
+
+    const first = await pageOf(client, { limit: 2 });
+    if (first.type !== 'catalogue-page') throw new Error(`the query was answered ${first.type}`);
+
+    // The count is over the whole answer and not over the page, which is what
+    // lets a client say "2 of 3" rather than "2 so far".
+    expect(first.total).toBe(3);
+    expect(first.items).toHaveLength(2);
+    expect(first.nextCursor).not.toBeNull();
+    // gpu-box-01 sorts before mbp-robert, and the heading on every item is the
+    // label of the pairing this hub holds rather than anything a server said
+    // about itself.
+    expect(first.items.map((item) => item.group?.label)).toEqual(['gpu-box-01', 'mbp-robert']);
+    expect(first.items.every((item) => item.group?.unfiled === false)).toBe(true);
+    // The session row is on the item, whole, so the client joins nothing: the
+    // heading and the row it heads agree because they are the same reading.
+    for (const item of first.items) {
+      expect(item.session?.source).toBe(item.group?.key);
+    }
+
+    const second = await pageOf(client, { limit: 2, cursor: first.nextCursor });
+    if (second.type !== 'catalogue-page') throw new Error(`the query was answered ${second.type}`);
+
+    expect(second.items).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+    expect([...first.items, ...second.items].map((item) => item.anchor?.sessionId).sort()).toEqual([
+      'session-bench-tokenizer',
+      'session-fix-auth',
+      'session-spike-wasm',
+    ]);
+  });
+
+  it('refuses a cursor from before the tree changed, and says it is stale', async () => {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+      descriptor(AGENTPLEX, 'session-spike-wasm', 'spike-wasm'),
+    ]);
+    fleet = await startFleetHub([laptop]);
+    const client = await openClient(fleet.hub);
+    await settles(client, [
+      'store-agentplex/session-fix-auth',
+      'store-agentplex/session-spike-wasm',
+    ]);
+
+    const first = await pageOf(client, { limit: 1 });
+    if (first.type !== 'catalogue-page') throw new Error(`the query was answered ${first.type}`);
+    const cursor = first.nextCursor;
+    if (cursor === null) throw new Error('the first page ended the answer');
+
+    // Anything that moves the tree will do; a folder is the cheapest. The
+    // client has already been told the version moved -- `catalogue-changed`
+    // reached this socket -- so what it does about the refusal is ask for the
+    // first page again.
+    expect(
+      await client.ask({ type: 'node-create-folder', parentId: null, name: 'later' }),
+    ).toMatchObject({ type: 'node-created' });
+
+    const refused = await pageOf(client, { limit: 1, cursor });
+
+    expect(refused).toMatchObject({ type: 'refusal', code: 'bad-request' });
+    if (refused.type !== 'refusal') throw new Error('the stale cursor was not refused');
+    expect(refused.message).toContain('stale');
+
+    // And the first page still answers, at the version the tree is now at.
+    const again = await pageOf(client, { limit: 1 });
+    if (again.type !== 'catalogue-page') throw new Error(`the query was answered ${again.type}`);
+    expect(again.version).toBeGreaterThan(first.version);
+    expect(again.total).toBe(2);
+  });
+});

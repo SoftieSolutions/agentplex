@@ -8,6 +8,7 @@ import {
   type FrameId,
   type HubFrame,
   type HubId,
+  type CatalogueQuery,
   type Layout,
   type RefusalCode,
   type ServerRegistrationId,
@@ -21,7 +22,7 @@ import {
   type MessageSocket,
   type SocketClosure,
 } from '@agentplex/node-shared';
-import type { TreeChanged, TreeMutations } from '../catalogue/catalogue.js';
+import type { CatalogueQueries, TreeChanged, TreeMutations } from '../catalogue/catalogue.js';
 import { newServerRegistrationSchema, type Pairing } from '../pairing/pairing.js';
 import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
@@ -167,14 +168,16 @@ export interface ClientConnectionDependencies {
    */
   readonly projects: Projects;
   /**
-   * The five edits a client may make to the tree.
+   * The five edits a client may make to the tree, and the query it reads part
+   * of the tree with.
    *
-   * Narrower than the catalogue, and deliberately not the same seam the layout
-   * arrives on: reading the tree is a reply built per client, and editing it is
-   * a decision the feature that owns the rows makes. What this file does with
-   * either is the same -- answer the client that asked, and nobody else.
+   * Narrower than the catalogue, and deliberately not the same seam the whole
+   * layout arrives on: `readLayout` above is one function answering one frame,
+   * and these are the acts the feature that owns the rows decides. What this
+   * file does with all of them is the same -- answer the client that asked,
+   * and nobody else.
    */
-  readonly catalogue: TreeMutations;
+  readonly catalogue: TreeMutations & CatalogueQueries;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -483,6 +486,26 @@ export function serveClientConnection(
         return;
       }
 
+      case 'catalogue-query': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a layout read is not: a query reads every
+        // node and sorts them, and awaiting it here would stall every later
+        // frame on this socket -- including the next page this same client is
+        // about to ask for.
+        void answerCatalogueQuery(frame.id, {
+          view: frame.view,
+          groupBy: frame.groupBy,
+          sort: frame.sort,
+          filter: frame.filter,
+          cursor: frame.cursor,
+          limit: frame.limit,
+        });
+        return;
+      }
+
       case 'session-subscribe':
       case 'session-unsubscribe':
       case 'terminal-input':
@@ -541,6 +564,40 @@ export function serveClientConnection(
       logger.error('could not read the layout', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not read its layout');
+    }
+  }
+
+  /**
+   * Answers one page of the catalogue to the client that asked.
+   *
+   * Two kinds of no, and they are different things for a client to do. A stale
+   * or foreign cursor is a `refusal` the client acts on -- it asks for the
+   * first page again -- and it is `bad-request` rather than `refused` because
+   * the frame named something this hub cannot serve, not a state of the world
+   * that says no. A read that throws is `internal`, for the reason the layout
+   * read gives: the hub broke, retrying may work, and what broke inside its
+   * database is not a client's to render.
+   */
+  async function answerCatalogueQuery(replyTo: FrameId, request: CatalogueQuery): Promise<void> {
+    try {
+      const outcome = await catalogue.query(request);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'catalogue-page',
+        replyTo,
+        items: [...outcome.items],
+        nextCursor: outcome.nextCursor,
+        total: outcome.total,
+        version: outcome.version,
+      });
+    } catch (error) {
+      logger.error('could not read the catalogue', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not read its catalogue');
     }
   }
 

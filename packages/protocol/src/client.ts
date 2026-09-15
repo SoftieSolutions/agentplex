@@ -1,4 +1,12 @@
 import { z } from 'zod';
+import {
+  catalogueCursorSchema,
+  catalogueFilterSchema,
+  catalogueGroupBySchema,
+  catalogueItemSchema,
+  catalogueSortSchema,
+  catalogueViewSchema,
+} from './catalogue.js';
 import { directoryListingFrameSchema, directorySchema } from './directory.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import {
@@ -411,6 +419,41 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
   }),
+  /**
+   * Asks for part of the catalogue: shaped, filtered, sorted and paged.
+   *
+   * The frame that makes sorting and paging the hub's rather than the client's,
+   * which is decision 4 of the design. `layout-request` above still answers the
+   * whole tree and is still the right frame for a screen drawing an arrangement
+   * somebody made by hand; this is the one a screen with a few hundred sessions
+   * on it asks, and the difference is that the hub decides the order.
+   *
+   * That is the point rather than an optimisation. Two clients sorting one set
+   * of rows by their own rules is how two screens come to disagree about one
+   * catalogue, and neither of them nor the hub can say which is right. Here
+   * there is one sort, it happens once, and the cursor is a position in it.
+   *
+   * Every parameter is a closed set or a bound: a view, a grouping, a sort key,
+   * a filter of ids and enums, and a limit the hub clamps. Nothing here is a
+   * column name, an expression or an ordering clause -- a query frame that
+   * carried one would be the generic surface the rule about argv and env vars
+   * exists to keep shut, in another direction.
+   *
+   * `cursor` is `null` for the first page and otherwise a string this hub
+   * handed out. It is refused when it was minted before a change to the tree:
+   * `catalogue-changed` has already told this client the version moved, and a
+   * page resumed across a change would skip or repeat rows without saying so.
+   */
+  z.object({
+    type: z.literal('catalogue-query'),
+    id: frameIdSchema,
+    view: catalogueViewSchema,
+    groupBy: catalogueGroupBySchema,
+    sort: catalogueSortSchema,
+    filter: catalogueFilterSchema,
+    cursor: catalogueCursorSchema.nullable(),
+    limit: z.int().positive(),
+  }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
 ]);
@@ -681,6 +724,36 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
    */
   z.object({
     type: z.literal('catalogue-changed'),
+    version: z.int().nonnegative(),
+  }),
+  /**
+   * One page of the catalogue, answered to the client that asked.
+   *
+   * A reply and never a broadcast, for the reason a layout is one: what one
+   * person is looking at, sorted the way they asked for it, is not a fact about
+   * the fleet.
+   *
+   * `total` is the count before paging -- after the filter and the search, and
+   * before the limit -- so that a client can say "12 of 340" rather than
+   * "12 so far". A client that had to page to the end to count would be asking
+   * for the whole tree to avoid asking for the whole tree.
+   *
+   * `version` is the catalogue version this page was computed at, and it is the
+   * same number `catalogue-changed` carries. That is what lets a client tell a
+   * page from before a change from one from after it, and it is what the
+   * cursor is pinned to: the hub refuses a cursor minted at an older version
+   * rather than resuming into an order that has moved underneath it.
+   *
+   * `nextCursor` is `null` when this page is the last one. It is not "no more
+   * for now": a page that ends the answer says so, and a client that got one
+   * stops rather than polling for a page that will never arrive.
+   */
+  z.object({
+    type: z.literal('catalogue-page'),
+    replyTo: frameIdSchema,
+    items: z.array(catalogueItemSchema),
+    nextCursor: catalogueCursorSchema.nullable(),
+    total: z.int().nonnegative(),
     version: z.int().nonnegative(),
   }),
   protocolErrorFrameSchema,

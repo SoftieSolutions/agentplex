@@ -154,3 +154,24 @@ export async function findProjectByDirectory(
   const row = result.rows[0];
   return row === undefined ? null : projectRowSchema.parse(row).nodeId;
 }
+
+/**
+ * Every project's directory, by node.
+ *
+ * One statement for the whole table rather than `readProjectDirectory` per
+ * node, because its caller is the catalogue query, which resolves a whole
+ * catalogue at once: a lookup per project node would be one round trip per
+ * project to answer one page. The table is one row per project a person made,
+ * so reading it whole is reading a few rows.
+ */
+export async function readProjectDirectories(
+  database: Queryable,
+): Promise<ReadonlyMap<NodeId, string>> {
+  const result = await database.query('SELECT node_id, directory FROM projects');
+  const directories = new Map<NodeId, string>();
+  for (const row of result.rows) {
+    const project = projectRowSchema.parse(row);
+    directories.set(project.nodeId, project.directory);
+  }
+  return directories;
+}

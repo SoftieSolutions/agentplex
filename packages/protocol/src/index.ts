@@ -6,6 +6,36 @@ export { assertNever } from './exhaustive.js';
 export type { ParseFailure, ParseResult } from './parse.js';
 
 export {
+  CATALOGUE_PAGE_MAX_LIMIT,
+  CATALOGUE_SEARCH_MAX_CHARS,
+  catalogueCursorSchema,
+  catalogueFilterSchema,
+  catalogueGroupBySchema,
+  catalogueGroupSchema,
+  catalogueItemSchema,
+  catalogueMatchFieldSchema,
+  catalogueNameSourceSchema,
+  catalogueQuerySchema,
+  catalogueSortKeySchema,
+  catalogueSortSchema,
+  catalogueViewSchema,
+  sortDirectionSchema,
+} from './catalogue.js';
+export type {
+  CatalogueFilter,
+  CatalogueGroup,
+  CatalogueGroupBy,
+  CatalogueItem,
+  CatalogueMatchField,
+  CatalogueNameSource,
+  CatalogueQuery,
+  CatalogueSort,
+  CatalogueSortKey,
+  CatalogueView,
+  SortDirection,
+} from './catalogue.js';
+
+export {
   BEACON_ANNOUNCE_INTERVAL_MS,
   BEACON_EXPIRY_MS,
   BEACON_MISSED_LIMIT,
