@@ -6,6 +6,7 @@ import {
   type MessageSocket,
   type Timers,
 } from '@agentplex/node-shared';
+import type { Pairing } from '../pairing/pairing.js';
 import type { Sessions } from '../sessions/sessions.js';
 import type { FleetState } from '../fleet-state/fleet-state.js';
 import {
@@ -67,6 +68,21 @@ export interface ClientsDependencies {
    */
   readonly sessions: Sessions;
   /**
+   * Pairing and unpairing servers, handed to every client this serves.
+   *
+   * One instance for the whole broadcast, like the session control and for the
+   * same reason: which servers this hub may dial is one fact about the fleet,
+   * and a per-socket copy of it would be a second answer waiting to differ.
+   */
+  readonly pairing: Pairing;
+  /**
+   * Tells the servers feature to re-read the pairing table.
+   *
+   * A function rather than the supervisor itself, so that what a client socket
+   * can reach is "something changed, look again" and not `stop()`.
+   */
+  readonly syncServers: () => Promise<void>;
+  /**
    * The deadline seam the flush is scheduled on.
    *
    * Injected rather than `setTimeout` because coalescing is exactly the
@@ -110,8 +126,17 @@ export interface Clients {
 const DEFAULT_COALESCE_MS = 0;
 
 export function createClients(dependencies: ClientsDependencies): Clients {
-  const { hubId, state, timers, readLayout, readPaneLayout, writePaneLayout, sessions } =
-    dependencies;
+  const {
+    hubId,
+    state,
+    timers,
+    readLayout,
+    readPaneLayout,
+    writePaneLayout,
+    sessions,
+    pairing,
+    syncServers,
+  } = dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
 
@@ -181,6 +206,8 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         readPaneLayout,
         writePaneLayout,
         sessions,
+        pairing,
+        syncServers,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);
         },

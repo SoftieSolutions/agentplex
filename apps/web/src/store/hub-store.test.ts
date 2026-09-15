@@ -364,6 +364,55 @@ describe('commands', () => {
   });
 });
 
+describe('requests', () => {
+  const A_PAIRING = {
+    type: 'server-pair',
+    label: 'gpu-box-01',
+    address: 'wss://gpu-box-01.example:8443',
+    token: 'the-token-the-server-printed',
+  } as const;
+
+  it('sends now and never queues, because a queued one holds a credential', async () => {
+    // The rule this path exists for: a pair frame carries the token a server
+    // printed, and a queue is a place for it to sit in memory with nobody
+    // watching it for as long as the tab is open.
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.drop();
+
+    const outcome = await h.store.request(A_PAIRING);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.reason).toContain('nothing was sent');
+    expect(h.store.getSnapshot().commandQueue.queued).toBe(0);
+  });
+
+  it('does not replay one after a reconnection, the way a subscription is', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.drop();
+    await h.store.request(A_PAIRING);
+
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+
+    expect(sentFrames(next).map((frame) => frame.type)).toEqual(['hello']);
+    for (const text of next.sent) expect(text).not.toContain('the-token-the-server-printed');
+  });
+
+  it('answers whoever asked when the connection goes before the hub does', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const answer = h.store.request(A_PAIRING);
+    socket.drop();
+
+    await expect(answer).resolves.toMatchObject({ ok: false });
+  });
+});
+
 describe('terminal input', () => {
   it('discards keystrokes while down, says so in words, and never queues them', async () => {
     const h = harness();

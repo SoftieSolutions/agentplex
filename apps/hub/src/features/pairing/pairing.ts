@@ -1,14 +1,22 @@
 import { z } from 'zod';
-import type { ServerId, ServerRegistrationId, StoreDescriptor } from '@agentplex/protocol';
+import {
+  serverAddressSchema,
+  serverLabelSchema,
+  serverTokenSchema,
+  type ServerId,
+  type ServerRegistrationId,
+  type StoreDescriptor,
+} from '@agentplex/protocol';
 import type { Clock, IdGenerator, Logger } from '@agentplex/node-shared';
 import type { StoreFileSystem } from '@agentplex/providers';
 import type { Database } from '../../db/database.js';
 import { registerLocalServer } from './local-server.js';
 import { recordHandshake } from './record-handshake.js';
-import { addressProblem } from './server-address.js';
 import {
   listServers,
-  serverTokenSchema,
+  registerServer,
+  revokeServer,
+  type RevokedServerRegistration,
   type liveServerRegistrationSchema,
 } from './server-registrations.js';
 import type { StoreRecord } from './store-records.js';
@@ -23,38 +31,26 @@ import type { StoreRecord } from './store-records.js';
  * `Pairing` seam. The rows themselves are `server-registrations.ts` and
  * `store-records.ts`, and nothing outside this folder reads them directly.
  *
- * The address parser lives here rather than beside the column parser because
- * it is the feature's input: an address is a word a person typed into a form,
- * and what the feature accepts is the entry file's to say. The column's own
- * parser, with its loopback allowance, stays internal in `server-address.ts`.
+ * What a pairing is made of -- a label, an address, a token -- is
+ * `@agentplex/protocol`'s and not this file's, because those words are on the
+ * wire in both directions now: they arrive on a `server-pair` frame and the
+ * address is published on every `machine-state` row. What stays here is what
+ * this feature does with them.
  */
 
 /**
- * The address the hub dials a paired server at.
+ * What a pairing form submits, as this feature will accept it.
  *
- * This is a word typed by a person into a form, so it goes through a parser
- * that can say no rather than being carried around as a string that everything
- * downstream hopes is a URL. The brand is what makes that unskippable: nothing
- * can be registered or dialled without having come through here.
- *
- * The protocol is transport-agnostic on purpose -- public DNS, a Tailscale
- * name, an SSH-tunnelled port are all the same to it -- so the rules are about
- * the URL and never about the route. `server-address.ts` holds them.
+ * Each field goes through the protocol's own parser rather than being taken on
+ * trust: the frame that carries a pairing bounds its three fields and rules on
+ * nothing else, deliberately, so that a typed address that is not an address
+ * comes back as a refusal a person can read rather than as a closed socket.
+ * This is where that "no" is decided, and the brand on `address` is the proof
+ * it was: nothing can be registered or dialled without having come through
+ * here.
  */
-export const serverAddressSchema = z
-  .string()
-  .trim()
-  .superRefine((text, context) => {
-    const problem = addressProblem(text, false);
-    if (problem !== null) context.addIssue({ code: 'custom', message: problem });
-  })
-  .brand<'ServerAddress'>();
-
-export type ServerAddress = z.infer<typeof serverAddressSchema>;
-
-/** What a pairing form submits. The address is parsed, never taken on trust. */
 export const newServerRegistrationSchema = z.object({
-  label: z.string().trim().min(1).max(200),
+  label: serverLabelSchema,
   address: serverAddressSchema,
   token: serverTokenSchema,
 });
@@ -136,6 +132,26 @@ export interface Pairing {
    */
   listServers(): Promise<readonly LiveServerRegistration[]>;
   /**
+   * Records a pairing somebody submitted: this address, this token, called
+   * this.
+   *
+   * It records and nothing more. Whether the machine answers is the dial's to
+   * find out, and a register that waited for a handshake before admitting the
+   * row would leave a person who typed a correct address for a laptop that is
+   * asleep with no pairing and no explanation -- when what they have is a
+   * pairing that is fine and a machine that is off.
+   */
+  register(registration: NewServerRegistration): Promise<LiveServerRegistration>;
+  /**
+   * Revokes one pairing: its token is cleared and it stops being dialable.
+   *
+   * `null` when there is no live pairing with that id, which covers both a
+   * registration this hub never had and one that was already revoked. Neither
+   * is a pairing to end, and a caller that has to tell them apart is asking a
+   * question about history rather than making a change.
+   */
+  revoke(registrationId: ServerRegistrationId): Promise<RevokedServerRegistration | null>;
+  /**
    * What a successful handshake changes: the server's identity, when it was
    * last reached, and the stores it reported, in one transaction.
    */
@@ -160,6 +176,27 @@ export function createPairing(dependencies: PairingDependencies): Pairing {
       return registrations.filter(
         (registration): registration is LiveServerRegistration => registration.revokedAt === null,
       );
+    },
+
+    async register(registration: NewServerRegistration): Promise<LiveServerRegistration> {
+      const recorded = await registerServer(database, ids, clock, registration);
+      // The label and the hub's own id for the row. Not the token, which is
+      // the one credential a client frame carries and is written to exactly
+      // one place; not the address either, because a log line about a pairing
+      // is read beside one about a dial, and the dial's is the address that
+      // matters.
+      logger.info('server paired', { registrationId: recorded.id, server: recorded.label });
+      return recorded;
+    },
+
+    async revoke(registrationId: ServerRegistrationId): Promise<RevokedServerRegistration | null> {
+      const revoked = await revokeServer(database, clock, registrationId);
+      if (revoked === null) {
+        logger.info('nothing to revoke', { registrationId });
+        return null;
+      }
+      logger.info('server unpaired', { registrationId, server: revoked.label });
+      return revoked;
     },
 
     recordHandshake(

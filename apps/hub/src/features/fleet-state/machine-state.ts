@@ -20,10 +20,9 @@ import type {
  * that are both about what a client is owed.
  *
  * The first is that the internal state holds things a client has no business
- * with. `ServerConnectionReport` carries the address the hub dials -- which is
- * a routing detail of the hub's deployment, not a fact about a session -- and a
- * retry counter, which is the supervisor's bookkeeping and would only ever be
- * rendered as a number nobody can act on.
+ * with -- the retry counter, which is the supervisor's bookkeeping and would
+ * only ever be rendered as a number nobody can act on, and the timestamp a
+ * candidate's aging is measured against.
  *
  * The second is the one this ticket exists for. Internally a store holds the
  * server objects attached to it, because that is the convenient shape for the
@@ -51,8 +50,8 @@ export function toMachineState(snapshot: HubStateSnapshot): MachineState {
 /**
  * A machine the hub has heard from, as a client reads it.
  *
- * Two internal fields do not make the trip, for the reason the dialled address
- * and the retry counter do not. `heardAt` is what the aging is measured
+ * Two internal fields do not make the trip, for the reason the retry counter
+ * does not. `heardAt` is what the aging is measured
  * against, and it moves every five seconds for a machine that has done nothing
  * but still be there -- publishing it would put a ticking field into a frame
  * that goes whole to every client, and invite a client to re-derive an answer
@@ -80,6 +79,15 @@ function toServerView(report: ServerConnectionReport): ServerView {
   return {
     registrationId: report.registrationId,
     label: report.label,
+    // Published, after a release in which it was held back as a routing detail
+    // of the hub's deployment. What changed is that a client can pair and
+    // unpair now, so the screen these rows are drawn on is the pairing screen:
+    // the address is what tells two boxes with the same label apart, and
+    // `Unpair` destroys a token rather than hiding a row. It carries no secret
+    // to leak -- the parser that admitted it refuses a URL with a credential,
+    // a query or a fragment in it -- and the token, which is the credential,
+    // is on no frame the hub sends.
+    address: report.address,
     serverId: report.serverId,
     phase: report.phase,
     stores: [...report.stores],

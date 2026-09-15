@@ -10,6 +10,7 @@ import {
   type HubId,
   type Layout,
   type RefusalCode,
+  type ServerRegistrationId,
   type SessionHolder,
 } from '@agentplex/protocol';
 import {
@@ -20,6 +21,7 @@ import {
   type MessageSocket,
   type SocketClosure,
 } from '@agentplex/node-shared';
+import { newServerRegistrationSchema, type Pairing } from '../pairing/pairing.js';
 import type { Sessions } from '../sessions/sessions.js';
 
 /**
@@ -122,6 +124,25 @@ export interface ClientConnectionDependencies {
    * lives: the routing sees the whole fleet, and a connection sees one socket.
    */
   readonly sessions: Sessions;
+  /**
+   * Which servers this hub may dial, as the feature that owns those rows.
+   *
+   * The whole seam rather than two functions, because what a pairing frame
+   * does is exactly what this interface says: record a pairing, or revoke one.
+   * The rules about what a pairing may be -- the address parser, the label
+   * bound -- are its to state, and a connection that took a pre-checked value
+   * would be a second place those rules were decided.
+   */
+  readonly pairing: Pairing;
+  /**
+   * Tells the servers feature that the pairing table has changed.
+   *
+   * A function and not the `Servers` seam: what a connection needs is for a
+   * new pairing to be dialled and a revoked one to stop, and handing a socket
+   * the supervisor would also hand it `stop()`. The supervisor reads the table
+   * itself -- this says only that there is something to re-read.
+   */
+  readonly syncServers: () => Promise<void>;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -141,6 +162,8 @@ export function serveClientConnection(
     readPaneLayout,
     writePaneLayout,
     sessions,
+    pairing,
+    syncServers,
     onClosed,
   }: ClientConnectionDependencies,
 ): ClientConnection {
@@ -303,6 +326,32 @@ export function serveClientConnection(
         return;
       }
 
+      case 'server-pair': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a start is not: this writes a row and
+        // then asks the supervisor to re-read the table, and a socket whose
+        // later frames queued behind a dial would be a screen that freezes
+        // because somebody paired a machine that is switched off.
+        void answerPair(frame.id, {
+          label: frame.label,
+          address: frame.address,
+          token: frame.token,
+        });
+        return;
+      }
+
+      case 'server-unpair': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerUnpair(frame.id, frame.registrationId);
+        return;
+      }
+
       case 'session-subscribe':
       case 'session-unsubscribe':
       case 'terminal-input':
@@ -435,6 +484,86 @@ export function serveClientConnection(
       logger.error('could not start a session', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not start that session');
+    }
+  }
+
+  /**
+   * Records a pairing and answers the client that submitted it.
+   *
+   * Three answers and each says something different. A `bad-request` is the
+   * form: the address is not one, or the label is empty, and the words are the
+   * parser's own so the person reads what was wrong with what they typed
+   * rather than "no". A `server-paired` means the row exists -- not that the
+   * machine answered, which is the dial's to find out and the row's `phase` to
+   * say a moment later. An `internal` is the hub's own failure, where retrying
+   * may work.
+   *
+   * The token is written to the pairing table and appears nowhere else: not in
+   * the reply, which has no field for it; not in the log line below; and not
+   * in the refusal, whose words come from a parser that was handed the address
+   * and the label and never the token.
+   *
+   * The sync is awaited before the reply, so a client that has been told
+   * `server-paired` is a client whose server the hub is already dialling. The
+   * dial itself is not awaited -- nothing waits for a machine to answer -- but
+   * the decision to dial it has been made by the time the answer goes out.
+   */
+  async function answerPair(
+    replyTo: FrameId,
+    submitted: { readonly label: string; readonly address: string; readonly token: string },
+  ): Promise<void> {
+    const parsed = newServerRegistrationSchema.safeParse(submitted);
+    if (!parsed.success) {
+      // The parser's own sentences. They were written to be read by whoever
+      // typed the address, which is exactly who is waiting for this frame.
+      refuse(replyTo, 'bad-request', parsed.error.issues.map((issue) => issue.message).join('; '));
+      return;
+    }
+
+    try {
+      const registration = await pairing.register(parsed.data);
+      await syncServers();
+      if (state !== 'established') return;
+      send({ type: 'server-paired', replyTo, registrationId: registration.id });
+    } catch (error) {
+      logger.error('could not pair a server', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not record that pairing');
+    }
+  }
+
+  /**
+   * Revokes a pairing and answers the client that asked.
+   *
+   * `refused` and not `bad-request` for a registration that is not there: the
+   * frame was well-formed and the hub understood it perfectly; what says no is
+   * the state of the world. Unknown and already-revoked are one answer because
+   * they are one outcome -- there is no live pairing to end -- and a client
+   * that has just watched a row disappear from the state does not need to be
+   * told which of the two it raced.
+   *
+   * The sync is awaited before the reply for the reason the pair's is, and it
+   * matters more here: a client told `server-unpaired` must not be able to see
+   * the hub still holding a connection it was told is gone.
+   */
+  async function answerUnpair(
+    replyTo: FrameId,
+    registrationId: ServerRegistrationId,
+  ): Promise<void> {
+    try {
+      const revoked = await pairing.revoke(registrationId);
+      if (revoked === null) {
+        if (state !== 'established') return;
+        refuse(replyTo, 'refused', 'this hub has no such server paired');
+        return;
+      }
+      await syncServers();
+      if (state !== 'established') return;
+      send({ type: 'server-unpaired', replyTo });
+    } catch (error) {
+      logger.error('could not unpair a server', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not revoke that pairing');
     }
   }
 

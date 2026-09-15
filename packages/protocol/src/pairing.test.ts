@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { loopbackServerAddress } from './server-address.js';
-import { serverAddressSchema } from './pairing.js';
+import {
+  loopbackServerAddress,
+  pairedServerAddressSchema,
+  serverAddressSchema,
+  serverLabelSchema,
+  serverTokenSchema,
+} from './pairing.js';
 
 function problem(text: string): string {
   const parsed = serverAddressSchema.safeParse(text);
@@ -37,6 +42,10 @@ describe('serverAddressSchema', () => {
     expect(problem('box.example:8443')).toContain('wss://');
   });
 
+  it('names the scheme it accidentally found, so the message points at the typo', () => {
+    expect(problem('box.example:8443')).toContain('"box.example:"');
+  });
+
   it('refuses credentials in the address: the pairing token is the credential', () => {
     expect(problem('wss://me:hunter2@box.example')).toContain('credential');
   });
@@ -45,8 +54,27 @@ describe('serverAddressSchema', () => {
     expect(problem('wss://box.example?token=hunter2')).toContain('query string');
   });
 
+  it('refuses a fragment for the same reason', () => {
+    expect(problem('wss://box.example#token')).toContain('fragment');
+  });
+
   it('refuses the empty address', () => {
     expect(problem('   ')).not.toBe('');
+  });
+
+  it('refuses an address longer than a frame may carry', () => {
+    expect(serverAddressSchema.safeParse(`wss://${'a'.repeat(4_000)}.example`).success).toBe(false);
+  });
+});
+
+describe('pairedServerAddressSchema', () => {
+  it('reads back the loopback address a one-box install wrote', () => {
+    expect(pairedServerAddressSchema.parse('ws://127.0.0.1:8081')).toBe('ws://127.0.0.1:8081');
+  });
+
+  it('still refuses plaintext to anywhere else, which is the whole allowance', () => {
+    expect(pairedServerAddressSchema.safeParse('ws://box.example:8443').success).toBe(false);
+    expect(pairedServerAddressSchema.safeParse('ws://localhost:8081').success).toBe(false);
   });
 });
 
@@ -76,5 +104,33 @@ describe('loopbackServerAddress', () => {
     const address = loopbackServerAddress(8081);
     expect(address).not.toBeNull();
     expect(serverAddressSchema.safeParse(String(address)).success).toBe(false);
+  });
+});
+
+describe('serverLabelSchema', () => {
+  it('trims and keeps what a person called their machine', () => {
+    expect(serverLabelSchema.parse('  gpu-box-01 ')).toBe('gpu-box-01');
+  });
+
+  it('refuses a label that is only whitespace: a row has to be namable', () => {
+    expect(serverLabelSchema.safeParse('   ').success).toBe(false);
+  });
+
+  it('refuses a label past the bound the column holds', () => {
+    expect(serverLabelSchema.safeParse('n'.repeat(201)).success).toBe(false);
+  });
+});
+
+describe('serverTokenSchema', () => {
+  it('takes the token the server printed, trimmed of what a paste brought', () => {
+    expect(serverTokenSchema.parse(' printed-by-the-server\n')).toBe('printed-by-the-server');
+  });
+
+  it('refuses the empty and the absurd, and rules on nothing else', () => {
+    // How much entropy a token carries is the minting side's business. What
+    // this parser is for is the two shapes that cannot be a token at all.
+    expect(serverTokenSchema.safeParse('  ').success).toBe(false);
+    expect(serverTokenSchema.safeParse('t'.repeat(4_097)).success).toBe(false);
+    expect(serverTokenSchema.safeParse('t').success).toBe(true);
   });
 });

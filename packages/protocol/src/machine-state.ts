@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { serverIdSchema, serverRegistrationIdSchema, storeIdSchema } from './identity.js';
+import { pairedServerAddressSchema } from './pairing.js';
 import { providerReadinessSchema } from './readiness.js';
 import { sessionDescriptorSchema } from './session.js';
 
@@ -158,6 +159,28 @@ export const serverViewSchema = z.object({
   /** The stable key for this row, from the moment the pairing form was submitted. */
   registrationId: serverRegistrationIdSchema,
   label: z.string().min(1),
+  /**
+   * Where this hub dials that machine, exactly as the pairing holds it.
+   *
+   * Published, after a release in which it was not. The argument for keeping it
+   * back was that an address is a routing detail of the hub's deployment; what
+   * changed is that a client can now pair and unpair, so the screen showing
+   * these rows is the pairing screen and the address is the fact a person
+   * checks a row against. Two boxes a user labelled `gpu-box` are one row twice
+   * without it, and `Unpair` on the wrong one is not undoable -- it destroys
+   * the token that pairing was made with.
+   *
+   * It is safe to publish for a reason the parser guarantees rather than a
+   * reason anybody has to remember: `addressProblem` refuses a URL carrying a
+   * username, a password, a query or a fragment, so there is nowhere in a
+   * stored address for a secret to be. The credential is the token, it travels
+   * once, inbound, and it is on no frame the hub sends.
+   *
+   * Parsed with the loopback allowance, because a `--role=both` hub's own
+   * pairing is `ws://127.0.0.1:<port>` and a client that refused to read that
+   * row would refuse the whole state frame over the one pairing nobody typed.
+   */
+  address: pairedServerAddressSchema,
   /** What the machine calls itself, once a handshake has said so. */
   serverId: serverIdSchema.nullable(),
   phase: serverPhaseSchema,

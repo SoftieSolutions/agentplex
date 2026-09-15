@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROTOCOL_VERSION,
+  serverAddressSchema,
   serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
@@ -11,7 +12,6 @@ import {
 import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { DiscoveredServer } from '../discovery/discovery.js';
-import { serverAddressSchema } from '../pairing/pairing.js';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type FleetState, type StoreView } from './fleet-state.js';
 

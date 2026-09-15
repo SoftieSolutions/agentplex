@@ -65,6 +65,7 @@ function stateWith(overrides?: {
       {
         registrationId: 'reg-1',
         label: 'mbp-robert',
+        address: 'wss://mbp-robert.example:8443',
         serverId: 'srv-1',
         phase: 'connected',
         stores: ['store-a'],

@@ -17,6 +17,7 @@ import {
 const A_SERVER = {
   registrationId: 'registration-1',
   label: 'workshop',
+  address: 'wss://workshop.example:8443',
   serverId: 'server-1',
   phase: 'connected',
   stores: ['store-work'],
@@ -65,6 +66,28 @@ const A_SESSION_ROW = {
 describe('serverViewSchema', () => {
   it('accepts a connected server', () => {
     expect(serverViewSchema.safeParse(A_SERVER).success).toBe(true);
+  });
+
+  it('reads back the loopback pairing a one-box hub publishes', () => {
+    // The row a `--role=both` hub has for the server in its own process. A view
+    // that refused it would refuse the whole state frame over the one pairing
+    // nobody typed.
+    expect(
+      serverViewSchema.safeParse({ ...A_SERVER, address: 'ws://127.0.0.1:8081' }).success,
+    ).toBe(true);
+  });
+
+  it('refuses a row whose address carries a credential', () => {
+    // What makes publishing an address safe is that a stored one cannot hold a
+    // secret. The parser is where that is true rather than a comment.
+    expect(
+      serverViewSchema.safeParse({ ...A_SERVER, address: 'wss://me:hunter2@workshop.example' })
+        .success,
+    ).toBe(false);
+    expect(
+      serverViewSchema.safeParse({ ...A_SERVER, address: 'wss://workshop.example?token=hunter2' })
+        .success,
+    ).toBe(false);
   });
 
   it('accepts a server that has never handshaken, with no serverId', () => {

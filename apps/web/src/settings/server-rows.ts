@@ -12,11 +12,16 @@ import type { Tone } from '../ui/tokens.js';
  * component so the mapping from wire fact to screen word is testable without
  * a DOM.
  *
- * What is *not* here is as deliberate as what is. The machine state carries no
- * address — the hub publishes what it can vouch for and where it dials a
- * server is not a fact clients need — and no latency, so neither is drawn;
- * a latency invented client-side would be an over-claim. The pairing token is
- * nowhere near the wire at all, by design.
+ * What is *not* here is as deliberate as what is. There is no latency, because
+ * the machine state carries none: only the end that dialled can time a round
+ * trip, the hub does not yet measure one, and a figure invented client-side
+ * would be an over-claim about how far away a machine is. The pairing token is
+ * nowhere near the wire at all, by design — it travels once, inbound, on the
+ * frame that pairs a server.
+ *
+ * The address is drawn, and it is the one thing on this row the user typed.
+ * Two machines a person labelled `gpu-box` are one row twice without it, and
+ * the button beside it revokes a token rather than hiding a row.
  */
 
 export interface ServerRowView {
@@ -24,6 +29,8 @@ export interface ServerRowView {
   readonly label: string;
   /** What the machine calls itself, once a handshake has said so. */
   readonly serverId: string | null;
+  /** Where this hub dials it. Never a credential: the parser forbids one. */
+  readonly address: string;
   /** The connectivity, as the tone dot beside the row. */
   readonly tone: Tone;
   /** The connectivity, as a word beside the dot. */
@@ -134,6 +141,7 @@ export function serverRows(state: MachineState | null): readonly ServerRowView[]
     registrationId: view.registrationId,
     label: view.label,
     serverId: view.serverId,
+    address: view.address,
     tone: toneFor(view),
     phase: phaseWords(view),
     problem: view.problem,

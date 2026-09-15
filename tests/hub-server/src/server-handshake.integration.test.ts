@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { HubId } from '@agentplex/protocol';
+import { serverAddressSchema, type HubId } from '@agentplex/protocol';
 import {
   createFakeGrantFiles,
   createFakeStoreFiles,
@@ -25,7 +25,6 @@ import {
   handshakeWithServer,
   type DialTarget,
 } from '../../../apps/hub/src/features/servers/server-handshake.js';
-import { serverAddressSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
 

@@ -3,6 +3,7 @@ import {
   PROTOCOL_VERSION,
   machineStateSchema,
   serverIdSchema,
+  serverAddressSchema,
   sessionIdSchema,
   storeIdSchema,
   type MachineState,
@@ -13,16 +14,17 @@ import {
 import { readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
-import { serverAddressSchema } from '../pairing/pairing.js';
 import { createFleetState } from '../fleet-state/fleet-state.js';
 import { toMachineState } from './machine-state.js';
 
 /**
  * The projection, driven through the real reducer.
  *
- * The interesting questions are all about what does *not* come out: the address
- * the hub dials, the retry counter, and above all a second copy of a server
- * inlined under each store it has mounted.
+ * The interesting questions are mostly about what does *not* come out: the
+ * retry counter, a candidate's aging timestamp, and above all a second copy of
+ * a server inlined under each store it has mounted. The address is the one that
+ * used to be on that list and is not: a client that can unpair is drawing the
+ * pairing screen, and a row it can destroy has to say which machine it is.
  */
 
 const START = 1_756_000_000_000;
@@ -105,10 +107,14 @@ describe('toMachineState', () => {
     expect(state.stores[0]?.servers).toEqual([registration('laptop'), registration('workshop')]);
   });
 
-  it('does not publish the address the hub dials, nor its retry bookkeeping', () => {
+  it('publishes the address the hub dials, which is the row the settings screen draws', () => {
+    const laptop = published().servers.find((server) => server.label === 'laptop');
+    expect(laptop?.address).toBe('wss://laptop.example:8443');
+  });
+
+  it('does not publish the retry bookkeeping: a number nobody can act on', () => {
     const [server] = published().servers;
     expect(server).toBeDefined();
-    expect(server).not.toHaveProperty('address');
     expect(server).not.toHaveProperty('failedAttempts');
   });
 

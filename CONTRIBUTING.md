@@ -199,7 +199,7 @@ the unhappy path is describing the common case as an exception.
 **Reachability is the operator's problem.** The hub has to be able to open a
 connection to the address it was given, and getting it there is a forwarded
 port, or both ends on one network over a VPN, or a tunnel. The protocol is
-deliberately indifferent between them — `apps/hub/src/features/pairing/server-address.ts`
+deliberately indifferent between them — `packages/protocol/src/pairing.ts`
 parses a URL and never a route — and agentplex neither solves this nor pretends
 to. Saying so is the same rule as the rest of the codebase: degrade in the
 direction that does not over-claim.
@@ -229,7 +229,11 @@ differences is load-bearing:
   that both survive a restart. It only ever arrives. It authenticates a hub to
   one server, and there is one per pairing rather than one per server: a pairing
   is the unit an operator revokes, so a server two hubs have paired with holds
-  two, and revoking either leaves the other working.
+  two, and revoking either leaves the other working. It is the one credential a
+  client frame carries — `server-pair` brings the token a person read off that
+  server and pasted — and it travels in that direction only: the hub stores it,
+  no reply or `machine-state` row has a field for it, and tests on both sides
+  assert that no frame the hub sends afterwards contains it.
 - **The enrollment token** is short-lived, minted by a hub for a single
   enrollment. It expires in minutes rather than hours because it is a string
   that gets pasted in front of other people, and the only safe assumption about

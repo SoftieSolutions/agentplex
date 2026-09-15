@@ -9,6 +9,7 @@ import {
   sessionIdSchema,
   storeIdSchema,
   type HubFrame,
+  serverAddressSchema,
   type Layout,
   type LayoutNode,
   type MachineState,
@@ -25,9 +26,9 @@ import {
 import { createLogger } from '@agentplex/node-shared';
 import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
-import { serverAddressSchema } from '../pairing/pairing.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
 import { createClients, type Clients } from './clients.js';
+import { createFakePairing, type FakePairing } from '../pairing/fake-pairing.js';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
 
 /**
@@ -103,6 +104,10 @@ interface Harness {
   readonly broadcast: Clients;
   /** The session control this broadcast was built on, for tests that drive it. */
   readonly sessions: FakeSessions;
+  /** The pairing table this broadcast writes through, for the pairing frames. */
+  readonly pairing: FakePairing;
+  /** Every time the supervisor was told the pairing table had changed. */
+  readonly syncs: () => number;
 }
 
 /**
@@ -119,9 +124,11 @@ function harness(
     read?: () => Promise<string | null>;
     write?: (layout: string) => Promise<void>;
   } = {},
+  pairing: FakePairing = createFakePairing(),
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
+  let syncs = 0;
   const broadcast = createClients({
     hubId: HUB_ID,
     state,
@@ -131,8 +138,12 @@ function harness(
     readPaneLayout: paneLayout.read ?? (async () => null),
     writePaneLayout: paneLayout.write ?? (async () => undefined),
     sessions,
+    pairing,
+    syncServers: async () => {
+      syncs += 1;
+    },
   });
-  return { state, timers, broadcast, sessions };
+  return { state, timers, broadcast, sessions, pairing, syncs: () => syncs };
 }
 
 /**
@@ -788,5 +799,283 @@ describe('the broadcast lifecycle', () => {
     timers.fireAll();
 
     expect(latest(working).servers).toHaveLength(1);
+  });
+});
+
+/**
+ * Pairing, over the socket a person's browser is on.
+ *
+ * The subject is the connection: which frame comes back, what it carries, and
+ * what the hub was told to do in between. The table itself is tested against a
+ * migrated schema, and the whole path -- a client pairing a real server end
+ * that the hub then dials -- is in `tests/hub-server`.
+ */
+async function settle(): Promise<void> {
+  // A pairing handler awaits a write and then a sync. Turns rather than a
+  // timer: everything here resolves immediately, and the only question is how
+  // many microtasks deep the answer is.
+  for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
+}
+
+const A_PAIRING = {
+  type: 'server-pair',
+  id: 2,
+  label: 'gpu-box-01',
+  address: 'wss://gpu-box-01.example:8443',
+  token: 'printed-by-the-server',
+};
+
+describe('a client that pairs a server', () => {
+  it('is answered with the hub’s own name for the pairing', async () => {
+    const { broadcast, pairing } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say(A_PAIRING);
+    await settle();
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'server-paired',
+      replyTo: 2,
+      registrationId: 'registration-1',
+    });
+    expect(pairing.registered).toEqual([
+      {
+        label: 'gpu-box-01',
+        address: 'wss://gpu-box-01.example:8443',
+        token: 'printed-by-the-server',
+      },
+    ]);
+  });
+
+  it('tells the supervisor to re-read the table, so the dial needs no restart', async () => {
+    const { broadcast, syncs } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say(A_PAIRING);
+    await settle();
+
+    expect(syncs()).toBe(1);
+  });
+
+  it('has told it before it answers, so a paired server is already being dialled', async () => {
+    // The ordering, not just the fact. A client told `server-paired` and then
+    // shown a state with no such server would be reading a screen that
+    // contradicts the answer it just got.
+    const { broadcast, syncs } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say(A_PAIRING);
+    await settle();
+
+    const paired = client.received.findIndex((frame) => frame.type === 'server-paired');
+    expect(paired).toBeGreaterThan(-1);
+    expect(syncs()).toBe(1);
+  });
+
+  it('refuses an address it will not dial, in the parser’s own words', async () => {
+    const { broadcast, pairing, syncs } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ ...A_PAIRING, address: 'ws://gpu-box-01.example:8443' });
+    await settle();
+
+    const answer = client.received.at(-1);
+    expect(answer).toMatchObject({ type: 'refusal', replyTo: 2, code: 'bad-request' });
+    if (answer?.type !== 'refusal') return;
+    expect(answer.message).toContain('wss://');
+    // Nothing was written and nothing was dialled: a refusal is the whole of
+    // what happened.
+    expect(pairing.registered).toEqual([]);
+    expect(syncs()).toBe(0);
+  });
+
+  it('refuses an empty label rather than storing a row nothing can name', async () => {
+    const { broadcast, pairing } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ ...A_PAIRING, label: '   ' });
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+    expect(pairing.registered).toEqual([]);
+  });
+
+  it('refuses an empty token: the credential is the point of the frame', async () => {
+    const { broadcast, pairing } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ ...A_PAIRING, token: '' });
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+    expect(pairing.registered).toEqual([]);
+  });
+
+  it('stays open through a refusal: a typo is not a protocol error', async () => {
+    // The reason the frame's own schema bounds these fields and rules on
+    // nothing else. A strict parser would answer a mistyped address with a
+    // `protocol-error` and a closed socket, which is a disconnection for a
+    // typo.
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ ...A_PAIRING, address: 'not an address' });
+    await settle();
+
+    expect(client.socket.closure).toBeNull();
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+  });
+
+  it('says the hub broke when the hub broke, which is the answer worth retrying', async () => {
+    const pairing = createFakePairing();
+    pairing.failWith(new Error('database is locked'));
+    const { broadcast } = harness(undefined, undefined, {}, pairing);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say(A_PAIRING);
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'internal' });
+  });
+
+  it('needs a hello first, like everything else on this socket', async () => {
+    const { broadcast, pairing } = harness();
+    const client = attach(broadcast);
+
+    await client.say(A_PAIRING);
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+    expect(pairing.registered).toEqual([]);
+  });
+
+  it('never says the token again, in any frame it sends afterwards', async () => {
+    // The rule the whole pairing surface rests on: the token travels once,
+    // inbound. Asserted over the characters on the socket rather than over a
+    // field, because a field assertion only covers the shapes somebody thought
+    // of -- this covers the reply, the refusal, every machine state after it,
+    // and anything a later ticket adds.
+    const { state, broadcast, timers } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say(A_PAIRING);
+    await settle();
+    state.applyConnection(connection('gpu-box-01', 'connected', ['store-work']));
+    timers.fireAll();
+    await settle();
+
+    expect(client.received.some((frame) => frame.type === 'server-paired')).toBe(true);
+    for (const text of client.socket.sent) {
+      expect(text).not.toContain('printed-by-the-server');
+    }
+  });
+});
+
+describe('a client that unpairs a server', () => {
+  const paired = {
+    id: 'registration-1' as ServerRegistrationId,
+    label: 'gpu-box-01',
+    address: serverAddressSchema.parse('wss://gpu-box-01.example:8443'),
+    serverId: null,
+    createdAt: START,
+    lastConnectedAt: null,
+    token: 'printed-by-the-server',
+    revokedAt: null,
+  };
+
+  it('is answered that the pairing is gone, with nothing else to carry', async () => {
+    const pairing = createFakePairing({ servers: [paired] });
+    const { broadcast } = harness(undefined, undefined, {}, pairing);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'server-unpair', id: 2, registrationId: 'registration-1' });
+    await settle();
+
+    expect(client.received.at(-1)).toEqual({ type: 'server-unpaired', replyTo: 2 });
+    expect(pairing.revoked).toEqual(['registration-1']);
+  });
+
+  it('tells the supervisor, so the hub stops dialling what it was just told to drop', async () => {
+    const pairing = createFakePairing({ servers: [paired] });
+    const { broadcast, syncs } = harness(undefined, undefined, {}, pairing);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'server-unpair', id: 2, registrationId: 'registration-1' });
+    await settle();
+
+    expect(syncs()).toBe(1);
+  });
+
+  it('refuses a registration this hub does not have', async () => {
+    const { broadcast, syncs } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'server-unpair', id: 2, registrationId: 'registration-9' });
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+    });
+    expect(syncs()).toBe(0);
+  });
+
+  it('refuses a second unpair the same way as an unknown one', async () => {
+    // Already revoked and never existed are one outcome -- there is no live
+    // pairing to end -- and `refused` rather than `bad-request` because the
+    // frame was understood perfectly and the world is what said no.
+    const pairing = createFakePairing({ servers: [paired] });
+    const { broadcast } = harness(undefined, undefined, {}, pairing);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'server-unpair', id: 2, registrationId: 'registration-1' });
+    await settle();
+    await client.say({ type: 'server-unpair', id: 3, registrationId: 'registration-1' });
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 3, code: 'refused' });
+  });
+
+  it('says the hub broke when the revocation itself failed', async () => {
+    const pairing = createFakePairing({ servers: [paired] });
+    pairing.failWith(new Error('database is locked'));
+    const { broadcast } = harness(undefined, undefined, {}, pairing);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'server-unpair', id: 2, registrationId: 'registration-1' });
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'internal' });
+  });
+
+  it('answers the client that asked and nobody else', async () => {
+    const pairing = createFakePairing({ servers: [paired] });
+    const { broadcast } = harness(undefined, undefined, {}, pairing);
+    const asking = attach(broadcast);
+    const watching = attach(broadcast);
+    await asking.hello();
+    await watching.hello();
+    const seenByWatcher = watching.socket.sent.length;
+
+    await asking.say({ type: 'server-unpair', id: 2, registrationId: 'registration-1' });
+    await settle();
+
+    expect(asking.received.at(-1)).toEqual({ type: 'server-unpaired', replyTo: 2 });
+    expect(watching.socket.sent.length).toBe(seenByWatcher);
   });
 });
