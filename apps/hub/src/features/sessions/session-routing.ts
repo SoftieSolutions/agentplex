@@ -100,8 +100,11 @@ export function routeStart(state: HubStateSnapshot, request: StartRequest): Rout
       // The machine the user picked, checked before it is instructed. This is
       // the refusal the preflight exists to make possible: on a pty a provider
       // that is not there is not an error, it is a session that appears and
-      // vanishes, and here is the last place it can still be a sentence.
-      const unusable = cannotRun(chosen, request.provider);
+      // vanishes, and here is the last place it can still be a sentence. A
+      // machine that is shutting down is refused in the same breath and with
+      // its own words, because to a user picking it the two are one question --
+      // can this box run it -- and the answers are different things to do.
+      const unusable = cannotStart(chosen, request.provider);
       if (unusable !== null) {
         return { ok: false, code: 'refused', problem: unusable, holder: null };
       }
@@ -126,8 +129,9 @@ export function routeStart(state: HubStateSnapshot, request: StartRequest): Rout
   // Filtered before the scheduling rather than after it, so a fleet where one
   // machine has the provider and another does not schedules onto the one that
   // does. An unusable provider costs its own machine a start and never the
-  // store: every other server on the volume is a candidate exactly as before.
-  const capable = live.filter((server) => cannotRun(server, request.provider) === null);
+  // store: every other server on the volume is a candidate exactly as before,
+  // and a machine that is shutting down leaves the same way.
+  const capable = live.filter((server) => cannotStart(server, request.provider) === null);
 
   const scheduled = leastLoaded(state, capable);
   if (scheduled === undefined) {
@@ -143,7 +147,29 @@ export function routeStart(state: HubStateSnapshot, request: StartRequest): Rout
 }
 
 /**
- * Why this machine must not be asked to run this provider, or `null`.
+ * Why this machine must not be asked to start this now, or `null`.
+ *
+ * Two questions with one answer, because a caller has one decision to make.
+ * The first is whether the machine can run the provider at all, below. The
+ * second is whether it is still taking work: a server that has announced a
+ * drain has sealed its terminals and would refuse this anyway, so the hub says
+ * so here -- where it can name the machine and the reason -- rather than
+ * sending an instruction across a wire to be told no by a box that is trying
+ * to shut down.
+ *
+ * The drain is checked first. A draining machine whose provider is also
+ * missing is a machine to wait for either way, and "gpu-box-01 is shutting
+ * down" is the fact that will still be true in a minute.
+ */
+function cannotStart(server: ServerConnectionReport, provider: Provider): string | null {
+  if (server.draining !== null) {
+    return `${server.label} is shutting down and is not taking new sessions`;
+  }
+  return cannotRun(server, provider);
+}
+
+/**
+ * Why this machine cannot run this provider, or `null`.
  *
  * A provider a server never mentioned is refused as firmly as one it reported
  * missing, and the sentence says which of the two it is: a build with no
@@ -170,7 +196,7 @@ function cannotRun(server: ServerConnectionReport, provider: Provider): string |
  */
 function whyNothingCanRun(live: readonly ServerConnectionReport[], provider: Provider): string {
   const reasons = live
-    .map((server) => cannotRun(server, provider))
+    .map((server) => cannotStart(server, provider))
     .filter((reason): reason is string => reason !== null);
 
   return reasons.length === 0

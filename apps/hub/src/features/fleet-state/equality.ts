@@ -1,4 +1,9 @@
-import type { ProviderReadiness, SessionDescriptor, SessionHold } from '@agentplex/protocol';
+import type {
+  ProviderReadiness,
+  ServerDraining,
+  SessionDescriptor,
+  SessionHold,
+} from '@agentplex/protocol';
 import type { DiscoveredServer } from '../discovery/discovery.js';
 import type { ServerConnectionReport } from '../servers/servers.js';
 
@@ -40,9 +45,37 @@ export function sameConnection(
     left.failedAttempts === right.failedAttempts &&
     left.problem === right.problem &&
     left.staleReason === right.staleReason &&
+    sameDraining(left.draining, right.draining) &&
     sameProviders(left.providers, right.providers) &&
     left.stores.length === right.stores.length &&
     left.stores.every((storeId, index) => storeId === right.stores[index])
+  );
+}
+
+/**
+ * Whether two readings of a shutdown say the same thing.
+ *
+ * Compared because a drain is the one thing that can change about a connection
+ * without the phase moving: a server announcing one is still connected, and a
+ * version that did not bump here would leave every screen saying "connected"
+ * about a machine that had just said it was going away. The sessions are
+ * compared in the order the frame named them, which is the holding server's own
+ * and stable for the same set of terminals.
+ */
+export function sameDraining(left: ServerDraining | null, right: ServerDraining | null): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.since === right.since &&
+    left.graceMs === right.graceMs &&
+    left.sessions.length === right.sessions.length &&
+    left.sessions.every((session, index) => {
+      const other = right.sessions[index];
+      return (
+        other !== undefined &&
+        session.storeId === other.storeId &&
+        session.sessionId === other.sessionId
+      );
+    })
   );
 }
 

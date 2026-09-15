@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { serverIdSchema, serverRegistrationIdSchema, storeIdSchema } from './identity.js';
+import {
+  serverIdSchema,
+  serverRegistrationIdSchema,
+  sessionRefSchema,
+  storeIdSchema,
+} from './identity.js';
 import { pairedServerAddressSchema } from './pairing.js';
 import { providerReadinessSchema } from './readiness.js';
 import { sessionDescriptorSchema } from './session.js';
@@ -58,6 +63,17 @@ export const staleReasonSchema = z.enum([
   'closed',
   /** An established connection ended. */
   'dropped',
+  /**
+   * It said it was shutting down, and then the connection ended.
+   *
+   * Set only when the close follows the notice, never when the notice arrives:
+   * a draining server answers instructions and goes on sending output right up
+   * to the moment it closes, so calling it unreachable while it is still
+   * talking would be the over-claim in the wrong direction. What a person does
+   * about this one is wait -- which is why it is worth telling apart from
+   * `dropped`, where waiting may be all anybody can do but nobody said so.
+   */
+  'draining',
   /** The machine now calls itself something else than the pairing names. */
   'identity-changed',
   /** The hub failed on its own side. Not the server's fault, and it says so. */
@@ -154,6 +170,39 @@ export const machineLoadSchema = z.object({
 });
 export type MachineLoad = z.infer<typeof machineLoadSchema>;
 
+/**
+ * A shutdown a server announced, as the hub holds it.
+ *
+ * The hub's reading of one `server-draining` frame, stamped with the hub's own
+ * clock. `since` is not on the wire the server sends and could not be: two
+ * machines' clocks disagree, so the server sends a duration and the receiver
+ * dates it, which is the same rule `store-report` and `pong` are shaped by.
+ *
+ * It is a field of its own rather than a phase, because the connection is
+ * genuinely up: the socket stays open through the drain on purpose, so the hub
+ * can still ask, still be answered, and still relay whatever the last of an
+ * agent's output turns out to be. A phase saying otherwise would take a live
+ * connection off every screen to describe something that has not happened yet.
+ *
+ * The sessions are named rather than left to be inferred from the last report,
+ * because a report can be older than this frame and these are exactly the rows
+ * somebody is watching. They are named here and nowhere else: a `draining` flag
+ * on a session row would be a second copy of this list, free to contradict it,
+ * which is the same rule that keeps a store from inlining its servers.
+ */
+export const serverDrainingSchema = z.object({
+  /** When the hub was told, by the hub's clock. */
+  since: z.int().nonnegative(),
+  /** How long the server said it would wait for a turn to end before killing it. */
+  graceMs: z.int().nonnegative(),
+  /**
+   * What it was holding as the drain began. Empty is a server with nothing
+   * running, which is a drain nobody has to watch.
+   */
+  sessions: z.array(sessionRefSchema),
+});
+export type ServerDraining = z.infer<typeof serverDrainingSchema>;
+
 /** One paired server's connectivity, as the hub publishes it. */
 export const serverViewSchema = z.object({
   /** The stable key for this row, from the moment the pairing form was submitted. */
@@ -212,6 +261,20 @@ export const serverViewSchema = z.object({
   /** When the hub last held a connection to it, ever, including before a restart. */
   lastConnectedAt: momentSchema,
   staleReason: staleReasonSchema.nullable(),
+  /**
+   * The shutdown this machine announced, or `null` for one that has announced
+   * none.
+   *
+   * Set while the phase is still `connected`, which is the pair a client reads
+   * as "shutting down, N sessions finishing" rather than as either "fine" or
+   * "unreachable". It survives the close that follows, beside
+   * `staleReason: 'draining'`, for the reason the store list survives it: the
+   * last thing the machine actually said stays visible with its age attached,
+   * rather than a row that empties out and reads as a machine that simply went.
+   * A handshake clears it, because a server that has answered again is not the
+   * server that was going down.
+   */
+  draining: serverDrainingSchema.nullable(),
   /** What went wrong, in words. Never a token, and never an address with one in it. */
   problem: z.string().nullable(),
 });

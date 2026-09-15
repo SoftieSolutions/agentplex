@@ -100,6 +100,18 @@ function toServerView(report: ServerConnectionReport): ServerView {
     staleSince: report.staleSince,
     lastConnectedAt: report.lastConnectedAt,
     staleReason: report.staleReason,
+    // Published beside the phase rather than folded into it, because they are
+    // two facts and a client draws both: the socket is up, and everything on it
+    // is about to stop. The sessions are copied rather than passed through, so
+    // that nothing a client is sent shares an array with the supervisor's own.
+    draining:
+      report.draining === null
+        ? null
+        : {
+            since: report.draining.since,
+            graceMs: report.draining.graceMs,
+            sessions: [...report.draining.sessions],
+          },
     problem: report.problem,
   };
 }

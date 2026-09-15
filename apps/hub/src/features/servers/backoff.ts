@@ -8,6 +8,17 @@
  */
 export interface BackoffPolicy {
   /**
+   * The longest wait this policy will ever schedule.
+   *
+   * Exposed because something other than the schedule sometimes has a wait of
+   * its own to bound: a server that announces a drain says how long it will be,
+   * and the hub honours that rather than its own curve -- but only up to here,
+   * because a machine that named an hour must not take the hub off the air for
+   * one. A second constant at that call site would be a second answer to "how
+   * long is too long", free to drift from this one.
+   */
+  readonly ceilingMs: number;
+  /**
    * The wait before retry number `attempt`, where 1 is the first retry after
    * the first failure. Anything below 1 is treated as the first: an attempt
    * count is a count, and a caller that has miscounted should get the shortest
@@ -53,6 +64,8 @@ export function createExponentialBackoff(options: ExponentialBackoffOptions = {}
   const random = options.random ?? Math.random;
 
   return {
+    ceilingMs: maxMs,
+
     delayMs(attempt: number): number {
       const step = Math.max(1, Math.floor(attempt)) - 1;
       // `Math.min` first, so an attempt count large enough to make the power

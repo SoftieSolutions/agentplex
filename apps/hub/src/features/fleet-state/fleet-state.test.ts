@@ -53,6 +53,7 @@ function connection(
     failedAttempts: phase === 'stale' ? 1 : 0,
     problem: null,
     staleReason: phase === 'stale' ? 'unreachable' : null,
+    draining: null,
     ...overrides,
   };
 }

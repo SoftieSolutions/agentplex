@@ -1,4 +1,4 @@
-import type { ProviderReadiness, ServerId, StoreId } from '@agentplex/protocol';
+import type { ProviderReadiness, ServerDraining, ServerId, StoreId } from '@agentplex/protocol';
 import {
   type Clock,
   type Logger,
@@ -9,6 +9,7 @@ import {
 } from '@agentplex/node-shared';
 import type { LiveServerRegistration, Pairing } from '../pairing/pairing.js';
 import type { BackoffPolicy } from './backoff.js';
+import type { DrainingNotice } from './frame-router.js';
 import type { DialTarget } from './server-handshake.js';
 import type {
   InstructionOutcome,
@@ -39,6 +40,15 @@ import type {
  * be asked something, it says when a report arrives, and it ends. That is the
  * whole of the seam AGX-224 replaces, and keeping the loop on this side of it
  * is what makes the replacement a new transport rather than a new loop.
+ *
+ * One end of a connection can also be told what is about to happen to it. A
+ * server that is going down says so first and keeps its sockets open while it
+ * closes its turns, so this file holds a third state beside up and down: a
+ * connection that is good, answering, and about to end. What that buys is the
+ * close afterwards being expected -- named as a drain rather than a drop, and
+ * dialled again when the machine said it would be back rather than half a
+ * second later, which is the difference between a hub that waits and a hub
+ * that hammers a box that is trying to shut down.
  *
  * The rule it exists to enforce is the one the connectivity design states
  * plainly: an unreachable server keeps its rows, marked stale, and its
@@ -92,6 +102,21 @@ export interface DialLoopDependencies {
 
 const DEFAULT_REFUSED_RETRY_MS = 60_000;
 
+/**
+ * What to say about a connection that ended the way its server said it would.
+ *
+ * The count is in the sentence because it is the difference between a machine
+ * somebody should leave alone for a minute and one that had work on it when it
+ * went. It is the count as of the notice and is described as such: whether
+ * those sessions reached a boundary or were killed at the end of the grace is
+ * the next handshake's answer, and this end cannot know it.
+ */
+function drainClosureWords(sessions: number): string {
+  if (sessions === 0) return 'the server said it was shutting down, and then closed the connection';
+  const named = sessions === 1 ? '1 session' : `${String(sessions)} sessions`;
+  return `the server said it was shutting down with ${named} finishing, and then closed the connection`;
+}
+
 /** Nothing gets faster by dialling again. Only a person changes these. */
 const NEEDS_A_PERSON: ReadonlySet<StaleReason> = new Set<StaleReason>([
   'unauthorized',
@@ -142,6 +167,17 @@ export function startDialLoop(
   let failedAttempts = 0;
   let problem: string | null = null;
   let staleReason: StaleReason | null = null;
+  /**
+   * What this machine last said about going down, or `null`.
+   *
+   * Kept across the close it precedes rather than cleared at it, because it is
+   * what makes the close legible: the reason the connection ended and the wait
+   * before the next dial are both read off this, and both happen after the
+   * socket is gone. Cleared by a handshake, which is the one event that says
+   * the machine is not going down after all -- or has already gone and come
+   * back, which amounts to the same thing for a row on a screen.
+   */
+  let draining: ServerDraining | null = null;
 
   let stopped = false;
   /**
@@ -175,6 +211,7 @@ export function startDialLoop(
     failedAttempts,
     problem,
     staleReason,
+    draining,
   });
 
   const changed = (): void => dependencies.onChange?.(report());
@@ -208,6 +245,11 @@ export function startDialLoop(
     staleReason = null;
     problem = null;
     failedAttempts = 0;
+    // A machine that has just completed a handshake is not the machine that
+    // was shutting down, even when it is the same box: whatever it was
+    // draining is over, and the sessions it names below are the ones it has
+    // now rather than the ones it was closing.
+    draining = null;
     logger.info('server connected', {
       serverId: id,
       stores: mounted.length,
@@ -216,13 +258,32 @@ export function startDialLoop(
     changed();
   };
 
+  /**
+   * The shortest this wait may be, whatever the curve says.
+   *
+   * Two reasons put a floor under a retry, and they are opposite kinds of
+   * fact. A refusal only a person can fix gets one because nothing changes
+   * until somebody acts, so dialling every half second only fills a log. A
+   * drain gets one because the machine said when to come back: it is closing
+   * its turns and then going down, and a hub that dialled at the first backoff
+   * step would spend the whole grace window being refused by a server it was
+   * told to leave alone. Honouring what it said is bounded by the backoff's own
+   * ceiling, because a machine that names an hour must not take the hub off the
+   * air for one -- and it is the whole grace even when the close came sooner,
+   * since a server that finished draining early is still restarting.
+   */
+  const waitFloorMs = (): number => {
+    if (staleReason === 'draining' && draining !== null) {
+      return Math.min(draining.graceMs, backoff.ceilingMs);
+    }
+    if (staleReason !== null && NEEDS_A_PERSON.has(staleReason)) return refusedRetryMs;
+    return 0;
+  };
+
   /** Waits out the backoff, or returns early because the hub is stopping. */
   const waitToRetry = async (): Promise<void> => {
     const scheduled = backoff.delayMs(failedAttempts);
-    const delay =
-      staleReason !== null && NEEDS_A_PERSON.has(staleReason)
-        ? Math.max(scheduled, refusedRetryMs)
-        : scheduled;
+    const delay = Math.max(scheduled, waitFloorMs());
 
     logger.info('retrying', { inMs: delay, failedAttempts, reason: staleReason });
     let cancel: () => void = () => {};
@@ -247,6 +308,19 @@ export function startDialLoop(
   let pendingReports: ServerStoreReport[] | null = null;
 
   /**
+   * A drain notice that arrived in that same gap, held for the same reason.
+   *
+   * Rare to the point of being a race nobody would hit on purpose -- the
+   * machine would have to begin shutting down in the moment between accepting
+   * a handshake and the hub finishing a database write -- and held anyway,
+   * because the alternative is worse than dropping it: `goConnected` clears the
+   * drain for the new connection, so a notice applied before it would be wiped
+   * by the very handshake it arrived on, and the hub would forget a shutdown it
+   * had been told about.
+   */
+  let pendingDrain: DrainingNotice | null = null;
+
+  /**
    * Takes hold of a connection the transport just settled, before anything is
    * awaited on it.
    *
@@ -255,9 +329,32 @@ export function startDialLoop(
    * the meantime -- which is exactly when a server says the most, since
    * accepting a handshake is what makes it report its stores.
    */
+  /**
+   * Takes down what a server said about going down.
+   *
+   * Dated here rather than on the frame, because the frame carries a duration
+   * and not a deadline: the two machines' clocks disagree, so the end that
+   * receives it is the end that can say when it arrived. The phase is left
+   * exactly as it is -- this connection is up, and everything it could do a
+   * moment ago it can still do.
+   */
+  const noteDraining = (notice: DrainingNotice): void => {
+    draining = {
+      since: clock.now(),
+      graceMs: notice.graceMs,
+      sessions: [...notice.sessions],
+    };
+    logger.info('server draining', {
+      graceMs: notice.graceMs,
+      sessions: notice.sessions.length,
+    });
+    changed();
+  };
+
   const take = (transport: ServerTransport): void => {
     held = transport;
     pendingReports = [];
+    pendingDrain = null;
     transport.watch({
       onReport: (frame) => {
         const arrived: ServerStoreReport = {
@@ -272,14 +369,25 @@ export function startDialLoop(
         }
         dependencies.onReport?.(arrived);
       },
+      onDraining: (notice) => {
+        if (pendingReports !== null) {
+          pendingDrain = notice;
+          return;
+        }
+        noteDraining(notice);
+      },
     });
   };
 
   /** Lets through what arrived while the hub was recording the connection. */
-  const deliverPendingReports = (): void => {
+  const deliverPending = (): void => {
     const waiting = pendingReports ?? [];
     pendingReports = null;
     for (const arrived of waiting) dependencies.onReport?.(arrived);
+
+    const announced = pendingDrain;
+    pendingDrain = null;
+    if (announced !== null) noteDraining(announced);
   };
 
   /** Holds an established connection until it ends or the hub stops. */
@@ -288,6 +396,7 @@ export function startDialLoop(
 
     held = null;
     pendingReports = null;
+    pendingDrain = null;
     if (stopped) transport.close(closure(CLOSE_NORMAL, 'the hub is stopping'));
   };
 
@@ -372,11 +481,20 @@ export function startDialLoop(
         // After the state says this server is connected, because the fleet
         // state refuses sessions from a server it has no connection for --
         // correctly, and this is the ordering that keeps that from being a lie.
-        deliverPendingReports();
+        deliverPending();
         await hold(outcome.transport);
         if (stopped) break;
 
-        goStale('dropped', 'the connection to the server ended');
+        // The close a drain warned about is a different event from a machine
+        // that went quiet, and only this end has both halves to join: the
+        // notice arrived on the connection that has just ended. Saying
+        // `dropped` here would throw away the one fact that tells an operator
+        // to wait rather than go and look at the machine.
+        if (draining === null) {
+          goStale('dropped', 'the connection to the server ended');
+        } else {
+          goStale('draining', drainClosureWords(draining.sessions.length));
+        }
         await waitToRetry();
       } catch (error) {
         // The hub's own side failed -- almost certainly the database. The
@@ -386,6 +504,7 @@ export function startDialLoop(
         held?.close(closure(CLOSE_NORMAL, 'the hub could not record this connection'));
         held = null;
         pendingReports = null;
+        pendingDrain = null;
         goStale('hub-error', `the hub could not record the connection: ${String(error)}`);
         await waitToRetry();
       }

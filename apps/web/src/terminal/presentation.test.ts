@@ -85,6 +85,9 @@ function stateWith(overrides?: {
         staleSince: null,
         lastConnectedAt: 1_756_000_000_000,
         staleReason: null,
+        // Not going anywhere: this file is about drawing sessions on a machine
+        // that is answering, and a drain is the settings screen's subject.
+        draining: null,
         problem: null,
       },
     ],

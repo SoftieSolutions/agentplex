@@ -1,6 +1,7 @@
 import type {
   MachineState,
   ProviderReadiness,
+  ServerDraining,
   ServerRegistrationId,
   ServerView,
 } from '@agentplex/protocol';
@@ -67,11 +68,17 @@ export interface ProviderRowView {
  * idle rather than alarming. `stopped` never reaches a client in practice
  * (the reducer forgets a revoked server with its rows), but the phase is one
  * union and this projection covers all of it rather than casting.
+ *
+ * A machine that is shutting down is the one row that is not read off the
+ * phase alone. The connection is up and answering, so `blocked` would be a
+ * lie about now; `running` would be a lie about the next few seconds. It is
+ * `needs-you` — nothing is wrong, and everything on that box is about to stop,
+ * which is the one row on this screen somebody should look at.
  */
 function toneFor(view: ServerView): Tone {
   switch (view.phase) {
     case 'connected':
-      return 'running';
+      return view.draining === null ? 'running' : 'needs-you';
     case 'connecting':
       return 'idle';
     case 'stale':
@@ -81,17 +88,33 @@ function toneFor(view: ServerView): Tone {
   }
 }
 
+/**
+ * The connectivity as a word, and the drain as a short sentence.
+ *
+ * A draining machine gets a count because the count is the thing a person is
+ * deciding on: "shutting down" is a machine to leave alone, and "shutting
+ * down, 2 sessions finishing" is two agents somebody may want to look at
+ * before they close. After the close the word is `shut down` rather than
+ * `unreachable` — the same distinction the stale reason carries, which is the
+ * whole point of having told the hub in advance.
+ */
 function phaseWords(view: ServerView): string {
   switch (view.phase) {
     case 'connected':
-      return 'connected';
+      return view.draining === null ? 'connected' : drainingWords(view.draining);
     case 'connecting':
       return 'connecting';
     case 'stale':
-      return 'unreachable';
+      return view.staleReason === 'draining' ? 'shut down' : 'unreachable';
     case 'stopped':
       return 'unpaired';
   }
+}
+
+function drainingWords(draining: ServerDraining): string {
+  const held = draining.sessions.length;
+  if (held === 0) return 'shutting down';
+  return `shutting down, ${String(held)} ${held === 1 ? 'session' : 'sessions'} finishing`;
 }
 
 /**

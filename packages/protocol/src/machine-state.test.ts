@@ -34,6 +34,7 @@ const A_SERVER = {
   staleSince: null,
   lastConnectedAt: 1_000,
   staleReason: null,
+  draining: null,
   problem: null,
 };
 
@@ -113,6 +114,7 @@ describe('serverViewSchema', () => {
       'dropped',
       'identity-changed',
       'hub-error',
+      'draining',
     ]) {
       const parsed = serverViewSchema.safeParse({
         ...A_SERVER,
@@ -144,6 +146,52 @@ describe('serverViewSchema', () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+
+  it('accepts a connected server that has said it is going down', () => {
+    // The pair a client reads as "shutting down, 1 session finishing": the
+    // phase says the socket is up and answering, and this says everything on
+    // it is about to stop. Neither of them alone is that reading.
+    const parsed = serverViewSchema.safeParse({
+      ...A_SERVER,
+      draining: {
+        since: 1_200,
+        graceMs: 15_000,
+        sessions: [{ storeId: 'store-work', sessionId: 'session-1' }],
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts a drain with no sessions on it, which is a server running nothing', () => {
+    expect(
+      serverViewSchema.safeParse({
+        ...A_SERVER,
+        draining: { since: 1_200, graceMs: 0, sessions: [] },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a drain dated by a deadline instead of a duration', () => {
+    // The frame carries `graceMs` because two machines' clocks disagree, and a
+    // view that admitted a deadline would let one back in through the door the
+    // protocol closed.
+    expect(
+      serverViewSchema.safeParse({
+        ...A_SERVER,
+        draining: { since: 1_200, until: 16_200, sessions: [] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a server view with no drain field: absent is not the same as none', () => {
+    // The same rule the provider list is held to. A reader that saw no field
+    // could not tell a hub that has heard no drain from one too old to hear
+    // one, and those are different claims about a machine that is going down.
+    const { draining: _dropped, ...withoutDraining } = A_SERVER;
+
+    expect(serverViewSchema.safeParse(withoutDraining).success).toBe(false);
   });
 
   it('rejects a server view with no provider list at all', () => {

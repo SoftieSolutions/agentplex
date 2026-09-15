@@ -6,18 +6,18 @@ import {
   type ServerToHubFrame,
 } from '@agentplex/protocol';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
-import { routeServerFrame, type StoreReport } from './frame-router.js';
+import { routeServerFrame, type DrainingNotice, type StoreReport } from './frame-router.js';
 import type { InstructionOutcome } from './servers.js';
 
 /**
  * What a server says, and where each of it goes.
  *
- * The half of this suite that is about silence is the half worth having. Four
- * frames in the protocol have no handler in this build -- the drain notice and
- * the three the terminal relay is made of -- and until the switch became
- * exhaustive they parsed cleanly and vanished with nothing anywhere saying so.
- * A drop is now a debug line that names the frame, which is the difference
- * between "this build does not do that yet" and "something ate a frame".
+ * The half of this suite that is about silence is the half worth having. Three
+ * frames in the protocol have no handler in this build -- the ones the terminal
+ * relay is made of -- and until the switch became exhaustive they parsed
+ * cleanly and vanished with nothing anywhere saying so. A drop is now a debug
+ * line that names the frame, which is the difference between "this build does
+ * not do that yet" and "something ate a frame".
  */
 
 const STORE = storeIdSchema.parse('store-work');
@@ -26,12 +26,14 @@ const SESSION = sessionIdSchema.parse('session-1');
 interface Routed {
   readonly answers: readonly { replyTo: number; outcome: InstructionOutcome }[];
   readonly reports: readonly StoreReport[];
+  readonly drains: readonly DrainingNotice[];
   readonly logged: readonly LogRecord[];
 }
 
 function route(frame: ServerToHubFrame): Routed {
   const answers: { replyTo: number; outcome: InstructionOutcome }[] = [];
   const reports: StoreReport[] = [];
+  const drains: DrainingNotice[] = [];
   const logged: LogRecord[] = [];
   const logger = createLogger('debug', (record) => logged.push(record));
 
@@ -40,11 +42,12 @@ function route(frame: ServerToHubFrame): Routed {
     {
       onAnswer: (replyTo, outcome) => answers.push({ replyTo, outcome }),
       onReport: (report) => reports.push(report),
+      onDraining: (notice) => drains.push(notice),
     },
     logger,
   );
 
-  return { answers, reports, logged };
+  return { answers, reports, drains, logged };
 }
 
 describe('an answer to an instruction', () => {
@@ -109,9 +112,31 @@ describe('a store report', () => {
   });
 });
 
+describe('a drain notice', () => {
+  it('goes to the loop that holds the connection, whole, and answers nobody', () => {
+    // Whole, because the sessions on it are the point: they are what the
+    // server is closing, named rather than left to be read off a store report
+    // that may be older than this frame.
+    const frame: ServerToHubFrame = {
+      type: 'server-draining',
+      graceMs: 15_000,
+      sessions: [{ storeId: STORE, sessionId: SESSION }],
+    };
+
+    const routed = route(frame);
+
+    expect(routed.drains).toEqual([frame]);
+    expect(routed.answers).toEqual([]);
+    expect(routed.reports).toEqual([]);
+    // Not a drop, so nothing says it was one: the debug line below means "this
+    // build is behind that server", and a drain that logged it would make the
+    // line mean nothing.
+    expect(routed.logged).toEqual([]);
+  });
+});
+
 describe('a frame this build has no handler for', () => {
   const unhandled: readonly ServerToHubFrame[] = [
-    { type: 'server-draining', graceMs: 15_000, sessions: [] },
     {
       type: 'session-subscribed',
       replyTo: 6,

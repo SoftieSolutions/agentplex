@@ -490,6 +490,35 @@ describe('client and hub round trips', () => {
             staleSince: null,
             lastConnectedAt: 1_000,
             staleReason: null,
+            draining: null,
+            problem: null,
+          },
+          {
+            // The machine that said it was going down: connected, because the
+            // socket is up and answering, with the shutdown beside the phase
+            // rather than inside it. The two fields together are the reading a
+            // client draws, and neither of them alone is one.
+            registrationId: serverRegistrationIdSchema.parse('registration-2'),
+            label: 'attic',
+            address: pairedServerAddressSchema.parse('wss://attic.example:8443'),
+            serverId: serverIdSchema.parse('server-2'),
+            phase: 'connected',
+            stores: [storeIdSchema.parse('store-work')],
+            providers: [],
+            connectedSince: 1_000,
+            staleSince: null,
+            lastConnectedAt: 1_000,
+            staleReason: null,
+            draining: {
+              since: 1_200,
+              graceMs: 15_000,
+              sessions: [
+                {
+                  storeId: storeIdSchema.parse('store-work'),
+                  sessionId: sessionIdSchema.parse('session-2'),
+                },
+              ],
+            },
             problem: null,
           },
         ],
