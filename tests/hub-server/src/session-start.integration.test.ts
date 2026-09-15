@@ -11,9 +11,11 @@ import {
   storeIdSchema,
   type ClientFrame,
   type HubFrame,
+  type HubToServerFrame,
   type MachineState,
   type ProviderReadiness,
   type ServerRegistrationId,
+  type ServerToHubFrame,
   type SessionRow,
   type StoreDescriptor,
 } from '@agentplex/protocol';
@@ -21,6 +23,8 @@ import {
   createFakeMessageSocket,
   createSocketPair,
   createFakeTimers,
+  PEER_GONE,
+  type FakeMessageSocket,
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
@@ -44,7 +48,11 @@ import {
 import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
 import { toMachineState } from '../../../apps/hub/src/features/fleet-state/machine-state.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
+import {
+  createServers,
+  type ServerConnectionReport,
+  type Servers,
+} from '../../../apps/hub/src/features/servers/servers.js';
 import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
 import {
   createPairing,
@@ -122,6 +130,17 @@ interface Machine {
    * apart on the same volume.
    */
   providers: readonly ProviderReadiness[];
+  /**
+   * This machine's own end of the connection it currently has, or `null`
+   * before the first dial.
+   *
+   * The one thing a machine needs that is not durable, and it is here for the
+   * case the durable half exists for: pulling the wire on a machine with an
+   * agent alive on it. A test can close a socket and a test cannot close a
+   * connection any other way -- the hub's own `stop()` is a shutdown and never
+   * comes back.
+   */
+  socket: FakeMessageSocket | null;
   /** Every frame this machine sent to the hub, and every one it received. */
   readonly sentToHub: string[];
   readonly sentToServer: string[];
@@ -166,6 +185,7 @@ function buildMachine(label: string, providers: readonly ProviderReadiness[]): M
     terminals,
     ptys,
     providers,
+    socket: null,
     sentToHub: [],
     sentToServer: [],
   };
@@ -211,6 +231,7 @@ function serveMachine(machine: Machine): DialResult {
   };
   serverEnd.onMessage(() => {});
   hubEnd.onMessage((text) => machine.sentToHub.push(text));
+  machine.socket = serverEnd;
 
   return { ok: true, socket: capturing };
 }
@@ -793,6 +814,465 @@ describe('a session start against a machine with no such provider installed', ()
     ]);
   });
 });
+
+/**
+ * A hub that comes back to a machine it left running.
+ *
+ * The harness has always built each machine's terminals once and kept them
+ * across every dial, because that is what a server is: a connection is a
+ * socket, and the processes underneath it outlive one. Nothing pulled the wire
+ * with an agent alive on the far side, and that is the case the one-writer rule
+ * is most exposed to. The hub keeps no durable memory of who is holding what --
+ * deliberately, since a table of holds outlives the process that wrote it and
+ * would present a dead machine's agents as running -- so after a drop the only
+ * thing in the world that can restore the fact is the machine saying it again.
+ */
+describe('a hub that reconnects to a machine holding a live session', () => {
+  beforeEach(async () => {
+    harness = await start();
+    await until(
+      () =>
+        held()
+          .connections.snapshot()
+          .every((report) => report.phase === 'connected'),
+      'both servers to be connected',
+    );
+    await until(
+      () => (held().state.snapshot().stores[0]?.sessions.length ?? 0) === 3,
+      'both servers to have reported the store',
+    );
+  });
+
+  afterEach(async () => {
+    await harness?.connections.stop();
+    harness?.clients.stop();
+    await migrated?.close();
+    harness = null;
+    migrated = null;
+  });
+
+  /** A session running on that machine, started the way a client starts one. */
+  async function startOn(client: Client, label: string): Promise<void> {
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: sessionIdSchema.parse('session-quiet'),
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf(label),
+    });
+    expect(client.reply(2).type).toBe('session-started');
+  }
+
+  /**
+   * The wire goes, and the hub dials again.
+   *
+   * The machine is untouched: nothing was told anything, nothing was signalled,
+   * and the pty under the terminal manager never hears about it. That is the
+   * whole class of event the dial loop exists for -- a hub restart, a network
+   * that dropped, a lid that closed -- and the only part of it a test can cause
+   * is the socket.
+   */
+  async function pullThePlug(label: string): Promise<void> {
+    machine(label).socket?.close(PEER_GONE);
+    await until(() => phaseOf(label) === 'stale', `${label} to be seen as dropped`);
+    held().timers.fireAll();
+    await until(() => phaseOf(label) === 'connected', `${label} to be dialled again`);
+  }
+
+  it('is told what the machine is still holding, in the first report after the handshake', async () => {
+    const client = await attach();
+    await startOn(client, 'attic');
+
+    const attic = machine('attic');
+    const reportsBeforeTheDrop = storeReports(attic).length;
+    await pullThePlug('attic');
+    await until(
+      () => storeReports(attic).length > reportsBeforeTheDrop,
+      'a store report on the new connection',
+    );
+
+    // Same terminal, same process: a reconnect starts nothing and kills
+    // nothing, and the agent has been working through all of it.
+    expect(attic.ptys.ptys).toHaveLength(1);
+    expect(attic.ptys.ptys[0]?.kills).toBe(0);
+
+    // The hold is on the report the fresh handshake produced, which is the only
+    // place it could come from.
+    expect(storeReports(attic).at(-1)?.holding).toEqual([
+      { sessionId: 'session-quiet', stoppable: true },
+    ]);
+
+    await until(
+      () => client.row('session-quiet')?.holder !== null,
+      'the holder to be published again',
+    );
+    expect(client.row('session-quiet')).toMatchObject({
+      reachable: true,
+      holder: { server: registrationOf('attic'), stoppable: true },
+    });
+  });
+
+  it('refuses a start on the session it came back to, and names the machine that has it', async () => {
+    const client = await attach();
+    await startOn(client, 'attic');
+    await pullThePlug('attic');
+    await until(
+      () => client.row('session-quiet')?.holder !== null,
+      'the holder to be published again',
+    );
+
+    // Aimed at the other machine, which has the same volume mounted and is
+    // running nothing. Only the hub can know that starting there would put a
+    // second agent on a transcript the first one is still writing -- and after
+    // a drop it knows it only because the machine said so again.
+    await client.say({
+      type: 'session-start',
+      id: 3,
+      storeId: WORK,
+      sessionId: sessionIdSchema.parse('session-quiet'),
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('workshop'),
+    });
+
+    expect(client.reply(3)).toMatchObject({
+      type: 'refusal',
+      code: 'refused',
+      holder: { server: registrationOf('attic'), stoppable: true },
+    });
+    expect(launches(machine('workshop'))).toEqual([]);
+    expect(machine('attic').ptys.ptys).toHaveLength(1);
+  });
+});
+
+/**
+ * A fleet whose machines do not agree about what they can run.
+ *
+ * `start(preflightOf)` has taken a per-machine answer since readiness landed on
+ * the handshake, and every call site passes a constant: both ready, or both
+ * missing. The case the parameter exists for is this one -- one box on the
+ * volume can run the agent and the other cannot -- and it is where the routing
+ * rule's branches stop being independent: the filter that schedules around a
+ * machine, the override that refuses the machine a person picked anyway, and
+ * the line between a reading that means no and one that only means "could not
+ * tell".
+ *
+ * The machine that cannot is `attic` in all but one of these, and that is the
+ * half that makes the assertion worth anything. Ties break on label, so a
+ * scheduler that had stopped filtering entirely would still land on `attic` and
+ * still look right; it is only when the usable machine is the second one that
+ * the filter is the thing being read.
+ */
+describe('a fleet where the machines differ in what they can start', () => {
+  afterEach(async () => {
+    await harness?.connections.stop();
+    harness?.clients.stop();
+    await migrated?.close();
+    harness = null;
+    migrated = null;
+  });
+
+  /** The fleet up, both machines connected and reporting, with a client on it. */
+  async function fleetOf(
+    preflightOf: (label: string) => readonly ProviderReadiness[],
+  ): Promise<Client> {
+    harness = await start(preflightOf);
+    await until(
+      () =>
+        held()
+          .connections.snapshot()
+          .every((report) => report.phase === 'connected'),
+      'both servers to be connected',
+    );
+    await until(
+      () => (held().state.snapshot().stores[0]?.sessions.length ?? 0) === 3,
+      'both servers to have reported the store',
+    );
+    return attach();
+  }
+
+  /** An unaddressed start: the hub picks, which is the whole question here. */
+  async function scheduleStart(client: Client, id: number, sessionId: string): Promise<void> {
+    await client.say({
+      type: 'session-start',
+      id,
+      storeId: WORK,
+      sessionId: sessionIdSchema.parse(sessionId),
+      provider: 'claude',
+      prompt: null,
+      server: null,
+    });
+  }
+
+  /** A start on the machine a person picked, however that machine is reading. */
+  async function startOn(
+    client: Client,
+    id: number,
+    sessionId: string,
+    label: string,
+  ): Promise<void> {
+    await client.say({
+      type: 'session-start',
+      id,
+      storeId: WORK,
+      sessionId: sessionIdSchema.parse(sessionId),
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf(label),
+    });
+  }
+
+  it('schedules past the machine that is missing it, and refuses that machine by name', async () => {
+    const client = await fleetOf((label) =>
+      label === 'attic' ? [missingProvider('claude')] : [readyProvider('claude')],
+    );
+
+    await scheduleStart(client, 2, 'session-quiet');
+    expect(client.reply(2)).toMatchObject({
+      type: 'session-started',
+      server: registrationOf('workshop'),
+    });
+    expect(launches(machine('workshop'))).toEqual([['--resume', 'session-quiet']]);
+    expect(launches(machine('attic'))).toEqual([]);
+
+    // And picked by hand it is still refused, in the machine's own words rather
+    // than the hub's guess at what some other box meant.
+    await startOn(client, 3, 'session-busy', 'attic');
+    expect(client.reply(3)).toMatchObject({
+      type: 'refusal',
+      code: 'refused',
+      holder: null,
+      message: 'attic cannot run claude: no directory this server searches holds claude',
+    });
+
+    // Never asked, either time. A refusal that still sent the instruction would
+    // be a pty forked into a program that is not there.
+    expect(instructionsTo('attic')).toEqual([]);
+  });
+
+  it('refuses a machine whose agent says it is logged out', async () => {
+    const client = await fleetOf((label) =>
+      label === 'attic' ? [loggedOutProvider()] : [readyProvider('claude')],
+    );
+
+    await scheduleStart(client, 2, 'session-quiet');
+    expect(client.reply(2)).toMatchObject({
+      type: 'session-started',
+      server: registrationOf('workshop'),
+    });
+
+    // The binary resolves, so nothing would die at the fork: what would happen
+    // is a session sitting at a sign-in prompt instead of doing the work it was
+    // asked for, which is a different thing to go and fix and is said as one.
+    await startOn(client, 3, 'session-busy', 'attic');
+    expect(client.reply(3)).toMatchObject({
+      type: 'refusal',
+      code: 'refused',
+      message: 'attic cannot run claude: claude says it is not logged in',
+    });
+    expect(launches(machine('attic'))).toEqual([]);
+  });
+
+  it('starts on a machine whose reading could not be taken, because that is not a no', async () => {
+    // The considered half of the readiness rule, and the only case here where
+    // the machine the hub must choose is the first one: `attic` resolved the
+    // program and could not read a version out of it, `workshop` does not have
+    // it at all. A hub that turned "could not tell" into "no" would refuse the
+    // whole store and take a working provider offline the first time its vendor
+    // renamed a subcommand.
+    const client = await fleetOf((label) =>
+      label === 'attic' ? [unreadProvider()] : [missingProvider('claude')],
+    );
+
+    await scheduleStart(client, 2, 'session-quiet');
+    expect(client.reply(2)).toMatchObject({
+      type: 'session-started',
+      server: registrationOf('attic'),
+    });
+    expect(launches(machine('attic'))).toEqual([['--resume', 'session-quiet']]);
+    expect(launches(machine('workshop'))).toEqual([]);
+
+    // And the problem is still published, because it is still a fact about the
+    // machine that somebody may want to go and look at.
+    expect(
+      client.states.at(-1)?.servers.find((server) => server.label === 'attic')?.providers,
+    ).toEqual([unreadProvider()]);
+  });
+
+  it('refuses a machine that never mentioned the provider at all', async () => {
+    // A preflight with nothing in it is a build with no adapter for this
+    // provider, which is a different thing to fix from a machine with no
+    // binary, and the sentence says which it is.
+    const client = await fleetOf((label) => (label === 'attic' ? [] : [readyProvider('claude')]));
+
+    await scheduleStart(client, 2, 'session-quiet');
+    expect(client.reply(2)).toMatchObject({
+      type: 'session-started',
+      server: registrationOf('workshop'),
+    });
+
+    await startOn(client, 3, 'session-busy', 'attic');
+    expect(client.reply(3)).toMatchObject({
+      type: 'refusal',
+      code: 'refused',
+      message: 'attic does not run claude',
+    });
+    expect(instructionsTo('attic')).toEqual([]);
+  });
+});
+
+/**
+ * The connection dies with an instruction on it.
+ *
+ * A start is the one thing the hub asks a server for and then waits on, and
+ * everything above that wait is a client holding a frame id. The instruction
+ * channel settles every outstanding one as an `internal` refusal when the
+ * connection ends, and until now nothing drove that from a client frame to the
+ * sentence the client reads.
+ *
+ * `internal` and not `refused`, and that is the decision this is about. A
+ * refusal says the machine understood and declined; what actually happened is
+ * that the hub does not know. The start may well have run -- the machine below
+ * receives it and forks before the socket is gone -- so the answer a person
+ * gets has to be one they can retry, and the truth about what is running comes
+ * from the next handshake rather than from anything the hub remembers.
+ */
+describe('a machine that goes away with a start in flight', () => {
+  beforeEach(async () => {
+    harness = await start();
+    await until(
+      () =>
+        held()
+          .connections.snapshot()
+          .every((report) => report.phase === 'connected'),
+      'both servers to be connected',
+    );
+    await until(
+      () => (held().state.snapshot().stores[0]?.sessions.length ?? 0) === 3,
+      'both servers to have reported the store',
+    );
+  });
+
+  afterEach(async () => {
+    await harness?.connections.stop();
+    harness?.clients.stop();
+    await migrated?.close();
+    harness = null;
+    migrated = null;
+  });
+
+  it('answers the client in words about the connection, and dials the machine again', async () => {
+    const client = await attach();
+    const attic = machine('attic');
+
+    // The machine takes the instruction and the wire dies before it can answer.
+    // Attached after the server's own listener, so the frame really does reach
+    // the thing that acts on it: the server has already begun the start -- it
+    // cannot finish one without awaiting -- and the close lands before anything
+    // it would send.
+    attic.socket?.onMessage((text) => {
+      if (parsed<{ type: string }>(parseHubToServerFrame, text).type !== 'session-start') return;
+      attic.socket?.close(PEER_GONE);
+    });
+
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: sessionIdSchema.parse('session-quiet'),
+      provider: 'claude',
+      prompt: null,
+      server: registrationOf('attic'),
+    });
+
+    // Answered, and answered now: no timer has been fired in this test, so
+    // nothing here waited out the instruction deadline. A client left holding a
+    // frame id nothing will ever reply to is the failure this settles.
+    expect(client.reply(2)).toMatchObject({
+      type: 'refusal',
+      code: 'internal',
+      holder: null,
+      message: 'the connection to the server ended before it answered',
+    });
+
+    // The machine is dialled again on the ordinary curve: a socket that ended
+    // mid-instruction is a dropped connection like any other.
+    await until(() => phaseOf('attic') === 'stale', 'attic to be seen as dropped');
+    expect(connectionTo('attic')?.staleReason).toBe('dropped');
+    held().timers.fireAll();
+    await until(() => phaseOf('attic') === 'connected', 'attic to be dialled again');
+
+    // And what the start actually did is the new handshake's answer rather than
+    // anything the hub was holding: it ran, and the machine says so.
+    await until(
+      () => client.row('session-quiet')?.holder !== null,
+      'the machine to report what it is holding',
+    );
+    expect(client.row('session-quiet')?.holder).toEqual({
+      server: registrationOf('attic'),
+      stoppable: true,
+    });
+  });
+});
+
+/** What the supervisor says about one machine's connection, by label. */
+function connectionTo(label: string): ServerConnectionReport | undefined {
+  return held()
+    .connections.snapshot()
+    .find((report) => report.registrationId === registrationOf(label));
+}
+
+/** Where that connection is, as one word. */
+function phaseOf(label: string): ServerConnectionReport['phase'] | undefined {
+  return connectionTo(label)?.phase;
+}
+
+/** Every store report a machine has sent, in order, read back through the parser. */
+function storeReports(
+  one: Machine,
+): readonly Extract<ServerToHubFrame, { type: 'store-report' }>[] {
+  return one.sentToHub
+    .map((text) => parsed<ServerToHubFrame>(parseServerToHubFrame, text))
+    .filter((frame) => frame.type === 'store-report');
+}
+
+/** Every instruction a machine was actually sent, as it read it off the wire. */
+function instructionsTo(label: string): readonly HubToServerFrame[] {
+  return machine(label)
+    .sentToServer.map((text) => parsed<HubToServerFrame>(parseHubToServerFrame, text))
+    .filter((frame) => frame.type === 'session-start' || frame.type === 'session-stop');
+}
+
+/**
+ * What a preflight reports for a provider that resolved and says it is logged
+ * out: a version, a directory, and a person who has to go and run its login.
+ *
+ * Built from `readyProvider` rather than written out again, because the only
+ * thing that differs is the one field the machine actually read differently.
+ */
+function loggedOutProvider(): ProviderReadiness {
+  return {
+    ...readyProvider('claude'),
+    state: 'unauthenticated',
+    problem: 'claude says it is not logged in',
+  };
+}
+
+/**
+ * What a preflight reports for a provider it could not read: the program is
+ * there and something in front of it answered with what this build does not
+ * understand.
+ */
+function unreadProvider(): ProviderReadiness {
+  return {
+    ...readyProvider('claude'),
+    state: 'unknown',
+    version: null,
+    problem: 'claude printed no version',
+  };
+}
 
 function parsed<T>(parser: (raw: unknown) => { ok: boolean }, text: string): T & { type: string } {
   const result = parseTextFrame(parser as never, text) as
