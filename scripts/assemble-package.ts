@@ -70,8 +70,9 @@ import { z } from 'zod';
  * Packaging preserves the invariant rather than adding an exception to it.
  *
  * The client is the one thing that stopped being a relative path, and it
- * stopped because it stopped being in the same package: `apps/hub/src/web/
- * web-package.ts` resolves `@softiesolutions/agentplex-web` instead, which is
+ * stopped because it stopped being in the same package:
+ * `apps/hub/src/features/web/web-package.ts` resolves
+ * `@softiesolutions/agentplex-web` instead, which is
  * one specifier that works in a checkout, in the image and under
  * `<prefix>/lib/node_modules` alike. The client's package is the one whose
  * contents are laid out as its app rather than as the workspace, and the

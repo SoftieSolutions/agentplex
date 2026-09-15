@@ -2,6 +2,7 @@ export { PROTOCOL_VERSION, checkProtocolVersion } from './version.js';
 export type { ProtocolVersionMismatch } from './version.js';
 
 export { frameParser, parseTextFrame } from './parse.js';
+export { assertNever } from './exhaustive.js';
 export type { ParseFailure, ParseResult } from './parse.js';
 
 export {

@@ -1,0 +1,348 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  serverIdSchema,
+  sessionIdSchema,
+  storeIdSchema,
+  type HubId,
+  type ServerRegistrationId,
+  type SessionDescriptor,
+  type StoreDescriptor,
+  type StoreId,
+} from '@agentplex/protocol';
+import { serveServerEnd } from './server-end.js';
+import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
+import { createFakeStoreFiles, readyProvider } from '@agentplex/providers/testing';
+import {
+  createSocketPair,
+  createFakeTimers,
+  type FakeTimers,
+} from '@agentplex/node-shared/testing';
+import {
+  createLogger,
+  type DialResult,
+  type MessageSocket,
+  type SocketDialer,
+} from '@agentplex/node-shared';
+import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
+import type { Database } from '../../../apps/hub/src/db/database.js';
+import {
+  registerServer,
+  revokeServer,
+} from '../../../apps/hub/src/features/pairing/server-registrations.js';
+import {
+  createPairing,
+  newServerRegistrationSchema,
+  type Pairing,
+} from '../../../apps/hub/src/features/pairing/pairing.js';
+import {
+  openMigratedSchema,
+  type MigratedSchema,
+} from '../../../apps/hub/src/db/test-migrated-schema.js';
+import {
+  createFleetState,
+  type FleetState,
+  type StoreView,
+} from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
+import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+
+/**
+ * The reducer against the real supervisor, over real handshakes.
+ *
+ * The unit tests hand it connection reports; this drives the seam it will
+ * actually be wired to -- `onChange` off a supervisor dialling servers that
+ * answer for themselves -- so that the case the whole ticket is about is
+ * demonstrated rather than asserted: two machines, one volume, one store.
+ */
+
+const logger = createLogger('error', () => {});
+const hubId = 'hub-under-test' as HubId;
+const START = 1_756_000_000_000;
+const clock = { now: () => START };
+
+let migrated: MigratedSchema | null = null;
+let timers: FakeTimers;
+let supervisor: Servers | null = null;
+let reducer: FleetState;
+
+function db(): Database {
+  if (migrated === null) throw new Error('no database: beforeAll did not run');
+  return migrated.database;
+}
+
+/** The pairing feature over the same schema: the real reader of the table. */
+function pairing(): Pairing {
+  return createPairing({
+    database: db(),
+    files: createFakeStoreFiles(),
+    ids: { newId: () => 'unused' },
+    clock,
+    logger,
+  });
+}
+
+async function until(predicate: () => boolean, what: string): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+function store(id: string, path: string): StoreDescriptor {
+  return { storeId: storeIdSchema.parse(id), path };
+}
+
+/** Which hostnames answer, and what each says when it does. */
+const machines = new Map<string, { serverId: string; stores: readonly StoreDescriptor[] }>();
+const unreachable = new Set<string>();
+/** The server end of each open connection, so a test can pull the plug on one. */
+const live = new Map<string, MessageSocket>();
+
+const PEER_GONE = { code: 1006, reason: 'the machine went away' };
+
+const dialer: SocketDialer = {
+  dial: async (address: string): Promise<DialResult> => {
+    const host = new URL(address).hostname;
+    const machine = machines.get(host);
+    if (machine === undefined || unreachable.has(host)) {
+      return { ok: false, problem: 'connection refused' };
+    }
+
+    const { hubEnd, serverEnd } = createSocketPair();
+    serveServerEnd(serverEnd, {
+      sessions: createFakeSessionController(),
+      terminals: createFakeTerminals().terminals,
+      machineLoad: createFakeMachineLoadReader(),
+      identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
+      stores: machine.stores,
+      providers: [readyProvider()],
+      logger,
+    });
+    live.set(host, serverEnd);
+    return { ok: true, socket: hubEnd };
+  },
+};
+
+/** The machine goes away without saying so, and stays away. */
+function pullThePlug(host: string): void {
+  unreachable.add(host);
+  live.get(host)?.close(PEER_GONE);
+}
+
+async function register(label: string): Promise<ServerRegistrationId> {
+  const registration = await registerServer(
+    db(),
+    { newId: () => `registration-${label}` },
+    clock,
+    newServerRegistrationSchema.parse({
+      label,
+      address: `wss://${label}.example:8443`,
+      token: `tok-${label}.example`,
+    }),
+  );
+  return registration.id;
+}
+
+async function startAll(): Promise<Servers> {
+  const running = createServers({
+    pairing: pairing(),
+    dialer,
+    hubId,
+    timers,
+    clock,
+    logger,
+    backoff: createExponentialBackoff({ baseMs: 500, maxMs: 8000, random: () => 0 }),
+    onChange: (report) => reducer.applyConnection(report),
+  });
+  supervisor = running;
+  await running.sync();
+  return running;
+}
+
+function session(
+  id: string,
+  storeId: StoreId,
+  status: SessionDescriptor['status'],
+): SessionDescriptor {
+  return {
+    storeId,
+    sessionId: sessionIdSchema.parse(id),
+    provider: 'claude',
+    status,
+    updatedAt: START,
+    cwd: '/volumes/claude/work',
+    branch: null,
+    title: null,
+    uncommitted: null,
+  };
+}
+
+function view(storeId: string): StoreView {
+  const found = reducer.snapshot().stores.find((candidate) => candidate.storeId === storeId);
+  if (found === undefined) throw new Error(`no view for ${storeId}`);
+  return found;
+}
+
+function phaseOf(running: Servers, label: string): string | undefined {
+  return running.snapshot().find((report) => report.label === label)?.phase;
+}
+
+describe('the reducer over a live supervisor', () => {
+  beforeAll(async () => {
+    migrated = await openMigratedSchema('hub-state-reducer');
+  });
+
+  afterAll(async () => {
+    await migrated?.close();
+  });
+
+  beforeEach(async () => {
+    timers = createFakeTimers();
+    reducer = createFleetState({ logger });
+    machines.clear();
+    unreachable.clear();
+    live.clear();
+    // One volume, mounted on two machines at two paths. This is the case: the
+    // store id is minted into the volume, so both servers report the same one.
+    machines.set('laptop.example', {
+      serverId: 'server-laptop',
+      stores: [store('store-shared', '/Users/me/work')],
+    });
+    machines.set('box.example', {
+      serverId: 'server-box',
+      stores: [store('store-shared', '/mnt/work')],
+    });
+    await db().query('DELETE FROM servers');
+    await db().query('DELETE FROM stores');
+  });
+
+  afterEach(async () => {
+    await supervisor?.stop();
+    supervisor = null;
+  });
+
+  it('reads two servers on one volume as one store with two attached', async () => {
+    await register('laptop');
+    await register('box');
+
+    const running = await startAll();
+    await until(
+      () => running.snapshot().every((report) => report.phase === 'connected'),
+      'both servers',
+    );
+
+    const stores = reducer.snapshot().stores;
+    expect(stores.map((candidate) => candidate.storeId)).toEqual(['store-shared']);
+    expect(view('store-shared').servers.map((server) => server.label)).toEqual(['box', 'laptop']);
+    expect(view('store-shared').reachable).toBe(true);
+  });
+
+  it('unifies what both servers report into one session list', async () => {
+    const laptop = await register('laptop');
+    const box = await register('box');
+    const running = await startAll();
+    await until(
+      () => running.snapshot().every((report) => report.phase === 'connected'),
+      'both servers',
+    );
+
+    const shared = storeIdSchema.parse('store-shared');
+    // Both machines read the same volume. The laptop is the one running the
+    // session, so it is the only one that can see a process.
+    reducer.applySessions({
+      holding: [],
+      registrationId: laptop,
+      storeId: shared,
+      sessions: [session('session-1', shared, 'working'), session('session-2', shared, 'idle')],
+      reportedAt: START,
+    });
+    reducer.applySessions({
+      holding: [],
+      registrationId: box,
+      storeId: shared,
+      sessions: [session('session-1', shared, 'idle'), session('session-2', shared, 'idle')],
+      reportedAt: START,
+    });
+
+    const sessions = view('store-shared').sessions;
+    expect(sessions.map((row) => row.descriptor.sessionId)).toEqual(['session-1', 'session-2']);
+    expect(sessions[0]?.descriptor.status).toBe('working');
+    expect(sessions[0]?.source).toBe('registration-laptop');
+    expect(sessions[0]?.reportedBy).toEqual(['registration-box', 'registration-laptop']);
+  });
+
+  it('keeps the store reachable through the server that is still up', async () => {
+    const laptop = await register('laptop');
+    await register('box');
+    unreachable.add('laptop.example');
+
+    const running = await startAll();
+    await until(() => phaseOf(running, 'laptop') === 'stale', 'the laptop to go stale');
+    await until(() => phaseOf(running, 'box') === 'connected', 'the box to connect');
+
+    // The laptop never connected, so it has no stores of its own on record and
+    // the store is the box's. What matters is that the volume is still there
+    // and still answerable.
+    expect(view('store-shared').reachable).toBe(true);
+    expect(view('store-shared').unreachableSince).toBeNull();
+    expect(
+      reducer.applySessions({
+        holding: [],
+        registrationId: laptop,
+        storeId: storeIdSchema.parse('store-shared'),
+        sessions: [],
+        reportedAt: START,
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps a store whose only server went away, labelled with its age', async () => {
+    const box = await register('box');
+    const running = await startAll();
+    await until(() => phaseOf(running, 'box') === 'connected', 'the box to connect');
+
+    const shared = storeIdSchema.parse('store-shared');
+    reducer.applySessions({
+      holding: [],
+      registrationId: box,
+      storeId: shared,
+      sessions: [session('session-1', shared, 'idle')],
+      reportedAt: START,
+    });
+
+    // The machine goes away mid-connection. Its rows stay; they are all anyone
+    // knows about that volume, and deleting them would read as an empty store.
+    pullThePlug('box.example');
+    await until(() => phaseOf(running, 'box') === 'stale', 'the box to go stale');
+
+    const stale = view('store-shared');
+    expect(stale.reachable).toBe(false);
+    expect(stale.sessions.map((row) => row.descriptor.sessionId)).toEqual(['session-1']);
+    expect(stale.sessions[0]?.reachable).toBe(false);
+    expect(stale.lastReachableAt).toBe(START);
+  });
+
+  it('forgets a revoked pairing and everything it reported', async () => {
+    const box = await register('box');
+    const running = await startAll();
+    await until(() => phaseOf(running, 'box') === 'connected', 'the box to connect');
+
+    const shared = storeIdSchema.parse('store-shared');
+    reducer.applySessions({
+      holding: [],
+      registrationId: box,
+      storeId: shared,
+      sessions: [session('session-1', shared, 'idle')],
+      reportedAt: START,
+    });
+    expect(view('store-shared').sessions).toHaveLength(1);
+
+    await revokeServer(db(), clock, box);
+    await running.sync();
+
+    expect(reducer.snapshot().stores).toEqual([]);
+    expect(reducer.snapshot().servers).toEqual([]);
+  });
+});

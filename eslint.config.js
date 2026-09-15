@@ -52,6 +52,62 @@ const doctorOpensNoPty = [
   },
 ];
 
+/**
+ * The hub's features, each a folder with one entry file (AGX-226).
+ *
+ * A feature may be read by another feature through `features/<b>/<b>.ts` and
+ * through nothing else in that folder. The entry file names the interface and
+ * the factory and re-exports nothing, so it is a seam rather than a barrel:
+ * what is not on it is not another feature's to reach, and moving a file
+ * inside a folder costs nobody an import. `CONTRIBUTING.md` carries the
+ * argument.
+ *
+ * Written as one list of negations rather than a rule per feature because the
+ * allowance is the same everywhere: gitignore-style patterns cannot say "the
+ * file whose name matches its folder", so the folders are named. A new feature
+ * is a line here, and forgetting the line fails closed -- nothing may import
+ * it -- which is the right direction for a rule about who may reach whom.
+ */
+const HUB_FEATURES = [
+  'catalogue',
+  'client-auth',
+  'clients',
+  'discovery',
+  'fleet-state',
+  'pairing',
+  'pane-layout',
+  'servers',
+  'sessions',
+  'web',
+];
+
+const startsNoChild = {
+  group: ['node:child_process', 'child_process'],
+  message:
+    'Starting a child directly bypasses the operation registry. Add an operation and run it through the injected ProcessRunner.',
+};
+
+/**
+ * One feature reaching into another. `alsoAllowed` is how the test-file block
+ * below adds `fake-<feature>.ts`, which is a seam a test may stand on and a
+ * service module may not.
+ */
+const featureEntriesOnly = (alsoAllowed = []) => [
+  {
+    group: [
+      // Named per folder rather than as one `../*/*`: that form also matches
+      // `../../db/database.js`, which is a seam every feature may hold and not
+      // a feature at all.
+      ...HUB_FEATURES.map((feature) => `../${feature}/*`),
+      ...HUB_FEATURES.map((feature) => `!../${feature}/${feature}.js`),
+      ...alsoAllowed,
+    ],
+    message:
+      'A feature reaches another only through its entry file: import ../<feature>/<feature>.js, and add what you need to that interface rather than reaching past it.',
+  },
+  startsNoChild,
+];
+
 export default tseslint.config(
   {
     // `apps/<app>/release` is a staged package: every file in one is a copy of
@@ -258,6 +314,28 @@ export default tseslint.config(
     },
   },
   {
+    // The feature boundary itself. Scoped to files inside a feature, because
+    // it is a rule about features reaching each other: `hub.ts` is the
+    // composition root and names every entry file by design, and `main.ts`
+    // names the Node-backed implementations of the seams it injects.
+    files: ['apps/hub/src/features/*/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports(featureEntriesOnly()),
+    },
+  },
+  {
+    // A test may also stand on another feature's fake, which is the whole
+    // point of there being one: `fake-<feature>.ts` sits beside the entry file
+    // and is what a suite in a neighbouring folder uses instead of the real
+    // thing. Nothing that ships matches this pattern.
+    files: ['apps/hub/src/features/*/**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports(
+        featureEntriesOnly(['!../*/fake-*.js']),
+      ),
+    },
+  },
+  {
     // The doctor reads a machine and must not be able to change it: a check is
     // easier to trust when the program running it cannot open a pty or
     // provision. This is that rule made checkable rather than a dependency list
@@ -375,7 +453,7 @@ export default tseslint.config(
     // resolver as a subject.
     files: [
       'apps/hub/src/main.integration.test.ts',
-      'apps/hub/src/web/web-package.integration.test.ts',
+      'apps/hub/src/features/web/web-package.integration.test.ts',
       'apps/server/src/main.integration.test.ts',
       'apps/cli/src/commands/setup/main.integration.test.ts',
     ],

@@ -22,8 +22,8 @@ import { missingProvider, readyProvider, createFakeStoreFiles } from '@agentplex
 import {
   createFakeBeaconSource,
   type FakeBeaconSource,
-} from '../../../apps/hub/src/discovery/fake-beacon-source.js';
-import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web-assets.js';
+} from '../../../apps/hub/src/features/discovery/fake-discovery.js';
+import { createFakeWebAssets } from '../../../apps/hub/src/features/web/fake-web.js';
 import { serveServerEnd } from './server-end.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import type { SessionOutcome, StoreReport } from '../../../apps/server/src/session-control.js';
@@ -46,15 +46,13 @@ import {
 import { migrate } from '../../../apps/hub/src/db/migrations.js';
 import { nodeMigrationFileSystem } from '../../../apps/hub/src/db/node-migration-files.js';
 import { createSqliteDatabase } from '../../../apps/hub/src/db/sqlite.js';
-import {
-  newServerRegistrationSchema,
-  registerServer,
-} from '../../../apps/hub/src/pairing/server-registrations.js';
+import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
+import { newServerRegistrationSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
 import { startHub, type Hub } from '../../../apps/hub/src/hub.js';
 import {
   CLIENT_SOCKET_PATH,
   CLIENT_TICKET_PATH,
-} from '../../../apps/hub/src/clients/client-auth.js';
+} from '../../../apps/hub/src/features/client-auth/client-auth.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**

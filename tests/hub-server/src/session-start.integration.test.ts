@@ -32,6 +32,7 @@ import {
   missingProvider,
   readyProvider,
   createFakeProviderFiles,
+  createFakeStoreFiles,
 } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
 import { createSessionController } from '../../../apps/server/src/session-control.js';
@@ -40,29 +41,24 @@ import {
   createTerminalManager,
   type TerminalManager,
 } from '../../../apps/server/src/terminal-manager.js';
+import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
+import { toMachineState } from '../../../apps/hub/src/features/fleet-state/machine-state.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
+import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
 import {
-  startClientBroadcast,
-  type ClientBroadcast,
-} from '../../../apps/hub/src/clients/client-broadcast.js';
-import { toMachineState } from '../../../apps/hub/src/clients/machine-state.js';
-import { createExponentialBackoff } from '../../../apps/hub/src/connections/backoff.js';
-import {
-  startConnectionSupervisor,
-  type ConnectionSupervisor,
-} from '../../../apps/hub/src/connections/connection-supervisor.js';
-import {
+  createPairing,
   newServerRegistrationSchema,
-  registerServer,
-} from '../../../apps/hub/src/pairing/server-registrations.js';
+} from '../../../apps/hub/src/features/pairing/pairing.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
-} from '../../../apps/hub/src/pairing/test-migrated-schema.js';
-import { createReducer, type Reducer } from '../../../apps/hub/src/state/reducer.js';
+} from '../../../apps/hub/src/db/test-migrated-schema.js';
 import {
-  createSessionControl,
-  type SessionControl,
-} from '../../../apps/hub/src/sessions/session-control.js';
+  createFleetState,
+  type FleetState,
+} from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
+import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**
@@ -132,10 +128,10 @@ interface Machine {
 }
 
 interface Harness {
-  readonly state: Reducer;
-  readonly sessions: SessionControl;
-  readonly clients: ClientBroadcast;
-  readonly connections: ConnectionSupervisor;
+  readonly state: FleetState;
+  readonly sessions: Sessions;
+  readonly clients: Clients;
+  readonly connections: Servers;
   readonly machines: ReadonlyMap<string, Machine>;
   readonly timers: FakeTimers;
 }
@@ -258,38 +254,19 @@ async function start(
   };
 
   const timers = createFakeTimers();
-  const state = createReducer({ logger });
+  const state = createFleetState({ logger });
 
-  let connections: ConnectionSupervisor | null = null;
-  const sessions = createSessionControl({
-    state,
-    connections: {
-      ask: (registrationId, instruction) =>
-        connections === null
-          ? Promise.resolve({
-              ok: false as const,
-              code: 'internal' as const,
-              problem: 'not started',
-              hold: null,
-            })
-          : connections.ask(registrationId, instruction),
-    },
-    logger,
-  });
-
-  const clients = startClientBroadcast({
-    hubId: 'hub-under-test' as never,
-    state,
-    timers,
-    logger,
-    readLayout: async () => [],
-    readPaneLayout: async () => null,
-    writePaneLayout: async () => undefined,
-    sessions,
-  });
-
-  connections = await startConnectionSupervisor({
-    database,
+  // Built before it dials, which is the same order `hub.ts` composes in: the
+  // broadcast below has to be attached to the state before the first
+  // connectivity change can reach it.
+  const connections = createServers({
+    pairing: createPairing({
+      database,
+      files: createFakeStoreFiles(),
+      ids: { newId: () => 'unused' },
+      clock,
+      logger,
+    }),
     dialer,
     hubId: 'hub-under-test' as never,
     timers,
@@ -306,6 +283,21 @@ async function start(
         reportedAt: clock.now(),
       }),
   });
+
+  const sessions = createSessions({ state, connections, logger });
+
+  const clients = createClients({
+    hubId: 'hub-under-test' as never,
+    state,
+    timers,
+    logger,
+    readLayout: async () => [],
+    readPaneLayout: async () => null,
+    writePaneLayout: async () => undefined,
+    sessions,
+  });
+
+  await connections.sync();
 
   return { state, sessions, clients, connections, machines, timers };
 }

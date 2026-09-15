@@ -1,8 +1,6 @@
-import { PROTOCOL_VERSION, type HubId } from '@agentplex/protocol';
+import type { HubId } from '@agentplex/protocol';
 import {
   HTTP_TIMEOUTS,
-  sendBytes,
-  sendJson,
   startHttpServer,
   type HttpListener,
   type Clock,
@@ -15,32 +13,26 @@ import {
   type TokenMinter,
   createWebSocketListener,
 } from '@agentplex/node-shared';
-import {
-  admitsUpgrade,
-  answerTicketRequest,
-  requestPath,
-  CLIENT_TICKET_PATH,
-  NOT_AUTHORIZED,
-} from './clients/client-auth.js';
-import { createClientTickets } from './clients/client-tickets.js';
-import { startClientBroadcast, type ClientBroadcast } from './clients/client-broadcast.js';
-import {
-  startConnectionSupervisor,
-  type ConnectionSupervisor,
-} from './connections/connection-supervisor.js';
 import type { StoreFileSystem } from '@agentplex/providers';
-import type { InstructionOutcome, SessionInstruction } from './connections/server-connection.js';
-import { startBeaconListener, type BeaconSource } from './discovery/beacon-listener.js';
-import { createSessionControl } from './sessions/session-control.js';
 import type { Database } from './db/database.js';
 import { loadMigrations, type MigrationFileSystem } from './db/migration-files.js';
 import { migrate } from './db/migrations.js';
+import {
+  createClientAuth,
+  requestPath,
+  NOT_AUTHORIZED,
+} from './features/client-auth/client-auth.js';
+import { createCatalogue } from './features/catalogue/catalogue.js';
+import { createClients, type Clients } from './features/clients/clients.js';
+import { createDiscovery, type BeaconSource } from './features/discovery/discovery.js';
+import { createFleetState, type FleetState } from './features/fleet-state/fleet-state.js';
+import { createPairing, type LocalServerEntry } from './features/pairing/pairing.js';
+import { createPaneLayout } from './features/pane-layout/pane-layout.js';
+import { createServers, type Servers } from './features/servers/servers.js';
+import { createSessions } from './features/sessions/sessions.js';
+import { createWeb, type WebAssetFileSystem } from './features/web/web.js';
+import { createHubRoutes } from './http/routes.js';
 import { ensureHubIdentity } from './hub-identity.js';
-import { registerLocalServer, type LocalServerEntry } from './pairing/local-server.js';
-import { readLayout } from './layout/node-tree.js';
-import { readPaneLayout, writePaneLayout } from './layout/pane-layout.js';
-import { createReducer, type Reducer } from './state/reducer.js';
-import { answerWebAssetRequest, SHELL_FILE, type WebAssetFileSystem } from './web/web-assets.js';
 
 /**
  * The hub role.
@@ -60,10 +52,11 @@ import { answerWebAssetRequest, SHELL_FILE, type WebAssetFileSystem } from './we
  * ever carries the URL it came in on -- see `client-auth.ts` for why the
  * distinction is not this hub's to publish.
  *
- * The client the browser runs is served from the same handler, last, after
- * every route this hub owns. One origin for the app, the socket and the MCP
- * endpoint is a requirement rather than packaging convenience --
- * `web/web-assets.ts` carries that argument.
+ * What is left in this file is composition and nothing else. Every part of the
+ * hub is a feature behind its own entry file, and this is the one place that
+ * knows the concrete set: which seam each of them gets, which of them is handed
+ * to which, and in what order they are allowed to start. The route chain moved
+ * to `http/routes.ts`, which is where the argument for one origin now lives.
  */
 
 export interface HubDependencies {
@@ -147,23 +140,23 @@ export interface Hub {
   readonly port: number;
   /**
    * The paired servers and what the hub can reach. Exposed because it is the
-   * live half of the hub's state: the reducer reads it, and a listing that
+   * live half of the hub's state: the fleet state reads it, and a listing that
    * shows a store has to be able to say whether anybody can still reach it.
    */
-  readonly connections: ConnectionSupervisor;
+  readonly connections: Servers;
   /**
    * Everything every server has reported, merged: one store per volume, one
    * session list under it, and the servers attached to it. The read surface
    * the client broadcast is built on, and the only place a session row is
    * assembled.
    */
-  readonly state: Reducer;
+  readonly state: FleetState;
   /**
    * Every attached client, and the pipeline that keeps them all looking at the
    * same thing. An authenticated socket is handed to `attach` and becomes a
    * client; nothing else in the hub sends a client anything.
    */
-  readonly clients: ClientBroadcast;
+  readonly clients: Clients;
   stop(): Promise<void>;
 }
 
@@ -198,79 +191,36 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
 
   const hubId = await ensureHubIdentity(database, ids, clock);
 
-  // Before the supervisor reads the pairing table, so that the row a first boot
+  const pairing = createPairing({ database, files, ids, clock, logger });
+
+  // Before anything reads the pairing table, so that the row a first boot
   // writes is dialled on that boot and not the next one. After the migrations,
   // because it is a row in a table they make.
-  await registerLocalServer(localServer, { database, files, ids, clock, logger });
+  await pairing.registerLocalServer(localServer);
 
-  // Started before the port is opened, and not awaited past its first read of
-  // the pairing table. A server that is switched off must not delay the hub
-  // coming up: it is marked stale, dialled again on a backoff, and the hub
-  // serves in the meantime with its rows labelled rather than absent.
-  // Built before the supervisor, because the supervisor starts dialling as
-  // soon as it exists and a connection that came up before there was anywhere
+  // Built before the servers feature, because that starts dialling the moment
+  // it is told to sync and a connection that came up before there was anywhere
   // to put it would be a state that is wrong until the next change.
-  const state = createReducer({ logger });
+  const state = createFleetState({ logger });
 
   // Started before anything is served, because a machine that announced itself
   // while the hub was coming up should be on the pairing screen when somebody
   // opens it, rather than up to five seconds later. Nothing it hears is
-  // written down: candidates live in the reducer's own collection beside the
-  // paired servers and never among them, and a hub that restarts knows nothing
-  // about the network until it is announced to again -- which is the honest
-  // state, because a claim read back off a disk is a claim nobody made today.
-  const beacons = startBeaconListener({
-    source: discovery,
-    clock,
-    timers,
-    logger,
-  });
+  // written down: candidates live in the fleet state's own collection beside
+  // the paired servers and never among them, and a hub that restarts knows
+  // nothing about the network until it is announced to again -- which is the
+  // honest state, because a claim read back off a disk is a claim nobody made
+  // today.
+  const beacons = createDiscovery({ source: discovery, clock, timers, logger });
   beacons.subscribe((candidates) => void state.applyCandidates(candidates));
 
-  // Subscribed before the supervisor exists, so that the first connectivity
-  // change has somewhere to go. A client that attached a moment later would
-  // still see it -- the state is whole and read at the moment it is sent -- but
-  // a broadcast that missed changes it was running for would be a pipeline
-  // whose correctness depended on start order.
-  // The layout is read from the database per request rather than held in
-  // memory beside the reducer's state. It is durable and the state is not:
-  // where the user put things survives a restart, and which sessions are
-  // reachable this second does not.
-  // The supervisor does not exist yet and the broadcast must be built before it
-  // does, so what the session control is given is a way to reach whichever
-  // supervisor this hub ends up with rather than the supervisor itself. Nothing
-  // can ask through it before the assignment below: an instruction comes from
-  // an attached client, and no port is open until both exist.
-  let connections: ConnectionSupervisor | null = null;
-  const sessions = createSessionControl({
-    state,
-    connections: {
-      ask: (registrationId, instruction: SessionInstruction): Promise<InstructionOutcome> =>
-        connections === null
-          ? Promise.resolve({
-              ok: false,
-              code: 'internal',
-              problem: 'the hub is still starting',
-              hold: null,
-            })
-          : connections.ask(registrationId, instruction),
-    },
-    logger,
-  });
-
-  const clients = startClientBroadcast({
-    hubId,
-    state,
-    timers,
-    logger,
-    readLayout: () => readLayout(database),
-    readPaneLayout: () => readPaneLayout(database),
-    writePaneLayout: (layout) => writePaneLayout(database, layout, clock),
-    sessions,
-  });
-
-  connections = await startConnectionSupervisor({
-    database,
+  // Constructed here and dialling nothing yet. That is what the split between
+  // building this and calling `sync` below buys: everything that has to see a
+  // connectivity change -- the fleet state, and the broadcast attached to it --
+  // exists before the first change can happen, and no part of this file holds a
+  // reference that is null for part of a startup.
+  const servers = createServers({
+    pairing,
     dialer,
     hubId,
     timers,
@@ -290,10 +240,41 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       }),
   });
 
+  const sessions = createSessions({ state, connections: servers, logger });
+
+  // The tree and the pane arrangement are read from the database per request
+  // rather than held in memory beside the fleet state. They are durable and it
+  // is not: where the user put things survives a restart, and which sessions
+  // are reachable this second does not.
+  const catalogue = createCatalogue({ database, ids, clock });
+  const paneLayout = createPaneLayout({ database, clock });
+
+  // Subscribed before the first server is dialled, so that the first
+  // connectivity change has somewhere to go. A client that attached a moment
+  // later would still see it -- the state is whole and read at the moment it is
+  // sent -- but a broadcast that missed changes it was running for would be a
+  // pipeline whose correctness depended on start order.
+  const clients = createClients({
+    hubId,
+    state,
+    timers,
+    logger,
+    readLayout: () => catalogue.readLayout(),
+    readPaneLayout: () => paneLayout.read(),
+    writePaneLayout: (layout) => paneLayout.write(layout),
+    sessions,
+  });
+
+  // Not awaited past its first read of the pairing table, and started before
+  // the port is opened. A server that is switched off must not delay the hub
+  // coming up: it is marked stale, dialled again on a backoff, and the hub
+  // serves in the meantime with its rows labelled rather than absent.
+  await servers.sync();
+
   // The short-lived half of client auth. Nothing durable: a ticket outliving a
   // restart would be a credential the hub could not count the uses of, and the
   // client holds the long-lived token it can always exchange for another.
-  const tickets = createClientTickets({ tokens, clock });
+  const clientAuth = createClientAuth({ token: clientToken, tokens, clock });
 
   // A socket is admitted by its ticket and then handed straight to the
   // broadcast. There is no third state: either the ticket was good and this is
@@ -304,7 +285,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // nothing it can act on, and telling the user "not authorized" is the point.
   const sockets = createWebSocketListener({
     onConnection: (socket, request) => {
-      if (!admitsUpgrade(request.url, tickets)) {
+      if (!clientAuth.admitsUpgrade(request.url ?? '')) {
         // The path and nothing else. The URL carries the ticket, so logging the
         // request target would be logging the credential.
         logger.warn('client refused', { path: requestPath(request.url) });
@@ -315,50 +296,20 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     },
   });
 
+  const web = createWeb({ files: webAssets, logger });
+
   // Asked once, before the port is open, so that a hub with nothing to serve
   // says so in the first lines of its log rather than in a 503 nobody is
   // watching for. It is a warning and not a failure: this hub still owns the
   // database, still dials every paired server and still answers a health
   // check, and refusing to start would take a fleet down over a directory
   // that did not get copied.
-  await reportClientBuild(webAssets, logger);
+  await web.reportBuild();
 
   const listener: HttpListener = await startHttpServer(
     port,
     host,
-    (request, response) => {
-      const path = requestPath(request.url);
-
-      if (path === '/health') {
-        sendJson(response, 200, { status: 'ok', role: 'hub', protocolVersion: PROTOCOL_VERSION });
-        return;
-      }
-
-      if (path === CLIENT_TICKET_PATH) {
-        const answer = answerTicketRequest(
-          { method: request.method, authorization: request.headers.authorization },
-          { token: clientToken, tickets },
-        );
-        if (answer.status === 401) logger.warn('client refused', { path });
-        sendJson(response, answer.status, answer.body);
-        return;
-      }
-
-      // Last, and only last. The hub's own routes are matched above against
-      // literal paths, so nothing that ends up in the web root can take one
-      // over -- which is what lets the PWA and the authenticated endpoints
-      // share an origin without the origin becoming a place to negotiate.
-      void answerWebAssetRequest({ method: request.method, path }, webAssets).then(
-        (answer) => sendBytes(response, answer),
-        (error: unknown) => {
-          // A read that failed for a reason that is not absence. The path is
-          // safe to log -- it is the normalized one, with the query gone --
-          // and this is a fault rather than a missing file, so it says 500.
-          logger.error('client asset unreadable', { path, error: String(error) });
-          sendJson(response, 500, { error: 'internal' });
-        },
-      );
-    },
+    createHubRoutes({ clientAuth, web, logger }),
     HTTP_TIMEOUTS,
     // The same port the health check is on. One inbound port per process is the
     // promise both roles make to whoever opens the firewall, and the client
@@ -366,18 +317,16 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     sockets.onUpgrade,
   );
 
-  const supervisor = connections;
-
   logger.info('hub listening', {
     port: listener.port,
     hubId,
-    servers: supervisor.snapshot().length,
+    servers: servers.snapshot().length,
   });
 
   return {
     hubId,
     port: listener.port,
-    connections: supervisor,
+    connections: servers,
     state,
     clients,
     async stop() {
@@ -397,32 +346,9 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       sockets.close();
       // Then outbound. The dials are what hold sockets open and what would
       // otherwise still be retrying while the listener is closing.
-      await supervisor.stop();
+      await servers.stop();
       await listener.close();
       logger.info('hub stopped');
     },
   };
-}
-
-/**
- * Says, at startup, whether there is a client to serve.
- *
- * The directory is named here and nowhere a browser can read it. An operator
- * looking at a hub that answers 503 needs to know which path it looked in;
- * an unauthenticated visitor needs to know that there is no client, and
- * nothing about this machine's filesystem.
- */
-async function reportClientBuild(webAssets: WebAssetFileSystem, logger: Logger): Promise<void> {
-  try {
-    const shell = await webAssets.read(SHELL_FILE);
-    if (shell === null) {
-      logger.warn('no client build to serve', { from: webAssets.root });
-      return;
-    }
-    logger.info('serving the client', { from: webAssets.root });
-  } catch (error) {
-    // A web root that cannot be read at all. Still not a reason not to start:
-    // the same 503 covers it, and this is the line that explains it.
-    logger.warn('client build unreadable', { from: webAssets.root, error: String(error) });
-  }
 }

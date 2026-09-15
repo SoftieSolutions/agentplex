@@ -10,9 +10,9 @@ import type { StoreFileSystem } from '@agentplex/providers';
 import type { HubConfig } from './config.js';
 import type { Database } from './db/database.js';
 import type { MigrationFileSystem } from './db/migration-files.js';
-import type { BeaconSource } from './discovery/beacon-listener.js';
+import type { BeaconSource } from './features/discovery/discovery.js';
 import { startHub, type Hub } from './hub.js';
-import type { WebAssetFileSystem } from './web/web-assets.js';
+import type { WebAssetFileSystem } from './features/web/web.js';
 
 /**
  * Composition of the hub from a configuration.

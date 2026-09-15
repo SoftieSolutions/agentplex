@@ -23,8 +23,8 @@ import {
 import {
   handshakeWithServer,
   type DialTarget,
-} from '../../../apps/hub/src/pairing/server-handshake.js';
-import { serverAddressSchema } from '../../../apps/hub/src/pairing/server-address.js';
+} from '../../../apps/hub/src/features/servers/server-handshake.js';
+import { serverAddressSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**

@@ -24,8 +24,8 @@ import { createLogger } from '@agentplex/node-shared';
 import {
   handshakeWithServer,
   type DialTarget,
-} from '../../../apps/hub/src/pairing/server-handshake.js';
-import type { ServerAddress } from '../../../apps/hub/src/pairing/server-address.js';
+} from '../../../apps/hub/src/features/servers/server-handshake.js';
+import type { ServerAddress } from '../../../apps/hub/src/features/pairing/pairing.js';
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
