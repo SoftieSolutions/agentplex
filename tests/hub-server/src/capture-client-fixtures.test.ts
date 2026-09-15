@@ -138,7 +138,15 @@ function labelFor(text: string): string {
   if (!parsed.ok) throw new Error(`the hub sent something unreadable: ${parsed.reason}`);
   const frame = parsed.value;
   if (frame.type === 'refusal') {
-    return frame.code === 'protocol-version' ? 'refusalProtocolVersion' : 'refusal';
+    if (frame.code === 'protocol-version') return 'refusalProtocolVersion';
+    // A refusal that names a holder is a different answer from "no", and the
+    // two kinds of holder are different again: one leads somewhere -- stop the
+    // machine it names -- and one is the reason there is nowhere to lead. A
+    // client draws all three, so all three are captured apart.
+    if (frame.holder !== null) {
+      return frame.holder.stoppable ? 'refusalHeldStoppable' : 'refusalHeldBusy';
+    }
+    return 'refusal';
   }
   if (frame.type === 'machine-state') {
     // Labelled by what the state holds, so the web tests get a captured state
@@ -155,6 +163,7 @@ function labelFor(text: string): string {
     ['layout', 'layout'],
     ['pane-layout-saved', 'paneLayoutSaved'],
     ['session-started', 'sessionStarted'],
+    ['session-stopped', 'sessionStopped'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -756,6 +765,120 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     if (sessionStarted === undefined) throw new Error('the start was not answered');
     await singleHub.cleanup();
 
+    // A machine holding one session it will stop and one it will not, for the
+    // three answers a holder produces and that a client has to draw: a stop
+    // that lands, a stop refused because the holder is mid-turn, and a start
+    // refused because the session is already running somewhere that can be
+    // stopped. The last is the one the `holder` field exists for -- "it is
+    // running over here" is a different answer from "no", and the way out is
+    // named rather than left for the user to find.
+    const held = new Map<string, Machine>([
+      [
+        'mbp-robert.example',
+        {
+          serverId: 'server-mbp',
+          providers: [readyProvider('claude'), readyProvider('codex')],
+          stores: [
+            {
+              storeId: storeIdSchema.parse('store-agentplex'),
+              path: '/Users/robert/code/agentplex',
+            },
+          ],
+          reports: [
+            {
+              storeId: storeIdSchema.parse('store-agentplex'),
+              sessions: [
+                descriptor(
+                  'store-agentplex',
+                  'session-fix-auth',
+                  'claude',
+                  'working',
+                  START - 12 * MINUTE,
+                  '/Users/robert/code/agentplex',
+                  'fix-auth-refresh',
+                ),
+                descriptor(
+                  'store-agentplex',
+                  'session-migrate-db',
+                  'codex',
+                  'awaiting-permission',
+                  START - 3 * MINUTE,
+                  '/Users/robert/code/agentplex/db',
+                  'migrate-db-v9',
+                ),
+              ],
+              holding: [hold('session-fix-auth', false), hold('session-migrate-db', true)],
+            },
+          ],
+          // The controller answers both a start and a stop with this, and only
+          // the stop gets that far: the two refusals below are the hub's, taken
+          // before any machine is instructed.
+          startOutcome: {
+            ok: true,
+            storeId: storeIdSchema.parse('store-agentplex'),
+            sessionId: null,
+            terminalId: 'terminal-mbp-2',
+          },
+        },
+      ],
+    ]);
+    const heldHub = await startFleetHub(
+      held,
+      [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
+      new Map(),
+    );
+    await until(
+      () =>
+        heldHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sessionCount(heldHub.hub) === 2,
+      'the holding machine to connect and report',
+    );
+    const stopper = await openClient(heldHub.hub);
+    stopper.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await stopper.framesReceived(2);
+    stopper.send({
+      type: 'session-stop',
+      id: 2,
+      storeId: 'store-agentplex',
+      sessionId: 'session-fix-auth',
+    });
+    await until(
+      () => stopper.received.some((text) => labelFor(text) === 'refusalHeldBusy'),
+      'the mid-turn stop to be refused',
+    );
+    stopper.send({
+      type: 'session-start',
+      id: 3,
+      storeId: 'store-agentplex',
+      sessionId: 'session-migrate-db',
+      provider: 'codex',
+      prompt: null,
+      server: null,
+    });
+    await until(
+      () => stopper.received.some((text) => labelFor(text) === 'refusalHeldStoppable'),
+      'the start on a held session to be refused',
+    );
+    stopper.send({
+      type: 'session-stop',
+      id: 4,
+      storeId: 'store-agentplex',
+      sessionId: 'session-migrate-db',
+    });
+    await until(
+      () => stopper.received.some((text) => labelFor(text) === 'sessionStopped'),
+      'the stop to land',
+    );
+    const fromStopper = (label: string): string => {
+      const text = stopper.received.find((candidate) => labelFor(candidate) === label);
+      if (text === undefined) throw new Error(`the hub never sent a ${label}`);
+      return text;
+    };
+    const refusalHeldBusy = fromStopper('refusalHeldBusy');
+    const refusalHeldStoppable = fromStopper('refusalHeldStoppable');
+    const sessionStopped = fromStopper('sessionStopped');
+    await heldHub.cleanup();
+
     // A shared volume: two machines with the same store mounted. This is the
     // state in which the new-session server override is drawn -- more than one
     // connected machine could run the store -- and, degraded, the state in
@@ -917,6 +1040,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStateStale', machineStateStale);
     captured.set('machineStateSingle', machineStateSingle);
     captured.set('sessionStarted', sessionStarted);
+    captured.set('sessionStopped', sessionStopped);
+    captured.set('refusalHeldBusy', refusalHeldBusy);
+    captured.set('refusalHeldStoppable', refusalHeldStoppable);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
     captured.set('machineStateDiscovered', machineStateDiscovered);

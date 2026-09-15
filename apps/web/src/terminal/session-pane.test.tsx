@@ -3,7 +3,8 @@ import { sessionRefSchema } from '@agentplex/protocol';
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createFakeSocketFactory } from '../store/fake-socket.js';
+import { createFakeSocketFactory, type FakeSocketFactory } from '../store/fake-socket.js';
+import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
@@ -14,8 +15,9 @@ import { FindBar } from './find-bar.js';
 import { SessionPane } from './session-pane.js';
 
 /**
- * The find bar as the user meets it: opened by the chord on a real pane,
- * driven through the fake emulator.
+ * The pane's own chrome as the user meets it: the find bar, opened by the
+ * chord on a real pane and driven through the fake emulator, and the stop in
+ * the header, drawn off a captured hub state.
  *
  * The fake is the point. What the bar owes anybody is that the question it
  * asks is the question that was typed and the answer it draws is the answer
@@ -52,13 +54,19 @@ function installMatchMedia(): void {
  * file asserts on a frame.
  */
 function buildStore(): HubStore {
+  return connectableStore().store;
+}
+
+/** The same store, with the socket kept so a test can play the hub on it. */
+function connectableStore(): { store: HubStore; sockets: FakeSocketFactory } {
   const sockets = createFakeSocketFactory();
-  return createHubStore({
+  const store = createHubStore({
     fetchTicket: () => Promise.resolve('ticket-1'),
     createSocket: (ticket) => sockets.create(ticket),
     timers: createFakeTimers(),
     frameIds: createFrameIdCounter(),
   });
+  return { store, sockets };
 }
 
 /** Lets the ticket promise inside `connect` settle. */
@@ -78,7 +86,7 @@ function typeInto(input: HTMLInputElement, text: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-describe('the find bar in a session pane', () => {
+describe('a session pane', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
   let emulators: ReturnType<typeof createFakeEmulatorFactory>;
@@ -354,6 +362,58 @@ describe('the find bar in a session pane', () => {
     });
 
     expect(findInput()).toBeNull();
+  });
+
+  /**
+   * A pane on a store that has been walked through to a captured hub state,
+   * so the header draws off the same holders a real fleet published.
+   */
+  async function mountPaneOn(sessionId: string): Promise<void> {
+    const { store, sockets } = connectableStore();
+    await mount(
+      <SessionPane
+        sessionRef={sessionRefSchema.parse({ storeId: 'store-agentplex', sessionId })}
+        store={store}
+        emulators={emulators}
+      />,
+    );
+    const socket = sockets.sockets[0];
+    if (socket === undefined) throw new Error('the pane dialled nothing');
+    await act(() => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(hubFrames.machineStatePopulated);
+    });
+  }
+
+  function stopButton(): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>('button[aria-label^="stop "]');
+  }
+
+  it('offers a stop in the header when the holder says the session can be stopped', async () => {
+    await mountPaneOn('session-migrate-db');
+
+    expect(stopButton()?.getAttribute('aria-label')).toBe('stop session-migrate-db');
+  });
+
+  it('offers none for a holder that is mid-turn', async () => {
+    // Working, held, and `stoppable: false`: the one case where the status
+    // would say yes and the published fact says no.
+    await mountPaneOn('session-fix-auth');
+
+    expect(stopButton()).toBeNull();
+  });
+
+  it('offers none for a session nothing is running', async () => {
+    await mountPaneOn('session-spike-wasm');
+
+    expect(stopButton()).toBeNull();
+  });
+
+  it('offers none for a session the state does not describe at all', async () => {
+    await mountPaneOn('session-that-is-not-there');
+
+    expect(stopButton()).toBeNull();
   });
 
   it('says what it could not search when the pane has dropped output', async () => {

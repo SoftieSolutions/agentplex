@@ -1,4 +1,5 @@
 import type { MachineState, SessionRef, SessionRow, SessionStatus } from '@agentplex/protocol';
+import { serverLabel } from '../sessions/session-list-model.js';
 import type { HubSnapshot } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
 import { EMULATOR_SCROLLBACK_LINES, type SearchResults } from './emulator.js';
@@ -45,9 +46,7 @@ export function findSessionRow(state: MachineState | null, ref: SessionRef): Ses
  * is. Falls back to the raw registration id rather than hiding the fact.
  */
 export function machineLabel(state: MachineState, row: SessionRow): string {
-  const registrationId = row.holder?.server ?? row.source;
-  const server = state.servers.find((candidate) => candidate.registrationId === registrationId);
-  return server?.label ?? registrationId;
+  return serverLabel(state, row.holder?.server ?? row.source);
 }
 
 /**

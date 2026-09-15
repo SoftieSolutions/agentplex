@@ -1,10 +1,11 @@
 import { useEffect, useState, type JSX } from 'react';
 import { storeIdSchema, serverRegistrationIdSchema } from '@agentplex/protocol';
-import type { StoreId } from '@agentplex/protocol';
+import type { SessionRef, StoreId } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Button, Group, Modal, Select, Stack, Text, Textarea } from '../ui/components.js';
 import { colorForTone, type Scheme } from '../ui/tokens.js';
+import { StopButton } from './stop-button.js';
 import {
   buildStart,
   deliveryWords,
@@ -14,6 +15,12 @@ import {
   submitBlockedReason,
   type StartFollowUp,
 } from './new-session-model.js';
+
+/** A start this form is waiting on, and the session it named (usually none). */
+interface PendingStart {
+  readonly outcome: ReturnType<HubStore['sendCommand']>;
+  readonly asked: SessionRef | null;
+}
 
 /**
  * The new-session form, in the mockup's dialog language (turn 7): a store, an
@@ -51,8 +58,16 @@ export function NewSessionForm({
   const [storeChoice, setStoreChoice] = useState<string | null>(null);
   const [serverChoice, setServerChoice] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
-  /** The id of the start awaiting an answer, or `null` while none is. */
-  const [pending, setPending] = useState<ReturnType<HubStore['sendCommand']> | null>(null);
+  /**
+   * The start awaiting an answer, or `null` while none is.
+   *
+   * The session it named travels with it, because a refusal that names a
+   * holder is answered about that session and a stop has to be aimed at it.
+   * Today it is always `null` -- this form only starts new sessions -- and it
+   * is carried rather than assumed so the day a resume sends one, the refusal
+   * leads somewhere instead of only saying no.
+   */
+  const [pending, setPending] = useState<PendingStart | null>(null);
   const [rejected, setRejected] = useState<string | null>(null);
 
   const state = snapshot.machineState;
@@ -72,9 +87,15 @@ export function NewSessionForm({
 
   const blocked = submitBlockedReason(snapshot.phase, stores, chosenStore);
   const followUp: StartFollowUp | null =
-    pending === null || !pending.accepted
+    pending === null || !pending.outcome.accepted
       ? null
-      : startFollowUp(pending.id, snapshot.lastStarted, snapshot.lastRefusal, state);
+      : startFollowUp(
+          pending.outcome.id,
+          snapshot.lastStarted,
+          snapshot.lastRefusal,
+          state,
+          pending.asked,
+        );
 
   const paneHash = followUp?.kind === 'navigate' ? followUp.hash : null;
   // useEffect, justified: entering the pane route is an imperative browser
@@ -102,20 +123,29 @@ export function NewSessionForm({
   function submit(): void {
     if (chosenStore === null) return;
     setRejected(null);
-    const outcome = store.sendCommand(buildStart(chosenStore, chosenServer, prompt));
+    const command = buildStart(chosenStore, chosenServer, prompt);
+    const outcome = store.sendCommand(command);
     if (!outcome.accepted) {
       setRejected(outcome.reason);
       setPending(null);
       return;
     }
-    setPending(outcome);
+    setPending({
+      outcome,
+      asked:
+        command.type === 'session-start' && command.sessionId !== null
+          ? { storeId: command.storeId, sessionId: command.sessionId }
+          : null,
+    });
   }
 
   const waiting = followUp?.kind === 'waiting';
   const started = followUp?.kind === 'started' ? followUp.words : null;
-  const refused = followUp?.kind === 'refused' ? followUp.words : null;
+  const refusal = followUp?.kind === 'refused' ? followUp : null;
   const queued =
-    pending !== null && pending.accepted && waiting ? deliveryWords(pending.delivery) : null;
+    pending !== null && pending.outcome.accepted && waiting
+      ? deliveryWords(pending.outcome.delivery)
+      : null;
 
   return (
     <Modal opened={opened} onClose={close} title="New session" centered>
@@ -184,10 +214,30 @@ export function NewSessionForm({
             {rejected}
           </Text>
         )}
-        {refused === null ? null : (
-          <Text fz={13} style={{ color: colorForTone('blocked', scheme) }}>
-            {refused}
-          </Text>
+        {refusal === null ? null : (
+          <Stack gap={6}>
+            <Text fz={13} style={{ color: colorForTone('blocked', scheme) }}>
+              {refusal.words}
+            </Text>
+            {refusal.held === null ? null : (
+              // The machine, named by this client's own lookup rather than read
+              // out of the hub's sentence, and the way out beside it. The
+              // button draws itself only for a holder that can be stopped.
+              <Group gap={8} align="center">
+                <Text fz={12} c="dimmed">
+                  held by {refusal.held.machine}
+                </Text>
+                {refusal.held.session === null ? null : (
+                  <StopButton
+                    store={store}
+                    sessionRef={refusal.held.session}
+                    holder={refusal.held.holder}
+                    scheme={scheme}
+                  />
+                )}
+              </Group>
+            )}
+          </Stack>
         )}
         {started === null ? null : (
           <Text fz={13} style={{ color: colorForTone('running', scheme) }}>

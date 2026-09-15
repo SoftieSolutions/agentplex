@@ -1,6 +1,8 @@
 import type {
   MachineState,
   Provider,
+  ServerRegistrationId,
+  SessionHolder,
   SessionRef,
   SessionStatus,
   StoreId,
@@ -45,6 +47,15 @@ export interface SessionListItem {
   readonly summary: string;
   readonly updatedAt: number;
   readonly storeId: StoreId;
+  /**
+   * The server running this session right now, or `null` when nobody is.
+   *
+   * Carried through rather than re-derived, because `stoppable` on it is the
+   * server's own answer about this process on this machine at this moment, and
+   * nothing here can work it out from a status: a session can be `idle` and
+   * held, and `working` and held by nobody.
+   */
+  readonly holder: SessionHolder | null;
 }
 
 /**
@@ -86,16 +97,31 @@ export function statusWords(status: SessionStatus): string {
   }
 }
 
+/**
+ * What to call a machine: its label, or the raw registration id when the frame
+ * names a server its own `servers` list does not describe -- a truthful name
+ * over a blank.
+ *
+ * One lookup, exported, because four surfaces name machines now -- the card,
+ * the pane header, the machine a start landed on, the holder a refusal names --
+ * and four copies of the same `find` are four chances for one screen to call a
+ * machine something the screen beside it does not.
+ */
+export function serverLabel(state: MachineState, registrationId: ServerRegistrationId): string {
+  const server = state.servers.find((view) => view.registrationId === registrationId);
+  return server?.label ?? registrationId;
+}
+
 /** Flattens every store's sessions into list items, in the order the hub sent. */
 export function listSessions(state: MachineState): readonly SessionListItem[] {
-  const labels = new Map(state.servers.map((server) => [server.registrationId, server.label]));
   const items: SessionListItem[] = [];
   for (const store of state.stores) {
     for (const row of store.sessions) {
       const { descriptor } = row;
       const machineId = row.holder === null ? row.source : row.holder.server;
+      const ref = { storeId: descriptor.storeId, sessionId: descriptor.sessionId };
       items.push({
-        ref: { storeId: descriptor.storeId, sessionId: descriptor.sessionId },
+        ref,
         key: JSON.stringify([descriptor.storeId, descriptor.sessionId]),
         name: descriptor.title ?? descriptor.sessionId,
         provider: descriptor.provider,
@@ -103,10 +129,11 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         tone: toneForStatus(descriptor.status),
         needsYou: wantsHuman(descriptor.status) && row.reachable,
         reachable: row.reachable,
-        machine: labels.get(machineId) ?? machineId,
+        machine: serverLabel(state, machineId),
         summary: descriptor.cwd ?? statusWords(descriptor.status),
         updatedAt: descriptor.updatedAt,
         storeId: descriptor.storeId,
+        holder: row.holder,
       });
     }
   }

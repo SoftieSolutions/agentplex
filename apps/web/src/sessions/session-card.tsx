@@ -1,8 +1,11 @@
 import { type JSX } from 'react';
 import { Box, Group, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import type { HubStore } from '../store/hub-store.js';
+import { sessionHash } from '../terminal/session-route.js';
 import { ageLabel, type SessionListItem } from './session-list-model.js';
 import { SessionSummaryLine } from './session-summary-line.js';
+import { StopButton } from './stop-button.js';
 
 /**
  * One compact session card, from the approved mockup (turn 7, screens 7a/7e):
@@ -12,15 +15,25 @@ import { SessionSummaryLine } from './session-summary-line.js';
  * The Allow/Deny affordances the mockup shows belong to the approvals
  * milestone and are deliberately absent: an approval that cannot be granted
  * yet must not be drawn as if it could.
+ *
+ * The whole card opens the session, as a real link to the pane's hash address
+ * rather than an `onClick`: an anchor is what the browser already makes
+ * keyboard reachable, what a middle click opens in a second tab, and what a
+ * hover shows the destination of. The link is a stretched overlay rather than
+ * a wrapper around the content, because the stop button is inside the card and
+ * a button nested inside an anchor is neither valid nor separately operable --
+ * the overlay covers the card and the button sits above it.
  */
 export interface SessionCardProps {
   readonly item: SessionListItem;
   readonly scheme: Scheme;
   /** The moment the ages on this render are measured against. */
   readonly now: number;
+  /** The page's one hub store, for the stop this card may offer. */
+  readonly store: HubStore;
 }
 
-export function SessionCard({ item, scheme, now }: SessionCardProps): JSX.Element {
+export function SessionCard({ item, scheme, now, store }: SessionCardProps): JSX.Element {
   const border = item.needsYou ? colorForTone('needs-you', scheme) : colorForRole('border', scheme);
   const muted = colorForRole('textMuted', scheme);
   const age = ageLabel(now, item.updatedAt);
@@ -29,6 +42,7 @@ export function SessionCard({ item, scheme, now }: SessionCardProps): JSX.Elemen
       component="article"
       bg={colorForRole('surface', scheme)}
       style={{
+        position: 'relative',
         border: `1px solid ${border}`,
         borderRadius: 10,
         padding: '11px 12px',
@@ -38,6 +52,12 @@ export function SessionCard({ item, scheme, now }: SessionCardProps): JSX.Elemen
         minWidth: 0,
       }}
     >
+      <Box
+        component="a"
+        href={sessionHash(item.ref)}
+        aria-label={`open ${item.name}`}
+        style={{ position: 'absolute', inset: 0, borderRadius: 10 }}
+      />
       <Group gap={7} wrap="nowrap">
         <Box
           style={{
@@ -56,24 +76,31 @@ export function SessionCard({ item, scheme, now }: SessionCardProps): JSX.Elemen
         </Text>
       </Group>
       <SessionSummaryLine text={item.summary} scheme={scheme} />
-      <Text fz={11} c={muted}>
-        {item.provider} {'·'}{' '}
-        {item.needsYou ? (
-          <Text component="span" fz={11} c={colorForTone('needs-you', scheme)}>
-            waiting {age}
-          </Text>
-        ) : (
-          age
-        )}
-        {item.reachable ? null : (
-          // The row stays, labelled: an unreachable session is a fact with an
-          // age on it, not a session to hide and not one to show as live.
-          <Text component="span" fz={11} c={muted}>
-            {' '}
-            {'·'} unreachable
-          </Text>
-        )}
-      </Text>
+      <Group gap={8} wrap="nowrap" justify="space-between" align="center">
+        <Text fz={11} c={muted}>
+          {item.provider} {'·'}{' '}
+          {item.needsYou ? (
+            <Text component="span" fz={11} c={colorForTone('needs-you', scheme)}>
+              waiting {age}
+            </Text>
+          ) : (
+            age
+          )}
+          {item.reachable ? null : (
+            // The row stays, labelled: an unreachable session is a fact with an
+            // age on it, not a session to hide and not one to show as live.
+            <Text component="span" fz={11} c={muted}>
+              {' '}
+              {'·'} unreachable
+            </Text>
+          )}
+        </Text>
+        {/* Above the link overlay, so the button is the button. It renders
+            nothing at all unless the holder says this session can be stopped. */}
+        <Box style={{ position: 'relative', flexShrink: 0 }}>
+          <StopButton store={store} sessionRef={item.ref} holder={item.holder} scheme={scheme} />
+        </Box>
+      </Group>
     </Box>
   );
 }

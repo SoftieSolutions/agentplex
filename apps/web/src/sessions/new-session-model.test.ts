@@ -4,6 +4,7 @@ import {
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
+  sessionRefSchema,
   storeIdSchema,
   type MachineState,
 } from '@agentplex/protocol';
@@ -32,6 +33,21 @@ function stateFrom(text: string): MachineState {
     throw new Error('the fixture is not a machine-state frame');
   }
   return parsed.value.state;
+}
+
+/** A captured refusal, as the store would put it in a snapshot. */
+function refusalFrom(text: string): RefusalView {
+  const parsed = parseTextFrame(parseHubFrame, text);
+  if (!parsed.ok || parsed.value.type !== 'refusal') {
+    throw new Error('the fixture is not a refusal frame');
+  }
+  const frame = parsed.value;
+  return {
+    replyTo: frame.replyTo,
+    code: frame.code,
+    message: frame.message,
+    holder: frame.holder,
+  };
 }
 
 /** The captured session-started reply, as the store would put it in a snapshot. */
@@ -161,12 +177,12 @@ describe('the follow-up to a start', () => {
   const started = startedFrom(hubFrames.sessionStarted);
 
   it('waits while no answer names the command', () => {
-    expect(startFollowUp(started.replyTo, null, null, single)).toEqual({ kind: 'waiting' });
+    expect(startFollowUp(started.replyTo, null, null, single, null)).toEqual({ kind: 'waiting' });
   });
 
   it("ignores an answer to somebody else's command", () => {
     const other = frameIdSchema.parse(99);
-    expect(startFollowUp(other, started, null, single)).toEqual({ kind: 'waiting' });
+    expect(startFollowUp(other, started, null, single, null)).toEqual({ kind: 'waiting' });
   });
 
   it('a fresh spawn is said in words, naming the machine the hub picked', () => {
@@ -174,7 +190,7 @@ describe('the follow-up to a start', () => {
     // id yet, so there is no pane address to navigate to -- inventing one would
     // give a page that never matches the id the provider mints.
     expect(started.sessionId).toBeNull();
-    expect(startFollowUp(started.replyTo, started, null, single)).toEqual({
+    expect(startFollowUp(started.replyTo, started, null, single, null)).toEqual({
       kind: 'started',
       words:
         'started on mbp-robert; the session appears in the list once the provider writes its first turn',
@@ -186,7 +202,7 @@ describe('the follow-up to a start', () => {
       ...started,
       sessionId: single.stores[0]?.sessions[0]?.descriptor.sessionId ?? null,
     };
-    expect(startFollowUp(started.replyTo, resumed, null, single)).toEqual({
+    expect(startFollowUp(started.replyTo, resumed, null, single, null)).toEqual({
       kind: 'navigate',
       hash: '#/session/store-agentplex/session-fix-auth',
     });
@@ -201,10 +217,52 @@ describe('the follow-up to a start', () => {
       message: parsed.value.message,
       holder: parsed.value.holder,
     };
-    expect(startFollowUp(refusal.replyTo, null, refusal, single)).toEqual({
+    expect(startFollowUp(refusal.replyTo, null, refusal, single, null)).toEqual({
       kind: 'refused',
       words: 'no server the hub is paired with has that store mounted',
+      held: null,
     });
+  });
+
+  it('names the machine when the refusal says the session is already running', () => {
+    // Captured from a real hub refusing a real start on a session another
+    // process was holding. The machine is named from the state through the
+    // lookup the list uses, not read out of the hub's sentence.
+    const refusal = refusalFrom(hubFrames.refusalHeldStoppable);
+    const followUp = startFollowUp(refusal.replyTo, null, refusal, populated, null);
+
+    expect(followUp).toEqual({
+      kind: 'refused',
+      words: 'that session is already running on mbp-robert',
+      held: {
+        holder: { server: 'registration-mbp-robert', stoppable: true },
+        machine: 'mbp-robert',
+        session: null,
+      },
+    });
+  });
+
+  it('aims the way out at the session the start named, when it named one', () => {
+    // `session` is what a stop is addressed to, and it is the start's own
+    // subject: only a start that names a session can be refused for one being
+    // held. This flow sends none today, so the field is `null` above.
+    const refusal = refusalFrom(hubFrames.refusalHeldStoppable);
+    const asked = sessionRefSchema.parse({
+      storeId: 'store-agentplex',
+      sessionId: 'session-migrate-db',
+    });
+    const followUp = startFollowUp(refusal.replyTo, null, refusal, populated, asked);
+
+    expect(followUp.kind === 'refused' ? followUp.held?.session : null).toEqual(asked);
+  });
+
+  it('falls back to the registration id before any state describes the machine', () => {
+    const refusal = refusalFrom(hubFrames.refusalHeldStoppable);
+    const followUp = startFollowUp(refusal.replyTo, null, refusal, null, null);
+
+    expect(followUp.kind === 'refused' ? followUp.held?.machine : null).toBe(
+      'registration-mbp-robert',
+    );
   });
 });
 
