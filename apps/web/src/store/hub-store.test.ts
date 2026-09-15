@@ -40,6 +40,18 @@ const STOP: HubCommand = {
   sessionId: SESSION.sessionId,
 };
 
+/**
+ * A browse of one machine's roots, which is how a picker starts.
+ *
+ * A command and not a subscription: somebody asked a question once, and nothing
+ * re-asks it on a reconnection.
+ */
+const BROWSE: HubCommand = {
+  type: 'directory-list',
+  server: 'registration-mbp-robert' as never,
+  directory: null,
+};
+
 /** Lets the ticket promise inside `connect` settle. */
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -301,6 +313,54 @@ describe('commands', () => {
       sessionId: null,
       server: 'registration-mbp-robert',
     });
+  });
+
+  it('reads a directory listing the hub actually sent, correlated to its browse', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    // Two browses, because `directory-listing` is answered on the same channel
+    // as a start and the ids are what keep the two apart. The first command is
+    // the start above so that the reply below cannot be matched by position.
+    h.store.sendCommand(START);
+    const roots = h.store.sendCommand(BROWSE);
+    if (!roots.accepted) throw new Error(roots.reason);
+
+    // Captured from a real server answering out of real configuration: the
+    // roots listing carries no directory and its entries are the roots
+    // themselves, absolute.
+    socket.deliver(hubFrames.directoryRoots);
+    expect(h.store.getSnapshot().lastListing).toEqual({
+      replyTo: roots.id,
+      directory: null,
+      roots: ['/Users/robert/code'],
+      entries: [{ name: '/Users/robert/code', kind: 'directory' }],
+      truncated: false,
+    });
+
+    // And one step down, where an entry is a single segment and the kinds the
+    // server reports include the one it will not follow.
+    socket.deliver(hubFrames.directoryListing);
+    expect(h.store.getSnapshot().lastListing).toMatchObject({
+      directory: '/Users/robert/code',
+      entries: [
+        { name: '.config', kind: 'directory' },
+        { name: 'agentplex', kind: 'directory' },
+        { name: 'notes.md', kind: 'file' },
+        { name: 'scratch', kind: 'other' },
+      ],
+    });
+  });
+
+  it('a directory listing clears the refusal that preceded it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.sendCommand(START);
+    h.store.sendCommand(BROWSE);
+
+    socket.deliver(hubFrames.refusal);
+    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
+    socket.deliver(hubFrames.directoryRoots);
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
   });
 
   it('a session-started reply clears the refusal that preceded it', async () => {

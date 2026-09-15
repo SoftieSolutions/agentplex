@@ -348,7 +348,7 @@ describe('agentplex setup --plan', () => {
  */
 describe('agentplex setup', () => {
   it('asks when there is no plan to replay', async () => {
-    const asked = await run([], { answers: ['', '', '', '', '', '', ''] });
+    const asked = await run([], { answers: ['', '', '', '', '', '', '', ''] });
 
     expect(asked.code).toBe(0);
     expect(asked.terminal.transcript).toContain('provider: claude 2.1.259 - adopted, logged in');
@@ -356,7 +356,7 @@ describe('agentplex setup', () => {
   });
 
   it('pre-seeds the first question with the role an installer was told', async () => {
-    const asked = await run(['--role', 'server'], { answers: ['', '', '', '', ''] });
+    const asked = await run(['--role', 'server'], { answers: ['', '', '', '', '', ''] });
 
     expect(asked.code).toBe(0);
     expect(asked.terminal.questions).toContain('Role [server] ');
@@ -402,7 +402,7 @@ describe('agentplex setup', () => {
   it('exits zero when the operator declines the plan it built', async () => {
     // Nothing on the machine was changed and nothing failed. An installer that
     // read that as an error would be wrong about it.
-    const declined = await run([], { answers: ['', '', '', '', '', 'n', 'n'] });
+    const declined = await run([], { answers: ['', '', '', '', '', '', 'n', 'n'] });
 
     expect(declined.code).toBe(0);
     expect(declined.files.creates).toEqual([]);
@@ -410,7 +410,7 @@ describe('agentplex setup', () => {
 
   it('exits nonzero when the run it applied had problems', async () => {
     const failed = await run([], {
-      answers: ['', '', '', '', '', '', ''],
+      answers: ['', '', '', '', '', '', '', ''],
       machine: createFakeMachine(),
     });
 
@@ -422,7 +422,9 @@ describe('agentplex setup', () => {
     // `install.sh --prefix=/opt/agentplex` hands that prefix over, and everything
     // the wizard owns has to land in it: the unit the installer just wrote reads
     // /opt/agentplex/agentplex.env and resolves programs in /opt/agentplex/bin.
-    const asked = await run(['--prefix', HANDED_PREFIX], { answers: ['', '', '', '', '', '', ''] });
+    const asked = await run(['--prefix', HANDED_PREFIX], {
+      answers: ['', '', '', '', '', '', '', ''],
+    });
 
     expect(asked.code).toBe(0);
     expect(asked.terminal.transcript).toContain(`install into: ${HANDED_PREFIX}`);
@@ -432,7 +434,7 @@ describe('agentplex setup', () => {
 
   it('takes the prefix in either spelling of the flag', async () => {
     const asked = await run([`--prefix=${HANDED_PREFIX}`], {
-      answers: ['', '', '', '', '', '', ''],
+      answers: ['', '', '', '', '', '', '', ''],
     });
 
     expect(asked.code).toBe(0);
@@ -471,7 +473,7 @@ describe('agentplex setup', () => {
     // second opinion instead of the home directory.
     vi.stubEnv('AGENTPLEX_PREFIX', HANDED_PREFIX);
 
-    const asked = await run([], { answers: ['', '', '', '', '', '', ''] });
+    const asked = await run([], { answers: ['', '', '', '', '', '', '', ''] });
 
     expect(asked.code).toBe(0);
     expect(asked.terminal.transcript).toContain('install into: /home/dev/.agentplex');
@@ -502,7 +504,7 @@ describe('starting the units when setup finishes', () => {
   });
 
   it('starts them after a wizard run that provisioned the machine', async () => {
-    const asked = await run([], { answers: ['', '', '', '', '', '', ''] });
+    const asked = await run([], { answers: ['', '', '', '', '', '', '', ''] });
 
     expect(asked.code).toBe(0);
     expect(asked.units.calls()).toBe(1);

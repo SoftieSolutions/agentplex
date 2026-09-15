@@ -30,6 +30,7 @@ import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js
 import { createClients, type Clients } from './clients.js';
 import { createFakePairing, type FakePairing } from '../pairing/fake-pairing.js';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
+import { createFakeProjects, type FakeProjects } from '../projects/fake-projects.js';
 
 /**
  * The pipeline, with the real reducer above it and fake sockets below.
@@ -109,6 +110,8 @@ interface Harness {
   readonly pairing: FakePairing;
   /** Every time the supervisor was told the pairing table had changed. */
   readonly syncs: () => number;
+  /** The browse this broadcast was built on, for the same reason. */
+  readonly projects: FakeProjects;
 }
 
 /**
@@ -126,6 +129,7 @@ function harness(
     write?: (layout: string) => Promise<void>;
   } = {},
   pairing: FakePairing = createFakePairing(),
+  projects: FakeProjects = createFakeProjects(),
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
@@ -143,8 +147,9 @@ function harness(
     syncServers: async () => {
       syncs += 1;
     },
+    projects,
   });
-  return { state, timers, broadcast, sessions, pairing, syncs: () => syncs };
+  return { state, timers, broadcast, sessions, pairing, syncs: () => syncs, projects };
 }
 
 /**

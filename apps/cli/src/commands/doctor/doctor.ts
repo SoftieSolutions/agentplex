@@ -65,6 +65,16 @@ export interface DoctorReport {
   readonly providers: readonly ProviderReadiness[];
   /** One per configured store path, in the order they were configured. */
   readonly stores: readonly StoreCheck[];
+  /**
+   * One per configured browse root, in the order they were configured.
+   *
+   * The same check a store gets, against the same seam, and for the same
+   * reason: "is that directory actually there" is the question an operator who
+   * has just typed a path wants answered before a client tells them it is not.
+   * An empty list is a machine that browses nothing, which is the default and
+   * is reported as a sentence rather than as a problem.
+   */
+  readonly browseRoots: readonly StoreCheck[];
   /** The pty seam, or `null` on a role that opens none. */
   readonly terminals: TerminalCheck | null;
 }
@@ -121,12 +131,16 @@ export async function inspectMachine(
       hub,
       providers: [],
       stores: [],
+      browseRoots: [],
       terminals: null,
     };
   }
 
   const readiness = await preflight.run(providers);
   const stores = await Promise.all(config.server.storePaths.map((path) => checkStore(path, files)));
+  const browseRoots = await Promise.all(
+    config.server.browseRoots.map((path) => checkStore(path, files)),
+  );
   const pty = checkTerminals(terminals());
 
   return {
@@ -135,10 +149,16 @@ export async function inspectMachine(
       (hub === null || hubUsable(hub)) &&
       readiness.every((provider) => provider.state === 'ready') &&
       stores.every((store) => store.state === 'present') &&
+      // A configured root that is not there is a browse that will be refused,
+      // which is a fact about this deployment and therefore part of the exit
+      // code. Having none is not: that is the default, and a machine nobody
+      // asked to offer browsing is working exactly as configured.
+      browseRoots.every((root) => root.state === 'present') &&
       pty.state === 'ready',
     hub,
     providers: readiness,
     stores,
+    browseRoots,
     terminals: pty,
   };
 }
@@ -227,6 +247,26 @@ export function formatDoctorReport(report: DoctorReport): readonly string[] {
     );
   } else {
     for (const store of report.stores) lines.push(`  ${storeLine(store)}`);
+  }
+
+  lines.push('', 'browse roots');
+  if (report.browseRoots.length === 0) {
+    lines.push(
+      report.role === 'hub'
+        ? '  this machine runs no server, so nothing browses it'
+        : // Not a problem, and said so. This is the default and it is the
+          // direction that does not over-claim: what a root grants is a listing
+          // of this machine's files to anybody who can reach a paired hub.
+          '  none configured, so this server will not list any directory',
+    );
+  } else {
+    for (const root of report.browseRoots) lines.push(`  ${storeLine(root)}`);
+    lines.push(
+      '',
+      '  Anything under these can be listed by a client of any hub this server',
+      '  is paired with. Nothing else can: a path outside them is refused, and',
+      '  a symlink is reported and never followed.',
+    );
   }
 
   return lines;

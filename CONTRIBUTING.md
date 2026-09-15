@@ -63,9 +63,45 @@ item in a listing costs itself and not the listing.
 **One parser per direction.** Each half of the protocol owns exactly one parser,
 and nothing downstream re-checks a frame's `type` by hand.
 
-**No frame carries an operation name, an argv element, an env var, or a cwd.**
-Every spawn goes through the operation registry, `shell: false` always. A
-generic `{ command }` frame is the failure mode the registry exists to prevent.
+**No frame carries an operation name, an argv element or an env var. A
+directory crosses the wire only as a `directory` field parsed by
+`directorySchema`, refused unless under a configured browse root, and the only
+spawn field it may reach is `cwd`.** Every spawn goes through the operation
+registry, `shell: false` always. A generic `{ command }` frame is the failure
+mode the registry exists to prevent.
+
+The cwd half of that rule is an amendment, taken deliberately and argued here so
+it is not re-argued. A project holds a directory on a server and the user picks
+it by browsing, so a directory has to cross. The rule's reason was that a
+`{ command }` or `{ cwd }` field is a generic execution surface; three things
+together are what make this one not that, and none is optional. The value is
+parsed by one schema, `packages/protocol/src/directory.ts`, which is the same
+schema an operation's request is parsed by — absolute, no NUL. The server
+refuses it unless its **real** path sits under a root that server's operator
+configured, which is a list nothing on the wire can add to and which is empty by
+default, so a machine nobody has configured browses nothing and says so. And the
+only spawn field it may ever reach is `cwd`, on a spawn that still goes through
+the registry with an argv this process built.
+
+The rejected alternative is server-declared workspaces with opaque ids on the
+wire, which keeps the old rule verbatim. It was rejected because it makes adding
+a directory a server-side setup action, and the decision the catalogue rests on
+is that the user browses for one — an operator editing a settings file to make a
+checkout pickable is the workflow the browse exists to remove.
+
+Two uses are already covered by the amended wording, and they were argued
+separately: `directory-list` (AGX-238) is a browse request, and the document
+frames (AGX-241) carry a `directory` as the key of a per-project file store. The
+second never reaches a spawn at all. One rule covers both because what bounds
+them is the same thing — a parser that can say no, and a root list only the
+machine's operator writes.
+
+`apps/server/src/directory-browse.ts` holds the containment rule and the reason
+it runs on `fs.realpath` rather than on the string, and
+`tests/hub-server/src/session-start.integration.test.ts` is where the wire shape
+is asserted: `args`, `argv`, `env`, `command`, `operation`, `pid` and
+`terminalId` absent everywhere, and every `directory` on a hub-to-server
+instruction either null or under a configured root.
 
 **Setup's spawns go through a second registry, not a wider one.** Installing a
 provider is a spawn, so it obeys every rule above, and it is registered where
@@ -84,9 +120,9 @@ migration is history: add a new one rather than editing it.
 ## Features
 
 `apps/hub/src/features/` is one folder per feature: the fleet state, the paired
-servers, pairing, sessions, the catalogue, the pane layout, the clients, client
-auth, discovery, the web assets, and MCP. Four rules hold it together, and `pnpm
-lint` enforces the first one.
+servers, pairing, sessions, projects, the catalogue, the pane layout, the
+clients, client auth, discovery, the web assets, and MCP. Four rules hold it
+together, and `pnpm lint` enforces the first one.
 
 **A feature is a folder with one entry file.** `features/catalogue/catalogue.ts`
 exports the interface `Catalogue` and `createCatalogue(deps)`, and another

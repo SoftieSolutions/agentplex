@@ -17,6 +17,16 @@ export {
 export type { ServerBeacon } from './beacon.js';
 
 export {
+  DIRECTORY_ENTRIES_MAX,
+  directoryEntryKindSchema,
+  directoryEntrySchema,
+  directoryListFrameSchema,
+  directoryListingFrameSchema,
+  directorySchema,
+} from './directory.js';
+export type { DirectoryEntry, DirectoryEntryKind, DirectoryListingFrame } from './directory.js';
+
+export {
   DOC_CONTENT_MAX_CHARS,
   DOC_NAME_EXTENSIONS,
   DOC_NAME_MAX_LENGTH,

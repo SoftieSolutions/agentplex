@@ -29,6 +29,7 @@ import { createFleetState, type FleetState } from './features/fleet-state/fleet-
 import { createMcp } from './features/mcp/mcp.js';
 import { createPairing, type LocalServerEntry } from './features/pairing/pairing.js';
 import { createPaneLayout } from './features/pane-layout/pane-layout.js';
+import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
 import { createWeb, type WebAssetFileSystem } from './features/web/web.js';
@@ -273,6 +274,13 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
 
   const sessions = createSessions({ state, connections: servers, logger });
 
+  // Browsing a server's directories, so that a project can hold one. The rule
+  // about which directories is the server's and not this hub's -- it is checked
+  // against roots that machine's operator configured -- so what this feature
+  // adds is the one fact a server cannot have: whether the hub holds a
+  // connection to ask down at all.
+  const projects = createProjects({ state, connections: servers, logger });
+
   // Read per request for the reason the tree above is, and durable for the
   // same one: an arrangement of panes outlives the process that was told it.
   const paneLayout = createPaneLayout({ database, clock });
@@ -297,6 +305,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     // hub that recorded a pairing and waited for a restart to dial it would be
     // a settings screen whose successful answer is followed by nothing.
     syncServers: () => servers.sync(),
+    projects,
   });
 
   // Not awaited past its first read of the pairing table, and started before

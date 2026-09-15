@@ -3,6 +3,7 @@ import {
   parseTextFrame,
   PROTOCOL_VERSION,
   type ClientFrame,
+  type DirectoryEntry,
   type FrameId,
   type HubFrame,
   type HubId,
@@ -135,6 +136,28 @@ export interface StoppedView {
   readonly server: ServerRegistrationId;
 }
 
+/**
+ * The hub's answer to a browse, kept so the picker that asked can render it.
+ *
+ * `replyTo` is what joins it to the request, because a picker may have more
+ * than one browse in flight -- a user who clicks twice while a slow disk is
+ * answering -- and a snapshot field with no id on it would show the first
+ * answer under the second directory.
+ *
+ * `directory` is `null` for the listing of roots, and the entries are then the
+ * roots themselves carrying their own absolute paths. Everywhere else an entry
+ * is one segment and is joined onto the directory. The store keeps both exactly
+ * as the hub sent them; the joining rule lives in `projects/directory-picker-model.ts`,
+ * where a test can reach it.
+ */
+export interface DirectoryListingView {
+  readonly replyTo: FrameId;
+  readonly directory: string | null;
+  readonly roots: readonly string[];
+  readonly entries: readonly DirectoryEntry[];
+  readonly truncated: boolean;
+}
+
 export interface HubSnapshot {
   readonly phase: ConnectionPhase;
   /** What is degraded, in words, or `null` while nothing is. */
@@ -167,6 +190,8 @@ export interface HubSnapshot {
   readonly lastStarted: StartedView | null;
   /** The hub's most recent yes to a stop, kept until the next one. */
   readonly lastStopped: StoppedView | null;
+  /** The hub's most recent directory listing, kept until the next one. */
+  readonly lastListing: DirectoryListingView | null;
 }
 
 /**
@@ -178,11 +203,15 @@ export interface HubSnapshot {
  * the user makes once. `pane-layout-save` is a command: a save is something
  * that happened once, and if the connection is down when it does, the queue
  * carries it — later saves replay after it, so the hub still ends on the
- * newest arrangement.
+ * newest arrangement. `directory-list` is a command too, and the queue is the
+ * right place for it rather than the wrong one: a person browsing while the
+ * connection blinks asked a question once, and the answer is as good a moment
+ * later. It is not standing interest — nothing re-lists a directory on every
+ * reconnection — so it is not a subscription.
  */
 type CommandFrame = Extract<
   ClientFrame,
-  { type: 'session-start' | 'session-stop' | 'pane-layout-save' }
+  { type: 'session-start' | 'session-stop' | 'pane-layout-save' | 'directory-list' }
 >;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type HubCommand = DistributiveOmit<CommandFrame, 'id'>;
@@ -311,6 +340,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastRefusal: null,
     lastStarted: null,
     lastStopped: null,
+    lastListing: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -507,6 +537,23 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         waiting.delete(frame.replyTo);
         return;
       }
+      case 'directory-listing': {
+        pending.delete(frame.replyTo);
+        // The refusal is cleared for the reason a start clears it: the last
+        // thing the hub said is now a yes, and a picker showing both would be
+        // showing a sentence about a question that has since been answered.
+        update({
+          lastRefusal: null,
+          lastListing: {
+            replyTo: frame.replyTo,
+            directory: frame.directory,
+            roots: frame.roots,
+            entries: frame.entries,
+            truncated: frame.truncated,
+          },
+        });
+        return;
+      }
       case 'refusal': {
         pending.delete(frame.replyTo);
         // A refusal answers a request as surely as a reply does, and its words
@@ -593,6 +640,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       phase: 'idle',
       commandQueue: queueView(null),
       terminalInput: INITIAL_TERMINAL,
+      // A listing describes somebody else's disk as it was; nothing is looking
+      // any more, and the next page to look will ask again.
+      lastListing: null,
     });
   }
 

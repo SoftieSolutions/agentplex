@@ -77,6 +77,7 @@ const HUB_FEATURES = [
   'mcp',
   'pairing',
   'pane-layout',
+  'projects',
   'servers',
   'sessions',
   'web',

@@ -14,7 +14,7 @@
  *
  * Bump this in the same commit as any change to a frame's shape.
  */
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 export type ProtocolVersionMismatch = {
   readonly expected: number;

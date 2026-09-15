@@ -66,6 +66,10 @@ describe('the setup plan parser', () => {
         server: {
           port: 8081,
           storePaths: ['/home/dev/.claude'],
+          // Absent from the file above and present here: a plan written before
+          // browse roots existed describes a machine that browses nothing, and
+          // an empty list is exactly what that means.
+          browseRoots: [],
           binPath: ['/opt/homebrew/bin'],
           identityPath: '/home/dev/.agentplex/server.json',
           installPrefix: '/home/dev/.agentplex',
@@ -156,13 +160,14 @@ describe('the setup plan parser', () => {
         ...SERVER_HALF,
         storePaths: ['work'],
         binPath: ['bin'],
+        browseRoots: ['code'],
         identityPath: 'server.json',
         installPrefix: '.agentplex',
       }),
     );
 
-    expect(relative).toHaveLength(4);
-    for (const field of ['storePaths', 'binPath', 'identityPath', 'installPrefix']) {
+    expect(relative).toHaveLength(5);
+    for (const field of ['storePaths', 'binPath', 'browseRoots', 'identityPath', 'installPrefix']) {
       expect(relative).toContainEqual(expect.stringContaining(field));
     }
   });

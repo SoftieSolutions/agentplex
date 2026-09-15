@@ -11,6 +11,7 @@ import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
 import { createFakeStoreWatcher } from '../../../apps/server/src/fake-store-watcher.js';
 import {
@@ -65,6 +66,10 @@ async function startServer(storePaths: readonly string[] = []) {
     // say to each other over a real socket, and a watch on a fake volume would
     // be a seam nothing in it fires.
     storeWatcher: createFakeStoreWatcher(),
+    // Nothing to browse: this suite is about the handshake, and the default a
+    // server ships with is no roots at all.
+    browseRoots: [],
+    directoryReader: createFakeDirectoryReader(),
     storeFileSystem: files,
     identityPath: IDENTITY_PATH,
     // The grants file lands beside the identity file, on the same fake volume.
