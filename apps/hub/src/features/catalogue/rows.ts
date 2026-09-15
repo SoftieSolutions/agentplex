@@ -113,6 +113,17 @@ export const COLUMNS =
 export const SESSION_KIND: NodeKind = nodeKindSchema.parse('session');
 /** The kind the user's containers get. */
 export const FOLDER_KIND: NodeKind = nodeKindSchema.parse('folder');
+/**
+ * The kind a project node gets. Seeded by migration 0006, not by this.
+ *
+ * Named here because one rule about the tree's shape is about projects and
+ * could not be about anything else: a project may not sit inside another. A
+ * session is filed under the project whose directory its `cwd` is, and "the
+ * project" has to be a definite article -- nested projects would make a
+ * placement a choice between two right answers. The projects feature owns what
+ * a project *is*; what this folder owns is where one may go.
+ */
+export const PROJECT_KIND: NodeKind = nodeKindSchema.parse('project');
 
 /**
  * What a node may be called. Trimmed, because a name of spaces is not a name.

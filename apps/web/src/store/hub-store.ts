@@ -172,6 +172,21 @@ export interface ProjectCreatedView {
   readonly nodeId: NodeId;
 }
 
+/**
+ * The hub's yes to one of the five tree edits, kept so the menu that asked can
+ * close itself and say what happened.
+ *
+ * One view for all five, because the yes really is the same: the tree did what
+ * was asked, and what the screen shows next comes from the layout it re-reads
+ * when `catalogue-changed` arrives. `nodeId` is the one thing a create adds —
+ * the id of the folder it made — and it is `null` for the four edits that make
+ * nothing.
+ */
+export interface TreeChangeView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId | null;
+}
+
 export interface HubSnapshot {
   readonly phase: ConnectionPhase;
   /** What is degraded, in words, or `null` while nothing is. */
@@ -208,6 +223,8 @@ export interface HubSnapshot {
   readonly lastListing: DirectoryListingView | null;
   /** The hub's most recent yes to a project create, kept until the next one. */
   readonly lastProjectCreated: ProjectCreatedView | null;
+  /** The hub's most recent yes to a tree edit, kept until the next one. */
+  readonly lastTreeChange: TreeChangeView | null;
 }
 
 /**
@@ -223,9 +240,9 @@ export interface HubSnapshot {
  * right place for it rather than the wrong one: a person browsing while the
  * connection blinks asked a question once, and the answer is as good a moment
  * later. It is not standing interest — nothing re-lists a directory on every
- * reconnection — so it is not a subscription. `project-create` and
- * `project-rename` are commands for the plainest reason of all: each is
- * something the user did once, and a queue is where a once-only intent waits.
+ * reconnection — so it is not a subscription. `project-create` and the five
+ * tree edits are commands for the plainest reason of all: each is something
+ * the user did once, and a queue is where a once-only intent waits.
  */
 type CommandFrame = Extract<
   ClientFrame,
@@ -236,7 +253,11 @@ type CommandFrame = Extract<
       | 'pane-layout-save'
       | 'directory-list'
       | 'project-create'
-      | 'project-rename';
+      | 'node-create-folder'
+      | 'node-rename'
+      | 'node-move'
+      | 'node-remove'
+      | 'node-forget-removal';
   }
 >;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -368,6 +389,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastStopped: null,
     lastListing: null,
     lastProjectCreated: null,
+    lastTreeChange: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -583,24 +605,41 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'project-created': {
         pending.delete(frame.replyTo);
+        // No re-request here, and there used to be one. The hub now broadcasts
+        // `catalogue-changed` after every change to the tree, this one
+        // included, so asking again on the reply as well would be two requests
+        // for one change — and only on the client that made it, which was
+        // always the wrong half: the other tabs are looking at the same tree.
         update({
           lastRefusal: null,
           lastProjectCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
         });
-        // The tree just changed on this client's own account, and there is no
-        // broadcast that says so yet -- `catalogue-changed` is its own ticket.
-        // Asking again here is the honest minimum: the project this client just
-        // made is the one it is about to need in a picker, and a screen that
-        // showed every project but the newest would be describing a tree from
-        // before the click that produced it.
-        requestLayout();
         return;
       }
-      case 'node-renamed': {
+      case 'node-created': {
         pending.delete(frame.replyTo);
-        // Same reason as above: the name on the screen came out of the layout,
-        // and the hub has just stored a different one.
-        update({ lastRefusal: null });
+        update({
+          lastRefusal: null,
+          lastTreeChange: { replyTo: frame.replyTo, nodeId: frame.nodeId },
+        });
+        return;
+      }
+      case 'node-renamed':
+      case 'node-moved':
+      case 'node-removed':
+      case 'node-removal-forgotten': {
+        pending.delete(frame.replyTo);
+        // One case for four frames, because the answer is the same: the tree
+        // did what was asked, and what is on screen comes from the layout the
+        // broadcast is about to make this client re-read.
+        update({ lastRefusal: null, lastTreeChange: { replyTo: frame.replyTo, nodeId: null } });
+        return;
+      }
+      case 'catalogue-changed': {
+        // Unsolicited, and the only frame that makes this store ask for
+        // something on its own account. It carries a version and no nodes, so
+        // the honest response is to re-read what this client is actually
+        // drawing — and a client watching no layout does nothing at all.
         requestLayout();
         return;
       }

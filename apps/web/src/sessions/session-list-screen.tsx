@@ -13,7 +13,7 @@ import {
 } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import type { HubStore } from '../store/hub-store.js';
-import { useHubSnapshot } from '../store/use-hub-store.js';
+import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import {
   chipCounts,
   connectionNotice,
@@ -25,6 +25,10 @@ import {
   type StatusChip,
 } from './session-list-model.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
+import { AbsentSessions } from '../tree/absent-sessions.js';
+import { NodeMenu } from '../tree/node-menu.js';
+import { ProjectRows } from '../tree/project-rows.js';
+import { nodeForSession } from '../tree/tree-model.js';
 import { NewSessionForm } from './new-session-form.js';
 import { SessionCard } from './session-card.js';
 import { stoppedNotice } from './stop-model.js';
@@ -49,6 +53,10 @@ export interface SessionListScreenProps {
 
 export function SessionListScreen({ store, now = Date.now }: SessionListScreenProps): JSX.Element {
   const snapshot = useHubSnapshot(store);
+  // Declaring interest, which is what sends the layout request and what has it
+  // re-sent after every reconnection and every `catalogue-changed`. The tree is
+  // what the menus on this screen edit, so this screen is what is looking at it.
+  const layout = useHubLayout(store);
   const scheme = useComputedColorScheme('dark');
   const [search, setSearch] = useState('');
   const [chip, setChip] = useState<StatusChip | null>(null);
@@ -206,6 +214,8 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
         />
       </Group>
 
+      <ProjectRows store={store} layout={layout} scheme={scheme} />
+
       {visible.length === 0 ? (
         <Text c="dimmed" fz={13}>
           {everySession.length === 0
@@ -214,11 +224,37 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
         </Text>
       ) : (
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
-          {visible.map((item) => (
-            <SessionCard key={item.key} item={item} scheme={scheme} now={moment} store={store} />
-          ))}
+          {visible.map((item) => {
+            // A session the tree holds no node for gets no menu: there is
+            // nothing to rename, move or remove, and a menu that opened onto
+            // three refusals would be worse than no menu.
+            const node = nodeForSession(layout, item.ref);
+            return (
+              <SessionCard
+                key={item.key}
+                item={item}
+                scheme={scheme}
+                now={moment}
+                store={store}
+                actions={
+                  node === null ? null : (
+                    <NodeMenu
+                      store={store}
+                      nodeId={node.id}
+                      name={node.name ?? item.name}
+                      layout={layout}
+                      anchor={item.ref}
+                      scheme={scheme}
+                    />
+                  )
+                }
+              />
+            );
+          })}
         </SimpleGrid>
       )}
+
+      <AbsentSessions store={store} state={state} layout={layout} scheme={scheme} />
     </Stack>
   );
 }

@@ -10,6 +10,7 @@ import {
   sessionIdSchema,
   storeIdSchema,
   PROTOCOL_VERSION,
+  type HubFrame,
   type Layout,
   type SessionDescriptor,
   type StoreId,
@@ -225,6 +226,8 @@ async function startFleetHub(machines: readonly Machine[]): Promise<Fleet> {
  */
 interface Client {
   layout(): Promise<Layout>;
+  /** Sends one frame and waits for the hub's answer to it, whatever it is. */
+  ask(frame: Record<string, unknown>): Promise<HubFrame>;
 }
 
 async function openClient(hub: Hub): Promise<Client> {
@@ -255,11 +258,31 @@ async function openClient(hub: Hub): Promise<Client> {
     JSON.stringify({ type: 'hello', id: (nextId += 1), protocolVersion: PROTOCOL_VERSION }),
   );
 
+  /** The first frame that answers this id, whatever kind of answer it is. */
+  const answerFor = async (replyTo: number): Promise<HubFrame> => {
+    for (;;) {
+      for (const text of received) {
+        const parsed = parseTextFrame(parseHubFrame, text);
+        if (!parsed.ok) throw new Error(`the hub sent something unreadable: ${parsed.reason}`);
+        const frame = parsed.value;
+        if (!('replyTo' in frame) || frame.replyTo !== replyTo) continue;
+        return frame;
+      }
+      await new Promise<void>((resolve) => waiting.push(resolve));
+    }
+  };
+
   return {
     async layout(): Promise<Layout> {
       const id = (nextId += 1);
       serverEnd.send(JSON.stringify({ type: 'layout-request', id }));
       return frameFor(id);
+    },
+
+    async ask(frame: Record<string, unknown>): Promise<HubFrame> {
+      const id = (nextId += 1);
+      serverEnd.send(JSON.stringify({ ...frame, id }));
+      return answerFor(id);
     },
   };
 }
@@ -405,6 +428,111 @@ describe('the tree a reporting fleet fills in', () => {
     await settles(client, [
       'store-agentplex/session-fix-auth',
       'store-universe/session-bench-tokenizer',
+    ]);
+  });
+});
+
+/**
+ * Removing a node, over the fleet that reports the sessions it points at.
+ *
+ * The two things worth driving end to end are the two the tree cannot decide on
+ * its own. A live holder is a fact about a process on another machine, and it
+ * arrives here the only way it ever does -- in a store report, over the real
+ * protocol, merged by the reducer -- so a suite that stubbed it would be
+ * asserting that the hub reads its own fake. And a remembered removal is only
+ * worth anything against a store that keeps on reporting the session: the test
+ * that matters is the second report, and the one after the forgetting.
+ */
+describe('taking a session out of the tree', () => {
+  it('refuses while a machine says it is running it, and names the machine', async () => {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+    ]);
+    laptop.controller.setReport({
+      storeId: AGENTPLEX,
+      sessions: [descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh')],
+      holding: [{ sessionId: sessionIdSchema.parse('session-fix-auth'), stoppable: true }],
+    });
+    fleet = await startFleetHub([laptop]);
+    const client = await openClient(fleet.hub);
+    const layout = await settles(client, ['store-agentplex/session-fix-auth']);
+    const node = layout[0];
+    if (node === undefined) throw new Error('the session was not placed');
+
+    const answer = await client.ask({ type: 'node-remove', nodeId: node.id });
+
+    expect(answer).toMatchObject({
+      type: 'refusal',
+      code: 'refused',
+      // The hold came off this machine's own account of what it is running,
+      // which is the only source that can answer it -- and the client is given
+      // it so it can offer the stop rather than only the sentence.
+      holder: { server: 'registration-mbp-robert', stoppable: true },
+    });
+    expect(await client.layout()).toHaveLength(1);
+
+    // The agent finished. Nobody holds it now, and the same removal goes
+    // through -- the refusal was about the world and not about the node.
+    laptop.controller.setReport({
+      storeId: AGENTPLEX,
+      sessions: [descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh')],
+      holding: [],
+    });
+    await laptop.audience?.reportToAll(AGENTPLEX);
+    await until(
+      async () =>
+        fleet?.hub.state
+          .snapshot()
+          .stores.every((store) => store.sessions.every((row) => row.holder === null)) === true,
+      () => 'the hold to be released',
+    );
+
+    expect(await client.ask({ type: 'node-remove', nodeId: node.id })).toMatchObject({
+      type: 'node-removed',
+    });
+    await settles(client, []);
+  });
+
+  it('stays removed across the reports that follow, and comes back when forgotten', async () => {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+      descriptor(AGENTPLEX, 'session-spike-wasm', 'spike-wasm'),
+    ]);
+    fleet = await startFleetHub([laptop]);
+    const client = await openClient(fleet.hub);
+    const layout = await settles(client, [
+      'store-agentplex/session-fix-auth',
+      'store-agentplex/session-spike-wasm',
+    ]);
+    const node = layout.find((candidate) => candidate.anchor?.sessionId === 'session-fix-auth');
+    if (node === undefined) throw new Error('the session was not placed');
+
+    expect(await client.ask({ type: 'node-remove', nodeId: node.id })).toMatchObject({
+      type: 'node-removed',
+    });
+    await settles(client, ['store-agentplex/session-spike-wasm']);
+
+    // The whole point of remembering. The store still has the transcript --
+    // nothing was deleted on any disk -- so every report from here on carries
+    // the session, and every one of them would otherwise put the node back a
+    // few seconds after the user removed it.
+    await laptop.audience?.reportToAll(AGENTPLEX);
+    await laptop.audience?.reportToAll(AGENTPLEX);
+    expect(anchored(await client.layout())).toEqual(['store-agentplex/session-spike-wasm']);
+
+    const forgotten = await client.ask({
+      type: 'node-forget-removal',
+      storeId: AGENTPLEX,
+      sessionId: 'session-fix-auth',
+    });
+
+    expect(forgotten).toMatchObject({ type: 'node-removal-forgotten' });
+    // Back already, rather than at whatever moment that machine next scans: the
+    // hub runs a pass against what it currently believes is in the store on the
+    // way to answering.
+    expect(anchored(await client.layout())).toEqual([
+      'store-agentplex/session-fix-auth',
+      'store-agentplex/session-spike-wasm',
     ]);
   });
 });

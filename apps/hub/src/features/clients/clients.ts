@@ -7,6 +7,7 @@ import {
   type Timers,
 } from '@agentplex/node-shared';
 import type { Pairing } from '../pairing/pairing.js';
+import type { ClientCatalogue } from '../catalogue/catalogue.js';
 import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
 import type { FleetState } from '../fleet-state/fleet-state.js';
@@ -92,6 +93,16 @@ export interface ClientsDependencies {
    */
   readonly projects: Projects;
   /**
+   * The tree a client edits, and word that it changed.
+   *
+   * One instance for the whole broadcast, for the reason the sessions seam is
+   * one -- and one subscription, not one per socket: the tree is one shared
+   * thing, and N listeners on it would be N copies of a fact that is the same
+   * for everybody. What is per client is only whether it is established enough
+   * to be told.
+   */
+  readonly catalogue: ClientCatalogue;
+  /**
    * The deadline seam the flush is scheduled on.
    *
    * Injected rather than `setTimeout` because coalescing is exactly the
@@ -146,6 +157,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
     pairing,
     syncServers,
     projects,
+    catalogue,
   } = dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
@@ -202,6 +214,27 @@ export function createClients(dependencies: ClientsDependencies): Clients {
     cancelFlush = timers.schedule(coalesceMs, flush);
   });
 
+  /**
+   * Says the tree changed, to everybody, now.
+   *
+   * Not coalesced and not scheduled, which is the one place this differs from
+   * the state above. The state is read at flush time, so waiting a turn buys a
+   * newer reading of it; this frame carries a version and no content, so
+   * delaying it would buy nothing and cost the client the promptness that is
+   * the entire reason it exists. A send that throws costs itself, for the
+   * reason a state send does: one closed tab must not stop the rest being told.
+   */
+  const unwatchTree = catalogue.subscribe((version) => {
+    if (stopped) return;
+    for (const connection of connections) {
+      try {
+        connection.catalogueChanged(version);
+      } catch (error) {
+        logger.warn('a client could not be told the tree changed', { problem: String(error) });
+      }
+    }
+  });
+
   return {
     attach(socket: MessageSocket): ClientConnection {
       // Assigned immediately below. The callback cannot run before then: a
@@ -219,6 +252,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         pairing,
         syncServers,
         projects,
+        catalogue,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);
         },
@@ -246,6 +280,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
       if (stopped) return;
       stopped = true;
       unsubscribe();
+      unwatchTree();
       cancelFlush?.();
       cancelFlush = null;
 

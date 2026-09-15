@@ -148,6 +148,67 @@ export async function listChildren(
   return result.rows.map((row) => nodeRowSchema.parse(row));
 }
 
+/**
+ * The node at `from` and every node above it, nearest first.
+ *
+ * `from` is a parent id rather than a node's own id, because both callers ask
+ * about a place rather than about a node: a move asks what is above where it
+ * is going, and `null` -- the root -- is above everything and is not a node.
+ *
+ * Stops on a ring rather than spinning. Nothing in this module can write one
+ * (a move refuses a cycle and the foreign key refuses a missing parent), and a
+ * walk that would hang if one existed anyway is a walk that turns a bad row
+ * into a hung request.
+ */
+export async function listAncestry(
+  database: Queryable,
+  from: NodeId | null,
+): Promise<readonly TreeNode[]> {
+  const chain: TreeNode[] = [];
+  const seen = new Set<NodeId>();
+  let walking = from;
+  while (walking !== null) {
+    if (seen.has(walking)) return chain;
+    seen.add(walking);
+    const node: TreeNode | null = await findNode(database, walking);
+    if (node === null) return chain;
+    chain.push(node);
+    walking = node.parentId;
+  }
+  return chain;
+}
+
+/**
+ * One node and everything under it, the node first and then breadth-first.
+ *
+ * Rows rather than a recursive CTE, for the reason `orderDepthFirst` sorts in
+ * TypeScript: one user's tree is small, and a walk a test can read is worth
+ * more than a walk the database does. Every caller is about the subtree as a
+ * whole -- what a removal must remember, what a move would carry with it --
+ * and both of those are questions that must not miss a descendant.
+ */
+export async function listSubtree(
+  database: Queryable,
+  node: TreeNode,
+): Promise<readonly TreeNode[]> {
+  const subtree: TreeNode[] = [node];
+  const seen = new Set<NodeId>([node.id]);
+  let frontier: readonly NodeId[] = [node.id];
+  while (frontier.length > 0) {
+    const next: NodeId[] = [];
+    for (const parentId of frontier) {
+      for (const child of await listChildren(database, parentId)) {
+        if (seen.has(child.id)) continue;
+        seen.add(child.id);
+        subtree.push(child);
+        next.push(child.id);
+      }
+    }
+    frontier = next;
+  }
+  return subtree;
+}
+
 /** Every removal this hub remembers, oldest first. */
 export async function listRemovals(database: Queryable): Promise<readonly RememberedRemoval[]> {
   const result = await database.query(

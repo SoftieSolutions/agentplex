@@ -39,6 +39,8 @@ function projects(): Projects {
     state: createFleetState({ logger }),
     connections: { ask: () => Promise.reject(new Error('no browse in this suite')) },
     logger,
+    // The tree's version is the catalogue's, and no catalogue is running here.
+    onTreeChanged: () => undefined,
   });
 }
 
@@ -127,71 +129,6 @@ describe('making a project', () => {
     const made = await projects().create({ name: '  agentplex  ', directory: '/srv/work' });
     if (!made.ok) throw new Error('the project should have been made');
 
-    const node = await db().query('SELECT name FROM nodes WHERE id = ?', [made.nodeId]);
-    expect(node.rows[0]).toEqual({ name: 'agentplex' });
-  });
-});
-
-describe('renaming a project', () => {
-  beforeAll(async () => {
-    migrated = await openMigratedSchema('projects-rename-probe');
-  });
-
-  afterAll(async () => {
-    await migrated?.close();
-  });
-
-  beforeEach(async () => {
-    await db().query('DELETE FROM nodes');
-    minted = 0;
-  });
-
-  it('renames the project and leaves its directory alone', async () => {
-    const feature = projects();
-    const made = await feature.create({ name: 'agentplex', directory: '/srv/work' });
-    if (!made.ok) throw new Error('the project should have been made');
-
-    const renamed = await feature.rename(made.nodeId, 'agentplex (main checkout)');
-
-    expect(renamed).toEqual({ ok: true, nodeId: made.nodeId });
-    const node = await db().query('SELECT name FROM nodes WHERE id = ?', [made.nodeId]);
-    expect(node.rows[0]).toEqual({ name: 'agentplex (main checkout)' });
-    // A project's directory is what the project is. There is no frame that
-    // changes it and no statement here that could.
-    expect(await feature.directoryOf(made.nodeId)).toBe('/srv/work');
-  });
-
-  it('refuses a node this hub does not have', async () => {
-    const renamed = await projects().rename(nodeIdSchema.parse('node-nowhere'), 'anything');
-
-    expect(renamed).toMatchObject({ ok: false, code: 'refused' });
-  });
-
-  /**
-   * The WHERE clause, as a claim. A stale client naming a folder is a client
-   * describing a tree that has moved on, and renaming something it did not mean
-   * is worse than telling it no.
-   */
-  it('refuses a node that is not a project, rather than renaming a folder', async () => {
-    await db().query(
-      `INSERT INTO nodes (id, parent_id, kind, position, name, name_source, created_at)
-       VALUES ('node-folder', NULL, 'folder', 0, 'this week', 'user', ?)`,
-      [NOW],
-    );
-
-    const renamed = await projects().rename(nodeIdSchema.parse('node-folder'), 'renamed');
-
-    expect(renamed).toMatchObject({ ok: false, code: 'refused' });
-    const node = await db().query('SELECT name FROM nodes WHERE id = ?', ['node-folder']);
-    expect(node.rows[0]).toEqual({ name: 'this week' });
-  });
-
-  it('refuses a blank name for a project it does have', async () => {
-    const feature = projects();
-    const made = await feature.create({ name: 'agentplex', directory: '/srv/work' });
-    if (!made.ok) throw new Error('the project should have been made');
-
-    expect(await feature.rename(made.nodeId, '  ')).toMatchObject({ ok: false, code: 'refused' });
     const node = await db().query('SELECT name FROM nodes WHERE id = ?', [made.nodeId]);
     expect(node.rows[0]).toEqual({ name: 'agentplex' });
   });

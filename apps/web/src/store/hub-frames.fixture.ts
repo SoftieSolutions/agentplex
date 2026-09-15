@@ -7,10 +7,10 @@
  * and these exist to test that it can read what the hub actually sends.
  * Re-capture after any change to the hub-to-client frames.
  *
- * Captured at protocol version 17.
+ * Captured at protocol version 18.
  */
 export const hubFrames = {
-  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":17,"hubId":"hub-1"}',
+  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":18,"hubId":"hub-1"}',
   machineState:
     '{"type":"machine-state","state":{"version":0,"stores":[],"servers":[],"candidates":[]}}',
   pong: '{"type":"pong","replyTo":2}',
@@ -22,7 +22,7 @@ export const hubFrames = {
   protocolError:
     '{"type":"protocol-error","code":"bad-request","message":"frame is not valid JSON"}',
   refusalProtocolVersion:
-    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 17, not 18","holder":null}',
+    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 18, not 19","holder":null}',
   machineStateWithServer:
     '{"type":"machine-state","state":{"version":1,"stores":[],"servers":[{"registrationId":"pairing-1","label":"gpu-box-01","address":"wss://gpu-box-01.example:8443","serverId":null,"phase":"stale","stores":[],"providers":[],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":null,"staleReason":"unreachable","draining":null,"problem":"connection refused"}],"candidates":[]}}',
   paneLayout:
@@ -51,12 +51,21 @@ export const hubFrames = {
   nodeRenamed: '{"type":"node-renamed","replyTo":6}',
   layoutWithProject:
     '{"type":"layout","replyTo":7,"nodes":[{"id":"hub-2","parentId":null,"kind":"session","position":0,"name":"fix-auth-refresh","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-fix-auth"}},{"id":"hub-3","parentId":null,"kind":"session","position":1,"name":"spike-wasm","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-spike-wasm"}},{"id":"hub-4","parentId":null,"kind":"project","position":2,"name":"agentplex (main checkout)","named":true,"anchor":null}]}',
+  nodeCreated: '{"type":"node-created","replyTo":8,"nodeId":"hub-5"}',
+  nodeMoved: '{"type":"node-moved","replyTo":9}',
+  refusalHolder:
+    '{"type":"refusal","replyTo":10,"code":"refused","message":"this session is still running; stop it first, and then remove it","holder":{"server":"registration-mbp-robert","stoppable":false}}',
+  nodeRemoved: '{"type":"node-removed","replyTo":11}',
+  nodeRemovalForgotten: '{"type":"node-removal-forgotten","replyTo":12}',
+  catalogueChanged: '{"type":"catalogue-changed","version":2}',
+  layoutArranged:
+    '{"type":"layout","replyTo":13,"nodes":[{"id":"hub-2","parentId":null,"kind":"session","position":0,"name":"fix-auth-refresh","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-fix-auth"}},{"id":"hub-5","parentId":null,"kind":"folder","position":2,"name":"this week","named":true,"anchor":null},{"id":"hub-4","parentId":"hub-5","kind":"project","position":0,"name":"agentplex (main checkout)","named":true,"anchor":null},{"id":"hub-6","parentId":null,"kind":"session","position":3,"name":"spike-wasm","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-spike-wasm"}}]}',
   machineStateShared:
     '{"type":"machine-state","state":{"version":4,"stores":[{"storeId":"store-shared","servers":["registration-gpu-box-01","registration-mbp-robert"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-shared","sessionId":"session-shared-notes","provider":"claude","status":"idle","updatedAt":1755998200000,"cwd":"/mnt/volumes/shared/notes","branch":null,"title":"shared-notes","uncommitted":null},"source":"registration-gpu-box-01","reportedBy":["registration-gpu-box-01","registration-mbp-robert"],"reportedAt":1756000000000,"reachable":true,"holder":null}]}],"servers":[{"registrationId":"registration-gpu-box-01","label":"gpu-box-01","address":"wss://gpu-box.example:8443","serverId":"server-gpu","phase":"connected","stores":["store-shared"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"missing","version":null,"directory":null,"problem":"no directory this server searches holds codex"}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null},{"registrationId":"registration-mbp-robert","label":"mbp-robert","address":"wss://mbp-robert.example:8443","serverId":"server-mbp","phase":"connected","stores":["store-shared"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null}],"candidates":[]}}',
   machineStateSharedDegraded:
     '{"type":"machine-state","state":{"version":5,"stores":[{"storeId":"store-shared","servers":["registration-gpu-box-01","registration-mbp-robert"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-shared","sessionId":"session-shared-notes","provider":"claude","status":"idle","updatedAt":1755998200000,"cwd":"/mnt/volumes/shared/notes","branch":null,"title":"shared-notes","uncommitted":null},"source":"registration-mbp-robert","reportedBy":["registration-gpu-box-01","registration-mbp-robert"],"reportedAt":1756000000000,"reachable":true,"holder":null}]}],"servers":[{"registrationId":"registration-gpu-box-01","label":"gpu-box-01","address":"wss://gpu-box.example:8443","serverId":"server-gpu","phase":"stale","stores":["store-shared"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"missing","version":null,"directory":null,"problem":"no directory this server searches holds codex"}],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":1756000000000,"staleReason":"dropped","draining":null,"problem":"the connection to the server ended"},{"registrationId":"registration-mbp-robert","label":"mbp-robert","address":"wss://mbp-robert.example:8443","serverId":"server-mbp","phase":"connected","stores":["store-shared"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null}],"candidates":[]}}',
   machineStateDiscovered:
-    '{"type":"machine-state","state":{"version":2,"stores":[],"servers":[],"candidates":[{"serverId":"server-mbp","address":"192.168.1.24","port":8443,"protocolVersion":17},{"serverId":"server-old-build","address":"192.168.1.31","port":8443,"protocolVersion":16}]}}',
+    '{"type":"machine-state","state":{"version":2,"stores":[],"servers":[],"candidates":[{"serverId":"server-mbp","address":"192.168.1.24","port":8443,"protocolVersion":18},{"serverId":"server-old-build","address":"192.168.1.31","port":8443,"protocolVersion":17}]}}',
   refusalPairing:
     '{"type":"refusal","replyTo":2,"code":"bad-request","message":"expected a wss:// address, not the scheme \\"ws:\\"","holder":null}',
   serverPaired: '{"type":"server-paired","replyTo":3,"registrationId":"registration-1"}',

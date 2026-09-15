@@ -71,6 +71,9 @@ function harness(options: { readonly failOn?: RegExp } = {}): Harness {
     logger: createLogger('debug', (record) => logs.push(record)),
     readStore: (storeId) => stores.get(storeId) ?? null,
     projects,
+    // Nothing in this file removes a node, and a holder is only ever read to
+    // refuse one. `mutations.test` is where that question is asked.
+    readHolder: () => null,
   });
   return { catalogue, projects, database, logs, stores };
 }

@@ -233,6 +233,21 @@ export interface FleetState {
    */
   storeSessions(storeId: StoreId): readonly SessionDescriptor[] | null;
   /**
+   * The server running one session right now, or `null` when nobody is.
+   *
+   * `null` also answers a session this hub has never heard of, and the two are
+   * deliberately one answer: both mean there is no live process here to name,
+   * and the one caller -- a removal deciding whether the tree may drop a node
+   * -- would do the same thing with either. A session in a store nobody has
+   * mounted is precisely a session nobody is running.
+   *
+   * Here rather than read off `snapshot().stores` by whoever needs it, for the
+   * reason `storeSessions` is here: a hold is merged across every server
+   * attached to a volume, and a second reader doing that merge is a second
+   * answer waiting to differ from the one the client is looking at.
+   */
+  sessionHolder(ref: SessionRef): SessionHolder | null;
+  /**
    * The same state, projected onto the shape the wire carries.
    *
    * A method here rather than a function the broadcast imports, because the
@@ -419,6 +434,12 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
       const view = snapshot().stores.find((candidate) => candidate.storeId === storeId);
       if (view === undefined) return null;
       return view.sessions.map((row) => row.descriptor);
+    },
+
+    sessionHolder(ref: SessionRef): SessionHolder | null {
+      const view = snapshot().stores.find((candidate) => candidate.storeId === ref.storeId);
+      const row = view?.sessions.find((session) => session.ref.sessionId === ref.sessionId);
+      return row?.holder ?? null;
     },
 
     published(): MachineState {

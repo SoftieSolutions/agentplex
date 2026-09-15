@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { NodeId, SessionRef } from '@agentplex/protocol';
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import type { Database, Queryable } from '../../db/database.js';
-import { findNode, findNodeKind, listChildren } from './reads.js';
+import { findNode, findNodeKind, listAncestry, listChildren, listSubtree } from './reads.js';
 import { COLUMNS, FOLDER_KIND, nodeNameSchema, nodeRowSchema, type TreeNode } from './rows.js';
 
 /**
@@ -184,24 +184,18 @@ async function renumber(database: Queryable, parentId: NodeId | null): Promise<v
  * The foreign key cannot see this: `a.parent = b` and `b.parent = a` are two
  * individually valid rows and together a ring that is part of no tree and that
  * a depth-first walk from the root would never reach.
+ *
+ * Exported because the refusal a client is answered with is decided in
+ * `mutations.ts`, one layer up: a cycle reaches this file as a throw, which is
+ * the right answer to a caller with a bug and the wrong one to a person who
+ * dragged a folder onto its own child.
  */
-async function wouldCycle(
+export async function wouldCycle(
   database: Queryable,
   id: NodeId,
   parentId: NodeId | null,
 ): Promise<boolean> {
-  let walking = parentId;
-  const seen = new Set<NodeId>();
-  while (walking !== null) {
-    if (walking === id) return true;
-    // Only reachable if a ring already exists; stops rather than spins.
-    if (seen.has(walking)) return true;
-    seen.add(walking);
-    const ancestor: TreeNode | null = await findNode(database, walking);
-    if (ancestor === null) return false;
-    walking = ancestor.parentId;
-  }
-  return false;
+  return (await listAncestry(database, parentId)).some((ancestor) => ancestor.id === id);
 }
 
 export interface RemovedNode {
@@ -266,26 +260,8 @@ async function anchorsInSubtree(
   database: Queryable,
   node: TreeNode,
 ): Promise<readonly SessionRef[]> {
-  const anchors: SessionRef[] = [];
-  if (node.anchor !== null) anchors.push(node.anchor);
-
-  // Breadth-first over the rows rather than a recursive CTE: the walk is the
-  // same either way and this one is readable from the test that exercises it.
-  let frontier: readonly NodeId[] = [node.id];
-  const seen = new Set<NodeId>([node.id]);
-  while (frontier.length > 0) {
-    const next: NodeId[] = [];
-    for (const parentId of frontier) {
-      for (const child of await listChildren(database, parentId)) {
-        if (seen.has(child.id)) continue;
-        seen.add(child.id);
-        if (child.anchor !== null) anchors.push(child.anchor);
-        next.push(child.id);
-      }
-    }
-    frontier = next;
-  }
-  return anchors;
+  const subtree = await listSubtree(database, node);
+  return subtree.flatMap((member) => (member.anchor === null ? [] : [member.anchor]));
 }
 
 /**

@@ -36,6 +36,10 @@ import {
  *   * `machine-state` is unsolicited and goes to every client, whole. It has no
  *     `replyTo` because nobody asked for it, and no delta form because two
  *     clients holding different subsets of an edit stream disagree.
+ *     `catalogue-changed` is the other one, and it is the odd member: it goes
+ *     to everybody unasked, like the state, but carries nothing except a
+ *     version -- because the thing that changed is answered per client, and a
+ *     client that is not looking at the tree has no use for it.
  *   * everything else is a reply, carrying the id of the frame it answers, and
  *     goes to the one client that asked. A refusal in particular is never
  *     broadcast: the other clients did not ask, and nothing about the world
@@ -301,24 +305,111 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     directory: directorySchema,
   }),
   /**
-   * Renames a project, and nothing else about it.
+   * Makes a folder: a container the user names, and the only node kind a
+   * client can bring into existence out of nothing.
    *
-   * The directory is not here and never will be. A project's directory is what
-   * the project *is* -- the sessions under it are the ones reported from it,
-   * and the file store on the server is keyed by it -- so changing it would not
-   * be an edit to a project but a different project wearing the old one's
-   * children. Making another is the honest way to say that, and it is one
-   * frame away.
+   * Everything else in the tree is a node for something that already exists --
+   * a session on a disk, a project that is a directory -- and this is the one
+   * that is nothing but the arrangement. Which is why it is also the only kind
+   * a removal can take away for good: discovery can put a session back and
+   * nothing on any disk describes a folder.
    *
-   * It is answered with `node-renamed`, which names no kind: renaming is one
-   * act on the tree whatever the node is, and AGX-239's generic node mutations
-   * reuse this reply rather than minting a second word for the same yes.
+   * `parentId` is `null` for the root, which is not a node and has no id. See
+   * migration 0004 for why there is no row for it to name.
    */
   z.object({
-    type: z.literal('project-rename'),
+    type: z.literal('node-create-folder'),
+    id: frameIdSchema,
+    parentId: nodeIdSchema.nullable(),
+    name: nodeNameTextSchema,
+  }),
+  /**
+   * Renames a node -- a folder, a session, or a project -- and nothing else
+   * about it.
+   *
+   * One frame for all three kinds, and the project-scoped frame AGX-133 added
+   * beside it is gone rather than kept. The two carried the same three fields
+   * and were answered by the same `node-renamed`; what the project one added
+   * was a refusal when the id named something that was not a project, and that
+   * refusal protects nobody. A client sending an id meant to rename *that
+   * node*, and this renames it. What a second frame would have cost is a
+   * second way to say one thing, and -- once the tree's own context menu is
+   * what renames a project -- a frame with no sender left in the codebase.
+   *
+   * A project's directory is not here and never will be. It is what the
+   * project *is* -- the sessions under it are the ones reported from it, and
+   * the file store on the server is keyed by it -- so changing it would not be
+   * an edit to a project but a different project wearing the old one's
+   * children. Making another is the honest way to say that.
+   *
+   * The rename is permanent in one further sense: it sets the node's name
+   * source to the user, and discovery stops following the transcript's title
+   * from then on. A name that lapsed the next time a provider retitled
+   * something would be an edit the user watched get undone.
+   */
+  z.object({
+    type: z.literal('node-rename'),
     id: frameIdSchema,
     nodeId: nodeIdSchema,
     name: nodeNameTextSchema,
+  }),
+  /**
+   * Moves a node to a place among a parent's children.
+   *
+   * `position` is where among the new siblings, counted with the node itself
+   * taken out. It is clamped rather than refused: a client that computed an
+   * index against a tree that has since changed asked for something reasonable,
+   * and refusing it would leave a client one frame out of date unable to move
+   * anything.
+   *
+   * Three things are refused, and each is a state the tree has no reading of:
+   * a parent that cannot hold children, a move that would put a node inside
+   * its own subtree, and a project landing under another project. The last is
+   * not tidiness -- a session is filed under the project whose directory its
+   * `cwd` is, and "the project" has to be a definite article.
+   */
+  z.object({
+    type: z.literal('node-move'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+    parentId: nodeIdSchema.nullable(),
+    position: z.int().nonnegative(),
+  }),
+  /**
+   * Takes a node out of the tree, with everything under it.
+   *
+   * It removes the node and nothing else. No transcript is deleted, no
+   * directory is touched, and no frame goes to any server: a tree is the
+   * user's arrangement of their own screen, and removing something from an
+   * arrangement has never meant deleting the thing.
+   *
+   * Refused while any session in the subtree has a live holder, and the
+   * refusal carries that holder. Removing a session somebody is watching run
+   * would leave a process going with nothing on screen pointing at it; naming
+   * the holder is what lets the client offer the stop that clears the way.
+   *
+   * What it does do is remember. Discovery would otherwise see the session on
+   * the next scan and put the node straight back, so the removal of every
+   * session in the subtree is recorded -- and `node-forget-removal` is how
+   * that is undone.
+   */
+  z.object({
+    type: z.literal('node-remove'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
+  /**
+   * Forgets that a session was removed, so discovery may place it again.
+   *
+   * Keyed by the session and not by a node id, and it has to be: the node is
+   * gone, so an id naming it would name nothing. `{ storeId, sessionId }` is a
+   * session's identity everywhere in this protocol, and never the machine.
+   */
+  z.object({
+    type: z.literal('node-forget-removal'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
   }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
@@ -516,16 +607,81 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     nodeId: nodeIdSchema,
   }),
   /**
+   * The folder exists, and this is the node it is.
+   *
+   * The id is carried for the reason `project-created` carries one: it is the
+   * one thing the client cannot work out for itself, and a client that had to
+   * find its own folder back out of the next tree by name would be matching on
+   * the one field the user is free to change.
+   */
+  z.object({
+    type: z.literal('node-created'),
+    replyTo: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
+  /**
    * The node is now called what was asked, and there is nothing else to say.
    *
    * It carries no name, because the client sent it and the hub stored exactly
    * that; and no kind, because a rename is one act on the tree whatever the
-   * node is. AGX-239 answers its own renames with this frame rather than a
-   * second one, which is why it is named for the act and not for the caller.
+   * node is -- a folder, a session, or a project. It is named for the act and
+   * not for the caller, which is what let the project-scoped rename frame be
+   * deleted rather than kept beside it.
    */
   z.object({
     type: z.literal('node-renamed'),
     replyTo: frameIdSchema,
+  }),
+  /**
+   * The node is where it was asked to go. Nothing to carry: the client named
+   * the parent and the position, and a clamped position is a detail of the
+   * tree the next layout answers for.
+   */
+  z.object({
+    type: z.literal('node-moved'),
+    replyTo: frameIdSchema,
+  }),
+  /** The node is out of the tree, with everything that was under it. */
+  z.object({
+    type: z.literal('node-removed'),
+    replyTo: frameIdSchema,
+  }),
+  /**
+   * That removal is forgotten. The session is placed again by the discovery
+   * pass the hub runs on the way to answering this, so the layout a client
+   * asks for next already holds it.
+   */
+  z.object({
+    type: z.literal('node-removal-forgotten'),
+    replyTo: frameIdSchema,
+  }),
+  /**
+   * The tree changed. No `replyTo`, because it is nobody's reply.
+   *
+   * Unsolicited and broadcast, like `machine-state` and unlike `layout` -- and
+   * the difference between this and the layout is exactly why it carries a
+   * version and no nodes. A layout is one person's arrangement and is answered
+   * to the client that asked; what changed about the tree is one shared fact,
+   * and every client that is looking at the tree needs to know that what it is
+   * holding is old. So the hub says that much to everybody, and each client
+   * asks for the layout again if it is drawing one. A client that is not
+   * looking at a tree does nothing and costs nothing.
+   *
+   * The version is monotonic and is the hub's own counter, not a row anywhere.
+   * It exists so a client can tell a change it has already followed from one
+   * it has not, and it has no delta form: what a client would do with an edit
+   * to a tree it may be several versions behind on is the question this whole
+   * protocol answers by sending things whole.
+   *
+   * It follows every mutation, and also a discovery pass that actually changed
+   * something -- a session that appeared, a title that moved, a node the prune
+   * took. The frame names the catalogue and not the client's own edit, and a
+   * tree that quietly fell behind the fleet would be the same stale screen as
+   * one that fell behind a rename.
+   */
+  z.object({
+    type: z.literal('catalogue-changed'),
+    version: z.int().nonnegative(),
   }),
   protocolErrorFrameSchema,
 ]);
