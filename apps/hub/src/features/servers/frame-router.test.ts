@@ -130,6 +130,9 @@ describe('a frame this build has no handler for', () => {
       chunk: encodeTerminalChunk(new TextEncoder().encode('ok\r\n')),
       droppedChunks: 0,
     },
+    { type: 'doc-written', replyTo: 8, updatedAt: 1_700_000_000_000 },
+    { type: 'doc-content', replyTo: 9, content: '# plan\n', updatedAt: 1_700_000_000_000 },
+    { type: 'doc-listing', replyTo: 10, entries: [] },
   ];
 
   it.each(unhandled)('says so at debug rather than dropping $type in silence', (frame) => {

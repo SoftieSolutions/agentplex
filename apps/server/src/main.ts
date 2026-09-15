@@ -25,6 +25,7 @@ import { startRuntime } from './boot.js';
 import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
 import { nodeDataRoot } from './node-data-root.js';
+import { nodeProjectFiles } from './node-project-files.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
 import { createMachineLoadReader, createNodeMachineProbe } from './machine-load.js';
 import { createGitWorkingTree } from './working-tree.js';
@@ -144,6 +145,11 @@ async function main(): Promise<void> {
       // separate seam from the store volumes above because it is a separate
       // permission: a store is read, and this is written.
       dataRootFileSystem: nodeDataRoot,
+      // The disk under the project folders, below the root above. The one
+      // place this process replaces a file of its own whole -- a project's
+      // documents -- and separate from the seam above because a replace does
+      // not belong beside a `mkdir` that has to be refusable.
+      projectFiles: nodeProjectFiles,
       grantFileSystem: nodeGrantFileSystem,
       // The only place a secret is generated, and the CSPRNG is the whole
       // implementation: the server's pairing token, once, on its first start.

@@ -1,6 +1,8 @@
 import type { MessageSocket } from '@agentplex/node-shared';
 import { createFakeGrantAuthority } from '@agentplex/providers/testing';
+import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
 import { createHubAudience } from '../../../apps/server/src/hub-audience.js';
+import { createProjectDocs } from '../../../apps/server/src/project-docs.js';
 import {
   serveHubConnection,
   type HubConnection,
@@ -22,12 +24,17 @@ import {
  * The default grant is derived from the identity's own token, so a suite that
  * dials with the token it was given still connects and one that dials with
  * another still does not: the authorization is real, it is just not the subject.
+ *
+ * The document store defaults to the real rules over an in-memory disk under
+ * a data root nothing here reads back, for the same reason: no suite in this
+ * directory is about documents yet, and a connection carries the store
+ * whether or not the hub asks it anything.
  */
 export type ServerEndDependencies = Omit<
   HubConnectionDependencies,
-  'connectionId' | 'grants' | 'audience'
+  'connectionId' | 'grants' | 'audience' | 'docs'
 > &
-  Partial<Pick<HubConnectionDependencies, 'connectionId' | 'grants' | 'audience'>>;
+  Partial<Pick<HubConnectionDependencies, 'connectionId' | 'grants' | 'audience' | 'docs'>>;
 
 let connections = 0;
 
@@ -42,6 +49,11 @@ export function serveServerEnd(
       grants: { [identity.token]: `grant-for-${identity.serverId}` },
     }),
     audience: createHubAudience({ sessions, logger }),
+    docs: createProjectDocs({
+      dataRoot: '/var/lib/agentplex',
+      files: createFakeProjectFiles(),
+      logger,
+    }),
     ...dependencies,
   });
 }

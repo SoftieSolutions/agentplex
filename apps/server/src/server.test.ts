@@ -17,6 +17,7 @@ import {
   createFakeStoreFiles,
   missingProvider,
   readyProvider,
+  type FakeProcessRunner,
 } from '@agentplex/providers/testing';
 import type { Launch, LaunchPlan } from '@agentplex/providers';
 import { startRuntime, type Runtime } from './boot.js';
@@ -26,6 +27,8 @@ import { createFakeDataRoot } from './fake-data-root.js';
 import { createFakeWorkingTree } from './fake-working-tree.js';
 import { createFakeTerminals, type FakeTerminals } from './fake-terminals.js';
 import { createFakeMachineLoadReader } from './fake-machine-probe.js';
+import { createFakeProjectFiles, type FakeProjectFiles } from './fake-project-files.js';
+import { PROJECT_FILES_DIRECTORY } from './project-files.js';
 
 /**
  * The draining shutdown, against a real server on a real port with a real hub
@@ -86,6 +89,10 @@ interface World {
   readonly terminals: FakeTerminals;
   readonly records: readonly LogRecord[];
   readonly preflight: FakePreflight;
+  /** The one runner every operation goes through, so a spawn is a request in here. */
+  readonly runner: FakeProcessRunner;
+  /** The disk under the project folders, so a write is a path in here. */
+  readonly projectFiles: FakeProjectFiles;
 }
 
 /**
@@ -154,6 +161,8 @@ async function start(reading: readonly ProviderReadiness[] = []): Promise<World>
   const terminals = createFakeTerminals();
   const records: LogRecord[] = [];
   const preflight = createFakePreflight(reading);
+  const runner = createFakeProcessRunner();
+  const projectFiles = createFakeProjectFiles();
   const runtime = await startRuntime(config, {
     logger: createLogger('info', (record) => records.push(record)),
     ids: { newId: () => 'id-under-test' },
@@ -161,6 +170,7 @@ async function start(reading: readonly ProviderReadiness[] = []): Promise<World>
     storeFileSystem: createFakeStoreFiles(),
     dataRootFileSystem: createFakeDataRoot(),
     grantFileSystem: createFakeGrantFiles(),
+    projectFiles,
     tokens: { newToken: () => TOKEN },
     // No adapters. A scan that found sessions would derive statuses of its own
     // and overwrite the one each test is making its point with.
@@ -168,7 +178,7 @@ async function start(reading: readonly ProviderReadiness[] = []): Promise<World>
     preflight,
     terminals: terminals.terminals,
     machineLoad: createFakeMachineLoadReader(),
-    operations: createOperationRegistry(createFakeProcessRunner()),
+    operations: createOperationRegistry(runner),
     workingTree: createFakeWorkingTree(),
     beacon: {
       open: () => {
@@ -178,7 +188,7 @@ async function start(reading: readonly ProviderReadiness[] = []): Promise<World>
     },
     clock: { now: () => 1_756_000_000_000 },
   });
-  world = { runtime, terminals, records, preflight };
+  world = { runtime, terminals, records, preflight, runner, projectFiles };
   return world;
 }
 
@@ -499,5 +509,72 @@ describe('re-reading provider readiness', () => {
     // the sockets are gone. A probe here would fork two children on a process
     // whose whole job now is to stop forking them.
     expect(started.preflight.runs).toBe(runsAfterBoot);
+  });
+});
+
+/**
+ * The document frames, end to end through the runtime `main` assembles, and
+ * the one assertion about them that has to hold at this level rather than at
+ * the handler's: nothing on them reaches a process.
+ *
+ * `directory` on a document frame is a key into the project file store and
+ * the rule that no frame carries a cwd is about what reaches a child. The
+ * handler's tests show the store is asked; this shows the runner and the pty
+ * -- the only two ways this server starts anything -- were not. Both are the
+ * real registry and the real manager over fakes that record every request,
+ * so "no process" is an empty list rather than an absence of evidence.
+ */
+describe('the document frames', () => {
+  const DIRECTORY = '/Users/dev/Code/agentplex';
+
+  it('writes, reads back and lists a document, and starts no process doing it', async () => {
+    const started = await start();
+    const hub = await dial(started);
+
+    hub.send({
+      type: 'doc-write',
+      id: 2,
+      directory: DIRECTORY,
+      name: 'plan.md',
+      content: '# Plan\n',
+    });
+    const written = await hub.next('doc-written');
+    hub.send({ type: 'doc-read', id: 3, directory: DIRECTORY, name: 'plan.md' });
+    const content = await hub.next('doc-content');
+    hub.send({ type: 'doc-list', id: 4, directory: DIRECTORY });
+    const listing = await hub.next('doc-listing');
+
+    expect(written).toMatchObject({ replyTo: 2 });
+    expect(content).toMatchObject({ replyTo: 3, content: '# Plan\n' });
+    expect(listing).toMatchObject({ replyTo: 4, entries: [{ name: 'plan.md', bytes: 7 }] });
+
+    // No operation was run and no terminal was opened: the frames' fields
+    // went to the file store and to nothing that forks.
+    expect(started.runner.requests).toEqual([]);
+    expect(started.terminals.factory.ptys).toEqual([]);
+
+    // And what was written went under this server's own root, keyed by the
+    // directory, and never into the directory itself.
+    const root = `${DATA_PATH}/${PROJECT_FILES_DIRECTORY}/`;
+    const touched = [...started.projectFiles.creates, ...started.projectFiles.writes];
+    expect(touched.length).toBeGreaterThan(0);
+    for (const path of touched) {
+      expect(path.startsWith(root)).toBe(true);
+      expect(path.startsWith(DIRECTORY)).toBe(false);
+    }
+
+    hub.close();
+  });
+
+  it('refuses a document it does not have on the frame the hub can already read', async () => {
+    const started = await start();
+    const hub = await dial(started);
+
+    hub.send({ type: 'doc-read', id: 2, directory: DIRECTORY, name: 'missing.md' });
+    const refusal = await hub.next('session-refused');
+
+    expect(refusal).toMatchObject({ replyTo: 2, code: 'refused', hold: null });
+    expect(started.runner.requests).toEqual([]);
+    hub.close();
   });
 });

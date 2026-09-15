@@ -59,8 +59,12 @@ export function routeServerFrame(
     case 'session-subscribed':
     case 'session-unsubscribed':
     case 'terminal-output':
-      // Parsed, and dropped on purpose. The drain is AGX-83's stack and the
-      // terminal relay is AGX-102's; until those land, a server that sends
+    case 'doc-written':
+    case 'doc-content':
+    case 'doc-listing':
+      // Parsed, and dropped on purpose. The drain is AGX-83's stack, the
+      // terminal relay is AGX-102's, and the three document replies are read
+      // by the docs feature in AGX-242; until those land, a server that sends
       // these is ahead of this hub, and the line below is the only evidence
       // there will be.
       logger.debug('frame dropped: this hub build does not handle it yet', { type: frame.type });

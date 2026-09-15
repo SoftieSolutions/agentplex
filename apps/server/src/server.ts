@@ -36,6 +36,8 @@ import { createHubAudience } from './hub-audience.js';
 import { sweepGrants } from './grant-sweep.js';
 import { createSessionController } from './session-control.js';
 import type { MachineLoadReader } from './machine-load.js';
+import { createProjectDocs } from './project-docs.js';
+import type { ProjectFileSystem } from './project-files.js';
 import type { WorkingTree } from './working-tree.js';
 import type { TerminalManager } from './terminal-manager.js';
 
@@ -173,6 +175,19 @@ export interface SessionServerDependencies {
    * assembled, and nothing below it goes looking on its own.
    */
   readonly machineLoad: MachineLoadReader;
+  /**
+   * The data root, as `boot.ts` ensured it before anything was served, and
+   * the disk under it for the project file store.
+   *
+   * The path and the seam arrive together because they are one capability:
+   * a project folder is made under this root through this seam, and a
+   * server handed one without the other could make folders it cannot name
+   * or name folders it cannot make. The seam is separate from the data
+   * root's for the reason the grant seam is: this one replaces files, and a
+   * replace does not belong on the seam that only makes directories.
+   */
+  readonly dataRoot: string;
+  readonly projectFiles: ProjectFileSystem;
   readonly timers: Timers;
   /**
    * How this server announces itself on the local network, or `null` for one
@@ -257,6 +272,8 @@ export async function startSessionServer(
     operations,
     workingTree,
     machineLoad,
+    dataRoot,
+    projectFiles,
     timers,
     announce,
   } = dependencies;
@@ -419,6 +436,14 @@ export async function startSessionServer(
    */
   const connections = new Set<HubConnection>();
 
+  // The document store, one per server and shared by every connection,
+  // because a project's folder is the machine's and not a socket's. It takes
+  // no lock and holds no state, so sharing it serialises nothing: what a
+  // concurrent second write owes to the first is the rename in
+  // `node-project-files.ts`. Nothing in it starts a process;
+  // `project-docs.ts` says why it is not an operation.
+  const docs = createProjectDocs({ dataRoot, files: projectFiles, logger });
+
   // Every hub connected at once, which is what makes a stop by one of them
   // something the others are told about. It outlives each connection: a socket
   // comes and goes and the set is the server's.
@@ -457,6 +482,7 @@ export async function startSessionServer(
           // server's and not the connection's: the counters are one machine's,
           // and two hubs asking are two questions about the same cpus.
           machineLoad,
+          docs,
           logger,
         }),
       );
