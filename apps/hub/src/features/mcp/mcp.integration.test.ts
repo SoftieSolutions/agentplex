@@ -12,6 +12,7 @@ import type { MigrationFileSystem } from '../../db/migration-files.js';
 import { startHub, type Hub } from '../../hub.js';
 import { createFakeBeaconSource } from '../discovery/fake-discovery.js';
 import { createFakeSessions } from '../sessions/fake-sessions.js';
+import { createFakeDocs } from '../docs/fake-docs.js';
 import { createFakeWebAssets } from '../web/fake-web.js';
 import { createMcp, MCP_PATH } from './mcp.js';
 
@@ -59,6 +60,7 @@ afterEach(async () => {
 const emptyFleet = { published: () => ({ version: 0, stores: [], servers: [], candidates: [] }) };
 const noTerminal = { subscribe: () => {}, input: () => {}, forget: () => {} };
 const noSessions = createFakeSessions();
+const noDocs = createFakeDocs();
 
 /**
  * One pairing in the hub's table, so the fleet an agent lists is not empty.
@@ -196,6 +198,10 @@ describe('the hub MCP endpoint', () => {
     const { tools } = await connected.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'doc_create',
+      'doc_list',
+      'doc_read',
+      'doc_update',
       'hub_info',
       'list_servers',
       'list_sessions',
@@ -205,10 +211,14 @@ describe('the hub MCP endpoint', () => {
       'start_session',
       'stop_session',
     ]);
-    // The split a client reads before it decides whether to ask a person: five
-    // that only read, three that act, and exactly one of those that destroys.
+    // The split a client reads before it decides whether to ask a person: seven
+    // that only read, five that act, and exactly one of those that destroys.
+    // Making and saving a document are acts and neither is destructive -- the
+    // document is there afterwards either way -- so the stop stays alone.
     const readers = tools.filter((tool) => tool.annotations?.readOnlyHint === true);
     expect(readers.map((tool) => tool.name).sort()).toEqual([
+      'doc_list',
+      'doc_read',
       'hub_info',
       'list_servers',
       'list_sessions',
@@ -455,6 +465,7 @@ describe('the MCP endpoint while the hub is stopping', () => {
       state: emptyFleet,
       terminal: noTerminal,
       sessions: noSessions,
+      docs: noDocs,
       timers: createFakeTimers(),
       logger: createLogger('debug', () => {}),
     });
@@ -502,6 +513,7 @@ describe('the MCP endpoint while the hub is stopping', () => {
       state: emptyFleet,
       terminal: noTerminal,
       sessions: noSessions,
+      docs: noDocs,
       timers: createFakeTimers(),
       logger: createLogger('debug', () => {}),
     });
