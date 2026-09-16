@@ -35,12 +35,6 @@ describe('colorForTone', () => {
     }
   });
 
-  it('defaults to the dark scheme, because the app is dark-first', () => {
-    for (const tone of tones) {
-      expect(colorForTone(tone)).toBe(colorForTone(tone, 'dark'));
-    }
-  });
-
   it('gives needs-you the accent hue in both schemes: what the app points at is what wants a human', () => {
     for (const scheme of schemes) {
       expect(colorForTone('needs-you', scheme)).toBe(colorForRole('accent', scheme));

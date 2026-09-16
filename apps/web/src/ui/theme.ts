@@ -18,11 +18,13 @@ import { colorForRole, hues } from './tokens.js';
 
 /**
  * The mockup palette (tokens.ts) wired into Mantine. Dark-first: the provider
- * mounts with defaultColorScheme="dark" (see App.tsx), and the light scheme
- * is the mockup's paper variant, not Mantine's stock white. Fonts are
- * self-hosted through the fontsource imports above — Manrope for UI, Fira
- * Code for code and metadata — so nothing is fetched from a font CDN at
- * runtime. Components that color a status still call colorForTone rather
+ * falls back to dark when nothing has been chosen (see App.tsx), and the
+ * light scheme is the mockup's paper variant, not Mantine's stock white. Both
+ * are reachable: Settings carries the control, see ui/color-scheme.ts.
+ *
+ * Fonts are self-hosted through the fontsource imports above — Manrope for
+ * UI, Fira Code for code and metadata — so nothing is fetched from a font CDN
+ * at runtime. Components that color a status still call colorForTone rather
  * than reaching into a palette.
  */
 

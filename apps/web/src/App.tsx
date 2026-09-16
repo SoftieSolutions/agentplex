@@ -7,6 +7,7 @@ import { SessionListScreen } from './sessions/session-list-screen.js';
 import { SettingsRoute } from './settings/settings-route.js';
 import type { HubStore } from './store/hub-store.js';
 import { useSessionRoute } from './terminal/session-route.js';
+import { colorSchemeManager } from './ui/color-scheme.js';
 import { MantineProvider, Stack } from './ui/components.js';
 import { cssVariablesResolver, theme } from './ui/theme.js';
 
@@ -35,6 +36,7 @@ export function App({ hub, tokens }: AppProps): JSX.Element {
     <MantineProvider
       theme={theme}
       cssVariablesResolver={cssVariablesResolver}
+      colorSchemeManager={colorSchemeManager}
       defaultColorScheme="dark"
     >
       <AppShell hub={hub} tokens={tokens} />
