@@ -14,7 +14,6 @@ import {
   CATALOGUE_PAGE_LIMIT,
   countLabel,
   DEFAULT_SHAPE,
-  DOC_NOTE,
   filterOptions,
   isNarrowed,
   matchWords,
@@ -374,7 +373,7 @@ describe('the short machine label', () => {
 });
 
 describe('the kinds a leaf may be', () => {
-  it('knows a doc from a session, so the tree can say what a doc needs', () => {
+  it('draws a doc as a leaf, since a document holds nothing to expand into', () => {
     const doc = item({ id: id('d'), kind: DOC_KIND });
     const rows = rowsFor([doc], { view: 'tree', collapsed: new Set() });
     expect(rows[0]?.kind === 'item' && rows[0].expandable).toBe(false);
@@ -385,10 +384,6 @@ describe('the quiet second line on a row', () => {
   it('labels a session no server is reporting rather than drawing it as live', () => {
     const orphan = item({ id: id('s'), anchor: anchorOf('session-1'), session: null });
     expect(rowNotes(orphan)).toEqual(['no server is reporting this session']);
-  });
-
-  it('says what a doc needs, since nothing in this build can open one', () => {
-    expect(rowNotes(item({ id: id('d'), kind: DOC_KIND }))).toEqual([DOC_NOTE]);
   });
 
   it('explains a hit the name does not, and says nothing about a folder', () => {

@@ -29,6 +29,7 @@ import {
 } from './session-list-model.js';
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogue-store.js';
+import { ProjectDocuments } from '../docs/project-docs.js';
 import { MachineSelector } from '../machines/machine-selector.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
@@ -216,6 +217,8 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
         onClose={() => setCreatingProject(false)}
         scheme={scheme}
       />
+
+      <ProjectDocuments store={store} scheme={scheme} />
 
       {stores.length === 0 && providers.length === 0 ? null : (
         <Group gap={8}>

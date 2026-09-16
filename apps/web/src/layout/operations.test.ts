@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { sessionRefSchema } from '@agentplex/protocol';
+import { nodeIdSchema, sessionRefSchema } from '@agentplex/protocol';
 import {
   closePane,
-  findSessionPane,
+  findPaneShowing,
   moveFocus,
   paneRects,
   panes,
@@ -10,7 +10,7 @@ import {
   setRatio,
   splitPane,
 } from './operations.js';
-import { emptyPane, sessionPane, type LayoutTree } from './tree.js';
+import { docPane, emptyPane, sessionPane, type LayoutTree } from './tree.js';
 
 const SESSION = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-1' });
 const OTHER = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-2' });
@@ -100,24 +100,46 @@ describe('setRatio', () => {
   });
 });
 
-describe('setPaneContent and findSessionPane', () => {
+describe('setPaneContent and findPaneShowing', () => {
   it('replaces what a pane shows', () => {
     const tree = setPaneContent(ARRANGED, ['second', 'second'], {
       type: 'session',
       session: SESSION,
     });
-    expect(tree === null ? null : findSessionPane(tree, SESSION)).toEqual(['first']);
+    expect(
+      tree === null ? null : findPaneShowing(tree, { type: 'session', session: SESSION }),
+    ).toEqual(['first']);
     // Both panes now show it; the first in tree order is the answer.
   });
 
   it('finds a showing session by value, and answers null for one not showing', () => {
-    expect(findSessionPane(ARRANGED, OTHER)).toEqual(['second', 'first']);
+    expect(findPaneShowing(ARRANGED, { type: 'session', session: OTHER })).toEqual([
+      'second',
+      'first',
+    ]);
     expect(
-      findSessionPane(
-        ARRANGED,
-        sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-9' }),
-      ),
+      findPaneShowing(ARRANGED, {
+        type: 'session',
+        session: sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-9' }),
+      }),
     ).toBeNull();
+  });
+
+  it('finds a document by its node, and never confuses one kind for another', () => {
+    const plan = nodeIdSchema.parse('hub-5');
+    const notes = nodeIdSchema.parse('hub-6');
+    const tree = setPaneContent(ARRANGED, ['first'], { type: 'doc', nodeId: plan });
+    if (tree === null) throw new Error('the path names a pane');
+    expect(findPaneShowing(tree, { type: 'doc', nodeId: plan })).toEqual(['first']);
+    expect(findPaneShowing(tree, { type: 'doc', nodeId: notes })).toBeNull();
+    expect(findPaneShowing(tree, { type: 'session', session: SESSION })).toBeNull();
+  });
+
+  it('never calls an empty pane the same thing as another empty pane', () => {
+    // "Is this already on screen" has no answer for a pane showing nothing,
+    // and saying yes would focus an empty pane instead of filling one.
+    expect(findPaneShowing(docPane(nodeIdSchema.parse('hub-5')), { type: 'empty' })).toBeNull();
+    expect(findPaneShowing(emptyPane(), { type: 'empty' })).toBeNull();
   });
 });
 

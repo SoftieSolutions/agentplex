@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseHubFrame, parseTextFrame, sessionRefSchema } from '@agentplex/protocol';
+import { nodeIdSchema, parseHubFrame, parseTextFrame, sessionRefSchema } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import {
   DEFAULT_TREE,
+  docPane,
   parsePaneLayout,
   serializePaneLayout,
   sessionPane,
@@ -10,6 +11,8 @@ import {
 } from './tree.js';
 
 const SESSION = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-1' });
+/** The node a real hub minted for a real document; see the capture. */
+const DOC = nodeIdSchema.parse('hub-5');
 
 /** A tree this build writes, for round trips. */
 const ARRANGED: LayoutTree = {
@@ -45,6 +48,15 @@ describe('parsePaneLayout on answers with no layout in them', () => {
 describe('parsePaneLayout on layouts', () => {
   it('round-trips what this build writes', () => {
     expect(parsePaneLayout(serializePaneLayout(ARRANGED))).toEqual(ARRANGED);
+  });
+
+  it('round-trips a document pane, which is a node id and nothing else', () => {
+    const withDoc: LayoutTree = { ...ARRANGED, first: docPane(DOC) };
+    expect(parsePaneLayout(serializePaneLayout(withDoc))).toEqual(withDoc);
+    expect(JSON.parse(serializePaneLayout(docPane(DOC)))).toEqual({
+      v: 1,
+      root: { kind: 'pane', content: { type: 'doc', nodeId: 'hub-5' } },
+    });
   });
 
   it('reads what the hub actually answers for a stored layout', () => {
@@ -97,6 +109,11 @@ describe('parsePaneLayout degrading a node it cannot read', () => {
       `"first":{"kind":"pane","content":{"type":"empty"}},"second":${strangerNode}}}`;
     const saved = serializePaneLayout(parsePaneLayout(text));
     expect(JSON.parse(saved)).toEqual(JSON.parse(text));
+  });
+
+  it('degrades a document pane with no node in it, rather than opening nothing', () => {
+    const tree = parsePaneLayout('{"v":1,"root":{"kind":"pane","content":{"type":"doc"}}}');
+    expect(tree.kind === 'pane' && tree.content.type).toBe('unknown');
   });
 
   it('degrades a session pane whose ref does not parse, rather than showing a guess', () => {

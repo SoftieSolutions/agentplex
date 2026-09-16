@@ -1,4 +1,4 @@
-import { sessionRefSchema, type SessionRef } from '@agentplex/protocol';
+import { nodeIdSchema, sessionRefSchema, type NodeId, type SessionRef } from '@agentplex/protocol';
 
 /**
  * The split-pane layout tree, and the parser that is the whole reason it can
@@ -22,6 +22,13 @@ import { sessionRefSchema, type SessionRef } from '@agentplex/protocol';
  *     writes the stranger's node back out verbatim. An older client passing
  *     through a newer one's layout must not launder it into placeholders.
  *
+ * Adding a kind does not bump the format version, and that is the forward
+ * compatibility working in both directions rather than an omission. A build
+ * that has never heard of `doc` reads one as an `unknown` pane, keeps the raw
+ * node and writes it back verbatim on the next save, so a person with two
+ * builds open loses neither arrangement; a version bump would have said the
+ * whole document was unreadable to the older one, which is the over-claim.
+ *
  * Splits are binary, deliberately: one ratio per split keeps a divider drag
  * one number, and a three-way split is two nested ones. Panes are addressed
  * by path — the run of `first`/`second` choices from the root — rather than
@@ -32,6 +39,13 @@ import { sessionRefSchema, type SessionRef } from '@agentplex/protocol';
 /** What one pane shows. The closed set today; `unknown` is tomorrow's entry. */
 export type PaneContent =
   | { readonly type: 'session'; readonly session: SessionRef }
+  /**
+   * A document, by the node it is. The node id and nothing else, for the
+   * reason every doc frame carries one: the file's name, its project and the
+   * machine holding it are the hub's rows, and a layout that restated any of
+   * them would be a saved arrangement that could contradict the tree.
+   */
+  | { readonly type: 'doc'; readonly nodeId: NodeId }
   /** No session here yet. Later tickets put a picker in it. */
   | { readonly type: 'empty' }
   /**
@@ -90,6 +104,10 @@ export function sessionPane(session: SessionRef): PaneLeaf {
   return { kind: 'pane', content: { type: 'session', session } };
 }
 
+export function docPane(nodeId: NodeId): PaneLeaf {
+  return { kind: 'pane', content: { type: 'doc', nodeId } };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -113,6 +131,10 @@ function parseContent(raw: unknown): PaneContent | null {
     // A session pane whose ref does not parse is not a session pane with a
     // guess in it; it is a pane this build cannot honestly show.
     return session.success ? { type: 'session', session: session.data } : null;
+  }
+  if (raw['type'] === 'doc') {
+    const nodeId = nodeIdSchema.safeParse(raw['nodeId']);
+    return nodeId.success ? { type: 'doc', nodeId: nodeId.data } : null;
   }
   return null;
 }
@@ -165,6 +187,8 @@ function encodeNode(node: LayoutTree): unknown {
     switch (node.content.type) {
       case 'session':
         return { kind: 'pane', content: { type: 'session', session: node.content.session } };
+      case 'doc':
+        return { kind: 'pane', content: { type: 'doc', nodeId: node.content.nodeId } };
       case 'empty':
         return { kind: 'pane', content: { type: 'empty' } };
       case 'unknown':

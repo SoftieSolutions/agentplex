@@ -835,10 +835,11 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         },
       ],
     ]);
+    const singleLive = new Map<string, MessageSocket>();
     const singleHub = await startFleetHub(
       single,
       [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
-      new Map(),
+      singleLive,
     );
     await until(
       () =>
@@ -987,9 +988,30 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const docContent = starter.received.find((text) => labelFor(text) === 'docContent');
     if (docContent === undefined) throw new Error('the document open was not answered');
 
+    // The editor's own flow, which is the order a person meets these frames
+    // in: the document is read, edited, and written back whole. Captured as a
+    // second save because the web's editor store is tested against a real
+    // answer to a save that followed a real open -- the two replies have to be
+    // consecutive there, and they are consecutive here for the same reason.
+    starter.send({
+      type: 'doc-save',
+      id: 11,
+      nodeId: madeDoc.value.nodeId,
+      content:
+        '# Plan\n\n- read the failing test\n- fix the refresh loop\n- write it up\n- ship it\n',
+    });
+    await until(
+      () => starter.received.filter((text) => labelFor(text) === 'docSaved').length === 2,
+      'the second document save to be answered',
+    );
+    const docSavedAfterOpen = starter.received.filter((text) => labelFor(text) === 'docSaved')[1];
+    if (docSavedAfterOpen === undefined) throw new Error('the second save was not answered');
+
     // The tree with that project in it, so the web's project picker has a
-    // captured layout to read rather than one somebody typed.
-    starter.send({ type: 'layout-request', id: 11 });
+    // captured layout to read rather than one somebody typed. Last, because
+    // the tree is the hub's own rows and says the same thing whether or not
+    // the machine holding the file is awake.
+    starter.send({ type: 'layout-request', id: 13 });
     await until(
       () => starter.received.some((text) => labelFor(text) === 'layout'),
       'the layout to be answered',
@@ -1185,6 +1207,46 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       (text) => labelFor(text) === 'catalogueTreePage',
     );
     if (catalogueTreePage === undefined) throw new Error('no final tree page was answered');
+
+    // The same save once the machine has gone away, which is the refusal the
+    // editor is written around: the hub holds no copy of a document, so a
+    // write it cannot deliver is a no with the machine named in it, and what
+    // the editor must not do with that no is drop the characters. Captured
+    // rather than written here because the sentence is the hub's.
+    //
+    // Last in this conversation, and that is not incidental: everything above
+    // -- the tree, the catalogue, both pages of both views -- is captured with
+    // this machine connected, so taking it away is the end of the scenario
+    // rather than a state the later captures would have inherited.
+    singleLive.get('mbp-robert.example')?.close({ code: 1006, reason: 'the machine went away' });
+    await until(
+      () => singleHub.hub.connections.snapshot().some((report) => report.phase === 'stale'),
+      'the single machine to go stale',
+    );
+    starter.send({
+      type: 'doc-save',
+      // The id this frame carries is load-bearing beyond this file: the web's
+      // editor suite runs its own counter up to the same numbers so that a
+      // captured answer lands on the captured request, which is the property
+      // that suite is about. It is 12 because a save follows a read and a
+      // first save, and moving it would be moving the reply it is matched to.
+      id: 12,
+      nodeId: madeDoc.value.nodeId,
+      content: '# Plan\n\n- everything above, and this line nobody received\n',
+    });
+    // By the frame it answers and not by its label: this conversation has
+    // already been refused a stale cursor, and both are refusals with no
+    // holder on them.
+    const answersTheAwaySave = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'refusal' && seen.value.replyTo === 12;
+    };
+    await until(
+      () => starter.received.some(answersTheAwaySave),
+      'the save to the machine that went away to be refused',
+    );
+    const refusalDocAway = starter.received.find(answersTheAwaySave);
+    if (refusalDocAway === undefined) throw new Error('the save was not refused');
 
     await singleHub.cleanup();
 
@@ -1708,6 +1770,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('nodeRenamed', nodeRenamed);
     captured.set('docCreated', docCreated);
     captured.set('docSaved', docSaved);
+    captured.set('docSavedAfterOpen', docSavedAfterOpen);
+    captured.set('refusalDocAway', refusalDocAway);
     captured.set('docContent', docContent);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);

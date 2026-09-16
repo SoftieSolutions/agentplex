@@ -1,10 +1,11 @@
 import { type JSX, type ReactNode } from 'react';
 import type { CatalogueItem, NodeId } from '@agentplex/protocol';
+import { docHash } from '../docs/doc-route.js';
 import { toneForStatus } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { Box, Group, Text, UnstyledButton } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
-import { nameStyleOf, rowNotes, type CatalogueRow } from './catalogue-model.js';
+import { isDoc, nameStyleOf, rowNotes, type CatalogueRow } from './catalogue-model.js';
 
 /**
  * One row of the catalogue, in either view.
@@ -15,10 +16,10 @@ import { nameStyleOf, rowNotes, type CatalogueRow } from './catalogue-model.js';
  * without a DOM. This stack renders under no jsdom (AGX-238 and AGX-243 set
  * the pattern), so a rule that lived here would be a rule nothing tests.
  *
- * A leaf that addresses a session is an anchor and not a button. The session
- * route is an address -- `#/session/<store>/<session>` -- and a link is what a
- * person can middle-click into a second tab, which is exactly the thing
- * somebody watching two agents wants to do.
+ * A leaf that addresses something is an anchor and not a button, and both
+ * leaves do: a session is `#/session/<store>/<session>` and a document is
+ * `#/doc/<node>`. A link is what a person can middle-click into a second tab,
+ * which is exactly the thing somebody watching two agents wants to do.
  */
 export interface CatalogueRowViewProps {
   readonly row: Extract<CatalogueRow, { kind: 'item' }>;
@@ -142,13 +143,13 @@ function RowName({ item, scheme }: RowNameProps): JSX.Element {
     </Text>
   );
 
-  if (item.anchor === null) return text;
+  // Two addressable leaves and one rule: a node the client can open is a link
+  // to the address that opens it, and everything else is text.
+  const href =
+    item.anchor !== null ? sessionHash(item.anchor) : isDoc(item.kind) ? docHash(item.id) : null;
+  if (href === null) return text;
   return (
-    <UnstyledButton
-      component="a"
-      href={sessionHash(item.anchor)}
-      style={{ flex: 1, minWidth: 0, display: 'block' }}
-    >
+    <UnstyledButton component="a" href={href} style={{ flex: 1, minWidth: 0, display: 'block' }}>
       {text}
     </UnstyledButton>
   );
