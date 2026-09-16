@@ -45,6 +45,7 @@ import {
 } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 import { createTerminal, type Terminal } from '../../../apps/hub/src/features/terminal/terminal.js';
+import { listProjectsTool } from '../../../apps/hub/src/features/mcp/list-projects.js';
 import { listSessionsTool } from '../../../apps/hub/src/features/mcp/list-sessions.js';
 import { sendInputTool } from '../../../apps/hub/src/features/mcp/send-input.js';
 import { startSessionTool } from '../../../apps/hub/src/features/mcp/start-session.js';
@@ -53,7 +54,7 @@ import { callTool, type ToolCall } from '../../../apps/hub/src/features/mcp/test
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
-import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake-projects.js';
+import { createProjects, type Projects } from '../../../apps/hub/src/features/projects/projects.js';
 
 /**
  * The act tools, from an agent's call to a pty on another machine and back.
@@ -64,6 +65,14 @@ import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake
  * reaches a machine and forks a process, that the characters an agent typed are
  * the bytes the pty was written, and that a stop resolved hub-side ends the
  * thing that was running.
+ *
+ * A start in a project is the case that needs all three parties at once, so
+ * the projects feature here is the real one over a real schema and the machine
+ * has real browse roots. The agent names a node; the hub reads the directory
+ * out of its own rows; the machine checks the real path against a root its own
+ * operator configured; and the pty is forked there or the refusal is that
+ * machine's own sentence. No string on any tool call in this file is that
+ * path.
  *
  * There is no client socket anywhere in this file, and that is the point of the
  * endpoint rather than a shortcut in the harness: the agent driving this hub
@@ -80,8 +89,22 @@ const QUIET = sessionIdSchema.parse('session-quiet');
 const FRESH = sessionIdSchema.parse('session-fresh');
 const ATTIC = 'registration-attic' as ServerRegistrationId;
 
+/**
+ * The one directory this machine's operator said work may happen in, and two
+ * checkouts: one under it and one that is not.
+ *
+ * Both exist on the fake disk, which is what makes the second case the one
+ * worth having. A project outside every root is refused for being outside a
+ * root -- the sentence somebody can act on by configuring one -- rather than
+ * for not being there.
+ */
+const BROWSE_ROOT = '/volumes/work';
+const PROJECT_DIRECTORY = '/volumes/work/agentplex';
+const OUTSIDE = '/elsewhere/checkout';
+
 interface Harness {
   readonly state: FleetState;
+  readonly projects: Projects;
   readonly terminal: Terminal;
   readonly sessions: Sessions;
   readonly connections: Servers;
@@ -173,10 +196,15 @@ async function start(
           ]),
           terminals,
           workingTree: createFakeWorkingTree(),
-          // No roots, which is the default a server ships with: `start_session`
-          // names no project, so no instruction carries a directory to be
-          // bounded against.
-          browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
+          // The roots this machine's operator configured, and the rule a start
+          // carrying a project's directory is checked against. A start that
+          // names no project carries no directory and never reaches it.
+          browse: createDirectoryBrowser({
+            roots: [BROWSE_ROOT],
+            reader: createFakeDirectoryReader({
+              directories: { [BROWSE_ROOT]: [], [PROJECT_DIRECTORY]: [], [OUTSIDE]: [] },
+            }),
+          }),
           clock,
           logger,
         }),
@@ -220,12 +248,23 @@ async function start(
   });
 
   const terminal = createTerminal({ state, servers: connections, logger });
+  // The real rows, because a project is the one argument a start carries that
+  // the hub turns into a value: a node id in, a directory out, read here and
+  // nowhere else. A fake table would leave the turn untested at exactly the
+  // point this file exists to test it.
+  let nodes = 0;
+  const projects = createProjects({
+    database,
+    ids: { newId: () => `node-${String((nodes += 1))}` },
+    clock,
+    state,
+    connections,
+    logger,
+    onTreeChanged: () => undefined,
+  });
   const sessions = createSessions({
     state,
-    // A fake project table, and empty. The tool passes `project: null`, so
-    // nothing here ever asks it for a directory -- it is the seam the feature
-    // takes rather than a subject of this file.
-    projects: createFakeProjects(),
+    projects,
     connections,
     ids: { newId: () => 'start-1' },
     logger,
@@ -233,7 +272,7 @@ async function start(
 
   await connections.sync();
 
-  return { state, terminal, sessions, connections, ptys, terminals, timers };
+  return { state, projects, terminal, sessions, connections, ptys, terminals, timers };
 }
 
 async function until(predicate: () => boolean, what: string): Promise<void> {
@@ -271,6 +310,17 @@ function stopping(args: Record<string, unknown> = {}): Promise<ToolCall> {
 
 function listing(): Promise<ToolCall> {
   return callTool(listSessionsTool({ state: held().state }), {});
+}
+
+function listingProjects(): Promise<ToolCall> {
+  return callTool(listProjectsTool({ projects: held().projects }), {});
+}
+
+/** A project in this hub's rows, as a person makes one after browsing. */
+async function project(name: string, directory: string): Promise<string> {
+  const made = await held().projects.create({ name, directory });
+  if (!made.ok) throw new Error(`the project was not made: ${made.problem}`);
+  return made.nodeId;
 }
 
 interface SessionRowView {
@@ -377,6 +427,75 @@ describe('an agent starting, steering and stopping a session through MCP', () =>
     expect(result.structured).toBeUndefined();
     expect(result.text).toBe('nothing the hub can see is running that session');
     expect(held().ptys.ptys).toHaveLength(0);
+  });
+});
+
+describe('an agent starting a session in a project', () => {
+  beforeEach(async () => {
+    harness = await start();
+    await connected();
+  });
+
+  it('spawns in the project directory, which no call in this file said', async () => {
+    const projectId = await project('agentplex', PROJECT_DIRECTORY);
+
+    const result = await starting({ projectId, prompt: 'read the ticket' });
+
+    expect(result.isError).toBe(false);
+    // The whole point of the argument being a node id. The agent said
+    // `projectId`; the hub read the directory out of its own rows; the machine
+    // checked that real path against the root its own operator configured; and
+    // the pty was forked there. No string on the tool call is this path.
+    expect(held().ptys.opened[0]).toMatchObject({
+      command: 'claude',
+      args: ['read the ticket'],
+      cwd: PROJECT_DIRECTORY,
+    });
+  });
+
+  it('leaves a start that names no project in the store own folder', async () => {
+    await starting();
+
+    // The behaviour this tool shipped with, unchanged by the argument being
+    // there: an absent project is the store's directory and the machine is
+    // asked to check nothing.
+    expect(held().ptys.opened[0]).toMatchObject({ cwd: '/volumes/work' });
+  });
+
+  it('is refused in the machine own words when no root covers the project', async () => {
+    const projectId = await project('elsewhere', OUTSIDE);
+
+    const result = await starting({ projectId });
+
+    expect(result.isError).toBe(true);
+    expect(result.structured).toBeUndefined();
+    // The refusal comes from the box that would have spawned, because the
+    // roots are its operator's and nobody else can answer. The hub made the
+    // project happily -- it holds no server's root list -- so the first start
+    // is where this is found out, which is the cost migration 0006 wrote down.
+    expect(result.text).toBe(`${OUTSIDE} is not under a directory this server will browse`);
+    expect(held().ptys.ptys).toHaveLength(0);
+  });
+
+  it('is refused by the hub for a project it has no row for, before any machine is asked', async () => {
+    const result = await starting({ projectId: 'node-nowhere' });
+
+    expect(result.isError).toBe(true);
+    // Not a placement problem, so it is not answered like one: there is no
+    // machine that would make it right, and nothing was asked of one.
+    expect(result.text).toBe('this hub has no project by that id');
+    expect(held().ptys.ptys).toHaveLength(0);
+  });
+
+  it('lists the project an agent would name, with the id the start takes', async () => {
+    const projectId = await project('agentplex', PROJECT_DIRECTORY);
+
+    const listed = (await listingProjects()).structured?.['projects'];
+
+    // The two halves of one capability: this is where the id in the call above
+    // comes from, and the directory beside it is what tells a person which
+    // checkout they are about to run in.
+    expect(listed).toEqual([{ projectId, name: 'agentplex', directory: PROJECT_DIRECTORY }]);
   });
 });
 

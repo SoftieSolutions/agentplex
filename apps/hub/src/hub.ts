@@ -426,7 +426,14 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // feature is four functions and no more, and its whole point is being the
   // one path a document write takes -- so the tools and the client connection
   // above them are two callers of one thing rather than two ways to write a
-  // file. Nothing else reaches MCP that did not before.
+  // file.
+  //
+  // Projects are the opposite: one method of five. `list_projects` reads the
+  // rows and nothing on this endpoint may make a project, browse a disk or
+  // turn a node into a path. A start that runs in a project names the node,
+  // and the sessions feature makes that turn on its way to the machine that
+  // will check the result again -- which is the same route a client's frame
+  // takes.
   const mcp = createMcp({
     hubId,
     clientToken,
@@ -434,6 +441,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     terminal,
     sessions,
     docs,
+    projects,
     timers,
     logger,
   });

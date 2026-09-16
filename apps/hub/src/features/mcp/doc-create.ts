@@ -2,7 +2,8 @@ import { DOC_CONTENT_MAX_CHARS, type DocName, type NodeId } from '@agentplex/pro
 import type { ServerRegistrationId } from '@agentplex/protocol';
 import { z } from 'zod';
 import type { DocCreated } from '../docs/docs.js';
-import { parsedDocName, parsedNodeId, refusedDoc } from './doc-args.js';
+import { parsedDocName, refusedDoc } from './doc-args.js';
+import { parsedNodeId } from './node-args.js';
 import { parsedServerId } from './session-args.js';
 import { acts, answers, defineMcpTool, type McpTool } from './tool-registry.js';
 

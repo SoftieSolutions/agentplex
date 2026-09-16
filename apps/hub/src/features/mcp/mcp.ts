@@ -11,6 +11,7 @@ import { docReadTool, type DocReads } from './doc-read.js';
 import { docUpdateTool, type DocSaves } from './doc-update.js';
 import type { FleetReads } from './fleet-view.js';
 import { hubInfoTool } from './hub-info.js';
+import { listProjectsTool, type ProjectIndex } from './list-projects.js';
 import { listServersTool } from './list-servers.js';
 import { listSessionsTool } from './list-sessions.js';
 import { admitsMcpRequest } from './mcp-auth.js';
@@ -158,6 +159,23 @@ export interface McpDependencies {
    * no row, and nowhere to put a path.
    */
   readonly docs: DocIndex & DocReads & DocCreates & DocSaves;
+  /**
+   * Projects, narrowed to the listing and nothing else.
+   *
+   * One method of a feature with five, and the four it is denied are the
+   * point. `create` would let an agent add a row that names a directory, which
+   * is the one way a path could reach this hub from outside a browse;
+   * `directoryOf` and `findByDirectory` are how a node becomes a path, and the
+   * only caller that may make that turn is the sessions feature, on its way to
+   * the machine that will check it again. `listDirectory` is the browse, and
+   * an agent that could list a disk is the capability this endpoint exists not
+   * to have.
+   *
+   * A start in a project therefore goes the same way a client's frame does:
+   * the tool passes a node id to `sessions.start`, and that feature -- not
+   * this one -- reads the row.
+   */
+  readonly projects: ProjectIndex;
   /** The deadline a terminal read gives up after. */
   readonly timers: Timers;
   readonly logger: Logger;
@@ -193,6 +211,7 @@ export function createMcp({
   terminal,
   sessions,
   docs,
+  projects,
   timers,
   logger,
 }: McpDependencies): Mcp {
@@ -201,10 +220,19 @@ export function createMcp({
    * server, because the list is a fact about the build and the server is a fact
    * about the request.
    *
-   * Seven that read and five that act, and the split is in the annotations
+   * Eight that read and five that act, and the split is in the annotations
    * rather than in this list: each of the five says `readOnlyHint: false`, and
    * the stop alone says `destructiveHint: true`, which is what a client reads
    * before deciding whether to ask a person first.
+   *
+   * ## `list_projects` is the half of `start_session` that names a place
+   *
+   * A start may name the project it runs in, by node id, and an id is no use
+   * to a caller that cannot find out which ids exist. The two are one
+   * capability and they are listed apart only because one reads and one acts.
+   * Neither of them says a directory: the listing shows one so a person can
+   * tell two checkouts apart, and there is no input property on this endpoint
+   * that would take one back.
    *
    * ## The document tools call a feature, like every other tool here
    *
@@ -235,6 +263,7 @@ export function createMcp({
    */
   const tools: readonly McpTool[] = [
     hubInfoTool({ hubId }),
+    listProjectsTool({ projects }),
     listServersTool({ state }),
     listSessionsTool({ state }),
     sessionStatusTool({ state }),

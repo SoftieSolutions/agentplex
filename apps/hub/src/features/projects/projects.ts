@@ -17,6 +17,8 @@ import {
   insertProject,
   readProjectDirectories,
   readProjectDirectory,
+  readProjects,
+  type ProjectSummaryRow,
 } from './project-rows.js';
 
 /**
@@ -121,6 +123,24 @@ export type ProjectOutcome =
   | { readonly ok: true; readonly nodeId: NodeId }
   | { readonly ok: false; readonly code: RefusalCode; readonly problem: string };
 
+/**
+ * One project, as anything that lists them reads it.
+ *
+ * Three fields, and the third is the one worth arguing. A directory is display
+ * data here and never an argument: it is how a person recognises which
+ * checkout a project is, and the id beside it is the only thing anything may
+ * hand back. The hub is still the only party that turns a project into a path
+ * -- `sessions.ts` does it, once, out of these same rows -- so showing the
+ * directory costs nothing the browse roots were protecting.
+ *
+ * What is deliberately not on it is a machine. A project is not tied to one --
+ * 0006 argues that at length -- and this hub holds no server's browse roots,
+ * so which machines could spawn in a project is a question nothing here can
+ * answer. The first start is where that is found out, in the words of the
+ * machine that refused.
+ */
+export type ProjectSummary = ProjectSummaryRow;
+
 export interface Projects {
   /**
    * Makes a project, or says why not.
@@ -158,6 +178,16 @@ export interface Projects {
    * way.
    */
   directories(): Promise<ReadonlyMap<NodeId, string>>;
+  /**
+   * Every project this hub holds, named and located.
+   *
+   * Beside `directories()` rather than replacing it, because the two answer
+   * different questions and one of them is hot: the catalogue query asks
+   * "which of these node ids is a project's directory" on every page it
+   * builds, and a map is what that read is. This is the listing a person or an
+   * agent reads, so it carries the name the map has no use for.
+   */
+  list(): Promise<readonly ProjectSummary[]>;
   /**
    * Lists a directory on one paired server, or says why not.
    *
@@ -212,6 +242,8 @@ export function createProjects(dependencies: ProjectsDependencies): Projects {
     findByDirectory: (directory: string) => findProjectByDirectory(database, directory),
 
     directories: () => readProjectDirectories(database),
+
+    list: () => readProjects(database),
 
     async listDirectory(
       server: ServerRegistrationId,

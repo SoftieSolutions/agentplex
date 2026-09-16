@@ -1,6 +1,7 @@
-import { providerSchema, type ServerRegistrationId } from '@agentplex/protocol';
+import { providerSchema, type NodeId, type ServerRegistrationId } from '@agentplex/protocol';
 import { z } from 'zod';
 import type { StartOutcome, StartSessionRequest } from '../sessions/sessions.js';
+import { parsedNodeId } from './node-args.js';
 import { parsedServerId, parsedStoreId, refusedSession } from './session-args.js';
 import { acts, answers, defineMcpTool, type McpTool } from './tool-registry.js';
 
@@ -24,20 +25,24 @@ import { acts, answers, defineMcpTool, type McpTool } from './tool-registry.js';
  *
  * ## Where a session runs
  *
- * In the store, on the machine, and neither of those is a directory this tool
- * names. `session-start` now carries a `project` -- a node the hub already
- * holds, whose directory the hub reads out of its own rows and the server
- * checks against a root its operator configured -- and this tool passes `null`,
- * which is the store's own directory and the behaviour it has always had.
+ * In the store, on the machine, and in a project -- and none of those three is
+ * a directory this tool names. `projectId` is a node this hub already holds,
+ * listed by `list_projects`, and it is the same argument the new-session form
+ * sends: the hub reads the directory out of its own rows, the machine refuses
+ * it unless its real path sits under a root that machine's own operator
+ * configured, and what a person browsed is the only way a path got into those
+ * rows in the first place. Three parties, and the value is checked by two of
+ * them.
  *
- * `null` rather than an argument, on purpose. Giving an agent a project to
- * start in is its own question with its own answer: which projects a tool may
- * name, whether one it was told about in prose is one it may start in, and what
- * a refused project reads like. AGX-249 is where that is decided. What is not
- * open is the spelling: if a project becomes an argument here it is the node id
- * `doc_list` and the tree already use, never a path, because the directory is
- * the hub's to resolve and a path argument is the thing the frame shape exists
- * to make unrepresentable.
+ * An id and never a path, which is the whole shape of the argument rather than
+ * a preference about spelling. A `directory` here would be an agent choosing
+ * where a process runs, and no amount of validation downstream makes that a
+ * different capability: the browse roots bound the damage, they do not remove
+ * the choice. A node id can only ever name a directory somebody already
+ * decided this hub may spawn in.
+ *
+ * Omitted, it is the store's own directory -- the behaviour this tool shipped
+ * with, and what a caller that has no project in mind still gets.
  *
  * ## What it does not take either
  *
@@ -58,7 +63,7 @@ export function startSessionTool({ sessions }: { readonly sessions: SessionStart
   return defineMcpTool({
     name: 'start_session',
     description:
-      'Starts a new coding-agent session in a store. The hub picks the least-loaded machine that can run the provider unless one is named.',
+      'Starts a new coding-agent session in a store, optionally in one of the hub projects. The hub picks the least-loaded machine that can run the provider unless one is named.',
     input: {
       storeId: z
         .string()
@@ -79,6 +84,12 @@ export function startSessionTool({ sessions }: { readonly sessions: SessionStart
         .describe(
           'A machine registration id from list_servers, overriding the hub scheduling. Omit it unless the work has to happen on one particular machine.',
         ),
+      projectId: z
+        .string()
+        .optional()
+        .describe(
+          "A project node id from list_projects, to run the agent in that project rather than in the store's own folder. The hub works out where that is and the machine refuses it unless its operator allows work there. Omit it for the store's own folder.",
+        ),
     },
     output: {
       storeId: z.string(),
@@ -96,7 +107,7 @@ export function startSessionTool({ sessions }: { readonly sessions: SessionStart
         ),
     },
     annotations: acts,
-    run: async ({ storeId, provider, prompt, server }) => {
+    run: async ({ storeId, provider, prompt, server, projectId }) => {
       const store = parsedStoreId(storeId);
       if (!store.ok) return store;
 
@@ -109,6 +120,13 @@ export function startSessionTool({ sessions }: { readonly sessions: SessionStart
         chosen = parsed.value;
       }
 
+      let project: NodeId | null = null;
+      if (projectId !== undefined) {
+        const parsed = parsedNodeId(projectId);
+        if (!parsed.ok) return parsed;
+        project = parsed.value;
+      }
+
       const outcome = await sessions.start({
         storeId: store.value,
         sessionId: null,
@@ -118,10 +136,11 @@ export function startSessionTool({ sessions }: { readonly sessions: SessionStart
         // was not given is `null` on the frame.
         prompt: prompt ?? null,
         server: chosen,
-        // The store's own directory. See the note above: a project an agent
-        // could name is AGX-249, and the field is spelled out here rather than
-        // left off so that the day it gains a value is a diff somebody reads.
-        project: null,
+        // A node id or nothing, and the feature does the rest: a project this
+        // hub has no row for, and a directory no machine will open, are both
+        // refusals in words that come back as the sentence below. Neither is
+        // decided here, because neither is a fact this file holds.
+        project,
       });
 
       if (!outcome.ok) return refusedSession(outcome);

@@ -13,6 +13,7 @@ import { startHub, type Hub } from '../../hub.js';
 import { createFakeBeaconSource } from '../discovery/fake-discovery.js';
 import { createFakeSessions } from '../sessions/fake-sessions.js';
 import { createFakeDocs } from '../docs/fake-docs.js';
+import { createFakeProjects } from '../projects/fake-projects.js';
 import { createFakeWebAssets } from '../web/fake-web.js';
 import { createMcp, MCP_PATH } from './mcp.js';
 
@@ -61,6 +62,7 @@ const emptyFleet = { published: () => ({ version: 0, stores: [], servers: [], ca
 const noTerminal = { subscribe: () => {}, input: () => {}, forget: () => {} };
 const noSessions = createFakeSessions();
 const noDocs = createFakeDocs();
+const noProjects = createFakeProjects();
 
 /**
  * One pairing in the hub's table, so the fleet an agent lists is not empty.
@@ -203,6 +205,7 @@ describe('the hub MCP endpoint', () => {
       'doc_read',
       'doc_update',
       'hub_info',
+      'list_projects',
       'list_servers',
       'list_sessions',
       'read_terminal',
@@ -211,7 +214,7 @@ describe('the hub MCP endpoint', () => {
       'start_session',
       'stop_session',
     ]);
-    // The split a client reads before it decides whether to ask a person: seven
+    // The split a client reads before it decides whether to ask a person: eight
     // that only read, five that act, and exactly one of those that destroys.
     // Making and saving a document are acts and neither is destructive -- the
     // document is there afterwards either way -- so the stop stays alone.
@@ -220,6 +223,7 @@ describe('the hub MCP endpoint', () => {
       'doc_list',
       'doc_read',
       'hub_info',
+      'list_projects',
       'list_servers',
       'list_sessions',
       'read_terminal',
@@ -229,6 +233,11 @@ describe('the hub MCP endpoint', () => {
     // And no tool takes a command, an argv, an environment or a directory, on
     // this build or any later one. The rule is the endpoint's whole claim, and
     // this is the listing a model is actually handed.
+    //
+    // It holds with a start that can now say where it runs, which is the point
+    // of saying where by node id: `list_projects` shows a directory so a person
+    // can tell two checkouts apart, and there is still nowhere on any input
+    // schema to hand one back.
     const named = JSON.stringify(tools.map((tool) => tool.inputSchema));
     for (const forbidden of ['command', 'argv', 'args', 'env', 'cwd', 'directory', 'path']) {
       expect(named).not.toContain(`"${forbidden}"`);
@@ -466,6 +475,7 @@ describe('the MCP endpoint while the hub is stopping', () => {
       terminal: noTerminal,
       sessions: noSessions,
       docs: noDocs,
+      projects: noProjects,
       timers: createFakeTimers(),
       logger: createLogger('debug', () => {}),
     });
@@ -514,6 +524,7 @@ describe('the MCP endpoint while the hub is stopping', () => {
       terminal: noTerminal,
       sessions: noSessions,
       docs: noDocs,
+      projects: noProjects,
       timers: createFakeTimers(),
       logger: createLogger('debug', () => {}),
     });
