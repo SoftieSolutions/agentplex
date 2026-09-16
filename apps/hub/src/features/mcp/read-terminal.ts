@@ -1,7 +1,5 @@
 import {
   decodeTerminalChunk,
-  sessionIdSchema,
-  storeIdSchema,
   type ClientTerminalTarget,
   type FrameId,
   type HubFrame,
@@ -9,6 +7,7 @@ import {
 import type { Timers } from '@agentplex/node-shared';
 import { z } from 'zod';
 import type { TerminalClient } from '../terminal/terminal.js';
+import { parsedSessionRef } from './session-args.js';
 import {
   answers,
   defineMcpTool,
@@ -153,27 +152,15 @@ export function readTerminalTool({ terminal, timers }: ReadTerminalDependencies)
     annotations: readOnly,
     render: (value) => value.text,
     run: async ({ storeId, sessionId, maxBytes }) => {
-      // Parsed rather than asserted. These arrive off an MCP client as two
-      // strings and the relay addresses a terminal by two branded ids; a cast
-      // here would be this endpoint deciding that whatever a model typed is an
-      // id.
-      //
-      // `safeParse`, so that a string that is not an id is refused the way
-      // everything else here is refused -- in a sentence. A throw would be
-      // caught by the SDK and answered as a failed call either way, but with
-      // zod's words in it rather than a hub's, which is the rule this file's
-      // own registry states and would then be the one place breaking.
-      const store = storeIdSchema.safeParse(storeId);
-      const session = sessionIdSchema.safeParse(sessionId);
-      if (!store.success || !session.success) {
-        return refuses('a store id and a session id are each one to two hundred characters');
-      }
+      // Parsed rather than asserted, and parsed where every session tool parses
+      // one: these arrive off an MCP client as two strings, the relay addresses
+      // a terminal by two branded ids, and the sentence a bad one is refused
+      // with is the same sentence whichever tool was called. `session-args.ts`
+      // carries the argument.
+      const ref = parsedSessionRef(storeId, sessionId);
+      if (!ref.ok) return ref;
 
-      const target: ClientTerminalTarget = {
-        by: 'session',
-        storeId: store.data,
-        sessionId: session.data,
-      };
+      const target: ClientTerminalTarget = { by: 'session', ...ref.value };
 
       const replayed = await replayOf(terminal, timers, target);
       if (!replayed.ok) return replayed;
