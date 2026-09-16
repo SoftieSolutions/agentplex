@@ -223,6 +223,114 @@ line, and neither app may import the other. `pnpm lint` enforces this.
 `packages/protocol` is shared by a Node service and a browser bundle, so it may
 use neither Node builtins nor another workspace package.
 
+## Dependency versions
+
+`AGENTS.md` says to install the latest version of a new dependency and pin it
+deliberately. This section is what deliberately means. It is one rule with no
+judgement in it, so that applying it across a manifest is mechanical and a
+check can enforce it afterwards.
+
+**A caret is the absence of a decision.** `pnpm add` writes one by default, so
+`^4.1.13` is what a manifest holds when nobody chose anything, which is the
+half of that sentence with nothing behind it. It is also a bound whose value is
+not in the file: `^4.1.13` stops below 5.0.0 and `^0.11.0` stops below 0.12.0,
+one character meaning two different things depending on the version it is
+attached to, so a reader applies a semver special case to learn what a manifest
+permits. Writing the bound out makes it a fact in the file rather than a
+derivation from one, and it is what lets a failing check name the bound it
+wanted instead of pointing at a document.
+
+**Three forms, and nothing else.** Every value under `dependencies`,
+`devDependencies`, `optionalDependencies` and `peerDependencies`, in every
+manifest in this workspace, is one of:
+
+- `workspace:*` for a sibling in this tree. It never resolves against a
+  registry, and `scripts/assemble-package.ts` replaces it with the exact
+  version it bundled before the package is published.
+- `>=x.y.z <X.0.0` for a third-party package at 1.0.0 or later, where `X` is
+  `x + 1`. The floor is the version the lockfile resolves today, not a guess at
+  the oldest that might work.
+- `x.y.z`, exact, for a package below 1.0 and for anything that compiles at
+  install. Exact is also always allowed to win an argument the other two forms
+  lost, and then the argument is written next to it.
+
+**A window above 1.0, because there is a promise to take.** Inside the
+workspace a range decides nothing: the lockfile is committed, `pnpm install` in
+a fresh worktree resolves through it, and CI installs frozen, so a contributor
+gets what CI ran either way. The range is the only thing there is exactly once,
+on a stranger's machine: `scripts/assemble-package.ts` copies a third-party
+range verbatim out of a manifest into the published package's `dependencies`,
+and npm resolves it there against the registry with no lockfile of ours in
+sight. A window is the honest thing to say in that position. It lets an
+upstream patch reach a daemon that has been running for months without waiting
+for a release of ours, and it stops where the author's compatibility promise
+stops. An exact pin there would turn every upstream patch into a release of
+ours, which is a maintenance burden we would pay in order to publish a claim we
+have no more evidence for.
+
+**Exact below 1.0, because there is no promise to take.** Below 1.0 semver
+makes the minor the breaking change, so the widest honest window is
+`>=0.11.0 <0.12.0`: patch releases only, of a package whose author has not
+committed to patches being safe either. That window admits one kind of release
+and costs a second grammar, and the tree already agrees it is not worth it.
+Every dependency here below 1.0 is one of the four `@xterm/addon-*` packages,
+each pinned exactly, and nobody argued about it. Keeping it that way leaves the
+window form with exactly one shape, `<X.0.0` with `X` at least 1, so neither
+the rule nor the check that follows it has a 0.x branch.
+
+**Exact for anything that compiles, and `node-pty` is the instance rather than
+the exception.** A package that builds a native addon is the only kind whose
+install is a compilation, against whatever compiler and Node ABI the machine
+happens to have. A minor there is a different binary, and the failure it
+produces is a compiler error during somebody else's install rather than a test
+failure here, so the version has to be one that was built and run. `node-pty`
+sits at `1.1.0` in `packages/pty` for that reason, and so does the next such
+dependency. The set this can be true of is legible: `allowBuilds` in
+`pnpm-workspace.yaml` is the list of packages permitted to run an install
+script at all, and a package that cannot run one has no opportunity to compile
+anything.
+
+**Dev tooling is held to the same rule, for a different reason.** Nothing under
+a `devDependencies` key reaches a tarball — the manifest schema in
+`scripts/assemble-package.ts` does not even read the field — so the paragraph
+about a stranger's machine does not reach the root manifest, which is dev
+tooling only and publishes nothing. The rule still applies there, because the
+root manifest is where `pnpm add -D` gets run most often and therefore where a
+default caret is most likely to be written, and an exemption at exactly the
+place the default appears is an exemption that eats the rule. It also costs
+nothing to hold: the window changes nothing a contributor installs, since the
+lockfile does that, and the saving a looser rule would buy is an occasional
+one-line edit. The price would be a check with a branch in it and a question at
+every review about which manifest is which.
+
+**`engines` is not a dependency range, and carries no upper bound.** The root
+manifest's node floor of `>=24` and its pnpm floor of `>=11` resolve nothing
+and fetch nothing. They are evaluated against the runtime already on the
+machine, so there is no version to choose and no drift to bound: the entry
+either accepts what is there or refuses it. Capping the first at `<25` would
+make every package refuse Node 25 on the day it ships, and that refusal would
+be a claim we had tested something, when in truth nobody has run Node 25 and
+nobody has run Node 24.11 either. Only one of those two would be enforced. So
+the floors stay floors, and a check does not read the field. `packageManager` is exact already, at `pnpm@11.17.0`,
+because corepack needs one version rather than a range, and it is not a
+dependency either. `scripts/assemble-package.ts` carries `engines.node` into
+every published manifest and deliberately drops `engines.pnpm`, since a
+published package is installed by npm on a machine that has no pnpm.
+
+**No git or URL dependencies.** There are none today. If one is ever needed it
+names a 40-character commit SHA, because a tag and a branch both move, and a
+dependency whose version can change with no diff anywhere is the thing this
+whole section exists to prevent.
+
+**What a check reads.** Every `package.json` in the workspace outside
+`node_modules`, and every value under the four dependency fields named above. A
+value passes when it is `workspace:*`, or an exact `x.y.z` with an optional
+prerelease suffix, or `>=x.y.z <X.0.0` written with a single space between the
+two comparators and `X` at least 1. Everything else fails, `^` and `~`
+included, and the message names the manifest, the dependency and the bound it
+wanted. `engines`, `packageManager` and anything under a `pnpm` key are not
+dependency fields and are not read.
+
 ## Connectivity
 
 **The hub dials. A server dials out to nothing.** Every socket a server has is
