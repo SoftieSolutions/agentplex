@@ -42,9 +42,20 @@ services:
     <<: *checks
     command: ['pnpm', 'typecheck']
 
+  # The suite, under the guard that keeps its writes inside the sandbox.
+  #
+  # `test-write-guard.ts` walks the filesystem before and after the run, skips
+  # the workspace and `$TMPDIR`, and fails naming any path that changed outside
+  # them together with the test files that were running when it did. It is
+  # wired here rather than into `pnpm test` because the machine is what makes
+  # the check possible: a container's filesystem is disposable and quiet, and a
+  # laptop's is neither -- a browser and an editor write during the seconds the
+  # suite takes, and a guard that reports their writes as the suite's is
+  # believed exactly once. `check` above deliberately stays the plain command:
+  # it is the prediction of CI a contributor runs, and CI runs this service.
   test:
     <<: *checks
-    command: ['pnpm', 'test']
+    command: ['node', 'scripts/test-write-guard.ts', 'pnpm', 'test']
 
   # The one check that is not about this tree. `install-check` assembles the
   # four publishable packages, packs them, and installs them with a bare npm on
