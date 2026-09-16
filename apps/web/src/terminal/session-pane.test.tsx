@@ -651,6 +651,34 @@ describe('a pane fed by the hub', () => {
     // rectangle. The name is the whole of the difference.
     expect(container.textContent).toContain('the hub said no: the hub cannot reach mbp-robert');
   });
+
+  it('does not go on telling a machine the hub cannot reach how big it is', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+
+    // The captured refusal answers this pane's subscribe: the session is not
+    // held by a server the hub has a connection to.
+    await deliver(socket, hubFrames.refusalTerminal);
+
+    // The pane goes on being a pane -- it is laid out, the divider beside it
+    // is dragged, the window is resized -- and the emulator goes on settling
+    // on grids.
+    await act(async () => {
+      emulator().resizeTo({ cols: 100, rows: 30 });
+      emulator().resizeTo({ cols: 120, rows: 40 });
+      emulator().resizeTo({ cols: 140, rows: 50 });
+    });
+
+    // None of which is a frame. The size is remembered against the watch and
+    // replayed after the subscribe that does attach; a resize for a terminal
+    // this connection is not watching is one the hub can only refuse again,
+    // and a pane that sent one per grid would be asking to be told no at the
+    // rate its own divider moves.
+    expect(sentFrames(socket).filter((frame) => frame.type === 'terminal-resize')).toEqual([]);
+    // One sentence, from the one refusal.
+    expect(container.textContent).toContain('the hub said no: the hub cannot reach mbp-robert');
+  });
 });
 
 /**
