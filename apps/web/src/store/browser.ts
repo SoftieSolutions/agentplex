@@ -80,7 +80,17 @@ function wrapWebSocket(socket: WebSocket): StoreSocket {
   };
 }
 
-/** The real dependencies for `createHubStore`, minus the future frame seams. */
+/**
+ * The real dependencies for `createHubStore`.
+ *
+ * Four seams and no more, and the list got shorter rather than longer when the
+ * terminal frames landed. The store used to take its subscribe and keystroke
+ * frames as injected encoders, because the protocol had no frame to put either
+ * on and an unfilled seam was the honest way to say so. There are frames now,
+ * and `encodeClientFrame` is already the one place a client frame becomes
+ * characters, so an encoder here would be a second one -- a seam whose only
+ * remaining purpose was to be filled.
+ */
 export function createBrowserDependencies(options: BrowserDependencyOptions): HubStoreDependencies {
   const { tokens, fetch = globalThis.fetch } = options;
   return {

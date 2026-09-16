@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
-import { sessionRefSchema } from '@agentplex/protocol';
+import {
+  parseClientFrame,
+  parseTextFrame,
+  sessionRefSchema,
+  type ClientFrame,
+} from '@agentplex/protocol';
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createFakeSocketFactory, type FakeSocketFactory } from '../store/fake-socket.js';
-import { hubFrames } from '../store/hub-frames.fixture.js';
+import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
+import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
@@ -15,16 +20,25 @@ import { FindBar } from './find-bar.js';
 import { SessionPane } from './session-pane.js';
 
 /**
- * The pane's own chrome as the user meets it: the find bar, opened by the
- * chord on a real pane and driven through the fake emulator, and the stop in
- * the header, drawn off a captured hub state.
+ * The pane as the user meets it: the find bar opened by the chord, and the
+ * terminal driven by frames a real hub actually sent.
  *
- * The fake is the point. What the bar owes anybody is that the question it
- * asks is the question that was typed and the answer it draws is the answer
- * it was given -- whether the answer is right is the emulator's business, and
- * `xterm-emulator.test.ts` holds it to that against real captured bytes. So
- * this file asserts on what the pane asked the seam for and on what it
- * rendered, and never on a buffer.
+ * The fake emulator is the point of the first half. What the bar owes anybody
+ * is that the question it asks is the question that was typed and the answer
+ * it draws is the answer it was given -- whether the answer is right is the
+ * emulator's business, and `xterm-emulator.test.ts` holds it to that against
+ * real captured bytes. So this file asserts on what the pane asked the seam
+ * for and on what it rendered, and never on a buffer.
+ *
+ * The captured frames are the point of the second half. The sentences a pane
+ * shows about how much of a session it is not showing are exactly the ones a
+ * hand-written fixture would get flatteringly right, so the numbers behind
+ * them come off a hub that really did drop something.
+ *
+ * The stop in the header is the third, and it is captured for the same reason:
+ * whether the control is offered is a published holder's answer rather than a
+ * status this pane reads, so the state it is drawn off is one a real fleet
+ * sent.
  */
 
 declare global {
@@ -32,7 +46,15 @@ declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
 }
 
-const SESSION = sessionRefSchema.parse({ storeId: 'store-observatory', sessionId: 'session-11' });
+/**
+ * The session the captured hub frames were captured watching.
+ *
+ * Not an arbitrary pair: the fixtures in `hub-frames.fixture.ts` are what a
+ * real hub said about this session, and a pane driven by them has to be a
+ * pane watching it. The subscribe a mounted pane sends is the second frame on
+ * its socket, which is the id those replies name.
+ */
+const SESSION = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-build' });
 
 /** Mantine consults the media query for its colour scheme; jsdom has none. */
 function installMatchMedia(): void {
@@ -49,16 +71,19 @@ function installMatchMedia(): void {
 }
 
 /**
- * A store that never reaches a hub: the pane declares its interest in a
- * session on mount, and this lets that go somewhere harmless. Nothing in this
- * file asserts on a frame.
+ * A store on a socket the test plays the hub on.
+ *
+ * The pane declares its interest in a session on mount; most of this file
+ * lets that go somewhere harmless, and the tests at the bottom drive the
+ * other end of it with the captured frames.
  */
-function buildStore(): HubStore {
-  return connectableStore().store;
+interface StoreHarness {
+  readonly store: HubStore;
+  /** The socket the store dialled, once `settle` has let the ticket resolve. */
+  socket(): FakeSocket;
 }
 
-/** The same store, with the socket kept so a test can play the hub on it. */
-function connectableStore(): { store: HubStore; sockets: FakeSocketFactory } {
+function buildStore(): StoreHarness {
   const sockets = createFakeSocketFactory();
   const store = createHubStore({
     fetchTicket: () => Promise.resolve('ticket-1'),
@@ -66,7 +91,39 @@ function connectableStore(): { store: HubStore; sockets: FakeSocketFactory } {
     timers: createFakeTimers(),
     frameIds: createFrameIdCounter(),
   });
-  return { store, sockets };
+  return {
+    store,
+    socket(): FakeSocket {
+      const dialled = sockets.sockets[0];
+      if (dialled === undefined) throw new Error('the store dialled nothing');
+      return dialled;
+    },
+  };
+}
+
+/** What the pane put on the wire, read back through the hub's own parser. */
+function sentFrames(socket: FakeSocket): ClientFrame[] {
+  return socket.sent.map((text) => {
+    const parsed = parseTextFrame(parseClientFrame, text);
+    if (!parsed.ok) throw new Error(`the pane sent something unreadable: ${parsed.reason}`);
+    return parsed.value;
+  });
+}
+
+/**
+ * jsdom has no `ResizeObserver`, and the pane watches its own box with one.
+ *
+ * A stub that observes nothing and fires nothing: what the watch does with an
+ * observation is `resize.test.ts`'s question, asked against a seam, and what
+ * the browser's observer does is the browser's. This is here so that mounting
+ * a pane under jsdom is not a `ReferenceError`.
+ */
+function installResizeObserver(): void {
+  globalThis.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
 }
 
 /** Lets the ticket promise inside `connect` settle. */
@@ -86,110 +143,113 @@ function typeInto(input: HTMLInputElement, text: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-describe('a session pane', () => {
-  let container: HTMLDivElement;
-  let root: Root | null = null;
-  let emulators: ReturnType<typeof createFakeEmulatorFactory>;
+let container: HTMLDivElement;
+let root: Root | null = null;
+let emulators: ReturnType<typeof createFakeEmulatorFactory>;
 
-  beforeEach(() => {
-    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-    installMatchMedia();
-    container = document.createElement('div');
-    document.body.append(container);
-    emulators = createFakeEmulatorFactory();
+beforeEach(() => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  installMatchMedia();
+  installResizeObserver();
+  container = document.createElement('div');
+  document.body.append(container);
+  emulators = createFakeEmulatorFactory();
+});
+
+afterEach(async () => {
+  await act(async () => {
+    root?.unmount();
   });
+  root = null;
+  container.remove();
+});
 
-  afterEach(async () => {
-    await act(async () => {
-      root?.unmount();
-    });
-    root = null;
-    container.remove();
+function withProvider(element: JSX.Element): JSX.Element {
+  return (
+    <MantineProvider
+      theme={theme}
+      cssVariablesResolver={cssVariablesResolver}
+      defaultColorScheme="dark"
+    >
+      {element}
+    </MantineProvider>
+  );
+}
+
+async function mount(element: JSX.Element): Promise<void> {
+  await act(async () => {
+    root = createRoot(container);
+    // No StrictMode: its simulated remount would build a second emulator
+    // and the count of what the bar asked the first one is the assertion.
+    root.render(withProvider(element));
   });
+  await act(settle);
+}
 
-  function withProvider(element: JSX.Element): JSX.Element {
-    return (
-      <MantineProvider
-        theme={theme}
-        cssVariablesResolver={cssVariablesResolver}
-        defaultColorScheme="dark"
-      >
-        {element}
-      </MantineProvider>
+/**
+ * The same root rendering again, which is what a prop changing under a
+ * mounted pane looks like. A second `createRoot` would be a new tree with
+ * no state to keep, and a test of what survives a change would be asserting
+ * about a component that was never there.
+ */
+async function rerender(element: JSX.Element): Promise<void> {
+  const live = root;
+  if (live === null) throw new Error('nothing is mounted to render again');
+  await act(async () => {
+    live.render(withProvider(element));
+  });
+  await act(settle);
+}
+
+async function mountPane(): Promise<void> {
+  await mount(
+    <SessionPane sessionRef={SESSION} store={buildStore().store} emulators={emulators} />,
+  );
+}
+
+function emulator(): FakeEmulator {
+  const built = emulators.created[0];
+  if (built === undefined) throw new Error('the pane built no emulator');
+  return built;
+}
+
+function findInput(): HTMLInputElement | null {
+  return container.querySelector<HTMLInputElement>('input[aria-label="find in this pane"]');
+}
+
+function control(label: string): HTMLElement {
+  const button = container.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+  if (button === null) throw new Error(`no control labelled ${label}`);
+  return button;
+}
+
+function summary(): string {
+  return container.querySelector('[role="status"]')?.textContent ?? '';
+}
+
+/**
+ * The chord, from inside the pane: the registry is consulted by a
+ * capture-phase handler on the pane's root, so the event has to be
+ * dispatched on something the pane contains. The steer input is a fair
+ * stand-in for wherever the user's focus happens to be.
+ */
+async function pressChord(key: string): Promise<void> {
+  const somewhereInThePane = container.querySelector('[aria-label="steer the agent"]');
+  if (somewhereInThePane === null) throw new Error('the pane rendered no steer input');
+  await act(() => {
+    somewhereInThePane.dispatchEvent(
+      new KeyboardEvent('keydown', { key, ctrlKey: true, shiftKey: true, bubbles: true }),
     );
-  }
+  });
+}
 
-  async function mount(element: JSX.Element): Promise<void> {
-    await act(async () => {
-      root = createRoot(container);
-      // No StrictMode: its simulated remount would build a second emulator
-      // and the count of what the bar asked the first one is the assertion.
-      root.render(withProvider(element));
-    });
-    await act(settle);
-  }
+async function press(target: Element, key: string): Promise<void> {
+  await act(() => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  });
+}
 
-  /**
-   * The same root rendering again, which is what a prop changing under a
-   * mounted pane looks like. A second `createRoot` would be a new tree with
-   * no state to keep, and a test of what survives a change would be asserting
-   * about a component that was never there.
-   */
-  async function rerender(element: JSX.Element): Promise<void> {
-    const live = root;
-    if (live === null) throw new Error('nothing is mounted to render again');
-    await act(async () => {
-      live.render(withProvider(element));
-    });
-    await act(settle);
-  }
-
-  async function mountPane(): Promise<void> {
-    await mount(<SessionPane sessionRef={SESSION} store={buildStore()} emulators={emulators} />);
-  }
-
-  function emulator(): FakeEmulator {
-    const built = emulators.created[0];
-    if (built === undefined) throw new Error('the pane built no emulator');
-    return built;
-  }
-
-  function findInput(): HTMLInputElement | null {
-    return container.querySelector<HTMLInputElement>('input[aria-label="find in this pane"]');
-  }
-
-  function control(label: string): HTMLElement {
-    const button = container.querySelector<HTMLElement>(`[aria-label="${label}"]`);
-    if (button === null) throw new Error(`no control labelled ${label}`);
-    return button;
-  }
-
-  function summary(): string {
-    return container.querySelector('[role="status"]')?.textContent ?? '';
-  }
-
-  /**
-   * The chord, from inside the pane: the registry is consulted by a
-   * capture-phase handler on the pane's root, so the event has to be
-   * dispatched on something the pane contains. The steer input is a fair
-   * stand-in for wherever the user's focus happens to be.
-   */
-  async function pressChord(key: string): Promise<void> {
-    const somewhereInThePane = container.querySelector('[aria-label="steer the agent"]');
-    if (somewhereInThePane === null) throw new Error('the pane rendered no steer input');
-    await act(() => {
-      somewhereInThePane.dispatchEvent(
-        new KeyboardEvent('keydown', { key, ctrlKey: true, shiftKey: true, bubbles: true }),
-      );
-    });
-  }
-
-  async function press(target: Element, key: string): Promise<void> {
-    await act(() => {
-      target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
-    });
-  }
-
+describe('the find bar in a session pane', () => {
   it('is not there until the chord asks for it', async () => {
     await mountPane();
 
@@ -347,7 +407,9 @@ describe('a session pane', () => {
     expect(findInput()).not.toBeNull();
 
     const rebuilt = createFakeEmulatorFactory();
-    await rerender(<SessionPane sessionRef={SESSION} store={buildStore()} emulators={rebuilt} />);
+    await rerender(
+      <SessionPane sessionRef={SESSION} store={buildStore().store} emulators={rebuilt} />,
+    );
 
     expect(rebuilt.created).toHaveLength(1);
     expect(findInput()).toBeNull();
@@ -364,22 +426,218 @@ describe('a session pane', () => {
     expect(findInput()).toBeNull();
   });
 
-  /**
-   * A pane on a store that has been walked through to a captured hub state,
-   * so the header draws off the same holders a real fleet published.
-   */
+  it('says what it could not search when the pane has dropped output', async () => {
+    // The pane owns its feed and a test cannot push half a megabyte through
+    // it to make it drop anything, so the bar is mounted directly on a feed
+    // that says it has. The sentence itself is `searchScopeNotice`, held to
+    // its wording in presentation.test.ts; what this pins is that the bar
+    // asks and draws it.
+    const search = createFakeEmulatorFactory().create(document.createElement('div')).search;
+    await mount(
+      <FindBar search={() => search} truncated={() => true} scheme="dark" onClose={() => {}} />,
+    );
+
+    expect(container.textContent).toContain('so a miss is not proof of absence');
+  });
+});
+
+describe('a pane fed by the hub', () => {
+  async function mountOn(hub: StoreHarness): Promise<void> {
+    await mount(<SessionPane sessionRef={SESSION} store={hub.store} emulators={emulators} />);
+  }
+
+  /** The hub accepting the connection, which is what sends the subscribe. */
+  async function connect(hub: StoreHarness): Promise<FakeSocket> {
+    const socket = hub.socket();
+    await act(async () => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+    });
+    return socket;
+  }
+
+  async function deliver(socket: FakeSocket, frame: string): Promise<void> {
+    await act(async () => {
+      socket.deliver(frame);
+    });
+  }
+
+  const WATCHED = {
+    by: 'session' as const,
+    storeId: SESSION.storeId,
+    sessionId: SESSION.sessionId,
+  };
+
+  it('asks to watch the session it is pointed at, and gives the watch back', async () => {
+    const hub = buildStore();
+    // Something else on the page is looking at the hub, so closing this pane
+    // closes a pane and not the connection. With nothing else looking the
+    // socket goes with the last subscriber and the detach is the close, which
+    // is the same detach by the hub's own rule -- so the case worth asserting
+    // is the one where the connection outlives the pane.
+    const looking = hub.store.subscribe(() => {});
+    await act(settle);
+    await mountOn(hub);
+    const socket = await connect(hub);
+
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'session-subscribe',
+      id: 2,
+      target: WATCHED,
+    });
+
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+
+    // Detaching closes nothing: the count this gives back is the one the
+    // server evicts terminals by, and the agent goes on working unwatched.
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'session-unsubscribe',
+      id: 3,
+      target: WATCHED,
+    });
+    looking();
+  });
+
+  it('writes arriving output to the emulator and to nothing else', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await deliver(socket, hubFrames.sessionSubscribed);
+
+    await deliver(socket, hubFrames.terminalOutput);
+
+    const written = emulator().written;
+    expect(written.map((chunk) => new TextDecoder().decode(chunk))).toEqual(['building\r\n']);
+    // Bytes go to the emulator and never into what React renders.
+    expect(container.textContent).not.toContain('building');
+  });
+
+  it('says nothing about completeness while it is showing the whole session', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+
+    await deliver(socket, hubFrames.sessionSubscribed);
+
+    expect(container.textContent).not.toContain('showing less than everything');
+  });
+
+  it('says how much of the beginning it never had', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+
+    await deliver(socket, hubFrames.sessionSubscribedTruncated);
+
+    // The number is the hub's, off a terminal that really evicted that much.
+    expect(container.textContent).toContain(
+      'showing less than everything: the first 3.0 MB this session printed was gone before this pane attached',
+    );
+  });
+
+  it('says what this connection dropped, in its own clause', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await deliver(socket, hubFrames.sessionSubscribed);
+
+    await deliver(socket, hubFrames.terminalOutputDropped);
+
+    expect(container.textContent).toContain('did not fit down this connection and were dropped');
+    // And not the other clause: the session's history is intact, the link is
+    // not, and those are two different things to do something about.
+    expect(container.textContent).not.toContain('before this pane attached');
+  });
+
+  it('tells the find bar the same fact, so a miss is not read as absence', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await deliver(socket, hubFrames.sessionSubscribedTruncated);
+
+    await pressChord('F');
+
+    // The bar's bound is the pane's: it searches what reached this pane, and
+    // what reached this pane is missing the first three megabytes.
+    expect(container.textContent).toContain('so a miss is not proof of absence');
+  });
+
+  it('sends what the steer bar was given, as the keystrokes it is', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await deliver(socket, hubFrames.sessionSubscribed);
+
+    const steer = container.querySelector<HTMLInputElement>('[aria-label="steer the agent"]');
+    if (steer === null) throw new Error('the pane rendered no steer input');
+    steer.value = 'look at the failing test';
+    await press(steer, 'Enter');
+
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'terminal-input',
+      id: 3,
+      target: WATCHED,
+      // The Enter is the whole of what makes this a steer rather than a
+      // half-typed line: there is no steer frame, and the caption says so.
+      data: 'look at the failing test\r',
+    });
+    expect(steer.value).toBe('');
+  });
+
+  it('tells the session how big the viewer is when the emulator settles on a grid', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await deliver(socket, hubFrames.sessionSubscribed);
+
+    await act(async () => {
+      emulator().resizeTo({ cols: 100, rows: 30 });
+    });
+
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'terminal-resize',
+      id: 3,
+      target: WATCHED,
+      size: { cols: 100, rows: 30 },
+    });
+  });
+
+  it('repeats the hub refusing this terminal, which a blank rectangle cannot', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+
+    await deliver(socket, hubFrames.refusalTerminal);
+
+    // A machine that is asleep and an agent that is quiet draw the same
+    // rectangle. The name is the whole of the difference.
+    expect(container.textContent).toContain('the hub said no: the hub cannot reach mbp-robert');
+  });
+});
+
+/**
+ * The stop in the pane's header, drawn off a captured hub state.
+ *
+ * A pane on a store walked through to that state, so the header answers from
+ * the same holders a real fleet published rather than from a status this file
+ * made up. The session is named per test because the interesting cases differ
+ * only in which one the pane is pointed at.
+ */
+describe('the stop in a session pane header', () => {
   async function mountPaneOn(sessionId: string): Promise<void> {
-    const { store, sockets } = connectableStore();
+    const hub = buildStore();
     await mount(
       <SessionPane
         sessionRef={sessionRefSchema.parse({ storeId: 'store-agentplex', sessionId })}
-        store={store}
+        store={hub.store}
         emulators={emulators}
       />,
     );
-    const socket = sockets.sockets[0];
-    if (socket === undefined) throw new Error('the pane dialled nothing');
-    await act(() => {
+    const socket = hub.socket();
+    await act(async () => {
       socket.open();
       socket.deliver(hubFrames.welcome);
       socket.deliver(hubFrames.machineStatePopulated);
@@ -414,19 +672,5 @@ describe('a session pane', () => {
     await mountPaneOn('session-that-is-not-there');
 
     expect(stopButton()).toBeNull();
-  });
-
-  it('says what it could not search when the pane has dropped output', async () => {
-    // The pane owns its feed and a test cannot push half a megabyte through
-    // it to make it drop anything, so the bar is mounted directly on a feed
-    // that says it has. The sentence itself is `searchScopeNotice`, held to
-    // its wording in presentation.test.ts; what this pins is that the bar
-    // asks and draws it.
-    const search = createFakeEmulatorFactory().create(document.createElement('div')).search;
-    await mount(
-      <FindBar search={() => search} truncated={() => true} scheme="dark" onClose={() => {}} />,
-    );
-
-    expect(container.textContent).toContain('so a miss is not proof of absence');
   });
 });

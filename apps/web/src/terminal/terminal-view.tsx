@@ -1,10 +1,12 @@
 import { useCallback, useMemo, type JSX } from 'react';
+import type { TerminalSize } from '@agentplex/protocol';
 
 import { Box } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { attachEmulator } from './attach.js';
 import type { TerminalFeed } from './chunk-feed.js';
 import type { EmulatorFactory, TerminalEmulator } from './emulator.js';
+import { browserBoxObservers, browserFrames } from './resize.js';
 import { createXtermEmulatorFactory } from './xterm-emulator.js';
 
 export interface TerminalViewProps {
@@ -12,6 +14,12 @@ export interface TerminalViewProps {
   readonly scheme: Scheme;
   /** Keystrokes, as the emulator encoded them. Goes to the store, never to state. */
   onData(data: string): void;
+  /**
+   * The grid the emulator settled on. Goes to the store, never to state
+   * either: a size in state would re-render the pane to tell it what it just
+   * measured about itself.
+   */
+  onResize(size: TerminalSize): void;
   /** The live emulator, for the focus shortcut. Called with null on teardown. */
   emulatorReady?(emulator: TerminalEmulator | null): void;
   /**
@@ -32,15 +40,24 @@ export interface TerminalViewProps {
  * lifecycle is exactly the emulator's, which is what a ref callback with a
  * cleanup says.
  *
+ * The same callback is where the box gets watched. A `ResizeObserver` on the
+ * element, one fit per animation frame, and the size the emulator settles on
+ * going straight out as a frame — all of it attached and detached with the
+ * element, which is the one lifetime it can correctly have. An effect would
+ * tie it to a render instead, and a pane is resized by a window drag that no
+ * render is involved in.
+ *
  * Every prop the callback closes over is in its dependency list, so a change
  * of feed, scheme or factory rebuilds the emulator — correct, since all
- * three are constructor-time facts for xterm. Callers keep `onData` and
- * `emulatorReady` referentially stable so keystrokes do not rebuild it.
+ * three are constructor-time facts for xterm. Callers keep `onData`,
+ * `onResize` and `emulatorReady` referentially stable so keystrokes do not
+ * rebuild it.
  */
 export function TerminalView({
   feed,
   scheme,
   onData,
+  onResize,
   emulatorReady,
   emulators,
 }: TerminalViewProps): JSX.Element {
@@ -51,8 +68,17 @@ export function TerminalView({
 
   const mount = useCallback(
     (container: HTMLDivElement) =>
-      attachEmulator({ emulators: factory, container, feed, onData, emulatorReady }),
-    [factory, feed, onData, emulatorReady],
+      attachEmulator({
+        emulators: factory,
+        container,
+        feed,
+        onData,
+        onResize,
+        boxes: browserBoxObservers,
+        frames: browserFrames,
+        emulatorReady,
+      }),
+    [factory, feed, onData, onResize, emulatorReady],
   );
 
   return (

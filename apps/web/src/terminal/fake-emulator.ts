@@ -1,3 +1,4 @@
+import type { TerminalSize } from '@agentplex/protocol';
 import {
   NO_RESULTS,
   type EmulatorFactory,
@@ -77,6 +78,17 @@ export interface FakeEmulator extends TerminalEmulator {
   type(data: string): void;
   readonly focused: number;
   readonly disposed: boolean;
+  /** How many times the pane asked this emulator to re-measure its box. */
+  readonly fitted: number;
+  /**
+   * The emulator having taken a new size: fires whatever onResize listener
+   * the view wired up.
+   *
+   * Driven by the test rather than by `fit`, because that is how the real one
+   * behaves -- a fit that finds the same grid reports nothing, and a program
+   * asking for a size through an escape sequence reports one nobody fitted.
+   */
+  resizeTo(size: TerminalSize): void;
 }
 
 export interface FakeEmulatorFactory extends EmulatorFactory {
@@ -89,7 +101,9 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
     create(): FakeEmulator {
       const written: Uint8Array[] = [];
       const listeners: ((data: string) => void)[] = [];
+      const resized: ((size: TerminalSize) => void)[] = [];
       let focused = 0;
+      let fitted = 0;
       let disposed = false;
       const search = createFakeSearch();
       const emulator: FakeEmulator = {
@@ -106,14 +120,26 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
         dispose(): void {
           disposed = true;
         },
+        fit(): void {
+          fitted += 1;
+        },
+        onResize(listener: (size: TerminalSize) => void): void {
+          resized.push(listener);
+        },
         type(data: string): void {
           for (const listener of [...listeners]) listener(data);
+        },
+        resizeTo(size: TerminalSize): void {
+          for (const listener of [...resized]) listener(size);
         },
         get written(): readonly Uint8Array[] {
           return [...written];
         },
         get focused(): number {
           return focused;
+        },
+        get fitted(): number {
+          return fitted;
         },
         get disposed(): boolean {
           return disposed;
