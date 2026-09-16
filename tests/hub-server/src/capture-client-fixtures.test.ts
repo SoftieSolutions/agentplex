@@ -20,11 +20,22 @@ import {
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 import {
   createFakeStoreFiles,
+  createFakeProviderAdapter,
+  createFakeProviderFiles,
   missingProvider,
   readyProvider,
   unauthenticatedProvider,
   unknownProvider,
 } from '@agentplex/providers/testing';
+import { createProviderRegistry, type ProviderFiles } from '@agentplex/providers';
+import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
+import { createPtySupervisor } from '@agentplex/pty';
+import {
+  createTerminalManager,
+  type TerminalManager,
+} from '../../../apps/server/src/terminal-manager.js';
+import { createSessionController } from '../../../apps/server/src/session-control.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
 import {
   createFakeBeaconSource,
   type FakeBeaconSource,
@@ -35,7 +46,11 @@ import type { HubConnection } from '../../../apps/server/src/hub-connection.js';
 import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
-import type { SessionOutcome, StoreReport } from '../../../apps/server/src/session-control.js';
+import type {
+  SessionController,
+  SessionOutcome,
+  StoreReport,
+} from '../../../apps/server/src/session-control.js';
 import {
   createUnreachableDialer,
   createSocketPair,
@@ -189,6 +204,17 @@ function labelFor(text: string): string {
     // segments, and the web's joining rule has to be tested against both.
     return frame.directory === null ? 'directoryRoots' : 'directoryListing';
   }
+  if (frame.type === 'session-subscribed') {
+    // Labelled by what it says about the history, because those are the two
+    // cases a pane has to draw differently: a subscriber being shown the
+    // session from its first byte, and one joining mid-stream.
+    return frame.droppedBytes > 0 ? 'sessionSubscribedTruncated' : 'sessionSubscribed';
+  }
+  if (frame.type === 'terminal-output') {
+    // The same distinction one layer down: bytes that arrived with a gap in
+    // front of them, and bytes that did not.
+    return frame.droppedChunks > 0 ? 'terminalOutputDropped' : 'terminalOutput';
+  }
   const labels = new Map<string, string>([
     ['welcome', 'welcome'],
     ['pong', 'pong'],
@@ -208,6 +234,7 @@ function labelFor(text: string): string {
     ['doc-created', 'docCreated'],
     ['doc-saved', 'docSaved'],
     ['doc-content', 'docContent'],
+    ['session-unsubscribed', 'sessionUnsubscribed'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -242,6 +269,24 @@ interface Machine {
       Record<string, readonly { name: string; kind: 'directory' | 'file' | 'other' }[]>
     >;
   };
+  /**
+   * A real session controller over a fake pty, for the terminal captures.
+   *
+   * The other machines here answer a start without running anything, which is
+   * all a machine-state capture needs. A terminal frame is different: there is
+   * nothing to subscribe to unless a process exists, a scrollback exists, and
+   * the real terminal manager is the thing counting watchers -- so the
+   * terminal captures stand on the shipped server code with only the fork
+   * faked, exactly as `terminal-relay.integration.test.ts` does.
+   */
+  readonly live?: LiveMachine;
+}
+
+/** The shipped server-side terminal path, with a fake pty under it. */
+interface LiveMachine {
+  readonly sessions: SessionController;
+  readonly terminals: TerminalManager;
+  readonly ptys: FakePtyFactory;
 }
 
 const START = 1_756_000_000_000;
@@ -265,11 +310,13 @@ function fleetDialer(
       const machine = machines.get(host);
       if (machine === undefined) return { ok: false, problem: 'connection refused' };
       const { hubEnd, serverEnd } = createSocketPair();
-      const controller = createFakeSessionController(
-        machine.startOutcome === undefined
-          ? { reports: machine.reports }
-          : { reports: machine.reports, outcome: machine.startOutcome },
-      );
+      const controller =
+        machine.live?.sessions ??
+        createFakeSessionController(
+          machine.startOutcome === undefined
+            ? { reports: machine.reports }
+            : { reports: machine.reports, outcome: machine.startOutcome },
+        );
       const connection = serveServerEnd(serverEnd, {
         // A real scan reads a disk and takes event-loop turns; a fake that
         // resolved in the same microtask as the handshake would race its
@@ -282,7 +329,7 @@ function fleetDialer(
             return controller.report(storeId);
           },
         },
-        terminals: createFakeTerminals().terminals,
+        terminals: machine.live?.terminals ?? createFakeTerminals().terminals,
         machineLoad: createFakeMachineLoadReader(),
         identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
         stores: machine.stores,
@@ -359,6 +406,100 @@ const CAPTURED_USAGE = {
 
 function hold(sessionId: string, stoppable: boolean): SessionHold {
   return { sessionId: sessionIdSchema.parse(sessionId), stoppable };
+}
+
+/** The store the terminal captures run in, and the session they watch. */
+const LIVE_STORE: StoreDescriptor = {
+  storeId: storeIdSchema.parse('store-work'),
+  path: '/volumes/work',
+};
+const LIVE_SESSION = sessionIdSchema.parse('session-build');
+
+/**
+ * Small enough that a burst of output makes the server's own scrollback drop
+ * something.
+ *
+ * `droppedBytes` on a subscribe reply is the number a pane uses to say it is
+ * joining mid-stream, and it is nonzero only when a real terminal really
+ * evicted real history. Shrinking the buffer is how that is provoked in a
+ * second rather than in a megabyte; the rule doing the evicting is the shipped
+ * one either way.
+ */
+const CAPTURE_SCROLLBACK_BYTES = 512;
+
+/** The shipped server terminal path, with only the fork faked. */
+function buildLiveMachine(): LiveMachine {
+  const ptys = createFakePtyFactory();
+  const clock = { now: () => START };
+  const supervisor = createPtySupervisor({
+    pty: ptys,
+    clock,
+    ids: { newId: () => `capture-run-${String(ptys.ptys.length)}` },
+    environment: { PATH: '/usr/bin' },
+    scrollbackBytes: CAPTURE_SCROLLBACK_BYTES,
+  });
+  const terminals = createTerminalManager({ supervisor, clock });
+  // The transcript the provider has already written, so the session exists to
+  // be resumed and the store report names it.
+  const sessionFiles = {
+    [`${LIVE_STORE.path}/claude/sessions/${LIVE_SESSION}.json`]: JSON.stringify({
+      signal: 'awaiting-input',
+      updatedAt: START,
+      cwd: LIVE_STORE.path,
+    }),
+  };
+  const files: ProviderFiles = {
+    readFile: (path) => createFakeProviderFiles({ files: sessionFiles }).readFile(path),
+    listDirectory: (path) => createFakeProviderFiles({ files: sessionFiles }).listDirectory(path),
+  };
+  const stores = [LIVE_STORE];
+  return {
+    ptys,
+    terminals,
+    sessions: createSessionController({
+      stores,
+      providers: createProviderRegistry([createFakeProviderAdapter({ provider: 'claude', files })]),
+      terminals,
+      workingTree: createFakeWorkingTree(),
+      // No roots, which is the default a server ships with: this machine
+      // resumes a session that names its own directory, and nothing captured
+      // here starts in a project.
+      browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
+      clock,
+      logger,
+    }),
+  };
+}
+
+/**
+ * Waits for a client to stop being sent things.
+ *
+ * Turns of the loop are not enough here, and that is the point of the whole
+ * burst below: a megabyte on a real socket leaves the process when the kernel
+ * says so, and the relay's decision to drop is made against how far behind
+ * that socket is. So this waits on real time and on the frames actually
+ * arriving, which is the only clock that fact is true on.
+ */
+async function quiet(client: Client): Promise<void> {
+  let seen = -1;
+  while (seen !== client.received.length) {
+    seen = client.received.length;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/** The first frame a client was sent under a label, or a failure naming it. */
+function firstFrame(client: Client, label: string): string {
+  const found = client.received.find((text) => labelFor(text) === label);
+  if (found === undefined) throw new Error(`nothing the client received was a ${label}`);
+  return found;
+}
+
+/** The same, from the end. */
+function lastFrame(client: Client, label: string): string {
+  const found = [...client.received].reverse().find((text) => labelFor(text) === label);
+  if (found === undefined) throw new Error(`nothing the client received was a ${label}`);
+  return found;
 }
 
 async function until(predicate: () => boolean, what: string | (() => string)): Promise<void> {
@@ -1723,6 +1864,152 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const machineStateDiscovered = await captureState(listeningHub.hub);
     await listeningHub.cleanup();
 
+    // A terminal, end to end. The server end is the shipped one with only the
+    // fork faked: the real session controller, the real terminal manager, the
+    // real scrollback and its real eviction rule, behind the real relay. Every
+    // frame below is a frame a hub sent a browser about a process that was
+    // actually running.
+    //
+    // Three of them exist only to admit to a gap, and those are the ones a
+    // hand-written fixture would always get flatteringly wrong: a reply that
+    // says how much history is missing, output that says how much of itself
+    // never arrived, and a refusal for a session whose machine is asleep. So
+    // each is provoked here rather than described -- a scrollback small enough
+    // to overflow, more output in one turn than a socket can write, and a
+    // machine that goes away.
+    const live = buildLiveMachine();
+    const terminalFleet = new Map<string, Machine>([
+      [
+        'mbp-robert.example',
+        {
+          serverId: 'server-mbp',
+          providers: [readyProvider('claude')],
+          stores: [LIVE_STORE],
+          // Unused: this machine scans its own store through the real
+          // controller, which is the whole reason it is here.
+          reports: [],
+          live,
+        },
+      ],
+    ]);
+    const terminalLive = new Map<string, MessageSocket>();
+    const terminalHub = await startFleetHub(
+      terminalFleet,
+      [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
+      terminalLive,
+    );
+    await until(
+      () =>
+        terminalHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sessionCount(terminalHub.hub) === 1,
+      'the machine holding the terminal to connect and report',
+    );
+
+    // One client resumes the session and another watches it, so that the
+    // subscribe is the second frame on the watching socket -- which is what a
+    // pane's first subscribe is, and therefore the id these fixtures carry.
+    const runner = await openClient(terminalHub.hub);
+    runner.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await runner.framesReceived(2);
+    runner.send({
+      type: 'session-start',
+      id: 2,
+      storeId: LIVE_STORE.storeId,
+      sessionId: LIVE_SESSION,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    await until(
+      () => runner.received.some((text) => labelFor(text) === 'sessionStarted'),
+      'the session to be running',
+    );
+
+    const watched = {
+      by: 'session' as const,
+      storeId: LIVE_STORE.storeId,
+      sessionId: LIVE_SESSION,
+    };
+
+    // Printed before anybody attached: this is the scrollback, and it is what
+    // the subscription has to replay.
+    live.ptys.last?.emit('building\r\n');
+    live.ptys.last?.emit('still building\r\n');
+
+    const watcher = await openClient(terminalHub.hub);
+    watcher.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await watcher.framesReceived(2);
+    watcher.send({ type: 'session-subscribe', id: 2, target: watched });
+    await until(
+      () => watcher.received.filter((text) => labelFor(text) === 'terminalOutput').length >= 2,
+      'the reply and the history it promised',
+    );
+
+    // The gap on this link. More output in one turn than the socket to this
+    // client can write, so the relay throws whole chunks away and charges them
+    // to this watch; the next frame that does get through carries the count.
+    const noise = new Uint8Array(64 * 1024).fill(0x2e);
+    for (let round = 0; round < 4; round += 1) {
+      for (let at = 0; at < 48; at += 1) live.ptys.last?.emit(noise);
+      await quiet(watcher);
+      live.ptys.last?.emit(`marker ${String(round)}\r\n`);
+      await quiet(watcher);
+      if (watcher.received.some((text) => labelFor(text) === 'terminalOutputDropped')) break;
+    }
+    if (!watcher.received.some((text) => labelFor(text) === 'terminalOutputDropped')) {
+      throw new Error('the relay never fell behind, so there is no dropped-chunk frame to capture');
+    }
+    // One more, so the captured frame is the small one that follows the burst
+    // rather than a megabyte of noise: the count is cumulative, so every frame
+    // after a drop carries it.
+    live.ptys.last?.emit('done\r\n');
+    await quiet(watcher);
+
+    watcher.send({ type: 'session-unsubscribe', id: 3, target: watched });
+    await until(
+      () => watcher.received.some((text) => labelFor(text) === 'sessionUnsubscribed'),
+      'the detach to be answered',
+    );
+
+    // A pane opened on a session that has been running a while. The burst
+    // above overflowed the terminal's scrollback, so this is the reply that
+    // says outright how much of the beginning is gone.
+    const latecomer = await openClient(terminalHub.hub);
+    latecomer.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await latecomer.framesReceived(2);
+    latecomer.send({ type: 'session-subscribe', id: 2, target: watched });
+    await until(
+      () => latecomer.received.some((text) => labelFor(text) === 'sessionSubscribedTruncated'),
+      'the late subscription to be answered with the size of the gap',
+    );
+
+    // And the machine goes away without saying so. The rows it reported stay,
+    // labelled, so this is a refusal naming a machine rather than a session
+    // that cannot be found -- which is the difference between a pane that says
+    // what to do about it and a blank rectangle.
+    terminalLive.get('mbp-robert.example')?.close({ code: 1006, reason: 'the machine went away' });
+    await until(
+      () => terminalHub.hub.connections.snapshot().some((report) => report.phase === 'stale'),
+      'the machine holding the terminal to go stale',
+    );
+    const orphan = await openClient(terminalHub.hub);
+    orphan.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await orphan.framesReceived(2);
+    orphan.send({ type: 'session-subscribe', id: 2, target: watched });
+    await until(
+      () => orphan.received.some((text) => labelFor(text) === 'refusal'),
+      'the subscription to a sleeping machine to be refused',
+    );
+
+    const sessionSubscribed = firstFrame(watcher, 'sessionSubscribed');
+    const terminalOutput = firstFrame(watcher, 'terminalOutput');
+    const terminalOutputDropped = lastFrame(watcher, 'terminalOutputDropped');
+    const sessionUnsubscribed = firstFrame(watcher, 'sessionUnsubscribed');
+    const sessionSubscribedTruncated = firstFrame(latecomer, 'sessionSubscribedTruncated');
+    const refusalTerminal = firstFrame(orphan, 'refusal');
+    await terminalHub.cleanup();
+
     // A hub whose database already holds a pane layout, for the answer a
     // stored arrangement earns. A second hub rather than a re-ask of the
     // first, because the fake database records writes without keeping them;
@@ -1794,6 +2081,12 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('serverPaired', serverPaired);
     captured.set('serverUnpaired', serverUnpaired);
     captured.set('machineStateJustPaired', machineStateJustPaired);
+    captured.set('sessionSubscribed', sessionSubscribed);
+    captured.set('sessionSubscribedTruncated', sessionSubscribedTruncated);
+    captured.set('terminalOutput', terminalOutput);
+    captured.set('terminalOutputDropped', terminalOutputDropped);
+    captured.set('sessionUnsubscribed', sessionUnsubscribed);
+    captured.set('refusalTerminal', refusalTerminal);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)

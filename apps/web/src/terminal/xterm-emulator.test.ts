@@ -6,6 +6,7 @@ import type { SearchResults, TerminalSearch } from './emulator.js';
 import { ptyChunks } from './pty-chunks.fixture.js';
 import { unicodeChunks } from './unicode-widths.fixture.js';
 import {
+  createPaneFit,
   createPaneSearch,
   createPaneTerminal,
   createWebLinkHandler,
@@ -185,6 +186,41 @@ async function writeLine(terminal: PaneTerminal, text: string): Promise<void> {
     terminal.write(`${text}\r\n`, resolve);
   });
 }
+
+describe('fitting the pane to its box', () => {
+  it('measures nothing it cannot measure, and leaves the grid where it was', () => {
+    const terminal = createPaneTerminal('dark');
+    open.push(terminal);
+    const fit = createPaneFit(terminal);
+    const before = { cols: terminal.cols, rows: terminal.rows };
+
+    // A terminal with no element is what a pane in a collapsed layout cell,
+    // or one whose emulator has not been drawn yet, looks like to the addon.
+    expect(() => fit()).not.toThrow();
+
+    // Unchanged, rather than clamped to the two-column minimum the addon's
+    // arithmetic would produce from a box of nothing. The size this produces
+    // is the size a process on another machine lays its screen out against,
+    // and a guess is worse for that process than being left alone.
+    expect({ cols: terminal.cols, rows: terminal.rows }).toEqual(before);
+  });
+
+  it('reports the grid it settles on, which is what crosses the wire', () => {
+    const terminal = createPaneTerminal('dark');
+    open.push(terminal);
+    createPaneFit(terminal);
+    const reported: { cols: number; rows: number }[] = [];
+    terminal.onResize(({ cols, rows }) => reported.push({ cols, rows }));
+
+    terminal.resize(100, 30);
+    // The same size again: a resize to the grid it already has is not a
+    // change, and a pane that sent one would be telling a pty about a window
+    // that did not move.
+    terminal.resize(100, 30);
+
+    expect(reported).toEqual([{ cols: 100, rows: 30 }]);
+  });
+});
 
 describe('a link in terminal output', () => {
   it('opens http and https in a new tab the opened page cannot reach back through', () => {

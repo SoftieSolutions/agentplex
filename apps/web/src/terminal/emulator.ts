@@ -1,3 +1,5 @@
+import type { TerminalSize } from '@agentplex/protocol';
+
 /**
  * The emulator seam: what the terminal pane needs from xterm, and no more.
  *
@@ -85,6 +87,27 @@ export interface TerminalEmulator extends EmulatorSink {
   dispose(): void;
   /** Finding text in the scrollback this emulator holds. */
   readonly search: TerminalSearch;
+  /**
+   * Re-measures the container and takes the largest whole grid that fits it.
+   *
+   * A no-op while nothing can be measured -- a pane in a collapsed cell, a
+   * terminal not yet laid out -- rather than a guess, because the size this
+   * produces is the size the process on another machine lays its screen out
+   * against, and a guessed 2x1 is worse for that process than being left
+   * where it was.
+   */
+  fit(): void;
+  /**
+   * The grid this emulator now has, whenever it changes.
+   *
+   * The listener is the pane's for the pane's whole life, like `onData`: what
+   * it does with a size is send it, and there is no version of the pane that
+   * stops wanting to. The size is reported rather than returned by `fit`
+   * because a resize can also come from the emulator itself -- a program
+   * asking for one through an escape sequence -- and a pane that only watched
+   * its own fits would miss those.
+   */
+  onResize(listener: (size: TerminalSize) => void): void;
 }
 
 /**
