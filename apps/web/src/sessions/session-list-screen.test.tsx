@@ -3,6 +3,7 @@ import { parseClientFrame, parseTextFrame, type ClientFrame } from '@agentplex/p
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createCatalogueStore } from '../catalogue/catalogue-store.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
@@ -19,6 +20,14 @@ import { SessionListScreen } from './session-list-screen.js';
  * stop. Everything inbound here is captured output -- the fleet state, the
  * refusal a real hub answered a real stop with, the reply it sent when one
  * landed -- and everything outbound is read back through the hub's own parser.
+ *
+ * The screen is mounted beside the interest the chrome declares in the
+ * catalogue rather than alone. Until AGX-122 this screen drew the tree itself
+ * and so asked the catalogue question itself; the sidebar asks it now, before
+ * anything on this screen is pressed, and the captured refusal answers the
+ * frame a stop is under that numbering. Standing the interest up here keeps
+ * this suite asserting about the cards rather than about how many frames the
+ * chrome around them happens to send.
  */
 
 declare global {
@@ -66,6 +75,8 @@ describe('the session list', () => {
   let root: Root | null = null;
   let store: HubStore;
   let sockets: ReturnType<typeof createFakeSocketFactory>;
+  /** The chrome's standing catalogue interest, taken away after each test. */
+  let chrome: (() => void) | null = null;
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -80,6 +91,7 @@ describe('the session list', () => {
       timers: createFakeTimers(),
       frameIds: createFrameIdCounter(),
     });
+    chrome = createCatalogueStore({ hub: store }).subscribe(() => {});
     window.location.hash = '';
   });
 
@@ -88,6 +100,8 @@ describe('the session list', () => {
       root?.unmount();
     });
     root = null;
+    chrome?.();
+    chrome = null;
     container.remove();
   });
 
@@ -246,8 +260,8 @@ describe('the session list', () => {
     // The race the hub refuses on purpose: the holder went mid-turn between
     // the button being drawn and the button being pressed. Captured from a
     // real hub answering a real stop, and it answers frame 4 -- the stop this
-    // card just sent, after the layout and the catalogue page this screen asks
-    // for on connecting.
+    // card just sent, after the layout this screen asks for on connecting and
+    // the catalogue page the chrome asks for beside it.
     await act(() => {
       socket.deliver(hubFrames.refusalHeldBusy);
     });
