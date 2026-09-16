@@ -10,9 +10,11 @@ import {
   canMeasureGrid,
   createPaneEmulator,
   createPaneFit,
+  createPaneScroll,
   createPaneSearch,
   createPaneTerminal,
   createWebLinkHandler,
+  paneCellHeight,
   paneSearchDecorations,
   type WindowOpener,
 } from './xterm-emulator.js';
@@ -260,6 +262,108 @@ describe('fitting the pane to its box', () => {
     terminal.resize(100, 30);
 
     expect(reported).toEqual([{ cols: 100, rows: 30 }]);
+  });
+});
+
+/**
+ * Turning a finger's pixels into xterm's lines, which is the half of touch
+ * scrolling that has to know what a row is.
+ *
+ * jsdom lays nothing out and opening a terminal needs a renderer, so the
+ * terminal here is the three members `createPaneScroll` actually reads, with
+ * the boxes a browser would have measured set on the elements directly -- the
+ * same way `canMeasureGrid` is held to a box above. What is under test is an
+ * arithmetic and a remainder, and neither of those is xterm's.
+ */
+describe('scrolling the pane by a distance a finger moved', () => {
+  function boxed(height: number): HTMLElement {
+    const element = document.createElement('div');
+    Object.defineProperty(element, 'clientHeight', { value: height });
+    return element;
+  }
+
+  /** A terminal of `rows` rows of `cell` pixels, in a box with padding to spare. */
+  interface Gridded {
+    readonly rows: number;
+    element: HTMLElement | undefined;
+    readonly scrolled: number[];
+    scrollLines(amount: number): void;
+  }
+
+  function gridded(rows: number, cell: number): Gridded {
+    const element = boxed(rows * cell + 40);
+    const screen = boxed(rows * cell);
+    screen.className = 'xterm-screen';
+    element.append(screen);
+    const scrolled: number[] = [];
+    return { rows, element, scrolled, scrollLines: (amount) => scrolled.push(amount) };
+  }
+
+  it('measures a row off the screen and not off the padded box around it', () => {
+    const terminal = gridded(40, 16);
+
+    expect(paneCellHeight(terminal.element, terminal.rows)).toBe(16);
+  });
+
+  it('falls back to the box it was fitted into when there is no screen in it', () => {
+    // Slightly too tall a row rather than no row at all: a gesture that moves
+    // nothing cannot be told from an app that has stopped answering, and the
+    // cost of being wrong here is a glide that overshoots a little.
+    expect(paneCellHeight(boxed(660), 40)).toBe(16.5);
+  });
+
+  it('has no answer for a pane with no box, and none for one never drawn', () => {
+    expect(paneCellHeight(boxed(0), 40)).toBeNull();
+    expect(paneCellHeight(undefined, 40)).toBeNull();
+    expect(paneCellHeight(boxed(640), 0)).toBeNull();
+  });
+
+  it('scrolls the whole lines a distance covers and keeps what is left over', () => {
+    const terminal = gridded(40, 16);
+    const scroll = createPaneScroll(terminal);
+
+    // Two and a half rows, then two and a half more: the halves make a row.
+    scroll(40);
+    scroll(40);
+
+    expect(terminal.scrolled).toEqual([2, 3]);
+  });
+
+  it('moves nothing for a drag shorter than a row, until the drag adds up', () => {
+    // The rule a truncate-per-event implementation gets wrong: a slow drag
+    // arrives as a run of small deltas, and one that dropped the remainder of
+    // each would fall further behind the finger the slower the finger moved.
+    const terminal = gridded(40, 16);
+    const scroll = createPaneScroll(terminal);
+
+    for (let event = 0; event < 7; event += 1) scroll(6);
+
+    expect(terminal.scrolled).toEqual([1, 1]);
+  });
+
+  it('scrolls backwards for a finger going the other way', () => {
+    const terminal = gridded(40, 16);
+    const scroll = createPaneScroll(terminal);
+
+    scroll(-40);
+
+    expect(terminal.scrolled).toEqual([-2]);
+  });
+
+  it('forgets what it was carrying for a pane with no box to carry it against', () => {
+    // A collapsed cell. Pixels held over would be spent at whatever size the
+    // pane comes back at, on a screen the user has since moved.
+    const terminal = gridded(40, 16);
+    const drawn = terminal.element;
+    const scroll = createPaneScroll(terminal);
+    scroll(8);
+
+    terminal.element = boxed(0);
+    scroll(8);
+    terminal.element = drawn;
+    scroll(8);
+
+    expect(terminal.scrolled).toEqual([]);
   });
 });
 

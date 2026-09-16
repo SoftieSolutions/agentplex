@@ -118,6 +118,32 @@ export interface TerminalEmulator extends EmulatorSink {
   paste(text: string): void;
   focus(): void;
   dispose(): void;
+  /**
+   * Moves the view through the scrollback by a distance in CSS pixels, the
+   * way a finger asks for it. Positive is towards the newest output, the
+   * direction `scrollTop` grows in.
+   *
+   * Pixels rather than lines, because the caller is a gesture and a gesture
+   * measures in pixels. Turning that into lines needs the height of a cell,
+   * which is a fact about a font measured in a real layout -- the emulator's
+   * to know, and nothing a pane or a pointer handler could ask for without
+   * measuring the emulator's own DOM on its behalf. What is left over after
+   * the whole lines are taken is the emulator's to keep as well, so that a
+   * slow drag moves at a finger's speed instead of losing a fraction of a
+   * line on every event.
+   *
+   * It exists because xterm has no touch scrolling of its own. Its viewport
+   * is not a scroll container -- `.xterm-viewport` is an empty element whose
+   * scroll height is its client height, and the screen sits in a VS Code
+   * `SmoothScrollableElement` whose scroll position is a number the renderer
+   * repaints from. Measured in the built app: a freshly opened terminal
+   * registers no `touchstart`, `touchmove` or `touchend` listener anywhere,
+   * and the only pointer listeners are the four on its own scrollbar slider.
+   * So a finger has nothing to drag but a 14px slider that is invisible until
+   * it moves, and `touch-action: pan-y` would hand the pan to the page, which
+   * has nothing to scroll either.
+   */
+  scrollPixels(pixels: number): void;
   /** Finding text in the scrollback this emulator holds. */
   readonly search: TerminalSearch;
   /**

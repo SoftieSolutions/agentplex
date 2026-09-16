@@ -327,6 +327,76 @@ export function createPaneFit(terminal: Terminal): () => void {
 }
 
 /**
+ * The height of one row, in CSS pixels, or `null` when there is nothing to
+ * measure it against.
+ *
+ * The number a finger has to be turned into lines with, and xterm publishes no
+ * API for it: the renderer's dimensions are internal, and the fit addon reads
+ * them through the private core. What is public is the DOM, so it is measured
+ * there -- `.xterm-screen` is exactly the grid, `rows` is how many rows are in
+ * it, and the quotient is a cell.
+ *
+ * Reaching for a class name is this module's to do and nobody else's. It is
+ * the one module that knows xterm at all, and the class is as much of xterm's
+ * published surface as the stylesheet the app imports to lay it out: nothing
+ * would draw if `.xterm-screen` changed name.
+ *
+ * The screen and the element are two answers rather than one because they fail
+ * differently. The screen is exact. The element is the box the terminal was
+ * fitted into, so dividing it by the rows overstates a cell by up to a row's
+ * worth of leftover -- a few percent, which in this use is a glide that
+ * travels slightly too far and nothing else. That is a better direction to
+ * degrade in than answering `null`, because `null` here is a finger that moves
+ * nothing, and a gesture that does nothing is indistinguishable from an app
+ * that has stopped answering.
+ */
+export function paneCellHeight(element: HTMLElement | undefined, rows: number): number | null {
+  if (element === undefined || rows <= 0) return null;
+  const screen = element.querySelector('.xterm-screen');
+  const height = screen instanceof HTMLElement ? screen.clientHeight : element.clientHeight;
+  if (height <= 0) return null;
+  return height / rows;
+}
+
+/** The half of a terminal that scrolling needs, which is three members of it. */
+export interface ScrollableTerminal {
+  readonly rows: number;
+  readonly element: HTMLElement | undefined;
+  scrollLines(amount: number): void;
+}
+
+/**
+ * Moving one terminal's view by a distance in pixels.
+ *
+ * The remainder is why this is a closure and not a function. xterm scrolls in
+ * whole lines, a finger moves in pixels, and a drag delivers its pixels a
+ * handful at a time -- so an implementation that truncated each event on its
+ * own would drop a fraction of a line per event, and a slow drag would fall
+ * steadily behind the finger holding it. What is left over is carried to the
+ * next one, so the view arrives where the finger did.
+ *
+ * The carry is dropped whenever there is nothing to measure. A pane in a
+ * collapsed cell has no cell height, and pixels saved up against a grid that
+ * is not there are pixels that would be spent later, at another size, on a
+ * screen the user has since moved.
+ */
+export function createPaneScroll(terminal: ScrollableTerminal): (pixels: number) => void {
+  let carried = 0;
+  return (pixels: number): void => {
+    const cell = paneCellHeight(terminal.element, terminal.rows);
+    if (cell === null) {
+      carried = 0;
+      return;
+    }
+    carried += pixels;
+    const lines = Math.trunc(carried / cell);
+    if (lines === 0) return;
+    carried -= lines * cell;
+    terminal.scrollLines(lines);
+  };
+}
+
+/**
  * The seam over one terminal that has already been opened.
  *
  * Separate from the factory below for the same reason the three helpers above
@@ -346,8 +416,10 @@ export function createPaneFit(terminal: Terminal): () => void {
 export function createPaneEmulator(terminal: Terminal, scheme: Scheme): TerminalEmulator {
   const search = createPaneSearch(terminal, scheme);
   const fit = createPaneFit(terminal);
+  const scrollPixels = createPaneScroll(terminal);
   return {
     search,
+    scrollPixels,
     write: (chunk) => terminal.write(chunk),
     onData: (listener) => {
       terminal.onData(listener);
