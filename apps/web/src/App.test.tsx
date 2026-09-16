@@ -46,6 +46,15 @@ function installMatchMedia(): void {
   });
 }
 
+/** Settings carries a segmented control that measures itself; jsdom has no layout. */
+function installResizeObserver(): void {
+  globalThis.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
+}
+
 interface Page {
   readonly tokens: TokenStore;
   readonly hub: HubStore;
@@ -84,6 +93,7 @@ describe('the page', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     installMatchMedia();
+    installResizeObserver();
     container = document.createElement('div');
     document.body.append(container);
   });
