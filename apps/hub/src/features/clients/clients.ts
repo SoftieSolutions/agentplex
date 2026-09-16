@@ -8,6 +8,7 @@ import {
 } from '@agentplex/node-shared';
 import type { Pairing } from '../pairing/pairing.js';
 import type { ClientCatalogue } from '../catalogue/catalogue.js';
+import type { Docs } from '../docs/docs.js';
 import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
 import type { FleetState } from '../fleet-state/fleet-state.js';
@@ -103,6 +104,15 @@ export interface ClientsDependencies {
    */
   readonly catalogue: ClientCatalogue;
   /**
+   * Documents, handed to every client this serves.
+   *
+   * One instance for the whole broadcast, for the reason the seams above are
+   * one each: which machines are reachable is a fact about the fleet, and the
+   * index is one set of rows. A per-socket copy of either would be a second
+   * answer waiting to differ.
+   */
+  readonly docs: Docs;
+  /**
    * The deadline seam the flush is scheduled on.
    *
    * Injected rather than `setTimeout` because coalescing is exactly the
@@ -158,6 +168,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
     syncServers,
     projects,
     catalogue,
+    docs,
   } = dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
@@ -253,6 +264,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         syncServers,
         projects,
         catalogue,
+        docs,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);
         },

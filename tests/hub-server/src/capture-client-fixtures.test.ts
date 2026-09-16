@@ -205,6 +205,9 @@ function labelFor(text: string): string {
     ['node-removed', 'nodeRemoved'],
     ['node-removal-forgotten', 'nodeRemovalForgotten'],
     ['catalogue-changed', 'catalogueChanged'],
+    ['doc-created', 'docCreated'],
+    ['doc-saved', 'docSaved'],
+    ['doc-content', 'docContent'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -937,9 +940,56 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const nodeRenamed = starter.received.find((text) => labelFor(text) === 'nodeRenamed');
     if (nodeRenamed === undefined) throw new Error('the project rename was not answered');
 
+    // A document in that project, written, saved and read back. The whole real
+    // path again: the hub turns the node id into the project's directory out of
+    // its own rows, the server writes the file under its own data root, and the
+    // three replies captured here are what a client actually reads. The write
+    // times are the machine's -- the fake project disk counts its writes, so
+    // this fixture says "the second write on that machine" rather than a
+    // millisecond somebody typed.
+    starter.send({
+      type: 'doc-create',
+      id: 8,
+      projectId: created.value.nodeId,
+      server: 'registration-mbp-robert',
+      name: 'plan.md',
+      content: '# Plan\n\n- read the failing test\n- fix the refresh loop\n',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'docCreated'),
+      'the document create to be answered',
+    );
+    const docCreated = starter.received.find((text) => labelFor(text) === 'docCreated');
+    if (docCreated === undefined) throw new Error('the document create was not answered');
+    const madeDoc = parseTextFrame(parseHubFrame, docCreated);
+    if (!madeDoc.ok || madeDoc.value.type !== 'doc-created') {
+      throw new Error('the document create was answered with something else');
+    }
+
+    starter.send({
+      type: 'doc-save',
+      id: 9,
+      nodeId: madeDoc.value.nodeId,
+      content: '# Plan\n\n- read the failing test\n- fix the refresh loop\n- write it up\n',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'docSaved'),
+      'the document save to be answered',
+    );
+    const docSaved = starter.received.find((text) => labelFor(text) === 'docSaved');
+    if (docSaved === undefined) throw new Error('the document save was not answered');
+
+    starter.send({ type: 'doc-open', id: 10, nodeId: madeDoc.value.nodeId });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'docContent'),
+      'the document open to be answered',
+    );
+    const docContent = starter.received.find((text) => labelFor(text) === 'docContent');
+    if (docContent === undefined) throw new Error('the document open was not answered');
+
     // The tree with that project in it, so the web's project picker has a
     // captured layout to read rather than one somebody typed.
-    starter.send({ type: 'layout-request', id: 7 });
+    starter.send({ type: 'layout-request', id: 11 });
     await until(
       () => starter.received.some((text) => labelFor(text) === 'layout'),
       'the layout to be answered',
@@ -1656,6 +1706,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('directoryListing', directoryListing);
     captured.set('projectCreated', projectCreated);
     captured.set('nodeRenamed', nodeRenamed);
+    captured.set('docCreated', docCreated);
+    captured.set('docSaved', docSaved);
+    captured.set('docContent', docContent);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);
     captured.set('nodeMoved', nodeMoved);

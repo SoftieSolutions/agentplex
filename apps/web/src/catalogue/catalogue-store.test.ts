@@ -246,7 +246,7 @@ describe('a page nobody asked for', () => {
     h.store.loadMore();
     h.asked[1]?.resolve(REST);
     await settled();
-    expect(h.store.getSnapshot().pages.items).toHaveLength(5);
+    expect(h.store.getSnapshot().pages.items).toHaveLength(FIRST.items.length + REST.items.length);
 
     // `catalogue-changed` arrived: the hub store asked the last question again,
     // from the first page, and the answer landed in its snapshot.
@@ -265,7 +265,7 @@ describe('a page nobody asked for', () => {
     // and replace the very rows the append is adding to.
     h.asked[1]?.resolve(REST);
     await settled();
-    expect(h.store.getSnapshot().pages.items).toHaveLength(5);
+    expect(h.store.getSnapshot().pages.items).toHaveLength(FIRST.items.length + REST.items.length);
   });
 });
 

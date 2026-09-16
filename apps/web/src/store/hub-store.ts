@@ -210,6 +210,47 @@ export interface CataloguePageView {
   readonly version: number;
 }
 
+/**
+ * The hub's answer to a document create, kept so the form that asked can act.
+ *
+ * The same shape and the same reason as a project's: every later frame about
+ * this document names the node, and a form that had to find its own back out
+ * of the next tree would be matching on a name the user may rename.
+ */
+export interface DocCreatedView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+}
+
+/**
+ * A document the hub answered with, whole, and when the machine holding it
+ * says it was written.
+ *
+ * `replyTo` is what joins it to the request for the reason a listing carries
+ * one: a person may open a second document while a slow disk is answering the
+ * first, and a snapshot field with no id on it would put the first document
+ * under the second name. The editor is AGX-243; what this store owes it is the
+ * characters and the time, kept exactly as they arrived.
+ */
+export interface DocContentView {
+  readonly replyTo: FrameId;
+  readonly content: string;
+  readonly updatedAt: number;
+}
+
+/**
+ * The hub's answer to a save: when the machine holding the document wrote it.
+ *
+ * Kept rather than discarded, because it is the only evidence a client has
+ * that a save landed on a disk rather than merely leaving the browser -- and
+ * it is the server's clock, so an editor showing "saved a moment ago" is
+ * showing what the machine said and not what this tab assumed.
+ */
+export interface DocSavedView {
+  readonly replyTo: FrameId;
+  readonly updatedAt: number;
+}
+
 export interface HubSnapshot {
   readonly phase: ConnectionPhase;
   /** What is degraded, in words, or `null` while nothing is. */
@@ -258,6 +299,12 @@ export interface HubSnapshot {
    * screen.
    */
   readonly catalogue: CataloguePageView | null;
+  /** The hub's most recent yes to a document create, kept until the next one. */
+  readonly lastDocCreated: DocCreatedView | null;
+  /** The hub's most recent yes to a document save, kept until the next one. */
+  readonly lastDocSaved: DocSavedView | null;
+  /** The most recent document the hub answered with, kept until the next one. */
+  readonly lastDocContent: DocContentView | null;
 }
 
 /**
@@ -273,9 +320,10 @@ export interface HubSnapshot {
  * right place for it rather than the wrong one: a person browsing while the
  * connection blinks asked a question once, and the answer is as good a moment
  * later. It is not standing interest — nothing re-lists a directory on every
- * reconnection — so it is not a subscription. `project-create` and the five
- * tree edits are commands for the plainest reason of all: each is something
- * the user did once, and a queue is where a once-only intent waits.
+ * reconnection — so it is not a subscription. `project-create`, the five tree
+ * edits and the three document frames are commands for the plainest reason of
+ * all: each is something the user did once, and a queue is where a once-only
+ * intent waits.
  */
 type CommandFrame = Extract<
   ClientFrame,
@@ -290,7 +338,10 @@ type CommandFrame = Extract<
       | 'node-rename'
       | 'node-move'
       | 'node-remove'
-      | 'node-forget-removal';
+      | 'node-forget-removal'
+      | 'doc-create'
+      | 'doc-save'
+      | 'doc-open';
   }
 >;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -461,6 +512,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastProjectCreated: null,
     lastTreeChange: null,
     catalogue: null,
+    lastDocCreated: null,
+    lastDocSaved: null,
+    lastDocContent: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -723,6 +777,41 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         });
         return;
       }
+      case 'doc-created': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastDocCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
+        });
+        // No re-request here, for the reason a project create has none: a
+        // document is a node, so the hub broadcasts `catalogue-changed` after
+        // making one, and asking again on the reply as well would be two
+        // requests for one change -- on the only client that already knows.
+        return;
+      }
+      case 'doc-saved': {
+        pending.delete(frame.replyTo);
+        // Nothing about the tree changed. A save changes the file on a machine
+        // and the hub's index of when; it changes no row the layout carries,
+        // so there is nothing here for a re-read of the tree to find.
+        update({
+          lastRefusal: null,
+          lastDocSaved: { replyTo: frame.replyTo, updatedAt: frame.updatedAt },
+        });
+        return;
+      }
+      case 'doc-content': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastDocContent: {
+            replyTo: frame.replyTo,
+            content: frame.content,
+            updatedAt: frame.updatedAt,
+          },
+        });
+        return;
+      }
       case 'node-renamed':
       case 'node-moved':
       case 'node-removed':
@@ -916,6 +1005,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // Same, and more so: a catalogue page is pinned to a version this hub run
       // may not be at when somebody looks again.
       catalogue: null,
+      // The same, and more so: a document is a file that may have been edited
+      // on its own machine while nothing here was connected, so holding the
+      // characters would be holding a copy this store cannot vouch for.
+      lastDocContent: null,
     });
   }
 

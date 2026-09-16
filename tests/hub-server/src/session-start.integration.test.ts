@@ -76,6 +76,7 @@ import {
   createCatalogue,
   type Catalogue,
 } from '../../../apps/hub/src/features/catalogue/catalogue.js';
+import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
 import { createProjects, type Projects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
@@ -474,6 +475,9 @@ async function start(
     syncServers: () => connections.sync(),
     projects,
     catalogue,
+    // Not the subject: a start is what this file is about, and the fake is what
+    // a suite stands on when a seam is not its subject.
+    docs: createFakeDocs(),
   });
 
   await connections.sync();

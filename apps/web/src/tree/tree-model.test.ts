@@ -57,16 +57,16 @@ describe('where a node may be put', () => {
   it('offers the root and every container the hub sent', () => {
     expect(moveTargets(ARRANGED, node('hub-2'))).toEqual([
       { parentId: null, label: 'Top level' },
-      { parentId: 'hub-5', label: 'this week' },
+      { parentId: 'hub-6', label: 'this week' },
       { parentId: 'hub-4', label: 'agentplex (main checkout)' },
     ]);
   });
 
   it('leaves out the node itself and everything under it', () => {
-    // `hub-5` is the folder and `hub-4` the project inside it. Neither is
+    // `hub-6` is the folder and `hub-4` the project inside it. Neither is
     // somewhere the folder can go, and the hub would refuse both -- but a
     // menu offering a click that can only be refused is a menu wasting one.
-    expect(moveTargets(ARRANGED, node('hub-5'))).toEqual([{ parentId: null, label: 'Top level' }]);
+    expect(moveTargets(ARRANGED, node('hub-6'))).toEqual([{ parentId: null, label: 'Top level' }]);
   });
 
   it('offers the root alone before any tree has been answered', () => {
