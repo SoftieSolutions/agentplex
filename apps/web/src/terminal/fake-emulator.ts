@@ -76,6 +76,19 @@ export interface FakeEmulator extends TerminalEmulator {
   readonly written: readonly Uint8Array[];
   /** The user typing: fires whatever onData listener the view wired up. */
   type(data: string): void;
+  /** The user having dragged across output, which `selection` then answers. */
+  select(text: string): void;
+  /**
+   * Every text the pane handed to `paste`, in order.
+   *
+   * Recorded verbatim, and fired at the onData listener verbatim: this fake
+   * normalises nothing and wraps nothing. What a paste turns into is xterm's
+   * answer and depends on a mode only a real parser can be in, so the fake
+   * inventing a bracketed form would be the test agreeing with itself about
+   * the one thing worth capturing bytes for. `xterm-emulator.test.ts` holds
+   * the real one to that, against a pty that really set the mode.
+   */
+  readonly pasted: readonly string[];
   readonly focused: number;
   readonly disposed: boolean;
   /** How many times the pane asked this emulator to re-measure its box. */
@@ -102,9 +115,11 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
       const written: Uint8Array[] = [];
       const listeners: ((data: string) => void)[] = [];
       const resized: ((size: TerminalSize) => void)[] = [];
+      const pasted: string[] = [];
       let focused = 0;
       let fitted = 0;
       let disposed = false;
+      let selected = '';
       const search = createFakeSearch();
       const emulator: FakeEmulator = {
         search,
@@ -113,6 +128,15 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
         },
         onData(listener: (data: string) => void): void {
           listeners.push(listener);
+        },
+        selection(): string {
+          return selected;
+        },
+        paste(text: string): void {
+          pasted.push(text);
+          // Out through onData, because that is where the real one sends it:
+          // a paste is input, and it leaves by the path typing leaves by.
+          for (const listener of [...listeners]) listener(text);
         },
         focus(): void {
           focused += 1;
@@ -129,11 +153,17 @@ export function createFakeEmulatorFactory(): FakeEmulatorFactory {
         type(data: string): void {
           for (const listener of [...listeners]) listener(data);
         },
+        select(text: string): void {
+          selected = text;
+        },
         resizeTo(size: TerminalSize): void {
           for (const listener of [...resized]) listener(size);
         },
         get written(): readonly Uint8Array[] {
           return [...written];
+        },
+        get pasted(): readonly string[] {
+          return [...pasted];
         },
         get focused(): number {
           return focused;
