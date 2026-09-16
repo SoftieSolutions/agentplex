@@ -2,11 +2,16 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { sendJson, type Logger } from '@agentplex/node-shared';
+import { sendJson, type Logger, type Timers } from '@agentplex/node-shared';
 import { PROTOCOL_VERSION, type HubId } from '@agentplex/protocol';
 import { NOT_AUTHORIZED } from '../client-auth/client-auth.js';
+import type { FleetReads } from './fleet-view.js';
 import { hubInfoTool } from './hub-info.js';
+import { listServersTool } from './list-servers.js';
+import { listSessionsTool } from './list-sessions.js';
 import { admitsMcpRequest } from './mcp-auth.js';
+import { readTerminalTool, type TerminalReads } from './read-terminal.js';
+import { sessionStatusTool } from './session-status.js';
 import { registerTool, type McpTool } from './tool-registry.js';
 
 /**
@@ -102,6 +107,24 @@ export interface McpDependencies {
    * `mcp-auth.ts`.
    */
   readonly clientToken: string;
+  /**
+   * What the hub believes about its fleet, as it publishes it to a client.
+   *
+   * The published projection and not the reducer's own state, which is the
+   * line this endpoint's whole claim rests on: a tool reads exactly what an
+   * attached browser is broadcast, so "MCP gains no capability the UI lacks" is
+   * something this file can point at rather than something it asserts.
+   */
+  readonly state: FleetReads;
+  /**
+   * The terminal relay, narrowed to what a reader needs: subscribe, and give
+   * the subscription back. There is no path from a tool to `input` or to
+   * `resize`, and AGX-44 will have to widen this seam in a diff somebody reads
+   * rather than inherit the whole feature from here.
+   */
+  readonly terminal: TerminalReads;
+  /** The deadline a terminal read gives up after. */
+  readonly timers: Timers;
   readonly logger: Logger;
 }
 
@@ -128,14 +151,32 @@ export interface Mcp {
   close(): Promise<void>;
 }
 
-export function createMcp({ hubId, clientToken, logger }: McpDependencies): Mcp {
+export function createMcp({
+  hubId,
+  clientToken,
+  state,
+  terminal,
+  timers,
+  logger,
+}: McpDependencies): Mcp {
   /**
-   * Every tool this build has. A later ticket adds a line: AGX-43 the read
-   * tools, AGX-44 the acting ones, AGX-244 after them. Built once and
-   * registered onto each request's server, because the list is a fact about the
-   * build and the server is a fact about the request.
+   * Every tool this build has. A later ticket adds a line: AGX-44 the acting
+   * ones, AGX-244 after them. Built once and registered onto each request's
+   * server, because the list is a fact about the build and the server is a fact
+   * about the request.
+   *
+   * Read tools only, and every one of them annotated `readOnlyHint`. Nothing
+   * here starts, stops, types into or writes anything: the five below are the
+   * fleet, its sessions, one session, and what one terminal has printed, each a
+   * projection of something a client is already shown.
    */
-  const tools: readonly McpTool[] = [hubInfoTool({ hubId })];
+  const tools: readonly McpTool[] = [
+    hubInfoTool({ hubId }),
+    listServersTool({ state }),
+    listSessionsTool({ state }),
+    sessionStatusTool({ state }),
+    readTerminalTool({ terminal, timers }),
+  ];
 
   /**
    * What is being served right now. Empty between requests, which is what
