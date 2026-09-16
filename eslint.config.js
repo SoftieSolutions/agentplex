@@ -81,6 +81,7 @@ const HUB_FEATURES = [
   'projects',
   'servers',
   'sessions',
+  'terminal',
   'web',
 ];
 

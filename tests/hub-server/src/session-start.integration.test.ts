@@ -81,6 +81,7 @@ import {
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
 import { createProjects, type Projects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
+import { createTerminal } from '../../../apps/hub/src/features/terminal/terminal.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
 /**
@@ -428,8 +429,17 @@ async function start(
       // rather than captured: the catalogue is built below, and nothing
       // reports until `sync` at the end of this function.
       if (accepted) void catalogue.observe(report.storeId);
+      terminal.noteStarts(report.registrationId, report.storeId, report.starts);
     },
+    onStream: (registrationId, output) => terminal.deliver(registrationId, output),
   });
+
+  // The relay, composed as `hub.ts` composes it. This suite asserts nothing
+  // about terminals -- `terminal-relay.integration.test.ts` is where those
+  // scenarios are -- but it runs the real thing rather than a fake, so that a
+  // start's answer and the handle the relay files under it are produced by the
+  // same code path a hub actually runs.
+  const terminal = createTerminal({ state, servers: connections, logger });
 
   // The real feature over the real migrated schema, because the rows are the
   // subject here: a project is made by a client frame in one of the suites
@@ -484,6 +494,7 @@ async function start(
     // Not the subject: a start is what this file is about, and the fake is what
     // a suite stands on when a seam is not its subject.
     docs: createFakeDocs(),
+    terminal,
   });
 
   await connections.sync();
@@ -1621,9 +1632,9 @@ describe('a spawn the hub lost the socket to', () => {
    * forever, if the provider never named the session. The assertion below is
    * that the name survives the socket.
    *
-   * Subscribing by that handle is not asserted here: the hub does not relay
-   * terminal frames yet, which is AGX-212. What is asserted is the report,
-   * which is what the relay will read.
+   * Subscribing by that handle is asserted in
+   * `terminal-relay.integration.test.ts`, which is where the relay's scenarios
+   * are. What is asserted here is the report, which is what the relay reads.
    */
   beforeEach(async () => {
     harness = await start(() => [readyProvider('claude')]);

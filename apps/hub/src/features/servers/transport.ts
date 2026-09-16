@@ -16,12 +16,19 @@ import type {
 import { startHeartbeat } from './connection-heartbeat.js';
 import { routeServerFrame, type DrainingNotice, type StoreReport } from './frame-router.js';
 import { createInstructionChannel } from './instruction-channel.js';
+import { createStreamChannel } from './stream-channel.js';
 import {
   handshakeWithServer,
   type DialTarget,
   type HandshakeFailureReason,
 } from './server-handshake.js';
-import type { InstructionOutcome, ServerInstruction } from './servers.js';
+import type {
+  InstructionOutcome,
+  ServerInstruction,
+  StreamInstruction,
+  StreamOutcome,
+  TerminalOutputFrame,
+} from './servers.js';
 
 /**
  * How the hub speaks to one server, once it is connected.
@@ -33,12 +40,17 @@ import type { InstructionOutcome, ServerInstruction } from './servers.js';
  * reading it. It is the one file the Connect-over-HTTP/2 epic (AGX-224)
  * replaces, which is why it is kept to what the loop actually needs.
  *
- * `ask` is the unary half: one instruction, one answer. The stream half --
- * `subscribe(target): AsyncIterable<TerminalEvent>`, for a terminal's output
- * -- is deliberately not declared here. The terminal stack (AGX-102) adds it
- * when there is a relay to stand behind it; an interface that promised a
- * stream nothing implements would be a promise the loop could be written
- * against and then broken.
+ * `ask` stays the unary half: one instruction, one answer, awaited. `stream`
+ * is the other half, added by the terminal relay (AGX-212) now that there is
+ * something behind it -- this file used to name it in a comment and not declare
+ * it, because an interface promising a stream nothing implements is a promise
+ * the loop above could be written against and then broken.
+ *
+ * It is deliberately not `ask` with more frame types on it. A terminal frame is
+ * answered on a different schedule and sometimes not at all, and its answer has
+ * to be delivered where the frame was read rather than a microtask later --
+ * `stream-channel.ts` carries that argument, and it is the reason the two
+ * halves are two methods rather than one with a wider union.
  */
 
 export interface ServerTransportHandlers {
@@ -55,11 +67,22 @@ export interface ServerTransportHandlers {
    * exists to remove.
    */
   onDraining(notice: DrainingNotice): void;
+  /**
+   * A chunk of terminal output, as it was read off the socket.
+   *
+   * Called synchronously, in the order the frames arrived, which is the whole
+   * of what a relay owes a terminal: the replay a subscription promised is
+   * these frames, and a transport that batched or deferred them would hand a
+   * client its history in an order no emulator can undo.
+   */
+  onOutput(output: TerminalOutputFrame): void;
 }
 
 export interface ServerTransport {
   /** Puts one instruction to the server and waits for its answer. */
   ask(instruction: ServerInstruction): Promise<InstructionOutcome>;
+  /** Puts one terminal frame to the server and answers where the reply is read. */
+  stream(frame: StreamInstruction, answer: (outcome: StreamOutcome) => void): void;
   /**
    * Attaches the handlers for what the server says unprompted. Called once,
    * before anything is awaited, so that nothing the server says in the
@@ -153,6 +176,13 @@ function overSocket(
       : { instructionTimeoutMs: dependencies.instructionTimeoutMs }),
   });
 
+  const streams = createStreamChannel({
+    timers,
+    logger,
+    nextFrameId,
+    send: (frame) => void socket.send(JSON.stringify(frame)),
+  });
+
   let handlers: ServerTransportHandlers | null = null;
 
   socket.onMessage((text) => {
@@ -162,15 +192,20 @@ function overSocket(
     // protocol errors, and a server that has started talking nonsense fails
     // the heartbeat that is asking it questions on the same socket.
     if (!parsed.ok) return;
-    routeServerFrame(
-      parsed.value,
-      {
-        onAnswer: channel.answer,
-        onReport: (report) => handlers?.onReport(report),
-        onDraining: (notice) => handlers?.onDraining(notice),
+    routeServerFrame(parsed.value, {
+      // A refusal is the one frame either channel may be waiting for, and this
+      // is the only thing that knows which of its own ids it spent on which.
+      // The instruction channel is asked first and says whether it took it; a
+      // refusal neither is waiting for has outlived its deadline.
+      onAnswer: (replyTo, outcome) => {
+        if (channel.answer(replyTo, outcome) || outcome.ok) return;
+        streams.settle(replyTo, { ok: false, code: outcome.code, problem: outcome.problem });
       },
-      logger,
-    );
+      onStreamAnswer: (replyTo, answer) => void streams.settle(replyTo, { ok: true, answer }),
+      onReport: (report) => handlers?.onReport(report),
+      onDraining: (notice) => handlers?.onDraining(notice),
+      onOutput: (output) => handlers?.onOutput(output),
+    });
   });
 
   // The heartbeat's counter is this connection's, continued: the handshake
@@ -192,12 +227,14 @@ function overSocket(
     socket.onClose(() => {
       heartbeat.stop();
       channel.settleAll('the connection to the server ended before it answered');
+      streams.settleAll('the connection to the server ended before it answered');
       resolve();
     });
   });
 
   return {
     ask: channel.ask,
+    stream: streams.put,
     watch(attached: ServerTransportHandlers): void {
       handlers = attached;
     },

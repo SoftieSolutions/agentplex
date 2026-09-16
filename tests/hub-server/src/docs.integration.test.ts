@@ -48,6 +48,7 @@ import {
   createFleetState,
   type FleetState,
 } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
+import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake-terminal.js';
 import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
 import { createDocs } from '../../../apps/hub/src/features/docs/docs.js';
 import { createProjects } from '../../../apps/hub/src/features/projects/projects.js';
@@ -232,6 +233,9 @@ async function start(): Promise<Harness> {
     syncServers: () => connections.sync(),
     projects,
     docs,
+    // Nothing here subscribes to a terminal; the relay is here because a
+    // broadcast without one is not the broadcast the hub builds.
+    terminal: createFakeTerminal(),
   });
 
   await connections.sync();
