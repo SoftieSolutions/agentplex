@@ -43,6 +43,20 @@ export interface SessionListItem {
    * not describe -- a truthful name over a blank.
    */
   readonly machine: string;
+  /**
+   * The machine this row is narrowed by, which is the server whose reading it
+   * is -- `source`, and deliberately not the holder that `machine` above
+   * prefers for the label.
+   *
+   * The two differ for a session running on one machine and last read by
+   * another, and the catalogue's `filter.server` is defined over the chosen
+   * reading: a session on a volume two machines have mounted is one session,
+   * and filtering on every server that reported it would put it under both.
+   * The machine selector narrows both views at once, so the cards narrow by
+   * the same fact the hub narrows the catalogue by, or the two panes on one
+   * screen would answer the same question differently.
+   */
+  readonly server: ServerRegistrationId;
   /** The one-line body: the working directory, or the status in words. */
   readonly summary: string;
   readonly updatedAt: number;
@@ -130,6 +144,7 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         needsYou: wantsHuman(descriptor.status) && row.reachable,
         reachable: row.reachable,
         machine: serverLabel(state, machineId),
+        server: row.source,
         summary: descriptor.cwd ?? statusWords(descriptor.status),
         updatedAt: descriptor.updatedAt,
         storeId: descriptor.storeId,
@@ -248,6 +263,15 @@ export interface SessionListFilters {
   /** `null` when not narrowed, and always `null` while the control is not drawn. */
   readonly storeId: string | null;
   readonly provider: string | null;
+  /**
+   * The machine selector's selection, or `null` for the whole fleet.
+   *
+   * Unlike the two above, a selection naming a machine the state no longer
+   * lists is *not* quietly dropped here. It is what the catalogue query is
+   * narrowed by at the same moment, and a card list that widened while the
+   * panel beside it stayed narrow would be two answers to one question.
+   */
+  readonly server: string | null;
 }
 
 export const NO_FILTERS: SessionListFilters = {
@@ -255,6 +279,7 @@ export const NO_FILTERS: SessionListFilters = {
   chip: null,
   storeId: null,
   provider: null,
+  server: null,
 };
 
 /**
@@ -270,6 +295,7 @@ export function visibleSessions(
     (item) =>
       (filters.storeId === null || item.storeId === filters.storeId) &&
       (filters.provider === null || item.provider === filters.provider) &&
+      (filters.server === null || item.server === filters.server) &&
       (filters.chip === null || chipForStatus(item.status) === filters.chip) &&
       matchesSearch(item, filters.search),
   );
