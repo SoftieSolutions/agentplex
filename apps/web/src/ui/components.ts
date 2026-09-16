@@ -13,6 +13,7 @@ import '@mantine/core/styles.css';
 export {
   Box,
   Button,
+  CloseButton,
   Group,
   MantineProvider,
   Menu,
