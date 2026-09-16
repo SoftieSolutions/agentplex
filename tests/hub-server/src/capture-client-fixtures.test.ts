@@ -170,6 +170,17 @@ function labelFor(text: string): string {
     // Labelled by whether the answer ended, because those are the two shapes a
     // paging client has to handle: a page that is the whole answer, and one
     // with a cursor on it that the store has to ask again with.
+    //
+    // And by which view answered, read off the frame rather than off what was
+    // asked for: the tree view is the only one that carries containers, since
+    // the list view drops them, which is what flat means. The web draws two
+    // screens out of this one frame and has to be tested against both.
+    const containers = frame.items.some(
+      (entry) => entry.kind === 'folder' || entry.kind === 'project',
+    );
+    if (containers) {
+      return frame.nextCursor === null ? 'catalogueTreePage' : 'catalogueTreePagePartial';
+    }
     return frame.nextCursor === null ? 'cataloguePage' : 'cataloguePagePartial';
   }
   if (frame.type === 'directory-listing') {
@@ -1090,6 +1101,41 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     });
     if (refusalStaleCursor === undefined) throw new Error('the stale cursor was not refused');
 
+    // The same catalogue as the tree it is: containers, their children, parents
+    // before children, and the depth on every row. Ungrouped, because in a tree
+    // the containment is the grouping -- the hub labels the items and reorders
+    // nothing -- and cut at two, so the sidebar's tests get a tree page with a
+    // cursor on it as well as the one that ends the answer.
+    const treeQuery = {
+      type: 'catalogue-query',
+      view: 'tree',
+      groupBy: 'none',
+      sort: { key: 'name', direction: 'asc' },
+      filter: {},
+    };
+    starter.send({ ...treeQuery, id: 18, cursor: null, limit: 2 });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'catalogueTreePagePartial'),
+      'the first tree page to be answered',
+    );
+    const catalogueTreePagePartial = starter.received.find(
+      (text) => labelFor(text) === 'catalogueTreePagePartial',
+    );
+    if (catalogueTreePagePartial === undefined) throw new Error('no tree page was answered');
+    const treePartial = parseTextFrame(parseHubFrame, catalogueTreePagePartial);
+    if (!treePartial.ok || treePartial.value.type !== 'catalogue-page') {
+      throw new Error('the tree page did not parse back');
+    }
+    starter.send({ ...treeQuery, id: 19, cursor: treePartial.value.nextCursor, limit: 50 });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'catalogueTreePage'),
+      'the last tree page to be answered',
+    );
+    const catalogueTreePage = starter.received.find(
+      (text) => labelFor(text) === 'catalogueTreePage',
+    );
+    if (catalogueTreePage === undefined) throw new Error('no final tree page was answered');
+
     await singleHub.cleanup();
 
     // A machine holding one session it will stop and one it will not, for the
@@ -1163,20 +1209,34 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const stopper = await openClient(heldHub.hub);
     stopper.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
     await stopper.framesReceived(2);
-    // The frame a real client sends next, and the reason it is here: the web
-    // client asks for the tree as soon as it is connected, so every command it
-    // then sends is numbered one higher than it would be in a capture that
-    // skipped this. The refusals below are matched to a pending command by
-    // `replyTo`, so a capture whose numbering was not the client's would answer
-    // a frame no screen ever sent.
+    // The two frames a real client sends next, and the reason they are here:
+    // the session list asks for the tree and for a page of the catalogue as
+    // soon as it is connected, so every command it then sends is numbered two
+    // higher than it would be in a capture that skipped them. The refusals
+    // below are matched to a pending command by `replyTo`, so a capture whose
+    // numbering was not the client's would answer a frame no screen ever sent.
     stopper.send({ type: 'layout-request', id: 2 });
     await until(
       () => stopper.received.some((text) => labelFor(text) === 'layout'),
       'the tree a client asks for on connecting',
     );
     stopper.send({
-      type: 'session-stop',
+      type: 'catalogue-query',
       id: 3,
+      view: 'list',
+      groupBy: 'none',
+      sort: { key: 'updatedAt', direction: 'desc' },
+      filter: {},
+      cursor: null,
+      limit: 50,
+    });
+    await until(
+      () => stopper.received.some((text) => labelFor(text) === 'cataloguePage'),
+      'the catalogue page a list asks for on connecting',
+    );
+    stopper.send({
+      type: 'session-stop',
+      id: 4,
       storeId: 'store-agentplex',
       sessionId: 'session-fix-auth',
     });
@@ -1186,7 +1246,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     stopper.send({
       type: 'session-start',
-      id: 4,
+      id: 5,
       storeId: 'store-agentplex',
       sessionId: 'session-migrate-db',
       provider: 'codex',
@@ -1200,7 +1260,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     stopper.send({
       type: 'session-stop',
-      id: 5,
+      id: 6,
       storeId: 'store-agentplex',
       sessionId: 'session-migrate-db',
     });
@@ -1607,6 +1667,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('cataloguePagePartial', cataloguePagePartial);
     captured.set('cataloguePage', cataloguePage);
     captured.set('refusalStaleCursor', refusalStaleCursor);
+    captured.set('catalogueTreePagePartial', catalogueTreePagePartial);
+    captured.set('catalogueTreePage', catalogueTreePage);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
     captured.set('machineStateProviders', machineStateProviders);

@@ -1,7 +1,9 @@
 import { useState, type JSX } from 'react';
 import {
+  Box,
   Button,
   Group,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
@@ -24,10 +26,9 @@ import {
   type ChipCount,
   type StatusChip,
 } from './session-list-model.js';
+import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
-import { AbsentSessions } from '../tree/absent-sessions.js';
 import { NodeMenu } from '../tree/node-menu.js';
-import { ProjectRows } from '../tree/project-rows.js';
 import { nodeForSession } from '../tree/tree-model.js';
 import { NewSessionForm } from './new-session-form.js';
 import { SessionCard } from './session-card.js';
@@ -40,6 +41,19 @@ import { stoppedNotice } from './stop-model.js';
  * exist; the table's one filter is search. Layout is the approved mockup's
  * card grid (turn 7, 7a/7b), which collapses to the mobile card feed (7e) by
  * dropping to one column rather than by being a second view.
+ *
+ * The catalogue sits beside it: a sidebar at desk widths and a tab at phone
+ * widths, which is the one decision this file makes about it. The two are
+ * different answers to different questions -- "what am I working on" against
+ * "where did I put things" -- and the cards are the fleet's own reading while
+ * the panel is a page of the hub's catalogue query.
+ *
+ * Which of the two is on screen is decided without a media query: each column
+ * is rendered exactly once and carries `visibleFrom="md"` only while the other
+ * tab is the chosen one, so above the breakpoint both are drawn and below it
+ * the tab decides. A media query hook would be a second source of truth about
+ * the same breakpoint, and two panels rendered so one can be hidden would be
+ * two catalogue queries for one screen.
  *
  * All UI state here is what the user did to this screen; everything derived
  * from the machine state comes from session-list-model.ts, and the snapshot
@@ -64,6 +78,7 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
   const [provider, setProvider] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
+  const [tab, setTab] = useState<Tab>('sessions');
 
   const state = snapshot.machineState;
   const notice = connectionNotice(snapshot.phase, snapshot.problem, state !== null);
@@ -194,70 +209,100 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
         </Group>
       )}
 
-      <Group gap={10}>
-        {chips.length === 0 ? null : (
-          <StatusChips
-            chips={chips}
-            total={narrowed.length}
-            active={activeChip}
-            onPick={setChip}
-            scheme={scheme}
-          />
-        )}
-        <TextInput
-          size="xs"
-          aria-label="Search sessions"
-          placeholder="Search sessions"
-          value={search}
-          onChange={(event) => setSearch(event.currentTarget.value)}
-          style={{ flex: 1, maxWidth: 380 }}
-        />
-      </Group>
+      {/* Below the breakpoint the two columns are one at a time, and this is
+          what chooses. Above it the control is not drawn and both are. */}
+      <SegmentedControl
+        hiddenFrom="md"
+        size="xs"
+        fullWidth
+        aria-label="What to show"
+        value={tab}
+        onChange={(value) => setTab(value === 'projects' ? 'projects' : 'sessions')}
+        data={[
+          { value: 'sessions', label: 'Sessions' },
+          { value: 'projects', label: 'Projects' },
+        ]}
+      />
 
-      <ProjectRows store={store} layout={layout} scheme={scheme} />
+      <Group align="flex-start" wrap="nowrap" gap="md">
+        <Box
+          w={{ base: '100%', md: 300 }}
+          style={{ flexShrink: 0, minWidth: 0 }}
+          {...(tab === 'projects' ? {} : { visibleFrom: 'md' as const })}
+        >
+          <CataloguePanel store={store} state={state} layout={layout} scheme={scheme} />
+        </Box>
 
-      {visible.length === 0 ? (
-        <Text c="dimmed" fz={13}>
-          {everySession.length === 0
-            ? 'no sessions in any store yet'
-            : 'no session matches the current narrowing'}
-        </Text>
-      ) : (
-        <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
-          {visible.map((item) => {
-            // A session the tree holds no node for gets no menu: there is
-            // nothing to rename, move or remove, and a menu that opened onto
-            // three refusals would be worse than no menu.
-            const node = nodeForSession(layout, item.ref);
-            return (
-              <SessionCard
-                key={item.key}
-                item={item}
+        <Stack
+          gap="sm"
+          style={{ flex: 1, minWidth: 0 }}
+          {...(tab === 'sessions' ? {} : { visibleFrom: 'md' as const })}
+        >
+          <Group gap={10}>
+            {chips.length === 0 ? null : (
+              <StatusChips
+                chips={chips}
+                total={narrowed.length}
+                active={activeChip}
+                onPick={setChip}
                 scheme={scheme}
-                now={moment}
-                store={store}
-                actions={
-                  node === null ? null : (
-                    <NodeMenu
-                      store={store}
-                      nodeId={node.id}
-                      name={node.name ?? item.name}
-                      layout={layout}
-                      anchor={item.ref}
-                      scheme={scheme}
-                    />
-                  )
-                }
               />
-            );
-          })}
-        </SimpleGrid>
-      )}
+            )}
+            <TextInput
+              size="xs"
+              aria-label="Search sessions"
+              placeholder="Search sessions"
+              value={search}
+              onChange={(event) => setSearch(event.currentTarget.value)}
+              style={{ flex: 1, maxWidth: 380 }}
+            />
+          </Group>
 
-      <AbsentSessions store={store} state={state} layout={layout} scheme={scheme} />
+          {visible.length === 0 ? (
+            <Text c="dimmed" fz={13}>
+              {everySession.length === 0
+                ? 'no sessions in any store yet'
+                : 'no session matches the current narrowing'}
+            </Text>
+          ) : (
+            <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
+              {visible.map((item) => {
+                // A session the tree holds no node for gets no menu: there is
+                // nothing to rename, move or remove, and a menu that opened onto
+                // three refusals would be worse than no menu.
+                const node = nodeForSession(layout, item.ref);
+                return (
+                  <SessionCard
+                    key={item.key}
+                    item={item}
+                    scheme={scheme}
+                    now={moment}
+                    store={store}
+                    actions={
+                      node === null ? null : (
+                        <NodeMenu
+                          store={store}
+                          nodeId={node.id}
+                          name={node.name ?? item.name}
+                          layout={layout}
+                          anchor={item.ref}
+                          scheme={scheme}
+                        />
+                      )
+                    }
+                  />
+                );
+              })}
+            </SimpleGrid>
+          )}
+        </Stack>
+      </Group>
     </Stack>
   );
 }
+
+/** Which of the two columns a narrow screen is showing. */
+type Tab = 'sessions' | 'projects';
 
 interface StatusChipsProps {
   readonly chips: readonly ChipCount[];

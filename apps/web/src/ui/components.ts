@@ -19,6 +19,7 @@ export {
   Modal,
   Paper,
   PasswordInput,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
