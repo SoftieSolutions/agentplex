@@ -83,6 +83,39 @@ export interface TerminalSearch {
 export interface TerminalEmulator extends EmulatorSink {
   /** Keystrokes, as xterm encoded them. Arrow keys and Enter are sequences. */
   onData(listener: (data: string) => void): void;
+  /**
+   * The text the user has selected in this pane, or `''` when none is.
+   *
+   * Selecting is the browser's and the emulator's between them: dragging over
+   * output is DOM-level and works with nothing here involved. Reading back
+   * what was selected is not, because a terminal's screen is a grid and the
+   * string a user means by a selection -- rows rejoined, the padding to the
+   * right of each line dropped -- is the emulator's answer and not the DOM's.
+   * Nothing crosses the wire either way; the protocol has no notion of a
+   * selection, and this is the reason it needs none.
+   */
+  selection(): string;
+  /**
+   * Text the user pasted, put in as a paste rather than as keystrokes.
+   *
+   * It leaves through the `onData` listener, like typing, and nothing about it
+   * reaches the screen directly: what appears there is whatever the program at
+   * the far end echoes back. Two things happen to it on the way out, and both
+   * are the emulator's to decide rather than the pane's.
+   *
+   * Line endings are normalised to carriage returns, because a carriage return
+   * is what a terminal sends for the Enter key; a pasted line feed delivered
+   * as a line feed is a line a shell never sees the end of.
+   *
+   * And when the program has asked for bracketed paste, the text is wrapped in
+   * the markers that let it tell a paste from typing -- so that an editor
+   * indents nothing and a shell runs nothing until the whole thing has
+   * arrived. Whether it asked is a mode the emulator holds because it parsed
+   * the bytes that set it. The pane has no way to know it and no business
+   * guessing at it, which is why the wrapping lives behind this seam rather
+   * than in the caller.
+   */
+  paste(text: string): void;
   focus(): void;
   dispose(): void;
   /** Finding text in the scrollback this emulator holds. */

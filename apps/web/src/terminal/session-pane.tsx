@@ -21,6 +21,13 @@ import {
   useComputedColorScheme,
 } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
+import {
+  browserClipboard,
+  clipboardProblem,
+  CLIPBOARD_EMPTY,
+  NOTHING_SELECTED,
+  type Clipboard,
+} from './clipboard.js';
 import type { EmulatorFactory, TerminalEmulator } from './emulator.js';
 import { FindBar } from './find-bar.js';
 import {
@@ -33,6 +40,7 @@ import {
 } from './presentation.js';
 import { StopButton } from '../sessions/stop-button.js';
 import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
+import { chunkTerminalInput } from './terminal-input.js';
 import { TerminalView } from './terminal-view.js';
 
 /**
@@ -52,6 +60,33 @@ import { TerminalView } from './terminal-view.js';
  */
 
 const MONO_META = { fontFamily: 'var(--mantine-font-family-monospace)' } as const;
+
+/**
+ * Whether this device's main pointer is a finger, which is the whole of what
+ * decides whether the header draws a paste control.
+ *
+ * A media query and not the user agent string. The question is not which OS
+ * or which browser; it is whether the person looking at this pane has a way to
+ * press Ctrl+Shift+V, and the only honest source for that is the pointer they
+ * are using. An iPad with a keyboard attached reports a fine pointer and gets
+ * the chord; the same iPad held in two hands reports a coarse one and gets the
+ * button. No list of devices has to be kept up to date for that to keep being
+ * true.
+ *
+ * `(pointer: coarse)` rather than `(any-pointer: coarse)`: a laptop with a
+ * touchscreen has both, and drawing a control for the pointer somebody is not
+ * using is how a header fills up with things nobody needs.
+ *
+ * Read at render, not subscribed to. A pointer changes when a keyboard case is
+ * clipped on, which is rare and which re-renders this pane for other reasons
+ * within moments anyway; a subscription in the pane's hot path would be
+ * machinery bought for that. The guard is for jsdom, which has no `matchMedia`
+ * unless a test installs one.
+ */
+function hasCoarsePointer(): boolean {
+  if (typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia('(pointer: coarse)').matches;
+}
 
 /**
  * Standing interest in one terminal, declared the way looking at anything is
@@ -83,9 +118,24 @@ export interface SessionPaneProps {
    * the pane's and a test of them wants an emulator it can read.
    */
   readonly emulators?: EmulatorFactory | undefined;
+  /**
+   * The system clipboard, injected for the same reason the emulator is: no
+   * suite can grant a clipboard permission or answer a browser's prompt, and
+   * the case worth testing hardest is the one where the browser says no.
+   *
+   * Constructor-time for a pane, like the store and the session it is pointed
+   * at: the chords are registered once, on the first render, and hold the
+   * clipboard they were given. Nothing in the app hands a pane a second one.
+   */
+  readonly clipboard?: Clipboard | undefined;
 }
 
-export function SessionPane({ sessionRef, store: hub, emulators }: SessionPaneProps): JSX.Element {
+export function SessionPane({
+  sessionRef,
+  store: hub,
+  emulators,
+  clipboard = browserClipboard,
+}: SessionPaneProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const snapshot = useHubSnapshot(hub);
   // A pane addresses a session; the start handle the target union also allows
@@ -110,6 +160,72 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
   // Whether the find bar is drawn. State and not a ref: it is the one thing
   // about the terminal that the pane renders differently.
   const [finding, setFinding] = useState(false);
+  /**
+   * The last thing the clipboard would not do, or `null` while it has done
+   * everything asked of it.
+   *
+   * State, because it is a sentence the pane draws, and a sentence is the
+   * whole point: a copy chord that silently does nothing and a copy chord on a
+   * browser that refused the permission are the same non-event to look at, and
+   * on the device where paste is a button they are the same non-event to
+   * press. It clears on the next clipboard action that works, so it says what
+   * happened last rather than accumulating.
+   */
+  const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
+
+  /**
+   * Copy and paste, as the pane does them.
+   *
+   * Both are asynchronous because the browser's clipboard is, and both end in
+   * either clearing the notice or setting one -- there is no path through
+   * either that ends in nothing having visibly happened. A rejected promise
+   * here is the ordinary case, not the exceptional one: an insecure origin has
+   * no clipboard at all, and a permission is the user's to refuse.
+   *
+   * The copy reads the selection through the emulator seam rather than the
+   * DOM's own `getSelection`. What a user means by selecting part of a
+   * terminal is rows rejoined without the padding each one is drawn with, and
+   * that is the emulator's answer; the DOM's would carry the layout.
+   *
+   * The paste hands the text back to the emulator instead of sending it. That
+   * is the load-bearing choice on this path: the emulator normalises the line
+   * endings and, when the program at the far end has asked for bracketed
+   * paste, wraps the text in the markers that tell it a paste is a paste. What
+   * comes out of that goes down the same `onData` the keyboard goes down, so
+   * there is one route from this pane to a pty and a paste is on it.
+   */
+  const copySelection = useCallback(async (): Promise<void> => {
+    const selection = emulatorRef.current?.selection() ?? '';
+    if (selection.length === 0) {
+      setClipboardNotice(NOTHING_SELECTED);
+      return;
+    }
+    try {
+      await clipboard.writeText(selection);
+      setClipboardNotice(null);
+    } catch (error) {
+      setClipboardNotice(clipboardProblem('copy', error));
+    }
+  }, [clipboard]);
+
+  const pasteFromClipboard = useCallback(async (): Promise<void> => {
+    const emulator = emulatorRef.current;
+    if (emulator === null) return;
+    let text: string;
+    try {
+      text = await clipboard.readText();
+    } catch (error) {
+      setClipboardNotice(clipboardProblem('paste', error));
+      return;
+    }
+    if (text.length === 0) {
+      setClipboardNotice(CLIPBOARD_EMPTY);
+      return;
+    }
+    setClipboardNotice(null);
+    emulator.paste(text);
+  }, [clipboard]);
+
   const [registry] = useState<ShortcutRegistry>(() => {
     const bindings = createShortcutRegistry();
     // The minimal real bindings; the layout ticket (AGX-34) registers its
@@ -135,11 +251,61 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
         findRef.current?.focus();
       },
     });
+    /**
+     * Copy and paste, in the corner of the keyboard reserved for exactly this.
+     *
+     * Ctrl+Shift+C and Ctrl+Shift+V are the terminal convention and they are
+     * the convention for a reason this pane inherits whole: plain Ctrl+C is
+     * the interrupt a user sends a runaway agent, and a pane that spent it on
+     * copying would have taken away the one key that stops things. Cmd+Shift
+     * is the same chord on a Mac, which the registry already treats as one
+     * space.
+     *
+     * What no page can promise is that the browser lets a chord through at
+     * all: Ctrl+Shift+C is the devtools inspector shortcut on some browsers
+     * and platforms, and a shortcut the browser keeps is one this handler
+     * never sees. Observed reaching the page on Chrome on macOS and checked
+     * nowhere else, so it is written down as the risk it is rather than as a
+     * fact about every browser. It is survivable where it bites: a selection
+     * is still copyable with the platform's own Cmd/Ctrl+C, which xterm's
+     * textarea answers. Paste is the half with no fallback on a touch device,
+     * and it is on V, which is nobody's inspector.
+     *
+     * The run closures are async and their promises are deliberately dropped:
+     * a chord has nobody to report to, and both functions already end in a
+     * sentence on the pane, which is the reporting.
+     */
+    bindings.register({
+      key: 'c',
+      description: 'copy the selection',
+      run: () => void copySelection(),
+    });
+    bindings.register({
+      key: 'v',
+      description: 'paste into the terminal',
+      run: () => void pasteFromClipboard(),
+    });
     return bindings;
   });
 
+  /**
+   * Everything the emulator produces, on its way to the pty: keystrokes, and
+   * pastes, which arrive here as one very long keystroke.
+   *
+   * Cut into frames the protocol will accept, in order, and abandoned at the
+   * first one that does not go. Abandoning is the honest half: the store
+   * discards input rather than queueing it while the connection is down, so
+   * pressing on would hand it the rest of a paste to discard one frame at a
+   * time and would leave the user told that forty keystrokes went nowhere when
+   * what went nowhere was one paste. One refusal, counted once, said once.
+   */
   const sendInput = useCallback(
-    (data: string): boolean => hub.sendTerminalInput(target, data).delivered,
+    (data: string): boolean => {
+      for (const piece of chunkTerminalInput(data)) {
+        if (!hub.sendTerminalInput(target, piece).delivered) return false;
+      }
+      return true;
+    },
     [hub, target],
   );
 
@@ -212,6 +378,16 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
   const notice = terminalInputNotice(snapshot, terminal);
   const scope = terminalScopeNotice(terminal);
   const border = `1px solid ${colorForRole('border', scheme)}`;
+  /**
+   * Whether to draw the paste control, asked at render.
+   *
+   * The device with no chord is the device this whole control exists for: a
+   * PWA on an iOS home screen has no Ctrl and no Cmd, so without a button
+   * there is no way at all to get text into a session from that device --
+   * which is the primary one. On anything with a keyboard the chord is better
+   * than a button and the header stays as it was.
+   */
+  const pasteControl = hasCoarsePointer();
 
   return (
     <Stack
@@ -258,6 +434,21 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
             {metadata}
           </Text>
         )}
+        {pasteControl && (
+          // `ml="auto"` rather than a spacer, so the control sits at the end of
+          // the header whether or not there is a metadata line to push it
+          // there. Labelled for the same reason the find bar's controls are:
+          // the word on it is one word, and what it acts on is the terminal.
+          <Button
+            size="compact-xs"
+            variant="default"
+            ml="auto"
+            onClick={() => void pasteFromClipboard()}
+            aria-label="paste into the terminal"
+          >
+            Paste
+          </Button>
+        )}
         {/* The same button the card carries, off the same published fact.
             Nothing is drawn for a session nobody is running, or for a holder
             mid-turn. */}
@@ -269,6 +460,24 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
           size="xs"
         />
       </Group>
+
+      {clipboardNotice !== null && (
+        // Under the header rather than inside it, and its own row rather than
+        // a word beside the button: this is a whole sentence, the header is a
+        // no-wrap row whose metadata is already ellipsized, and a truncated
+        // explanation of why a paste did not happen is worse than none. It is
+        // also where the chord's failures have to appear, since on a keyboard
+        // there is no button for them to appear beside.
+        <Text
+          fz={11}
+          px={18}
+          py={6}
+          role="alert"
+          style={{ color: colorForTone('blocked', scheme), borderBottom: border }}
+        >
+          {clipboardNotice}
+        </Text>
+      )}
 
       {finding && (
         <FindBar

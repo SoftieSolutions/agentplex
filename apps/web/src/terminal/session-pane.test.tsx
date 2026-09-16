@@ -3,6 +3,7 @@ import {
   parseClientFrame,
   parseTextFrame,
   sessionRefSchema,
+  TERMINAL_INPUT_MAX_CHARS,
   type ClientFrame,
 } from '@agentplex/protocol';
 import { act, type JSX } from 'react';
@@ -15,6 +16,8 @@ import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
+import { NO_CLIPBOARD_HERE, type Clipboard } from './clipboard.js';
+import { createFakeClipboard, createRefusingClipboard } from './fake-clipboard.js';
 import { createFakeEmulatorFactory, type FakeEmulator } from './fake-emulator.js';
 import { FindBar } from './find-bar.js';
 import { SessionPane } from './session-pane.js';
@@ -56,10 +59,19 @@ declare global {
  */
 const SESSION = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-build' });
 
-/** Mantine consults the media query for its colour scheme; jsdom has none. */
-function installMatchMedia(): void {
+/**
+ * Mantine consults the media query for its colour scheme, xterm for its own
+ * reasons, and the pane header consults `(pointer: coarse)` to decide whether
+ * to draw a paste control. jsdom implements none of them.
+ *
+ * Local to this file and driven by a predicate rather than a global fixture:
+ * the one thing worth asserting about the control is that it appears for a
+ * finger and not for a mouse, and a stub that answered every query the same
+ * way could only ever show one of those.
+ */
+function installMatchMedia(matches: (query: string) => boolean = () => false): void {
   window.matchMedia = (query: string): MediaQueryList => ({
-    matches: false,
+    matches: matches(query),
     media: query,
     onchange: null,
     addListener: () => {},
@@ -69,6 +81,9 @@ function installMatchMedia(): void {
     dispatchEvent: () => false,
   });
 }
+
+/** A device whose pointer is a finger, and nothing else about it. */
+const COARSE_POINTER = (query: string): boolean => query === '(pointer: coarse)';
 
 /**
  * A store on a socket the test plays the hub on.
@@ -233,13 +248,33 @@ function summary(): string {
  * dispatched on something the pane contains. The steer input is a fair
  * stand-in for wherever the user's focus happens to be.
  */
-async function pressChord(key: string): Promise<void> {
+function dispatchChord(key: string): void {
   const somewhereInThePane = container.querySelector('[aria-label="steer the agent"]');
   if (somewhereInThePane === null) throw new Error('the pane rendered no steer input');
+  somewhereInThePane.dispatchEvent(
+    new KeyboardEvent('keydown', { key, ctrlKey: true, shiftKey: true, bubbles: true }),
+  );
+}
+
+async function pressChord(key: string): Promise<void> {
   await act(() => {
-    somewhereInThePane.dispatchEvent(
-      new KeyboardEvent('keydown', { key, ctrlKey: true, shiftKey: true, bubbles: true }),
-    );
+    dispatchChord(key);
+  });
+}
+
+/**
+ * Something that starts a clipboard promise, and the settling of it, inside
+ * one `act`.
+ *
+ * Both halves together, and not a press followed by a flush: what a chord
+ * begins here finishes a microtask later, in a `.then` React knows nothing
+ * about, and an update that lands between two acts is the one React warns
+ * about having rendered outside a test's knowledge.
+ */
+async function settleAfter(action: () => void): Promise<void> {
+  await act(async () => {
+    action();
+    await settle();
   });
 }
 
@@ -441,32 +476,32 @@ describe('the find bar in a session pane', () => {
   });
 });
 
+/** The hub accepting the connection, which is what sends the subscribe. */
+async function connect(hub: StoreHarness): Promise<FakeSocket> {
+  const socket = hub.socket();
+  await act(async () => {
+    socket.open();
+    socket.deliver(hubFrames.welcome);
+  });
+  return socket;
+}
+
+async function deliver(socket: FakeSocket, frame: string): Promise<void> {
+  await act(async () => {
+    socket.deliver(frame);
+  });
+}
+
+const WATCHED = {
+  by: 'session' as const,
+  storeId: SESSION.storeId,
+  sessionId: SESSION.sessionId,
+};
+
 describe('a pane fed by the hub', () => {
   async function mountOn(hub: StoreHarness): Promise<void> {
     await mount(<SessionPane sessionRef={SESSION} store={hub.store} emulators={emulators} />);
   }
-
-  /** The hub accepting the connection, which is what sends the subscribe. */
-  async function connect(hub: StoreHarness): Promise<FakeSocket> {
-    const socket = hub.socket();
-    await act(async () => {
-      socket.open();
-      socket.deliver(hubFrames.welcome);
-    });
-    return socket;
-  }
-
-  async function deliver(socket: FakeSocket, frame: string): Promise<void> {
-    await act(async () => {
-      socket.deliver(frame);
-    });
-  }
-
-  const WATCHED = {
-    by: 'session' as const,
-    storeId: SESSION.storeId,
-    sessionId: SESSION.sessionId,
-  };
 
   it('asks to watch the session it is pointed at, and gives the watch back', async () => {
     const hub = buildStore();
@@ -672,5 +707,248 @@ describe('the stop in a session pane header', () => {
     await mountPaneOn('session-that-is-not-there');
 
     expect(stopButton()).toBeNull();
+  });
+});
+
+/**
+ * Copy and paste, through the two seams that make them testable at all.
+ *
+ * The clipboard is injected because no suite can grant a clipboard permission
+ * or dismiss a browser's prompt, and because the case worth testing hardest is
+ * the one where the browser says no -- which is the ordinary case on a hub
+ * read over plain HTTP. The emulator is injected for the reasons the find bar
+ * already relies on. What the fake emulator deliberately does not do is decide
+ * what a paste looks like: it hands back exactly the text it was given, so
+ * every assertion here is about the pane's own route from the clipboard to a
+ * frame. Whether that text should have been wrapped in bracketed-paste markers
+ * is xterm's answer, held to a captured pty in `xterm-emulator.test.ts`.
+ */
+describe('copy and paste in a pane', () => {
+  interface Harness {
+    readonly hub: StoreHarness;
+    /** The socket, once the hub has accepted the connection. */
+    socket(): FakeSocket;
+  }
+
+  async function mountWith(clipboard: Clipboard): Promise<Harness> {
+    const hub = buildStore();
+    await mount(
+      <SessionPane
+        sessionRef={SESSION}
+        store={hub.store}
+        emulators={emulators}
+        clipboard={clipboard}
+      />,
+    );
+    return { hub, socket: () => hub.socket() };
+  }
+
+  /** Mounted, connected and subscribed: a pane that can actually send. */
+  async function mountLive(clipboard: Clipboard): Promise<FakeSocket> {
+    const harness = await mountWith(clipboard);
+    const socket = await connect(harness.hub);
+    await deliver(socket, hubFrames.sessionSubscribed);
+    return socket;
+  }
+
+  /** The chord, and the microtask the clipboard promise settles on. */
+  async function pressClipboardChord(key: string): Promise<void> {
+    await settleAfter(() => {
+      dispatchChord(key);
+    });
+  }
+
+  /** Every terminal-input frame the pane has sent, in order. */
+  function inputData(socket: FakeSocket): string[] {
+    return sentFrames(socket)
+      .filter((frame) => frame.type === 'terminal-input')
+      .map((frame) => frame.data);
+  }
+
+  describe('copying', () => {
+    it('puts the selection on the clipboard', async () => {
+      const clipboard = createFakeClipboard();
+      await mountWith(clipboard);
+      emulator().select('refresh token rotates (212ms)');
+
+      await pressClipboardChord('C');
+
+      expect(clipboard.text).toBe('refresh token rotates (212ms)');
+    });
+
+    it('says so rather than copying nothing when nothing is selected', async () => {
+      const clipboard = createFakeClipboard('something already here');
+      await mountWith(clipboard);
+
+      await pressClipboardChord('C');
+
+      // The clipboard is untouched -- a copy with an empty selection that
+      // overwrote what was on it would lose the user something.
+      expect(clipboard.writes).toBe(0);
+      expect(clipboard.text).toBe('something already here');
+      expect(container.textContent).toContain('nothing is selected in this pane');
+    });
+
+    it('repeats what the browser said when it refused', async () => {
+      await mountWith(createRefusingClipboard('Write permission denied.'));
+      emulator().select('a line worth keeping');
+
+      await pressClipboardChord('C');
+
+      expect(container.textContent).toContain(
+        'could not copy to the clipboard: Write permission denied.',
+      );
+    });
+
+    it('sends nothing: a copy is not a thing that crosses the wire', async () => {
+      const socket = await mountLive(createFakeClipboard());
+      emulator().select('a line worth keeping');
+      const before = socket.sent.length;
+
+      await pressClipboardChord('C');
+
+      expect(socket.sent.length).toBe(before);
+    });
+  });
+
+  describe('pasting', () => {
+    it('hands what the clipboard held to the emulator, as a paste and not as writes', async () => {
+      await mountWith(createFakeClipboard('git commit --amend'));
+
+      await pressClipboardChord('V');
+
+      expect(emulator().pasted).toEqual(['git commit --amend']);
+      // Not written: a paste is input, and what appears on the screen is
+      // whatever the program at the far end echoes back.
+      expect(emulator().written).toEqual([]);
+    });
+
+    it('sends what the emulator made of it, as terminal input', async () => {
+      const socket = await mountLive(createFakeClipboard('git commit --amend'));
+
+      await pressClipboardChord('V');
+
+      expect(sentFrames(socket).at(-1)).toEqual({
+        type: 'terminal-input',
+        id: 3,
+        target: WATCHED,
+        data: 'git commit --amend',
+      });
+    });
+
+    it('cuts a paste too long for one frame into frames, in order', async () => {
+      // Two frames and a little: what a pasted file looks like. The ends are
+      // distinguishable so that a swapped pair is a failure and not a
+      // coincidence, which is the whole property a pty depends on -- it has no
+      // notion of a message boundary and will run whatever order it is given.
+      const paste = `head${'x'.repeat(TERMINAL_INPUT_MAX_CHARS * 2)}tail`;
+      const socket = await mountLive(createFakeClipboard(paste));
+
+      await pressClipboardChord('V');
+
+      const sent = inputData(socket);
+      expect(sent).toHaveLength(3);
+      expect(sent.join('')).toBe(paste);
+      for (const frame of sent) expect(frame.length).toBeLessThanOrEqual(TERMINAL_INPUT_MAX_CHARS);
+    });
+
+    it('says the clipboard was empty rather than doing nothing visible', async () => {
+      await mountWith(createFakeClipboard(''));
+
+      await pressClipboardChord('V');
+
+      expect(emulator().pasted).toEqual([]);
+      expect(container.textContent).toContain('the clipboard is empty');
+    });
+
+    it('names the origin when the page was given no clipboard at all', async () => {
+      // The plain-HTTP case, which is most hubs: `navigator.clipboard` is not
+      // there to refuse anything, so the sentence has to name the origin
+      // rather than blame a permission nobody was asked for.
+      await mountWith(createRefusingClipboard(NO_CLIPBOARD_HERE));
+
+      await pressClipboardChord('V');
+
+      expect(emulator().pasted).toEqual([]);
+      expect(container.textContent).toContain('could not paste from the clipboard');
+      expect(container.textContent).toContain('secure context');
+    });
+
+    it('discards a paste made while the connection is down, and counts it once', async () => {
+      // Never queued: a paste replayed into a session against a screen the
+      // user was not looking at is the rule the store is built around. What
+      // this pins is that one paste is one discard -- cutting it into frames
+      // must not turn a single refusal into a count of them.
+      const paste = `head${'x'.repeat(TERMINAL_INPUT_MAX_CHARS * 2)}tail`;
+      await mountWith(createFakeClipboard(paste));
+
+      await pressClipboardChord('V');
+
+      expect(container.textContent).toContain('the connection is down: 1 keystroke was discarded');
+      expect(container.textContent).toContain('nothing typed here will replay when it returns');
+    });
+
+    it('clears the last complaint once the clipboard answers', async () => {
+      const clipboard = createFakeClipboard('');
+      await mountWith(clipboard);
+      await pressClipboardChord('V');
+      expect(container.textContent).toContain('the clipboard is empty');
+
+      clipboard.text = 'now there is something';
+      await pressClipboardChord('V');
+
+      expect(container.textContent).not.toContain('the clipboard is empty');
+      expect(emulator().pasted).toEqual(['now there is something']);
+    });
+  });
+
+  describe('the paste control in the header', () => {
+    function pasteButton(): HTMLElement | null {
+      return container.querySelector<HTMLElement>('[aria-label="paste into the terminal"]');
+    }
+
+    it('is not drawn where there is a keyboard to press the chord on', async () => {
+      // The default stub answers false to everything, which is a mouse.
+      await mountWith(createFakeClipboard('git commit --amend'));
+
+      expect(pasteButton()).toBeNull();
+    });
+
+    it('is drawn where the pointer is a finger, because there is no chord there', async () => {
+      // A PWA on a phone home screen has no Ctrl and no Cmd: without this
+      // control there is no way at all to get text into a session from the
+      // device this client is mainly for.
+      installMatchMedia(COARSE_POINTER);
+      await mountWith(createFakeClipboard('git commit --amend'));
+
+      expect(pasteButton()).not.toBeNull();
+    });
+
+    it('pastes what the chord would have pasted', async () => {
+      installMatchMedia(COARSE_POINTER);
+      const socket = await mountLive(createFakeClipboard('git commit --amend'));
+
+      await settleAfter(() => {
+        pasteButton()?.click();
+      });
+
+      expect(emulator().pasted).toEqual(['git commit --amend']);
+      expect(inputData(socket)).toEqual(['git commit --amend']);
+    });
+
+    it('shows a refusal beside itself rather than swallowing it', async () => {
+      installMatchMedia(COARSE_POINTER);
+      await mountWith(createRefusingClipboard('Read permission denied.'));
+
+      await settleAfter(() => {
+        pasteButton()?.click();
+      });
+
+      expect(container.textContent).toContain(
+        'could not paste from the clipboard: Read permission denied.',
+      );
+      // And the control is still there to try again with.
+      expect(pasteButton()).not.toBeNull();
+    });
   });
 });

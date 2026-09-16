@@ -285,6 +285,60 @@ export function createPaneFit(terminal: Terminal): () => void {
 }
 
 /**
+ * The seam over one terminal that has already been opened.
+ *
+ * Separate from the factory below for the same reason the three helpers above
+ * are: the factory's own half is the DOM half -- construct, open -- and this
+ * half is the mapping, which is the half worth reading and the half a test can
+ * hold to captured bytes. A test that has to go through the factory can only
+ * write bytes through `write`, which answers no callback, so it would have to
+ * guess at how long xterm takes to parse them. Given the terminal, a test
+ * writes with xterm's own completion callback and wraps it afterwards, and the
+ * question it then asks the paste is asked of a buffer in a known state.
+ *
+ * It takes an opened terminal and does not open one. Two of the things below
+ * need that and say so: a search selects what it finds, and a selection is
+ * something only an opened terminal has; a paste is delivered through the
+ * hidden textarea xterm keys input off, which `open` is what creates.
+ */
+export function createPaneEmulator(terminal: Terminal, scheme: Scheme): TerminalEmulator {
+  const search = createPaneSearch(terminal, scheme);
+  const fit = createPaneFit(terminal);
+  return {
+    search,
+    write: (chunk) => terminal.write(chunk),
+    onData: (listener) => {
+      terminal.onData(listener);
+    },
+    selection: () => terminal.getSelection(),
+    /**
+     * xterm's own paste, deliberately, rather than this module deciding what a
+     * paste is made of.
+     *
+     * It normalises line endings, wraps the text in `ESC[200~` and `ESC[201~`
+     * when the mode the buffer is in says to, and fires the result at the
+     * `onData` listener -- which is to say it produces the bytes the same
+     * paste produces in every other terminal, including the one the agent on
+     * the far end was written against. Re-deriving that here would be this app
+     * holding a second opinion about a mode xterm already tracks, and the two
+     * would disagree the first time either changed. It is also why this is on
+     * the seam at all rather than the pane calling `write`: `write` is the
+     * output direction, and a paste is input.
+     */
+    paste: (text) => terminal.paste(text),
+    focus: () => terminal.focus(),
+    dispose: () => terminal.dispose(),
+    fit,
+    onResize: (listener: (size: TerminalSize) => void) => {
+      // Narrowed to the two fields the frame carries. xterm's event is the
+      // same pair, but taking it whole would put whatever it gains next on the
+      // wire without anybody deciding to.
+      terminal.onResize(({ cols, rows }) => listener({ cols, rows }));
+    },
+  };
+}
+
+/**
  * The real emulator behind the seam: xterm, themed from the tokens file and
  * touched by nothing else in the app. This is the one module that imports
  * @xterm/xterm, the way browser.ts is the one that touches WebSocket — tests
@@ -298,26 +352,8 @@ export function createXtermEmulatorFactory(
     create(container: HTMLElement): TerminalEmulator {
       const terminal = createPaneTerminal(scheme, opener);
       terminal.open(container);
-      // After `open`, deliberately: a search selects what it finds, and
-      // selection is a thing an opened terminal has.
-      const search = createPaneSearch(terminal, scheme);
-      const fit = createPaneFit(terminal);
-      return {
-        search,
-        write: (chunk) => terminal.write(chunk),
-        onData: (listener) => {
-          terminal.onData(listener);
-        },
-        focus: () => terminal.focus(),
-        dispose: () => terminal.dispose(),
-        fit,
-        onResize: (listener: (size: TerminalSize) => void) => {
-          // Narrowed to the two fields the frame carries. xterm's event is
-          // the same pair, but taking it whole would put whatever it gains
-          // next on the wire without anybody deciding to.
-          terminal.onResize(({ cols, rows }) => listener({ cols, rows }));
-        },
-      };
+      // After `open`, deliberately: see `createPaneEmulator`.
+      return createPaneEmulator(terminal, scheme);
     },
   };
 }
