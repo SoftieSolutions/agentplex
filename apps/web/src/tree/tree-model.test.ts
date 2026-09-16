@@ -57,16 +57,16 @@ describe('where a node may be put', () => {
   it('offers the root and every container the hub sent', () => {
     expect(moveTargets(ARRANGED, node('hub-2'))).toEqual([
       { parentId: null, label: 'Top level' },
-      { parentId: 'hub-6', label: 'this week' },
-      { parentId: 'hub-4', label: 'agentplex (main checkout)' },
+      { parentId: 'hub-7', label: 'this week' },
+      { parentId: 'hub-5', label: 'agentplex (main checkout)' },
     ]);
   });
 
   it('leaves out the node itself and everything under it', () => {
-    // `hub-6` is the folder and `hub-4` the project inside it. Neither is
+    // `hub-7` is the folder and `hub-5` the project inside it. Neither is
     // somewhere the folder can go, and the hub would refuse both -- but a
     // menu offering a click that can only be refused is a menu wasting one.
-    expect(moveTargets(ARRANGED, node('hub-6'))).toEqual([{ parentId: null, label: 'Top level' }]);
+    expect(moveTargets(ARRANGED, node('hub-7'))).toEqual([{ parentId: null, label: 'Top level' }]);
   });
 
   it('offers the root alone before any tree has been answered', () => {
@@ -128,10 +128,10 @@ describe('what the frames carry', () => {
   });
 
   it('sends a move to the end of its new siblings, which the hub clamps', () => {
-    expect(buildMove(node('hub-2'), node('hub-5'))).toMatchObject({
+    expect(buildMove(node('hub-2'), node('hub-6'))).toMatchObject({
       type: 'node-move',
       nodeId: 'hub-2',
-      parentId: 'hub-5',
+      parentId: 'hub-6',
     });
     expect(buildRemove(node('hub-2'))).toEqual({ type: 'node-remove', nodeId: 'hub-2' });
   });

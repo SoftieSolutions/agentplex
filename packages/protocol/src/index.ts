@@ -80,6 +80,7 @@ export {
   serverRegistrationIdSchema,
   sessionIdSchema,
   sessionRefSchema,
+  startIdSchema,
   storeDescriptorSchema,
   storeIdSchema,
 } from './identity.js';
@@ -92,6 +93,7 @@ export type {
   ServerRegistrationId,
   SessionId,
   SessionRef,
+  StartId,
   StoreDescriptor,
   StoreId,
 } from './identity.js';
@@ -170,8 +172,10 @@ export type {
 } from './session.js';
 
 export {
+  clientTerminalTargetSchema,
   decodeTerminalChunk,
   encodeTerminalChunk,
+  serverTerminalTargetSchema,
   TERMINAL_CHUNK_MAX_CHARS,
   TERMINAL_INPUT_MAX_CHARS,
   TERMINAL_MAX_COLS,
@@ -179,9 +183,8 @@ export {
   terminalChunkSchema,
   terminalInputSchema,
   terminalSizeSchema,
-  terminalTargetSchema,
 } from './terminal.js';
-export type { TerminalSize, TerminalTarget } from './terminal.js';
+export type { ClientTerminalTarget, ServerTerminalTarget, TerminalSize } from './terminal.js';
 
 export {
   clientFrameSchema,

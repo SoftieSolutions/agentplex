@@ -315,7 +315,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     onTreeChanged: () => catalogue.changed(),
   });
 
-  const sessions = createSessions({ state, projects, connections: servers, logger });
+  const sessions = createSessions({ state, projects, connections: servers, ids, logger });
 
   // Documents: the index of files the hub does not hold, and the one path a
   // write to one takes. It reads projects for the directory a frame is

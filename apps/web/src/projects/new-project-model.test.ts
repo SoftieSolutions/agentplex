@@ -112,7 +112,7 @@ describe('what the form does with the answer', () => {
   const pending = frameIdSchema.parse(5);
   const created: ProjectCreatedView = {
     replyTo: pending,
-    nodeId: nodeIdSchema.parse('hub-4'),
+    nodeId: nodeIdSchema.parse('hub-5'),
   };
 
   it('waits while nothing has answered this create', () => {
@@ -145,7 +145,7 @@ describe('what the form does with the answer', () => {
 describe('the projects a picker offers', () => {
   it('reads them off the tree, by kind, in the order the hub sent them', () => {
     expect(projectChoices(withProject)).toEqual([
-      { id: 'hub-4', label: 'agentplex (main checkout)' },
+      { id: 'hub-5', label: 'agentplex (main checkout)' },
     ]);
   });
 

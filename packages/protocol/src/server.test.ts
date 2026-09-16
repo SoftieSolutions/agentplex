@@ -6,12 +6,21 @@ import {
   type HubToServerFrame,
   type ServerToHubFrame,
 } from './server.js';
-import { hubIdSchema, serverIdSchema, sessionIdSchema, storeIdSchema } from './identity.js';
+import {
+  hubIdSchema,
+  serverIdSchema,
+  sessionIdSchema,
+  startIdSchema,
+  storeIdSchema,
+} from './identity.js';
 import { parseTextFrame } from './parse.js';
 import { encodeTerminalChunk } from './terminal.js';
 import { DOC_CONTENT_MAX_CHARS, docNameSchema } from './doc.js';
 
 const HUB_ID = hubIdSchema.parse('hub-1');
+
+/** One hub-minted start handle. Opaque, and never a frame id: see `identity.ts`. */
+const A_START_ID = startIdSchema.parse('start-2f9c');
 
 /** One provider that resolved, reported a version and says it is logged in. */
 const READY_CLAUDE = {
@@ -74,6 +83,7 @@ describe('parseHubToServerFrame on the session instructions', () => {
   const A_START = {
     type: 'session-start',
     id: 2,
+    startId: 'start-2f9c',
     storeId: 'store-1',
     sessionId: null,
     provider: 'claude',
@@ -84,6 +94,38 @@ describe('parseHubToServerFrame on the session instructions', () => {
   it('accepts a start that names a store and a provider, and nothing else', () => {
     expect(parseHubToServerFrame(A_START).ok).toBe(true);
     expect(parseHubToServerFrame({ ...A_START, sessionId: 'session-1' }).ok).toBe(true);
+  });
+
+  it('requires the hub to name the start, so a spawn has a name before the provider does', () => {
+    // Required rather than optional, and on a resume as much as a spawn: a
+    // field that is sometimes there is a field the server has to branch on, to
+    // save the hub minting one id.
+    const { startId: _omitted, ...unnamed } = A_START;
+    expect(parseHubToServerFrame(unnamed).ok).toBe(false);
+  });
+
+  it('refuses a frame id where a start id belongs', () => {
+    // The whole of this change in one assertion. A frame id is unique within
+    // one connection and means nothing on the next, so a hub that redialled
+    // could no longer name the spawn it had just asked for. The parser is
+    // where that stops being possible rather than a convention somebody keeps.
+    expect(parseHubToServerFrame({ ...A_START, startId: 3 }).ok).toBe(false);
+    expect(
+      parseHubToServerFrame({
+        type: 'session-subscribe',
+        id: 6,
+        target: { by: 'start', startId: 3 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseServerToHubFrame({
+        type: 'store-report',
+        storeId: 'store-1',
+        sessions: [],
+        holding: [],
+        starts: [{ startId: 3, sessionId: null }],
+      }).ok,
+    ).toBe(false);
   });
 
   it('accepts a start in a project, whose directory is parsed like every other', () => {
@@ -296,7 +338,7 @@ describe('terminal frames on the server direction', () => {
     const parsed = parseHubToServerFrame({
       type: 'session-subscribe',
       id: 6,
-      target: { by: 'start', startId: 3 },
+      target: { by: 'start', startId: 'start-2f9c' },
     });
     expect(parsed.ok).toBe(true);
   });
@@ -375,7 +417,7 @@ describe('terminal frames on the server direction', () => {
       type: 'terminal-output',
       storeId: 'store-1',
       sessionId: null,
-      startId: 3,
+      startId: 'start-2f9c',
       chunk: encodeTerminalChunk(new Uint8Array([27, 91, 48, 109])),
       droppedChunks: 0,
     });
@@ -389,15 +431,15 @@ describe('terminal frames on the server direction', () => {
       sessions: [],
       holding: [],
       starts: [
-        { startId: 3, sessionId: null },
-        { startId: 4, sessionId: 'session-2' },
+        { startId: 'start-2f9c', sessionId: null },
+        { startId: 'start-7ab1', sessionId: 'session-2' },
       ],
     });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok || parsed.value.type !== 'store-report') return;
     expect(parsed.value.starts).toEqual([
-      { startId: 3, sessionId: null },
-      { startId: 4, sessionId: 'session-2' },
+      { startId: 'start-2f9c', sessionId: null },
+      { startId: 'start-7ab1', sessionId: 'session-2' },
     ]);
   });
 });
@@ -578,6 +620,7 @@ describe('hub and server round trips', () => {
     {
       type: 'session-start',
       id: 3,
+      startId: A_START_ID,
       storeId: storeIdSchema.parse('store-1'),
       sessionId: null,
       provider: 'claude',
@@ -587,6 +630,7 @@ describe('hub and server round trips', () => {
     {
       type: 'session-start',
       id: 4,
+      startId: startIdSchema.parse('start-7ab1'),
       storeId: storeIdSchema.parse('store-1'),
       sessionId: sessionIdSchema.parse('session-1'),
       provider: 'claude',
@@ -602,7 +646,7 @@ describe('hub and server round trips', () => {
     {
       type: 'session-subscribe',
       id: 6,
-      target: { by: 'start', startId: 3 },
+      target: { by: 'start', startId: A_START_ID },
     },
     {
       type: 'session-unsubscribe',
@@ -626,7 +670,7 @@ describe('hub and server round trips', () => {
     {
       type: 'terminal-resize',
       id: 9,
-      target: { by: 'start', startId: 3 },
+      target: { by: 'start', startId: A_START_ID },
       size: { cols: 120, rows: 40 },
     },
     {
@@ -703,14 +747,14 @@ describe('hub and server round trips', () => {
         },
       ],
       holding: [{ sessionId: sessionIdSchema.parse('session-1'), stoppable: false }],
-      starts: [{ startId: 3, sessionId: sessionIdSchema.parse('session-1') }],
+      starts: [{ startId: A_START_ID, sessionId: sessionIdSchema.parse('session-1') }],
     },
     {
       type: 'session-subscribed',
       replyTo: 6,
       storeId: storeIdSchema.parse('store-1'),
       sessionId: null,
-      startId: 3,
+      startId: A_START_ID,
       replayChunks: 2,
       droppedBytes: 8_192,
     },

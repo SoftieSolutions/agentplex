@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   type ProviderReadiness,
   sessionRefSchema,
+  startIdSchema,
   storeDescriptorSchema,
   type ServerToHubFrame,
 } from '@agentplex/protocol';
@@ -367,6 +368,7 @@ describe('a draining shutdown', () => {
     hub.send({
       type: 'session-start',
       id: 2,
+      startId: startIdSchema.parse('start-mid-drain'),
       storeId: session.storeId,
       sessionId: null,
       provider: 'claude',

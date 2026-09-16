@@ -5,6 +5,7 @@ import {
   parseTextFrame,
   PROTOCOL_VERSION,
   sessionIdSchema,
+  startIdSchema,
   storeDescriptorSchema,
   type HubToServerFrame,
   type ServerToHubFrame,
@@ -63,6 +64,15 @@ const identity: ServerIdentity = {
 
 const STORE = storeDescriptorSchema.parse({ storeId: 'store-a', path: '/volumes/claude' });
 const SESSION_A = sessionIdSchema.parse('session-a');
+
+/**
+ * The hub's name for the one start these tests make.
+ *
+ * Opaque and not a frame id, which is what lets the server hold it against the
+ * terminal rather than against the socket: the frame ids below go on being
+ * per-connection counters, and this does not move when the connection does.
+ */
+const START = startIdSchema.parse('start-4');
 
 const logger = createLogger('error', () => {});
 
@@ -161,7 +171,7 @@ async function handshaken(
  * is what a real start does: the terminal id never crosses the wire, and the
  * connection is what joins the start handle to it.
  */
-async function start(test: Harness, startId: number): Promise<FakePty> {
+async function start(test: Harness, frameId: number): Promise<FakePty> {
   const opened = test.terminals.spawn(STORE, launch);
   if (!opened.ok) throw new Error(`the spawn should have opened: ${opened.problem}`);
   test.sessions.answerWith({
@@ -172,7 +182,11 @@ async function start(test: Harness, startId: number): Promise<FakePty> {
   });
   await test.send({
     type: 'session-start',
-    id: startId,
+    id: frameId,
+    // The hub's own name for the start, minted before the frame was sent. It
+    // is not the frame id beside it, and the difference is the point: this one
+    // still means something on the connection after this one.
+    startId: START,
     storeId: STORE.storeId,
     sessionId: null,
     provider: 'claude',
@@ -197,14 +211,14 @@ describe('terminal frames against a real server', () => {
     const test = await handshaken();
     await start(test, 4);
 
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     expect(test.frames().at(-1)).toEqual({
       type: 'session-subscribed',
       replyTo: 5,
       storeId: STORE.storeId,
       sessionId: null,
-      startId: 4,
+      startId: START,
       replayChunks: 0,
       droppedBytes: 0,
     });
@@ -217,7 +231,7 @@ describe('terminal frames against a real server', () => {
     // that draw boxes and print emoji.
     const test = await handshaken();
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     const every = Uint8Array.from({ length: 256 }, (_, at) => at);
     pty.emit(every);
@@ -229,7 +243,7 @@ describe('terminal frames against a real server', () => {
   it('keeps a UTF-8 sequence the pty split across two reads split in exactly the same place', async () => {
     const test = await handshaken();
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     const whole = new TextEncoder().encode('┌─ diff ─┐ 🚀');
     pty.emit(whole.subarray(0, 5));
@@ -251,7 +265,7 @@ describe('terminal frames against a real server', () => {
     pty.emit('before anybody watched\r\n');
     await settle();
 
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
     pty.emit('and after\r\n');
     await settle();
 
@@ -268,7 +282,7 @@ describe('terminal frames against a real server', () => {
     pty.emit('the second');
     await settle();
 
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     // A byte count rather than a flag: a pane can say how much it is not
     // showing, and `> 0` is still the flag for one that only wants to say it
@@ -286,14 +300,18 @@ describe('terminal frames against a real server', () => {
     // are what separates them, and they arrive before any of the bytes do.
     const silent = await handshaken(8);
     await start(silent, 4);
-    await silent.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await silent.send({
+      type: 'session-subscribe',
+      id: 5,
+      target: { by: 'start', startId: START },
+    });
 
     const busy = await handshaken(8);
     const pty = await start(busy, 4);
     pty.emit('an hour of output, gone\r\n');
     pty.emit('what is left');
     await settle();
-    await busy.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await busy.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     expect(silent.frames().find((frame) => frame.type === 'session-subscribed')).toMatchObject({
       replayChunks: 0,
@@ -318,7 +336,7 @@ describe('terminal frames against a real server', () => {
     pty.emit('third\r\n');
     await settle();
 
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
     pty.emit('live\r\n');
     await settle();
 
@@ -334,7 +352,7 @@ describe('terminal frames against a real server', () => {
   it('counts dropped chunks on every chunk of output, at zero until something drops them', async () => {
     const test = await handshaken();
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     pty.emit('anything');
     await settle();
@@ -355,7 +373,7 @@ describe('terminal frames against a real server', () => {
     // matter how much the child prints.
     const test = await handshaken(undefined, { drains: false });
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     const printed = new Uint8Array(16 * 1024).fill(0x61);
     const OFFERED = 2_000;
@@ -381,7 +399,11 @@ describe('terminal frames against a real server', () => {
     const bufferedAfter = async (chunks: number): Promise<number> => {
       const test = await handshaken(undefined, { drains: false });
       const pty = await start(test, 4);
-      await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+      await test.send({
+        type: 'session-subscribe',
+        id: 5,
+        target: { by: 'start', startId: START },
+      });
       const printed = new Uint8Array(16 * 1024).fill(0x61);
       for (let at = 0; at < chunks; at += 1) pty.emit(printed);
       await settle();
@@ -396,7 +418,7 @@ describe('terminal frames against a real server', () => {
     // connection, and every other session on this machine is still served.
     const test = await handshaken(undefined, { drains: false });
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     const printed = new Uint8Array(16 * 1024).fill(0x61);
     for (let at = 0; at < 2_000; at += 1) pty.emit(printed);
@@ -415,7 +437,7 @@ describe('terminal frames against a real server', () => {
     // say how big the gap was, and `> 0` is still the flag.
     const test = await handshaken(undefined, { drains: false });
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     const printed = new Uint8Array(16 * 1024).fill(0x61);
     for (let at = 0; at < 2_000; at += 1) pty.emit(printed);
@@ -440,7 +462,7 @@ describe('terminal frames against a real server', () => {
     // pane can label -- and it is why this drops chunks rather than bytes.
     const test = await handshaken(undefined, { drains: false });
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     const printed = new Uint8Array(16 * 1024).fill(0x61);
     for (let at = 0; at < 2_000; at += 1) pty.emit(printed);
@@ -454,13 +476,13 @@ describe('terminal frames against a real server', () => {
   it('names the session on its output as soon as the provider has named it', async () => {
     const test = await handshaken();
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     bind(test, SESSION_A);
     pty.emit('named now');
     await settle();
 
-    expect(outputs(test).at(-1)).toMatchObject({ sessionId: SESSION_A, startId: 4 });
+    expect(outputs(test).at(-1)).toMatchObject({ sessionId: SESSION_A, startId: START });
   });
 
   it('writes what the hub says the user typed, as they typed it, and says nothing back', async () => {
@@ -471,7 +493,7 @@ describe('terminal frames against a real server', () => {
     await test.send({
       type: 'terminal-input',
       id: 6,
-      target: { by: 'start', startId: 4 },
+      target: { by: 'start', startId: START },
       data: 'pnpm test\r',
     });
 
@@ -488,7 +510,7 @@ describe('terminal frames against a real server', () => {
     await test.send({
       type: 'terminal-resize',
       id: 6,
-      target: { by: 'start', startId: 4 },
+      target: { by: 'start', startId: START },
       size: { cols: 120, rows: 40 },
     });
 
@@ -516,7 +538,11 @@ describe('terminal frames against a real server', () => {
   it('refuses a subscription to a start that never happened on this connection', async () => {
     const test = await handshaken();
 
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 99 } });
+    await test.send({
+      type: 'session-subscribe',
+      id: 5,
+      target: { by: 'start', startId: startIdSchema.parse('start-nobody-made') },
+    });
 
     expect(test.frames().at(-1)).toMatchObject({ type: 'session-refused', replyTo: 5 });
   });
@@ -524,7 +550,7 @@ describe('terminal frames against a real server', () => {
   it('answers nothing about a terminal before a handshake', async () => {
     const test = harness();
 
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
     expect(test.frames()).toEqual([
       { type: 'protocol-error', code: 'bad-request', message: expect.any(String) },
@@ -536,9 +562,13 @@ describe('detaching from a terminal', () => {
   it('gives the watcher back and leaves the session running', async () => {
     const test = await handshaken();
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
 
-    await test.send({ type: 'session-unsubscribe', id: 6, target: { by: 'start', startId: 4 } });
+    await test.send({
+      type: 'session-unsubscribe',
+      id: 6,
+      target: { by: 'start', startId: START },
+    });
 
     expect(test.frames().at(-1)).toEqual({ type: 'session-unsubscribed', replyTo: 6 });
     expect(terminalOf(test).watchers).toEqual([]);
@@ -551,8 +581,12 @@ describe('detaching from a terminal', () => {
   it('stops sending output once the last watcher has let go', async () => {
     const test = await handshaken();
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
-    await test.send({ type: 'session-unsubscribe', id: 6, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
+    await test.send({
+      type: 'session-unsubscribe',
+      id: 6,
+      target: { by: 'start', startId: START },
+    });
 
     pty.emit('nobody is listening');
     await settle();
@@ -564,7 +598,11 @@ describe('detaching from a terminal', () => {
     const test = await handshaken();
     await start(test, 4);
 
-    await test.send({ type: 'session-unsubscribe', id: 6, target: { by: 'start', startId: 4 } });
+    await test.send({
+      type: 'session-unsubscribe',
+      id: 6,
+      target: { by: 'start', startId: START },
+    });
 
     expect(test.frames().at(-1)).toMatchObject({ type: 'session-refused', replyTo: 6 });
   });
@@ -576,7 +614,7 @@ describe('detaching from a terminal', () => {
     // that can never fall.
     const test = await handshaken();
     const pty = await start(test, 4);
-    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: 4 } });
+    await test.send({ type: 'session-subscribe', id: 5, target: { by: 'start', startId: START } });
     expect(terminalOf(test).watchers).toEqual(['connection-under-test']);
 
     test.socket.closeFromPeer(PEER_GONE);
@@ -594,7 +632,7 @@ describe('start provenance in the report', () => {
 
     await start(test, 4);
 
-    expect(reports(test).at(-1)).toMatchObject({ starts: [{ startId: 4, sessionId: null }] });
+    expect(reports(test).at(-1)).toMatchObject({ starts: [{ startId: START, sessionId: null }] });
   });
 
   it('reports the pair once discovery has named the session, and then stops', async () => {
@@ -610,7 +648,7 @@ describe('start provenance in the report', () => {
     // A report on the handshake, one for the start, then one per stop: the
     // third is the first one sent after discovery named the session.
     const [, , named, afterwards] = reports(test);
-    expect(named).toMatchObject({ starts: [{ startId: 4, sessionId: SESSION_A }] });
+    expect(named).toMatchObject({ starts: [{ startId: START, sessionId: SESSION_A }] });
     expect(afterwards).toMatchObject({ starts: [] });
   });
 });

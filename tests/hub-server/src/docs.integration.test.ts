@@ -216,7 +216,16 @@ async function start(): Promise<Harness> {
     // Not the subject: a document is what this file is about, and the fake is
     // what a suite stands on when a seam is not its subject.
     catalogue: createFakeCatalogue(),
-    sessions: createSessions({ state, projects, connections, logger }),
+    // Nothing in this file starts a session, so the start handle the feature
+    // now mints has nothing to be unique against -- the same `unused` the rest
+    // of this harness hands an id source it never reads back.
+    sessions: createSessions({
+      state,
+      projects,
+      connections,
+      ids: { newId: () => 'unused' },
+      logger,
+    }),
     // The same two seams `hub.ts` hands the broadcast. A broadcast built
     // without them would be a different broadcast.
     pairing,

@@ -683,7 +683,7 @@ describe('projects and the tree', () => {
 
     socket.deliver(hubFrames.projectCreated);
 
-    expect(h.store.getSnapshot().lastProjectCreated).toEqual({ replyTo: 5, nodeId: 'hub-4' });
+    expect(h.store.getSnapshot().lastProjectCreated).toEqual({ replyTo: 5, nodeId: 'hub-5' });
     expect(h.store.getSnapshot().lastRefusal).toBeNull();
   });
 
@@ -733,7 +733,7 @@ describe('projects and the tree', () => {
     const { socket } = await establish(h);
 
     socket.deliver(hubFrames.nodeCreated);
-    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 8, nodeId: 'hub-6' });
+    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 8, nodeId: 'hub-7' });
 
     socket.deliver(hubFrames.nodeMoved);
     expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 9, nodeId: null });
@@ -787,8 +787,8 @@ describe('projects and the tree', () => {
     const layout = h.store.getSnapshot().layout ?? [];
     expect(layout.filter((node) => node.kind === 'doc')).toEqual([
       {
-        id: 'hub-5',
-        parentId: 'hub-4',
+        id: 'hub-6',
+        parentId: 'hub-5',
         kind: 'doc',
         position: 0,
         // The file's name, and `named` because the user typed it: nothing
@@ -812,7 +812,7 @@ describe('projects and the tree', () => {
     const layout = h.store.getSnapshot().layout ?? [];
     expect(layout.filter((node) => node.kind === 'project')).toEqual([
       {
-        id: 'hub-4',
+        id: 'hub-5',
         parentId: null,
         kind: 'project',
         position: 2,
@@ -1074,7 +1074,7 @@ describe('documents', () => {
     type: 'doc-create',
     // The project the captured fixtures were made in, so the ids in this
     // suite are the ones a real hub minted rather than ones invented here.
-    projectId: nodeIdSchema.parse('hub-4'),
+    projectId: nodeIdSchema.parse('hub-5'),
     server: serverRegistrationIdSchema.parse('registration-mbp-robert'),
     name: docNameSchema.parse('plan.md'),
     content: '# Plan\n',
@@ -1097,7 +1097,7 @@ describe('documents', () => {
 
     socket.deliver(hubFrames.docCreated);
 
-    expect(h.store.getSnapshot().lastDocCreated).toEqual({ replyTo: 8, nodeId: 'hub-5' });
+    expect(h.store.getSnapshot().lastDocCreated).toEqual({ replyTo: 8, nodeId: 'hub-6' });
     expect(h.store.getSnapshot().lastRefusal).toBeNull();
   });
 

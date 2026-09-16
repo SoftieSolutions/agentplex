@@ -209,7 +209,16 @@ async function start(roots: readonly string[]): Promise<Harness> {
     readPaneLayout: async () => null,
     writePaneLayout: async () => undefined,
     catalogue: createFakeCatalogue(),
-    sessions: createSessions({ state, projects, connections, logger }),
+    // Nothing in this file starts a session, so the start handle the feature
+    // now mints has nothing to be unique against -- the same `unused` the rest
+    // of this harness hands an id source it never reads back.
+    sessions: createSessions({
+      state,
+      projects,
+      connections,
+      ids: { newId: () => 'unused' },
+      logger,
+    }),
     // The same two seams `hub.ts` hands the broadcast. Pairing is not this
     // file's subject, but a broadcast built without them would be a different
     // broadcast.

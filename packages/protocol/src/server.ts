@@ -12,6 +12,7 @@ import {
   serverIdSchema,
   sessionIdSchema,
   sessionRefSchema,
+  startIdSchema,
   storeDescriptorSchema,
   storeIdSchema,
 } from './identity.js';
@@ -19,15 +20,7 @@ import { machineLoadSchema } from './machine-state.js';
 import { frameParser } from './parse.js';
 import { providerReadinessSchema } from './readiness.js';
 import { sessionDescriptorSchema, sessionHoldSchema, sessionStartTagSchema } from './session.js';
-import {
-  sessionSubscribeFrameSchema,
-  sessionSubscribedFrameSchema,
-  sessionUnsubscribeFrameSchema,
-  sessionUnsubscribedFrameSchema,
-  terminalInputFrameSchema,
-  terminalOutputFrameSchema,
-  terminalResizeFrameSchema,
-} from './terminal.js';
+import { serverTerminalFrames } from './terminal.js';
 
 /**
  * The server-facing half of the protocol: hub to paired server.
@@ -85,6 +78,24 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('session-start'),
     id: frameIdSchema,
+    /**
+     * The hub's own name for this act of starting, minted before the frame is
+     * sent and carried so the server can tag the terminal it forks with it.
+     *
+     * Beside `id` rather than instead of it, because they answer different
+     * questions and outlive each other by different amounts. `id` correlates
+     * this frame with its reply on this socket and is spent the moment the
+     * reply arrives. This names the start itself: the server reports it back
+     * until the provider has written a session id, and a hub that redialled in
+     * between still recognises it -- which the frame id, unique only within a
+     * connection, could not survive.
+     *
+     * It is on every start and not only on a spawn. A resume already has a
+     * session id and needs no other name, but a frame whose fields depend on
+     * which kind of start it is would be a frame every reader has to branch on,
+     * to save minting one id.
+     */
+    startId: startIdSchema,
     storeId: storeIdSchema,
     /** The session to resume, or `null` to start one the provider will name. */
     sessionId: sessionIdSchema.nullable(),
@@ -123,19 +134,21 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
   /**
    * Watching a session, feeding it, and telling it how big the screen is.
    *
-   * Defined in `terminal.ts` and put into both directions' unions unchanged,
-   * because these are relayed rather than answered: what a client sends the
-   * hub about a terminal is what the hub sends the server. See that file for
-   * why output is base64 in a JSON frame and input is text.
+   * Defined in `terminal.ts` and instantiated for this leg, because these are
+   * relayed rather than answered: what a client sends the hub about a terminal
+   * is what the hub sends the server, with the one field that cannot be the
+   * same on both legs -- the start handle, a `StartId` here and a client's own
+   * frame id there -- swapped. See that file for why, and for why output is
+   * base64 in a JSON frame while input is text.
    *
    * They address a session or a start handle and never a terminal, so nothing
    * here can name a process on this machine. What a subscription buys the peer
    * is output from a session it could already stop.
    */
-  sessionSubscribeFrameSchema,
-  sessionUnsubscribeFrameSchema,
-  terminalInputFrameSchema,
-  terminalResizeFrameSchema,
+  serverTerminalFrames.subscribe,
+  serverTerminalFrames.unsubscribe,
+  serverTerminalFrames.input,
+  serverTerminalFrames.resize,
   /**
    * A project's documents: replace one whole, read one back, list them.
    *
@@ -328,9 +341,17 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
      * needs and the tag is dropped.
      *
      * Present and empty rather than absent on a report with nothing to say, so
-     * that every report has one shape. The handles are ids from this
-     * connection's own frames and mean nothing on another connection, which is
-     * exactly what makes them safe to put here.
+     * that every report has one shape.
+     *
+     * The handles are the hub's own `StartId`s, so this list is the same across
+     * every connection one hub makes -- which is the point: a hub that dropped
+     * and redialled between the fork and the first scan is told here what it
+     * started, rather than losing the only name that spawn had. It is *not* the
+     * same across two hubs. A start id is minted by one hub and means nothing
+     * to another, so a start is reported only to the connections holding the
+     * grant it was made under; another hub sees an empty list where this one
+     * sees its own starts, and sees the session itself as soon as the provider
+     * names it, like any other session in the store.
      */
     starts: z.array(sessionStartTagSchema),
   }),
@@ -370,9 +391,9 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
     sessions: z.array(sessionRefSchema),
   }),
   /** The other half of the relay. See `terminal.ts`. */
-  sessionSubscribedFrameSchema,
-  sessionUnsubscribedFrameSchema,
-  terminalOutputFrameSchema,
+  serverTerminalFrames.subscribed,
+  serverTerminalFrames.unsubscribed,
+  serverTerminalFrames.output,
   /**
    * The answers to the document frames.
    *
