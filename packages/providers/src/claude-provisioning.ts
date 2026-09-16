@@ -1,11 +1,10 @@
-import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { CompletedProcess } from './operations/process-runner.js';
 import { planClaudeLaunch, CLAUDE_COMMAND } from './claude-launch.js';
+import { NPM_COMMAND, npmInstallSpec, parseNpmPrefix, readNpmInstall } from './npm-install.js';
 import type {
   AuthProbe,
   AuthState,
-  InstalledProvider,
   InstallPlan,
   InstallRequest,
   Launch,
@@ -33,18 +32,16 @@ import type {
 /** The npm package Claude Code ships as. */
 export const CLAUDE_PACKAGE = '@anthropic-ai/claude-code';
 
-/** The installer, as a bare program name, resolved on PATH like every other. */
-export const NPM_COMMAND = 'npm';
-
 /**
- * The dist-tag npm resolves when a request pins no version.
+ * The installer this provider arrives through, re-exported so that a caller
+ * holding this file still learns the name of the program it plans.
  *
- * Named rather than left implicit, because the argv always carries a `<pkg>@`
- * suffix. `npm install <pkg>` and `npm install <pkg>@latest` mean the same
- * thing, and building one shape for both means there is one shape to read in a
- * log line and one shape a test asserts on.
+ * It is defined in `npm-install.ts` because it is a fact about npm rather than
+ * about Claude Code: the same constant, the same package spec and the same
+ * report parser serve every provider that ships to npm, and AGX-219 is the
+ * ticket that moved them there once there were two.
  */
-const NPM_LATEST_TAG = 'latest';
+export { NPM_COMMAND };
 
 /**
  * `claude auth status --json`, the provider's own answer to "am I logged in".
@@ -99,10 +96,10 @@ const AUTH_TIMEOUT_MS = 10_000;
 export function createClaudeProvisioning(): ProviderProvisioning {
   return {
     install(request: InstallRequest): InstallPlan {
-      const prefix = parsePrefix(request.prefix);
+      const prefix = parseNpmPrefix(request.prefix);
       if (!prefix.ok) return { ok: false, problem: prefix.problem };
 
-      const spec = `${CLAUDE_PACKAGE}@${request.version ?? NPM_LATEST_TAG}`;
+      const spec = npmInstallSpec(CLAUDE_PACKAGE, request.version);
 
       return {
         ok: true,
@@ -131,7 +128,7 @@ export function createClaudeProvisioning(): ProviderProvisioning {
           //
           // Captured on npm 11.19 with 2.1.259. `--ignore-scripts` installs the
           // package and its platform dependency, exits 0, and reports both
-          // under `add` — an install this file's reader would call a success —
+          // under `add` — an install the npm reader would call a success —
           // while leaving `bin/claude` as the 500-byte placeholder shipped in
           // the tarball, which prints "claude native binary not installed" and
           // exits 1. The postinstall is what replaces that placeholder with the
@@ -149,7 +146,7 @@ export function createClaudeProvisioning(): ProviderProvisioning {
           // npmrc, so the answer stops depending on the machine. The npmrc that
           // refuses instead of breaking, `strict-allow-scripts`, needs no
           // counter-flag: it fails loudly with ESTRICTALLOWSCRIPTS, and the
-          // reader below hands the operator npm's own remediation.
+          // npm reader hands the operator npm's own remediation.
           argv: {
             file: NPM_COMMAND,
             args: [
@@ -163,7 +160,7 @@ export function createClaudeProvisioning(): ProviderProvisioning {
             ],
           },
           timeoutMs: INSTALL_TIMEOUT_MS,
-          read: readNpmInstall,
+          read: readNpmInstall(CLAUDE_PACKAGE),
         },
       };
     },
@@ -192,103 +189,6 @@ export function createClaudeProvisioning(): ProviderProvisioning {
       return planClaudeLaunch(request.store, request.cwd, CLAUDE_LOGIN_ARGS);
     },
   };
-}
-
-/**
- * A prefix this will build an argv out of.
- *
- * Absolute, because a relative prefix resolves against whatever directory the
- * setup process happens to have been started in — the exact ambiguity the
- * absence of a cwd on the process seam exists to remove — and because an
- * absolute path cannot be mistaken by npm for one of its own options. No NUL,
- * because a NUL truncates the path at the syscall, so what is written to is a
- * prefix of what was checked.
- */
-function parsePrefix(
-  prefix: string,
-): { ok: true; prefix: string } | { ok: false; problem: string } {
-  if (prefix.includes('\0')) {
-    return { ok: false, problem: 'an install prefix may not contain a null byte' };
-  }
-  if (!isAbsolute(prefix)) {
-    return { ok: false, problem: `an install prefix must be an absolute path, not ${prefix}` };
-  }
-  return { ok: true, prefix };
-}
-
-/**
- * What npm reports about a package under `--json`.
- *
- * Three fields out of the twelve npm prints, and a passthrough for the rest:
- * this is a format npm owns and extends, and a parser that insisted on the
- * whole shape would start refusing real output the next time npm adds a field.
- */
-const npmPackageSchema = z.object({ name: z.string(), version: z.string() });
-
-/**
- * The half of npm's `--json` output an install has to be read out of.
- *
- * `add` is what npm reports for a package that was not there. `change` is what
- * it reports for one that was — a reinstall of the version already on disk
- * comes back with an empty `add`, a `changed` count of two, and the package in
- * `change[].to`. That detail is exactly why this is read against captured
- * output: an install that reads only `add` reports "npm installed nothing"
- * every time setup is re-run, which is the case a reconciling setup hits most.
- */
-const npmInstallSchema = z.object({
-  add: z.array(npmPackageSchema).optional(),
-  change: z.array(z.object({ to: npmPackageSchema })).optional(),
-});
-
-/**
- * npm's own error object, which it prints on stdout under `--json` while the
- * human-readable version goes to stderr.
- */
-const npmErrorSchema = z.object({
-  error: z.object({ code: z.string().nullish(), summary: z.string() }),
-});
-
-function readNpmInstall(completed: CompletedProcess): OneShotRead<InstalledProvider> {
-  const json = parseJson(completed.stdout);
-  if (json === undefined) {
-    // npm printed something that is not the format it was asked for. Reporting
-    // the exit code alone would hide a wrapper — a corporate npm shim, a proxy
-    // login page — that is the actual thing an operator has to deal with.
-    return {
-      ok: false,
-      problem: `npm printed no JSON: ${firstLine(completed.stdout) || firstLine(completed.stderr)}`,
-    };
-  }
-
-  if (completed.exitCode !== 0) {
-    // npm's own words. "No matching version found for @anthropic-ai/claude-
-    // code@0.0.0" tells an operator what to change; "npm exited 1" does not.
-    const failure = npmErrorSchema.safeParse(json);
-    return {
-      ok: false,
-      problem: failure.success
-        ? `npm could not install ${CLAUDE_PACKAGE}: ${failure.data.error.summary}`
-        : `npm could not install ${CLAUDE_PACKAGE}: it exited ${completed.exitCode}`,
-    };
-  }
-
-  const parsed = npmInstallSchema.safeParse(json);
-  if (!parsed.success) {
-    return { ok: false, problem: 'npm printed JSON that is not an install report' };
-  }
-
-  const added = parsed.data.add ?? [];
-  const changed = (parsed.data.change ?? []).map((change) => change.to);
-  const installed = [...added, ...changed].find((entry) => entry.name === CLAUDE_PACKAGE);
-
-  if (installed === undefined) {
-    // npm exited 0 having done something that did not include this package.
-    // Saying it was installed would put a version in front of an operator that
-    // nothing on disk backs.
-    return { ok: false, problem: `npm exited 0 without reporting ${CLAUDE_PACKAGE}` };
-  }
-
-  return { ok: true, result: { package: installed.name, version: installed.version } };
 }
 
 /**

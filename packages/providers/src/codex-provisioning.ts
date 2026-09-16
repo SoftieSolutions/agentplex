@@ -1,13 +1,11 @@
-import { isAbsolute } from 'node:path';
-import { z } from 'zod';
 import { CODEX_COMMAND, planCodexLaunch } from './codex-launch.js';
+import { NPM_COMMAND, npmInstallSpec, parseNpmPrefix, readNpmInstall } from './npm-install.js';
 import type { CompletedProcess } from './operations/process-runner.js';
 import type {
   AuthProbe,
   AuthState,
   InstallPlan,
   InstallRequest,
-  InstalledProvider,
   Launch,
   LoginRequest,
   OneShotRead,
@@ -32,12 +30,6 @@ import type {
 
 /** The npm package codex ships as. */
 export const CODEX_PACKAGE = '@openai/codex';
-
-/** The installer, as a bare program name, resolved on PATH like every other. */
-const NPM_COMMAND = 'npm';
-
-/** The dist-tag npm resolves when a request pins no version. */
-const NPM_LATEST_TAG = 'latest';
 
 /**
  * `codex login status`, codex's own answer to "am I logged in".
@@ -94,10 +86,10 @@ const AUTH_TIMEOUT_MS = 10_000;
 export function createCodexProvisioning(): ProviderProvisioning {
   return {
     install(request: InstallRequest): InstallPlan {
-      const prefix = parsePrefix(request.prefix);
+      const prefix = parseNpmPrefix(request.prefix);
       if (!prefix.ok) return { ok: false, problem: prefix.problem };
 
-      const spec = `${CODEX_PACKAGE}@${request.version ?? NPM_LATEST_TAG}`;
+      const spec = npmInstallSpec(CODEX_PACKAGE, request.version);
 
       return {
         ok: true,
@@ -132,7 +124,7 @@ export function createCodexProvisioning(): ProviderProvisioning {
             args: ['install', '--global', '--prefix', prefix.prefix, '--json', spec],
           },
           timeoutMs: INSTALL_TIMEOUT_MS,
-          read: readNpmInstall,
+          read: readNpmInstall(CODEX_PACKAGE),
         },
       };
     },
@@ -161,96 +153,6 @@ export function createCodexProvisioning(): ProviderProvisioning {
       return planCodexLaunch(request.store, request.cwd, CODEX_LOGIN_ARGS);
     },
   };
-}
-
-/**
- * A prefix this will build an argv out of.
- *
- * Absolute, because a relative prefix resolves against whatever directory the
- * setup process happens to have been started in, and because an absolute path
- * cannot be mistaken by npm for one of its own options. No NUL, because a NUL
- * truncates the path at the syscall, so what is written to is a prefix of what
- * was checked.
- */
-function parsePrefix(
-  prefix: string,
-): { ok: true; prefix: string } | { ok: false; problem: string } {
-  if (prefix.includes('\0')) {
-    return { ok: false, problem: 'an install prefix may not contain a null byte' };
-  }
-  if (!isAbsolute(prefix)) {
-    return { ok: false, problem: `an install prefix must be an absolute path, not ${prefix}` };
-  }
-  return { ok: true, prefix };
-}
-
-/**
- * What npm reports about a package under `--json`.
- *
- * Two fields out of the twelve npm prints, and a passthrough for the rest:
- * this is a format npm owns and extends, and a parser that insisted on the
- * whole shape would start refusing real output the next time npm adds a field.
- */
-const npmPackageSchema = z.object({ name: z.string(), version: z.string() });
-
-/**
- * The half of npm's `--json` output an install has to be read out of.
- *
- * `add` is what npm reports for a package that was not there; `change` is what
- * it reports for one that was. Captured both ways, because a reinstall of the
- * version already on disk comes back with an empty `add` and the package in
- * `change[].to`, and that is the case a reconciling setup hits most.
- */
-const npmInstallSchema = z.object({
-  add: z.array(npmPackageSchema).optional(),
-  change: z.array(z.object({ to: npmPackageSchema })).optional(),
-});
-
-/** npm's own error object, printed on stdout under `--json`. */
-const npmErrorSchema = z.object({
-  error: z.object({ code: z.string().nullish(), summary: z.string() }),
-});
-
-function readNpmInstall(completed: CompletedProcess): OneShotRead<InstalledProvider> {
-  const json = parseJson(completed.stdout);
-  if (json === undefined) {
-    // npm printed something that is not the format it was asked for.
-    // Reporting the exit code alone would hide a wrapper — a corporate npm
-    // shim, a proxy login page — that is the actual thing to deal with.
-    return {
-      ok: false,
-      problem: `npm printed no JSON: ${firstLine(completed.stdout) || firstLine(completed.stderr)}`,
-    };
-  }
-
-  if (completed.exitCode !== 0) {
-    const failure = npmErrorSchema.safeParse(json);
-    return {
-      ok: false,
-      problem: failure.success
-        ? `npm could not install ${CODEX_PACKAGE}: ${failure.data.error.summary}`
-        : `npm could not install ${CODEX_PACKAGE}: it exited ${completed.exitCode}`,
-    };
-  }
-
-  const parsed = npmInstallSchema.safeParse(json);
-  if (!parsed.success) {
-    return { ok: false, problem: 'npm printed JSON that is not an install report' };
-  }
-
-  const added = parsed.data.add ?? [];
-  const changed = (parsed.data.change ?? []).map((change) => change.to);
-  // By name, and not "the first entry": npm reports the platform package —
-  // `@openai/codex-darwin-arm64`, at a version spelled `0.154.0-darwin-arm64`
-  // — right beside this one, and an operator shown that version would be shown
-  // something no release is called.
-  const installed = [...added, ...changed].find((entry) => entry.name === CODEX_PACKAGE);
-
-  if (installed === undefined) {
-    return { ok: false, problem: `npm exited 0 without reporting ${CODEX_PACKAGE}` };
-  }
-
-  return { ok: true, result: { package: installed.name, version: installed.version } };
 }
 
 /**
@@ -354,14 +256,6 @@ function answerLines(completed: CompletedProcess): readonly string[] {
     .flatMap((stream) => stream.split('\n'))
     .map((line) => line.trim())
     .filter((line) => line !== '');
-}
-
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
 }
 
 function firstLine(text: string): string {
