@@ -6,6 +6,7 @@ import {
   parseTextFrame,
   PROTOCOL_VERSION,
   serverRegistrationIdSchema,
+  sessionIdSchema,
   sessionRefSchema,
   storeIdSchema,
   type CatalogueQuery,
@@ -15,7 +16,12 @@ import {
 import { createFrameIdCounter } from './frame-ids.js';
 import { createFakeSocketFactory, type FakeSocket } from './fake-socket.js';
 import { createFakeTimers } from './timers.js';
-import { createHubStore, type HubCommand, type HubStoreDependencies } from './hub-store.js';
+import {
+  createHubStore,
+  terminalKey,
+  type HubCommand,
+  type HubStoreDependencies,
+} from './hub-store.js';
 import { hubFrames } from './hub-frames.fixture.js';
 
 /**
@@ -29,6 +35,18 @@ const SESSION = sessionRefSchema.parse({
   storeId: 'store-observatory',
   sessionId: 'session-11',
 });
+
+/** The same session, as a terminal frame addresses one. */
+const TARGET = { by: 'session', storeId: STORE_ID, sessionId: SESSION.sessionId } as const;
+const TARGET_KEY = terminalKey(TARGET);
+
+/** What the captured frames were captured watching. */
+const CAPTURED_TARGET = {
+  by: 'session',
+  storeId: storeIdSchema.parse('store-work'),
+  sessionId: sessionIdSchema.parse('session-build'),
+} as const;
+const CAPTURED_KEY = terminalKey(CAPTURED_TARGET);
 
 const START: HubCommand = {
   type: 'session-start',
@@ -485,8 +503,8 @@ describe('terminal input', () => {
     const { socket } = await establish(h);
     socket.drop();
 
-    const first = h.store.sendTerminalInput(SESSION, 'l');
-    const second = h.store.sendTerminalInput(SESSION, 's');
+    const first = h.store.sendTerminalInput(TARGET, 'l');
+    const second = h.store.sendTerminalInput(TARGET, 's');
     expect(first.delivered).toBe(false);
     expect(second.delivered).toBe(false);
 
@@ -504,29 +522,279 @@ describe('terminal input', () => {
     expect(h.store.getSnapshot().terminalInput).toEqual({ discarded: 0, notice: null });
   });
 
-  it('sends keystrokes through the injected encoder while connected', async () => {
-    const encoded: string[] = [];
-    const h = harness({
-      encodeTerminalInput: (ref, data, id) => {
-        const text = JSON.stringify({ ref, data, id });
-        encoded.push(text);
-        return text;
-      },
-    });
+  it('puts a keystroke on the wire as the frame the hub parses', async () => {
+    const h = harness();
     const { socket } = await establish(h);
 
-    const outcome = h.store.sendTerminalInput(SESSION, 'l');
+    const outcome = h.store.sendTerminalInput(TARGET, 'ls\r');
+
     expect(outcome).toEqual({ delivered: true });
-    expect(socket.sent.at(-1)).toBe(encoded[0]);
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'terminal-input',
+      id: 2,
+      target: TARGET,
+      data: 'ls\r',
+    });
   });
 
-  it('says it cannot send terminal input while the protocol has no frame for it', async () => {
+  it('says the hub refused, which is the case an echoing terminal cannot show', async () => {
     const h = harness();
-    await establish(h);
-    const outcome = h.store.sendTerminalInput(SESSION, 'l');
-    expect(outcome).toEqual({
-      delivered: false,
-      reason: 'this build cannot send terminal input yet',
+    const { socket } = await establish(h);
+    h.store.watchTerminal(CAPTURED_TARGET);
+    // The captured refusal answers frame 2, which is that subscribe.
+    socket.deliver(hubFrames.refusalTerminal);
+
+    const terminal = h.store.getSnapshot().terminals.get(CAPTURED_KEY);
+    expect(terminal?.problem).toBe('the hub cannot reach mbp-robert right now');
+    expect(terminal?.attached).toBe(false);
+    // Not the screen-wide refusal: nothing else on screen was told no, and a
+    // pane is where a user can act on this one.
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+});
+
+describe('watching a terminal', () => {
+  it('subscribes once however many panes look, and detaches when the last leaves', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const first = h.store.watchTerminal(TARGET);
+    const second = h.store.watchTerminal(TARGET);
+
+    // One subscribe, not two: the hub refuses a second subscribe to one
+    // terminal from one connection, because a second asks for a second replay.
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-subscribe')).toEqual([
+      { type: 'session-subscribe', id: 2, target: TARGET },
+    ]);
+
+    first();
+    expect(sentFrames(socket).some((frame) => frame.type === 'session-unsubscribe')).toBe(false);
+
+    second();
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'session-unsubscribe',
+      id: 3,
+      target: TARGET,
+    });
+    expect(h.store.getSnapshot().terminals.has(TARGET_KEY)).toBe(false);
+  });
+
+  it('replays the subscription on every connection, and the size with it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.watchTerminal(TARGET);
+    socket.deliver(hubFrames.sessionSubscribed);
+    h.store.sendTerminalResize(TARGET, { cols: 120, rows: 40 });
+
+    socket.drop();
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+
+    // Interest, then the size, in that order: a resize for a terminal this
+    // connection is not yet watching is a frame the hub can only refuse.
+    expect(sentFrames(next).slice(1)).toEqual([
+      { type: 'session-subscribe', id: 5, target: TARGET },
+      { type: 'terminal-resize', id: 6, target: TARGET, size: { cols: 120, rows: 40 } },
+    ]);
+    // Nothing queued, ever: a subscription is standing interest and not a
+    // request, and the command queue is for requests.
+    expect(h.store.getSnapshot().commandQueue.queued).toBe(0);
+  });
+
+  it('is unattached while the connection is down, and keeps the bytes it had', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.watchTerminal(CAPTURED_TARGET);
+    socket.deliver(hubFrames.sessionSubscribed);
+    socket.deliver(hubFrames.terminalOutput);
+
+    socket.drop();
+
+    const terminal = h.store.getSnapshot().terminals.get(CAPTURED_KEY);
+    expect(terminal?.attached).toBe(false);
+    // The buffered bytes are what the emulator is showing; a pane does not go
+    // blank because a socket did.
+    expect(terminal?.feed.bytes).toBeGreaterThan(0);
+  });
+});
+
+describe('terminal frames from the hub', () => {
+  /** A connection already watching the session the fixtures were captured on. */
+  async function watching(h: Harness): Promise<FakeSocket> {
+    const { socket } = await establish(h);
+    h.store.watchTerminal(CAPTURED_TARGET);
+    return socket;
+  }
+
+  function terminal(h: Harness) {
+    const view = h.store.getSnapshot().terminals.get(CAPTURED_KEY);
+    if (view === undefined) throw new Error('the store is not watching that terminal');
+    return view;
+  }
+
+  it('attaches on the reply, carrying what it says about the history', async () => {
+    const h = harness();
+    const socket = await watching(h);
+
+    socket.deliver(hubFrames.sessionSubscribed);
+
+    expect(terminal(h)).toMatchObject({
+      attached: true,
+      session: { storeId: 'store-work', sessionId: 'session-build' },
+      replayChunks: 2,
+      // Nothing was evicted, so this pane is being shown the session from its
+      // first byte. Zero here with a replay is the opposite fact from zero
+      // here with no replay, which is why both numbers are kept.
+      droppedBytes: 0,
+      printed: false,
+    });
+  });
+
+  it('says how much of the beginning is gone when it is joining mid-stream', async () => {
+    const h = harness();
+    const socket = await watching(h);
+
+    socket.deliver(hubFrames.sessionSubscribedTruncated);
+
+    expect(terminal(h).droppedBytes).toBeGreaterThan(0);
+  });
+
+  it('puts the bytes in the feed and never in the snapshot', async () => {
+    const h = harness();
+    const socket = await watching(h);
+    socket.deliver(hubFrames.sessionSubscribed);
+
+    const written: Uint8Array[] = [];
+    terminal(h).feed.attach({ write: (chunk) => written.push(chunk) });
+    socket.deliver(hubFrames.terminalOutput);
+
+    // The bytes the pty produced, decoded exactly once, on their way to an
+    // emulator. Nothing about them is in the snapshot.
+    const arrived = written[0];
+    if (arrived === undefined) throw new Error('the feed was given nothing');
+    expect(new TextDecoder().decode(arrived)).toBe('building\r\n');
+    expect(JSON.stringify(h.store.getSnapshot())).not.toContain('building');
+  });
+
+  it('does not notify React for a chunk that changed no fact', async () => {
+    const h = harness();
+    const socket = await watching(h);
+    socket.deliver(hubFrames.sessionSubscribed);
+
+    let notifications = 0;
+    h.store.subscribe(() => {
+      notifications += 1;
+    });
+    socket.deliver(hubFrames.terminalOutput);
+    const afterFirst = notifications;
+    socket.deliver(hubFrames.terminalOutput);
+    socket.deliver(hubFrames.terminalOutput);
+
+    // The first chunk moved a fact -- this pane has printed something -- and
+    // the next two moved none. Output at pty speed through a snapshot would
+    // re-render the app per read, which is the rule this path is built on.
+    expect(afterFirst).toBe(1);
+    expect(notifications).toBe(afterFirst);
+    expect(terminal(h).printed).toBe(true);
+  });
+
+  it('carries the gap on this link, both legs, as the frame counted it', async () => {
+    const h = harness();
+    const socket = await watching(h);
+    socket.deliver(hubFrames.sessionSubscribed);
+
+    socket.deliver(hubFrames.terminalOutputDropped);
+
+    expect(terminal(h).droppedChunks).toBeGreaterThan(0);
+    // Never summed into `droppedBytes`: one is this connection's loss and the
+    // other is the session's history, and a pane that conflated them would
+    // send a user looking in the wrong place.
+    expect(terminal(h).droppedBytes).toBe(0);
+
+    // And it goes back to zero on a fresh connection, because it counts one
+    // link's losses and the link is gone.
+    socket.drop();
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+    expect(terminal(h).droppedChunks).toBe(0);
+  });
+
+  it('says when its own buffer has thrown away the oldest output', async () => {
+    // A cap of almost nothing, so two captured chunks overflow it. The rule
+    // being exercised is the feed's, which trims whole chunks.
+    const h = harness({ terminalFeedBytes: 4 });
+    const socket = await watching(h);
+    socket.deliver(hubFrames.sessionSubscribed);
+    expect(terminal(h).evicted).toBe(false);
+
+    socket.deliver(hubFrames.terminalOutput);
+    socket.deliver(hubFrames.terminalOutputDropped);
+
+    expect(terminal(h).evicted).toBe(true);
+  });
+
+  it('keeps feeding a pane that asked by start handle once the session is named', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    // A client's start handle is the id of its own `session-start` frame. The
+    // captured reply answers frame 2, which is what this subscribe is.
+    const startKey = terminalKey({ by: 'start', startId: 2 });
+    h.store.watchTerminal({ by: 'start', startId: 2 });
+
+    socket.deliver(hubFrames.sessionSubscribed);
+
+    const pending = h.store.getSnapshot().terminals.get(startKey);
+    // The pane stops being pending: the hub said which session the start
+    // became, exactly, off a report rather than by timing.
+    expect(pending?.session).toEqual({ storeId: 'store-work', sessionId: 'session-build' });
+
+    const written: Uint8Array[] = [];
+    pending?.feed.attach({ write: (chunk) => written.push(chunk) });
+    // Output carrying only the session id -- no start handle on it -- still
+    // reaches the pane that asked by the start.
+    socket.deliver(hubFrames.terminalOutput);
+
+    expect(written).toHaveLength(1);
+  });
+
+  it('says nothing to a pane about a detach it asked for', async () => {
+    const h = harness();
+    const socket = await watching(h);
+    // A second watcher, so the record survives the first one leaving and
+    // there is something left to assert about.
+    h.store.watchTerminal(CAPTURED_TARGET);
+    socket.deliver(hubFrames.sessionSubscribed);
+
+    socket.deliver(hubFrames.sessionUnsubscribed);
+
+    // The hub agreeing that a watch is gone is not news to the pane that gave
+    // it back, and the one still here never asked.
+    expect(h.store.getSnapshot().terminals.has(CAPTURED_KEY)).toBe(true);
+    expect(h.store.getSnapshot().problem).toBeNull();
+  });
+});
+
+describe('terminal resize', () => {
+  it('sends the viewer size while attached, and remembers it while not', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.watchTerminal(TARGET);
+
+    // Before the hub has answered: remembered, not sent, because a resize for
+    // a terminal this connection is not yet watching can only be refused.
+    h.store.sendTerminalResize(TARGET, { cols: 80, rows: 24 });
+    expect(sentFrames(socket).some((frame) => frame.type === 'terminal-resize')).toBe(false);
+
+    socket.deliver(hubFrames.sessionSubscribed);
+    h.store.sendTerminalResize(TARGET, { cols: 100, rows: 30 });
+
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'terminal-resize',
+      id: 3,
+      target: TARGET,
+      size: { cols: 100, rows: 30 },
     });
   });
 });
@@ -620,39 +888,6 @@ describe('subscriptions', () => {
     // Three still unanswered, not four: the acknowledged save is settled.
     expect(h.store.getSnapshot().problem).toContain('3 commands');
     unsubscribe();
-  });
-
-  it('replays session subscriptions through the injected encoder until unsubscribed', async () => {
-    const h = harness({
-      encodeSessionSubscription: (ref, id) => JSON.stringify({ subscribe: ref, id }),
-    });
-    const { socket } = await establish(h);
-
-    const unsubscribe = h.store.subscribeSession(SESSION);
-    expect(socket.sent.at(-1)).toBe(JSON.stringify({ subscribe: SESSION, id: 2 }));
-
-    socket.drop();
-    const next = await redial(h);
-    next.open();
-    next.deliver(hubFrames.welcome);
-    expect(next.sent.at(-1)).toBe(JSON.stringify({ subscribe: SESSION, id: 4 }));
-
-    unsubscribe();
-    next.drop();
-    const last = await redial(h);
-    last.open();
-    last.deliver(hubFrames.welcome);
-    expect(sentFrames(last)).toHaveLength(1);
-  });
-
-  it('tracks session interest even while the protocol has no frame to send', async () => {
-    const h = harness();
-    const { socket } = await establish(h);
-    h.store.subscribeSession(SESSION);
-    // Nothing on the wire and nothing queued: the interest waits for the
-    // milestone that gives it a frame.
-    expect(sentFrames(socket)).toHaveLength(1);
-    expect(h.store.getSnapshot().commandQueue.queued).toBe(0);
   });
 });
 

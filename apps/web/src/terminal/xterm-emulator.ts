@@ -1,8 +1,11 @@
+import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
+
+import type { TerminalSize } from '@agentplex/protocol';
 
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import {
@@ -260,6 +263,28 @@ export function createPaneSearch(terminal: Terminal, scheme: Scheme): TerminalSe
 }
 
 /**
+ * Fitting one terminal to the box it is drawn in.
+ *
+ * The addon is loaded here rather than in the factory, beside the search for
+ * the same reason: loading is the parser-and-bookkeeping half, which a test
+ * can drive, and only `fit` itself needs a terminal that was opened. What the
+ * returned function guarantees is that it is safe to call when nothing can be
+ * measured -- a pane in a collapsed cell, a terminal never opened -- because
+ * the addon answers a size of `undefined` and returns without resizing.
+ *
+ * That guarantee is the reason this is worth a named function at all. The
+ * alternative most people write is a fit followed by reading `cols`/`rows`
+ * and sending them, which on an unmeasurable pane sends the size the terminal
+ * still had, unprompted, as if it had just changed. Nothing here reports a
+ * size; `onResize` does, and it fires only when one actually changed.
+ */
+export function createPaneFit(terminal: Terminal): () => void {
+  const addon = new FitAddon();
+  terminal.loadAddon(addon);
+  return () => addon.fit();
+}
+
+/**
  * The real emulator behind the seam: xterm, themed from the tokens file and
  * touched by nothing else in the app. This is the one module that imports
  * @xterm/xterm, the way browser.ts is the one that touches WebSocket — tests
@@ -276,6 +301,7 @@ export function createXtermEmulatorFactory(
       // After `open`, deliberately: a search selects what it finds, and
       // selection is a thing an opened terminal has.
       const search = createPaneSearch(terminal, scheme);
+      const fit = createPaneFit(terminal);
       return {
         search,
         write: (chunk) => terminal.write(chunk),
@@ -284,6 +310,13 @@ export function createXtermEmulatorFactory(
         },
         focus: () => terminal.focus(),
         dispose: () => terminal.dispose(),
+        fit,
+        onResize: (listener: (size: TerminalSize) => void) => {
+          // Narrowed to the two fields the frame carries. xterm's event is
+          // the same pair, but taking it whole would put whatever it gains
+          // next on the wire without anybody deciding to.
+          terminal.onResize(({ cols, rows }) => listener({ cols, rows }));
+        },
       };
     },
   };

@@ -5,14 +5,18 @@ import {
   sessionStatusSchema,
   type MachineState,
 } from '@agentplex/protocol';
-import type { HubSnapshot } from '../store/hub-store.js';
+import type { HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
+import { createTerminalFeed } from './chunk-feed.js';
 import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
 import {
   findSessionRow,
+  formatBytes,
   machineLabel,
   matchSummary,
   searchScopeNotice,
   terminalInputNotice,
+  terminalIsPartial,
+  terminalScopeNotice,
   toneForStatus,
 } from './presentation.js';
 
@@ -106,6 +110,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     layout: null,
     paneLayout: null,
     commandQueue: { queued: 0, capacity: 32, overflowed: null },
+    terminals: new Map(),
     terminalInput: { discarded: 0, notice: null },
     lastRefusal: null,
     lastStarted: null,
@@ -117,6 +122,26 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastDocCreated: null,
     lastDocSaved: null,
     lastDocContent: null,
+    ...overrides,
+  };
+}
+
+/**
+ * One watched terminal, attached and whole unless an override says otherwise
+ * -- which is the pane every one of these functions has to say nothing about.
+ */
+function terminalWith(overrides: Partial<TerminalWatchView> = {}): TerminalWatchView {
+  return {
+    target: { by: 'session', storeId: ref.storeId, sessionId: ref.sessionId },
+    feed: createTerminalFeed({ maxBytes: 1024 }),
+    attached: true,
+    session: ref,
+    replayChunks: 4,
+    droppedBytes: 0,
+    droppedChunks: 0,
+    evicted: false,
+    printed: true,
+    problem: null,
     ...overrides,
   };
 }
@@ -167,6 +192,8 @@ describe('machineLabel', () => {
 
 describe('terminalInputNotice', () => {
   it('says nothing while typing is going somewhere', () => {
+    expect(terminalInputNotice(snapshotWith({}), terminalWith())).toBeNull();
+    // And nothing at all about a pane that is not watching anything yet.
     expect(terminalInputNotice(snapshotWith({}), null)).toBeNull();
   });
 
@@ -177,20 +204,92 @@ describe('terminalInputNotice', () => {
       phase: 'reconnecting',
       terminalInput: { discarded: 3, notice },
     });
-    expect(terminalInputNotice(snapshot, 'anything')).toBe(notice);
+    expect(terminalInputNotice(snapshot, terminalWith())).toBe(notice);
   });
 
-  it('says why a live connection refused a keystroke, which today is the missing frame', () => {
+  it("repeats the hub's own no about this terminal, which the echo cannot show", () => {
     const refused = terminalInputNotice(
       snapshotWith({}),
-      'this build cannot send terminal input yet',
+      terminalWith({ attached: false, problem: 'the hub cannot reach mbp-robert right now' }),
     );
-    expect(refused).toBe('typing goes nowhere: this build cannot send terminal input yet');
+    expect(refused).toBe('the hub said no: the hub cannot reach mbp-robert right now');
   });
 
   it('does not carry a stale refusal into a reconnecting spell the store already words', () => {
     const snapshot = snapshotWith({ phase: 'reconnecting' });
-    expect(terminalInputNotice(snapshot, 'stale reason')).toBeNull();
+    expect(terminalInputNotice(snapshot, terminalWith({ problem: 'stale reason' }))).toBeNull();
+  });
+});
+
+describe('formatBytes', () => {
+  it('reads as a person reads one', () => {
+    expect(formatBytes(512)).toBe('512 bytes');
+    expect(formatBytes(2048)).toBe('2 KB');
+    expect(formatBytes(3_145_754)).toBe('3.0 MB');
+  });
+});
+
+describe('terminalScopeNotice', () => {
+  it('says nothing before the subscription is answered', () => {
+    expect(terminalScopeNotice(null)).toBeNull();
+    expect(terminalScopeNotice(terminalWith({ attached: false }))).toBeNull();
+  });
+
+  it('says nothing while the pane is showing the whole of what there is', () => {
+    expect(terminalScopeNotice(terminalWith())).toBeNull();
+  });
+
+  it('tells an empty pane apart from an empty session, which draw the same rectangle', () => {
+    const quiet = terminalScopeNotice(terminalWith({ printed: false, replayChunks: 0 }));
+    expect(quiet).toContain('this session has printed nothing');
+    // Once something arrives it is an ordinary pane again and says nothing.
+    expect(terminalScopeNotice(terminalWith({ printed: true, replayChunks: 0 }))).toBeNull();
+  });
+
+  it('names history the terminal evicted before this pane attached', () => {
+    const notice = terminalScopeNotice(terminalWith({ droppedBytes: 3_145_754 }));
+    expect(notice).toBe(
+      'showing less than everything: the first 3.0 MB this session printed was gone before this pane attached',
+    );
+  });
+
+  it('names output this connection could not carry, separately', () => {
+    const notice = terminalScopeNotice(terminalWith({ droppedChunks: 30 }));
+    expect(notice).toContain('30 chunks of output did not fit down this connection');
+    expect(terminalScopeNotice(terminalWith({ droppedChunks: 1 }))).toContain('1 chunk of output');
+  });
+
+  it('names this pane throwing away its own oldest output', () => {
+    expect(terminalScopeNotice(terminalWith({ evicted: true }))).toContain(
+      'this pane has since thrown away its own oldest output',
+    );
+  });
+
+  it('names all three when all three happened, in the order they happened', () => {
+    const notice = terminalScopeNotice(
+      terminalWith({ droppedBytes: 4096, droppedChunks: 2, evicted: true }),
+    );
+    // Three losses in three places, never summed: a pane saying "the first 4
+    // KB is gone" and a pane saying "this link is dropping output" are asking
+    // for two different things to be done about it.
+    expect(notice).toBe(
+      'showing less than everything: the first 4 KB this session printed was gone before this pane attached; ' +
+        '2 chunks of output did not fit down this connection and were dropped; ' +
+        'this pane has since thrown away its own oldest output',
+    );
+  });
+});
+
+describe('terminalIsPartial', () => {
+  it('is false for a whole pane and for one watching nothing', () => {
+    expect(terminalIsPartial(terminalWith())).toBe(false);
+    expect(terminalIsPartial(null)).toBe(false);
+  });
+
+  it('is true for each of the three ways a pane comes to be short', () => {
+    expect(terminalIsPartial(terminalWith({ droppedBytes: 1 }))).toBe(true);
+    expect(terminalIsPartial(terminalWith({ droppedChunks: 1 }))).toBe(true);
+    expect(terminalIsPartial(terminalWith({ evicted: true }))).toBe(true);
   });
 });
 

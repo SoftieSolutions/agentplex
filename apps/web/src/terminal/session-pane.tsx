@@ -1,14 +1,15 @@
 import {
   useCallback,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type JSX,
   type KeyboardEvent,
 } from 'react';
-import type { SessionRef } from '@agentplex/protocol';
+import type { ClientTerminalTarget, SessionRef, TerminalSize } from '@agentplex/protocol';
 
-import type { HubStore } from '../store/hub-store.js';
+import { terminalKey, type HubStore, type TerminalWatchView } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import {
   Box,
@@ -20,13 +21,14 @@ import {
   useComputedColorScheme,
 } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
-import { createTerminalFeed, DEFAULT_FEED_BYTES, type TerminalFeed } from './chunk-feed.js';
 import type { EmulatorFactory, TerminalEmulator } from './emulator.js';
 import { FindBar } from './find-bar.js';
 import {
   findSessionRow,
   machineLabel,
   terminalInputNotice,
+  terminalIsPartial,
+  terminalScopeNotice,
   toneForStatus,
 } from './presentation.js';
 import { StopButton } from '../sessions/stop-button.js';
@@ -39,24 +41,34 @@ import { TerminalView } from './terminal-view.js';
  * What the mockup shows and this deliberately does not draw yet: the tab
  * strip (Transcript, Diff and Approvals are their own tickets, and a control
  * with one option is not drawn), the context panel, and the Pause / Hand off
- * / Replay buttons — all later tickets. The terminal itself renders whatever
- * the chunk feed carries; no protocol frame delivers terminal output yet, so
- * until the terminal-frames ticket lands the feed stays empty and the input
- * notice under the pane says, in words, that typing goes nowhere.
+ * / Replay buttons — all later tickets.
+ *
+ * The terminal itself is fed by the store: the pane declares standing
+ * interest in a target, and the bytes that come back go to the feed the store
+ * holds for that target and from there to the emulator. They never touch
+ * React, and neither does the size going the other way. What React holds is
+ * the handful of facts a pane has to be able to say out loud — whether it is
+ * attached, and how much of the session it is not being shown.
  */
 
 const MONO_META = { fontFamily: 'var(--mantine-font-family-monospace)' } as const;
 
 /**
- * Standing interest in one session, declared the way looking at anything is
+ * Standing interest in one terminal, declared the way looking at anything is
  * declared here: a subscription whose lifetime is the component's, through
  * `useSyncExternalStore` rather than an effect. The hook never re-renders —
- * the snapshot is a constant — it exists purely so the store replays this
- * interest on every reconnection while the pane is mounted.
+ * the snapshot is a constant — it exists purely so the store subscribes while
+ * this pane is mounted, replays that subscription on every reconnection, and
+ * gives the watch back when the pane goes.
+ *
+ * The bytes and the facts are not returned here. They live in the store's own
+ * snapshot, which the pane already reads through `useHubSnapshot`, so a pane
+ * gets the current version of them on every render rather than the version
+ * that was true at mount.
  */
 const NOTHING = (): null => null;
-function useSessionInterest(store: HubStore, sessionRef: SessionRef): void {
-  const subscribe = useCallback(() => store.subscribeSession(sessionRef), [store, sessionRef]);
+function useTerminalWatch(store: HubStore, target: ClientTerminalTarget): void {
+  const subscribe = useCallback(() => store.watchTerminal(target), [store, target]);
   useSyncExternalStore(subscribe, NOTHING);
 }
 
@@ -76,16 +88,25 @@ export interface SessionPaneProps {
 export function SessionPane({ sessionRef, store: hub, emulators }: SessionPaneProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const snapshot = useHubSnapshot(hub);
-  useSessionInterest(hub, sessionRef);
+  // A pane addresses a session; the start handle the target union also allows
+  // belongs to a spawn the provider has not named, which no address can name
+  // either. Memoized on the ref so the watch is not given back and retaken on
+  // every render.
+  const target = useMemo<ClientTerminalTarget>(
+    () => ({ by: 'session', storeId: sessionRef.storeId, sessionId: sessionRef.sessionId }),
+    [sessionRef],
+  );
+  useTerminalWatch(hub, target);
+  const terminal: TerminalWatchView | null = snapshot.terminals.get(terminalKey(target)) ?? null;
 
-  // Pane-lifetime collaborators, not render data: the feed buffers terminal
-  // bytes outside React, the registry holds the chord bindings. One of each
-  // per mounted pane; the route keys the pane so another session gets fresh
-  // ones.
+  // Pane-lifetime collaborators, not render data: the registry holds the
+  // chord bindings. One per mounted pane; the route keys the pane so another
+  // session gets a fresh one. The feed is not among them — it belongs to the
+  // target and not to the pane, so that a second pane on one session replays
+  // what the first one has rather than opening blank.
   const emulatorRef = useRef<TerminalEmulator | null>(null);
   const steerRef = useRef<HTMLInputElement | null>(null);
   const findRef = useRef<HTMLInputElement | null>(null);
-  const [feed] = useState<TerminalFeed>(() => createTerminalFeed({ maxBytes: DEFAULT_FEED_BYTES }));
   // Whether the find bar is drawn. State and not a ref: it is the one thing
   // about the terminal that the pane renders differently.
   const [finding, setFinding] = useState(false);
@@ -117,16 +138,19 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
     return bindings;
   });
 
-  // Words about undelivered keystrokes — never the keystrokes themselves.
-  const [undelivered, setUndelivered] = useState<string | null>(null);
-
   const sendInput = useCallback(
-    (data: string): boolean => {
-      const outcome = hub.sendTerminalInput(sessionRef, data);
-      setUndelivered(outcome.delivered ? null : outcome.reason);
-      return outcome.delivered;
+    (data: string): boolean => hub.sendTerminalInput(target, data).delivered,
+    [hub, target],
+  );
+
+  // The one thing about the viewer the process on the other machine has to be
+  // told. Stable, so a keystroke-rate re-render never rebuilds the emulator
+  // that produces these.
+  const sendResize = useCallback(
+    (size: TerminalSize): void => {
+      hub.sendTerminalResize(target, size);
     },
-    [hub, sessionRef],
+    [hub, target],
   );
 
   const emulatorReady = useCallback((emulator: TerminalEmulator | null) => {
@@ -142,7 +166,6 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
   // The find bar's three seams onto the pane, stable so the bar's own ref
   // callback is not torn down and rebuilt on every keystroke.
   const paneSearch = useCallback(() => emulatorRef.current?.search ?? null, []);
-  const feedTruncated = useCallback(() => feed.truncated, [feed]);
   const closeFind = useCallback(() => {
     // The find is over: the highlights and the selection go, and so does the
     // caret -- back to the terminal, which is where it was before the chord.
@@ -153,7 +176,9 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
 
   // Steer, honestly: there is no steer frame in the protocol, so the words
   // are sent through the same terminal-input path as typing them, with Enter.
-  // The caption beside the input says exactly that.
+  // The caption beside the input says exactly that, and it is now a claim the
+  // pane can make — there is a frame to put a keystroke on, so these bytes
+  // reach the pty, and the input clears only when they went out.
   function sendSteer(): void {
     const input = steerRef.current;
     const text = input?.value ?? '';
@@ -184,7 +209,8 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
       : [row.descriptor.provider, machineLabel(state, row), row.descriptor.cwd]
           .filter((part): part is string => part !== null)
           .join(' · ');
-  const notice = terminalInputNotice(snapshot, undelivered);
+  const notice = terminalInputNotice(snapshot, terminal);
+  const scope = terminalScopeNotice(terminal);
   const border = `1px solid ${colorForRole('border', scheme)}`;
 
   return (
@@ -247,20 +273,40 @@ export function SessionPane({ sessionRef, store: hub, emulators }: SessionPanePr
       {finding && (
         <FindBar
           search={paneSearch}
-          truncated={feedTruncated}
+          truncated={() => terminalIsPartial(terminal)}
           scheme={scheme}
           onClose={closeFind}
           inputRef={findRef}
         />
       )}
 
-      <TerminalView
-        feed={feed}
-        scheme={scheme}
-        onData={sendInput}
-        emulatorReady={emulatorReady}
-        emulators={emulators}
-      />
+      {terminal === null ? (
+        // The watch is declared in a subscription, which React runs after the
+        // first commit, so there is one frame in which this pane has no feed
+        // to hand an emulator. The same well, painted, rather than an
+        // emulator built against a buffer that is about to be replaced.
+        <Box style={{ flex: 1, background: colorForRole('terminalBackground', scheme) }} />
+      ) : (
+        <TerminalView
+          feed={terminal.feed}
+          scheme={scheme}
+          onData={sendInput}
+          onResize={sendResize}
+          emulatorReady={emulatorReady}
+          emulators={emulators}
+        />
+      )}
+
+      {scope !== null && (
+        <Text
+          fz={11}
+          px={18}
+          py={6}
+          style={{ color: colorForRole('textFaint', scheme), borderTop: border }}
+        >
+          {scope}
+        </Text>
+      )}
 
       {notice !== null && (
         <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>
