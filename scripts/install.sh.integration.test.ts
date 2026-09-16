@@ -43,6 +43,10 @@ const scriptPath = join(scriptsDirectory, 'install.sh');
 const documentation = join(workspaceRoot, 'apps', 'cli', 'README.md');
 const rootManifest = join(workspaceRoot, 'package.json');
 const releaseWorkflow = join(workspaceRoot, '.github', 'workflows', 'release.yml');
+// The two Docker stages that run this script against a machine it can really
+// install onto, and the two files that have to agree about how they are built.
+const checkWorkflow = join(workspaceRoot, '.github', 'workflows', 'ci.yml');
+const composeFile = join(workspaceRoot, 'docker-compose.test.yml');
 
 /**
  * Only `engines`. The rest of the root manifest is somebody else's to change --
@@ -51,6 +55,15 @@ const releaseWorkflow = join(workspaceRoot, '.github', 'workflows', 'release.yml
  * do with the Node major.
  */
 const enginesSchema = z.object({ engines: z.object({ node: z.string() }) });
+
+/**
+ * One script, for the same reason: the rest of the manifest is somebody else's
+ * to change, and a schema that read more than the command this tie is about
+ * would fail on edits that have nothing to do with it.
+ */
+const bootstrapScriptSchema = z.object({
+  scripts: z.object({ 'docker:bootstrap': z.string() }),
+});
 
 const suiteIsRoot = process.getuid?.() === 0;
 
@@ -2411,5 +2424,69 @@ describe('the Node major the script installs', () => {
         `NODE_MAJOR='${script}' in ${scriptPath} and engines.node '${engines.node}' in ` +
         `${rootManifest}. Raise both or neither.`,
     ).toBe(manifest);
+  });
+});
+
+describe('the Docker stages that run this script against a real machine', () => {
+  /**
+   * `bootstrap-check` and `hub-bootstrap-check` assert everything this suite
+   * cannot reach -- a runtime downloaded, a toolchain installed through sudo, a
+   * service account created, a unit systemd itself verified -- and every one of
+   * those assertions is a RUN line, so building a stage is running it.
+   *
+   * Which is the whole of the check, and the trap. The server stage ends by
+   * undoing both installs it made, because it is the only machine here an
+   * uninstall can be exercised against something really installed, so what it
+   * leaves has no `agentplex` on it at all. For a while the local command ran
+   * the compose services and the workflow built the targets directly, and the
+   * two stopped testing the same thing: `pnpm docker:bootstrap` failed with
+   * `agentplex: command not found` after a green build, on a stage CI was
+   * building green, and the command nobody ran was the one that rotted.
+   */
+  it('is built by a command that starts no container, and names both stages', () => {
+    const { scripts } = bootstrapScriptSchema.parse(JSON.parse(readFileSync(rootManifest, 'utf8')));
+    const argv = scripts['docker:bootstrap'].split(/\s+/);
+
+    expect(
+      argv,
+      `docker:bootstrap in ${rootManifest} is '${scripts['docker:bootstrap']}', which runs a ` +
+        'container. Both stages end as images with nothing left in them to run; the build is ' +
+        'the check.',
+    ).toContain('build');
+    expect(argv).not.toContain('run');
+
+    // Named here rather than assumed, because a stage nobody builds is a claim
+    // nobody checks: `hub-bootstrap-check` was reachable from no command at all
+    // until this one took both.
+    const compose = readFileSync(composeFile, 'utf8');
+    for (const service of ['bootstrap', 'bootstrap-hub']) {
+      expect(
+        compose,
+        `${composeFile} defines no '${service}' service for docker:bootstrap to build`,
+      ).toMatch(new RegExp(`^ {2}${service}:$`, 'm'));
+      expect(
+        argv,
+        `docker:bootstrap in ${rootManifest} does not build the '${service}' service`,
+      ).toContain(service);
+    }
+  });
+
+  /**
+   * The other half of the same tie. A workflow that names the targets itself is
+   * a second version of the check, and a second version is what drifted.
+   */
+  it('is the command CI runs, rather than one the workflow assembles', () => {
+    const workflow = readFileSync(checkWorkflow, 'utf8');
+
+    expect(
+      workflow,
+      `${checkWorkflow} does not run 'pnpm docker:bootstrap', so the job and the command a ` +
+        'contributor types can go their separate ways',
+    ).toContain('run: pnpm docker:bootstrap');
+    expect(
+      workflow,
+      `${checkWorkflow} builds a bootstrap stage by naming its target, which is the check ` +
+        'assembled a second time. Run the script instead.',
+    ).not.toMatch(/^ *target: (?:hub-)?bootstrap-check$/m);
   });
 });

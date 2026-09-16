@@ -25,7 +25,7 @@
     "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm test",
     "package": "pnpm build && pnpm --filter ./scripts package",
     "docker:check": "docker compose -f docker-compose.test.yml run --rm --build check",
-    "docker:bootstrap": "docker compose -f docker-compose.test.yml run --rm --build bootstrap",
+    "docker:bootstrap": "docker compose -f docker-compose.test.yml build bootstrap bootstrap-hub",
     "docker:install": "docker compose -f docker-compose.test.yml run --rm --build install",
     "docker:lint": "docker compose -f docker-compose.test.yml run --rm --build lint",
     "docker:typecheck": "docker compose -f docker-compose.test.yml run --rm --build typecheck",
