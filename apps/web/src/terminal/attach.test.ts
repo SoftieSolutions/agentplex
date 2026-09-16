@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TerminalSize } from '@agentplex/protocol';
+import { createFakeTimers } from '../store/timers.js';
 import { attachEmulator } from './attach.js';
 import { createTerminalFeed } from './chunk-feed.js';
 import { createFakeEmulatorFactory } from './fake-emulator.js';
@@ -52,6 +53,7 @@ function harness() {
   const sizes: TerminalSize[] = [];
   const announced: (TerminalEmulator | null)[] = [];
   const observed = pretendBoxes();
+  const timers = createFakeTimers();
   const cleanup = attachEmulator({
     emulators,
     container: NO_CONTAINER,
@@ -60,11 +62,12 @@ function harness() {
     onResize: (size) => sizes.push(size),
     boxes: observed.boxes,
     frames: NOW,
+    timers,
     emulatorReady: (emulator) => announced.push(emulator),
   });
   const emulator = emulators.created[0];
   if (emulator === undefined) throw new Error('the factory built nothing');
-  return { feed, typed, sizes, announced, cleanup, emulator, observed };
+  return { feed, typed, sizes, announced, cleanup, emulator, observed, timers };
 }
 
 describe('attachEmulator', () => {
@@ -83,6 +86,7 @@ describe('attachEmulator', () => {
       onResize: () => {},
       boxes: pretendBoxes().boxes,
       frames: NOW,
+      timers: createFakeTimers(),
     });
     feed.push(live);
 
@@ -105,7 +109,9 @@ describe('attachEmulator', () => {
 
   it('fits the emulator when the box it is drawn in moves', () => {
     const { emulator, observed } = harness();
+    // One already, from the attach: `watchFit` measures before it returns.
     const before = emulator.fitted;
+    expect(before).toBe(1);
 
     observed.move();
 
@@ -113,18 +119,71 @@ describe('attachEmulator', () => {
   });
 
   it('reports the size the emulator settled on, inside what a frame may carry', () => {
-    const { sizes, emulator } = harness();
+    const { sizes, emulator, timers } = harness();
 
     emulator.resizeTo({ cols: 120, rows: 40 });
     // Larger than the protocol allows, which the pane must not be the peer to
     // send: a parser on the far end would say no and cost the pane its
     // subscription over a number it measured off a box.
     emulator.resizeTo({ cols: 4_000, rows: 4_000 });
+    timers.fireAll();
 
     expect(sizes).toEqual([
       { cols: 120, rows: 40 },
       { cols: 1_000, rows: 1_000 },
     ]);
+  });
+
+  it('fits before the feed replays, so the scrollback is laid out once', () => {
+    const chunk = ptyChunks[0];
+    if (chunk === undefined) throw new Error('fixture too small');
+    const emulators = createFakeEmulatorFactory();
+    const feed = createTerminalFeed({ maxBytes: 1024 * 1024 });
+    // A session that has been running: the subscribe's replay is already in
+    // the feed when this pane attaches, which is what a second pane on one
+    // session always sees.
+    feed.push(chunk);
+
+    attachEmulator({
+      emulators,
+      container: NO_CONTAINER,
+      feed,
+      onData: () => {},
+      onResize: () => {},
+      boxes: pretendBoxes().boxes,
+      frames: NOW,
+      timers: createFakeTimers(),
+    });
+
+    // Zero here would mean the replay was written into an emulator still at
+    // its constructed 80x24 and reflowed when the real size arrived a frame
+    // or two later -- a screenful of wrapped output straightening itself out
+    // in front of the user.
+    expect(emulators.created[0]?.fitsBeforeFirstWrite).toBe(1);
+  });
+
+  it('says nothing for a grid that is not a measurement', () => {
+    const { sizes, emulator, timers } = harness();
+
+    // What a box of nothing divides through to. It would leave the frame
+    // carrying `null` where an integer belongs, and the hub would refuse it.
+    emulator.resizeTo({ cols: Number.NaN, rows: Number.NaN });
+    timers.fireAll();
+
+    expect(sizes).toEqual([]);
+  });
+
+  it('drops a size still waiting on the clock when the pane goes', () => {
+    const { sizes, emulator, cleanup, timers } = harness();
+
+    emulator.resizeTo({ cols: 120, rows: 40 });
+    emulator.resizeTo({ cols: 130, rows: 40 });
+    cleanup();
+    timers.fireAll();
+
+    // The first went at once; the second was still inside the settle window,
+    // and by the time it would have gone the pane it describes is gone.
+    expect(sizes).toEqual([{ cols: 120, rows: 40 }]);
   });
 
   it('tears down in the safe order: announce null, stop bytes, stop fitting, dispose', () => {
