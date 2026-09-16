@@ -2,13 +2,19 @@ import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 
 import { MANIFEST_PATH, buildWebManifest } from './src/pwa/manifest.js';
+import { shellStyles } from './src/pwa/shell-styles.js';
 import { hues } from './src/ui/tokens.js';
 
 /**
- * Serves the web manifest in dev and emits it into the build, and injects the
- * head tags that reference it. The manifest and the theme-color meta are
- * produced from src/pwa/manifest.ts and src/ui/tokens.ts rather than written
- * into index.html, so the hues exist in the tokens file and nowhere else.
+ * Serves the web manifest in dev and emits it into the build, and composes the
+ * head tags that go with it. The manifest, the theme-color meta and the one
+ * rule the document itself carries are produced from src/pwa/ and
+ * src/ui/tokens.ts rather than written into index.html, so each value exists
+ * in a module beside its reason and nowhere else.
+ *
+ * The stylesheet is in the head rather than in the bundle because it is true
+ * of the viewport before the bundle has parsed, and the first gesture at an
+ * app that is still starting is exactly the one it is there for.
  */
 function webManifest(): Plugin {
   const body = (): string => JSON.stringify(buildWebManifest(), null, 2);
@@ -32,6 +38,7 @@ function webManifest(): Plugin {
           attrs: { rel: 'apple-touch-icon', href: '/icons/apple-touch-icon.png' },
           injectTo: 'head',
         },
+        { tag: 'style', children: shellStyles(), injectTo: 'head' },
       ];
     },
   };
