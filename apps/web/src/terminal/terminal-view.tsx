@@ -89,7 +89,20 @@ export function TerminalView({
       style={{
         flex: 1,
         minHeight: 0,
-        padding: '14px 18px',
+        /**
+         * No padding here, which is a decision and not an omission. The air
+         * between this edge and the first character is still there; it is on
+         * the terminal element instead, where `padTerminalElement` puts it
+         * and where `@xterm/addon-fit` is the only place it reads one from.
+         * Padding on this box would be measured by the fit as part of the box
+         * and subtracted from nothing, so the grid would come out larger than
+         * what the pane shows and its last columns and row would be drawn
+         * past this element's edge and clipped.
+         *
+         * The background staying here is what makes that invisible: this box
+         * is the whole pane, the terminal element sits inside it inset by its
+         * own padding, and the inset shows this colour.
+         */
         background: colorForRole('terminalBackground', scheme),
         /**
          * The browser has no gesture to make on this box, because this box has
