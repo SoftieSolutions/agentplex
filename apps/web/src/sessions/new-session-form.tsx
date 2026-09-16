@@ -10,6 +10,8 @@ import { StopButton } from './stop-button.js';
 import {
   buildStart,
   deliveryWords,
+  providerOffer,
+  resolveProvider,
   serverOverrideChoices,
   startFollowUp,
   startableStores,
@@ -24,22 +26,30 @@ interface PendingStart {
 }
 
 /**
- * The new-session form, in the mockup's dialog language (turn 7): a store, an
- * optional machine override, an optional first prompt. Every rule -- which
- * controls exist, what the frame carries, what to do with the hub's answer --
- * comes from new-session-model.ts; this component owns only what the user has
- * typed and the id of the start it is waiting on.
+ * The new-session form, in the mockup's dialog language (turn 7): a store, a
+ * provider, an optional project, an optional machine override, an optional
+ * first prompt. Every rule -- which controls exist, what the frame carries,
+ * what to do with the hub's answer -- comes from new-session-model.ts; this
+ * component owns only what the user has typed and the id of the start it is
+ * waiting on.
  *
  * The mockup's New popover lists five node kinds, but only Session is live in
  * this milestone, and a menu with one live option is not drawn: the button
  * opens this form directly.
  *
- * The project control is drawn only once there is a project to pick, and
- * picking one changes two things: the start carries the project's id, and the
- * machine list narrows to the machines that could actually run it. Both are the
- * hub's rules reflected rather than invented here -- the hub resolves the
- * directory out of its own rows, and refuses a machine that does not run the
- * provider -- which is why the reasons live in `new-session-model.ts`.
+ * The order the four choices are resolved in is the design, not an accident of
+ * where the lines sit. The machine is resolved first, against the store's live
+ * candidates; the provider offer is then that machine's answer, or the union
+ * over the store when the hub is placing; and the machine list is then narrowed
+ * to what can start the resolved provider. Read that way the two selects
+ * constrain each other in both directions and cannot argue: whatever provider
+ * comes out of the offer, the chosen machine can start it, so the narrowing
+ * never drops the machine that produced it.
+ *
+ * The project control is drawn only once there is a project to pick, and it
+ * narrows nothing: nothing on the wire ties a project to a machine. What
+ * picking one changes is the frame, which carries the project's id, and the hub
+ * resolves the directory out of its own rows.
  */
 export interface NewSessionFormProps {
   readonly store: HubStore;
@@ -67,6 +77,7 @@ export function NewSessionForm({
   // projects it offers are nodes in it, and nothing else on this screen asks.
   const layout = useHubLayout(store);
   const [storeChoice, setStoreChoice] = useState<string | null>(null);
+  const [providerChoice, setProviderChoice] = useState<string | null>(null);
   const [projectChoice, setProjectChoice] = useState<string | null>(null);
   const [serverChoice, setServerChoice] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
@@ -97,18 +108,21 @@ export function NewSessionForm({
       ? nodeIdSchema.parse(projectChoice)
       : null;
 
-  // Narrowed by the provider only when a project is chosen: see
-  // `serverOverrideChoices` for why the hub's own filtering covers the rest.
-  const overrides =
-    state === null
-      ? []
-      : serverOverrideChoices(state, chosenStore, chosenProject === null ? null : 'claude');
+  // Resolved against the unnarrowed candidates, before the provider it will
+  // then be narrowed by: see this file's header for why that order is what
+  // keeps the two selects from arguing.
+  const candidates = serverOverrideChoices(state, chosenStore);
   const chosenServer =
-    serverChoice !== null && overrides.some((choice) => choice.id === serverChoice)
+    serverChoice !== null && candidates.some((choice) => choice.id === serverChoice)
       ? serverRegistrationIdSchema.parse(serverChoice)
       : null;
 
-  const blocked = submitBlockedReason(snapshot.phase, stores, chosenStore);
+  const offer = providerOffer(state, chosenStore, chosenServer);
+  const chosenProvider = resolveProvider(offer, providerChoice);
+  const caveat = offer.options.find((option) => option.provider === chosenProvider)?.caveat ?? null;
+  const overrides = serverOverrideChoices(state, chosenStore, chosenProvider);
+
+  const blocked = submitBlockedReason(snapshot.phase, stores, chosenStore, offer, chosenProvider);
   const followUp: StartFollowUp | null =
     pending === null || !pending.outcome.accepted
       ? null
@@ -137,6 +151,7 @@ export function NewSessionForm({
     setPrompt('');
     setServerChoice(null);
     setProjectChoice(null);
+    setProviderChoice(null);
   }
 
   function close(): void {
@@ -145,9 +160,9 @@ export function NewSessionForm({
   }
 
   function submit(): void {
-    if (chosenStore === null) return;
+    if (chosenStore === null || chosenProvider === null) return;
     setRejected(null);
-    const command = buildStart(chosenStore, chosenServer, prompt, chosenProject);
+    const command = buildStart(chosenStore, chosenProvider, chosenServer, prompt, chosenProject);
     const outcome = store.sendCommand(command);
     if (!outcome.accepted) {
       setRejected(outcome.reason);
@@ -194,6 +209,41 @@ export function NewSessionForm({
           </Text>
         )}
 
+        {offer.options.length >= 2 ? (
+          // Two or more, so there is a question to ask. The list is what the
+          // chosen machine -- or the store's live machines, when the hub is
+          // placing -- reported in its handshake, never a constant.
+          <Select
+            label="Provider"
+            aria-label="Provider"
+            placeholder="Choose a provider"
+            data={offer.options.map((option) => option.provider)}
+            value={chosenProvider}
+            onChange={setProviderChoice}
+          />
+        ) : chosenProvider !== null ? (
+          // One provider is not a choice: it is named in words instead.
+          <Text fz={13} c="dimmed">
+            provider: {chosenProvider}
+          </Text>
+        ) : null}
+
+        {caveat === null ? null : (
+          // Startable, and something about it could not be read. Beside the
+          // control it concerns, in the tone that means look rather than stop.
+          <Text fz={12} style={{ color: colorForTone('needs-you', scheme) }}>
+            {caveat}
+          </Text>
+        )}
+        {offer.problems.map((words) => (
+          // Why a provider is not on the list, in the words of the machine that
+          // took the reading. An install, a login and a build with no adapters
+          // are three different things to go and do.
+          <Text key={words} fz={12} c="dimmed">
+            {words}
+          </Text>
+        ))}
+
         {projects.length === 0 ? null : (
           // Drawn from the first project onwards, because "in this project" and
           // "wherever the store is" are two different starts. Clearable, and
@@ -232,11 +282,6 @@ export function NewSessionForm({
           value={prompt}
           onChange={(event) => setPrompt(event.currentTarget.value)}
         />
-
-        {/* On the frame, but one provider is not a choice to draw. */}
-        <Text fz={12} c="dimmed">
-          provider: claude
-        </Text>
 
         {blocked === null ? null : (
           <Text fz={13} c="dimmed">

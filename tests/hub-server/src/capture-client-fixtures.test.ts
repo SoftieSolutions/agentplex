@@ -18,7 +18,13 @@ import {
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
-import { missingProvider, readyProvider, createFakeStoreFiles } from '@agentplex/providers/testing';
+import {
+  createFakeStoreFiles,
+  missingProvider,
+  readyProvider,
+  unauthenticatedProvider,
+  unknownProvider,
+} from '@agentplex/providers/testing';
 import {
   createFakeBeaconSource,
   type FakeBeaconSource,
@@ -1423,6 +1429,93 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       throw new Error('the pairing conversation was not answered');
     }
 
+    // A fleet that disagrees about what it can start, which is the state the
+    // new-session form's provider chooser is a function of. Four machines on
+    // one volume, one per reading the preflight can produce: one that runs
+    // claude and is logged out of codex, one whose claude answered no version
+    // probe and whose codex is ready, one whose build carries no adapters at
+    // all, and one that has neither -- so a single captured frame holds
+    // `ready`, `unauthenticated`, `unknown`, `missing` and the empty list, and
+    // the client's rules are read against what a hub actually assembled out of
+    // four handshakes rather than against a literal somebody typed.
+    const mixedStore: StoreDescriptor = {
+      storeId: storeIdSchema.parse('store-mixed'),
+      path: '/mnt/volumes/mixed',
+    };
+    const mixedReport: StoreReport = {
+      storeId: mixedStore.storeId,
+      sessions: [
+        descriptor(
+          'store-mixed',
+          'session-mixed-notes',
+          'claude',
+          'idle',
+          START - 30 * MINUTE,
+          '/mnt/volumes/mixed/notes',
+          'mixed-notes',
+        ),
+      ],
+      holding: [],
+    };
+    const mixedFleet = new Map<string, Machine>([
+      [
+        'mbp-robert.example',
+        {
+          serverId: 'server-mbp',
+          providers: [readyProvider('claude'), unauthenticatedProvider('codex')],
+          stores: [mixedStore],
+          reports: [mixedReport],
+        },
+      ],
+      [
+        'gpu-box.example',
+        {
+          serverId: 'server-gpu',
+          providers: [unknownProvider('claude'), readyProvider('codex')],
+          stores: [mixedStore],
+          reports: [mixedReport],
+        },
+      ],
+      [
+        'mini.example',
+        {
+          serverId: 'server-mini',
+          providers: [],
+          stores: [mixedStore],
+          reports: [mixedReport],
+        },
+      ],
+      [
+        'old-box.example',
+        {
+          serverId: 'server-old',
+          providers: [missingProvider('claude'), unauthenticatedProvider('codex')],
+          stores: [mixedStore],
+          reports: [mixedReport],
+        },
+      ],
+    ]);
+    const mixedHub = await startFleetHub(
+      mixedFleet,
+      [
+        { label: 'mbp-robert', host: 'mbp-robert.example' },
+        { label: 'gpu-box-01', host: 'gpu-box.example' },
+        { label: 'mini-01', host: 'mini.example' },
+        { label: 'old-box-01', host: 'old-box.example' },
+      ],
+      new Map(),
+    );
+    await until(
+      () =>
+        mixedHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        mixedHub.hub.state
+          .snapshot()
+          .stores.some((view) => view.storeId === 'store-mixed' && view.servers.length === 4),
+      'the mixed fleet to connect and report',
+    );
+    const machineStateProviders = await captureState(mixedHub.hub);
+    await mixedHub.cleanup();
+
     // A hub that has heard two machines announce themselves and is paired with
     // neither. The beacons are formatted by the protocol's own formatter --
     // the function an announcing server calls -- and travel the whole real
@@ -1516,6 +1609,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('refusalStaleCursor', refusalStaleCursor);
     captured.set('machineStateShared', machineStateShared);
     captured.set('machineStateSharedDegraded', machineStateSharedDegraded);
+    captured.set('machineStateProviders', machineStateProviders);
     captured.set('machineStateDiscovered', machineStateDiscovered);
     captured.set('refusalPairing', refusalPairing);
     captured.set('serverPaired', serverPaired);

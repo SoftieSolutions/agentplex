@@ -106,8 +106,8 @@ describe('the new-session form meeting a holder', () => {
 
   /**
    * The form open on a store whose connection has reached a captured state
-   * with exactly one store in it -- one store is not a choice, so the form is
-   * submittable without anything being picked.
+   * with exactly one store in it -- one store is not a choice, so the only
+   * thing left to pick is the provider, which `chooseProvider` below does.
    */
   async function mountForm(): Promise<FakeSocket> {
     await act(async () => {
@@ -154,8 +154,29 @@ describe('the new-session form meeting a holder', () => {
     });
   }
 
+  /**
+   * Picks a provider, which the form insists on whenever a machine reported
+   * more than one. The captured single-machine state reports two, so a start
+   * from this form is blocked until somebody says which.
+   */
+  async function chooseProvider(provider: string): Promise<void> {
+    const input = document.body.querySelector<HTMLInputElement>('input[aria-label="Provider"]');
+    if (input === null) throw new Error('the form drew no provider chooser');
+    await act(() => {
+      input.click();
+    });
+    const option = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (candidate) => candidate.textContent === provider,
+    );
+    if (option === undefined) throw new Error(`the chooser offered no ${provider}`);
+    await act(() => {
+      option.click();
+    });
+  }
+
   it('names the machine already running the session it was refused for', async () => {
     const socket = await mountForm();
+    await chooseProvider('claude');
 
     // The start this form sent is frame 3 -- the form asks for the tree first,
     // to fill its project select -- which is the frame this captured refusal
@@ -173,6 +194,7 @@ describe('the new-session form meeting a holder', () => {
 
   it('offers no stop for a holder the server will not interrupt', async () => {
     const socket = await mountForm();
+    await chooseProvider('claude');
     await submit();
 
     await act(() => {
@@ -184,6 +206,7 @@ describe('the new-session form meeting a holder', () => {
 
   it('offers none either when the start named no session to aim one at', async () => {
     const socket = await mountForm();
+    await chooseProvider('claude');
     // The second start is frame 4, which the stoppable-holder refusal answers.
     await submit();
     await act(() => {
