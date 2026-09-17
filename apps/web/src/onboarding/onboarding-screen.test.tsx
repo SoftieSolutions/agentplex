@@ -187,11 +187,16 @@ describe('the onboarding wizard', () => {
     expect(liveStep()).toContain('Pair a server');
   });
 
-  it('draws the pairing step beside the stepper, pointing at Settings', async () => {
+  it('draws the pairing step beside the stepper, saying where pairing happens today', async () => {
     await mountConnected();
 
     expect(container.querySelector('h2')?.textContent).toBe('Pair a server');
-    expect(container.textContent).toContain('Settings');
+    // The placeholder may not send the reader to a panel below: this screen is
+    // the whole route, and the only pairing control is the one behind Skip.
+    expect(container.textContent).toContain('The pairing form arrives here in a later change.');
+    expect(container.textContent).toContain(
+      'Skip for now leads to the session list, where Settings pairs a server today',
+    );
   });
 
   it('carries the app icon, named', async () => {
