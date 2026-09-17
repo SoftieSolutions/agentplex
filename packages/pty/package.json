@@ -34,9 +34,9 @@
     "node-pty": "1.1.0"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
-    "@vitest/coverage-v8": "^3.2.7",
-    "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "@types/node": ">=24.13.3 <25.0.0",
+    "@vitest/coverage-v8": ">=3.2.7 <4.0.0",
+    "typescript": ">=5.9.3 <6.0.0",
+    "vitest": ">=3.2.7 <4.0.0"
   }
 }
