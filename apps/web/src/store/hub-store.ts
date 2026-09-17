@@ -700,8 +700,10 @@ export function encodeClientFrame(frame: ClientFrame): string {
  *
  * Far above any arrangement of panes -- a screen of twelve panes is twelve
  * starts -- and small enough that a tab left open all day starting sessions
- * cannot grow this without bound. The oldest entry goes first, so what is
- * dropped is always an answer nothing is still waiting to read.
+ * cannot grow this without bound. The oldest *answered* entry goes first, so
+ * what is dropped is an answer rather than a pane's expectation of one; see
+ * `evictOldestStarts` for what happens in the corner where nothing has been
+ * answered at all.
  */
 const MAX_REMEMBERED_STARTS = 64;
 
@@ -943,11 +945,29 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   function rememberStart(command: HubCommand, id: FrameId): void {
     if (command.type !== 'session-start') return;
     starts.set(id, { started: null, refusal: null });
-    for (const oldest of starts.keys()) {
-      if (starts.size <= MAX_REMEMBERED_STARTS) break;
+    evictOldestStarts();
+    update({ starts: new Map(starts) });
+  }
+
+  /**
+   * Brings the remembered starts back under the cap, answered ones first.
+   *
+   * A start the hub has not answered is the one a pane may still be waiting to
+   * read, so it is passed over while there is any settled entry left to drop --
+   * a pane that lost its entry would go back to saying it was asking, which is
+   * the over-claim this map exists to prevent. The bound is still hard: with
+   * nothing settled to drop, the oldest goes anyway, because a map that could
+   * refuse to shrink is not a bound.
+   */
+  function evictOldestStarts(): void {
+    while (starts.size > MAX_REMEMBERED_STARTS) {
+      const settled = [...starts].find(
+        ([, view]) => view.started !== null || view.refusal !== null,
+      );
+      const [oldest] = settled ?? [...starts][0] ?? [];
+      if (oldest === undefined) return;
       starts.delete(oldest);
     }
-    update({ starts: new Map(starts) });
   }
 
   /** Files an answer against the start it answers, and publishes it. */
@@ -1034,10 +1054,23 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
    * Only a record that is not attached, because a subscription that was
    * answered needs nothing, and a second subscribe to a terminal this
    * connection is already watching is refused by the hub on purpose.
+   *
+   * And only when nothing is outstanding, which is the same rule read for the
+   * other order the race can come out in. The hub may read the first subscribe
+   * *after* it sends this reply, in which case that subscribe is about to
+   * succeed and this connection is not attached yet -- so a retry here would
+   * be the second subscribe the hub refuses as a duplicate, and the pane would
+   * carry "the hub said no" for the rest of its life beside a terminal that is
+   * working perfectly. A subscribe with no answer yet is a subscribe that may
+   * still be answered; there is nothing to ask again for.
    */
   function retrySubscribeByStart(startId: FrameId): void {
-    const record = terminals.get(terminalKey({ by: 'start', startId }));
+    const key = terminalKey({ by: 'start', startId });
+    const record = terminals.get(key);
     if (record === undefined || record.attached) return;
+    for (const asked of terminalReplies.values()) {
+      if (asked.key === key && asked.ask === 'subscribe') return;
+    }
     // The refusal that sent the pane here is answered rather than left on
     // screen beside a terminal that is about to work.
     record.problem = null;

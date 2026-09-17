@@ -944,6 +944,68 @@ describe('terminal frames from the hub', () => {
     expect(watched()?.session).toEqual({ storeId: 'store-work', sessionId: 'session-spawned' });
   });
 
+  it('does not ask twice when the first subscribe has not been answered yet', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const start = h.store.sendCommand(START);
+    if (!start.accepted) throw new Error(start.reason);
+    h.store.watchTerminal({ by: 'start', startId: start.id });
+    const asked = sentFrames(socket).filter((frame) => frame.type === 'session-subscribe').length;
+
+    // The other order the race comes out in: the hub reads the subscribe after
+    // it sends this reply, so that subscribe is about to succeed. A second one
+    // would be refused as a duplicate -- the hub refuses two watches on one
+    // terminal from one connection deliberately -- and the pane would carry
+    // that "no" for life beside a terminal that is working.
+    socket.deliver(hubFrames.sessionStarted);
+
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-subscribe').length).toBe(
+      asked,
+    );
+    // And the watch is still exactly what it was: nothing was undone either.
+    const watched = h.store
+      .getSnapshot()
+      .terminals.get(terminalKey({ by: 'start', startId: start.id }));
+    expect(watched?.attached).toBe(false);
+    expect(watched?.problem).toBeNull();
+  });
+
+  it('keeps the start a pane is still waiting on when the remembered ones overflow', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    // The oldest start, and the one left unanswered: a pane opened on it is
+    // still waiting to read what the hub says.
+    const waiting = h.store.sendCommand(START);
+    if (!waiting.accepted) throw new Error(waiting.reason);
+    // Every start after it is answered, so there is always a settled entry to
+    // drop instead. The captured refusal answers frame 6.
+    h.store.sendCommand(BROWSE);
+    h.store.sendCommand(BROWSE);
+    h.store.sendCommand(BROWSE);
+    const answered = h.store.sendCommand(START);
+    if (!answered.accepted) throw new Error(answered.reason);
+    socket.deliver(hubFrames.refusal);
+    expect(h.store.getSnapshot().starts.get(answered.id)?.refusal).not.toBeNull();
+
+    // One past the cap of 64, so exactly one entry has to go.
+    for (let more = 0; more < 63; more += 1) h.store.sendCommand(START);
+
+    const starts = h.store.getSnapshot().starts;
+    expect(starts.size).toBe(64);
+    // The answered one went, although it is not the oldest: an answer nobody
+    // is reading is what the cap is for. The unanswered one stayed, because a
+    // pane reading its entry back as missing would go back to saying it was
+    // asking about a session that is running.
+    expect(starts.has(answered.id)).toBe(false);
+    expect(starts.get(waiting.id)).toEqual({ started: null, refusal: null });
+
+    // The exemption yields to the bound, which is the half that is not a
+    // preference: with nothing answered left to drop, the oldest goes anyway,
+    // because a map that could refuse to shrink is not a bound.
+    for (let more = 0; more < 40; more += 1) h.store.sendCommand(START);
+    expect(h.store.getSnapshot().starts.size).toBe(64);
+  });
+
   it('keeps each start its own answer, so a later yes cannot clear an earlier no', async () => {
     const h = harness();
     const { socket } = await establish(h);
