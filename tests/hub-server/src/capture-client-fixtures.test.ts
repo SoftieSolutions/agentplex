@@ -178,6 +178,14 @@ function labelFor(text: string): string {
     if (frame.state.candidates.length > 0) return 'machineStateDiscovered';
     return frame.state.servers.length > 0 ? 'machineStateWithServer' : 'machineState';
   }
+  if (frame.type === 'session-attention') {
+    // Labelled by what the row now says rather than by which frame asked, for
+    // the reason everything here is: the reply is one shape for two questions,
+    // and what a client has to be able to read is the answer.
+    if (frame.mutedAt !== null) return 'sessionMuted';
+    if (frame.acknowledgedAt !== null) return 'sessionAcknowledged';
+    return 'sessionUnmuted';
+  }
   if (frame.type === 'pane-layout') {
     return frame.layout === null ? 'paneLayoutEmpty' : 'paneLayout';
   }
@@ -879,6 +887,78 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     const machineStatePopulated = await captureState(populated.hub);
 
+    // Attention: the two facts on a session row that no machine reported and
+    // no scan can rebuild. Captured after `machineStatePopulated`, so that one
+    // carries the nulls a hub with nothing said to it publishes and this one
+    // carries a person's word; the mute is undone afterwards, so the states
+    // below are about a machine going away and nothing else.
+    //
+    // Both land on a session that is asking for a human, because that is the
+    // case the whole epic turns on and the two answers to it are different
+    // ones: an acknowledgement says it has been seen, and a mute says keep
+    // showing it and stop making noise about it. `machineStateAttended` is
+    // therefore a state with one acknowledged prompt and one muted one still
+    // saying it wants somebody -- which is the pair a client has to draw
+    // differently. The unmute afterwards is the third answer this one reply
+    // shape can carry, both moments null, and a client that could not read it
+    // would be a client that cannot undo a mute.
+    const attender = await openClient(populated.hub);
+    attender.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await attender.framesReceived(2);
+    attender.send({
+      type: 'session-acknowledge',
+      id: 2,
+      storeId: 'store-agentplex',
+      sessionId: 'session-migrate-db',
+    });
+    await until(
+      () => attender.received.some((text) => labelFor(text) === 'sessionAcknowledged'),
+      'the acknowledgement to be answered',
+    );
+    attender.send({
+      type: 'session-mute',
+      id: 3,
+      storeId: 'store-universe',
+      sessionId: 'session-docs-sweep',
+      muted: true,
+    });
+    await until(
+      () => attender.received.some((text) => labelFor(text) === 'sessionMuted'),
+      'the mute to be answered',
+    );
+    const machineStateAttended = await captureState(populated.hub);
+
+    // An acknowledgement of a session this hub has never heard of, refused.
+    // The bound on the attention table, in the words a person reads: an
+    // acknowledgement of something nobody can see has nothing to be spent
+    // against, and a table that took any pair of strings could be grown
+    // without limit by anything holding a socket.
+    attender.send({
+      type: 'session-acknowledge',
+      id: 4,
+      storeId: 'store-agentplex',
+      sessionId: 'session-nobody-has',
+    });
+    await until(
+      () => attender.received.some((text) => labelFor(text) === 'refusal'),
+      'the acknowledgement of an unknown session to be refused',
+    );
+    attender.send({
+      type: 'session-mute',
+      id: 5,
+      storeId: 'store-universe',
+      sessionId: 'session-docs-sweep',
+      muted: false,
+    });
+    await until(
+      () => attender.received.some((text) => labelFor(text) === 'sessionUnmuted'),
+      'the unmute to be answered',
+    );
+    const sessionAcknowledged = firstFrame(attender, 'sessionAcknowledged');
+    const sessionMuted = firstFrame(attender, 'sessionMuted');
+    const sessionUnmuted = firstFrame(attender, 'sessionUnmuted');
+    const refusalAttention = firstFrame(attender, 'refusal');
+
     // The same fleet after one machine goes away without saying so: its rows
     // stay, labelled unreachable, and its needs-you session leaves the
     // attention count. The degradation states are tested against this frame.
@@ -891,6 +971,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the gpu box to go stale',
     );
     const machineStateStale = await captureState(populated.hub);
+
     await populated.cleanup();
 
     // One machine, one store, one provider: the state in which no store or
@@ -2054,6 +2135,11 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     }
     captured.set('machineStatePopulated', machineStatePopulated);
     captured.set('machineStateStale', machineStateStale);
+    captured.set('machineStateAttended', machineStateAttended);
+    captured.set('sessionAcknowledged', sessionAcknowledged);
+    captured.set('sessionMuted', sessionMuted);
+    captured.set('sessionUnmuted', sessionUnmuted);
+    captured.set('refusalAttention', refusalAttention);
     captured.set('machineStateSingle', machineStateSingle);
     captured.set('machineStateDraining', machineStateDraining);
     captured.set('sessionStarted', sessionStarted);

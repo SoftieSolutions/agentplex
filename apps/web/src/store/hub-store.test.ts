@@ -413,6 +413,45 @@ describe('commands', () => {
     });
   });
 
+  it('a session-attention reply carries the whole row the hub now holds', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    // Captured from a real hub answering a real acknowledgement. One reply
+    // shape for two frames: the answer is the row, not the field that moved.
+    socket.deliver(hubFrames.sessionAcknowledged);
+    expect(h.store.getSnapshot().lastAttention).toEqual({
+      replyTo: 2,
+      storeId: 'store-agentplex',
+      sessionId: 'session-migrate-db',
+      acknowledgedAt: 1_756_000_000_000,
+      mutedAt: null,
+    });
+
+    socket.deliver(hubFrames.sessionUnmuted);
+    expect(h.store.getSnapshot().lastAttention).toEqual({
+      replyTo: 5,
+      storeId: 'store-universe',
+      sessionId: 'session-docs-sweep',
+      acknowledgedAt: null,
+      mutedAt: null,
+    });
+  });
+
+  it('an acknowledgement waits in the queue like anything else the user did once', async () => {
+    const h = harness();
+    const outcome = h.store.sendCommand({
+      type: 'session-acknowledge',
+      storeId: SESSION.storeId,
+      sessionId: SESSION.sessionId,
+    });
+    // Dismissing a prompt while the connection blinks is still dismissing that
+    // prompt. The hub stamps the moment when it reads the frame, so what a
+    // queued acknowledgement ends up worth is decided by whether the session
+    // spoke in the meantime -- the rule it already lives by.
+    expect(outcome).toEqual({ accepted: true, id: 1, delivery: 'queued' });
+  });
+
   it('a session-stopped reply clears the refusal that preceded it', async () => {
     const h = harness();
     const { socket } = await establish(h);

@@ -247,6 +247,26 @@ export interface StoppedView {
 }
 
 /**
+ * The hub's answer to an acknowledgement or a mute: the whole attention row as
+ * it now stands.
+ *
+ * Kept for one reason, and it is a narrow one: the control that sent the frame
+ * has to stop waiting. What the screen *draws* comes from the session row of
+ * the next machine state, which every tab is sent -- so this is a receipt and
+ * not a second copy of the state, and nothing reads the two moments off it.
+ * They are here because the frame carries them, and keeping half a captured
+ * frame would make this view one more thing to hold in step with the protocol
+ * for no gain.
+ */
+export interface AttentionView {
+  readonly replyTo: FrameId;
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  readonly acknowledgedAt: number | null;
+  readonly mutedAt: number | null;
+}
+
+/**
  * The hub's answer to a browse, kept so the picker that asked can render it.
  *
  * `replyTo` is what joins it to the request, because a picker may have more
@@ -398,6 +418,8 @@ export interface HubSnapshot {
   readonly lastStarted: StartedView | null;
   /** The hub's most recent yes to a stop, kept until the next one. */
   readonly lastStopped: StoppedView | null;
+  /** The hub's most recent yes to an acknowledgement or a mute. */
+  readonly lastAttention: AttentionView | null;
   /** The hub's most recent directory listing, kept until the next one. */
   readonly lastListing: DirectoryListingView | null;
   /** The hub's most recent yes to a project create, kept until the next one. */
@@ -438,7 +460,13 @@ export interface HubSnapshot {
  * reconnection — so it is not a subscription. `project-create`, the five tree
  * edits and the three document frames are commands for the plainest reason of
  * all: each is something the user did once, and a queue is where a once-only
- * intent waits.
+ * intent waits. `session-acknowledge` and `session-mute` are commands for that
+ * same reason, and the queue is righter for them than it is for a stop:
+ * dismissing a prompt while the connection blinks is still dismissing that
+ * prompt, and the hub stamps the moment when it reads the frame rather than
+ * when the user clicked — so what a queued acknowledgement ends up worth is
+ * decided by whether the session spoke in the meantime, which is the rule an
+ * acknowledgement already lives by.
  */
 type CommandFrame = Extract<
   ClientFrame,
@@ -446,6 +474,8 @@ type CommandFrame = Extract<
     type:
       | 'session-start'
       | 'session-stop'
+      | 'session-acknowledge'
+      | 'session-mute'
       | 'pane-layout-save'
       | 'directory-list'
       | 'project-create'
@@ -708,6 +738,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastRefusal: null,
     lastStarted: null,
     lastStopped: null,
+    lastAttention: null,
     lastListing: null,
     lastProjectCreated: null,
     lastTreeChange: null,
@@ -1039,6 +1070,20 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
             storeId: frame.storeId,
             sessionId: frame.sessionId,
             server: frame.server,
+          },
+        });
+        return;
+      }
+      case 'session-attention': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastAttention: {
+            replyTo: frame.replyTo,
+            storeId: frame.storeId,
+            sessionId: frame.sessionId,
+            acknowledgedAt: frame.acknowledgedAt,
+            mutedAt: frame.mutedAt,
           },
         });
         return;

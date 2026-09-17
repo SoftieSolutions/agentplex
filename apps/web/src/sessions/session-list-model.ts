@@ -35,6 +35,30 @@ export interface SessionListItem {
    * looking is worse than no badge.
    */
   readonly needsYou: boolean;
+  /**
+   * Whether the prompt this session is sitting on has been seen.
+   *
+   * Derived here and carried nowhere: the hub sends an acknowledgement moment
+   * and the moment the provider last wrote, on one row, and this is the
+   * comparison between them. An acknowledgement older than the last thing the
+   * provider said is spent -- which is what stops a session going quiet
+   * forever because somebody dismissed its first prompt and it stopped at a
+   * second one.
+   *
+   * False for a session nobody has acknowledged, and false for one nobody
+   * needs to: the flag is about the acknowledgement, not about whether
+   * anything is wanted, and `needsYou` beside it is the other half.
+   */
+  readonly acknowledged: boolean;
+  /**
+   * Whether this session is muted.
+   *
+   * It does not touch `needsYou`, and that is the whole semantic: a muted
+   * session keeps its status, its badge and its place in the list. What it
+   * loses is the noise -- the card is dimmed here, and the bell, the title and
+   * the push skip it.
+   */
+  readonly muted: boolean;
   readonly reachable: boolean;
   /**
    * The machine to show on the card: the label of the server running it, or of
@@ -96,6 +120,38 @@ export function wantsHuman(status: SessionStatus): boolean {
   return status === 'awaiting-permission' || status === 'awaiting-input';
 }
 
+/**
+ * Whether an acknowledgement still holds.
+ *
+ * The one rule the attention epic turns on, in one line: an acknowledgement is
+ * a moment, and it holds only while the session has said nothing since. A
+ * boolean would go sticky through a second prompt -- dismiss the first, let
+ * the agent run on to a second, and a flag set once claims that one has been
+ * seen too. Comparing the two moments cannot make that mistake.
+ *
+ * `>=` and not `>`: an acknowledgement stamped in the same millisecond as the
+ * last thing the provider wrote is an acknowledgement of it. The other reading
+ * would leave a badge up over a tie, which is the one direction of error a
+ * person notices.
+ */
+export function acknowledgementHolds(acknowledgedAt: number | null, updatedAt: number): boolean {
+  return acknowledgedAt !== null && acknowledgedAt >= updatedAt;
+}
+
+/**
+ * Whether this session should be making a noise: it wants a human, nobody has
+ * said they have seen it, and it is not muted.
+ *
+ * The one derived fact the bell, the document title and the push all read, so
+ * that three surfaces cannot come to three different answers about whether to
+ * interrupt somebody. It is deliberately narrower than `needsYou`, which is
+ * what the list partitions and counts on: the fact stays visible when it has
+ * been acknowledged or muted, and only the noise stops.
+ */
+export function wantsAttention(item: SessionListItem): boolean {
+  return item.needsYou && !item.acknowledged && !item.muted;
+}
+
 export function statusWords(status: SessionStatus): string {
   switch (status) {
     case 'working':
@@ -142,6 +198,8 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         status: descriptor.status,
         tone: toneForStatus(descriptor.status),
         needsYou: wantsHuman(descriptor.status) && row.reachable,
+        acknowledged: acknowledgementHolds(row.acknowledgedAt, descriptor.updatedAt),
+        muted: row.mutedAt !== null,
         reachable: row.reachable,
         machine: serverLabel(state, machineId),
         server: row.source,

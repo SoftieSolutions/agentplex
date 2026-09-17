@@ -62,6 +62,8 @@ function stateWith(overrides?: {
               overrides?.holder === undefined
                 ? { server: 'reg-1', stoppable: true }
                 : overrides.holder,
+            acknowledgedAt: null,
+            mutedAt: null,
           },
         ],
       },
@@ -116,6 +118,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastRefusal: null,
     lastStarted: null,
     lastStopped: null,
+    lastAttention: null,
     lastListing: null,
     lastTreeChange: null,
     catalogue: null,

@@ -3,6 +3,7 @@ import { Box, Group, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import type { HubStore } from '../store/hub-store.js';
 import { sessionHash } from '../terminal/session-route.js';
+import { AttentionControls } from './attention-controls.js';
 import { ageLabel, type SessionListItem } from './session-list-model.js';
 import { SessionSummaryLine } from './session-summary-line.js';
 import { StopButton } from './stop-button.js';
@@ -15,6 +16,15 @@ import { StopButton } from './stop-button.js';
  * The Allow/Deny affordances the mockup shows belong to the approvals
  * milestone and are deliberately absent: an approval that cannot be granted
  * yet must not be drawn as if it could.
+ *
+ * Attention rides on the same card. A muted session is dimmed and keeps
+ * everything else -- its tone dot, its accent border, its status, its place in
+ * the needs-you partition -- because mute silences the alert and never the
+ * fact, and a card that vanished or went grey-status would be the app deciding
+ * what a person may see. An acknowledged prompt is the other half: the card
+ * drops the accent border and the waiting clock and says it has been seen,
+ * without moving, and it comes back the moment the session speaks again --
+ * which is the whole reason the acknowledgement is a timestamp.
  *
  * The whole card opens the session, as a real link to the pane's hash address
  * rather than an `onClick`: an anchor is what the browser already makes
@@ -44,7 +54,12 @@ export interface SessionCardProps {
 }
 
 export function SessionCard({ item, scheme, now, store, actions }: SessionCardProps): JSX.Element {
-  const border = item.needsYou ? colorForTone('needs-you', scheme) : colorForRole('border', scheme);
+  // The accent border follows the unacknowledged prompt rather than the raw
+  // needs-you fact: saying "seen" has to do something visible, or nobody will
+  // say it twice. Muting deliberately does not touch it -- a muted card is the
+  // same card, dimmed.
+  const unseen = item.needsYou && !item.acknowledged;
+  const border = unseen ? colorForTone('needs-you', scheme) : colorForRole('border', scheme);
   const muted = colorForRole('textMuted', scheme);
   const age = ageLabel(now, item.updatedAt);
   return (
@@ -60,6 +75,11 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
         flexDirection: 'column',
         gap: 6,
         minWidth: 0,
+        // Dimmed, not hidden and not recoloured. Opacity is the one way to say
+        // "this is still here and still true, and it is not asking for you"
+        // without spending a hue on it -- and it costs the card's own tone
+        // nothing, which is what keeps the badge readable.
+        opacity: item.muted ? 0.55 : 1,
       }}
     >
       <Box
@@ -90,13 +110,28 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
       <Group gap={8} wrap="nowrap" justify="space-between" align="center">
         <Text fz={11} c={muted}>
           {item.provider} {'·'}{' '}
-          {item.needsYou ? (
+          {unseen ? (
             <Text component="span" fz={11} c={colorForTone('needs-you', scheme)}>
               waiting {age}
             </Text>
           ) : (
             age
           )}
+          {item.needsYou && item.acknowledged ? (
+            // Said in words rather than by the absence of the accent, so that
+            // a row still wanting a human does not read as one that has
+            // stopped wanting anything.
+            <Text component="span" fz={11} c={muted}>
+              {' '}
+              {'·'} seen
+            </Text>
+          ) : null}
+          {item.muted ? (
+            <Text component="span" fz={11} c={muted}>
+              {' '}
+              {'·'} muted
+            </Text>
+          ) : null}
           {item.reachable ? null : (
             // The row stays, labelled: an unreachable session is a fact with an
             // age on it, not a session to hide and not one to show as live.
@@ -108,7 +143,8 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
         </Text>
         {/* Above the link overlay, so the button is the button. It renders
             nothing at all unless the holder says this session can be stopped. */}
-        <Box style={{ position: 'relative', flexShrink: 0 }}>
+        <Box style={{ position: 'relative', flexShrink: 0, display: 'flex', gap: 6 }}>
+          <AttentionControls item={item} store={store} scheme={scheme} />
           <StopButton store={store} sessionRef={item.ref} holder={item.holder} scheme={scheme} />
         </Box>
       </Group>

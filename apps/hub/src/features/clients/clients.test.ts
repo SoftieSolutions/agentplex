@@ -29,6 +29,7 @@ import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
 import { createClients, type Clients } from './clients.js';
+import { createFakeAttention, type FakeAttention } from '../attention/fake-attention.js';
 import { createFakePairing, type FakePairing } from '../pairing/fake-pairing.js';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
 import { createFakeProjects, type FakeProjects } from '../projects/fake-projects.js';
@@ -110,6 +111,8 @@ interface Harness {
   readonly broadcast: Clients;
   /** The session control this broadcast was built on, for tests that drive it. */
   readonly sessions: FakeSessions;
+  /** The attention rows this broadcast writes through, for the two new frames. */
+  readonly attention: FakeAttention;
   /** The pairing table this broadcast writes through, for the pairing frames. */
   readonly pairing: FakePairing;
   /** Every time the supervisor was told the pairing table had changed. */
@@ -142,6 +145,7 @@ function harness(
   projects: FakeProjects = createFakeProjects(),
   catalogue: FakeCatalogue = createFakeCatalogue(),
   docs: FakeDocs = createFakeDocs(),
+  attention: FakeAttention = createFakeAttention(),
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
@@ -156,6 +160,7 @@ function harness(
     readPaneLayout: paneLayout.read ?? (async () => null),
     writePaneLayout: paneLayout.write ?? (async () => undefined),
     sessions,
+    attention,
     pairing,
     syncServers: async () => {
       syncs += 1;
@@ -170,6 +175,7 @@ function harness(
     timers,
     broadcast,
     sessions,
+    attention,
     pairing,
     syncs: () => syncs,
     projects,
@@ -822,6 +828,158 @@ describe('starting and stopping a session', () => {
 
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
     expect(sessions.starts).toEqual([]);
+    expect(client.socket.closure).not.toBeNull();
+  });
+});
+
+/**
+ * Acknowledging and muting, as this socket sees them.
+ *
+ * What the rows actually do is the attention feature's own suite, against a
+ * real schema. What is asked here is the part only a connection can answer:
+ * which client is told, in what words, and that the whole row comes back
+ * however the change was asked for.
+ */
+describe('acknowledging and muting a session', () => {
+  const STORE = 'store-work';
+  const SESSION = 'session-1';
+
+  it('answers the acknowledgement with the whole row, to the client that asked', async () => {
+    const attention = createFakeAttention({ now: 1_756_000_000_000 });
+    const { broadcast } = harness(
+      async () => [],
+      createFakeSessions(),
+      {},
+      createFakePairing(),
+      createFakeProjects(),
+      createFakeCatalogue(),
+      createFakeDocs(),
+      attention,
+    );
+    const asking = attach(broadcast);
+    const watching = attach(broadcast);
+    await asking.hello();
+    await watching.hello();
+
+    await asking.say({ type: 'session-acknowledge', id: 2, storeId: STORE, sessionId: SESSION });
+
+    expect(asking.received.at(-1)).toEqual({
+      type: 'session-attention',
+      replyTo: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      acknowledgedAt: 1_756_000_000_000,
+      mutedAt: null,
+    });
+    expect(attention.acknowledged).toEqual([{ storeId: STORE, sessionId: SESSION }]);
+    // Nobody else asked. The change itself reaches the other clients on the
+    // session row of the next state, which is the one place any of them reads
+    // attention from.
+    expect(watching.received.some((frame) => frame.type === 'session-attention')).toBe(false);
+  });
+
+  it('carries the state a mute wants rather than a toggle, and answers the row', async () => {
+    const attention = createFakeAttention({ now: 1_756_000_000_000 });
+    const { broadcast } = harness(
+      async () => [],
+      createFakeSessions(),
+      {},
+      createFakePairing(),
+      createFakeProjects(),
+      createFakeCatalogue(),
+      createFakeDocs(),
+      attention,
+    );
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'session-mute',
+      id: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      muted: true,
+    });
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'session-attention',
+      replyTo: 2,
+      mutedAt: 1_756_000_000_000,
+    });
+
+    await client.say({
+      type: 'session-mute',
+      id: 3,
+      storeId: STORE,
+      sessionId: SESSION,
+      muted: false,
+    });
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'session-attention',
+      replyTo: 3,
+      mutedAt: null,
+    });
+    expect(attention.mutes).toEqual([
+      { ref: { storeId: STORE, sessionId: SESSION }, muted: true },
+      { ref: { storeId: STORE, sessionId: SESSION }, muted: false },
+    ]);
+  });
+
+  it('passes a refusal back as a reply, leaving the socket open', async () => {
+    const attention = createFakeAttention();
+    attention.refuseWith({
+      ok: false,
+      code: 'refused',
+      problem: 'this hub knows no session by that id',
+    });
+    const { broadcast } = harness(
+      async () => [],
+      createFakeSessions(),
+      {},
+      createFakePairing(),
+      createFakeProjects(),
+      createFakeCatalogue(),
+      createFakeDocs(),
+      attention,
+    );
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'session-acknowledge', id: 2, storeId: STORE, sessionId: 'ghost' });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+      message: 'this hub knows no session by that id',
+      holder: null,
+    });
+    expect(client.socket.closure).toBeNull();
+  });
+
+  it('refuses either frame before a hello, like everything else on this socket', async () => {
+    const attention = createFakeAttention();
+    const { broadcast } = harness(
+      async () => [],
+      createFakeSessions(),
+      {},
+      createFakePairing(),
+      createFakeProjects(),
+      createFakeCatalogue(),
+      createFakeDocs(),
+      attention,
+    );
+    const client = attach(broadcast);
+
+    await client.say({
+      type: 'session-mute',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+      muted: true,
+    });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
+    expect(attention.mutes).toEqual([]);
     expect(client.socket.closure).not.toBeNull();
   });
 });

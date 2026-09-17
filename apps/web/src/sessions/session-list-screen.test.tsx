@@ -271,4 +271,132 @@ describe('the session list', () => {
 
     expect(container.textContent).toContain('stopped migrate-db-v9 on mbp-robert');
   });
+
+  /**
+   * The attention controls, on the same captured states.
+   *
+   * What a card says about attention it says out of the session row, so these
+   * mount against `machineStatePopulated` (nobody has spoken) and
+   * `machineStateAttended` (one prompt acknowledged, one muted) and read what
+   * the screen drew.
+   */
+  function buttonsLabelled(prefix: string): HTMLButtonElement[] {
+    return [...container.querySelectorAll<HTMLButtonElement>(`button[aria-label^="${prefix} "]`)];
+  }
+
+  /** The card an aria-labelled control sits inside. */
+  function cardOf(control: Element): HTMLElement {
+    const card = control.closest('article');
+    if (card === null) throw new Error('the control is not inside a card');
+    return card;
+  }
+
+  it('offers seen and mute only on the sessions asking for somebody', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    // The two prompts in the captured fleet, and neither the working sessions
+    // nor the idle one: a button on those would acknowledge nothing.
+    expect(buttonsLabelled('acknowledge').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'acknowledge migrate-db-v9',
+      'acknowledge docs-sweep',
+    ]);
+    expect(buttonsLabelled('mute').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'mute migrate-db-v9',
+      'mute docs-sweep',
+    ]);
+  });
+
+  it('sends an acknowledgement that names the session and carries no moment', async () => {
+    const socket = await mountWith(hubFrames.machineStatePopulated);
+    const seen = buttonsLabelled('acknowledge')[0];
+    if (seen === undefined) throw new Error('the list offered no acknowledgement');
+
+    await click(seen);
+
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-acknowledge')).toEqual([
+      {
+        type: 'session-acknowledge',
+        id: 4,
+        storeId: 'store-agentplex',
+        sessionId: 'session-migrate-db',
+      },
+    ]);
+    // Not a navigation: the card around the button is a link, and a person
+    // aiming at the button meant the button.
+    expect(window.location.hash).toBe('');
+  });
+
+  it('asks for the state it wants when muting, and for the opposite when unmuting', async () => {
+    const socket = await mountWith(hubFrames.machineStateAttended);
+
+    const mute = buttonsLabelled('mute')[0];
+    const unmute = buttonsLabelled('unmute')[0];
+    if (mute === undefined || unmute === undefined) {
+      throw new Error('the list did not offer both a mute and an unmute');
+    }
+    expect(unmute.getAttribute('aria-label')).toBe('unmute docs-sweep');
+
+    await click(mute);
+    await click(unmute);
+
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-mute')).toEqual([
+      {
+        type: 'session-mute',
+        id: 4,
+        storeId: 'store-agentplex',
+        sessionId: 'session-migrate-db',
+        muted: true,
+      },
+      {
+        type: 'session-mute',
+        id: 5,
+        storeId: 'store-universe',
+        sessionId: 'session-docs-sweep',
+        muted: false,
+      },
+    ]);
+  });
+
+  it('dims a muted card and leaves everything else on it saying what it said', async () => {
+    await mountWith(hubFrames.machineStateAttended);
+
+    const card = cardOf(buttonsLabelled('unmute')[0] ?? container);
+    expect(Number(card.style.opacity)).toBeLessThan(1);
+    // Mute silences the alert, never the fact. The row keeps its place in the
+    // needs-you half and it is still counting how long it has been waiting;
+    // what it gains is a word for why it is quiet.
+    expect(card.textContent).toContain('waiting');
+    expect(card.textContent).toContain('muted');
+    expect(cardLinks()[1]?.getAttribute('href')).toBe(
+      '#/session/store-universe/session-docs-sweep',
+    );
+  });
+
+  it('draws an acknowledged prompt at full weight and says it has been seen', async () => {
+    await mountWith(hubFrames.machineStateAttended);
+
+    const card = cardOf(buttonsLabelled('mute')[0] ?? container);
+    expect(card.textContent).toContain('seen');
+    // No longer counting the wait: the clock is what the accent was for.
+    expect(card.textContent).not.toContain('waiting');
+    expect(Number(card.style.opacity)).toBe(1);
+  });
+
+  it('stops waiting when the hub answers, and says why when it refuses', async () => {
+    const socket = await mountWith(hubFrames.machineStatePopulated);
+    const seen = buttonsLabelled('acknowledge')[0];
+    if (seen === undefined) throw new Error('the list offered no acknowledgement');
+
+    await click(seen);
+    expect(buttonsLabelled('acknowledge')[0]?.disabled).toBe(true);
+
+    // Captured from a real hub refusing a real acknowledgement, and it answers
+    // frame 4 -- the frame this card just sent, after the layout and the
+    // catalogue page the screen asks for on connecting.
+    await act(() => {
+      socket.deliver(hubFrames.refusalAttention);
+    });
+    expect(buttonsLabelled('acknowledge')[0]?.disabled).toBe(false);
+    expect(container.textContent).toContain('this hub knows no session by that id');
+  });
 });

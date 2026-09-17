@@ -139,6 +139,8 @@ describe('a catalogue item', () => {
       reportedAt: 1_756_000_000_000,
       reachable: true,
       holder: null,
+      acknowledgedAt: null,
+      mutedAt: null,
     };
 
     expect(catalogueItemSchema.parse({ ...ITEM, session })).toMatchObject({ session });

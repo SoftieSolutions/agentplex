@@ -337,6 +337,43 @@ export const sessionRowSchema = z.object({
    * is a session somebody started outside agentplex.
    */
   holder: sessionHolderSchema.nullable(),
+  /**
+   * When somebody last said they had seen this session's prompt, or `null`
+   * when nobody has.
+   *
+   * A moment and not a boolean, because a boolean goes sticky: acknowledge a
+   * permission prompt, let the agent run on and stop at a second one, and a
+   * flag set once says the second prompt has been seen too. A timestamp cannot
+   * do that -- it is compared with `descriptor.updatedAt`, and an
+   * acknowledgement older than the last thing the provider wrote is spent.
+   *
+   * The comparison is left to the reader rather than made here, for the reason
+   * `protocolVersion` on a candidate is carried rather than judged: the two
+   * fields are on the same row of the same frame, so every reader reaches the
+   * same verdict, and a third field stating it could only ever disagree with
+   * the two it was derived from.
+   *
+   * Stamped by the hub off the hub's own clock. A client-stamped moment would
+   * be a claim about a clock nothing here can check, compared against a moment
+   * a *provider* wrote -- and the answer would depend on whose watch was fast.
+   */
+  acknowledgedAt: momentSchema,
+  /**
+   * When this session was muted, or `null` when it is not muted.
+   *
+   * Mute silences the alert and never the fact. The row is still sent, its
+   * status still says a human is wanted, and it still counts wherever
+   * needs-you is counted; what a muted session does not get is the bell, the
+   * title and the push. A client dims it. A mute that removed the row would be
+   * the hub deciding what a person may see, which is the over-claim in the
+   * other direction.
+   *
+   * A moment rather than a boolean because it is the same kind of fact as the
+   * acknowledgement beside it and a person asks "since when", and because
+   * `null` is then one unambiguous way of saying not muted rather than a
+   * `false` sitting next to a stale timestamp.
+   */
+  mutedAt: momentSchema,
 });
 export type SessionRow = z.infer<typeof sessionRowSchema>;
 

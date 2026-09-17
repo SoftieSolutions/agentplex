@@ -62,6 +62,8 @@ const A_SESSION_ROW = {
   reportedAt: 1_000,
   reachable: true,
   holder: null,
+  acknowledgedAt: null,
+  mutedAt: null,
 };
 
 describe('serverViewSchema', () => {
@@ -245,6 +247,25 @@ describe('sessionRowSchema', () => {
     const { holder, ...withoutHolder } = A_SESSION_ROW;
     expect(holder).toBeNull();
     expect(sessionRowSchema.safeParse(withoutHolder).success).toBe(false);
+  });
+
+  it('accepts the two attention moments, so an acknowledgement can be compared', () => {
+    const parsed = sessionRowSchema.safeParse({
+      ...A_SESSION_ROW,
+      acknowledgedAt: 1_100,
+      mutedAt: 1_200,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('rejects a row with no acknowledgement field: absent is not the same as never', () => {
+    const { acknowledgedAt, ...without } = A_SESSION_ROW;
+    expect(acknowledgedAt).toBeNull();
+    expect(sessionRowSchema.safeParse(without).success).toBe(false);
+  });
+
+  it('rejects a mute stamped before the epoch, which is not a moment', () => {
+    expect(sessionRowSchema.safeParse({ ...A_SESSION_ROW, mutedAt: -1 }).success).toBe(false);
   });
 });
 

@@ -61,6 +61,8 @@ function fleetWith(
         reportedAt: START,
         reachable: true,
         holder,
+        acknowledgedAt: null,
+        mutedAt: null,
       },
     ],
   };
