@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { compareVersions } from './version-order.js';
 
 /**
- * `versions.json`: what is current, for every component at once.
+ * `versions.json`: every release of every component, and which of them is
+ * current.
  *
  * ## Why there is a file at all
  *
@@ -51,6 +53,32 @@ import { z } from 'zod';
  * has been hand-edited into something malformed should fail this release rather
  * than be carried forward and served to every machine that installs.
  *
+ * ## Why it carries history
+ *
+ * Every release this component has ever published, not only the current one,
+ * as `<version>: <protocol>`. Two things need it and neither could be had from
+ * the file that described only what is current.
+ *
+ * A partial pin is the first. `--role=hub@1.3` is the shape a fleet operator
+ * wanting security patches without a minor jump reaches for, and resolving it
+ * to the newest `1.3.x` needs the set of `1.3.x` releases to choose from. The
+ * alternative was the GitHub releases API, which is deeply nested JSON that
+ * `install.sh` has no parser for -- it reads this file with a bash grammar,
+ * because `resolve_component_versions` runs before there is a Node on the
+ * machine -- and which is rate limited to sixty unauthenticated requests an
+ * hour and paginated past a hundred releases, a number four independent
+ * release trains reach quickly.
+ *
+ * The protocol a *pinned* release speaks is the second, and it is what history
+ * deletes. That question used to be answered by a second published artifact, a
+ * `<component>-v<version>.json` beside each tarball, which existed only
+ * because this file had no line for anything but the current release. With
+ * history the answer is already in the file `install.sh` has fetched, so the
+ * artifact, its upload step and the extra download every pin used to cost are
+ * all gone. The release got smaller by giving this file more to say.
+ *
+ * A thousand releases is roughly thirty kilobytes, which is the whole cost.
+ *
  * ## Why the protocol is in it
  *
  * It is the whole reason independent versions are safe. `PROTOCOL_VERSION` is
@@ -80,35 +108,71 @@ const SEMVER =
  * Whether a word is a version this can install, asked of something a person
  * typed.
  *
- * The same grammar `install.sh` carries as `RELEASE_VERSION` and refuses a pin
- * against, restated here for the command that takes the same pins. Exact, and
- * that is forced rather than chosen: a pin names a release tag, and a tag is a
- * string that either exists or does not. `hub@1.3` is refused for the reason
- * the installer gives -- there is no registry to resolve it against and this
- * manifest describes only what is current, so accepting a range would mean
- * guessing which release was meant. AGX-198 is the ticket that would give the
- * manifest history and make it resolvable; until it lands, refusing at the flag
- * with the grammar named is the honest end of it.
+ * The same grammar `install.sh` carries as `RELEASE_VERSION`, restated here for
+ * the command that takes the same pins. Exact, and for this caller that is
+ * still the whole of it: `agentplex update --hub=1.3.0` names a release tag,
+ * and a tag is a string that either exists or does not.
+ *
+ * `install.sh` now takes a partial pin as well, because it resolves one against
+ * the release history this manifest carries before it builds a URL. This
+ * command does not, and the difference is deliberate rather than an oversight:
+ * the installer is what a fleet points at, so `hub@1.3` earns a resolver there,
+ * and a second resolver here would be a second thing to keep agreeing with the
+ * first for a command an operator runs by hand on one machine.
  */
 export function isReleaseVersion(value: string): boolean {
   return SEMVER.test(value);
 }
 
 /**
- * One component's line: what is current, and what it speaks.
+ * A version as a key or a value: the grammar above, used as a schema.
+ */
+const versionSchema = z.string().regex(SEMVER);
+
+/**
+ * One release: the version its tag names and the protocol its tarball declares.
+ *
+ * What a release job knows and hands to `updateVersionsManifest`, and what
+ * `currentRelease` hands back to a reader that wants the current one as a pair
+ * rather than as two lookups.
+ */
+const releaseSchema = z
+  .object({
+    version: versionSchema,
+    protocol: z.int().positive(),
+  })
+  .strict();
+
+/**
+ * One component's line: which release is current, and every release there has
+ * been.
  *
  * `strict`, so a field nobody listed stops the release rather than being
  * carried forward into a file every installing machine reads. The protocol is a
  * positive integer because `PROTOCOL_VERSION` never takes the value 0 -- a
  * falsy version is indistinguishable from a missing one in anything that tests
  * it before comparing.
+ *
+ * The keys of `releases` are checked as versions too. They are what a partial
+ * pin is resolved against, so a key that is not a version is a candidate
+ * `install.sh` would have to have an opinion about; refusing it here means the
+ * bash resolver only ever sees versions.
+ *
+ * `current` has to be one of them. It is the invariant that makes the file
+ * answerable in one read: a reader that wants what is current and what it
+ * speaks looks up one key rather than reading two halves that could disagree.
+ * A manifest where they do disagree is a `v1` branch somebody hand-edited, and
+ * it fails the release rather than being served.
  */
 const entrySchema = z
   .object({
-    version: z.string().regex(SEMVER),
-    protocol: z.int().positive(),
+    current: versionSchema,
+    releases: z.record(versionSchema, z.int().positive()),
   })
-  .strict();
+  .strict()
+  .refine((entry) => entry.current in entry.releases, {
+    message: 'the current version is not one of the releases listed beside it',
+  });
 
 /**
  * The manifest: one entry per component, keyed by the word its tag carries.
@@ -125,6 +189,7 @@ const manifestSchema = z.record(z.string().min(1), entrySchema);
 
 export type VersionsManifest = z.infer<typeof manifestSchema>;
 export type VersionsEntry = z.infer<typeof entrySchema>;
+export type PublishedRelease = z.infer<typeof releaseSchema>;
 
 /**
  * The manifest a previous release left on `v1`, or nothing at all.
@@ -159,20 +224,59 @@ export function parseVersionsManifest(source: string, text: string): VersionsMan
 }
 
 /**
- * The manifest this release publishes: the previous one with this component's
- * line replaced.
+ * The release one entry says is current, as a pair.
  *
- * The keys are sorted, so the file a release writes differs from the one before
- * it in exactly the lines that changed. A diff nobody can read is a diff nobody
- * checks, and this file is the one artifact of a release that a person might
- * actually look at on the branch.
+ * Total, because the schema refuses an entry whose `current` is not one of its
+ * own releases -- so the lookup cannot come back empty, and no caller has to
+ * invent what to do when it does. This is the one place that knows the
+ * invariant is what makes it total.
+ */
+export function currentRelease(entry: VersionsEntry): PublishedRelease {
+  const protocol = entry.releases[entry.current];
+  if (protocol === undefined) {
+    // Unreachable through the parser, and here rather than as a `!` because it
+    // is the schema's refinement that makes it unreachable: a cast would be the
+    // claim that the refinement will always be there.
+    throw new Error(`the manifest calls ${entry.current} current and lists no protocol for it`);
+  }
+  return { version: entry.current, protocol };
+}
+
+/**
+ * The manifest this release publishes: the previous one with this component's
+ * release added and named as the current one.
+ *
+ * Added, not replaced. A component's line is the history of that component, so
+ * a release appends to it -- which is what makes `--role=hub@1.3` resolvable
+ * later and what lets a pinned release's protocol be read out of a file that is
+ * already on disk. Re-cutting a tag writes the same key again, because that is
+ * one release published twice and not two.
+ *
+ * The component keys are sorted and so are the releases under each, newest
+ * first, so the file a release writes differs from the one before it in exactly
+ * the lines that changed. A diff nobody can read is a diff nobody checks, and
+ * this file is the one artifact of a release that a person might actually look
+ * at on the branch. Newest first rather than oldest, because the line anybody
+ * reading the file is looking for is the one at the top.
  */
 export function updateVersionsManifest(
   previous: VersionsManifest,
   component: string,
-  entry: VersionsEntry,
+  release: PublishedRelease,
 ): VersionsManifest {
-  const merged = { ...previous, [component]: entrySchema.parse(entry) };
+  const published = releaseSchema.parse(release);
+  const releases = {
+    ...previous[component]?.releases,
+    [published.version]: published.protocol,
+  };
+  const entry = entrySchema.parse({
+    current: published.version,
+    releases: Object.fromEntries(
+      Object.entries(releases).sort(([a], [b]) => -(compareVersions(a, b) ?? 0)),
+    ),
+  });
+
+  const merged = { ...previous, [component]: entry };
   return Object.fromEntries(Object.entries(merged).sort(([a], [b]) => a.localeCompare(b)));
 }
 

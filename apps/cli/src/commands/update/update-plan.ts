@@ -1,4 +1,4 @@
-import { compareVersions, type VersionsManifest } from '@agentplex/release';
+import { compareVersions, currentRelease, type VersionsManifest } from '@agentplex/release';
 import { COMPONENTS, releaseUrl, type Component } from '../../installation/components.js';
 import type { Installation, InstalledPackage } from '../../installation/installation.js';
 import type { AskedComponent } from './update-flags.js';
@@ -161,16 +161,20 @@ function planComponent(
 
   const pinned = wanted.get(component) ?? null;
   if (pinned !== null) {
-    // A pin names a release outright, so nothing is resolved and the manifest
-    // is not consulted -- which is also why a pinned component's protocol is
-    // unknown here. `install.sh` pays one small download per pin to find that
-    // out before installing; this command has the same question and answers it
-    // by leaving the number out of the agreement check rather than guessing.
+    // A pin names a release outright, so nothing is resolved. Its protocol is
+    // looked up all the same, because the manifest carries every release now
+    // and not only the current one -- so the agreement check below covers a
+    // pinned component instead of having to leave it out.
+    //
+    // `null` when the manifest does not list that release: a pin forward to
+    // something unpublished, or an older one on a machine reading a mirror that
+    // has been pruned. Unknown is left unknown rather than guessed, which is
+    // what the check already does with an absent component.
     return {
       ...base,
       target: pinned,
       url: releaseUrl(component, pinned),
-      protocol: null,
+      protocol: manifest?.[component]?.releases[pinned] ?? null,
       action: pinned === version ? 'current' : 'update',
     };
   }
@@ -188,23 +192,24 @@ function planComponent(
     };
   }
 
-  const order = compareVersions(entry.version, version);
+  const release = currentRelease(entry);
+  const order = compareVersions(release.version, version);
   if (order === null) {
     return {
       ...base,
       action: 'unknown',
-      problem: `${version} and ${entry.version} cannot be compared`,
+      problem: `${version} and ${release.version} cannot be compared`,
     };
   }
   if (order === 0)
-    return { ...base, target: entry.version, protocol: entry.protocol, action: 'current' };
+    return { ...base, target: release.version, protocol: release.protocol, action: 'current' };
   if (order < 0) {
     // Installed ahead of what is published. Reported and not acted on: a
     // machine running a release candidate, or one an operator pinned forward on
     // purpose, is not a machine this should quietly move backwards.
     return {
       ...base,
-      target: entry.version,
+      target: release.version,
       protocol: installed?.protocol ?? null,
       action: 'ahead',
     };
@@ -212,9 +217,9 @@ function planComponent(
 
   return {
     ...base,
-    target: entry.version,
-    url: releaseUrl(component, entry.version),
-    protocol: entry.protocol,
+    target: release.version,
+    url: releaseUrl(component, release.version),
+    protocol: release.protocol,
     action: 'update',
   };
 }

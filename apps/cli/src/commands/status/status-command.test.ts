@@ -275,8 +275,8 @@ describe('what is available beside what is installed', () => {
       checkedAt: CHECKED_AT,
       source: 'https://example.invalid/versions.json',
       manifest: {
-        cli: { version: cliVersion, protocol: 3 },
-        hub: { version: '1.2.0', protocol: 3 },
+        cli: { current: cliVersion, releases: { [cliVersion]: 3 } },
+        hub: { current: '1.2.0', releases: { '1.2.0': 3 } },
       },
     });
   }

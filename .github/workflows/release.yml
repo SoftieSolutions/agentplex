@@ -154,7 +154,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      # The release, its tarball and the metadata beside it.
+      # The release and its tarball.
       contents: write
       # What `actions/attest-build-provenance` signs with. It is the GitHub-side
       # equivalent of what `npm publish --provenance` used to do here, and it is
@@ -194,8 +194,8 @@ jobs:
       # one component it names at the version it names, and writes
       # `release-assets/release.json` beside the staging directory -- which is
       # every fact this workflow would otherwise have to repeat: which directory
-      # holds that component, what its tarball is called, what the metadata
-      # beside it is called, and what protocol the build it just packed speaks.
+      # holds that component, what its tarball is called, and what protocol the
+      # build it just packed speaks.
       #
       # The protocol is read out of the assembled manifest rather than written
       # here, and that is the point of putting it in the manifest at all: it is
@@ -214,7 +214,6 @@ jobs:
             echo "package=$(field package)"
             echo "directory=$(field directory)"
             echo "asset=$(field asset)"
-            echo "metadata=$(field metadataAsset)"
           } >> "$GITHUB_OUTPUT"
 
       # Packed, then renamed to the constant this component's asset is always
@@ -223,9 +222,11 @@ jobs:
       # an asset name is a name no URL built from a component and a version
       # could ever match.
       #
-      # The metadata file was written by the assembler and is already at its
-      # published name; it is listed here so the log says what is about to be
-      # uploaded.
+      # One asset, and it used to be two. The second was a small JSON carrying
+      # this release's protocol, published so that `--role=hub@1.3.0` could be
+      # pre-checked before installing; `versions.json` carries every release's
+      # protocol now, so the `v1` job below is the only thing that has to say
+      # what this tag speaks.
       - name: Pack it under the name every release publishes it under
         run: |
           set -euo pipefail
@@ -266,9 +267,10 @@ jobs:
 
               curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/v1/scripts/install.sh | bash
 
-          To pin this exact release, add \`--role=${COMPONENT}@${VERSION}\`." \
-            release-assets/${{ steps.assemble.outputs.asset }} \
-            release-assets/${{ steps.assemble.outputs.metadata }}
+          To pin this exact release, add \`--role=${COMPONENT}@${VERSION}\`, or
+          \`--role=${COMPONENT}@<major>.<minor>\` to take the newest release in a
+          series." \
+            release-assets/${{ steps.assemble.outputs.asset }}
 
       - name: Report
         if: always()
@@ -279,7 +281,7 @@ jobs:
             echo
             echo "- ${{ steps.assemble.outputs.package }}"
             echo "- protocol ${{ steps.assemble.outputs.protocol }}"
-            echo "- ${{ steps.assemble.outputs.asset }}, ${{ steps.assemble.outputs.metadata }}"
+            echo "- ${{ steps.assemble.outputs.asset }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # The `v1` branch, which is two artifacts and one push.
@@ -287,8 +289,10 @@ jobs:
   # `install.sh` is fetched over https from this branch, not from a package, so
   # the script a machine runs and the packages it installs are different
   # artifacts that have to agree -- and the script is what knows which packages a
-  # role takes. `versions.json` is the other one: it is how an unpinned install
-  # finds out what is current, and this is the only place it is written.
+  # role takes. `versions.json` is the other one: it is how any install, pinned
+  # or not, finds out which releases exist and what each one speaks, and this is
+  # the only place it is written. It is append-only, so this job is also the
+  # only thing that decides a release is ever visible to a pin.
   #
   # Conditional on the release having happened, and on it being a `1.x`: moving
   # `v1` to a commit whose packages were never published would point every `curl

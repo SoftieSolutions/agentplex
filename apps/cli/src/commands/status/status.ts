@@ -175,7 +175,7 @@ function availableColumn(installed: InstalledPackage, available: AvailableVersio
   if (available === null || installed.state !== 'installed' || installed.version === null) {
     return '';
   }
-  const published = available.cached.manifest[installed.component]?.version;
+  const published = available.cached.manifest[installed.component]?.current;
   if (published === undefined) return '';
   // Equality and not an ordering: what is being answered is "is this the one
   // that is published", and a machine ahead of the manifest is reported with
