@@ -18,6 +18,7 @@ import { readyProvider } from '@agentplex/providers/testing';
 import type {
   ServerConnectionPhase,
   ServerConnectionReport,
+  StaleReason,
   StreamInstruction,
   StreamOutcome,
   TerminalOutputFrame,
@@ -124,6 +125,7 @@ function server(
   registrationId: ServerRegistrationId,
   label: string,
   phase: ServerConnectionPhase = 'connected',
+  staleReason: StaleReason | null = null,
 ): ServerConnectionReport {
   return {
     registrationId,
@@ -138,7 +140,7 @@ function server(
     lastConnectedAt: 1,
     failedAttempts: 0,
     problem: null,
-    staleReason: null,
+    staleReason,
     draining: null,
   };
 }
@@ -783,5 +785,218 @@ describe('an unsubscribe for a terminal nobody is watching', () => {
       },
     ]);
     expect(servers.put).toEqual([]);
+  });
+});
+
+/**
+ * The connection under a subscription, ending and coming back.
+ *
+ * The case AGX-212 left out: the hub holds one upstream per terminal, and when
+ * the machine holding it goes away those upstreams are attached to nothing. A
+ * pane being fed by nothing and a session that has gone quiet draw the same
+ * rectangle, so the whole of what is asserted here is that a pane is told --
+ * and that when the machine answers again, the subscription it was told about
+ * is the one that comes back rather than a new one it has to ask for.
+ *
+ * Driven through `noteConnection`, which is what `hub.ts` hands every
+ * connectivity change. A dial loop reports a failed retry the same way it
+ * reports the first failure, so the edges are what this feature acts on and
+ * the repeats are what it ignores.
+ */
+describe('a server that stops feeding the terminals the hub borrowed from it', () => {
+  it('tells every pane watching it that the feed ended, and why', () => {
+    const { terminal, servers } = oneMachine();
+    const first = fakeClient();
+    const second = fakeClient();
+
+    terminal.subscribe(first, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(0));
+    terminal.subscribe(second, 5, SESSION_TARGET);
+    servers.put[1]?.answer(subscribed(0));
+
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+
+    const ended = {
+      type: 'session-subscription-ended',
+      target: SESSION_TARGET,
+      reason: 'server-dropped',
+    };
+    expect(first.received.at(-1)).toEqual(ended);
+    // Both of them, and each under the name it used. One frame to the first
+    // subscriber would leave the second pane silently stopped, which is the
+    // state this frame exists to end.
+    expect(second.received.at(-1)).toEqual(ended);
+  });
+
+  it('says a drain was a drain, because that is a different thing to do about it', () => {
+    const { terminal, servers } = oneMachine();
+    const client = fakeClient();
+
+    terminal.subscribe(client, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(0));
+
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'draining'));
+
+    expect(client.received.at(-1)).toMatchObject({ reason: 'server-draining' });
+  });
+
+  it('names the terminal a pending pane is watching by the handle that pane used', () => {
+    const { terminal, servers } = oneMachine();
+    const client = fakeClient();
+    terminal.noteStart(client, 7, { registrationId: ATTIC, startId: START, storeId: WORK });
+
+    terminal.subscribe(client, 7, { by: 'start', startId: 7 });
+    servers.put[0]?.answer(subscribed(0));
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+
+    // The client's own handle and never the hub's `StartId`: a pane waiting on
+    // a spawn has no session id to be addressed by, and the hub's name for the
+    // start means nothing on a browser's socket.
+    expect(client.received.at(-1)).toEqual({
+      type: 'session-subscription-ended',
+      target: { by: 'start', startId: 7 },
+      reason: 'server-dropped',
+    });
+  });
+
+  it('says it once per spell, not once per failed retry', () => {
+    const { terminal, servers } = oneMachine();
+    const client = fakeClient();
+
+    terminal.subscribe(client, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(0));
+
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+
+    const ended = client.received.filter((frame) => frame.type === 'session-subscription-ended');
+    expect(ended).toHaveLength(1);
+  });
+
+  it('says nothing to a pane watching a different machine', () => {
+    const { terminal, servers } = oneMachine();
+    const client = fakeClient();
+
+    terminal.subscribe(client, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(0));
+
+    terminal.noteConnection(server(WORKSHOP, 'workshop', 'stale', 'dropped'));
+
+    expect(client.received.some((frame) => frame.type === 'session-subscription-ended')).toBe(
+      false,
+    );
+  });
+});
+
+describe('a server that comes back', () => {
+  it('subscribes again for every watch it still has, and answers each pane', () => {
+    const { terminal, servers } = oneMachine();
+    const client = fakeClient();
+
+    terminal.subscribe(client, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(0));
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+
+    terminal.noteConnection(server(ATTIC, 'attic'));
+
+    expect(servers.of('session-subscribe')).toHaveLength(2);
+    expect(servers.of('session-subscribe')[1]?.frame).toEqual({
+      type: 'session-subscribe',
+      target: { by: 'session', storeId: WORK, sessionId: QUIET },
+    });
+
+    // The scrollback on the machine survived and this client's feed has a gap
+    // in it, so the answer is a fresh reply with the numbers that describe the
+    // history about to be replayed -- under the id this client's subscribe
+    // carried, which is the only name it has for this pane.
+    servers.of('session-subscribe')[1]?.answer(subscribed(2, 4_096));
+    expect(client.received.at(-1)).toEqual({
+      type: 'session-subscribed',
+      replyTo: 2,
+      storeId: WORK,
+      sessionId: QUIET,
+      startId: null,
+      replayChunks: 2,
+      droppedBytes: 4_096,
+    });
+
+    terminal.deliver(ATTIC, output('replayed\r\n'));
+    terminal.deliver(ATTIC, output('and more\r\n'));
+    terminal.deliver(ATTIC, output('live again\r\n'));
+    expect(chunks(client)).toEqual(['replayed\r\n', 'and more\r\n', 'live again\r\n']);
+  });
+
+  it('forgets history the dead connection promised and never sent', () => {
+    const { terminal, servers } = oneMachine();
+    const first = fakeClient();
+    const second = fakeClient();
+
+    // A replay the first client was promised, cut off by the drop with one
+    // frame of it still outstanding.
+    terminal.subscribe(first, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(2));
+    terminal.subscribe(second, 2, SESSION_TARGET);
+    servers.put[1]?.answer(subscribed(0));
+    terminal.deliver(ATTIC, output('half a history\r\n'));
+
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+    terminal.noteConnection(server(ATTIC, 'attic'));
+    servers.of('session-subscribe')[2]?.answer(subscribed(0));
+    servers.of('session-subscribe')[3]?.answer(subscribed(0));
+    terminal.deliver(ATTIC, output('live\r\n'));
+
+    // Both panes, because the chunk is live. A claim left standing from the
+    // connection that died would have swallowed it for the one client that was
+    // mid-replay, and the other pane would be missing output nobody dropped.
+    expect(chunks(first)).toEqual(['half a history\r\n', 'live\r\n']);
+    expect(chunks(second)).toEqual(['live\r\n']);
+  });
+
+  it('tells a pane the session ended when the machine no longer has that terminal', () => {
+    const { terminal, servers } = oneMachine();
+    const client = fakeClient();
+
+    terminal.subscribe(client, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(0));
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+    terminal.noteConnection(server(ATTIC, 'attic'));
+
+    servers.of('session-subscribe')[1]?.answer({
+      ok: false,
+      code: 'refused',
+      problem: 'no terminal for that session',
+    });
+
+    // Not a refusal: this client asked once, was attached, and is owed the news
+    // rather than a second answer to a frame it was already answered.
+    expect(client.received.at(-1)).toEqual({
+      type: 'session-subscription-ended',
+      target: SESSION_TARGET,
+      reason: 'session-ended',
+    });
+    // And the watch is gone, so nothing is left claiming an audience at a
+    // server for a terminal that is not there.
+    terminal.unsubscribe(client, 9, SESSION_TARGET);
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'refusal',
+      message: 'this connection is not watching that terminal',
+    });
+  });
+
+  it('asks for nothing when the last pane left while the machine was away', () => {
+    const { terminal, servers } = oneMachine();
+    const client = fakeClient();
+
+    terminal.subscribe(client, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(0));
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+    terminal.forget(client);
+
+    terminal.noteConnection(server(ATTIC, 'attic'));
+
+    // One subscribe, ever: the interest is gone, and a hub that re-subscribed
+    // here would be asking a machine to feed a pane nobody is looking at.
+    expect(servers.of('session-subscribe')).toHaveLength(1);
   });
 });

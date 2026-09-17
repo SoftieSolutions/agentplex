@@ -8,11 +8,17 @@ import type {
   SessionStartTag,
   StartId,
   StoreId,
+  SubscriptionEndReason,
   TerminalSize,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
-import type { StreamInstruction, StreamOutcome, TerminalOutputFrame } from '../servers/servers.js';
+import type {
+  ServerConnectionReport,
+  StreamInstruction,
+  StreamOutcome,
+  TerminalOutputFrame,
+} from '../servers/servers.js';
 import { routeTerminal } from './target-routing.js';
 
 /**
@@ -64,6 +70,28 @@ import { routeTerminal } from './target-routing.js';
  * report, rather than guessed from what appeared around the same time: a spawn
  * and a scan racing is precisely the case where guessing by timing attaches a
  * pane to somebody else's agent.
+ *
+ * ## What happens to a watch when the machine under it goes away
+ *
+ * A watch outlives the connection its upstream was made on, and that is the
+ * asymmetry worth stating: a client's standing interest is in a terminal, not
+ * in a socket the hub happens to be holding. So a server dropping ends the
+ * upstream and not the watch -- every pane watching it is told the feed
+ * stopped and why, the hub goes on dialling, and when the machine answers
+ * again every watch that is still here is subscribed afresh.
+ *
+ * Told, rather than left to work it out, because the two states a pane cannot
+ * tell apart are a session that has gone quiet and a session nobody is feeding
+ * it any more: both are a rectangle that stopped moving. That is the whole
+ * reason `session-subscription-ended` exists.
+ *
+ * The fresh subscription is a fresh subscription in every sense: the server
+ * replays the scrollback it still holds and says how much of the beginning it
+ * has, so the pane is answered with `session-subscribed` a second time under
+ * the same frame id its subscribe had. That id is the name this connection
+ * gave one standing interest, and it stays that name for as long as the
+ * interest stands -- a second name for it would be a second thing the pane has
+ * to match on to recognise its own terminal.
  */
 
 /**
@@ -171,6 +199,18 @@ export interface Terminal {
   ): void;
   /** A chunk of output from a server, on its way to whoever is watching. */
   deliver(registrationId: ServerRegistrationId, output: TerminalOutputFrame): void;
+  /**
+   * A server's connectivity changed: end what it was feeding, or ask for it
+   * again.
+   *
+   * The whole report rather than a phase, because the frame a pane is sent
+   * depends on why the machine went: a drop and a drain are the same silence
+   * and two different things to do about it. Called on every change and acting
+   * only on the two edges -- connected, and no longer connected -- because a
+   * dial loop reports each failed retry too, and a pane told four times that
+   * its machine is still away is four frames saying what the first one said.
+   */
+  noteConnection(report: ServerConnectionReport): void;
   /** The socket went away. Every watch it held is given back and its starts forgotten. */
   forget(client: TerminalClient): void;
 }
@@ -208,6 +248,25 @@ interface Watch {
   readonly client: TerminalClient;
   /** The target as the client named it, which is what an unsubscribe names too. */
   readonly clientKey: string;
+  /**
+   * The same target, unflattened, because one frame is addressed by it.
+   *
+   * Everything else here needs only the key: a watch is looked up by the name
+   * a client used, and the name is a string. `session-subscription-ended` is
+   * the exception -- it is addressed to one subscription rather than to a
+   * session, so it carries the target itself, and parsing one back out of a
+   * key would be a second reader of a format that exists to be compared.
+   */
+  readonly target: ClientTerminalTarget;
+  /**
+   * The id of the `session-subscribe` that made this watch.
+   *
+   * Kept rather than passed through, because this subscription is answered
+   * more than once: the reply when it attaches, and another after a redial
+   * re-establishes it. A client names its standing interest by the frame it
+   * asked with, and that is the name for as long as the interest stands.
+   */
+  readonly replyTo: FrameId;
   readonly upstream: Upstream;
   /**
    * The client's own start handle, on every frame this watch produces.
@@ -243,6 +302,17 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
   const starts = new Map<TerminalClient, Map<FrameId, ClientStart>>();
   /** Which session each of this hub's starts became, as the reports said so. */
   const named = new Map<StartId, { readonly storeId: StoreId; readonly sessionId: SessionId }>();
+  /**
+   * The servers this relay has seen go away and has not seen come back.
+   *
+   * What it buys is the edge rather than the value: a dial loop reports every
+   * failed retry the same way it reports the first failure, and a pane told
+   * four times that its machine is still away is three frames restating the
+   * first. Written as "gone" rather than "connected" so that the ordinary
+   * case needs no entry -- a server that has never been away has nothing here
+   * and nothing to re-establish, whatever order the reports arrive in.
+   */
+  const away = new Set<ServerRegistrationId>();
 
   const refuse = (client: TerminalClient, replyTo: FrameId, problem: string): void =>
     client.send({ type: 'refusal', replyTo, code: 'refused', message: problem, holder: null });
@@ -305,6 +375,17 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
     );
   };
 
+  /**
+   * The subscriptions borrowed from one server, as a list.
+   *
+   * Copied rather than iterated in place, because what the callers do with one
+   * can delete it: a re-subscription the server refuses gives the last watch on
+   * an upstream back, and a map being emptied while it is being walked is the
+   * bug that waits for the second entry.
+   */
+  const upstreamsOn = (registrationId: ServerRegistrationId): readonly Upstream[] =>
+    [...upstreams.values()].filter((upstream) => upstream.registrationId === registrationId);
+
   /** One chunk to one watch, unless that socket is too far behind to take it. */
   const relayTo = (watch: Watch, output: TerminalOutputFrame, history: boolean): void => {
     // History is never gated, for the reason the server does not gate its own:
@@ -349,16 +430,50 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
   };
 
   /**
+   * Tells one client its subscription stopped feeding it, and why.
+   *
+   * Sent whether or not the watch survives: the two cases differ in what
+   * happens next, not in what has already happened. A machine that dropped
+   * keeps the watch and gets a fresh `session-subscribed` when it answers
+   * again; a terminal that is gone has had its watch given back, and this is
+   * the last thing that pane will be told about it.
+   */
+  const end = (watch: Watch, reason: SubscriptionEndReason): void => {
+    watch.attached = false;
+    watch.client.send({ type: 'session-subscription-ended', target: watch.target, reason });
+  };
+
+  /**
    * The reply to a subscribe, where it was read.
    *
    * Everything below happens inside the turn that read the frame off the
    * socket, which is what keeps the client's `session-subscribed` ahead of the
    * history that follows it on the wire.
+   *
+   * `again` is a re-subscription after a redial rather than the client's own
+   * first one, and it changes what a failure is. A first subscribe that comes
+   * back refused is an answer to a frame the client sent, so the client is
+   * refused in the server's words. A re-subscription nobody asked for has no
+   * frame to refuse: the client asked once, was attached, and is owed the news
+   * that the terminal it was watching is not there any more.
    */
-  const attachTo = (watch: Watch, replyTo: FrameId, outcome: StreamOutcome): void => {
-    if (!outcome.ok) {
+  const attachTo = (watch: Watch, outcome: StreamOutcome, again = false): void => {
+    const replyTo = watch.replyTo;
+    const failed = (problem: string): void => {
       release(watch, false);
-      refuse(watch.client, replyTo, outcome.problem);
+      if (again) {
+        end(watch, 'session-ended');
+        logger.info('a watched terminal was gone when its machine came back', {
+          registrationId: watch.upstream.registrationId,
+          problem,
+        });
+        return;
+      }
+      refuse(watch.client, replyTo, problem);
+    };
+
+    if (!outcome.ok) {
+      failed(outcome.problem);
       return;
     }
 
@@ -367,8 +482,7 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
     // taking its word would leave a pane attached to nothing.
     const answer = outcome.answer;
     if (answer === null || answer.type !== 'session-subscribed') {
-      release(watch, false);
-      refuse(watch.client, replyTo, 'the server did not answer that subscription');
+      failed('the server did not answer that subscription');
       return;
     }
 
@@ -457,6 +571,8 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
       const watch: Watch = {
         client,
         clientKey,
+        target,
+        replyTo,
         upstream,
         clientStartId: handleFor(startsOf(client), named, target),
         dropped: 0,
@@ -480,7 +596,7 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
       servers.stream(
         routed.registrationId,
         { type: 'session-subscribe', target: routed.target },
-        (outcome) => attachTo(watch, replyTo, outcome),
+        (outcome) => attachTo(watch, outcome),
       );
     },
 
@@ -553,6 +669,56 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
           storeId,
           sessionId: tag.sessionId,
         });
+      }
+    },
+
+    noteConnection(report: ServerConnectionReport): void {
+      const gone = away.has(report.registrationId);
+
+      if (report.phase !== 'connected') {
+        if (gone) return;
+        away.add(report.registrationId);
+        // The reason the connection recorded, narrowed to the two this end can
+        // be sure of. A drain is the one case where the machine itself said
+        // when it would be back, and a pane that can say so is a pane whose
+        // user waits instead of going to look at the machine.
+        const reason: SubscriptionEndReason =
+          report.staleReason === 'draining' ? 'server-draining' : 'server-dropped';
+        for (const upstream of upstreamsOn(report.registrationId)) {
+          // The history that was on its way is not coming: the frames those
+          // claims were for died with the connection, and a claim left standing
+          // would swallow the first chunks of whatever replaces it.
+          upstream.replays.length = 0;
+          // Every watch, not only the attached ones. A subscribe that was in
+          // flight has already been refused in the server's words -- the
+          // transport settles what it was waiting on before this is reached --
+          // so what is left here is panes that were being fed.
+          for (const watch of upstream.watches) end(watch, reason);
+        }
+        logger.info('a server stopped feeding its terminals', {
+          registrationId: report.registrationId,
+          reason,
+        });
+        return;
+      }
+
+      // A server that never went away has nothing to re-establish: its
+      // subscriptions are the ones it is already feeding.
+      if (!gone) return;
+      away.delete(report.registrationId);
+      for (const upstream of upstreamsOn(report.registrationId)) {
+        // One subscribe per watch, as a client's own subscribe is: the server
+        // joins them to one stream and answers each with the scrollback as it
+        // stands, which is what gives every pane its own replay count.
+        // A copy, because a refusal answered where it is read gives that watch
+        // back inside this loop.
+        for (const watch of [...upstream.watches]) {
+          servers.stream(
+            upstream.registrationId,
+            { type: 'session-subscribe', target: upstream.target },
+            (outcome) => attachTo(watch, outcome, true),
+          );
+        }
       }
     },
 

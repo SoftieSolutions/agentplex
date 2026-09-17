@@ -6,7 +6,7 @@ import type {
   StoreId,
   TerminalSize,
 } from '@agentplex/protocol';
-import type { TerminalOutputFrame } from '../servers/servers.js';
+import type { ServerConnectionReport, TerminalOutputFrame } from '../servers/servers.js';
 import type { ClientStart, Terminal, TerminalClient } from './terminal.js';
 
 /**
@@ -80,6 +80,7 @@ export function createFakeTerminal(): FakeTerminal {
       _starts: readonly SessionStartTag[],
     ): void {},
     deliver(_registrationId: ServerRegistrationId, _output: TerminalOutputFrame): void {},
+    noteConnection(_report: ServerConnectionReport): void {},
     forget(client: TerminalClient): void {
       forgotten.push(client);
     },

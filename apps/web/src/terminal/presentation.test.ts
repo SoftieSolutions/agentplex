@@ -14,6 +14,7 @@ import {
   machineLabel,
   matchSummary,
   searchScopeNotice,
+  terminalFeedNotice,
   terminalInputNotice,
   terminalIsPartial,
   terminalScopeNotice,
@@ -142,6 +143,8 @@ function terminalWith(overrides: Partial<TerminalWatchView> = {}): TerminalWatch
     evicted: false,
     printed: true,
     problem: null,
+    ended: null,
+    resumed: false,
     ...overrides,
   };
 }
@@ -276,6 +279,46 @@ describe('terminalScopeNotice', () => {
       'showing less than everything: the first 4 KB this session printed was gone before this pane attached; ' +
         '2 chunks of output did not fit down this connection and were dropped; ' +
         'this pane has since thrown away its own oldest output',
+    );
+  });
+});
+
+describe('terminalFeedNotice', () => {
+  it('says nothing about a pane something is feeding', () => {
+    expect(terminalFeedNotice(null)).toBeNull();
+    expect(terminalFeedNotice(terminalWith())).toBeNull();
+  });
+
+  it('tells a machine that went away from one that is going down on purpose', () => {
+    // Two silences that draw the same rectangle and mean two different things
+    // to do: wait a moment, or leave a box that is restarting alone.
+    expect(terminalFeedNotice(terminalWith({ ended: 'server-dropped' }))).toContain(
+      'stopped answering',
+    );
+    expect(terminalFeedNotice(terminalWith({ ended: 'server-draining' }))).toContain(
+      'shutting down',
+    );
+  });
+
+  it('says outright when there is nothing left to wait for', () => {
+    const notice = terminalFeedNotice(terminalWith({ ended: 'session-ended' }));
+    // The one reason the hub is not about to re-attach this pane, so the words
+    // do not tell the user to wait for something that is not coming.
+    expect(notice).toContain('this terminal is gone');
+    expect(notice).not.toContain('dialling');
+  });
+
+  it('says a replayed history repeats rather than that something is missing', () => {
+    const notice = terminalScopeNotice(terminalWith({ resumed: true }));
+    // Not one of the losses: a feed that came back is showing something twice,
+    // not showing less, and a label that said "showing less than everything"
+    // about it would send a user looking for output that is right there.
+    expect(notice).toBe(
+      'this feed was re-established and the session replayed what it still held, so output above may appear twice',
+    );
+    expect(terminalScopeNotice(terminalWith({ resumed: true, droppedChunks: 2 }))).toBe(
+      'showing less than everything: 2 chunks of output did not fit down this connection and were dropped' +
+        ' — this feed was re-established and the session replayed what it still held, so output above may appear twice',
     );
   });
 });

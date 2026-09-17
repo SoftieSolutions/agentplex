@@ -271,7 +271,15 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     timers,
     clock,
     logger,
-    onChange: (report) => state.applyConnection(report),
+    onChange: (report) => {
+      state.applyConnection(report);
+      // The relay hears about connectivity too, and for a reason the state
+      // cannot cover: a subscription is held on a connection, so a machine
+      // going away leaves panes being fed by nothing and a machine coming back
+      // leaves them subscribed to a socket that is gone. The state describes
+      // the fleet; this re-establishes what was borrowed from it.
+      terminal.noteConnection(report);
+    },
     onReport: (report) => {
       // Stamped with the hub's clock and not the server's. Two machines' clocks
       // disagree, and a hub comparing readings dated by the machines that made
