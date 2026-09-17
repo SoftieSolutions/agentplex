@@ -32,6 +32,7 @@ export function ColorSchemeControl(): JSX.Element {
         itself over at sunset takes the app with it.
       </Text>
       <SegmentedControl
+        aria-label="Appearance"
         name={COLOR_SCHEME_FIELD_NAME}
         value={setting.choice}
         data={colorSchemeChoices.map((choice) => ({
