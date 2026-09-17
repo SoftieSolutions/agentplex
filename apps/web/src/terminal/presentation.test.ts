@@ -5,7 +5,7 @@ import {
   sessionStatusSchema,
   type MachineState,
 } from '@agentplex/protocol';
-import type { HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
+import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import { createTerminalFeed } from './chunk-feed.js';
 import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
 import {
@@ -13,6 +13,7 @@ import {
   formatBytes,
   machineLabel,
   matchSummary,
+  paneAttachment,
   searchScopeNotice,
   terminalInputNotice,
   terminalIsPartial,
@@ -323,5 +324,67 @@ describe('searchScopeNotice', () => {
     const notice = searchScopeNotice(true);
     expect(notice).toContain(String(EMULATOR_SCROLLBACK_LINES));
     expect(notice).toContain('not proof of absence');
+  });
+});
+
+/**
+ * Every phase the store can be in, written out so the strip's indicator can be
+ * held to saying something different in each. The compiler keeps this list
+ * honest in the other direction: `paneAttachment` switches over the union and
+ * a phase added to it fails to typecheck until it has words here too.
+ */
+const connectionPhaseNames: readonly ConnectionPhase[] = [
+  'idle',
+  'connecting',
+  'connected',
+  'reconnecting',
+  'failed',
+];
+
+describe('paneAttachment', () => {
+  it('claims attachment only when the socket is up and the watch was answered', () => {
+    expect(paneAttachment('connected', terminalWith())).toEqual({
+      tone: 'running',
+      words: 'Attached',
+    });
+  });
+
+  it('says it is still attaching while the hub has not answered the watch', () => {
+    // The first frames of a pane's life, and every reconnection's: the
+    // subscribe is out and nothing has come back. "Attached" here would be a
+    // claim about a terminal this pane is not being sent yet.
+    expect(paneAttachment('connected', terminalWith({ attached: false }))).toEqual({
+      tone: 'idle',
+      words: 'Attaching',
+    });
+    expect(paneAttachment('connected', null)).toEqual({ tone: 'idle', words: 'Attaching' });
+  });
+
+  it('says the connection is down rather than what the last frame said', () => {
+    // The watch record keeps `attached` true until the store tears the
+    // connection down, and a pane reading only that would go on saying
+    // "Attached" over a socket that is gone. The connection is read first for
+    // exactly that reason.
+    expect(paneAttachment('reconnecting', terminalWith())).toEqual({
+      tone: 'blocked',
+      words: 'Reconnecting',
+    });
+    expect(paneAttachment('failed', terminalWith())).toEqual({
+      tone: 'blocked',
+      words: 'Dropped',
+    });
+    expect(paneAttachment('connecting', terminalWith())).toEqual({
+      tone: 'idle',
+      words: 'Connecting',
+    });
+    expect(paneAttachment('idle', terminalWith())).toEqual({
+      tone: 'idle',
+      words: 'Not connected',
+    });
+  });
+
+  it('has a word for every phase the store can be in', () => {
+    const words = connectionPhaseNames.map((phase) => paneAttachment(phase, null).words);
+    expect(new Set(words).size).toBe(connectionPhaseNames.length);
   });
 });

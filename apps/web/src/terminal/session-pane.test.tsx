@@ -238,7 +238,17 @@ function control(label: string): HTMLElement {
   return button;
 }
 
+/**
+ * The find bar's count. The last live region in the pane and not the first:
+ * the header's attachment indicator is one too, and it is above the bar in
+ * document order.
+ */
 function summary(): string {
+  return [...container.querySelectorAll('[role="status"]')].at(-1)?.textContent ?? '';
+}
+
+/** The word in the header's attachment chip, which is the first live region. */
+function attachment(): string {
   return container.querySelector('[role="status"]')?.textContent ?? '';
 }
 
@@ -978,5 +988,87 @@ describe('copy and paste in a pane', () => {
       // And the control is still there to try again with.
       expect(pasteButton()).not.toBeNull();
     });
+  });
+});
+
+/**
+ * The strip across the top of the pane, and the word beside it.
+ *
+ * Two claims worth holding to a real socket rather than to a prop. The strip
+ * draws the tabs that exist -- one -- and says nothing about the three the
+ * mockup shows and nobody has built. And "Attached" is a claim about that
+ * socket and the subscription on it, so every stage of a connection is walked
+ * here with the hub's own frames: dialled, welcomed, answered, and dropped.
+ */
+describe('the session tab strip', () => {
+  async function mountOn(hub: StoreHarness): Promise<void> {
+    await mount(<SessionPane sessionRef={SESSION} store={hub.store} emulators={emulators} />);
+  }
+
+  function tabLabels(): string[] {
+    return [...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent ?? '');
+  }
+
+  it('draws the one tab that is built, selected, and nothing for the rest', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    await connect(hub);
+
+    expect(tabLabels()).toEqual(['Terminal']);
+    // Not a disabled Transcript, not a greyed Diff: a tab nobody can open is
+    // a promise the screen cannot keep, and the strip is a list rather than a
+    // fixed set of four.
+    expect(container.textContent).not.toContain('Transcript');
+    expect(container.textContent).not.toContain('Approvals');
+    expect(container.querySelector('[role="tab"]')?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('claims attachment only once the hub has answered the watch', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+
+    // Dialled, and nothing has answered yet.
+    expect(attachment()).toBe('Connecting');
+
+    const socket = await connect(hub);
+    // The socket is up and the subscribe is out. The terminal is not this
+    // pane's to show until the hub says it is.
+    expect(attachment()).toBe('Attaching');
+
+    await deliver(socket, hubFrames.sessionSubscribed);
+
+    expect(attachment()).toBe('Attached');
+  });
+
+  it('says the connection went, rather than what the last frame said', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await deliver(socket, hubFrames.sessionSubscribed);
+    expect(attachment()).toBe('Attached');
+
+    // The watch record still says attached until the store tears it down;
+    // the word is read off the connection first for exactly this moment.
+    await act(async () => {
+      socket.drop();
+    });
+
+    expect(attachment()).toBe('Reconnecting');
+  });
+
+  it('says a connection that is not coming back is gone', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = hub.socket();
+
+    // A hub that speaks another protocol version refuses the hello itself:
+    // down for a reason redialling cannot fix, and the one phase that is not
+    // a wait for something.
+    await act(async () => {
+      socket.open();
+      socket.deliver(hubFrames.refusalProtocolVersion);
+    });
+
+    expect(attachment()).toBe('Dropped');
   });
 });
