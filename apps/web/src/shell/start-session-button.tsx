@@ -14,10 +14,11 @@ import { withSafeArea } from './safe-area.js';
  * the New session button opens on a wide screen -- the shell holds the form and
  * this opens it -- rather than a second way in with its own rules.
  *
- * The count comes from `needsYouCount`, which is the number the session list's
- * Needs you chip carries. Deliberately one derivation: on a phone the chip and
- * this badge are on the same screen, and two numbers for one question is how a
- * badge stops being believed.
+ * The count comes from `needsYouCount`, which counts the sessions waiting on a
+ * human that something can actually be done about. It is deliberately not the
+ * Needs you chip's number, which is larger whenever a machine is unreachable:
+ * a chip promises how many rows pressing it yields, and a badge claims
+ * somebody's attention. `needsYouCount` carries the argument.
  */
 
 /** The button's diameter. Comfortably past the 44px a fingertip needs. */

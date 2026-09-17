@@ -394,9 +394,12 @@ describe('the shell on a phone', () => {
     expect(tabs().map((tab) => tab.textContent)).toEqual(['Sessions', 'Projects', 'More']);
   });
 
-  it('badges the action button with the count the Needs you chip carries', async () => {
+  it('badges the action button with the sessions waiting on a human', async () => {
     await mount();
 
+    // Every machine in this fleet is up, so the chip below says the same two
+    // the badge does. They part company on an unreachable one, which is
+    // `needsYouCount`'s own test rather than this one.
     const chips = [...container.querySelectorAll('main [aria-pressed]')].map(
       (chip) => chip.textContent,
     );
