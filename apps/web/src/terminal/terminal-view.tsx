@@ -90,14 +90,11 @@ export function TerminalView({
         flex: 1,
         minHeight: 0,
         /**
-         * No padding here, which is a decision and not an omission. The air
-         * between this edge and the first character is still there; it is on
-         * the terminal element instead, where `padTerminalElement` puts it
-         * and where `@xterm/addon-fit` is the only place it reads one from.
-         * Padding on this box would be measured by the fit as part of the box
-         * and subtracted from nothing, so the grid would come out larger than
-         * what the pane shows and its last columns and row would be drawn
-         * past this element's edge and clipped.
+         * No padding here, which is a decision and not an omission: the fit
+         * addon measures this box and subtracts the terminal element's
+         * padding, never this one's, so padding here is a grid drawn past
+         * this edge and clipped. `padTerminalElement` argues it and puts the
+         * pane's inset where the addon can see it.
          *
          * The background staying here is what makes that invisible: this box
          * is the whole pane, the terminal element sits inside it inset by its

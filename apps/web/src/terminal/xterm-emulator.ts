@@ -374,6 +374,21 @@ export function padTerminalElement(element: HTMLElement | undefined): void {
 }
 
 /**
+ * A computed length in CSS pixels. Anything that is not one -- an empty
+ * string, a keyword, a percentage -- is no length, which here means no inset.
+ */
+function cssPixels(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** What an element's own padding costs it, top and bottom together. */
+function blockInset(element: HTMLElement): number {
+  const style = getComputedStyle(element);
+  return cssPixels(style.paddingTop) + cssPixels(style.paddingBottom);
+}
+
+/**
  * The height of one row, in CSS pixels, or `null` when there is nothing to
  * measure it against.
  *
@@ -396,11 +411,27 @@ export function padTerminalElement(element: HTMLElement | undefined): void {
  * degrade in than answering `null`, because `null` here is a finger that moves
  * nothing, and a gesture that does nothing is indistinguishable from an app
  * that has stopped answering.
+ *
+ * The fallback subtracts the element's own padding, which is not a detail:
+ * `clientHeight` is the padding box, and `padTerminalElement` puts the pane's
+ * inset on exactly this element. Left in, the inset would be counted as grid
+ * -- a few percent again on a pane that has one, and a whole answer on a pane
+ * that has not. An element carrying nothing but 28px of padding would divide
+ * to a cell of half a pixel across a full grid, and half a pixel is a finger
+ * that moves the view a hundred lines. Taking the inset off is what keeps the
+ * fallback the box the terminal was fitted into, and it is also what makes
+ * that case answer `null` instead: with the padding gone there is no box left,
+ * which is the one thing worth refusing to guess at. Read off the element
+ * rather than off `TERMINAL_PADDING` because the question is what this element
+ * is inset by, and a terminal nobody padded is inset by nothing.
  */
 export function paneCellHeight(element: HTMLElement | undefined, rows: number): number | null {
   if (element === undefined || rows <= 0) return null;
   const screen = element.querySelector('.xterm-screen');
-  const height = screen instanceof HTMLElement ? screen.clientHeight : element.clientHeight;
+  const height =
+    screen instanceof HTMLElement
+      ? screen.clientHeight
+      : element.clientHeight - blockInset(element);
   if (height <= 0) return null;
   return height / rows;
 }
