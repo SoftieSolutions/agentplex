@@ -66,7 +66,7 @@ function stateWith(overrides?: {
               overrides?.holder === undefined
                 ? { server: 'reg-1', stoppable: true }
                 : overrides.holder,
-            acknowledgedAt: null,
+            acknowledgedThrough: null,
             mutedAt: null,
           },
         ],

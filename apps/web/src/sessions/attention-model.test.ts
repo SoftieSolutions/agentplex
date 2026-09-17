@@ -29,8 +29,8 @@ function attentionFrom(text: string): AttentionView {
   if (!parsed.ok || parsed.value.type !== 'session-attention') {
     throw new Error('the fixture is not a session-attention frame');
   }
-  const { replyTo, storeId, sessionId, acknowledgedAt, mutedAt } = parsed.value;
-  return { replyTo, storeId, sessionId, acknowledgedAt, mutedAt };
+  const { replyTo, storeId, sessionId, acknowledgedThrough, mutedAt } = parsed.value;
+  return { replyTo, storeId, sessionId, acknowledgedThrough, mutedAt };
 }
 
 const populated = stateFrom(hubFrames.machineStatePopulated);

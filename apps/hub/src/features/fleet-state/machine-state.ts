@@ -151,7 +151,7 @@ function toSessionRow(row: ReducedSessionRow): SessionRow {
     // never apart from it: the verdict a client wants is one comparison across
     // two fields of one row, and a nested object would put a `null` in the way
     // of it for the common case of a session nobody has said anything about.
-    acknowledgedAt: row.attention.acknowledgedAt,
+    acknowledgedThrough: row.attention.acknowledgedThrough,
     mutedAt: row.attention.mutedAt,
   };
 }

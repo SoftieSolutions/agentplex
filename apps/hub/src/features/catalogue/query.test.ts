@@ -158,7 +158,7 @@ function fleet(readings: readonly Reading[]): MachineState {
           reportedAt: START,
           reachable: true,
           holder: null,
-          acknowledgedAt: null,
+          acknowledgedThrough: null,
           mutedAt: null,
         })),
       },

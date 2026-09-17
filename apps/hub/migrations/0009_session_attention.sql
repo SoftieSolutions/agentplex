@@ -22,20 +22,32 @@
 -- What bounds this table instead is the hub refusing an acknowledgement or a
 -- mute for a session it cannot currently see.
 --
--- Both moments are nullable and a row may hold either alone: acknowledging a
--- session that is not muted must not mute it, and muting one nobody has
+-- The two columns are nullable and a row may hold either alone: acknowledging
+-- a session that is not muted must not mute it, and muting one nobody has
 -- acknowledged must not claim somebody has. A row with both columns null is
 -- possible (a mute that was undone on a session nobody acknowledged) and is
 -- left alone rather than deleted -- a sweep to reclaim a handful of bytes is a
 -- second writer to this table, and the read treats null and absent alike.
 --
+-- `acknowledged_through` is deliberately not a moment on this hub's clock, and
+-- the name says so. It holds the session's own `updated_at` as the hub saw it
+-- when the acknowledgement arrived -- a number a *provider* wrote into a
+-- transcript on some other machine. It exists to be compared against the next
+-- such number, and the whole point is that both sides of that comparison come
+-- off one clock. Stamping the hub's own time here instead would compare a hub
+-- clock with a provider clock: a hub five seconds fast would read a second
+-- prompt two seconds after the acknowledgement as already seen, silently,
+-- which is exactly the failure a timestamp was chosen over a boolean to avoid.
+--
+-- `muted_at` *is* this hub's clock, because it is not compared with anything.
+-- It answers "since when" for a person and nothing reads it as a threshold.
 -- Epoch milliseconds with no default, for the reason every earlier migration
 -- gives: time comes from an injected clock, and a schema default is the one
 -- reading of the wall clock no test could set.
 CREATE TABLE session_attention (
-  store_id        text    NOT NULL,
-  session_id      text    NOT NULL,
-  acknowledged_at integer,
-  muted_at        integer,
+  store_id             text    NOT NULL,
+  session_id           text    NOT NULL,
+  acknowledged_through integer,
+  muted_at             integer,
   PRIMARY KEY (store_id, session_id)
 );

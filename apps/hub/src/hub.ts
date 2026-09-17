@@ -343,15 +343,16 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // What the user has said about a session, as opposed to what a machine
   // reports about one. The rows are this feature's and the current reading of
   // them is the reducer's, joined by the two functions below and by nothing
-  // else: neither file imports the other, so there is one direction in which
-  // an acknowledgement travels and one in which the question "is this a
-  // session" is asked.
+  // else. The edge runs one way: the attention feature imports nothing of the
+  // fleet state, so what it can reach is exactly these two callbacks. (The
+  // reducer does import the feature, for the type of what it is handed and the
+  // value it uses for a session nobody has spoken about.)
   const attention = createAttention({
     database,
     clock,
     logger,
     onChanged: (ref, recorded) => state.applyAttention(ref, recorded),
-    knowsSession: (ref) => state.knowsSession(ref),
+    sessionActivity: (ref) => state.sessionActivity(ref),
   });
 
   // Read back before the first client is served, so that a hub which restarted

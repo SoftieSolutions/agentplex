@@ -1187,7 +1187,7 @@ export function serveClientConnection(
         replyTo,
         storeId: ref.storeId,
         sessionId: ref.sessionId,
-        acknowledgedAt: outcome.attention.acknowledgedAt,
+        acknowledgedThrough: outcome.attention.acknowledgedThrough,
         mutedAt: outcome.attention.mutedAt,
       });
     } catch (error) {

@@ -139,7 +139,7 @@ describe('a catalogue item', () => {
       reportedAt: 1_756_000_000_000,
       reachable: true,
       holder: null,
-      acknowledgedAt: null,
+      acknowledgedThrough: null,
       mutedAt: null,
     };
 

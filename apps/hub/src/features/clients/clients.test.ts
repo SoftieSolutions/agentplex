@@ -845,7 +845,10 @@ describe('acknowledging and muting a session', () => {
   const SESSION = 'session-1';
 
   it('answers the acknowledgement with the whole row, to the client that asked', async () => {
-    const attention = createFakeAttention({ now: 1_756_000_000_000 });
+    // Two numbers, kept apart: a mute is stamped off the hub's clock, and an
+    // acknowledgement records the session's own last activity. A fake that
+    // used one for both could not fail a test that conflated them.
+    const attention = createFakeAttention({ now: 1_756_000_000_000, through: 1_755_999_820_000 });
     const { broadcast } = harness(
       async () => [],
       createFakeSessions(),
@@ -868,7 +871,7 @@ describe('acknowledging and muting a session', () => {
       replyTo: 2,
       storeId: STORE,
       sessionId: SESSION,
-      acknowledgedAt: 1_756_000_000_000,
+      acknowledgedThrough: 1_755_999_820_000,
       mutedAt: null,
     });
     expect(attention.acknowledged).toEqual([{ storeId: STORE, sessionId: SESSION }]);
@@ -879,7 +882,7 @@ describe('acknowledging and muting a session', () => {
   });
 
   it('carries the state a mute wants rather than a toggle, and answers the row', async () => {
-    const attention = createFakeAttention({ now: 1_756_000_000_000 });
+    const attention = createFakeAttention({ now: 1_756_000_000_000, through: 1_755_999_820_000 });
     const { broadcast } = harness(
       async () => [],
       createFakeSessions(),

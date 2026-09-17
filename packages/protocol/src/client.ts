@@ -203,11 +203,12 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
    * Says the prompt this session is sitting on has been seen.
    *
    * It carries no timestamp, and that is the frame's whole design. The hub
-   * stamps the acknowledgement off its own clock, because the only thing the
-   * stamp is ever used for is a comparison against `updatedAt` -- a moment a
-   * *provider* wrote into a transcript -- and a comparison between two clocks
-   * neither of which is the reader's answers a question about whose watch is
-   * fast. One clock does the stamping and one clock's reading is compared.
+   * records the session's own `updatedAt` as it sees it at that moment, which
+   * is a number a *provider* wrote and therefore one the next such number can
+   * honestly be compared with. Neither the client's clock nor the hub's comes
+   * into it: a client-supplied value would be a claim about a clock nothing
+   * here can check, and a hub-stamped one would put the hub's clock on one
+   * side of a comparison whose other side is a provider's.
    *
    * It addresses `{ storeId, sessionId }` like a stop, and unlike a stop it
    * reaches no machine at all: an acknowledgement is a row in this hub's
@@ -230,7 +231,8 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
    * setting written twice and not two acts: the client sends the state it
    * wants, so a second click on a muted row cannot be mistaken for a toggle
    * against a value the client and the hub had drifted apart on. The hub
-   * stamps the moment, for the reason the acknowledgement above gives.
+   * stamps the moment off its own clock, which it may do here and not above
+   * because a mute is compared with nothing -- it says since when.
    *
    * What mute does not do is anywhere near this frame: the row goes on being
    * sent, with its status and its place, and the quieting happens in the
@@ -679,7 +681,7 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     replyTo: frameIdSchema,
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
-    acknowledgedAt: z.int().nonnegative().nullable(),
+    acknowledgedThrough: z.int().nonnegative().nullable(),
     mutedAt: z.int().nonnegative().nullable(),
   }),
   /**
