@@ -27,14 +27,14 @@
     "test:coverage": "vitest run --config ../../scripts/vitest.config.ts --coverage --passWithNoTests"
   },
   "dependencies": {
-    "ws": "^8.21.3",
-    "zod": "^4.1.13"
+    "ws": ">=8.21.3 <9.0.0",
+    "zod": ">=4.5.4 <5.0.0"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
-    "@types/ws": "^8.18.1",
-    "@vitest/coverage-v8": "^3.2.7",
-    "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "@types/node": ">=24.13.3 <25.0.0",
+    "@types/ws": ">=8.18.1 <9.0.0",
+    "@vitest/coverage-v8": ">=3.2.7 <4.0.0",
+    "typescript": ">=5.9.3 <6.0.0",
+    "vitest": ">=3.2.7 <4.0.0"
   }
 }
