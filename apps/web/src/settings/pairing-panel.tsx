@@ -81,10 +81,19 @@ export function PairingPanel({
       setName('');
       setAddress('');
       setToken('');
-      setOutcome({
-        ok: true,
-        words: 'Pairing recorded. The hub dials it from here; its row appears below.',
-      });
+      // "Its row appears below" is true where this panel sits above the paired
+      // list and false in the wizard, which is the whole route and has no list
+      // under it. A caller that asked to be told has somewhere to send the
+      // reader and says so itself, so the panel says nothing rather than
+      // guessing at a layout it cannot see.
+      setOutcome(
+        onPaired === undefined
+          ? {
+              ok: true,
+              words: 'Pairing recorded. The hub dials it from here; its row appears below.',
+            }
+          : null,
+      );
       onPaired?.(answer.registrationId);
     });
   }

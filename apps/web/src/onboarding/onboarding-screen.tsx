@@ -1,4 +1,6 @@
 import type { JSX } from 'react';
+import { discoveredCandidates } from '../settings/pairing-form.js';
+import { pairingFor } from '../settings/settings-route.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import {
@@ -14,6 +16,7 @@ import {
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import type { OnboardingDismissal } from './dismissal.js';
 import { activeStep, type OnboardingStep } from './onboarding-model.js';
+import { PairStep } from './pair-step.js';
 
 /**
  * The first-run wizard: what this is, how far along getting it working the
@@ -62,14 +65,16 @@ export function OnboardingScreen({ store, dismissal }: OnboardingScreenProps): J
   const scheme = useComputedColorScheme('dark');
 
   /**
-   * In the body because it writes the browser's address bar and the injected
-   * dismissal, both of which belong to this screen's one control.
+   * Leaving the wizard: skipping it and finishing it are the same two writes,
+   * so they are one function. In the body because it writes the browser's
+   * address bar and the injected dismissal, both of which belong to this
+   * screen rather than to a step.
    *
    * The dismissal's answer is deliberately not branched on: a browser that
    * refuses storage still gets to leave the screen it asked to leave, and it
    * says so by returning false rather than by refusing the click.
    */
-  function skip(): void {
+  function leave(): void {
     dismissal.dismiss();
     // Out of the wizard's address and back to the app's default route. The
     // empty hash rather than a route constant: there is no wizard-shaped place
@@ -84,9 +89,18 @@ export function OnboardingScreen({ store, dismissal }: OnboardingScreenProps): J
       spacing={0}
       style={{ minHeight: '100dvh', alignItems: 'stretch' }}
     >
-      <WizardHero step={activeStep(snapshot.phase)} onSkip={skip} />
+      <WizardHero step={activeStep(snapshot.phase)} onSkip={leave} />
       <Box p={{ base: 'lg', md: 40 }} bg={colorForRole('background', scheme)}>
-        <PairStep scheme={scheme} />
+        {/* The same pairing the settings screen does, over the same operations
+            this store already has: `pairingFor` is memoised per store, so the
+            wizard and settings are two mounts of one panel rather than two
+            pairing paths sharing a socket. */}
+        <PairStep
+          pairing={pairingFor(store)}
+          candidates={discoveredCandidates(snapshot.machineState)}
+          scheme={scheme}
+          onDone={leave}
+        />
       </Box>
     </SimpleGrid>
   );
@@ -146,34 +160,6 @@ function WizardHero({ step, onSkip }: WizardHeroProps): JSX.Element {
           Skip for now
         </Button>
       </Stack>
-    </Stack>
-  );
-}
-
-interface PairStepProps {
-  readonly scheme: Scheme;
-}
-
-/**
- * The live step's column, as a placeholder: the heading and where to go.
- *
- * AGX-250 replaces this with the pairing itself. Until then it says so, and
- * names the one route to a working pairing control -- Skip, then Settings on
- * the session list. It may not point at a panel below, because there is none:
- * this screen replaces the list and the settings on the default route rather
- * than sitting above them, so any "below" would send the reader off-screen.
- */
-function PairStep({ scheme }: PairStepProps): JSX.Element {
-  return (
-    <Stack gap={10} maw={520}>
-      <Title order={2} fz={20} c={colorForRole('text', scheme)}>
-        Pair a server
-      </Title>
-      <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
-        The pairing form arrives here in a later change. Until then, Skip for now leads to the
-        session list, where Settings pairs a server today: the hub takes its address and pairing
-        token and dials it.
-      </Text>
     </Stack>
   );
 }

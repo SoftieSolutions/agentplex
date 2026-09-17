@@ -112,8 +112,22 @@ describe('the pairing panel', () => {
     container.remove();
   });
 
-  async function mount(answer: PairingOutcome): Promise<FakePairingOperations> {
+  /**
+   * `announces` is whether a caller passed `onPaired`, which is the one thing
+   * the two mounts of this panel differ by: settings has nowhere to send
+   * anybody and the wizard has a next step.
+   */
+  async function mount(answer: PairingOutcome, announces = true): Promise<FakePairingOperations> {
     const pairing = createFakePairingOperations({ answer });
+    // Spread rather than `onPaired={... : undefined}`: an optional property is
+    // absent or a function here, and this app's TypeScript says so.
+    const announcement = announces
+      ? {
+          onPaired: (registrationId: ServerRegistrationId): void => {
+            paired.push(registrationId);
+          },
+        }
+      : {};
     await act(async () => {
       root = createRoot(container);
       root.render(
@@ -122,12 +136,7 @@ describe('the pairing panel', () => {
           cssVariablesResolver={cssVariablesResolver}
           defaultColorScheme="dark"
         >
-          <PairingPanel
-            pairing={pairing}
-            candidates={CANDIDATES}
-            scheme="dark"
-            onPaired={(registrationId) => paired.push(registrationId)}
-          />
+          <PairingPanel pairing={pairing} candidates={CANDIDATES} scheme="dark" {...announcement} />
         </MantineProvider>,
       );
     });
@@ -191,6 +200,28 @@ describe('the pairing panel', () => {
         token: 'printed-nowhere',
       },
     ]);
+    expect(paired).toEqual([PAIRED]);
+  });
+
+  it('tells a caller with nowhere to send anybody where the row will appear', async () => {
+    await mount(YES, false);
+
+    await submit({ name: 'gpu-box-01', address: 'wss://gpu-box-01.example:8443', token: 't' });
+
+    expect(container.textContent).toContain(
+      'Pairing recorded. The hub dials it from here; its row appears below.',
+    );
+  });
+
+  it('says nothing of a row below when the caller draws what happens next', async () => {
+    // "Below" is the settings list. The wizard mounts this same panel with no
+    // list under it and its own line to draw, so the panel's version of the
+    // news would be both a second sentence and a false one.
+    await mount(YES);
+
+    await submit({ name: 'gpu-box-01', address: 'wss://gpu-box-01.example:8443', token: 't' });
+
+    expect(container.textContent).not.toContain('Pairing recorded');
     expect(paired).toEqual([PAIRED]);
   });
 
