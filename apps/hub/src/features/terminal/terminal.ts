@@ -455,13 +455,46 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
    * back refused is an answer to a frame the client sent, so the client is
    * refused in the server's words. A re-subscription nobody asked for has no
    * frame to refuse: the client asked once, was attached, and is owed the news
-   * that the terminal it was watching is not there any more.
+   * instead.
+   *
+   * ## Which failures are evidence that the terminal is gone
+   *
+   * Exactly one: a server that read the frame and said no. Everything else
+   * that reaches a failure here is the attempt not landing, which says nothing
+   * about the session -- and the difference is the whole of what a pane does
+   * next, because giving the watch back is not undoable. A hub that released
+   * one on a connection that closed mid-frame would have told a pane its live
+   * session had ended, and then re-subscribed nothing on every later redial:
+   * silent forever, with a confident explanation.
+   *
+   * The two that are not evidence, and where they come from:
+   *
+   *   * `internal` -- `settleAll` in `transport.ts`, settling what was in
+   *     flight when the socket closed. A connection that ended before the
+   *     server read the frame has pronounced on nothing.
+   *   * a success with no answer -- the deadline in `stream-channel.ts`, which
+   *     cannot tell a server that had nothing to say from one that is slow, and
+   *     answers `ok` with nothing rather than inventing a refusal.
+   *
+   * Both keep the watch, so the next time that machine comes back it is asked
+   * again, and both say `server-dropped`: the feed stopped, and the reason it
+   * stopped is still the connection rather than the session.
    */
   const attachTo = (watch: Watch, outcome: StreamOutcome, again = false): void => {
     const replyTo = watch.replyTo;
-    const failed = (problem: string): void => {
-      release(watch, false);
-      if (again) {
+    /**
+     * `gone` is whether the server actually pronounced on this session, and
+     * therefore whether this watch is given back or stands.
+     */
+    const failed = (problem: string, gone: boolean): void => {
+      if (!again) {
+        release(watch, false);
+        refuse(watch.client, replyTo, problem);
+        return;
+      }
+
+      if (gone) {
+        release(watch, false);
         end(watch, 'session-ended');
         logger.info('a watched terminal was gone when its machine came back', {
           registrationId: watch.upstream.registrationId,
@@ -469,20 +502,29 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
         });
         return;
       }
-      refuse(watch.client, replyTo, problem);
+
+      end(watch, 'server-dropped');
+      logger.info('a re-subscription did not land; the watch stands', {
+        registrationId: watch.upstream.registrationId,
+        problem,
+      });
     };
 
     if (!outcome.ok) {
-      failed(outcome.problem);
+      // `internal` is the one code that is not the server's verdict on the
+      // request: it is the hub's own side failing, which on this path means the
+      // connection closed with the frame in flight.
+      failed(outcome.problem, outcome.code !== 'internal');
       return;
     }
 
     // Narrowed on the frame the server sent rather than assumed from what was
     // asked: a peer that answered a subscribe with a detach is out of step, and
-    // taking its word would leave a pane attached to nothing.
+    // taking its word would leave a pane attached to nothing. Neither shape is
+    // a refusal, so neither ends a watch.
     const answer = outcome.answer;
     if (answer === null || answer.type !== 'session-subscribed') {
-      failed('the server did not answer that subscription');
+      failed('the server did not answer that subscription', false);
       return;
     }
 
@@ -689,11 +731,14 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
           // claims were for died with the connection, and a claim left standing
           // would swallow the first chunks of whatever replaces it.
           upstream.replays.length = 0;
-          // Every watch, not only the attached ones. A subscribe that was in
-          // flight has already been refused in the server's words -- the
-          // transport settles what it was waiting on before this is reached --
-          // so what is left here is panes that were being fed.
-          for (const watch of upstream.watches) end(watch, reason);
+          // The panes that were being fed, and only those. Whatever was in
+          // flight on that connection has already been settled by the transport
+          // before this is reached -- a first subscribe with the client's own
+          // refusal, a re-subscription with this same frame -- and a pane told
+          // twice in one breath is the second frame restating the first.
+          for (const watch of upstream.watches) {
+            if (watch.attached) end(watch, reason);
+          }
         }
         logger.info('a server stopped feeding its terminals', {
           registrationId: report.registrationId,

@@ -1,8 +1,10 @@
 import type {
   MachineState,
+  ServerView,
   SessionRef,
   SessionRow,
   SessionStatus,
+  StaleReason,
   SubscriptionEndReason,
 } from '@agentplex/protocol';
 import { serverLabel } from '../sessions/session-list-model.js';
@@ -86,6 +88,34 @@ export function terminalInputNotice(
 }
 
 /**
+ * The machine a session is running on, as the published state has it.
+ *
+ * The holder when something is holding it, and otherwise the server whose
+ * reading the row is -- the same choice `machineLabel` makes, because they are
+ * answering the same question about the same row.
+ */
+export function machineFor(state: MachineState | null, row: SessionRow | null): ServerView | null {
+  if (state === null || row === null) return null;
+  const registrationId = row.holder?.server ?? row.source;
+  return state.servers.find((server) => server.registrationId === registrationId) ?? null;
+}
+
+/**
+ * Reasons no amount of waiting changes, as the fleet state names them.
+ *
+ * The hub goes on dialling all three -- it should notice a re-pairing without
+ * being restarted -- but on a floor of a minute, and nothing that happens in
+ * that minute helps. The same set the dial loop keeps for the same three, and
+ * it is here rather than imported because what it decides here is a sentence
+ * rather than a schedule.
+ */
+const NEEDS_A_PERSON: ReadonlySet<StaleReason> = new Set<StaleReason>([
+  'unauthorized',
+  'protocol-version',
+  'identity-changed',
+]);
+
+/**
  * The sentence for a pane nothing is feeding any more, or `null` while
  * something is.
  *
@@ -95,16 +125,34 @@ export function terminalInputNotice(
  * gets its own words because each is a different thing to do -- wait a moment,
  * wait for a machine that is deliberately restarting, or stop waiting.
  *
- * The first two say the hub is dialling, because it is: the watch survives the
- * machine that was serving it, and a pane that is told to wait is a pane
- * nobody reloads. The third does not, because nothing is coming back.
+ * `machine` is the server row for the machine this session is on, when the
+ * state has one, and it is what keeps `server-dropped` from promising too
+ * much. The frame carries three reasons and not ten, deliberately: a
+ * subscription ends for reasons about the connection, and the connection's own
+ * vocabulary for why it is down already reaches this client on every
+ * `machine-state`. So the words are joined here, where both facts are, rather
+ * than by widening a wire enum that a second pull request is already building
+ * on -- and a wrong token or a build that disagrees says so instead of telling
+ * somebody to wait for a dial that will be refused exactly as it was.
  */
-export function terminalFeedNotice(terminal: TerminalWatchView | null): string | null {
+export function terminalFeedNotice(
+  terminal: TerminalWatchView | null,
+  machine: ServerView | null = null,
+): string | null {
   const ended: SubscriptionEndReason | null = terminal?.ended ?? null;
   if (ended === null) return null;
   switch (ended) {
-    case 'server-dropped':
+    case 'server-dropped': {
+      const reason = machine?.staleReason ?? null;
+      if (reason !== null && NEEDS_A_PERSON.has(reason)) {
+        const problem = machine?.problem ?? null;
+        return (
+          'nothing is reaching this pane: the hub cannot connect to the machine running this session, ' +
+          `and waiting will not fix it${problem === null ? '' : ` — ${problem}`}`
+        );
+      }
       return 'the machine running this session stopped answering: nothing is reaching this pane, and the hub is dialling it again';
+    }
     case 'server-draining':
       return 'the machine running this session is shutting down: nothing is reaching this pane until it is back, and the hub is waiting the time it asked for';
     case 'session-ended':

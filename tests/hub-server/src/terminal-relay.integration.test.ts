@@ -126,6 +126,15 @@ interface Machine {
   readonly sessionFiles: Record<string, string>;
   /** The server end of the connection it holds now, for dropping a socket. */
   live: FakeMessageSocket | undefined;
+  /**
+   * Closes the next connection the moment a subscribe is put on it, once.
+   *
+   * The one thing a test cannot otherwise arrange: a connection that dies with
+   * a frame already on it. The hub's own transport answers that frame
+   * `internal`, and what the relay does with an `internal` is the difference
+   * between a flap and a pane told its live session ended.
+   */
+  dropOnSubscribe: boolean;
   /** Every frame the hub put on the wire to this machine, as raw text. */
   readonly sentToServer: string[];
 }
@@ -163,6 +172,7 @@ function buildMachine(label: string, sessionFiles: Record<string, string>): Mach
     ptys,
     sessionFiles,
     live: undefined,
+    dropOnSubscribe: false,
     sentToServer: [],
   };
 }
@@ -215,6 +225,14 @@ function serveMachine(machine: Machine): DialResult {
       ...hubEnd,
       send(text: string): void {
         machine.sentToServer.push(text);
+        const parsed = parseTextFrame(parseHubToServerFrame, text);
+        if (machine.dropOnSubscribe && parsed.ok && parsed.value.type === 'session-subscribe') {
+          // Sent, and never read: the socket goes before this frame lands, the
+          // way a machine that drops mid-reconnection takes one with it.
+          machine.dropOnSubscribe = false;
+          serverEnd.close(PEER_GONE);
+          return;
+        }
         originalSend(text);
       },
     },
@@ -899,6 +917,46 @@ describe('a watched terminal whose machine drops and comes back', () => {
     machine('attic').ptys.last?.emit('still building\r\n');
     await settle();
     expect(client.printed).toEqual(['building\r\n', 'building\r\n', 'still building\r\n']);
+  });
+
+  it('keeps the pane when the redial flaps, and brings it back on the one that lands', async () => {
+    const client = await watching();
+    await drop();
+
+    // The redial connects and the socket dies with the re-subscription on it.
+    // Nothing about that is a verdict on the terminal -- the server never read
+    // the frame -- so the watch has to stand, or the pane is silent forever and
+    // every later redial asks for nothing.
+    machine('attic').dropOnSubscribe = true;
+    held().timers.fireAll();
+    await until(
+      () =>
+        client.received.filter((frame) => frame.type === 'session-subscription-ended').length === 2,
+      'the flap to reach the pane',
+    );
+    await until(
+      () => held().connections.snapshot()[0]?.phase === 'stale' && held().timers.pending > 0,
+      'the next redial to be scheduled',
+    );
+    await settle();
+
+    const ended = client.received.filter((frame) => frame.type === 'session-subscription-ended');
+    // Twice, once per spell, and never `session-ended`: the session is running
+    // on that machine throughout.
+    expect(ended.map((frame) => frame.reason)).toEqual(['server-dropped', 'server-dropped']);
+
+    held().timers.fireAll();
+    await until(
+      () => held().connections.snapshot()[0]?.phase === 'connected',
+      'the machine to come back',
+    );
+    await settle();
+
+    // The pane is live again: a fresh reply, and what the session prints next.
+    expect(client.received.filter((frame) => frame.type === 'session-subscribed')).toHaveLength(2);
+    machine('attic').ptys.last?.emit('back\r\n');
+    await settle();
+    expect(client.printed.at(-1)).toBe('back\r\n');
   });
 
   it('says the session ended when the terminal did not survive the restart', async () => {

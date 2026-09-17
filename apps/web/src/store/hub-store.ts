@@ -184,17 +184,21 @@ export interface TerminalWatchView {
    */
   readonly ended: SubscriptionEndReason | null;
   /**
-   * Whether a subscription was re-established over output this pane already
-   * had.
+   * Whether this pane is still holding both copies of a re-established feed.
    *
-   * What it is really saying is that the bytes on screen have a seam in them.
-   * The machine's scrollback survived whatever interrupted the feed, so what
-   * the fresh subscription replays is the tail of the session as it stands --
-   * which overlaps what this pane was already showing, and is written after
-   * it rather than in place of it. The buffered bytes are kept rather than
+   * What it is really saying is that the bytes have a seam in them. The
+   * machine's scrollback survived whatever interrupted the subscription, so
+   * what the fresh one replays is the tail of the session as it stands --
+   * which overlaps what this pane was already showing, and is written after it
+   * rather than in place of it. The buffered bytes are kept rather than
    * cleared, because they are what the emulator has painted and a pane does
    * not go blank to tidy up its own history; the label says what happened
    * instead.
+   *
+   * It goes false again when the older of the two copies has been evicted,
+   * because from then on nothing appears twice -- and a label that outlived
+   * what it described would be the pane over-claiming in the other direction,
+   * warning about a repeat a user can no longer find.
    */
   readonly resumed: boolean;
 }
@@ -656,7 +660,20 @@ interface TerminalRecord {
   printed: boolean;
   problem: string | null;
   ended: SubscriptionEndReason | null;
-  resumed: boolean;
+  /**
+   * How much this pane had already been shown when its subscription was
+   * re-established, in bytes over this feed's whole life, or `null` when none
+   * of that has happened.
+   *
+   * A position rather than a flag, because the flag has to go out again. The
+   * output a replay duplicates is everything this pane held at that moment --
+   * the bytes below this position -- and the feed evicts oldest first, so the
+   * moment it has thrown away that much, the older copy of the repeat is gone
+   * and only the replayed one is left. `feed.dropped` is the same count on the
+   * same scale, which is what makes the comparison exact rather than a guess
+   * at how much a replay was worth.
+   */
+  resumedAbove: number | null;
   /**
    * The id of the `session-subscribe` this record's subscription was asked
    * with, or `null` when there is none outstanding.
@@ -796,6 +813,15 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
    * one of them: bytes go to the feed, and the pane's emulator reads them
    * from there without React ever hearing about it.
    */
+  /**
+   * Whether both copies of a re-established feed are still in this pane's
+   * buffer. Read where it is published rather than stored, because what moves
+   * it is the feed evicting, which is not an event this store hears about.
+   */
+  function stillRepeating(record: TerminalRecord): boolean {
+    return record.resumedAbove !== null && record.feed.dropped < record.resumedAbove;
+  }
+
   function publishTerminals(): void {
     const views = new Map<string, TerminalWatchView>();
     for (const [key, record] of terminals) {
@@ -811,7 +837,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         printed: record.printed,
         problem: record.problem,
         ended: record.ended,
-        resumed: record.resumed,
+        resumed: stillRepeating(record),
       });
     }
     update({ terminals: views });
@@ -1173,8 +1199,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
 
         // A reply to a subscription that was interrupted, rather than the
         // first one. What follows it is the machine's scrollback as it stands
-        // now, written after bytes this pane already has.
-        if (record.printed) record.resumed = true;
+        // now, written after bytes this pane already has -- so what is already
+        // here is what the replay is about to say again.
+        if (record.printed) record.resumedAbove = record.feed.dropped + record.feed.bytes;
         record.attached = true;
         record.ended = null;
         record.problem = null;
@@ -1233,6 +1260,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         const chunk = decodeTerminalChunk(frame.chunk);
         for (const record of recipientsOf(frame.storeId, frame.sessionId, frame.startId)) {
           const evicted = record.feed.truncated;
+          const repeating = stillRepeating(record);
           record.feed.push(chunk);
           // Only the facts, and only when one of them moved. The bytes went
           // to the feed above and the emulator has them already; publishing
@@ -1240,7 +1268,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           const changed =
             !record.printed ||
             record.droppedChunks !== frame.droppedChunks ||
-            evicted !== record.feed.truncated;
+            evicted !== record.feed.truncated ||
+            // This chunk may have pushed the older copy of a repeat out of the
+            // buffer, which is a fact about the label and moves nothing else.
+            repeating !== stillRepeating(record);
           record.printed = true;
           // Cumulative and only ever increasing, so the newest frame is the
           // whole count; a reader comparing it with the last one it saw gets
@@ -1593,7 +1624,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           printed: false,
           problem: null,
           ended: null,
-          resumed: false,
+          resumedAbove: null,
           subscribeId: null,
           size: null,
           bound: null,
