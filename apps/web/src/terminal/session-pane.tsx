@@ -35,6 +35,7 @@ import {
   machineLabel,
   terminalInputNotice,
   terminalIsPartial,
+  machineFor,
   terminalFeedNotice,
   terminalScopeNotice,
   toneForStatus,
@@ -378,7 +379,9 @@ export function SessionPane({
           .join(' · ');
   const notice = terminalInputNotice(snapshot, terminal);
   const scope = terminalScopeNotice(terminal);
-  const feed = terminalFeedNotice(terminal);
+  // The machine's own reading, so a pane whose hub cannot connect at all says
+  // that rather than telling somebody to wait for a dial that will be refused.
+  const feed = terminalFeedNotice(terminal, machineFor(state, row));
   const border = `1px solid ${colorForRole('border', scheme)}`;
   /**
    * Whether to draw the paste control, asked at render.

@@ -984,6 +984,62 @@ describe('a server that comes back', () => {
     });
   });
 
+  it('keeps the watch when the connection died with the re-subscribe in flight', () => {
+    const { terminal, servers } = oneMachine();
+    const client = fakeClient();
+
+    terminal.subscribe(client, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(0));
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+    terminal.noteConnection(server(ATTIC, 'attic'));
+
+    // What `settleAll` hands a frame that was in flight when the socket closed.
+    // The server never read it, so it has said nothing about the session.
+    servers.of('session-subscribe')[1]?.answer({
+      ok: false,
+      code: 'internal',
+      problem: 'the connection to the server ended before it answered',
+    });
+
+    // Not "this terminal is gone": a flapping redial must not tell a pane that
+    // its live session ended.
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'session-subscription-ended',
+      reason: 'server-dropped',
+    });
+
+    // And the watch stands, which is the half that cannot be undone: the next
+    // time the machine comes back, this pane is asked for again.
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+    terminal.noteConnection(server(ATTIC, 'attic'));
+    expect(servers.of('session-subscribe')).toHaveLength(3);
+    servers.of('session-subscribe')[2]?.answer(subscribed(1));
+    expect(client.received.at(-1)).toMatchObject({ type: 'session-subscribed', replyTo: 2 });
+  });
+
+  it('keeps the watch when a slow server says nothing at all', () => {
+    const { terminal, servers } = oneMachine();
+    const client = fakeClient();
+
+    terminal.subscribe(client, 2, SESSION_TARGET);
+    servers.put[0]?.answer(subscribed(0));
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+    terminal.noteConnection(server(ATTIC, 'attic'));
+
+    // The stream channel's deadline: it cannot tell a server with nothing to
+    // say from a slow one, so it answers `ok` with nothing rather than
+    // inventing a refusal. Nothing there is evidence about a terminal.
+    servers.of('session-subscribe')[1]?.answer({ ok: true, answer: null });
+
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'session-subscription-ended',
+      reason: 'server-dropped',
+    });
+    terminal.noteConnection(server(ATTIC, 'attic', 'stale', 'dropped'));
+    terminal.noteConnection(server(ATTIC, 'attic'));
+    expect(servers.of('session-subscribe')).toHaveLength(3);
+  });
+
   it('asks for nothing when the last pane left while the machine was away', () => {
     const { terminal, servers } = oneMachine();
     const client = fakeClient();

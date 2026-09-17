@@ -800,6 +800,25 @@ describe('terminal frames from the hub', () => {
     expect(terminal(h).droppedBytes).toBeGreaterThan(0);
   });
 
+  it('stops saying the history repeats once the older copy has been evicted', async () => {
+    // A cap of almost nothing, so one more chunk pushes out what came before
+    // it. The rule being exercised is the feed's own, which trims whole chunks.
+    const h = harness({ terminalFeedBytes: 4 });
+    const socket = await watching(h);
+    socket.deliver(hubFrames.sessionSubscribed);
+    socket.deliver(hubFrames.terminalOutput);
+    socket.deliver(hubFrames.sessionSubscriptionEnded);
+    socket.deliver(hubFrames.sessionSubscribed);
+    expect(terminal(h).resumed).toBe(true);
+
+    // The replayed copy arrives and evicts the original. Nothing appears twice
+    // any more, so the label goes -- a warning about a repeat the user can no
+    // longer find is the over-claim in the other direction.
+    socket.deliver(hubFrames.terminalOutput);
+
+    expect(terminal(h).resumed).toBe(false);
+  });
+
   it('is not marked as repeating when its first subscription is answered', async () => {
     const h = harness();
     const socket = await watching(h);
