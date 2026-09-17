@@ -13,6 +13,7 @@ import {
   useComputedColorScheme,
 } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
+import type { ShellForm } from '../shell/shell-form.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import {
@@ -44,7 +45,9 @@ import { stoppedNotice } from './stop-model.js';
  * The mockup's floating action button used to be drawn here, fixed to the
  * corner at narrow widths. It belongs to the phone chrome (AGX-125): it floats
  * over every destination and its badge counts the whole narrowed fleet, so a
- * copy owned by this screen would be one of two.
+ * copy owned by this screen would be one of two. New project stays, at every
+ * width: it is this screen's own, the chrome starts sessions and not projects,
+ * and a phone that could start neither would be a phone that can only watch.
  *
  * The catalogue tree and the machine selector used to stand beside the cards
  * here, because until AGX-122 this screen was the only place with room for
@@ -67,6 +70,13 @@ export interface SessionListScreenProps {
    * never written: the selector that writes it is in the chrome.
    */
   readonly machine?: ServerRegistrationId | null;
+  /**
+   * The form the shell is in, because one control here depends on it: below
+   * the breakpoint the chrome's action button is what starts a session. Read
+   * from the shell rather than measured again, so the two cannot disagree
+   * about which of them is drawing that button.
+   */
+  readonly form?: ShellForm;
   /** The clock, injected so a test can render fixed ages. */
   readonly now?: () => number;
 }
@@ -74,6 +84,7 @@ export interface SessionListScreenProps {
 export function SessionListScreen({
   store,
   machine = null,
+  form = 'wide',
   now = Date.now,
 }: SessionListScreenProps): JSX.Element {
   const snapshot = useHubSnapshot(store);
@@ -165,15 +176,17 @@ export function SessionListScreen({
           <Button size="xs" variant="default" onClick={() => setCreatingProject(true)}>
             New project
           </Button>
-          {/* Below `sm` the phone chrome's action button is what starts a
-              session, floating over every destination rather than only over
-              this one, so this would be the second of two. The breakpoint is
-              the shell's own -- `WIDE_FROM` in shell/shell-form.ts is Mantine's
-              `sm` for exactly this reason -- so one of the two is always
-              drawn and never both. */}
-          <Button size="xs" visibleFrom="sm" onClick={() => setCreating(true)}>
-            New session
-          </Button>
+          {/* In the phone form the chrome's action button is what starts a
+              session -- floating over every destination rather than only over
+              this one -- so this would be the second of two. Not a media query:
+              the shell's form is one rule in one place, and a `visibleFrom`
+              here would be a second spelling of it that disagrees at any font
+              size but the default. */}
+          {form === 'wide' ? (
+            <Button size="xs" onClick={() => setCreating(true)}>
+              New session
+            </Button>
+          ) : null}
         </Group>
       </Group>
       <NewSessionForm

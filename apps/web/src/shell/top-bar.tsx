@@ -2,6 +2,7 @@ import type { JSX, ReactNode } from 'react';
 import { Box, Group, Text, UnstyledButton } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { destinationHash } from './destinations.js';
+import { withSafeArea } from './safe-area.js';
 
 /**
  * The bar across the top: the brand mark, and the one slot the chrome keeps
@@ -39,9 +40,17 @@ export function TopBar({ scheme, status }: TopBarProps): JSX.Element {
       gap={12}
       align="center"
       wrap="nowrap"
-      px={14}
-      py={8}
-      style={{ borderBottom: `1px solid ${colorForRole('border', scheme)}`, flexShrink: 0 }}
+      style={{
+        borderBottom: `1px solid ${colorForRole('border', scheme)}`,
+        flexShrink: 0,
+        // The desk chrome is what a notched phone draws in landscape -- it is
+        // wider than the breakpoint -- so this bar is under the cutout there,
+        // and the brand mark is the thing it would swallow.
+        paddingTop: withSafeArea(8, 'top'),
+        paddingBottom: 8,
+        paddingLeft: withSafeArea(14, 'left'),
+        paddingRight: withSafeArea(14, 'right'),
+      }}
     >
       <UnstyledButton component="a" href={destinationHash('sessions')} aria-label="agentplex">
         <Group gap={9} align="center" wrap="nowrap">

@@ -24,7 +24,8 @@ import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { resolveDestination, useDestination, type Destination } from './destinations.js';
 import { MobileChrome } from './mobile-chrome.js';
 import { MoreScreen } from './more-screen.js';
-import { useShellForm } from './shell-form.js';
+import { withSafeArea } from './safe-area.js';
+import { useShellForm, type ShellForm } from './shell-form.js';
 import { Sidebar } from './sidebar.js';
 import { TopBar } from './top-bar.js';
 
@@ -113,6 +114,7 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
     doc,
     destination: place,
     machine,
+    form,
     scheme,
   });
 
@@ -161,6 +163,9 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
             flexShrink: 0,
             minWidth: 0,
             borderRight: `1px solid ${colorForRole('border', scheme)}`,
+            // A notched phone in landscape is wider than the breakpoint, so
+            // this chrome is what it draws and these two are its outer edges.
+            paddingLeft: withSafeArea(0, 'left'),
           }}
         >
           <Sidebar
@@ -174,7 +179,16 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
             scheme={scheme}
           />
         </Box>
-        <Box component="main" style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
+        <Box
+          component="main"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            overflowY: 'auto',
+            paddingRight: withSafeArea(0, 'right'),
+          }}
+        >
           {region}
         </Box>
       </Box>
@@ -183,14 +197,17 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
 }
 
 /**
- * How many sessions want a human, narrowed the way everything else on screen
- * is narrowed.
+ * How many sessions are waiting on a human, narrowed by what the chrome is
+ * narrowed by.
  *
- * The count is `needsYouCount`, which is the number the session list's Needs
- * you chip carries, so the badge on the phone's action button and the chip
- * below it cannot disagree. The narrowing is the machine selection, for the
- * same reason: a badge counting the whole fleet above a list showing one
- * machine would be counting sessions the person cannot see.
+ * The machine selection and nothing else, because that is the whole of what
+ * the chrome knows: the store and provider narrowings and the search field are
+ * the list screen's own state, held there because they are things done to that
+ * screen. So a person who narrows the list further will see a chip counting
+ * fewer than the badge does. That is the right way round -- the badge is the
+ * app's count of what wants attention, not a count of what this screen is
+ * currently showing, and it has to keep meaning the same thing on the Projects
+ * tab and over a session.
  */
 function attentionCount(state: MachineState | null, machine: ServerRegistrationId | null): number {
   if (state === null) return 0;
@@ -211,6 +228,8 @@ interface ContentProps {
   /** Already resolved for the form: see `resolveDestination`. */
   readonly destination: Destination;
   readonly machine: ServerRegistrationId | null;
+  /** Passed on to the session list, which draws one control only in one form. */
+  readonly form: ShellForm;
   readonly scheme: Scheme;
 }
 
@@ -240,6 +259,7 @@ function content({
   doc,
   destination,
   machine,
+  form,
   scheme,
 }: ContentProps): JSX.Element {
   if (sessionRef !== null || doc !== null) {
@@ -264,5 +284,5 @@ function content({
   if (destination === 'more') {
     return <MoreScreen scheme={scheme} />;
   }
-  return <SessionListScreen store={hub} machine={machine} />;
+  return <SessionListScreen store={hub} machine={machine} form={form} />;
 }

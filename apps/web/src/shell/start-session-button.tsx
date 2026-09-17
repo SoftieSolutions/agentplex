@@ -1,4 +1,4 @@
-import type { JSX } from 'react';
+import type { CSSProperties, JSX } from 'react';
 import { Box, Button, Text } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { TAB_BAR_HEIGHT } from './bottom-tabs.js';
@@ -22,6 +22,23 @@ import { withSafeArea } from './safe-area.js';
 
 /** The button's diameter. Comfortably past the 44px a fingertip needs. */
 const DIAMETER = 56;
+
+/**
+ * Off screen, and still read out. `display: none` and `visibility: hidden` are
+ * both dropped from the accessibility tree, which for a live region means it
+ * announces nothing at all.
+ */
+const OFF_SCREEN: CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+};
 
 export interface StartSessionButtonProps {
   /** How many sessions want a human. Zero draws no badge at all. */
@@ -60,6 +77,13 @@ export function StartSessionButton({
           +
         </Text>
       </Button>
+      {/* Mounted at every count, empty at zero. A live region inserted at the
+          moment its number appears is a region nothing was watching, so the
+          first session to start waiting -- the one announcement worth making
+          -- is the one that would be missed. */}
+      <Box role="status" style={OFF_SCREEN}>
+        {needsYou === 0 ? '' : needsYouWords(needsYou)}
+      </Box>
       {needsYou === 0 ? null : <NeedsYouBadge count={needsYou} scheme={scheme} />}
     </Box>
   );
@@ -73,17 +97,16 @@ interface NeedsYouBadgeProps {
 /**
  * The count, stuck to the corner of the button.
  *
- * Outside the button rather than inside it: a badge inside would join the
- * button's accessible name, and "Start a session, 2" is not what either half
- * means. It is a live region instead, so a session that begins waiting while
- * the app is open says so, and it carries the words rather than only the
- * digit -- a screen reader announcing "2" alone announces nothing.
+ * Drawing only, and outside the button: a badge inside would join the button's
+ * accessible name, and "Start a session, 2" is not what either half means. The
+ * words are said by the live region above, which is mounted whether or not
+ * this is -- a screen reader announcing "2" on its own announces nothing.
  */
 function NeedsYouBadge({ count, scheme }: NeedsYouBadgeProps): JSX.Element {
   return (
     <Box
-      role="status"
-      aria-label={needsYouWords(count)}
+      aria-hidden
+      data-needs-you={count}
       style={{
         position: 'absolute',
         top: -2,
@@ -99,7 +122,7 @@ function NeedsYouBadge({ count, scheme }: NeedsYouBadgeProps): JSX.Element {
         border: `1px solid ${colorForRole('borderStrong', scheme)}`,
       }}
     >
-      <Text component="span" aria-hidden fz={12} fw={700} lh={1} c={colorForRole('text', scheme)}>
+      <Text component="span" fz={12} fw={700} lh={1} c={colorForRole('text', scheme)}>
         {count}
       </Text>
     </Box>

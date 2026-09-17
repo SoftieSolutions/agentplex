@@ -401,9 +401,8 @@ describe('the shell on a phone', () => {
       (chip) => chip.textContent,
     );
     expect(chips).toContain('Needs you · 2');
-    expect(container.querySelector('[role="status"]')?.getAttribute('aria-label')).toBe(
-      '2 sessions need you',
-    );
+    expect(container.querySelector('[data-needs-you]')?.textContent).toBe('2');
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('2 sessions need you');
   });
 
   it('puts the tree in the content region, where the Projects tab leads', async () => {
@@ -439,5 +438,7 @@ describe('the shell on a phone', () => {
     // at none of them -- and it is still there to leave by.
     expect(tabs()).toHaveLength(3);
     expect(tabs().filter((tab) => tab.hasAttribute('aria-current'))).toHaveLength(0);
+    // And nothing floats over the terminal's bottom-right corner.
+    expect(container.querySelector('button[aria-label="Start a session"]')).toBeNull();
   });
 });

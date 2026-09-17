@@ -118,12 +118,24 @@ describe('the phone chrome', () => {
     return [...container.querySelectorAll<HTMLAnchorElement>('nav a')];
   }
 
+  function maybeActionButton(): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>('button[aria-label="Start a session"]');
+  }
+
   function actionButton(): HTMLButtonElement {
-    const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Start a session"]',
-    );
+    const button = maybeActionButton();
     if (button === null) throw new Error('the chrome drew no action button');
     return button;
+  }
+
+  /** The live region. Mounted at every count, which is half of what it is for. */
+  function announcement(): HTMLElement | null {
+    return container.querySelector<HTMLElement>('[role="status"]');
+  }
+
+  /** The drawn badge, which exists only above zero. */
+  function badge(): HTMLElement | null {
+    return container.querySelector<HTMLElement>('[data-needs-you]');
   }
 
   it('draws a compact header holding the machine selector, and no search entry', () => {
@@ -166,6 +178,14 @@ describe('the phone chrome', () => {
     expect(tabs().filter((tab) => tab.hasAttribute('aria-current'))).toHaveLength(0);
   });
 
+  it('floats nothing over a session, where the corner is the last line of output', () => {
+    draw({ current: null, needsYou: 2 });
+
+    expect(maybeActionButton()).toBeNull();
+    // The bar is still the way back to a place the button is drawn on.
+    expect(tabs()).toHaveLength(3);
+  });
+
   it('starts a session from the floating button', () => {
     draw();
 
@@ -176,12 +196,11 @@ describe('the phone chrome', () => {
     expect(started).toBe(1);
   });
 
-  it('carries the needs-you count as a badge, in words as well as digits', () => {
+  it('carries the needs-you count as a badge, and says it in words', () => {
     draw({ needsYou: 2 });
 
-    const badge = container.querySelector('[role="status"]');
-    expect(badge?.textContent).toBe('2');
-    expect(badge?.getAttribute('aria-label')).toBe('2 sessions need you');
+    expect(badge()?.textContent).toBe('2');
+    expect(announcement()?.textContent).toBe('2 sessions need you');
     // The count is not part of the button's name: "Start a session, 2" is not
     // what either half means.
     expect(actionButton().getAttribute('aria-label')).toBe('Start a session');
@@ -190,15 +209,16 @@ describe('the phone chrome', () => {
   it('says it in the singular for one session', () => {
     draw({ needsYou: 1 });
 
-    expect(container.querySelector('[role="status"]')?.getAttribute('aria-label')).toBe(
-      '1 session needs you',
-    );
+    expect(announcement()?.textContent).toBe('1 session needs you');
   });
 
   it('draws no badge when nothing is waiting on anyone', () => {
     draw({ needsYou: 0 });
 
-    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(badge()).toBeNull();
+    // The region itself stays mounted and empty, because a live region
+    // inserted along with its first number is a region nothing was watching.
+    expect(announcement()?.textContent).toBe('');
     // And the button is still there: it is how a session is started, not only
     // a place to hang a count.
     expect(actionButton()).not.toBeNull();
