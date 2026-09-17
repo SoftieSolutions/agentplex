@@ -1,7 +1,8 @@
 import type { JSX, ReactNode } from 'react';
-import { Box, Button, Group, Text, UnstyledButton } from '../ui/components.js';
+import { Box, Group, Text, UnstyledButton } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { destinationHash } from './destinations.js';
+import { withSafeArea } from './safe-area.js';
 
 /**
  * The bar across the top: the brand mark, and the one slot the chrome keeps
@@ -15,6 +16,11 @@ import { destinationHash } from './destinations.js';
  *
  * The mark is a link and not a picture, because it is how a person gets back
  * to the session list from a destination that has no other way out.
+ *
+ * This bar is the wide form's alone. It carried a menu button that swapped the
+ * sidebar for the content at narrow widths, which was a stand-in until the
+ * phone chrome existed (AGX-125); it does not exist below the breakpoint any
+ * more, so the button would be a control that never appears.
  */
 export interface TopBarProps {
   readonly scheme: Scheme;
@@ -25,36 +31,27 @@ export interface TopBarProps {
    * is a component and a prop rather than a second row of chrome.
    */
   readonly status?: ReactNode;
-  /** Whether the sidebar is showing at widths too narrow to hold both. */
-  readonly sidebarOpen: boolean;
-  readonly onToggleSidebar: () => void;
 }
 
-export function TopBar({ scheme, status, sidebarOpen, onToggleSidebar }: TopBarProps): JSX.Element {
+export function TopBar({ scheme, status }: TopBarProps): JSX.Element {
   return (
     <Group
       component="header"
       gap={12}
       align="center"
       wrap="nowrap"
-      px={14}
-      py={8}
-      style={{ borderBottom: `1px solid ${colorForRole('border', scheme)}`, flexShrink: 0 }}
+      style={{
+        borderBottom: `1px solid ${colorForRole('border', scheme)}`,
+        flexShrink: 0,
+        // The desk chrome is what a notched phone draws in landscape -- it is
+        // wider than the breakpoint -- so this bar is under the cutout there,
+        // and the brand mark is the thing it would swallow.
+        paddingTop: withSafeArea(8, 'top'),
+        paddingBottom: 8,
+        paddingLeft: withSafeArea(14, 'left'),
+        paddingRight: withSafeArea(14, 'right'),
+      }}
     >
-      {/* Below the breakpoint the sidebar and the content cannot both be on
-          screen, so this is what swaps them. Above it the sidebar is always
-          drawn and the button is not: the phone chrome proper is AGX-125. */}
-      <Button
-        hiddenFrom="md"
-        size="compact-xs"
-        variant="default"
-        aria-expanded={sidebarOpen}
-        aria-label={sidebarOpen ? 'Hide the sidebar' : 'Show the sidebar'}
-        onClick={onToggleSidebar}
-      >
-        {sidebarOpen ? 'Close' : 'Menu'}
-      </Button>
-
       <UnstyledButton component="a" href={destinationHash('sessions')} aria-label="agentplex">
         <Group gap={9} align="center" wrap="nowrap">
           <Box

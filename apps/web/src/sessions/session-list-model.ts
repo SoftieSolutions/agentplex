@@ -241,6 +241,27 @@ export function chipCounts(items: readonly SessionListItem[]): readonly ChipCoun
 }
 
 /**
+ * How many sessions are waiting on a human: the badge on the phone chrome's
+ * action button.
+ *
+ * `needsYou`, which is the field `partitionNeedsYou` sorts to the top, and
+ * deliberately not the Needs you chip's count. The two differ by exactly one
+ * thing -- a session nobody can reach right now -- and they differ because
+ * they answer different questions. A chip is a facet: its number is a promise
+ * about how many rows pressing it yields, so it counts every session in that
+ * state whether or not anything can be done about it. A badge is a claim on
+ * somebody's attention, and a number that cannot be brought down by attending
+ * to it is a number people learn to ignore.
+ *
+ * So the two are the same number while every machine is reachable, and when
+ * one drops the badge falls while the chip does not. That is the honest
+ * direction for both.
+ */
+export function needsYouCount(items: readonly SessionListItem[]): number {
+  return items.filter((item) => item.needsYou).length;
+}
+
+/**
  * The values a narrowing control would offer. The screen draws the control
  * only when there are at least two -- a control with one option is not drawn
  * -- so both lists come back empty below that threshold, the same instruction
