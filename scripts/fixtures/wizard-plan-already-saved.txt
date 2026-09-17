@@ -1,0 +1,41 @@
+agentplex setup
+
+Looking at this machine.
+  claude: not on this machine
+  codex: not on this machine
+  stores: none of the providers this build drives has state here yet
+
+What should this machine be?
+  hub - the database, the web app, and the machine that dials the servers
+  server - runs sessions on this machine; a hub elsewhere dials it
+  both - one process doing both, on one machine. The common case
+Role [hub] 
+Hub port [8080] 
+
+This is the plan:
+  role: hub
+  hub port: 8080
+
+Apply it to this machine? [Y/n] 
+
+role: hub
+hub: port 8080
+
+
+The hub needs a database file and a client token to start. Both are configuration with no default, and neither is carried in a plan.
+
+A saved plan replays this machine unattended: agentplex setup --plan <file>, in cloud-init or an image.
+Save this plan to a file? [y/N] y
+Save it as [/tmp/agx86h2/.agentplex/setup-plan.json] 
+There is already a file at /tmp/agx86h2/.agentplex/setup-plan.json, and it was left alone.
+Try another path? [Y/n] n
+
+
+drive-setup: the questions it answered, in order:
+  Role [hub]
+  Hub port [8080]
+  Apply it to this machine? [Y/n]
+  Save this plan to a file? [y/N]
+  Save it as [/tmp/agx86h2/.agentplex/setup-plan.json]
+  Try another path? [Y/n]
+drive-setup: the run exited 0, signal null

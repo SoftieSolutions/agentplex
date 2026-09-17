@@ -1,0 +1,29 @@
+agentplex setup
+
+Looking at this machine.
+  claude: not on this machine
+  codex: not on this machine
+  stores: none of the providers this build drives has state here yet
+
+What should this machine be?
+  hub - the database, the web app, and the machine that dials the servers
+  server - runs sessions on this machine; a hub elsewhere dials it
+  both - one process doing both, on one machine. The common case
+[1G[0JRole [hub] [12G
+[1G[0JHub port [8080] [17G
+
+This is the plan:
+  role: hub
+  hub port: 8080
+
+[1G[0JApply it to this machine? [Y/n] [33G
+
+role: hub
+hub: port 8080
+
+
+The hub needs a database file and a client token to start. Both are configuration with no default, and neither is carried in a plan.
+
+A saved plan replays this machine unattended: agentplex setup --plan <file>, in cloud-init or an image.
+[1G[0JSave this plan to a file? [y/N] [33G
+

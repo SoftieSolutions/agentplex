@@ -1,0 +1,110 @@
+agentplex install.sh 1
+
+release    the tarballs in /package; no version is resolved and no protocol is checked, because a directory of tarballs is one build and not a release
+toolchain  present; node-pty must build or npm fails this install
+node       keep v24.21.0 in /home/alice/.agentplex/node, which is what https://nodejs.org/dist/latest-v24.x names
+package    /package/softiesolutions-agentplex-0.0.0.tgz /package/softiesolutions-agentplex-server-0.0.0.tgz into /home/alice/.agentplex
+\|/-\|/-\|/-\|/-\|/-\|/-\|/-
+changed 10 packages in 4s
+-
+-1 package is looking for funding
+-  run `npm fund` for details
+-npm warn install-scripts 4 packages have install scripts not yet covered by allowScripts:
+npm warn install-scripts   node-pty@1.1.0 (install: node scripts/prebuild.js || node-gyp rebuild; postinstall: node scripts/post-install.js)
+npm warn install-scripts   node-pty@1.1.0 (install: node scripts/prebuild.js || node-gyp rebuild; postinstall: node scripts/post-install.js)
+npm warn install-scripts   @softiesolutions/agentplex-server@0.0.0 (postinstall: node packages/pty/scripts/node-pty-postinstall.js)
+npm warn install-scripts   @softiesolutions/agentplex@0.0.0 (postinstall: node packages/pty/scripts/node-pty-postinstall.js)
+npm warn install-scripts
+npm warn install-scripts Run `npm install -g --allow-scripts=node-pty,node-pty,@softiesolutions/agentplex-server,@softiesolutions/agentplex` to allow these scripts once, or `npm config set allow-scripts=node-pty,node-pty,@softiesolutions/agentplex-server,@softiesolutions/agentplex --location=user` to allow them for all global installs.
+-settings   /home/alice/.agentplex/agentplex.env (already there, left alone)
+unit       /home/alice/.config/systemd/user/agentplex-server.service (already there, left alone; --print-unit shows this version)
+setup      /home/alice/.agentplex/bin/agentplex setup --role=server --prefix=/home/alice/.agentplex
+
+agentplex setup
+
+Looking at this machine.
+  claude: 2.1.274 in /home/alice/.agentplex/bin - not logged in
+  codex: not on this machine
+  stores: /home/alice/.claude
+
+What should this machine be?
+  hub - the database, the web app, and the machine that dials the servers
+  server - runs sessions on this machine; a hub elsewhere dials it
+  both - one process doing both, on one machine. The common case
+Role [server] 
+Server port [8081] 
+Which stores should this server watch? Absolute paths, separated by commas.
+Stores [/home/alice/.claude] 
+Which directories may somebody browse when they pick a project on this machine? Absolute paths, separated by commas. Anything under one of these can be listed by a client of any hub this server is paired with, and nothing else can.
+Browse roots [none] 
+
+claude: 2.1.274 in /home/alice/.agentplex/bin - not logged in
+  adopt - use the claude in /home/alice/.agentplex/bin, which is the one you have logged in
+  install - let agentplex install its own copy into the prefix it owns
+  skip - leave this provider out of the plan entirely
+claude [adopt] 
+
+codex: not on this machine
+  install - let agentplex install its own copy into the prefix it owns
+  skip - leave this provider out of the plan entirely
+codex [install] skip
+
+This is the plan:
+  role: server
+  server port: 8081
+  stores: /home/alice/.claude
+  browse roots: none
+  resolve programs in: /home/alice/.agentplex/bin
+  install into: /home/alice/.agentplex
+  identity: /home/alice/.agentplex/server.json
+  providers: claude
+
+Apply it to this machine? [Y/n] 
+
+role: server
+server: port 8081
+bin path: /home/alice/.agentplex/bin
+identity: /home/alice/.agentplex/server.json (server 3cfea9b6-af15-48f5-aa95-6a5945343637) - minted; the pairing token is in that file
+store: /home/alice/.claude (store 682e3de8-84f2-4045-a001-3198fd3519c3) - minted
+provider: claude 2.1.274 - adopted, not logged in
+
+claude is installed and not logged in. Setup can run its own login here: claude auth login takes this terminal until it ends.
+Log claude in now? [Y/n] n
+
+claude is installed and not logged in. Run: claude auth login
+
+
+A saved plan replays this machine unattended: agentplex setup --plan <file>, in cloud-init or an image.
+Save this plan to a file? [y/N] y
+Save it as [/home/alice/.agentplex/setup-plan.json] 
+Saved /home/alice/.agentplex/setup-plan.json
+
+The units were not started:
+systemd would not reload: Failed to connect to bus: No medium found
+agentplex start tries again.
+
+agentplex is at /home/alice/.agentplex/bin/agentplex
+
+The units are written and deliberately not started: there is no database file, no
+client token and no store paths until /home/alice/.agentplex/agentplex.env has them.
+
+  /home/alice/.agentplex/bin/agentplex start
+  loginctl enable-linger alice   # so it runs when you are not logged in
+
+agentplex status says what is installed here and whether it is running.
+
+Check the machine with: /home/alice/.agentplex/bin/agentplex doctor --role=server
+Documentation: https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md
+
+drive-setup: the questions it answered, in order:
+  Role [server]
+  Server port [8081]
+  Stores [/home/alice/.claude]
+  Browse roots [none]
+  claude [adopt]
+  codex [install]
+  Apply it to this machine? [Y/n]
+  Log claude in now? [Y/n]
+  Save this plan to a file? [y/N]
+  Save it as [/home/alice/.agentplex/setup-plan.json]
+drive-setup: the run exited 0, signal null

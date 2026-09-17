@@ -422,6 +422,120 @@ RUN cat /tmp/status-available.log \
 RUN ! AGENTPLEX_VERSIONS=/tmp/mirror agentplex update hub@1.3 2>&1 | tee /tmp/pin.log
 RUN grep -q '1.3.0 rather than 1.3' /tmp/pin.log
 
+# install.sh into the wizard it hands over to, which is the one composition
+# nothing had ever run.
+#
+# Every run above took --no-setup, because a `RUN` line has no terminal and the
+# script refuses to open a wizard without one. That refusal is where a broken
+# handover hides: this repository proves the script as far as `doctor` on a
+# stock Debian, and proves the wizard against a pty in
+# `apps/cli/src/commands/setup/setup-exit.integration.test.ts` on a machine
+# nobody installed onto, and the two halves had never met.
+#
+# A second run of the same script, deliberately, and the cheapest way to get
+# one: the runtime, the packages and the unit are re-done against a box that
+# already has all three, which is a re-run of the installer and is exercised
+# nowhere else here. What is new is the last step. There is a terminal this
+# time, so `run_setup` takes the branch that starts
+# `agentplex setup --role=server --prefix=$HOME/.agentplex` on /dev/tty.
+#
+# The terminal comes out of the install itself. `drive-setup.ts` is handed the
+# pty seam bundled into the command this machine just installed, so the thing
+# that opens the pseudoterminal is the code a server opens its sessions with,
+# loaded from the prefix through the Node the script downloaded. Nothing was
+# installed to make this possible -- no tcl, no `script(1)` -- so the box is
+# still the operator's box, and loading that seam is one more assertion rather
+# than one more dependency. `scripts/drive-setup.ts` argues the choice in full.
+COPY scripts/drive-setup.ts /drive-setup.ts
+RUN AGENTPLEX_PACKAGE=/package node /drive-setup.ts \
+      --pty "$HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex/node_modules/@agentplex/pty/dist/index.js" \
+      -- bash /install.sh --role=server \
+    | tee /tmp/wizard.log
+
+# The handover, and then the whole run, read back off the transcript.
+#
+# The first line is the composition and the only one nothing else could state:
+# the script found a terminal this time, named the command it was handing to,
+# and handed to it. Everything below it is the wizard's own output about a
+# machine this build really installed -- the version the provider's own program
+# reported, out of the directory install.sh created, adopted rather than
+# reinstalled because adoption is what a found provider is offered.
+#
+# The login is asserted by the shape of its refusal. `ready` needs a browser and
+# a real account, and a build has neither, so what is checked is that the offer
+# was made about a provider that is installed and logged out, that the operator
+# declined it, and that nothing anywhere claimed otherwise: `Paste the code
+# here:` is the provider's own prompt during a login, and its absence is the
+# evidence that no login was faked to reach a greener report.
+RUN cat /tmp/wizard.log \
+    && grep -Eq '^setup +/home/alice/\.agentplex/bin/agentplex setup --role=server --prefix=/home/alice/\.agentplex$' /tmp/wizard.log \
+    && grep -Eq '^  claude: [0-9]+\.[0-9]+\.[0-9]+ in /home/alice/\.agentplex/bin - not logged in$' /tmp/wizard.log \
+    && grep -Eq '^identity: /home/alice/\.agentplex/server\.json \(server [0-9a-f-]+\) - minted' /tmp/wizard.log \
+    && grep -Eq '^provider: claude [0-9]+\.[0-9]+\.[0-9]+ - adopted, not logged in$' /tmp/wizard.log \
+    && grep -q 'claude is installed and not logged in. Setup can run its own login here' /tmp/wizard.log \
+    && ! grep -q 'Paste the code here' /tmp/wizard.log \
+    && grep -qx 'Saved /home/alice/.agentplex/setup-plan.json' /tmp/wizard.log \
+    && grep -qx 'drive-setup: the run exited 0, signal null' /tmp/wizard.log
+
+# The conversation, in the order it has to happen in.
+#
+# A subsequence and not the list, which is the same decision
+# `setup-exit.integration.test.ts` made and for the same reason: a question this
+# check does not name -- the offer for some provider registered later -- is
+# answered by the driver, dropped here, and breaks nothing. What is pinned is
+# the spine, and every step of it is load-bearing. The plan is built before it
+# is applied, applying is what finds claude logged out, the login is offered
+# after that and asks for this terminal, and the two save questions come back
+# afterwards on a terminal that has to have been handed back to ask them at all.
+#
+# Matched on the question rather than the whole prompt: what is inside the
+# brackets is a default, and a port, a store path or a provider version is this
+# machine's to choose.
+RUN sed -n '/^drive-setup: the questions it answered, in order:$/,$ s/^  \(.*\) \[.*/\1/p' /tmp/wizard.log \
+      | grep -xE 'Role|Server port|Stores|claude|Apply it to this machine\?|Log claude in now\?|Save this plan to a file\?|Save it as' \
+      >/tmp/wizard-spine.txt
+RUN cat /tmp/wizard-spine.txt \
+    && printf '%s\n' Role 'Server port' Stores claude 'Apply it to this machine?' \
+         'Log claude in now?' 'Save this plan to a file?' 'Save it as' \
+       | diff - /tmp/wizard-spine.txt
+
+# The artifact, parsed rather than matched.
+#
+# A plan is the file the other front end takes, so what is worth asserting is
+# that it survives a parser and that every path in it is a path on this machine:
+# the prefix install.sh created, the bin directory the unit resolves programs
+# in, the store the survey found, the identity the apply path minted, and the
+# one provider that is really here. A `grep` for a quoted string would pass on a
+# file that is not JSON at all.
+#
+# The identity file beside it, because the plan naming a path is not the same
+# claim as the path existing -- and it is the file the doctor below is pointed
+# at.
+RUN cat "$HOME/.agentplex/setup-plan.json" \
+    && test -f "$HOME/.agentplex/server.json"
+RUN node -p "const plan = JSON.parse(require('fs').readFileSync(process.env.HOME + '/.agentplex/setup-plan.json', 'utf8')); [plan.role, plan.server.installPrefix, plan.server.binPath.join(','), plan.server.storePaths.join(','), plan.server.identityPath, plan.server.providers.map((one) => one.provider).join(',')].join(' ')" \
+    | tee /tmp/plan-fields.log
+RUN grep -qx 'server /home/alice/.agentplex /home/alice/.agentplex/bin /home/alice/.claude /home/alice/.agentplex/server.json claude' /tmp/plan-fields.log
+
+# And the machine the run left behind, asked again by the program an operator
+# would ask with.
+#
+# `doctor` ran once already, above, on a box that had never seen a setup. This
+# is the same question after one: the same provider, out of the same directory,
+# and now with the identity file the wizard minted to read. `unauthenticated`
+# exactly, where the earlier run allowed `unknown` -- the transcript above holds
+# the provider's own answer to the same probe twice over, so a `doctor` that
+# could not get one here would be this machine disagreeing with itself, which is
+# worth failing on rather than allowing for.
+#
+# It still exits 1, because a logged-out provider is not usable and that is a
+# true statement about this container. The report is what is read.
+RUN agentplex doctor --role=server \
+    --bin-path="$HOME/.agentplex/bin" \
+    --server-identity-file="$HOME/.agentplex/server.json" >/tmp/doctor-after-setup.log 2>&1 || true
+RUN cat /tmp/doctor-after-setup.log \
+    && grep -Eq '^  claude +unauthenticated +.*/home/alice/\.agentplex/bin$' /tmp/doctor-after-setup.log
+
 # Undoing it, which is the only place an uninstall can be exercised against
 # something that was really installed. A dry run can be asserted in the suite
 # and the removals cannot: there is no machine to throw away anywhere else, and
