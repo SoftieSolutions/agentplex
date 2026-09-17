@@ -164,6 +164,17 @@ describe('the wizard pairing step', () => {
     return input;
   }
 
+  /**
+   * What the step says, with Mantine's injected stylesheet out of it: its
+   * `<style>` text is part of `container.textContent`, and a copy assertion
+   * that reads it is an assertion about the component library.
+   */
+  function copy(): string {
+    const clone = container.cloneNode(true) as HTMLElement;
+    for (const style of clone.querySelectorAll('style')) style.remove();
+    return clone.textContent ?? '';
+  }
+
   async function click(text: string): Promise<void> {
     await act(() => {
       button(text).click();
@@ -243,8 +254,30 @@ describe('the wizard pairing step', () => {
 
     await click('I need to run one');
 
-    expect(container.textContent).toContain('apps/cli/README.md');
+    // A repository path is not something a browser reader can open, so what
+    // this points at is the README that ships onto the machine they install.
+    expect(container.textContent).toContain('README');
+    expect(container.textContent).not.toContain('apps/cli/README.md');
     expect(hasButton('Pair server')).toBe(false);
+  });
+
+  it('puts the token where setup puts it, and never says anything printed it', async () => {
+    await mount();
+
+    // The two states this step words by itself, with the panel out of the
+    // way: what the panel says is pinned in `pairing-panel.test.tsx`, and
+    // this is the copy that has to agree with it.
+    const question = copy();
+    await click('I need to run one');
+    const installing = copy();
+
+    // Setup writes the token into the server's identity file and shows it
+    // nowhere. A step that promises a printed token sends the reader to
+    // search a scrollback that never carried one.
+    expect(installing).toContain('~/.agentplex/server.json');
+    expect(question).toMatch(/identity file/i);
+    expect(question).not.toMatch(/print/i);
+    expect(installing).not.toMatch(/print/i);
   });
 
   it('never says a server dials the hub, because it does not', async () => {

@@ -10,7 +10,8 @@ import {
   TextInput,
   Title,
 } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
+import { ToneDot } from '../ui/tone-dot.js';
+import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import {
   parsePairingForm,
   prefillFromCandidate,
@@ -226,27 +227,5 @@ function CandidateRow({
         </Button>
       </Group>
     </Paper>
-  );
-}
-
-/**
- * The mockup's status dot: 7px, round, colored by tone and nothing else.
- *
- * Its own copy rather than one imported from the settings screen, which is the
- * direction this file must not point: the wizard draws this panel, and an
- * import would drag the whole settings screen behind it for ten lines of
- * markup.
- */
-function ToneDot({ tone, scheme }: { readonly tone: Tone; readonly scheme: Scheme }): JSX.Element {
-  return (
-    <span
-      style={{
-        width: 7,
-        height: 7,
-        borderRadius: '50%',
-        background: colorForTone(tone, scheme),
-        flex: 'none',
-      }}
-    />
   );
 }

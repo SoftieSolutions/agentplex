@@ -13,6 +13,7 @@ import {
   Title,
   useComputedColorScheme,
 } from '../ui/components.js';
+import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
 import type { DiscoveredCandidate } from './pairing-form.js';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
@@ -71,21 +72,6 @@ function phaseWords(snapshot: HubSnapshot): string {
     case 'failed':
       return 'failed';
   }
-}
-
-/** The mockup's status dot: 7px, round, colored by tone and nothing else. */
-function ToneDot({ tone, scheme }: { readonly tone: Tone; readonly scheme: Scheme }): JSX.Element {
-  return (
-    <span
-      style={{
-        width: 7,
-        height: 7,
-        borderRadius: '50%',
-        background: colorForTone(tone, scheme),
-        flex: 'none',
-      }}
-    />
-  );
 }
 
 /** One bordered surface, the way every t7 panel sits on the background. */
