@@ -15,6 +15,7 @@ import {
   type RefusalCode,
   type ServerRegistrationId,
   type SessionHolder,
+  type SessionRef,
 } from '@agentplex/protocol';
 import {
   type Logger,
@@ -24,6 +25,7 @@ import {
   type MessageSocket,
   type SocketClosure,
 } from '@agentplex/node-shared';
+import type { Attention, AttentionOutcome } from '../attention/attention.js';
 import type { CatalogueQueries, TreeChanged, TreeMutations } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
 import { newServerRegistrationSchema, type Pairing } from '../pairing/pairing.js';
@@ -142,6 +144,20 @@ export interface ClientConnectionDependencies {
    */
   readonly sessions: Sessions;
   /**
+   * What the user has said about a session: acknowledged, muted, unmuted.
+   *
+   * A seam beside the sessions one rather than a pair of methods on it,
+   * because they are opposite kinds of act. A start or a stop crosses to a
+   * machine and is refused by whatever that machine says; these write a row in
+   * this hub's own database, reach no machine at all, and are refused by one
+   * rule -- that the hub can see the session being talked about.
+   *
+   * What a client cannot reach through it is the reading: there is no "tell me
+   * the attention of this session" frame, because the answer is already on
+   * every session row of the state this connection is sent unasked.
+   */
+  readonly attention: Attention;
+  /**
    * Which servers this hub may dial, as the feature that owns those rows.
    *
    * The whole seam rather than two functions, because what a pairing frame
@@ -222,6 +238,7 @@ export function serveClientConnection(
     readPaneLayout,
     writePaneLayout,
     sessions,
+    attention,
     pairing,
     syncServers,
     projects,
@@ -418,6 +435,32 @@ export function serveClientConnection(
           return;
         }
         void answerStop(frame.id, { storeId: frame.storeId, sessionId: frame.sessionId });
+        return;
+      }
+
+      case 'session-acknowledge': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a pane layout save is not: it writes a
+        // row, and a socket whose later frames queued behind one disk write
+        // would be a screen that stops taking clicks because somebody
+        // dismissed a prompt.
+        void answerAttention(frame.id, { storeId: frame.storeId, sessionId: frame.sessionId }, () =>
+          attention.acknowledge({ storeId: frame.storeId, sessionId: frame.sessionId }),
+        );
+        return;
+      }
+
+      case 'session-mute': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerAttention(frame.id, { storeId: frame.storeId, sessionId: frame.sessionId }, () =>
+          attention.setMuted({ storeId: frame.storeId, sessionId: frame.sessionId }, frame.muted),
+        );
         return;
       }
 
@@ -1110,6 +1153,47 @@ export function serveClientConnection(
       logger.error('could not stop a session', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not stop that session');
+    }
+  }
+
+  /**
+   * Writes one attention fact and answers the client that asked with the whole
+   * row.
+   *
+   * One function for both frames, taking the write as a thunk, because
+   * everything around the write is identical: the same refusal rule, the same
+   * reply, the same sentence when the disk fails. Two copies of it would be
+   * two chances for a mute to be answered differently from an acknowledgement.
+   *
+   * The state check is repeated after the await for the reason every other
+   * answer here repeats it: the socket can close while the row is being
+   * written, and the write still stands -- what is dropped is only the receipt
+   * for it.
+   */
+  async function answerAttention(
+    replyTo: FrameId,
+    ref: SessionRef,
+    write: () => Promise<AttentionOutcome>,
+  ): Promise<void> {
+    try {
+      const outcome = await write();
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'session-attention',
+        replyTo,
+        storeId: ref.storeId,
+        sessionId: ref.sessionId,
+        acknowledgedThrough: outcome.attention.acknowledgedThrough,
+        mutedAt: outcome.attention.mutedAt,
+      });
+    } catch (error) {
+      logger.error('could not record attention', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not record that');
     }
   }
 

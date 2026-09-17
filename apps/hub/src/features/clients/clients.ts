@@ -10,6 +10,7 @@ import type { Pairing } from '../pairing/pairing.js';
 import type { ClientCatalogue } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
 import type { Projects } from '../projects/projects.js';
+import type { Attention } from '../attention/attention.js';
 import type { Sessions } from '../sessions/sessions.js';
 import type { FleetState } from '../fleet-state/fleet-state.js';
 import type { Terminal } from '../terminal/terminal.js';
@@ -71,6 +72,16 @@ export interface ClientsDependencies {
    * of that decision is a second answer waiting to differ from the first.
    */
   readonly sessions: Sessions;
+  /**
+   * Acknowledging and muting sessions, handed to every client this serves.
+   *
+   * One instance for the whole broadcast, for the reason every seam here is
+   * one: an acknowledgement is a fact about a session and not about a socket,
+   * and two tabs must not be able to hold different answers to "has this been
+   * seen". It is also what makes the second tab's screen correct -- the write
+   * moves the state's version, and both tabs are sent the row.
+   */
+  readonly attention: Attention;
   /**
    * Pairing and unpairing servers, handed to every client this serves.
    *
@@ -175,6 +186,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
     readPaneLayout,
     writePaneLayout,
     sessions,
+    attention,
     pairing,
     syncServers,
     projects,
@@ -272,6 +284,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         readPaneLayout,
         writePaneLayout,
         sessions,
+        attention,
         pairing,
         syncServers,
         projects,

@@ -30,6 +30,7 @@ import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machi
 import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake-terminal.js';
 import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
 import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
+import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
 import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
 import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
@@ -223,6 +224,9 @@ async function start(roots: readonly string[]): Promise<Harness> {
     // The same two seams `hub.ts` hands the broadcast. Pairing is not this
     // file's subject, but a broadcast built without them would be a different
     // broadcast.
+    // Not this suite's subject; the fake keeps the rows in memory and answers
+    // the two frames the way the real feature does.
+    attention: createFakeAttention(),
     pairing,
     syncServers: () => connections.sync(),
     projects,

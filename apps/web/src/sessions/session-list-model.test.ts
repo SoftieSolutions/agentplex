@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import {
+  acknowledgementHolds,
   ageLabel,
   chipCounts,
   connectionNotice,
@@ -14,6 +15,8 @@ import {
   storeOptions,
   toneForStatus,
   visibleSessions,
+  wantsAttention,
+  type SessionListItem,
 } from './session-list-model.js';
 
 /**
@@ -34,7 +37,20 @@ function stateFrom(text: string): MachineState {
 const populated = stateFrom(hubFrames.machineStatePopulated);
 const stale = stateFrom(hubFrames.machineStateStale);
 const single = stateFrom(hubFrames.machineStateSingle);
+/**
+ * The same fleet after a person spoke to it: one permission prompt
+ * acknowledged, one input prompt muted. Captured from a real hub, like every
+ * other state here.
+ */
+const attended = stateFrom(hubFrames.machineStateAttended);
 const empty = stateFrom(hubFrames.machineState);
+
+/** One named item out of a state, or a failure that says which one was missing. */
+function item(state: MachineState, name: string): SessionListItem {
+  const found = listSessions(state).find((candidate) => candidate.name === name);
+  if (found === undefined) throw new Error(`the fixture has no session called ${name}`);
+  return found;
+}
 
 function names(state: MachineState): readonly string[] {
   return visibleSessions(state, NO_FILTERS).map((item) => item.name);
@@ -250,5 +266,104 @@ describe('degradation, said in words', () => {
     expect(connectionNotice('failed', 'this hub speaks protocol 4, not 5', false)).toBe(
       'this hub speaks protocol 4, not 5',
     );
+  });
+});
+
+describe('an acknowledgement', () => {
+  /** A provider's clock, which is the only clock either argument comes off. */
+  const WROTE_AT = 1_755_999_820_000;
+
+  it('holds while the session has not been written to since', () => {
+    // Equal is the common case, not a tie-break: the hub recorded exactly this
+    // reading, and nothing has been written since.
+    expect(acknowledgementHolds(WROTE_AT, WROTE_AT)).toBe(true);
+  });
+
+  it('is spent by a second prompt, which is the whole reason it is a timestamp', () => {
+    // A boolean set at the first prompt would still be saying yes here, and
+    // the agent sitting at the second one would never be mentioned again. One
+    // millisecond is enough, because both numbers come off one clock -- there
+    // is no skew to leave room for.
+    expect(acknowledgementHolds(WROTE_AT, WROTE_AT + 1)).toBe(false);
+  });
+
+  it('holds for a reading older than the acknowledgement, which a late scan can produce', () => {
+    // Two servers on one volume, or a scan that arrived out of order. The
+    // session has not said anything new, so neither has this.
+    expect(acknowledgementHolds(WROTE_AT, WROTE_AT - 1_000)).toBe(true);
+  });
+
+  it('is absent rather than false for a session nobody has acknowledged', () => {
+    expect(acknowledgementHolds(null, WROTE_AT)).toBe(false);
+  });
+
+  it('reads off the captured row: the acknowledged prompt is seen, the others are not', () => {
+    const acknowledged = item(attended, 'migrate-db-v9');
+    expect(acknowledged.acknowledged).toBe(true);
+    // The row the hub really sent: what it recorded is the session's own
+    // `updatedAt`, not the moment the click landed, so the comparison this
+    // model makes is between two readings of one provider's clock.
+    const row = attended.stores
+      .flatMap((store) => store.sessions)
+      .find((candidate) => candidate.descriptor.sessionId === 'session-migrate-db');
+    expect(row?.acknowledgedThrough).toBe(row?.descriptor.updatedAt);
+    // The fact is untouched. It still wants a human and it is still in the
+    // needs-you half of the list; what has changed is that it is not asking.
+    expect(acknowledged.needsYou).toBe(true);
+    expect(wantsAttention(acknowledged)).toBe(false);
+
+    expect(item(attended, 'fix-auth-refresh').acknowledged).toBe(false);
+  });
+});
+
+describe('a mute', () => {
+  it('keeps the badge and the place, and only stops the asking', () => {
+    const muted = item(attended, 'docs-sweep');
+    expect(muted.muted).toBe(true);
+    // Everything a person could act on is still true of it.
+    expect(muted.status).toBe('awaiting-input');
+    expect(muted.needsYou).toBe(true);
+    expect(muted.tone).toBe('needs-you');
+    // And it is still in the needs-you half of the list, in its own place.
+    expect([...names(attended).slice(0, 2)].sort()).toEqual(['docs-sweep', 'migrate-db-v9']);
+    expect(wantsAttention(muted)).toBe(false);
+  });
+
+  it('is absent from a session nobody muted', () => {
+    expect(item(attended, 'spike-wasm').muted).toBe(false);
+  });
+
+  it('leaves the chip counts alone: a muted session is still in its state', () => {
+    expect(chipCounts(listSessions(attended))).toEqual(chipCounts(listSessions(populated)));
+  });
+});
+
+describe('what is worth interrupting somebody for', () => {
+  it('is a session that wants a human, unacknowledged and unmuted', () => {
+    const asking = listSessions(populated)
+      .filter(wantsAttention)
+      .map((entry) => entry.name);
+    expect([...asking].sort()).toEqual(['docs-sweep', 'migrate-db-v9']);
+
+    // The same fleet, after one was acknowledged and the other muted. Both
+    // rows are still there, still needs-you, and neither is asking any more.
+    expect(listSessions(attended).filter(wantsAttention)).toEqual([]);
+    expect(listSessions(attended).filter((entry) => entry.needsYou)).toHaveLength(2);
+  });
+
+  it('never includes a session on a machine nobody can reach', () => {
+    // A badge you cannot clear by looking is worse than no badge, which is the
+    // rule `needsYou` already carries; this is the half that must not undo it.
+    // `docs-sweep` is on the machine that went away and is asking for nobody;
+    // the prompt on the machine that stayed is still asking, which is what
+    // keeps this from passing for the wrong reason.
+    expect(item(stale, 'docs-sweep').status).toBe('awaiting-input');
+    expect(item(stale, 'docs-sweep').reachable).toBe(false);
+    expect(item(stale, 'migrate-db-v9').acknowledged).toBe(false);
+    expect(
+      listSessions(stale)
+        .filter(wantsAttention)
+        .map((entry) => entry.name),
+    ).toEqual(['migrate-db-v9']);
   });
 });

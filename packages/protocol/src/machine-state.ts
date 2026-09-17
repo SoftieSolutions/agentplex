@@ -337,6 +337,48 @@ export const sessionRowSchema = z.object({
    * is a session somebody started outside agentplex.
    */
   holder: sessionHolderSchema.nullable(),
+  /**
+   * How far through this session's history somebody has said they have looked,
+   * as a `descriptor.updatedAt` value, or `null` when nobody has.
+   *
+   * A timestamp and not a boolean, because a boolean goes sticky: acknowledge
+   * a permission prompt, let the agent run on and stop at a second one, and a
+   * flag set once says the second prompt has been seen too. This cannot do
+   * that -- it is compared with `descriptor.updatedAt` on this same row, and a
+   * session whose provider has written since is no longer acknowledged.
+   *
+   * It is `updatedAt` as the hub saw it at the moment of the acknowledgement,
+   * and deliberately *not* a reading of the hub's clock -- which is why it is
+   * named for what it means rather than for when it was written. Both sides of
+   * the comparison are then numbers off the same provider's clock. A
+   * hub-stamped moment compared against a provider-written `updatedAt` is two
+   * unsynchronised clocks, and a hub a few seconds ahead would silently read a
+   * second prompt as already seen.
+   *
+   * The comparison is left to the reader rather than made here, for the reason
+   * `protocolVersion` on a candidate is carried rather than judged: the two
+   * fields are on the same row of the same frame, so every reader reaches the
+   * same verdict, and a third field stating it could only ever disagree with
+   * the two it was derived from.
+   */
+  acknowledgedThrough: momentSchema,
+  /**
+   * When this session was muted, or `null` when it is not muted.
+   *
+   * Mute silences the alert and never the fact. The row is still sent, its
+   * status still says a human is wanted, and it still counts wherever
+   * needs-you is counted; what a muted session does not get is the bell, the
+   * title and the push. A client dims it. A mute that removed the row would be
+   * the hub deciding what a person may see, which is the over-claim in the
+   * other direction.
+   *
+   * A moment rather than a boolean because a person asks "since when", and
+   * because `null` is then one unambiguous way of saying not muted rather than
+   * a `false` sitting next to a stale timestamp. Unlike the field above this
+   * one really is a wall-clock moment on the hub's clock, and it can be,
+   * because nothing compares it with anything.
+   */
+  mutedAt: momentSchema,
 });
 export type SessionRow = z.infer<typeof sessionRowSchema>;
 
