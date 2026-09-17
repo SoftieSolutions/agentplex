@@ -3,6 +3,7 @@ import type { ServerRegistrationId } from '@agentplex/protocol';
 import type { HubSnapshot } from '../store/hub-store.js';
 import type { TokenStore } from '../auth/token.js';
 import {
+  Anchor,
   Button,
   Group,
   Paper,
@@ -21,6 +22,7 @@ import {
   type DiscoveredCandidate,
   type PairingFormProblems,
 } from './pairing-form.js';
+import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import type { PairingOperations } from './pairing-operations.js';
 import { serverRows, type ProviderRowView, type ServerRowView } from './server-rows.js';
 
@@ -226,6 +228,15 @@ function HubAccessSection({
           The hub refused the last request: {snapshot.lastRefusal.message}
         </Text>
       )}
+      {/* The way back to the wizard, which opens by itself only while no
+          server is paired -- so from the second machine onwards this link is
+          the only way to it. It lives here because Settings is where somebody
+          adding a machine already is, and it is an anchor to the address
+          rather than a button toggling state: the wizard has one address, and
+          a link to it can be bookmarked, opened in a tab, and read aloud. */}
+      <Anchor href={ONBOARDING_HASH} size="sm">
+        Open the first-run guide
+      </Anchor>
     </Stack>
   );
 }
