@@ -243,14 +243,70 @@ export function currentRelease(entry: VersionsEntry): PublishedRelease {
 }
 
 /**
+ * Which release an entry calls current: the newest one that is not a
+ * prerelease.
+ *
+ * Worked out from the history rather than taken from the release being
+ * published, and that is two bugs rather than a nicety.
+ *
+ * A patch to an older line is published after a newer line exists -- 1.2.1
+ * lands the week after 1.3.0 -- and a manifest that called the version just
+ * released current would move every unpinned install on the fleet backwards.
+ *
+ * A prerelease is published on purpose and must never be what the documented
+ * one-liner hands out. Recording it in `releases` is what makes
+ * `--role=hub@1.3.8-rc1` installable; leaving it out of `current` is what keeps
+ * it from being installed by somebody who asked for nothing in particular.
+ *
+ * The exception is a component that has published nothing else. `current` is
+ * what an unpinned install takes and the schema will not let it be absent, so a
+ * release candidate that is the only release there is beats naming none. It is
+ * the only case where a prerelease is current, and it stops being one the
+ * moment anything else ships.
+ */
+function newestInstallable(releases: Readonly<Record<string, number>>): string {
+  const versions = Object.keys(releases);
+  const released = versions.filter((one) => !isPrerelease(one));
+  const candidates = released.length > 0 ? released : versions;
+  // Reduced rather than indexed. The set is never empty -- the only caller has
+  // just added a release to it -- and `candidates[0]!` would be the claim that
+  // it never will be, rather than a use of the fact that it is not.
+  return candidates.reduce((newest, one) =>
+    (compareVersions(one, newest) ?? 0) > 0 ? one : newest,
+  );
+}
+
+/**
+ * Whether a version is a prerelease: semver's tail after the `-`.
+ *
+ * Build metadata is stripped first, because a `-` inside `+build-3` is not a
+ * prerelease marker. The same rule `install.sh` keeps by shape rather than by
+ * parse -- its series pattern fixes the field depth, so anything carrying a `-`
+ * or a `+` fails it.
+ */
+function isPrerelease(version: string): boolean {
+  return (version.split('+', 1)[0] ?? '').includes('-');
+}
+
+/** Newest first, by precedence and not by text. */
+function sortReleases(releases: Readonly<Record<string, number>>): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(releases).sort(([a], [b]) => -(compareVersions(a, b) ?? 0)),
+  );
+}
+
+/**
  * The manifest this release publishes: the previous one with this component's
- * release added and named as the current one.
+ * release added to its history.
  *
  * Added, not replaced. A component's line is the history of that component, so
  * a release appends to it -- which is what makes `--role=hub@1.3` resolvable
  * later and what lets a pinned release's protocol be read out of a file that is
  * already on disk. Re-cutting a tag writes the same key again, because that is
  * one release published twice and not two.
+ *
+ * Which of them is current falls out of the set rather than being decided here;
+ * see `newestInstallable`.
  *
  * The component keys are sorted and so are the releases under each, newest
  * first, so the file a release writes differs from the one before it in exactly
@@ -265,16 +321,11 @@ export function updateVersionsManifest(
   release: PublishedRelease,
 ): VersionsManifest {
   const published = releaseSchema.parse(release);
-  const releases = {
+  const releases = sortReleases({
     ...previous[component]?.releases,
     [published.version]: published.protocol,
-  };
-  const entry = entrySchema.parse({
-    current: published.version,
-    releases: Object.fromEntries(
-      Object.entries(releases).sort(([a], [b]) => -(compareVersions(a, b) ?? 0)),
-    ),
   });
+  const entry = entrySchema.parse({ current: newestInstallable(releases), releases });
 
   const merged = { ...previous, [component]: entry };
   return Object.fromEntries(Object.entries(merged).sort(([a], [b]) => a.localeCompare(b)));
