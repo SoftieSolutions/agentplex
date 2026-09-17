@@ -84,12 +84,10 @@ export function PendingPane({ startId, store: hub, emulators }: PendingPaneProps
     [hub, target],
   );
 
-  const words = pendingWords(
-    startId,
-    snapshot.lastStarted,
-    snapshot.lastRefusal,
-    snapshot.machineState,
-  );
+  // This start's own answer, and never the connection's newest one: a second
+  // start succeeding elsewhere on this socket clears `lastRefusal`, and a pane
+  // reading that slot would go back to saying it was starting.
+  const words = pendingWords(snapshot.starts.get(startId) ?? null, snapshot.machineState);
   const tone = toneFor(words);
   const scope = terminalScopeNotice(terminal);
   const notice = terminalInputNotice(snapshot, terminal);

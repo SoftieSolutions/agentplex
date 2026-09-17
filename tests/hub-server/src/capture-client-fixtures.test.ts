@@ -2012,18 +2012,16 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // address: the provider mints its own and writes it moments after the
     // fork, so between the two there is a live terminal and no name for it.
     //
-    // The frame ids are chosen rather than sequential, and that is what makes
-    // these fixtures drivable. A client's start handle *is* the id of its own
-    // `session-start` frame, and the web store's first subscribe is the second
-    // frame on its socket; ids are unique per connection and nothing requires
-    // them to be in order, so a start on 5 and a subscribe on 2 captures the
-    // pair as that store will meet it.
+    // The frame ids are the ones the web store itself will mint -- hello,
+    // then the start, then the pane's subscribe, then the subscribe it sends
+    // again -- because a client's start handle *is* the id of its own
+    // `session-start` frame, and these fixtures have to drive that store.
     const spawning = await openClient(terminalHub.hub);
     spawning.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
     await spawning.framesReceived(2);
     spawning.send({
       type: 'session-start',
-      id: 5,
+      id: 2,
       storeId: LIVE_STORE.storeId,
       sessionId: null,
       provider: 'claude',
@@ -2035,7 +2033,23 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       () => spawning.received.some((text) => labelFor(text) === 'sessionStarted'),
       'the spawn to be running',
     );
-    spawning.send({ type: 'session-subscribe', id: 2, target: { by: 'start', startId: 5 } });
+
+    // The refusal a pane meets when it opens in the same click that sends the
+    // start: the hub writes the handle only once the machine has answered the
+    // fork, and a handle it has not written is one it can only refuse. It is
+    // provoked here with a handle that was never a start rather than by racing
+    // the fork, because the hub's answer is the same either way -- one lookup
+    // in this connection's own map, one sentence -- and a race would capture
+    // a frame that exists only when the timing goes one particular way.
+    spawning.send({ type: 'session-subscribe', id: 3, target: { by: 'start', startId: 99 } });
+    await until(
+      () => spawning.received.some((text) => labelFor(text) === 'refusal'),
+      'the subscription by an unwritten handle to be refused',
+    );
+
+    // And the subscribe the client sends again on reading `session-started`,
+    // which is the frame that says the handle now exists.
+    spawning.send({ type: 'session-subscribe', id: 4, target: { by: 'start', startId: 2 } });
     await until(
       () => spawning.received.some((text) => labelFor(text) === 'sessionSubscribedPending'),
       'the subscription by start handle to be answered',
@@ -2054,7 +2068,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       JSON.stringify({ signal: 'awaiting-input', updatedAt: START, cwd: LIVE_STORE.path });
     spawning.send({
       type: 'session-start',
-      id: 6,
+      id: 5,
       storeId: LIVE_STORE.storeId,
       sessionId: null,
       provider: 'claude',
@@ -2097,6 +2111,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const sessionUnsubscribed = firstFrame(watcher, 'sessionUnsubscribed');
     const sessionSubscribedTruncated = firstFrame(latecomer, 'sessionSubscribedTruncated');
     const refusalTerminal = firstFrame(orphan, 'refusal');
+    const refusalStartUnknown = firstFrame(spawning, 'refusal');
     const sessionSubscribedPending = firstFrame(spawning, 'sessionSubscribedPending');
     const terminalOutputPending = firstFrame(spawning, 'terminalOutputPending');
     const terminalOutputNamed = firstFrame(spawning, 'terminalOutputNamed');
@@ -2179,6 +2194,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('terminalOutputDropped', terminalOutputDropped);
     captured.set('sessionUnsubscribed', sessionUnsubscribed);
     captured.set('refusalTerminal', refusalTerminal);
+    captured.set('refusalStartUnknown', refusalStartUnknown);
     captured.set('sessionSubscribedPending', sessionSubscribedPending);
     captured.set('terminalOutputPending', terminalOutputPending);
     captured.set('terminalOutputNamed', terminalOutputNamed);

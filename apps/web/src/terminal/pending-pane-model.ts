@@ -1,5 +1,5 @@
-import type { FrameId, MachineState, SessionRef } from '@agentplex/protocol';
-import type { RefusalView, StartedView } from '../store/hub-store.js';
+import type { MachineState, SessionRef } from '@agentplex/protocol';
+import type { StartView } from '../store/hub-store.js';
 import { serverLabel } from '../sessions/session-list-model.js';
 
 /**
@@ -12,10 +12,14 @@ import { serverLabel } from '../sessions/session-list-model.js';
  * session: it exists the moment the provider names it, and the pane stops
  * being pending then, whatever it was saying a moment before.
  *
- * Both are correlated by `replyTo` and nothing else. The alternative anybody
- * reaches for -- the newest session on that machine, the row that appeared
- * around the right time -- is a guess, and a spawn racing a scan is exactly
- * the case where guessing attaches a pane to somebody else's agent.
+ * Both are answered per start and never out of a newest-answer slot. The
+ * store files what the hub said against the frame that asked (`StartView`),
+ * so the correlation is the key of the entry a pane was handed rather than a
+ * comparison made here -- a pane cannot read another start's answer, because
+ * it was never given one. The alternative anybody reaches for for the session
+ * half -- the newest session on that machine, the row that appeared around the
+ * right time -- is a guess, and a spawn racing a scan is exactly the case
+ * where guessing attaches a pane to somebody else's agent.
  */
 
 /**
@@ -32,14 +36,14 @@ export interface NamedTerminal {
 
 /** Which session this start turned out to be, or `null` while it has no name. */
 export function pendingSession(
-  startId: FrameId,
-  lastStarted: StartedView | null,
+  start: StartView | null,
   terminal: NamedTerminal | null,
 ): SessionRef | null {
   // A resume: the hub answered the start with the session it was about, so the
   // pane can stop being pending before a single byte has arrived.
-  if (lastStarted !== null && lastStarted.replyTo === startId && lastStarted.sessionId !== null) {
-    return { storeId: lastStarted.storeId, sessionId: lastStarted.sessionId };
+  const started = start?.started ?? null;
+  if (started !== null && started.sessionId !== null) {
+    return { storeId: started.storeId, sessionId: started.sessionId };
   }
   // A spawn: nobody knows the id until the provider writes it, and the first
   // thing that can say so is the terminal the pane is already watching. The
@@ -73,17 +77,14 @@ export type PendingWords =
  * client that pulled the name out of a message would be showing a second
  * spelling of the same machine.
  */
-export function pendingWords(
-  startId: FrameId,
-  lastStarted: StartedView | null,
-  lastRefusal: RefusalView | null,
-  state: MachineState | null,
-): PendingWords {
-  if (lastRefusal !== null && lastRefusal.replyTo === startId) {
-    return { kind: 'refused', words: lastRefusal.message };
+export function pendingWords(start: StartView | null, state: MachineState | null): PendingWords {
+  const refusal = start?.refusal ?? null;
+  if (refusal !== null) {
+    return { kind: 'refused', words: refusal.message };
   }
-  if (lastStarted !== null && lastStarted.replyTo === startId) {
-    const label = state === null ? lastStarted.server : serverLabel(state, lastStarted.server);
+  const started = start?.started ?? null;
+  if (started !== null) {
+    const label = state === null ? started.server : serverLabel(state, started.server);
     // The second clause is not decoration: a pane that is already showing a
     // live terminal while every list on the screen still has no row for it
     // looks like a pane that failed to open, and this is the one sentence

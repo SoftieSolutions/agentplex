@@ -6,14 +6,18 @@ import {
   type MachineState,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { RefusalView, StartedView } from '../store/hub-store.js';
+import type { RefusalView, StartedView, StartView } from '../store/hub-store.js';
 import { pendingSession, pendingWords } from './pending-pane-model.js';
 
 /**
  * What a pane waiting on a start says and becomes, against captured hub
  * output. The started reply, the refusals and the machine state are all frames
- * a real hub sent a real browser; the correlation under test is the one thing
- * a pending pane cannot afford to get wrong.
+ * a real hub sent a real browser.
+ *
+ * What a pane is given is the entry the store filed for its own start, so
+ * there is no correlation left to get wrong here -- that rule is the store's,
+ * and `hub-store.test.ts` holds it. What is left is what the two answers read
+ * as, and the order the two of them are read in.
  */
 
 function startedFrom(text: string): StartedView {
@@ -63,14 +67,19 @@ const SESSION = sessionRefSchema.parse({
 
 describe('pendingWords', () => {
   it('says only that it is asking, until the hub has answered', () => {
-    expect(pendingWords(started.replyTo, null, null, populated)).toEqual({
+    // The entry the store opens the moment a start is accepted: asked, and
+    // answered neither way. A pane has to be able to say something then.
+    expect(pendingWords({ started: null, refusal: null }, populated)).toEqual({
       kind: 'asking',
       words: 'starting a session',
     });
+    // And the same for a pane whose start the store has no entry for at all,
+    // which is a handle that outlived the connection it was minted on.
+    expect(pendingWords(null, populated).kind).toBe('asking');
   });
 
-  it('names the machine the hub picked, by the label the fleet knows it as', () => {
-    const words = pendingWords(started.replyTo, started, null, populated);
+  it('names the machine the hub picked, once it has said so', () => {
+    const words = pendingWords({ started, refusal: null }, populated);
     expect(words.kind).toBe('starting');
     // The label out of the machine state, not the registration id the reply
     // carried: one spelling of a machine on the screen.
@@ -79,59 +88,43 @@ describe('pendingWords', () => {
   });
 
   it('falls back to the registration id rather than hiding which machine it is', () => {
-    const words = pendingWords(started.replyTo, started, null, null);
+    const words = pendingWords({ started, refusal: null }, null);
     expect(words.words).toContain('registration-mbp-robert');
   });
 
-  it('says nothing about a start it is not waiting on', () => {
-    // A second tab's start, answered to this connection's newest reply slot:
-    // correlation is by `replyTo` and there is no other rule.
-    expect(pendingWords(started.replyTo + 1, started, null, populated).kind).toBe('asking');
-  });
-
   it('becomes the refusal, in the words the hub used', () => {
-    const words = pendingWords(refused.replyTo, null, refused, populated);
-    expect(words).toEqual({
+    expect(pendingWords({ started: null, refusal: refused }, populated)).toEqual({
       kind: 'refused',
       words: 'no server the hub is paired with has that store mounted',
     });
   });
 
   it('lets a refusal end the wait, over a start that was answered', () => {
-    // Both correlated to one handle is not a shape a hub produces, and if it
-    // ever did, a pane still saying "starting" over a no would be the blank
-    // rectangle this surface exists to replace.
-    const both = pendingWords(
-      refused.replyTo,
-      { ...started, replyTo: refused.replyTo },
-      refused,
-      populated,
-    );
-    expect(both.kind).toBe('refused');
+    // Both on one entry is not a shape the store writes -- a start is answered
+    // once -- and if it ever were, a pane still saying "starting" over a
+    // machine that said no would be the blank rectangle this surface exists to
+    // replace.
+    expect(pendingWords({ started, refusal: refused }, populated).kind).toBe('refused');
   });
 });
 
 describe('pendingSession', () => {
   it('has no session while nothing has named one', () => {
-    expect(pendingSession(started.replyTo, started, { session: null })).toBeNull();
-    expect(pendingSession(started.replyTo, null, null)).toBeNull();
+    expect(pendingSession({ started, refusal: null }, { session: null })).toBeNull();
+    expect(pendingSession(null, null)).toBeNull();
   });
 
   it('is the session the watched terminal turned out to be', () => {
-    expect(pendingSession(started.replyTo, started, { session: SESSION })).toEqual(SESSION);
+    expect(pendingSession({ started, refusal: null }, { session: SESSION })).toEqual(SESSION);
   });
 
   it('is the session a resume was answered with, before any output at all', () => {
     const resumed: StartedView = { ...started, sessionId: SESSION.sessionId };
-    expect(pendingSession(resumed.replyTo, resumed, null)).toEqual(SESSION);
+    expect(pendingSession({ started: resumed, refusal: null }, null)).toEqual(SESSION);
   });
 
-  it('never takes an answer to another start', () => {
-    const resumed: StartedView = {
-      ...started,
-      replyTo: started.replyTo + 1,
-      sessionId: SESSION.sessionId,
-    };
-    expect(pendingSession(started.replyTo, resumed, null)).toBeNull();
+  it('is nothing at all for a start that was refused', () => {
+    const entry: StartView = { started: null, refusal: refused };
+    expect(pendingSession(entry, null)).toBeNull();
   });
 });
