@@ -93,7 +93,7 @@ function sent(socket: FakeSocket): ClientFrame[] {
 }
 
 describe('pairing a server from the settings screen', () => {
-  it('sends the pairing and answers yes when the hub says it recorded one', async () => {
+  it('sends the pairing and answers with the registration the hub recorded', async () => {
     const { store, socket } = await connected(3);
     const pairing = createBrowserPairingOperations(store);
 
@@ -107,7 +107,26 @@ describe('pairing a server from the settings screen', () => {
     });
 
     socket.deliver(hubFrames.serverPaired);
-    await expect(answer).resolves.toEqual({ ok: true });
+    // The id is the point: whoever submitted the form can find that one row
+    // the moment the state carrying it lands, without matching on the address.
+    await expect(answer).resolves.toEqual({ ok: true, registrationId: PAIRED });
+  });
+
+  it('refuses when the answer is not the one a pairing asked for', async () => {
+    // No hub answers a pairing with an unpairing; the store's outcome type
+    // covers both replies, so this path exists and says so rather than
+    // claiming a registration it was never told. The frame is the captured
+    // one, unedited -- it is the conversation that is contrived, not the wire.
+    const { store, socket } = await connected(4);
+    const pairing = createBrowserPairingOperations(store);
+
+    const answer = pairing.pairServer(A_PAIRING);
+    socket.deliver(hubFrames.serverUnpaired);
+
+    const outcome = await answer;
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.reason).toContain('did not answer');
   });
 
   it('shows the hub’s own words when the hub refuses', async () => {
