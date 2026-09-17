@@ -417,7 +417,7 @@ describe('what is worth interrupting somebody for', () => {
  */
 describe('an empty list, and what resolves it', () => {
   it('names the narrowing when there are sessions the narrowing is hiding', () => {
-    const listing = emptyListing(populated, true);
+    const listing = emptyListing(populated, true, 'wide');
 
     expect(listing.words).toBe('no session matches the current narrowing');
     // The control that undoes it is the narrowing directly above the list.
@@ -425,7 +425,7 @@ describe('an empty list, and what resolves it', () => {
   });
 
   it('names pairing, and points at Settings, when no server is paired', () => {
-    const listing = emptyListing(empty, false);
+    const listing = emptyListing(empty, false, 'wide');
 
     expect(listing.words).toContain('No server is paired');
     expect(listing.words).toContain('reports the stores');
@@ -435,8 +435,19 @@ describe('an empty list, and what resolves it', () => {
     });
   });
 
+  it('names the starter that is actually drawn at this width', () => {
+    // Both forms have one, and they are two different controls with two
+    // different names: New session is `visibleFrom="sm"`, and below that the
+    // chrome's round button is what starts one. A single wording would send
+    // half the readers hunting for a button that is not there.
+    expect(emptyListing(populated, false, 'wide').words).toContain('New session starts one');
+    expect(emptyListing(populated, false, 'phone').words).toContain(
+      'the Start a session button starts one',
+    );
+  });
+
   it('says the paired server has no store, by name, rather than blaming pairing', () => {
-    const listing = emptyListing(pairedOnly, false);
+    const listing = emptyListing(pairedOnly, false, 'wide');
 
     expect(listing.words).toContain('gpu-box-01');
     expect(listing.words).toContain('no store');

@@ -9,6 +9,7 @@ import type {
 } from '@agentplex/protocol';
 import { destinationHash } from '../shell/destinations.js';
 import type { NextAction } from '../shell/next-action.js';
+import type { ShellForm } from '../shell/shell-form.js';
 import type { ConnectionPhase } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
 
@@ -424,11 +425,21 @@ export interface EmptyListing {
  * the server's own disk with an `agentplex-store.json` at its root; nothing in
  * this app creates one, so the honest answer there is the fact and no link,
  * rather than a link to a screen that cannot help. A narrowing is undone by
- * the controls directly above the list, and starting the first session is the
- * button at the top of it -- both on this screen, and a link to the screen you
- * are reading is a route to nowhere.
+ * the controls directly above the list, and starting the first session is a
+ * control on this screen or in the chrome around it -- and a link to the
+ * screen you are reading is a route to nowhere.
+ *
+ * Which control that is depends on the form the shell is in, which is why the
+ * form is an argument. The New session button is `visibleFrom="sm"`, and below
+ * that width the thing that starts one is the chrome's round button, whose
+ * name is "Start a session". Naming the wrong one is worse than naming none:
+ * it sends somebody hunting for a button that is not drawn at their width.
  */
-export function emptyListing(state: MachineState, anySession: boolean): EmptyListing {
+export function emptyListing(
+  state: MachineState,
+  anySession: boolean,
+  form: ShellForm,
+): EmptyListing {
   if (anySession) {
     return { words: 'no session matches the current narrowing', action: null };
   }
@@ -453,7 +464,8 @@ export function emptyListing(state: MachineState, anySession: boolean): EmptyLis
       action: null,
     };
   }
-  return { words: 'No sessions in any store yet — New session starts one.', action: null };
+  const starter = form === 'phone' ? 'the Start a session button' : 'New session';
+  return { words: `No sessions in any store yet — ${starter} starts one.`, action: null };
 }
 
 /** The age on a card: how long since the provider last wrote, in one word. */

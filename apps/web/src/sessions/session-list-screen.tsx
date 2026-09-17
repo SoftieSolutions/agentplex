@@ -75,10 +75,12 @@ export interface SessionListScreenProps {
    */
   readonly machine?: ServerRegistrationId | null;
   /**
-   * The form the shell is in, because one control here depends on it: below
-   * the breakpoint the chrome's action button is what starts a session. Read
-   * from the shell rather than measured again, so the two cannot disagree
-   * about which of them is drawing that button.
+   * The form the shell is in, because two things here depend on it: below the
+   * breakpoint the chrome's action button is what starts a session, and an
+   * empty list names whichever of the two is actually drawn. Read from the
+   * shell rather than measured again, so the two cannot disagree about which
+   * of them is drawing that button -- or about which one the sentence should
+   * send somebody to.
    */
   readonly form?: ShellForm;
   /** The clock, injected so a test can render fixed ages. */
@@ -261,7 +263,10 @@ export function SessionListScreen({
       </Group>
 
       {visible.length === 0 ? (
-        <EmptyListing listing={emptyListing(state, everySession.length > 0)} scheme={scheme} />
+        <EmptyListing
+          listing={emptyListing(state, everySession.length > 0, form)}
+          scheme={scheme}
+        />
       ) : (
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
           {visible.map((item) => {

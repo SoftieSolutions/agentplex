@@ -193,10 +193,24 @@ describe('the settings screen with nothing paired', () => {
     // already running, and the installer for the case where none is.
     expect(words).toContain('Pair one above');
     expect(words).toContain('install.sh --role=server');
-    // The README's flag and nothing around it: where the bootstrap is fetched
-    // from is a fact about a deployment, and inventing a host here would be
-    // the screen making one up.
+    // No host, in either command. Where the bootstrap is fetched from is a
+    // fact about a deployment, and inventing one here would be the screen
+    // making it up.
     expect(words).not.toContain('https://');
+  });
+
+  it('sends the operator to the identity file, because nothing prints the token', async () => {
+    await draw(hubFrames.machineState);
+
+    const words = container.textContent ?? '';
+    // `install.sh` writes no token by design (scripts/install.sh) and
+    // `agentplex setup` never prints one (describe-outcome.ts, pinned by
+    // setup-command.test.ts). A screen that said either hands you one would be
+    // sending somebody to look for something that is not there.
+    expect(words).toContain('agentplex setup');
+    expect(words).toContain('identity file');
+    expect(words).toContain('the pairing token is in it');
+    expect(words).toContain('never printed');
   });
 
   it('says nothing about pairing before the hub has answered at all', async () => {

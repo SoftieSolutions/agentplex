@@ -51,6 +51,22 @@ export interface PaneViewDependencies {
    * whose symptom is a session opening in the pane next door.
    */
   onShowSession(path: PanePath, session: SessionRef): void;
+  /**
+   * Every session some pane of this tree is already showing, by session hash.
+   *
+   * The empty pane's picker subtracts these, and it has to. `showSession` has
+   * one rule -- a session is on screen once, and asking for it again is a
+   * focus change rather than a second copy -- so a row for a session already
+   * in another pane would move the focus away and leave this pane exactly as
+   * empty as it was. The arrangement that produces it is the ordinary one:
+   * open a session, split, and pick the only session there is.
+   *
+   * Subtracting rather than relaxing that rule, because the rule is the one
+   * that keeps a terminal from being mounted twice over one subscription, and
+   * because this codebase does not draw a control that cannot do anything --
+   * the same call the nav makes for a destination with nothing behind it.
+   */
+  readonly sessionsOnScreen: ReadonlySet<string>;
   /** Where each pane's element lands, so a focus move can focus the DOM too. */
   registerPane(key: string, element: HTMLDivElement | null): void;
 }
@@ -235,7 +251,7 @@ function PaneContentView({
       // the pane came from a build that knows a kind this one does not. It is
       // preserved verbatim in every save, so nothing is lost by looking.
       return (
-        <Placeholder scheme={view.scheme} title="A newer pane">
+        <Placeholder scheme={view.scheme} title="A newer pane" hint={CLOSE_HINT}>
           This pane was arranged by a newer client and is kept as saved.
         </Placeholder>
       );
@@ -243,7 +259,7 @@ function PaneContentView({
 }
 
 /**
- * An empty pane, offering the sessions there are.
+ * An empty pane, offering the sessions it can actually put here.
  *
  * `tree.ts` reserved this spot -- "no session here yet; later tickets put a
  * picker in it" -- and until AGX-119 what stood in it was a sentence telling
@@ -252,6 +268,10 @@ function PaneContentView({
  * session list's own ordering (needs-you first, then activity), so the pane
  * offers the fleet in the order the list shows it rather than in a second
  * order of its own.
+ *
+ * Minus whatever is already on screen -- see `sessionsOnScreen`. A row for a
+ * session another pane holds would move the focus there and leave this pane
+ * empty, which is the one failure a picker must not have.
  *
  * The subscription is here rather than in the layout screen on purpose. An
  * empty pane is rare and a session pane is not: putting the hub snapshot at
@@ -268,19 +288,22 @@ function EmptyPaneView({
 }): JSX.Element {
   const snapshot = useHubSnapshot(view.hub);
   const state = snapshot.machineState;
-  const sessions = state === null ? [] : visibleSessions(state, NO_FILTERS);
+  const fleet = state === null ? [] : visibleSessions(state, NO_FILTERS);
+  const offerable = fleet.filter((item) => !view.sessionsOnScreen.has(sessionHash(item.ref)));
 
-  if (sessions.length === 0) {
+  if (offerable.length === 0) {
     return (
-      <Placeholder scheme={view.scheme} title="No session here yet">
+      <Placeholder scheme={view.scheme} title="No session here yet" hint={CLOSE_HINT}>
         {state === null ? (
           'The hub has not answered with the fleet yet, so there is nothing to offer.'
         ) : (
           <>
-            No session exists to put here.{' '}
+            {fleet.length === 0
+              ? 'No session exists to put here.'
+              : 'Every session is already open in a pane.'}{' '}
             <NextActionLink
               action={{
-                label: 'Start one from the session list',
+                label: fleet.length === 0 ? 'Start one' : 'Start another',
                 hash: destinationHash('sessions'),
               }}
               scheme={view.scheme}
@@ -296,7 +319,7 @@ function EmptyPaneView({
       <Text fz={11} fw={600} style={{ color: colorForRole('textMuted', view.scheme) }}>
         Show a session here
       </Text>
-      {sessions.map((item) => (
+      {offerable.map((item) => (
         <UnstyledButton
           key={item.key}
           onClick={() => view.onShowSession(path, item.ref)}
@@ -332,20 +355,33 @@ function EmptyPaneView({
         </UnstyledButton>
       ))}
       <Text fz={11} style={{ color: colorForRole('textFaint', view.scheme) }}>
-        Or close this pane with Ctrl+Shift+X.
+        {CLOSE_HINT}
       </Text>
     </Stack>
   );
 }
 
+/**
+ * The way out of a pane that is showing nothing usable.
+ *
+ * On every branch that draws no picker as well as on the one that does: a pane
+ * the app cannot fill is exactly where somebody needs to know how to be rid of
+ * it, and the hint used to be the one thing the old empty-pane sentence got
+ * right.
+ */
+const CLOSE_HINT = 'Or close this pane with Ctrl+Shift+X.';
+
 function Placeholder({
   scheme,
   title,
   children,
+  hint,
 }: {
   readonly scheme: Scheme;
   readonly title: string;
   readonly children: ReactNode;
+  /** A second, fainter line under the body. The close chord, where it applies. */
+  readonly hint?: string;
 }): JSX.Element {
   return (
     <Stack align="center" justify="center" gap={4} style={{ width: '100%', height: '100%' }}>
@@ -355,6 +391,11 @@ function Placeholder({
       <Text fz={11} style={{ color: colorForRole('textFaint', scheme) }}>
         {children}
       </Text>
+      {hint === undefined ? null : (
+        <Text fz={11} style={{ color: colorForRole('textFaint', scheme) }}>
+          {hint}
+        </Text>
+      )}
     </Stack>
   );
 }
