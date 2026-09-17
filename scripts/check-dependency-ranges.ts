@@ -72,15 +72,18 @@ const WINDOW =
  * a lint. This is the half the grammar used to leave to inference: `X` at least
  * 1 admitted `>=4.1.13 <9.0.0`, which broke the rule while passing the check.
  *
- * There is no 0.x branch here and the policy says there should not be: the
- * formula is the same at every floor, so a floor of `0.11.0` takes a ceiling of
- * `<1.0.0`. What keeps the tree's sub-1.0 dependencies exact is the paragraph
- * that argues for exact pins below 1.0 -- and `wantedFor` names one, for a
- * value that has already failed -- rather than a case in this function.
+ * A floor below 1.0 takes no window at all. The formula would happily produce
+ * one -- `>=0.11.0 <1.0.0` -- and it is the one place where a ceiling a major
+ * above the floor is not a promise anybody made: below 1.0 semver puts the
+ * breaking change in the minor, so that window spans every break between 0.11
+ * and 1.0 while looking like the form that spans none. The only compliant form
+ * there is exact, which is what `wantedFor` names for a sub-1.0 value, and this
+ * is the one line in the grammar that knows about 0.x.
  */
 function isWindow(value: string): boolean {
   const [, floorMajor, ceilingMajor, ceilingMinor, ceilingPatch] = WINDOW.exec(value) ?? [];
   if (floorMajor === undefined || ceilingMajor === undefined) return false;
+  if (floorMajor === '0') return false;
   return (
     ceilingMajor === String(Number(floorMajor) + 1) && ceilingMinor === '0' && ceilingPatch === '0'
   );

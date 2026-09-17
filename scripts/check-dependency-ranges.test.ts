@@ -54,10 +54,6 @@ describe('the three forms', () => {
     '>=4.5.4 <5.0.0',
     '>=24.13.3 <25.0.0',
     '>=1.0.0 <2.0.0',
-    // The ceiling is the floor's major plus one at every floor, so this is the
-    // same formula and not a 0.x case. The tree pins below 1.0 exactly because
-    // the policy's prose argues for that, not because the grammar has a branch.
-    '>=0.11.0 <1.0.0',
   ])('takes %s', (value) => {
     expect(
       manifestOffences('package.json', JSON.stringify({ dependencies: { a: value } })),
@@ -86,6 +82,13 @@ describe('the three forms', () => {
     // rather than a range that passes the lint on its way through.
     ['>=4.1.13 <9.0.0', '>=4.1.13 <5.0.0'],
     ['>=0.11.0 <2.0.0', '0.11.0'],
+    // The window form starts at a floor of 1.0. Below that the ceiling a major
+    // above the floor is the one that promises nothing -- semver puts the break
+    // in the minor there, so `>=0.11.0 <1.0.0` spans every break between 0.11
+    // and 1.0 while wearing the shape of the form that spans none. Exact is the
+    // only compliant form below 1.0, and it is what the check names.
+    ['>=0.11.0 <1.0.0', '0.11.0'],
+    ['>=0.0.1 <1.0.0', '0.0.1'],
     // Two spaces between the comparators: one grammar, written one way.
     ['>=1.2.3  <2.0.0', '>=1.2.3 <2.0.0'],
     ['>= 1.2.3 <2.0.0', '>=1.2.3 <2.0.0'],
