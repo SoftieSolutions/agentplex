@@ -45,7 +45,7 @@ export interface MobileChromeProps {
    * is the way back to them.
    */
   readonly current: Destination | null;
-  /** How many sessions want a human, as the session list's chip counts them. */
+  /** How many sessions are waiting on a human and can be reached: `needsYouCount`. */
   readonly needsYou: number;
   /** Opens the start form the shell holds -- the same one New session opens. */
   readonly onStartSession: () => void;

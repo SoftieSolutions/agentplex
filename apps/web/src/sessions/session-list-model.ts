@@ -253,8 +253,8 @@ export function chipCounts(items: readonly SessionListItem[]): readonly ChipCoun
  * somebody's attention, and a number that cannot be brought down by attending
  * to it is a number people learn to ignore.
  *
- * So on a fleet everything is reachable in they are the same number, and when
- * a machine drops the badge falls while the chip does not. That is the honest
+ * So the two are the same number while every machine is reachable, and when
+ * one drops the badge falls while the chip does not. That is the honest
  * direction for both.
  */
 export function needsYouCount(items: readonly SessionListItem[]): number {
