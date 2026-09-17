@@ -89,7 +89,17 @@ export function TerminalView({
       style={{
         flex: 1,
         minHeight: 0,
-        padding: '14px 18px',
+        /**
+         * No padding here, which is a decision and not an omission: the fit
+         * addon measures this box and subtracts the terminal element's
+         * padding, never this one's, so padding here is a grid drawn past
+         * this edge and clipped. `padTerminalElement` argues it and puts the
+         * pane's inset where the addon can see it.
+         *
+         * The background staying here is what makes that invisible: this box
+         * is the whole pane, the terminal element sits inside it inset by its
+         * own padding, and the inset shows this colour.
+         */
         background: colorForRole('terminalBackground', scheme),
         /**
          * The browser has no gesture to make on this box, because this box has

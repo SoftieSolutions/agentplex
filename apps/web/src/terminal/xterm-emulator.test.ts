@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
+import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { Terminal, type ILink } from '@xterm/xterm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bracketedPasteChunks } from './bracketed-paste.fixture.js';
-import type { SearchResults, TerminalEmulator, TerminalSearch } from './emulator.js';
+import {
+  EMULATOR_SCROLLBACK_LINES,
+  type SearchResults,
+  type TerminalEmulator,
+  type TerminalSearch,
+} from './emulator.js';
 import { ptyChunks } from './pty-chunks.fixture.js';
 import { unicodeChunks } from './unicode-widths.fixture.js';
 import {
@@ -14,8 +20,10 @@ import {
   createPaneSearch,
   createPaneTerminal,
   createWebLinkHandler,
+  padTerminalElement,
   paneCellHeight,
   paneSearchDecorations,
+  TERMINAL_PADDING,
   type WindowOpener,
 } from './xterm-emulator.js';
 
@@ -266,6 +274,93 @@ describe('fitting the pane to its box', () => {
 });
 
 /**
+ * Which element carries the pane's inset, asked of the addon that decides the
+ * answer. `padTerminalElement` argues why it is the terminal element and not
+ * the box around it; this is that argument held to the arithmetic.
+ *
+ * The addon is the real one, not a copy of its sums. A stand-in terminal
+ * supplies the three things `proposeDimensions` reads off one -- the element,
+ * the scrollback option, off which it reserves 14px for a scrollbar this app
+ * does not draw, and the measured cell behind xterm's private core -- because
+ * opening a terminal needs a renderer and the arithmetic needs none.
+ *
+ * The numbers are read off Chrome rather than chosen, from this app's own pane
+ * at a full-screen window on this display: a 1728x926 pane and the cell xterm
+ * measured for the app's font and size. With the padding on the container the
+ * addon proposed 237x66 and xterm drew a 1712x924 screen into a 1692x898
+ * content box, past the pane's right and bottom edges; with the padding on the
+ * terminal element it proposed 232x64 and drew 1676x896 inside the same box.
+ *
+ * jsdom lays nothing out, so the container's box is stated rather than
+ * measured -- which is not a cheat here, because what Chrome hands the addon
+ * for that box is a stated number too, for the `box-sizing` reason
+ * `padTerminalElement` gives.
+ */
+describe('the box the addon fits a grid into', () => {
+  const PANE = { width: 1728, height: 926 };
+  const CELL = { width: 7.224137931034483, height: 14 };
+
+  /** What the pane shows, once its inset is taken off its box. */
+  const HELD = {
+    width: PANE.width - 2 * TERMINAL_PADDING.inline,
+    height: PANE.height - 2 * TERMINAL_PADDING.block,
+  };
+
+  function proposalWithPaddingOn(carrier: 'the container' | 'the terminal element'): {
+    cols: number;
+    rows: number;
+  } {
+    const container = document.createElement('div');
+    container.style.width = `${PANE.width}px`;
+    container.style.height = `${PANE.height}px`;
+    const element = document.createElement('div');
+    container.append(element);
+    document.body.append(container);
+    mounted.push(container);
+    if (carrier === 'the container') {
+      container.style.padding = `${TERMINAL_PADDING.block}px ${TERMINAL_PADDING.inline}px`;
+    } else {
+      padTerminalElement(element);
+    }
+
+    const addon = new FitAddon();
+    // The addon's own view of a terminal, which is private API it reaches
+    // through `_core`. One cast, at the seam, so the arithmetic under test is
+    // the shipped arithmetic and not a copy of it.
+    addon.activate({
+      element,
+      options: { scrollback: EMULATOR_SCROLLBACK_LINES },
+      _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+    } as unknown as Terminal);
+    const proposal = addon.proposeDimensions();
+    if (proposal === undefined) throw new Error('the addon proposed nothing for a measurable box');
+    return proposal;
+  }
+
+  it('is the box the pane shows, when the terminal element carries the padding', () => {
+    const grid = proposalWithPaddingOn('the terminal element');
+
+    expect(grid).toEqual({ cols: 232, rows: 64 });
+    // The point of the assertion above, stated as the thing it is for: every
+    // column and every row the far end is told about is one the user can see.
+    expect(grid.cols * CELL.width).toBeLessThanOrEqual(HELD.width);
+    expect(grid.rows * CELL.height).toBeLessThanOrEqual(HELD.height);
+  });
+
+  it('is the box plus the padding, when the container carries it', () => {
+    const grid = proposalWithPaddingOn('the container');
+
+    expect(grid).toEqual({ cols: 237, rows: 66 });
+    // Five columns and two rows of a terminal drawn where nothing is visible.
+    // Kept as a test rather than a sentence in a comment because it is the
+    // reason the padding is where it is, and the next person to move it back
+    // for the tidiness of one style object should be told by a suite.
+    expect(grid.cols * CELL.width).toBeGreaterThan(HELD.width);
+    expect(grid.rows * CELL.height).toBeGreaterThan(HELD.height);
+  });
+});
+
+/**
  * Turning a finger's pixels into xterm's lines, which is the half of touch
  * scrolling that has to know what a row is.
  *
@@ -310,6 +405,28 @@ describe('scrolling the pane by a distance a finger moved', () => {
     // nothing cannot be told from an app that has stopped answering, and the
     // cost of being wrong here is a glide that overshoots a little.
     expect(paneCellHeight(boxed(660), 40)).toBe(16.5);
+  });
+
+  it('takes the pane inset off that box, because clientHeight counts padding as grid', () => {
+    // The same 660px box with the inset `padTerminalElement` puts on this very
+    // element. Counting the padding as grid is what the fallback must not do:
+    // it is the box the terminal was fitted into that a row is a fortieth of,
+    // and that box is 28px smaller than the padding box around it.
+    const padded = boxed(660 + 2 * TERMINAL_PADDING.block);
+    padTerminalElement(padded);
+
+    expect(paneCellHeight(padded, 40)).toBe(16.5);
+  });
+
+  it('has no answer for a box that is nothing but its own inset', () => {
+    // A pane that was padded and never drawn. Left counting the padding, this
+    // answers a cell of 0.7px, and a cell that small is a finger that throws
+    // the view hundreds of lines. There is no box here, so there is nothing to
+    // say.
+    const empty = boxed(2 * TERMINAL_PADDING.block);
+    padTerminalElement(empty);
+
+    expect(paneCellHeight(empty, 40)).toBeNull();
   });
 
   it('has no answer for a pane with no box, and none for one never drawn', () => {

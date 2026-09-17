@@ -327,6 +327,68 @@ export function createPaneFit(terminal: Terminal): () => void {
 }
 
 /**
+ * The pane's own inset, in CSS pixels: a little air between the edge of the
+ * pane and the first character, so output does not run into the border.
+ *
+ * Numbers rather than a CSS string because the fit addon's arithmetic is
+ * arithmetic, and a test that asks whether the grid fits the box has to be
+ * able to do the same sum.
+ */
+export const TERMINAL_PADDING = { block: 14, inline: 18 } as const;
+
+/**
+ * Putting that inset where the fit addon can see it, which is the terminal
+ * element and not the box around it.
+ *
+ * `proposeDimensions` reads two elements and it is natural to assume it reads
+ * one. It measures the PARENT of `terminal.element` -- the box the pane hands
+ * `open` -- and subtracts the padding of `terminal.element` itself. So padding
+ * on the container is measured and never subtracted: the grid it proposes is
+ * the grid the box would hold if the padding were not there, and the columns
+ * and rows that do not fit are drawn past the pane's edge and clipped. Measured
+ * in Chrome on this app's own pane rather than inferred: a 1728x926 pane with
+ * the padding on the container fitted to 237x66, which xterm drew as a 1712x924
+ * screen inside a 1692x898 content box; with the padding here it fits to 232x64
+ * and draws 1676x896, and nothing is outside the pane at any width.
+ *
+ * The other half of why it is invisible is a `getComputedStyle` detail worth
+ * writing down: the app's boxes are `box-sizing: border-box`, and a computed
+ * `height` on such an element resolves to the border box rather than the
+ * content box. The addon therefore reads the padded box's full height, which
+ * is the number that includes exactly the padding it is about to not subtract.
+ * Checked in a browser rather than assumed.
+ *
+ * Inline style rather than a stylesheet rule because the app ships no
+ * stylesheet of its own -- every rule in it is a style object beside the thing
+ * it styles -- and this is the one element no component renders. It is written
+ * by the module that owns that element, which is this one, and the pane's own
+ * box is left with none; `terminal-view.tsx` says so where its padding used to
+ * be.
+ *
+ * An element is `undefined` for a terminal that was never opened, which has no
+ * box to inset and is not an error here.
+ */
+export function padTerminalElement(element: HTMLElement | undefined): void {
+  if (element === undefined) return;
+  element.style.padding = `${TERMINAL_PADDING.block}px ${TERMINAL_PADDING.inline}px`;
+}
+
+/**
+ * A computed length in CSS pixels. Anything that is not one -- an empty
+ * string, a keyword, a percentage -- is no length, which here means no inset.
+ */
+function cssPixels(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** What an element's own padding costs it, top and bottom together. */
+function blockInset(element: HTMLElement): number {
+  const style = getComputedStyle(element);
+  return cssPixels(style.paddingTop) + cssPixels(style.paddingBottom);
+}
+
+/**
  * The height of one row, in CSS pixels, or `null` when there is nothing to
  * measure it against.
  *
@@ -349,11 +411,27 @@ export function createPaneFit(terminal: Terminal): () => void {
  * degrade in than answering `null`, because `null` here is a finger that moves
  * nothing, and a gesture that does nothing is indistinguishable from an app
  * that has stopped answering.
+ *
+ * The fallback subtracts the element's own padding, which is not a detail:
+ * `clientHeight` is the padding box, and `padTerminalElement` puts the pane's
+ * inset on exactly this element. Left in, the inset would be counted as grid
+ * -- a few percent again on a pane that has one, and a whole answer on a pane
+ * that has not. An element carrying nothing but 28px of padding would divide
+ * to a cell of half a pixel across a full grid, and half a pixel is a finger
+ * that moves the view a hundred lines. Taking the inset off is what keeps the
+ * fallback the box the terminal was fitted into, and it is also what makes
+ * that case answer `null` instead: with the padding gone there is no box left,
+ * which is the one thing worth refusing to guess at. Read off the element
+ * rather than off `TERMINAL_PADDING` because the question is what this element
+ * is inset by, and a terminal nobody padded is inset by nothing.
  */
 export function paneCellHeight(element: HTMLElement | undefined, rows: number): number | null {
   if (element === undefined || rows <= 0) return null;
   const screen = element.querySelector('.xterm-screen');
-  const height = screen instanceof HTMLElement ? screen.clientHeight : element.clientHeight;
+  const height =
+    screen instanceof HTMLElement
+      ? screen.clientHeight
+      : element.clientHeight - blockInset(element);
   if (height <= 0) return null;
   return height / rows;
 }
@@ -466,7 +544,10 @@ export function createXtermEmulatorFactory(
     create(container: HTMLElement): TerminalEmulator {
       const terminal = createPaneTerminal(scheme, opener);
       terminal.open(container);
-      // After `open`, deliberately: see `createPaneEmulator`.
+      // Both of these are after `open`, deliberately. The emulator's reason is
+      // in `createPaneEmulator`; the padding's is that `open` is what creates
+      // the element it goes on.
+      padTerminalElement(terminal.element);
       return createPaneEmulator(terminal, scheme);
     },
   };
