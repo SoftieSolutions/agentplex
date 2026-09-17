@@ -23,6 +23,7 @@ export {
   Select,
   SimpleGrid,
   Stack,
+  Stepper,
   Text,
   Textarea,
   TextInput,
