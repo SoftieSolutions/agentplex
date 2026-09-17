@@ -39,7 +39,14 @@ export interface OnboardingDismissal {
    * this browser refused, in which case it holds for this page only.
    */
   dismiss(): boolean;
-  /** Offers the wizard again. True when nothing is stored any more. */
+  /**
+   * Offers the wizard again. True when nothing is stored any more.
+   *
+   * Nothing in the app calls this yet: it is here for the re-offer path -- a
+   * Settings control, or the last server being unpaired -- and until that
+   * lands it is exercised only by this file's tests. Read it as the seam the
+   * re-offer will use, not as behaviour the wizard has today.
+   */
   forget(): boolean;
   /** For `useSyncExternalStore`; returns the unsubscribe. */
   subscribe(listener: () => void): () => void;

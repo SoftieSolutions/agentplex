@@ -157,10 +157,11 @@ interface PairStepProps {
 /**
  * The live step's column, as a placeholder: the heading and where to go.
  *
- * AGX-250 replaces this with the pairing itself. Until then it points at the
- * Settings panel already on the page rather than describing a flow that does
- * not exist yet -- pairing works there today, and a wizard that stopped at a
- * blank panel would be worse than one that says where the working control is.
+ * AGX-250 replaces this with the pairing itself. Until then it says so, and
+ * names the one route to a working pairing control -- Skip, then Settings on
+ * the session list. It may not point at a panel below, because there is none:
+ * this screen replaces the list and the settings on the default route rather
+ * than sitting above them, so any "below" would send the reader off-screen.
  */
 function PairStep({ scheme }: PairStepProps): JSX.Element {
   return (
@@ -169,8 +170,9 @@ function PairStep({ scheme }: PairStepProps): JSX.Element {
         Pair a server
       </Title>
       <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
-        Pair your first machine from the Settings panel below, where the hub takes its address and
-        pairing token and dials it.
+        The pairing form arrives here in a later change. Until then, Skip for now leads to the
+        session list, where Settings pairs a server today: the hub takes its address and pairing
+        token and dials it.
       </Text>
     </Stack>
   );
