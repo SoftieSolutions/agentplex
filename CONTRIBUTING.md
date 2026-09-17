@@ -245,14 +245,19 @@ wanted instead of pointing at a document.
 manifest in this workspace, is one of:
 
 - `workspace:*` for a sibling in this tree. It never resolves against a
-  registry. `scripts/assemble-package.ts` replaces it with the exact version of
-  the copy it bundled, or drops it altogether when it names one of the four
-  published packages, which is how the hub declares a client it does not
-  bundle.
-- A window, floor `x.y.z` and ceiling the next major, for a third-party package
-  at 1.0.0 or later. The floor is the version the lockfile resolves today, not
-  a guess at the oldest that might work, and the ceiling is one major above it
-  and not two: a range that spans two majors is a different rule, not a wider
+  registry. Assembling a published manifest, `scripts/assemble-package.ts`
+  replaces it with the exact version of the copy it bundled, or leaves it out
+  entirely when it names one of the four published packages. The hub is the
+  case: its workspace manifest declares `@softiesolutions/agentplex-web` as a
+  sibling so that pnpm links it, the published hub manifest declares nothing
+  for it at all, and `install.sh --role=hub` installs that package beside the
+  hub.
+- A window, written `>=x.y.z <X.0.0`, for a third-party package at 1.0.0 or
+  later: those two comparators and no others, one space between them, `x` at
+  least 1, `X` equal to `x + 1`, and the ceiling's minor and patch both zero.
+  The floor is the version the lockfile resolves today, not a guess at the
+  oldest that might work, and the ceiling is one major above it and not two,
+  because a range spanning two majors is a different rule rather than a wider
   reading of this one.
 - An exact `x.y.z`, for a package below 1.0, for anything that compiles at
   install, and anywhere else somebody wants one. A pin is the stricter answer
@@ -291,8 +296,9 @@ patches being safe either. That window admits one kind of release and costs a
 second grammar, and the tree already agrees it is not worth it. Every
 dependency here below 1.0 is one of the four `@xterm/addon-*` packages, each
 pinned exactly, and nobody argued about it. Keeping it that way leaves the
-window form with exactly one shape, a ceiling one major above the floor, so
-neither the rule nor the check that follows it has a 0.x branch.
+window form with exactly one shape, a ceiling one major above the floor. What
+the check needs for 0.x is then a condition on the floor rather than a second
+grammar to carry.
 
 **Exact for anything that compiles, and `node-pty` is the instance rather than
 the exception.** A package that builds a native addon is the only kind whose
@@ -352,15 +358,20 @@ whole section exists to prevent.
 workspace members and not the assembled manifests under the `dist/` and
 `apps/*/release/` output that `.gitignore` covers, and every value under the
 four dependency fields named above. A value passes when it is `workspace:*`, or
-an exact `x.y.z` with an optional prerelease suffix, or a window written as the
-floor and the ceiling with a single space between the two comparators, where
-the ceiling is the floor's major plus one and its minor and patch are zero.
-Everything else fails: a caret, a tilde, a comparator with nothing on the other
-side, and a window reaching further than one major, so that widening one is an
-edit to this section rather than a range that quietly passes. The message names
-the manifest, the dependency and the bound it wanted. `engines`,
-`packageManager` and anything under a `pnpm` key are not dependency fields and
-are not read.
+an exact `x.y.z` with an optional prerelease suffix, or a window of the form
+`>=x.y.z <X.0.0`, where `>=` and `<` are the only comparators, a single space
+separates them, `X` is `x + 1`, and the ceiling's minor and patch are zero.
+One condition beyond the shape: `x` is at least 1. A floor below 1.0 has no
+compliant window at all, so `>=0.11.0 <1.0.0` fails despite being shaped
+correctly, and an exact version is the only thing a sub-1.0 dependency may say.
+Everything else fails too, and naming the near misses is the point of writing
+the form out: a caret, a tilde, a comparator with nothing on the other side, a
+window reaching further than one major, and a window whose comparators are not
+those two, so `>4.1.12 <5.0.0` and `>=4.1.13 <=5.0.0` are refused as surely as
+`^4.1.13` is. Widening a window is then an edit to this section rather than a
+range that quietly passes. The message names the manifest, the dependency and
+the bound it wanted. `engines`, `packageManager` and anything under a `pnpm`
+key are not dependency fields and are not read.
 
 ## Connectivity
 
