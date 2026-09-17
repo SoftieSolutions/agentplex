@@ -396,7 +396,7 @@ RUN cat /tmp/start.log \
 # the invocation that asks only about the manifest, which is also why it is what
 # the passive notice refreshes with.
 RUN mkdir -p /tmp/mirror \
-    && printf '%s\n' '{"cli":{"version":"9.9.9","protocol":1},"server":{"version":"9.9.9","protocol":1}}' \
+    && printf '%s\n' '{"cli":{"current":"9.9.9","releases":{"9.9.9":1,"9.8.0":1}},"server":{"current":"9.9.9","releases":{"9.9.9":1}}}' \
       >/tmp/mirror/versions.json
 
 # Piped through `tee` rather than redirected to a file, because this one is
@@ -417,8 +417,12 @@ RUN cat /tmp/status-available.log \
     && grep -q '9.9.9 available' /tmp/status-available.log \
     && grep -q 'checked just now' /tmp/status-available.log
 
-# A pin names a release tag, so it is exact. Refused at the flag, before the
-# manifest is read and long before anything is stopped.
+# A pin to this command names a release tag, so it is exact, and it is refused at
+# the flag before the manifest is read and long before anything is stopped.
+# `install.sh` takes a series as well as a tag -- it resolves one against the
+# release history the manifest carries -- and this command deliberately does
+# not: one resolver, in the place a fleet points at, rather than two that have
+# to keep agreeing.
 RUN ! AGENTPLEX_VERSIONS=/tmp/mirror agentplex update hub@1.3 2>&1 | tee /tmp/pin.log
 RUN grep -q '1.3.0 rather than 1.3' /tmp/pin.log
 
