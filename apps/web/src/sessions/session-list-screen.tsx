@@ -41,6 +41,11 @@ import { stoppedNotice } from './stop-model.js';
  * card grid (turn 7, 7a/7b), which collapses to the mobile card feed (7e) by
  * dropping to one column rather than by being a second view.
  *
+ * The mockup's floating action button used to be drawn here, fixed to the
+ * corner at narrow widths. It belongs to the phone chrome (AGX-125): it floats
+ * over every destination and its badge counts the whole narrowed fleet, so a
+ * copy owned by this screen would be one of two.
+ *
  * The catalogue tree and the machine selector used to stand beside the cards
  * here, because until AGX-122 this screen was the only place with room for
  * them. They are the shell's now (`shell/sidebar.tsx`): they belong to every
@@ -151,29 +156,25 @@ export function SessionListScreen({
         </Group>
         {/* The mockup's New popover lists five node kinds; Session is the one
             live in this milestone, and a menu with one live option is not
-            drawn, so New is a direct button. On small screens the same action
-            is the mockup's floating button, bottom-right (7e). */}
-        {/* Two buttons and not a menu, for the reason the one above is a
+            drawn, so New is a direct button. */}
+        {/* Two buttons and not a menu, for the reason the one beside it is a
             button: a popover over two options is a click in front of every
             click. A project is where sessions get started from, so it sits
             beside the thing that starts them. */}
-        <Group gap={8} visibleFrom="sm">
+        <Group gap={8}>
           <Button size="xs" variant="default" onClick={() => setCreatingProject(true)}>
             New project
           </Button>
-          <Button size="xs" onClick={() => setCreating(true)}>
+          {/* Below `sm` the phone chrome's action button is what starts a
+              session, floating over every destination rather than only over
+              this one, so this would be the second of two. The breakpoint is
+              the shell's own -- `WIDE_FROM` in shell/shell-form.ts is Mantine's
+              `sm` for exactly this reason -- so one of the two is always
+              drawn and never both. */}
+          <Button size="xs" visibleFrom="sm" onClick={() => setCreating(true)}>
             New session
           </Button>
         </Group>
-        <Button
-          hiddenFrom="sm"
-          size="md"
-          radius="xl"
-          onClick={() => setCreating(true)}
-          style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 20 }}
-        >
-          New session
-        </Button>
       </Group>
       <NewSessionForm
         store={store}

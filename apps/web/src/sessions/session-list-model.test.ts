@@ -5,8 +5,10 @@ import {
   ageLabel,
   chipCounts,
   connectionNotice,
+  chipForStatus,
   listSessions,
   matchesSearch,
+  needsYouCount,
   NO_FILTERS,
   orderByActivity,
   partitionNeedsYou,
@@ -158,6 +160,32 @@ describe('chips', () => {
     expect(
       visibleSessions(populated, { ...NO_FILTERS, chip: 'running' }).map((i) => i.name),
     ).toEqual(['fix-auth-refresh', 'bench-tokenizer']);
+  });
+});
+
+describe('the needs-you count', () => {
+  it('is the number the Needs you chip carries', () => {
+    const items = listSessions(populated);
+    const chip = chipCounts(items).find((entry) => entry.chip === 'needs-you');
+
+    expect(chip?.count).toBe(2);
+    expect(needsYouCount(items)).toBe(chip?.count);
+  });
+
+  it('counts where there is no chip row to read a count off', () => {
+    // The chip row is not drawn when one state is all there is, and the badge
+    // on the action button still has to say two. Same derivation, one of the
+    // two readers with a rule of its own about when to draw at all.
+    const waiting = listSessions(populated).filter(
+      (item) => chipForStatus(item.status) === 'needs-you',
+    );
+
+    expect(chipCounts(waiting)).toEqual([]);
+    expect(needsYouCount(waiting)).toBe(2);
+  });
+
+  it('is zero for a fleet with nothing waiting on anyone', () => {
+    expect(needsYouCount(listSessions(empty))).toBe(0);
   });
 });
 

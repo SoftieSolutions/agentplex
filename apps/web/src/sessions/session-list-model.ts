@@ -227,17 +227,43 @@ export interface ChipCount {
  * the screen's instruction to render no chip row at all.
  */
 export function chipCounts(items: readonly SessionListItem[]): readonly ChipCount[] {
-  const counts = new Map<StatusChip, number>();
-  for (const item of items) {
-    const chip = chipForStatus(item.status);
-    counts.set(chip, (counts.get(chip) ?? 0) + 1);
-  }
+  const counts = countsByChip(items);
   if (counts.size < 2) return [];
   return CHIP_ORDER.filter((chip) => counts.has(chip)).map((chip) => ({
     chip,
     label: CHIP_LABELS[chip],
     count: counts.get(chip) ?? 0,
   }));
+}
+
+/** How many sessions are in each state, which is what both readers below count. */
+function countsByChip(items: readonly SessionListItem[]): Map<StatusChip, number> {
+  const counts = new Map<StatusChip, number>();
+  for (const item of items) {
+    const chip = chipForStatus(item.status);
+    counts.set(chip, (counts.get(chip) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * How many sessions want a human: the badge on the phone chrome's action
+ * button, and the number the Needs you chip carries.
+ *
+ * It is the chip's own count and not a second derivation of the same idea --
+ * both come out of `countsByChip` -- because they are on screen together on a
+ * phone and two numbers for one question is how a badge stops being believed.
+ * The chip row's rule about when to draw at all is the chip row's alone: when
+ * every session wants a human there is no chip row and there is still a badge.
+ *
+ * Counted by status, which means an unreachable session that was waiting on a
+ * human is counted. That is the chip's answer and the list's order agrees with
+ * it -- such a session sorts to the top -- even though it is not one a tap can
+ * clear. See `SessionListItem.needsYou`, which is the narrower fact the cards
+ * use to decide how loud a row is.
+ */
+export function needsYouCount(items: readonly SessionListItem[]): number {
+  return countsByChip(items).get('needs-you') ?? 0;
 }
 
 /**

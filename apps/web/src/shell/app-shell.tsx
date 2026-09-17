@@ -1,56 +1,66 @@
 import { useState, type JSX } from 'react';
-import type { NodeId, ServerRegistrationId, SessionRef } from '@agentplex/protocol';
+import type {
+  Layout,
+  MachineState,
+  NodeId,
+  ServerRegistrationId,
+  SessionRef,
+} from '@agentplex/protocol';
 import type { TokenStore } from '../auth/token.js';
+import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogue-store.js';
 import { useDocRoute } from '../docs/doc-route.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
+import { NewSessionForm } from '../sessions/new-session-form.js';
 import { SessionListScreen } from '../sessions/session-list-screen.js';
+import { needsYouCount, visibleSessions, NO_FILTERS } from '../sessions/session-list-model.js';
 import { SettingsRoute } from '../settings/settings-route.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
-import { sessionHash, useSessionRoute } from '../terminal/session-route.js';
+import { useSessionRoute } from '../terminal/session-route.js';
 import { Box, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
-import { useDestination, type Destination } from './destinations.js';
+import { resolveDestination, useDestination, type Destination } from './destinations.js';
+import { MobileChrome } from './mobile-chrome.js';
+import { MoreScreen } from './more-screen.js';
+import { useShellForm } from './shell-form.js';
 import { Sidebar } from './sidebar.js';
 import { TopBar } from './top-bar.js';
 
 /**
- * The frame: a bar across the top, a sidebar down the left, and a content
- * region every screen mounts into.
+ * The frame, in both the shapes it takes: a bar across the top with a sidebar
+ * down the left, or -- on a phone -- a compact header with a tab bar across the
+ * foot. One shell either way. The route model, the screens, and the facts the
+ * chrome holds are shared; `shell-form.ts` decides which frame they are drawn
+ * in, and `mobile-chrome.tsx` is the other one.
  *
- * The chrome is persistent, which is the whole point of this file. A session
- * used to replace the page -- the layout screen was the page -- and in the
- * mockups it keeps the sidebar, so the route decides what the content region
- * holds and nothing more. What that buys is that the tree, the machine
- * selector and the nav survive navigation: the catalogue is asked once and
- * not once per screen, and a session is somewhere you go rather than somewhere
- * you end up.
+ * The chrome is persistent, which is the point of this file. A session used to
+ * replace the page -- the layout screen was the page -- and in the mockups it
+ * keeps the chrome, so the route decides what the content region holds and
+ * nothing more. What that buys is that the tree, the machine selector and the
+ * nav survive navigation: the catalogue is asked once and not once per screen,
+ * and a session is somewhere you go rather than somewhere you end up.
  *
- * Two facts live here because two things read each of them, and one writer is
- * what keeps the two from disagreeing:
+ * Three facts live here because more than one thing reads each of them, and one
+ * writer is what keeps those readers from disagreeing:
  *
- *   * the machine the app is narrowed to. The selector at the top of the
- *     sidebar writes it; the catalogue query and the cards in the content
- *     region read it. `machine-selector-model.ts` argues why it is one fact.
+ *   * the machine the app is narrowed to. The selector writes it -- it is in
+ *     the sidebar in one form and in the header in the other; the catalogue
+ *     query, the cards in the content region and the attention badge read it.
+ *     `machine-selector-model.ts` argues why it is one fact.
  *   * the catalogue question itself, as a store. The panel draws it and the
  *     selection narrows it, and the store outlives both the panel's tab and
  *     whatever screen is mounted, so the question and the rows already paged
  *     survive a screen being swapped. Leaving the Projects tab does drop the
  *     interest and returning asks again -- the store is what the answer is
  *     kept in, not what stops it being re-asked.
- *
- * Narrow widths: the sidebar and the content cannot both be on screen, so each
- * is rendered exactly once and carries `visibleFrom` while the other is the
- * one being shown. The same decision the session list makes about its columns,
- * for the same reason -- a media-query hook would be a second source of truth
- * about one breakpoint. Above the breakpoint neither carries it and both are
- * drawn, so the toggle cannot strand a wide screen with half a page. The phone
- * chrome proper is AGX-125.
+ *   * whether the start form is open. On a phone it is opened by the action
+ *     button in the chrome, which is on screen over every destination, so the
+ *     form belongs to the chrome rather than to the list underneath it.
  *
  * No effects: the routes are external stores read through
- * `useSyncExternalStore`, and so is the hub.
+ * `useSyncExternalStore`, and so are the hub and the window's own width.
  */
 export interface AppShellProps {
   /** The page's one hub store, built by `main.tsx` and handed in. */
@@ -69,21 +79,12 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
   const sessionRef = useSessionRoute();
   const doc = useDocRoute();
   const destination = useDestination();
+  const form = useShellForm();
   const [machine, setMachine] = useState<ServerRegistrationId | null>(null);
   // Built once and inert until something subscribes: creating a catalogue
   // store dials nothing, and the panel's first subscriber is what asks.
   const [catalogue] = useState<CatalogueStore>(() => createCatalogueStore({ hub }));
-  // The sidebar's own openness below the breakpoint, and the address it was
-  // opened at. Two fields and not one because the content is `display: none`
-  // while the sidebar is open there: a tap on a session row or a nav link
-  // would otherwise change the address and leave the person looking at the
-  // sidebar they tapped in. Reading it back against the current address is
-  // what closes it, rather than a handler on every link -- the address is
-  // what "somewhere else" means, and this way the rows, the nav and the brand
-  // mark all count without any of them knowing about the sidebar.
-  const [sidebar, setSidebar] = useState<SidebarOpening>({ open: false, address: '' });
-  const address = addressOf(destination, sessionRef, doc);
-  const sidebarOpen = sidebar.open && sidebar.address === address;
+  const [starting, setStarting] = useState(false);
 
   /**
    * The one place the selection moves from. Two things read it -- the cards
@@ -98,6 +99,50 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
     catalogue.reshape(narrowedToMachine(catalogue.getSnapshot().shape, next));
   }
 
+  const state = snapshot.machineState;
+  // Where the address lands in the form the shell is actually in: Projects and
+  // More are places only where there is no sidebar holding both already.
+  const place = resolveDestination(destination, form);
+  const region = content({
+    hub,
+    tokens,
+    state,
+    layout,
+    catalogue,
+    sessionRef,
+    doc,
+    destination: place,
+    machine,
+    scheme,
+  });
+
+  if (form === 'phone') {
+    return (
+      <MobileChrome
+        state={state}
+        machine={machine}
+        onPickMachine={pickMachine}
+        // A session or a document is a thing and not one of the three places
+        // the bar offers, so no tab claims to be where the app is.
+        current={sessionRef !== null || doc !== null ? null : place}
+        needsYou={attentionCount(state, machine)}
+        onStartSession={() => setStarting(true)}
+        scheme={scheme}
+      >
+        {region}
+        {/* The chrome's own copy of the start form, because the button that
+            opens it is the chrome's: the list screen's New session button is
+            not drawn at this width. */}
+        <NewSessionForm
+          store={hub}
+          opened={starting}
+          onClose={() => setStarting(false)}
+          scheme={scheme}
+        />
+      </MobileChrome>
+    );
+  }
+
   return (
     <Box
       style={{
@@ -107,16 +152,11 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
         background: colorForRole('background', scheme),
       }}
     >
-      <TopBar
-        scheme={scheme}
-        sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebar({ open: !sidebarOpen, address })}
-      />
+      <TopBar scheme={scheme} />
       <Box style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Box
           component="aside"
-          w={{ base: '100%', md: 240 }}
-          {...(sidebarOpen ? {} : { visibleFrom: 'md' as const })}
+          w={240}
           style={{
             flexShrink: 0,
             minWidth: 0,
@@ -125,57 +165,53 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
         >
           <Sidebar
             store={hub}
-            state={snapshot.machineState}
+            state={state}
             layout={layout}
             catalogue={catalogue}
             machine={machine}
             onPickMachine={pickMachine}
-            destination={destination}
+            destination={place}
             scheme={scheme}
           />
         </Box>
-        <Box
-          component="main"
-          {...(sidebarOpen ? { visibleFrom: 'md' as const } : {})}
-          style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto' }}
-        >
-          {content({ hub, tokens, sessionRef, doc, destination, machine })}
+        <Box component="main" style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
+          {region}
         </Box>
       </Box>
     </Box>
   );
 }
 
-/** The sidebar being open, and the address it was opened at. */
-interface SidebarOpening {
-  readonly open: boolean;
-  readonly address: string;
-}
-
 /**
- * The address the shell resolved, as one string to compare. Every route this
- * file reads is in it, so a session row, a nav link and the brand mark are all
- * a change of address -- which is the only thing the sidebar has to notice.
+ * How many sessions want a human, narrowed the way everything else on screen
+ * is narrowed.
+ *
+ * The count is `needsYouCount`, which is the number the session list's Needs
+ * you chip carries, so the badge on the phone's action button and the chip
+ * below it cannot disagree. The narrowing is the machine selection, for the
+ * same reason: a badge counting the whole fleet above a list showing one
+ * machine would be counting sessions the person cannot see.
  */
-function addressOf(
-  destination: Destination,
-  sessionRef: SessionRef | null,
-  doc: NodeId | null,
-): string {
-  if (sessionRef !== null) return sessionHash(sessionRef);
-  if (doc !== null) return `doc/${doc}`;
-  return destination;
+function attentionCount(state: MachineState | null, machine: ServerRegistrationId | null): number {
+  if (state === null) return 0;
+  return needsYouCount(visibleSessions(state, { ...NO_FILTERS, server: machine }));
 }
 
 interface ContentProps {
   readonly hub: HubStore;
   readonly tokens: TokenStore;
+  /** The fleet, or `null` while the hub has not answered with one. */
+  readonly state: MachineState | null;
+  readonly layout: Layout | null;
+  readonly catalogue: CatalogueStore;
   /** The session the address names, or `null` for no session route. */
   readonly sessionRef: SessionRef | null;
   /** The document the address names, or `null` for no document route. */
   readonly doc: NodeId | null;
+  /** Already resolved for the form: see `resolveDestination`. */
   readonly destination: Destination;
   readonly machine: ServerRegistrationId | null;
+  readonly scheme: Scheme;
 }
 
 /**
@@ -186,20 +222,47 @@ interface ContentProps {
  * thing rather than of a place, and the layout screen is how a thing is shown.
  * It is deliberately not keyed on the route -- the layout outlives navigation,
  * and the panes key their own mounts.
+ *
+ * Projects is here rather than in the phone chrome because the two forms share
+ * one content region: the tree is the sidebar's on a wide screen and a
+ * destination on a phone, and `resolveDestination` has already decided which of
+ * those this call is. The panel itself is the same component either way, over
+ * the same catalogue store, so tapping Projects on a phone asks the hub nothing
+ * it has already been asked.
  */
 function content({
   hub,
   tokens,
+  state,
+  layout,
+  catalogue,
   sessionRef,
   doc,
   destination,
   machine,
+  scheme,
 }: ContentProps): JSX.Element {
   if (sessionRef !== null || doc !== null) {
     return <LayoutScreen session={sessionRef} doc={doc} store={hub} />;
   }
   if (destination === 'settings') {
     return <SettingsRoute store={hub} tokens={tokens} />;
+  }
+  if (destination === 'projects') {
+    return (
+      <Box p={12}>
+        <CataloguePanel
+          store={hub}
+          state={state}
+          layout={layout}
+          scheme={scheme}
+          catalogue={catalogue}
+        />
+      </Box>
+    );
+  }
+  if (destination === 'more') {
+    return <MoreScreen scheme={scheme} />;
   }
   return <SessionListScreen store={hub} machine={machine} />;
 }

@@ -21,10 +21,16 @@ import { destinationHash } from './destinations.js';
  * screen the address names, and that it stays drawn when the address names a
  * session.
  *
- * That last one is the whole of this ticket. A session used to replace the
- * page, so opening one was leaving the app; here the assertion is that the
- * sidebar the session list was drawn beside is the same sidebar the session
- * screen is drawn beside, and that it is one sidebar and not two.
+ * That last one is the whole of AGX-122. A session used to replace the page,
+ * so opening one was leaving the app; here the assertion is that the sidebar
+ * the session list was drawn beside is the same sidebar the session screen is
+ * drawn beside, and that it is one sidebar and not two.
+ *
+ * The phone form is mounted here too, at a window narrow enough to ask for it.
+ * What that pins is the wiring rather than the layout -- one shell, one set of
+ * addresses, the badge reading the count the list reads -- because jsdom has no
+ * layout to assert on. The chrome's own drawing is `mobile-chrome.test.tsx`,
+ * and the width rule is `shell-form.test.ts`.
  */
 
 declare global {
@@ -59,6 +65,17 @@ function installResizeObserver(): void {
   };
 }
 
+/**
+ * The catalogue panel, by the one control it always draws. Which region holds
+ * it is the question in both suites below: the sidebar's on a wide screen, the
+ * content region's on a phone, and never both at once.
+ */
+function catalogueSearchesIn(container: HTMLElement, region: string): HTMLElement[] {
+  return [
+    ...container.querySelectorAll<HTMLElement>(`${region} [aria-label="Search the catalogue"]`),
+  ];
+}
+
 /** Lets the ticket promise inside `connect` settle. */
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -90,6 +107,8 @@ describe('the shell', () => {
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    // jsdom's own default, restated because a test below narrows it.
+    window.innerWidth = 1024;
     installMatchMedia();
     installResizeObserver();
     container = document.createElement('div');
@@ -113,6 +132,7 @@ describe('the shell', () => {
     root = null;
     container.remove();
     window.location.hash = '';
+    window.innerWidth = 1024;
   });
 
   function withProvider(element: JSX.Element): JSX.Element {
@@ -185,6 +205,10 @@ describe('the shell', () => {
     });
   }
 
+  function catalogueSearches(region: string): HTMLElement[] {
+    return catalogueSearchesIn(container, region);
+  }
+
   /** The Projects/Sessions pair, by the name the sidebar gives that control. */
   function sidebarTabs(): HTMLInputElement[] {
     return [
@@ -236,43 +260,6 @@ describe('the shell', () => {
     expect(rows.map((row) => row.getAttribute('aria-label'))).toContain('open migrate-db-v9');
   });
 
-  /** The classes Mantine's breakpoint props leave behind, which is what the
-   * shell uses to say which of the two is on screen below `md`. */
-  function hiddenBelowMd(element: Element | null): boolean {
-    return element?.classList.contains('mantine-visible-from-md') ?? false;
-  }
-
-  function theSidebarToggle(): HTMLButtonElement {
-    const button = container.querySelector<HTMLButtonElement>(
-      'header button[aria-label$="the sidebar"]',
-    );
-    if (button === null) throw new Error('the bar drew no sidebar toggle');
-    return button;
-  }
-
-  it('closes the sidebar when the address changes, so the tap lands somewhere', async () => {
-    await mount();
-    await act(() => {
-      theSidebarToggle().click();
-    });
-
-    // Open below the breakpoint: the sidebar is drawn at every width and the
-    // content is the one that is not.
-    expect(hiddenBelowMd(container.querySelector('aside'))).toBe(false);
-    expect(hiddenBelowMd(container.querySelector('main'))).toBe(true);
-
-    await act(async () => {
-      window.location.hash = sessionHash(SESSION);
-      await settle();
-    });
-
-    // And closed again by going somewhere -- a session row, a nav link or the
-    // brand mark, all of which are this. Without it the phone shows the
-    // sidebar it was tapped in and none of what was tapped.
-    expect(hiddenBelowMd(container.querySelector('aside'))).toBe(true);
-    expect(hiddenBelowMd(container.querySelector('main'))).toBe(false);
-  });
-
   it('narrows both readings to the machine the selector picked', async () => {
     await mount();
 
@@ -315,5 +302,142 @@ describe('the shell', () => {
     // And the nav says where the page is, rather than leaving the reader to
     // work it out from what is drawn.
     expect(navLinks()[0]?.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('answers the session list for an address only the phone has a place for', async () => {
+    // Sent from a phone, or left in a bookmark. The tree is in the sidebar at
+    // this width, so the content region is the list it stands beside rather
+    // than a second copy of the tree.
+    window.location.hash = destinationHash('projects');
+
+    await mount();
+
+    expect(catalogueSearches('aside')).toHaveLength(1);
+    expect(catalogueSearches('main')).toHaveLength(0);
+    expect(container.querySelector('main')?.textContent).toContain('Sessions');
+  });
+});
+
+describe('the shell on a phone', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+  let store: HubStore;
+  let tokens: TokenStore;
+  let sockets: ReturnType<typeof createFakeSocketFactory>;
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    installMatchMedia();
+    installResizeObserver();
+    // A phone in portrait, which `shellForm` reads as the phone chrome.
+    window.innerWidth = 390;
+    container = document.createElement('div');
+    document.body.append(container);
+    sockets = createFakeSocketFactory();
+    store = createHubStore({
+      fetchTicket: () => Promise.resolve('ticket-1'),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+    });
+    const storage = fakeStorage();
+    tokens = createTokenStore(() => storage);
+    window.location.hash = '';
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+    container.remove();
+    window.location.hash = '';
+    window.innerWidth = 1024;
+  });
+
+  async function mount(): Promise<void> {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <MantineProvider
+          theme={theme}
+          cssVariablesResolver={cssVariablesResolver}
+          defaultColorScheme="dark"
+        >
+          <AppShell hub={store} tokens={tokens} />
+        </MantineProvider>,
+      );
+    });
+    await act(settle);
+    const socket = sockets.sockets[0];
+    if (socket === undefined) throw new Error('the shell dialled nothing');
+    await act(() => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(hubFrames.machineStatePopulated);
+    });
+  }
+
+  function tabs(): HTMLAnchorElement[] {
+    return [...container.querySelectorAll<HTMLAnchorElement>('nav a')];
+  }
+
+  function catalogueSearches(region: string): HTMLElement[] {
+    return catalogueSearchesIn(container, region);
+  }
+
+  it('draws the tab bar instead of the sidebar, and one content region', async () => {
+    await mount();
+
+    expect(container.querySelectorAll('aside')).toHaveLength(0);
+    expect(container.querySelectorAll('main')).toHaveLength(1);
+    expect(tabs().map((tab) => tab.textContent)).toEqual(['Sessions', 'Projects', 'More']);
+  });
+
+  it('badges the action button with the count the Needs you chip carries', async () => {
+    await mount();
+
+    const chips = [...container.querySelectorAll('main [aria-pressed]')].map(
+      (chip) => chip.textContent,
+    );
+    expect(chips).toContain('Needs you · 2');
+    expect(container.querySelector('[role="status"]')?.getAttribute('aria-label')).toBe(
+      '2 sessions need you',
+    );
+  });
+
+  it('puts the tree in the content region, where the Projects tab leads', async () => {
+    window.location.hash = destinationHash('projects');
+
+    await mount();
+
+    // One tree, in the only place a phone has for one.
+    expect(catalogueSearches('main')).toHaveLength(1);
+    expect(tabs().find((tab) => tab.getAttribute('aria-current') === 'page')?.textContent).toBe(
+      'Projects',
+    );
+  });
+
+  it('holds the nav under More, from the same list the sidebar draws', async () => {
+    window.location.hash = destinationHash('more');
+
+    await mount();
+
+    const main = container.querySelector('main');
+    const rows = [...(main?.querySelectorAll<HTMLAnchorElement>('nav a') ?? [])];
+    expect(rows.map((row) => row.textContent)).toEqual(['Settings']);
+    expect(rows[0]?.getAttribute('href')).toBe(destinationHash('settings'));
+  });
+
+  it('takes the same session address the wide form does', async () => {
+    window.location.hash = sessionHash(SESSION);
+
+    await mount();
+
+    expect(container.querySelectorAll('main')).toHaveLength(1);
+    // A session is a thing and not one of the three places, so the bar points
+    // at none of them -- and it is still there to leave by.
+    expect(tabs()).toHaveLength(3);
+    expect(tabs().filter((tab) => tab.hasAttribute('aria-current'))).toHaveLength(0);
   });
 });
