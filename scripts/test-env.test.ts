@@ -1,7 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 import { describe, expect, it } from 'vitest';
-import { TEST_ENVIRONMENT_PINS, pinTestEnvironment } from './test-env.js';
+import {
+  TEST_CREDENTIAL_VARIABLES,
+  TEST_ENVIRONMENT_PINS,
+  TEST_KEEP_CREDENTIALS,
+  pinTestEnvironment,
+} from './test-env.js';
 
 /**
  * The pins, asserted where they have to hold rather than where they are
@@ -26,7 +31,16 @@ import { TEST_ENVIRONMENT_PINS, pinTestEnvironment } from './test-env.js';
  * decide is the language `git`, `npm` and a coding agent answer a parser in.
  * `node -e` is the one program certain to exist here and in
  * `node:24-bookworm-slim`, and the string is written in this file and
- * assembled from no input.
+ * assembled from nothing outside it.
+ *
+ * The credentials are asked the same two ways and for a sharper reason. In
+ * process is where a suite reading `process.env` would find one; across the
+ * boundary is where a suite spawning a real `claude` or `codex` would hand one
+ * over, and that is the case the deletion exists for -- a provider answering
+ * "logged in" off the developer's own key rather than off the store the test
+ * built. The child's list is built from `TEST_CREDENTIAL_VARIABLES` rather
+ * than spelled out again, so a variable added there is a variable this asks a
+ * real child about.
  */
 
 /** Enough for a child to start and print on a loaded machine. */
@@ -73,6 +87,52 @@ describe('pinTestEnvironment', () => {
     pinTestEnvironment(env);
 
     expect(env['PATH']).toBe('/usr/bin');
+  });
+
+  it('deletes every provider credential the machine exported', () => {
+    // The case it exists for: a developer logged into a provider, whose shell
+    // exports the key a test would otherwise silently pass on.
+    const env: Record<string, string | undefined> = { PATH: '/usr/bin' };
+    for (const name of TEST_CREDENTIAL_VARIABLES) env[name] = 'from-the-machine';
+
+    pinTestEnvironment(env);
+
+    expect(env).toEqual({ PATH: '/usr/bin', ...TEST_ENVIRONMENT_PINS });
+  });
+
+  it('deletes rather than empties, because an empty key is a different claim', () => {
+    // `in` and not a value comparison. A provider handed `ANTHROPIC_API_KEY=''`
+    // can read that as a key it was given and refuse, which is a third answer
+    // between logged in and logged out and the one nothing is written for.
+    const env: Record<string, string | undefined> = { ANTHROPIC_API_KEY: 'sk-real' };
+
+    pinTestEnvironment(env);
+
+    expect('ANTHROPIC_API_KEY' in env).toBe(false);
+  });
+
+  it('keeps the credentials when the run opts in', () => {
+    // The eval suite's way in: the one suite whose subject is a real provider
+    // answering a real question, which cannot run on no credential at all.
+    const env: Record<string, string | undefined> = {
+      [TEST_KEEP_CREDENTIALS]: '1',
+      ANTHROPIC_API_KEY: 'sk-real',
+    };
+
+    pinTestEnvironment(env);
+
+    expect(env['ANTHROPIC_API_KEY']).toBe('sk-real');
+  });
+
+  it('opts in on exactly "1", so a leftover export does not widen the run', () => {
+    const env: Record<string, string | undefined> = {
+      [TEST_KEEP_CREDENTIALS]: 'true',
+      ANTHROPIC_API_KEY: 'sk-real',
+    };
+
+    pinTestEnvironment(env);
+
+    expect(env['ANTHROPIC_API_KEY']).toBeUndefined();
   });
 });
 
@@ -122,6 +182,30 @@ describe('the suite environment', () => {
     );
 
     expect(seen).toEqual({ ...TEST_ENVIRONMENT_PINS });
+  });
+
+  it('carries no provider credential', () => {
+    for (const name of TEST_CREDENTIAL_VARIABLES) {
+      expect(process.env[name], `${name} is visible to this run`).toBeUndefined();
+    }
+  });
+
+  it('hands a child no provider credential either', () => {
+    // The half that matters most here: what a test spawning a real `claude` or
+    // `codex` hands it is what decides whether the answer came from the
+    // machine's login or from the state the test built.
+    const seen: unknown = JSON.parse(
+      ask(
+        [
+          `const names = ${JSON.stringify([...TEST_CREDENTIAL_VARIABLES])};`,
+          'const out = {};',
+          'for (const name of names) out[name] = process.env[name] ?? null;',
+          'process.stdout.write(JSON.stringify(out));',
+        ].join(''),
+      ),
+    );
+
+    expect(seen).toEqual(Object.fromEntries(TEST_CREDENTIAL_VARIABLES.map((n) => [n, null])));
   });
 
   it('hands a child a clock in UTC too', () => {
