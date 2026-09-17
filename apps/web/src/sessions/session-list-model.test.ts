@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import {
+  acknowledgementHolds,
   ageLabel,
   chipCounts,
   connectionNotice,
@@ -14,6 +15,8 @@ import {
   storeOptions,
   toneForStatus,
   visibleSessions,
+  wantsAttention,
+  type SessionListItem,
 } from './session-list-model.js';
 
 /**
@@ -34,7 +37,20 @@ function stateFrom(text: string): MachineState {
 const populated = stateFrom(hubFrames.machineStatePopulated);
 const stale = stateFrom(hubFrames.machineStateStale);
 const single = stateFrom(hubFrames.machineStateSingle);
+/**
+ * The same fleet after a person spoke to it: one permission prompt
+ * acknowledged, one input prompt muted. Captured from a real hub, like every
+ * other state here.
+ */
+const attended = stateFrom(hubFrames.machineStateAttended);
 const empty = stateFrom(hubFrames.machineState);
+
+/** One named item out of a state, or a failure that says which one was missing. */
+function item(state: MachineState, name: string): SessionListItem {
+  const found = listSessions(state).find((candidate) => candidate.name === name);
+  if (found === undefined) throw new Error(`the fixture has no session called ${name}`);
+  return found;
+}
 
 function names(state: MachineState): readonly string[] {
   return visibleSessions(state, NO_FILTERS).map((item) => item.name);
@@ -250,5 +266,80 @@ describe('degradation, said in words', () => {
     expect(connectionNotice('failed', 'this hub speaks protocol 4, not 5', false)).toBe(
       'this hub speaks protocol 4, not 5',
     );
+  });
+});
+
+describe('an acknowledgement', () => {
+  const START = 1_756_000_000_000;
+
+  it('holds while the session has said nothing since', () => {
+    expect(acknowledgementHolds(START, START - 1)).toBe(true);
+    expect(acknowledgementHolds(START, START)).toBe(true);
+  });
+
+  it('is spent by a second prompt, which is the whole reason it is a moment', () => {
+    // A boolean set at the first prompt would still be saying yes here, and
+    // the agent sitting at the second one would never be mentioned again.
+    expect(acknowledgementHolds(START, START + 1)).toBe(false);
+  });
+
+  it('is absent rather than false for a session nobody has acknowledged', () => {
+    expect(acknowledgementHolds(null, START)).toBe(false);
+  });
+
+  it('reads off the captured row: the acknowledged prompt is seen, the others are not', () => {
+    const acknowledged = item(attended, 'migrate-db-v9');
+    expect(acknowledged.acknowledged).toBe(true);
+    // The fact is untouched. It still wants a human and it is still in the
+    // needs-you half of the list; what has changed is that it is not asking.
+    expect(acknowledged.needsYou).toBe(true);
+    expect(wantsAttention(acknowledged)).toBe(false);
+
+    expect(item(attended, 'fix-auth-refresh').acknowledged).toBe(false);
+  });
+});
+
+describe('a mute', () => {
+  it('keeps the badge and the place, and only stops the asking', () => {
+    const muted = item(attended, 'docs-sweep');
+    expect(muted.muted).toBe(true);
+    // Everything a person could act on is still true of it.
+    expect(muted.status).toBe('awaiting-input');
+    expect(muted.needsYou).toBe(true);
+    expect(muted.tone).toBe('needs-you');
+    // And it is still in the needs-you half of the list, in its own place.
+    expect([...names(attended).slice(0, 2)].sort()).toEqual(['docs-sweep', 'migrate-db-v9']);
+    expect(wantsAttention(muted)).toBe(false);
+  });
+
+  it('is absent from a session nobody muted', () => {
+    expect(item(attended, 'spike-wasm').muted).toBe(false);
+  });
+
+  it('leaves the chip counts alone: a muted session is still in its state', () => {
+    expect(chipCounts(listSessions(attended))).toEqual(chipCounts(listSessions(populated)));
+  });
+});
+
+describe('what is worth interrupting somebody for', () => {
+  it('is a session that wants a human, unacknowledged and unmuted', () => {
+    const asking = listSessions(populated)
+      .filter(wantsAttention)
+      .map((entry) => entry.name);
+    expect([...asking].sort()).toEqual(['docs-sweep', 'migrate-db-v9']);
+
+    // The same fleet, after one was acknowledged and the other muted. Both
+    // rows are still there, still needs-you, and neither is asking any more.
+    expect(listSessions(attended).filter(wantsAttention)).toEqual([]);
+    expect(listSessions(attended).filter((entry) => entry.needsYou)).toHaveLength(2);
+  });
+
+  it('never includes a session on a machine nobody can reach', () => {
+    // A badge you cannot clear by looking is worse than no badge, which is the
+    // rule `needsYou` already carries; this is the half that must not undo it.
+    // In the captured stale state the reachable prompt is the acknowledged one
+    // and the unreachable one is `docs-sweep`, so nothing is left asking.
+    expect(item(stale, 'docs-sweep').reachable).toBe(false);
+    expect(listSessions(stale).filter(wantsAttention)).toEqual([]);
   });
 });

@@ -200,6 +200,51 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     sessionId: sessionIdSchema,
   }),
   /**
+   * Says the prompt this session is sitting on has been seen.
+   *
+   * It carries no timestamp, and that is the frame's whole design. The hub
+   * stamps the acknowledgement off its own clock, because the only thing the
+   * stamp is ever used for is a comparison against `updatedAt` -- a moment a
+   * *provider* wrote into a transcript -- and a comparison between two clocks
+   * neither of which is the reader's answers a question about whose watch is
+   * fast. One clock does the stamping and one clock's reading is compared.
+   *
+   * It addresses `{ storeId, sessionId }` like a stop, and unlike a stop it
+   * reaches no machine at all: an acknowledgement is a row in this hub's
+   * database about a session, and nothing on any server learns it happened.
+   * A session this hub has never heard of is refused rather than recorded --
+   * not because a stray row would hurt, but because an acknowledgement of
+   * something nobody can see has nothing to be spent against, and a table that
+   * accepted any pair of strings is a table a client can grow without bound.
+   */
+  z.object({
+    type: z.literal('session-acknowledge'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+  }),
+  /**
+   * Mutes a session, or unmutes it.
+   *
+   * One frame with a boolean rather than two, because mute and unmute are one
+   * setting written twice and not two acts: the client sends the state it
+   * wants, so a second click on a muted row cannot be mistaken for a toggle
+   * against a value the client and the hub had drifted apart on. The hub
+   * stamps the moment, for the reason the acknowledgement above gives.
+   *
+   * What mute does not do is anywhere near this frame: the row goes on being
+   * sent, with its status and its place, and the quieting happens in the
+   * client and in whatever pushes. A frame that could stop a session being
+   * reported would be a frame that hides work from the person who muted it.
+   */
+  z.object({
+    type: z.literal('session-mute'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    muted: z.boolean(),
+  }),
+  /**
    * Watching a session, typing into it, and saying how big the screen is.
    *
    * A subscription is standing interest and is replayed on reconnection, which
@@ -611,6 +656,31 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     sessionId: sessionIdSchema,
     /** Which server it was resolved to, hub-side. The client never named it. */
     server: serverRegistrationIdSchema,
+  }),
+  /**
+   * What the hub now records about one session's attention, after an
+   * acknowledgement or a mute.
+   *
+   * One reply to two frames, carrying the whole of the row rather than the
+   * field that moved. An acknowledgement and a mute write the same two-column
+   * row, and two partial answers would leave the client merging them --
+   * which is a second copy of a state the next `machine-state` is about to
+   * state in full anyway.
+   *
+   * It is a reply and not a broadcast, like every other yes on this direction.
+   * The change itself reaches the other clients where every change does: on
+   * the session row of the next machine state, which is the one place any of
+   * them reads attention from. So this frame is a receipt -- it tells the
+   * client that asked that its frame was answered, and the button that sent it
+   * stops waiting.
+   */
+  z.object({
+    type: z.literal('session-attention'),
+    replyTo: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    acknowledgedAt: z.int().nonnegative().nullable(),
+    mutedAt: z.int().nonnegative().nullable(),
   }),
   /**
    * A refusal is a reply to the client that asked, never a broadcast: the other

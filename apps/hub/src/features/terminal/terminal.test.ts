@@ -23,6 +23,7 @@ import type {
   StreamOutcome,
   TerminalOutputFrame,
 } from '../servers/servers.js';
+import { UNATTENDED } from '../attention/attention.js';
 import type { HubStateSnapshot, SessionRow, StoreView } from '../fleet-state/fleet-state.js';
 import {
   createTerminal,
@@ -167,6 +168,7 @@ function row(
     reportedAt: 1,
     reachable: true,
     holder,
+    attention: UNATTENDED,
   };
 }
 
