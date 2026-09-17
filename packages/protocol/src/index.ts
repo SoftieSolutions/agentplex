@@ -176,6 +176,8 @@ export {
   decodeTerminalChunk,
   encodeTerminalChunk,
   serverTerminalTargetSchema,
+  subscriptionEndedFrameSchema,
+  subscriptionEndReasonSchema,
   TERMINAL_CHUNK_MAX_CHARS,
   TERMINAL_INPUT_MAX_CHARS,
   TERMINAL_MAX_COLS,
@@ -184,7 +186,12 @@ export {
   terminalInputSchema,
   terminalSizeSchema,
 } from './terminal.js';
-export type { ClientTerminalTarget, ServerTerminalTarget, TerminalSize } from './terminal.js';
+export type {
+  ClientTerminalTarget,
+  ServerTerminalTarget,
+  SubscriptionEndReason,
+  TerminalSize,
+} from './terminal.js';
 
 export {
   clientFrameSchema,

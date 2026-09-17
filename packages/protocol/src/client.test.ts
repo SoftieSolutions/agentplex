@@ -692,6 +692,23 @@ describe('client and hub round trips', () => {
       droppedChunks: 0,
     },
     {
+      type: 'session-subscription-ended',
+      target: {
+        by: 'session',
+        storeId: storeIdSchema.parse('store-work'),
+        sessionId: sessionIdSchema.parse('session-1'),
+      },
+      reason: 'server-dropped',
+    },
+    // The same frame about a pane that is still watching a spawn nobody has
+    // named: a subscription by start handle is the case a frame addressed by
+    // session id could not reach at all.
+    {
+      type: 'session-subscription-ended',
+      target: { by: 'start', startId: 4 },
+      reason: 'server-draining',
+    },
+    {
       type: 'server-paired',
       replyTo: 14,
       registrationId: serverRegistrationIdSchema.parse('registration-2'),
@@ -735,6 +752,25 @@ describe('client and hub round trips', () => {
     const output = hubFrames.find((frame) => frame.type === 'terminal-output');
     expect(output).toBeDefined();
     expect(output).not.toHaveProperty('replyTo');
+  });
+
+  it('says a subscription ended with no replyTo: nobody asked for the news', () => {
+    // `session-unsubscribed` is the frame this is not. That one answers the
+    // detach a client sent and needs its id; this one is the hub reporting a
+    // machine that went away, which no client asked about.
+    const ended = hubFrames.filter((frame) => frame.type === 'session-subscription-ended');
+    expect(ended).toHaveLength(2);
+    for (const frame of ended) expect(frame).not.toHaveProperty('replyTo');
+  });
+
+  it('refuses a subscription end whose reason is not one of the three', () => {
+    expect(
+      parseHubFrame({
+        type: 'session-subscription-ended',
+        target: { by: 'start', startId: 4 },
+        reason: 'server went away',
+      }).ok,
+    ).toBe(false);
   });
 
   it('sends the state with no replyTo, because nobody asked for it', () => {

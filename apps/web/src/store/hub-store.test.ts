@@ -759,6 +759,75 @@ describe('terminal frames from the hub', () => {
     expect(written).toHaveLength(1);
   });
 
+  it('says why a pane stopped being fed, and keeps what it was showing', async () => {
+    const h = harness();
+    const socket = await watching(h);
+    socket.deliver(hubFrames.sessionSubscribed);
+    socket.deliver(hubFrames.terminalOutput);
+
+    socket.deliver(hubFrames.sessionSubscriptionEnded);
+
+    // The two states a still rectangle can be in, told apart at last: this is
+    // not an agent that went quiet, it is a machine that went away.
+    expect(terminal(h)).toMatchObject({ attached: false, ended: 'server-dropped' });
+    // The bytes stay. They are what the emulator has painted, and a pane whose
+    // feed stopped is still showing the last of a session.
+    expect(terminal(h).feed.bytes).toBeGreaterThan(0);
+  });
+
+  it('attaches again when the hub subscribes for it, and says the history repeats', async () => {
+    const h = harness();
+    const socket = await watching(h);
+    socket.deliver(hubFrames.sessionSubscribed);
+    socket.deliver(hubFrames.terminalOutput);
+    socket.deliver(hubFrames.sessionSubscriptionEnded);
+
+    // The machine answered again and the hub re-subscribed on this pane's
+    // behalf: a second reply to the frame this pane asked with, which is the
+    // one name it has for this subscription. Nothing was sent from here --
+    // the client asked once.
+    socket.deliver(hubFrames.sessionSubscribedTruncated);
+
+    expect(terminal(h)).toMatchObject({
+      attached: true,
+      ended: null,
+      replayChunks: 2,
+      // The machine's scrollback survived the gap, so what is replayed into
+      // this pane overlaps what it already had. The label is how a user is
+      // told, because the bytes above are not thrown away to hide it.
+      resumed: true,
+    });
+    expect(terminal(h).droppedBytes).toBeGreaterThan(0);
+  });
+
+  it('stops saying the history repeats once the older copy has been evicted', async () => {
+    // A cap of almost nothing, so one more chunk pushes out what came before
+    // it. The rule being exercised is the feed's own, which trims whole chunks.
+    const h = harness({ terminalFeedBytes: 4 });
+    const socket = await watching(h);
+    socket.deliver(hubFrames.sessionSubscribed);
+    socket.deliver(hubFrames.terminalOutput);
+    socket.deliver(hubFrames.sessionSubscriptionEnded);
+    socket.deliver(hubFrames.sessionSubscribed);
+    expect(terminal(h).resumed).toBe(true);
+
+    // The replayed copy arrives and evicts the original. Nothing appears twice
+    // any more, so the label goes -- a warning about a repeat the user can no
+    // longer find is the over-claim in the other direction.
+    socket.deliver(hubFrames.terminalOutput);
+
+    expect(terminal(h).resumed).toBe(false);
+  });
+
+  it('is not marked as repeating when its first subscription is answered', async () => {
+    const h = harness();
+    const socket = await watching(h);
+
+    socket.deliver(hubFrames.sessionSubscribed);
+
+    expect(terminal(h).resumed).toBe(false);
+  });
+
   it('says nothing to a pane about a detach it asked for', async () => {
     const h = harness();
     const socket = await watching(h);

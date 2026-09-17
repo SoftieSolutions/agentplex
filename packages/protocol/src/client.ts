@@ -26,7 +26,7 @@ import {
   SERVER_TOKEN_MAX_CHARS,
 } from './pairing.js';
 import { frameParser } from './parse.js';
-import { clientTerminalFrames } from './terminal.js';
+import { clientTerminalFrames, subscriptionEndedFrameSchema } from './terminal.js';
 
 /**
  * The client-facing half of the protocol: browser (or MCP caller) to hub.
@@ -55,6 +55,12 @@ import { clientTerminalFrames } from './terminal.js';
  * and one definition for both legs is what keeps the relay from being two
  * shapes that drift. On this leg a start handle is the client's own
  * `session-start` frame id; see `terminal.ts` for why the server leg's is not.
+ *
+ * `session-subscription-ended` is the one exception on that list and is
+ * written for this leg alone, because it is not relayed from anywhere: it is
+ * what the hub says about a subscription it was holding when the machine
+ * feeding it went away, which is precisely the moment there is nothing on the
+ * other leg to pass through.
  */
 
 /**
@@ -642,6 +648,12 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
   clientTerminalFrames.subscribed,
   clientTerminalFrames.unsubscribed,
   clientTerminalFrames.output,
+  /**
+   * The fourth terminal frame, and the only one with no counterpart on the
+   * server leg: a subscription stopped feeding a pane, and the hub is the one
+   * end that can say so. `terminal.ts` carries the argument.
+   */
+  subscriptionEndedFrameSchema,
   /**
    * The pairing was recorded, and here is the hub's name for it.
    *

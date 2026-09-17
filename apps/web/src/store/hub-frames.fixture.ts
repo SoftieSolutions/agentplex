@@ -7,10 +7,10 @@
  * and these exist to test that it can read what the hub actually sends.
  * Re-capture after any change to the hub-to-client frames.
  *
- * Captured at protocol version 21.
+ * Captured at protocol version 22.
  */
 export const hubFrames = {
-  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":21,"hubId":"hub-1"}',
+  welcome: '{"type":"welcome","replyTo":1,"protocolVersion":22,"hubId":"hub-1"}',
   machineState:
     '{"type":"machine-state","state":{"version":0,"stores":[],"servers":[],"candidates":[]}}',
   pong: '{"type":"pong","replyTo":2}',
@@ -22,7 +22,7 @@ export const hubFrames = {
   protocolError:
     '{"type":"protocol-error","code":"bad-request","message":"frame is not valid JSON"}',
   refusalProtocolVersion:
-    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 21, not 22","holder":null}',
+    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 22, not 23","holder":null}',
   machineStateWithServer:
     '{"type":"machine-state","state":{"version":1,"stores":[],"servers":[{"registrationId":"pairing-1","label":"gpu-box-01","address":"wss://gpu-box-01.example:8443","serverId":null,"phase":"stale","stores":[],"providers":[],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":null,"staleReason":"unreachable","draining":null,"problem":"connection refused"}],"candidates":[]}}',
   paneLayout:
@@ -84,7 +84,7 @@ export const hubFrames = {
   machineStateProviders:
     '{"type":"machine-state","state":{"version":8,"stores":[{"storeId":"store-mixed","servers":["registration-gpu-box-01","registration-mbp-robert","registration-mini-01","registration-old-box-01"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-mixed","sessionId":"session-mixed-notes","provider":"claude","status":"idle","updatedAt":1755998200000,"cwd":"/mnt/volumes/mixed/notes","branch":null,"title":"mixed-notes","uncommitted":null},"source":"registration-gpu-box-01","reportedBy":["registration-gpu-box-01","registration-mbp-robert","registration-mini-01","registration-old-box-01"],"reportedAt":1756000000000,"reachable":true,"holder":null}]}],"servers":[{"registrationId":"registration-gpu-box-01","label":"gpu-box-01","address":"wss://gpu-box.example:8443","serverId":"server-gpu","phase":"connected","stores":["store-mixed"],"providers":[{"provider":"claude","state":"unknown","version":null,"directory":"/home/robert/.agentplex/bin","problem":"claude could not report its version: it exited 1"},{"provider":"codex","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null},{"registrationId":"registration-mbp-robert","label":"mbp-robert","address":"wss://mbp-robert.example:8443","serverId":"server-mbp","phase":"connected","stores":["store-mixed"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"unauthenticated","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":"codex is installed and logged out; run its login on that machine"}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null},{"registrationId":"registration-mini-01","label":"mini-01","address":"wss://mini.example:8443","serverId":"server-mini","phase":"connected","stores":["store-mixed"],"providers":[],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null},{"registrationId":"registration-old-box-01","label":"old-box-01","address":"wss://old-box.example:8443","serverId":"server-old","phase":"connected","stores":["store-mixed"],"providers":[{"provider":"claude","state":"missing","version":null,"directory":null,"problem":"no directory this server searches holds claude"},{"provider":"codex","state":"unauthenticated","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":"codex is installed and logged out; run its login on that machine"}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null}],"candidates":[]}}',
   machineStateDiscovered:
-    '{"type":"machine-state","state":{"version":2,"stores":[],"servers":[],"candidates":[{"serverId":"server-mbp","address":"192.168.1.24","port":8443,"protocolVersion":21},{"serverId":"server-old-build","address":"192.168.1.31","port":8443,"protocolVersion":20}]}}',
+    '{"type":"machine-state","state":{"version":2,"stores":[],"servers":[],"candidates":[{"serverId":"server-mbp","address":"192.168.1.24","port":8443,"protocolVersion":22},{"serverId":"server-old-build","address":"192.168.1.31","port":8443,"protocolVersion":21}]}}',
   refusalPairing:
     '{"type":"refusal","replyTo":2,"code":"bad-request","message":"expected a wss:// address, not the scheme \\"ws:\\"","holder":null}',
   serverPaired: '{"type":"server-paired","replyTo":3,"registrationId":"registration-1"}',
@@ -100,6 +100,8 @@ export const hubFrames = {
   terminalOutputDropped:
     '{"type":"terminal-output","storeId":"store-work","sessionId":"session-build","startId":null,"chunk":"ZG9uZQ0K","droppedChunks":30}',
   sessionUnsubscribed: '{"type":"session-unsubscribed","replyTo":3}',
+  sessionSubscriptionEnded:
+    '{"type":"session-subscription-ended","target":{"by":"session","storeId":"store-work","sessionId":"session-build"},"reason":"server-dropped"}',
   refusalTerminal:
     '{"type":"refusal","replyTo":2,"code":"refused","message":"the hub cannot reach mbp-robert right now","holder":null}',
 } as const;

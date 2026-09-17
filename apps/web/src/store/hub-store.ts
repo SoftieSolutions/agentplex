@@ -21,6 +21,7 @@ import {
   type SessionId,
   type SessionRef,
   type StoreId,
+  type SubscriptionEndReason,
   type TerminalSize,
 } from '@agentplex/protocol';
 import {
@@ -172,6 +173,34 @@ export interface TerminalWatchView {
   readonly printed: boolean;
   /** The hub's most recent "no" about this terminal, in its words, or `null`. */
   readonly problem: string | null;
+  /**
+   * Why this pane stopped being fed, or `null` while it is being fed.
+   *
+   * The whole point of the frame behind it: a session that has gone quiet and
+   * a session nobody is relaying any more are the same rectangle, and this is
+   * the only thing that tells them apart. Cleared when the hub subscribes
+   * again on this pane's behalf, which for a dropped or draining machine is
+   * what happens by itself a moment later.
+   */
+  readonly ended: SubscriptionEndReason | null;
+  /**
+   * Whether this pane is still holding both copies of a re-established feed.
+   *
+   * What it is really saying is that the bytes have a seam in them. The
+   * machine's scrollback survived whatever interrupted the subscription, so
+   * what the fresh one replays is the tail of the session as it stands --
+   * which overlaps what this pane was already showing, and is written after it
+   * rather than in place of it. The buffered bytes are kept rather than
+   * cleared, because they are what the emulator has painted and a pane does
+   * not go blank to tidy up its own history; the label says what happened
+   * instead.
+   *
+   * It goes false again when the older of the two copies has been evicted,
+   * because from then on nothing appears twice -- and a label that outlived
+   * what it described would be the pane over-claiming in the other direction,
+   * warning about a repeat a user can no longer find.
+   */
+  readonly resumed: boolean;
 }
 
 export interface PaneLayoutAnswer {
@@ -630,6 +659,33 @@ interface TerminalRecord {
   droppedChunks: number;
   printed: boolean;
   problem: string | null;
+  ended: SubscriptionEndReason | null;
+  /**
+   * How much this pane had already been shown when its subscription was
+   * re-established, in bytes over this feed's whole life, or `null` when none
+   * of that has happened.
+   *
+   * A position rather than a flag, because the flag has to go out again. The
+   * output a replay duplicates is everything this pane held at that moment --
+   * the bytes below this position -- and the feed evicts oldest first, so the
+   * moment it has thrown away that much, the older copy of the repeat is gone
+   * and only the replayed one is left. `feed.dropped` is the same count on the
+   * same scale, which is what makes the comparison exact rather than a guess
+   * at how much a replay was worth.
+   */
+  resumedAbove: number | null;
+  /**
+   * The id of the `session-subscribe` this record's subscription was asked
+   * with, or `null` when there is none outstanding.
+   *
+   * Kept for as long as the subscription stands rather than forgotten when it
+   * is first answered, because the hub answers it more than once: a machine
+   * that dropped and came back is re-subscribed on this client's behalf, and
+   * the fresh `session-subscribed` names the frame this pane asked with. It is
+   * also what a refusal about this terminal names, which is why the entry it
+   * indexes is the one place both are matched.
+   */
+  subscribeId: FrameId | null;
   /**
    * The last size sent for this terminal, replayed with the subscription.
    *
@@ -757,6 +813,15 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
    * one of them: bytes go to the feed, and the pane's emulator reads them
    * from there without React ever hearing about it.
    */
+  /**
+   * Whether both copies of a re-established feed are still in this pane's
+   * buffer. Read where it is published rather than stored, because what moves
+   * it is the feed evicting, which is not an event this store hears about.
+   */
+  function stillRepeating(record: TerminalRecord): boolean {
+    return record.resumedAbove !== null && record.feed.dropped < record.resumedAbove;
+  }
+
   function publishTerminals(): void {
     const views = new Map<string, TerminalWatchView>();
     for (const [key, record] of terminals) {
@@ -771,6 +836,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         evicted: record.feed.truncated,
         printed: record.printed,
         problem: record.problem,
+        ended: record.ended,
+        resumed: stillRepeating(record),
       });
     }
     update({ terminals: views });
@@ -802,7 +869,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
 
   /** Asks for one terminal, and for the size the viewer already has. */
   function subscribeTerminal(record: TerminalRecord): void {
-    sendTerminalFrame('subscribe', record.key, (id) => ({
+    record.subscribeId = sendTerminalFrame('subscribe', record.key, (id) => ({
       type: 'session-subscribe',
       id,
       target: record.target,
@@ -1120,14 +1187,23 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'session-subscribed': {
         const asked = terminalReplies.get(frame.replyTo);
-        terminalReplies.delete(frame.replyTo);
-        // A reply to a subscription this client has since given back, or to
-        // one from a connection that has already gone: there is nothing left
-        // to attach, and the history behind it belongs to nobody.
+        // Not deleted, unlike every other correlation here. This one names a
+        // standing interest rather than a question: the hub subscribes again
+        // on this pane's behalf when the machine holding the session comes
+        // back, and answers that under the id this pane asked with. Dropping
+        // the entry on the first reply would leave the second one -- the one
+        // that says how much history is being replayed into a pane with a gap
+        // in it -- matching nothing.
         const record = asked === undefined ? undefined : terminals.get(asked.key);
         if (record === undefined) return;
 
+        // A reply to a subscription that was interrupted, rather than the
+        // first one. What follows it is the machine's scrollback as it stands
+        // now, written after bytes this pane already has -- so what is already
+        // here is what the replay is about to say again.
+        if (record.printed) record.resumedAbove = record.feed.dropped + record.feed.bytes;
         record.attached = true;
+        record.ended = null;
         record.problem = null;
         record.replayChunks = frame.replayChunks;
         record.droppedBytes = frame.droppedBytes;
@@ -1158,10 +1234,33 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         terminalReplies.delete(frame.replyTo);
         return;
       }
+      case 'session-subscription-ended': {
+        // Addressed by the target this pane asked with, which is the name it
+        // is keyed by here -- including the start handle of a spawn nobody has
+        // named yet, which no frame addressed by session id could reach.
+        const record = terminals.get(terminalKey(frame.target));
+        if (record === undefined) return;
+
+        record.attached = false;
+        record.ended = frame.reason;
+        // The bytes stay. They are what the emulator has painted, and a pane
+        // whose feed stopped is still showing the last of a session rather
+        // than nothing.
+        if (frame.reason === 'session-ended' && record.subscribeId !== null) {
+          // The hub has given this subscription back: there is no terminal on
+          // the other end to re-attach to, so the id it was asked with will
+          // never name another frame.
+          terminalReplies.delete(record.subscribeId);
+          record.subscribeId = null;
+        }
+        publishTerminals();
+        return;
+      }
       case 'terminal-output': {
         const chunk = decodeTerminalChunk(frame.chunk);
         for (const record of recipientsOf(frame.storeId, frame.sessionId, frame.startId)) {
           const evicted = record.feed.truncated;
+          const repeating = stillRepeating(record);
           record.feed.push(chunk);
           // Only the facts, and only when one of them moved. The bytes went
           // to the feed above and the emulator has them already; publishing
@@ -1169,7 +1268,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           const changed =
             !record.printed ||
             record.droppedChunks !== frame.droppedChunks ||
-            evicted !== record.feed.truncated;
+            evicted !== record.feed.truncated ||
+            // This chunk may have pushed the older copy of a repeat out of the
+            // buffer, which is a fact about the label and moves nothing else.
+            repeating !== stillRepeating(record);
           record.printed = true;
           // Cumulative and only ever increasing, so the newest frame is the
           // whole count; a reader comparing it with the last one it saw gets
@@ -1189,7 +1291,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           // a no about one terminal, and the user is looking at it. A blank
           // rectangle and a machine that is asleep draw the same thing.
           record.problem = frame.message;
-          if (asked.ask === 'subscribe') record.attached = false;
+          if (asked.ask === 'subscribe') {
+            record.attached = false;
+            record.subscribeId = null;
+          }
           publishTerminals();
           return;
         }
@@ -1377,6 +1482,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       record.attached = false;
       record.droppedChunks = 0;
       record.problem = null;
+      // Why a subscription ended is a fact about the connection that carried
+      // it, and that connection is gone: what a pane shows now is the store's
+      // own phase, which says the hub itself is unreachable.
+      record.ended = null;
+      record.subscribeId = null;
     }
     publishTerminals();
   }
@@ -1513,6 +1623,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           droppedChunks: 0,
           printed: false,
           problem: null,
+          ended: null,
+          resumedAbove: null,
+          subscribeId: null,
           size: null,
           bound: null,
         };
@@ -1532,6 +1645,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         if (record.watchers > 0) return;
         terminals.delete(key);
         unbind(record);
+        // The standing interest is over, so the id that named it names nothing.
+        if (record.subscribeId !== null) terminalReplies.delete(record.subscribeId);
         // The partner of the subscribe, and the whole difference between
         // closing a tab and killing an agent: the count this gives back is
         // the one the server evicts terminals by, and detaching closes
