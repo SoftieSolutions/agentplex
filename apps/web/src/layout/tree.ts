@@ -1,4 +1,10 @@
-import { nodeIdSchema, sessionRefSchema, type NodeId, type SessionRef } from '@agentplex/protocol';
+import {
+  nodeIdSchema,
+  sessionRefSchema,
+  type FrameId,
+  type NodeId,
+  type SessionRef,
+} from '@agentplex/protocol';
 
 /**
  * The split-pane layout tree, and the parser that is the whole reason it can
@@ -46,6 +52,25 @@ export type PaneContent =
    * them would be a saved arrangement that could contradict the tree.
    */
   | { readonly type: 'doc'; readonly nodeId: NodeId }
+  /**
+   * A session that has been asked for and has no name yet, held by the handle
+   * the asking is already known by: the id of this connection's own
+   * `session-start` frame.
+   *
+   * The gap this fills is the provider's. A fresh spawn has no session id
+   * until the provider mints one and writes it, so between the click and that
+   * moment there is a process producing output and no `{ storeId, sessionId }`
+   * to address it with. The handle is the name that exists in the gap, and it
+   * is the frame's own id rather than anything invented here: an id minted in
+   * the node-tree's namespace would be a second name for the same act, and one
+   * the hub could never agree with. It is also why this never reaches the
+   * route -- an address is for a session that exists, and a start handle is
+   * local to one socket.
+   *
+   * Which is the same reason it is not saved: see `encodeNode`, where it
+   * serializes as the empty pane it will stop being.
+   */
+  | { readonly type: 'pending'; readonly startId: FrameId }
   /** No session here yet. Later tickets put a picker in it. */
   | { readonly type: 'empty' }
   /**
@@ -108,6 +133,10 @@ export function docPane(nodeId: NodeId): PaneLeaf {
   return { kind: 'pane', content: { type: 'doc', nodeId } };
 }
 
+export function pendingPane(startId: FrameId): PaneLeaf {
+  return { kind: 'pane', content: { type: 'pending', startId } };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -135,6 +164,15 @@ function parseContent(raw: unknown): PaneContent | null {
   if (raw['type'] === 'doc') {
     const nodeId = nodeIdSchema.safeParse(raw['nodeId']);
     return nodeId.success ? { type: 'doc', nodeId: nodeId.data } : null;
+  }
+  if (raw['type'] === 'pending') {
+    // Read as the empty pane it is written as, and not as an unreadable node
+    // kept verbatim. A start handle names a frame on one socket: the socket
+    // that minted it is gone by the time anything reads this back, so there is
+    // no pane here to preserve -- only a claim nothing on this connection
+    // could resolve. This build writes none; a build that did would be
+    // asserting a local handle at everything that shares the layout.
+    return { type: 'empty' };
   }
   return null;
 }
@@ -189,7 +227,15 @@ function encodeNode(node: LayoutTree): unknown {
         return { kind: 'pane', content: { type: 'session', session: node.content.session } };
       case 'doc':
         return { kind: 'pane', content: { type: 'doc', nodeId: node.content.nodeId } };
+      case 'pending':
       case 'empty':
+        // A pending pane is saved as an empty one, which is the only honest
+        // thing to write: what it holds is this connection's handle on a start
+        // it made, and the tab on the other device that reads this back has no
+        // such connection and no way to resolve one. Saving the handle would
+        // put a pane on somebody else's screen that could only ever say it was
+        // waiting for something that already happened. The arrangement is
+        // kept -- the split, the ratio, the place -- and what fills it is not.
         return { kind: 'pane', content: { type: 'empty' } };
       case 'unknown':
         // Verbatim: what this build could not read, it must not rewrite.

@@ -1,12 +1,4 @@
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type JSX,
-  type KeyboardEvent,
-} from 'react';
+import { useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } from 'react';
 import type { ClientTerminalTarget, SessionRef, TerminalSize } from '@agentplex/protocol';
 
 import { terminalKey, type HubStore, type TerminalWatchView } from '../store/hub-store.js';
@@ -42,6 +34,7 @@ import { StopButton } from '../sessions/stop-button.js';
 import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
 import { chunkTerminalInput } from './terminal-input.js';
 import { TerminalView } from './terminal-view.js';
+import { useTerminalWatch } from './use-terminal-watch.js';
 
 /**
  * The open-session screen (mockup 7c): header row, terminal, steer bar.
@@ -86,25 +79,6 @@ const MONO_META = { fontFamily: 'var(--mantine-font-family-monospace)' } as cons
 function hasCoarsePointer(): boolean {
   if (typeof window.matchMedia !== 'function') return false;
   return window.matchMedia('(pointer: coarse)').matches;
-}
-
-/**
- * Standing interest in one terminal, declared the way looking at anything is
- * declared here: a subscription whose lifetime is the component's, through
- * `useSyncExternalStore` rather than an effect. The hook never re-renders —
- * the snapshot is a constant — it exists purely so the store subscribes while
- * this pane is mounted, replays that subscription on every reconnection, and
- * gives the watch back when the pane goes.
- *
- * The bytes and the facts are not returned here. They live in the store's own
- * snapshot, which the pane already reads through `useHubSnapshot`, so a pane
- * gets the current version of them on every render rather than the version
- * that was true at mount.
- */
-const NOTHING = (): null => null;
-function useTerminalWatch(store: HubStore, target: ClientTerminalTarget): void {
-  const subscribe = useCallback(() => store.watchTerminal(target), [store, target]);
-  useSyncExternalStore(subscribe, NOTHING);
 }
 
 export interface SessionPaneProps {

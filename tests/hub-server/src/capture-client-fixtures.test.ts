@@ -205,12 +205,24 @@ function labelFor(text: string): string {
     return frame.directory === null ? 'directoryRoots' : 'directoryListing';
   }
   if (frame.type === 'session-subscribed') {
+    // A subscription made by start handle is answered under that handle, and
+    // with no session until the provider has written one. That is a third case
+    // and not a variant of the two below: a pane on it is showing a live
+    // terminal that no address anywhere can name yet.
+    if (frame.startId !== null) return 'sessionSubscribedPending';
     // Labelled by what it says about the history, because those are the two
     // cases a pane has to draw differently: a subscriber being shown the
     // session from its first byte, and one joining mid-stream.
     return frame.droppedBytes > 0 ? 'sessionSubscribedTruncated' : 'sessionSubscribed';
   }
   if (frame.type === 'terminal-output') {
+    // Output on a start handle, before and after the provider named the
+    // session. The pair is the whole of the rebind: a client watching by
+    // handle learns which session it is watching from the first chunk that
+    // carries both names, and nothing else on the client leg ever tells it.
+    if (frame.startId !== null) {
+      return frame.sessionId === null ? 'terminalOutputPending' : 'terminalOutputNamed';
+    }
     // The same distinction one layer down: bytes that arrived with a gap in
     // front of them, and bytes that did not.
     return frame.droppedChunks > 0 ? 'terminalOutputDropped' : 'terminalOutput';
@@ -287,6 +299,15 @@ interface LiveMachine {
   readonly sessions: SessionController;
   readonly terminals: TerminalManager;
   readonly ptys: FakePtyFactory;
+  /**
+   * The transcripts this machine's disk holds, live rather than a snapshot.
+   *
+   * Written to during the capture, because the moment the pending-pane frames
+   * exist for is a provider writing its session id while the connection that
+   * started it is still up. The reads below are answered from the record as it
+   * stands, which is what a disk does.
+   */
+  readonly sessionFiles: Record<string, string>;
 }
 
 const START = 1_756_000_000_000;
@@ -414,6 +435,8 @@ const LIVE_STORE: StoreDescriptor = {
   path: '/volumes/work',
 };
 const LIVE_SESSION = sessionIdSchema.parse('session-build');
+/** The session a spawn turns out to be, written mid-capture rather than up front. */
+const SPAWNED_SESSION = sessionIdSchema.parse('session-spawned');
 
 /**
  * Small enough that a burst of output makes the server's own scrollback drop
@@ -456,6 +479,7 @@ function buildLiveMachine(): LiveMachine {
   return {
     ptys,
     terminals,
+    sessionFiles,
     sessions: createSessionController({
       stores,
       providers: createProviderRegistry([createFakeProviderAdapter({ provider: 'claude', files })]),
@@ -1984,6 +2008,85 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the late subscription to be answered with the size of the gap',
     );
 
+    // A pane opened on a spawn, which is the one case a session id cannot
+    // address: the provider mints its own and writes it moments after the
+    // fork, so between the two there is a live terminal and no name for it.
+    //
+    // The frame ids are the ones the web store itself will mint -- hello,
+    // then the start, then the pane's subscribe, then the subscribe it sends
+    // again -- because a client's start handle *is* the id of its own
+    // `session-start` frame, and these fixtures have to drive that store.
+    const spawning = await openClient(terminalHub.hub);
+    spawning.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await spawning.framesReceived(2);
+    spawning.send({
+      type: 'session-start',
+      id: 2,
+      storeId: LIVE_STORE.storeId,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    await until(
+      () => spawning.received.some((text) => labelFor(text) === 'sessionStarted'),
+      'the spawn to be running',
+    );
+
+    // The refusal a pane meets when it opens in the same click that sends the
+    // start: the hub writes the handle only once the machine has answered the
+    // fork, and a handle it has not written is one it can only refuse. It is
+    // provoked here with a handle that was never a start rather than by racing
+    // the fork, because the hub's answer is the same either way -- one lookup
+    // in this connection's own map, one sentence -- and a race would capture
+    // a frame that exists only when the timing goes one particular way.
+    spawning.send({ type: 'session-subscribe', id: 3, target: { by: 'start', startId: 99 } });
+    await until(
+      () => spawning.received.some((text) => labelFor(text) === 'refusal'),
+      'the subscription by an unwritten handle to be refused',
+    );
+
+    // And the subscribe the client sends again on reading `session-started`,
+    // which is the frame that says the handle now exists.
+    spawning.send({ type: 'session-subscribe', id: 4, target: { by: 'start', startId: 2 } });
+    await until(
+      () => spawning.received.some((text) => labelFor(text) === 'sessionSubscribedPending'),
+      'the subscription by start handle to be answered',
+    );
+
+    const spawned = live.ptys.ptys[1];
+    spawned?.emit('starting up\r\n');
+    await quiet(spawning);
+
+    // The provider writes its transcript, and a scan of the store is what joins
+    // the terminal to it. Anything that changes what is running in a store
+    // reports it, so a second start is the scan -- which is also the ordinary
+    // way this happens in life, since a person who has just started one agent
+    // is about to start another.
+    live.sessionFiles[`${LIVE_STORE.path}/claude/sessions/${SPAWNED_SESSION}.json`] =
+      JSON.stringify({ signal: 'awaiting-input', updatedAt: START, cwd: LIVE_STORE.path });
+    spawning.send({
+      type: 'session-start',
+      id: 5,
+      storeId: LIVE_STORE.storeId,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: null,
+    });
+    await until(
+      () =>
+        terminalHub.hub.state
+          .snapshot()
+          .stores[0]?.sessions.some((row) => row.ref.sessionId === SPAWNED_SESSION) === true,
+      'the provider to name the session the spawn became',
+    );
+
+    spawned?.emit('named now\r\n');
+    await quiet(spawning);
+
     // And the machine goes away without saying so. The rows it reported stay,
     // labelled, so this is a refusal naming a machine rather than a session
     // that cannot be found -- which is the difference between a pane that says
@@ -2008,6 +2111,10 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const sessionUnsubscribed = firstFrame(watcher, 'sessionUnsubscribed');
     const sessionSubscribedTruncated = firstFrame(latecomer, 'sessionSubscribedTruncated');
     const refusalTerminal = firstFrame(orphan, 'refusal');
+    const refusalStartUnknown = firstFrame(spawning, 'refusal');
+    const sessionSubscribedPending = firstFrame(spawning, 'sessionSubscribedPending');
+    const terminalOutputPending = firstFrame(spawning, 'terminalOutputPending');
+    const terminalOutputNamed = firstFrame(spawning, 'terminalOutputNamed');
     await terminalHub.cleanup();
 
     // A hub whose database already holds a pane layout, for the answer a
@@ -2087,6 +2194,10 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('terminalOutputDropped', terminalOutputDropped);
     captured.set('sessionUnsubscribed', sessionUnsubscribed);
     captured.set('refusalTerminal', refusalTerminal);
+    captured.set('refusalStartUnknown', refusalStartUnknown);
+    captured.set('sessionSubscribedPending', sessionSubscribedPending);
+    captured.set('terminalOutputPending', terminalOutputPending);
+    captured.set('terminalOutputNamed', terminalOutputNamed);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)

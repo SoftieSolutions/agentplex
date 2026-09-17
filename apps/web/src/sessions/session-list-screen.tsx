@@ -28,6 +28,7 @@ import {
   type StatusChip,
 } from './session-list-model.js';
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
+import { appLayoutStore } from '../layout/app-layout.js';
 import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogue-store.js';
 import { ProjectDocuments } from '../docs/project-docs.js';
 import { MachineSelector } from '../machines/machine-selector.js';
@@ -210,6 +211,11 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
         opened={creating}
         onClose={() => setCreating(false)}
         scheme={scheme}
+        // The start opens a pane in the layout the moment it goes out, on the
+        // handle the start frame already has. The page's one layout store, for
+        // the reason `app-layout.ts` gives -- a second one would adopt a
+        // stored arrangement that predates what the first one saved.
+        onPending={(startId) => appLayoutStore(store).showPendingSession(startId)}
       />
       <NewProjectForm
         store={store}
