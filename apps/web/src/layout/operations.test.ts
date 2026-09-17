@@ -6,11 +6,13 @@ import {
   moveFocus,
   paneRects,
   panes,
+  pendingStarts,
+  rebindPending,
   setPaneContent,
   setRatio,
   splitPane,
 } from './operations.js';
-import { docPane, emptyPane, sessionPane, type LayoutTree } from './tree.js';
+import { docPane, emptyPane, pendingPane, sessionPane, type LayoutTree } from './tree.js';
 
 const SESSION = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-1' });
 const OTHER = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-2' });
@@ -198,5 +200,76 @@ describe('panes', () => {
       ['second', 'first'],
       ['second', 'second'],
     ]);
+  });
+});
+
+describe('rebindPending', () => {
+  /** A pending pane beside a session pane, which is the shape a split leaves. */
+  const waiting: LayoutTree = {
+    kind: 'split',
+    direction: 'row',
+    ratio: 0.5,
+    first: sessionPane(SESSION),
+    second: pendingPane(7),
+  };
+
+  it('becomes the session, in the pane that asked, wherever it sits', () => {
+    const bound = rebindPending(waiting, 7, OTHER);
+    expect(bound).toEqual({ ...waiting, second: sessionPane(OTHER) });
+  });
+
+  it('leaves a pane waiting on another start alone, handle by handle', () => {
+    const two: LayoutTree = { ...waiting, first: pendingPane(9) };
+    const bound = rebindPending(two, 7, OTHER);
+    expect(bound).toEqual({ ...two, second: sessionPane(OTHER) });
+  });
+
+  it('answers with the tree itself when nothing was waiting on that start', () => {
+    // Identity, so a caller can ask on every hub change and let it decide
+    // whether anything is owed a save.
+    expect(rebindPending(waiting, 8, OTHER)).toBe(waiting);
+    expect(rebindPending(ARRANGED, 7, OTHER)).toBe(ARRANGED);
+  });
+
+  it('is by the handle and never by what was started', () => {
+    // Two panes on one handle is not a shape the store makes, but the rule is
+    // the handle's: both become the session, and neither is matched by
+    // anything else about the start.
+    const both: LayoutTree = { ...waiting, first: pendingPane(7) };
+    expect(rebindPending(both, 7, OTHER)).toEqual({
+      ...waiting,
+      first: sessionPane(OTHER),
+      second: sessionPane(OTHER),
+    });
+  });
+});
+
+describe('pendingStarts', () => {
+  it('names every start a pane is still waiting on, once each, first seen first', () => {
+    const tree: LayoutTree = {
+      kind: 'split',
+      direction: 'row',
+      ratio: 0.5,
+      first: pendingPane(9),
+      second: {
+        kind: 'split',
+        direction: 'column',
+        ratio: 0.5,
+        first: pendingPane(7),
+        second: pendingPane(9),
+      },
+    };
+    expect(pendingStarts(tree)).toEqual([9, 7]);
+    expect(pendingStarts(ARRANGED)).toEqual([]);
+  });
+});
+
+describe('samePaneContent on pending panes', () => {
+  it('is the same pane only for the same handle', () => {
+    expect(findPaneShowing(pendingPane(7), { type: 'pending', startId: 7 })).toEqual([]);
+    expect(findPaneShowing(pendingPane(7), { type: 'pending', startId: 8 })).toBeNull();
+    // A pending pane is not the session it is about to become: the rebind is
+    // what joins those two, off the hub's own answer.
+    expect(findPaneShowing(pendingPane(7), { type: 'session', session: SESSION })).toBeNull();
   });
 });

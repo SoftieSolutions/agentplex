@@ -759,6 +759,38 @@ describe('terminal frames from the hub', () => {
     expect(written).toHaveLength(1);
   });
 
+  it('names a pane that asked by start handle off the output that carries the session', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    // The captured conversation: a start on frame 5, a subscribe on frame 2.
+    // The handle is the start frame's own id, and the subscribe is this
+    // store's second frame, which is the reply id the capture carries.
+    const startKey = terminalKey({ by: 'start', startId: 5 });
+    const watched = () => h.store.getSnapshot().terminals.get(startKey);
+    h.store.watchTerminal({ by: 'start', startId: 5 });
+
+    socket.deliver(hubFrames.sessionSubscribedPending);
+    // Attached to a terminal nothing can address yet: the provider has not
+    // written a session id, and the hub says so rather than inventing one.
+    expect(watched()?.attached).toBe(true);
+    expect(watched()?.session).toBeNull();
+
+    const written: Uint8Array[] = [];
+    watched()?.feed.attach({ write: (chunk) => written.push(chunk) });
+    socket.deliver(hubFrames.terminalOutputPending);
+    expect(watched()?.session).toBeNull();
+
+    socket.deliver(hubFrames.terminalOutputNamed);
+
+    // The moment the pane stops being pending, off the hub's own frame: the
+    // server bound the terminal to the session its scan found and every chunk
+    // since has carried both names. Nothing here compared times.
+    expect(watched()?.session).toEqual({ storeId: 'store-work', sessionId: 'session-spawned' });
+    // And the bytes were never the price of learning that: both chunks went to
+    // the feed, in order, before and after the name arrived.
+    expect(written).toHaveLength(2);
+  });
+
   it('says nothing to a pane about a detach it asked for', async () => {
     const h = harness();
     const socket = await watching(h);

@@ -5,6 +5,7 @@ import {
   DEFAULT_TREE,
   docPane,
   parsePaneLayout,
+  pendingPane,
   serializePaneLayout,
   sessionPane,
   type LayoutTree,
@@ -42,6 +43,30 @@ describe('parsePaneLayout on answers with no layout in them', () => {
     expect(parsePaneLayout('[1,2,3]')).toEqual(DEFAULT_TREE);
     expect(parsePaneLayout('{"weather":"fine"}')).toEqual(DEFAULT_TREE);
     expect(parsePaneLayout('{"v":"one","root":{}}')).toEqual(DEFAULT_TREE);
+  });
+});
+
+describe('a pending pane, which is never saved as one', () => {
+  it('serializes as the empty pane it is standing in for', () => {
+    const arranged: LayoutTree = { ...ARRANGED, first: pendingPane(7) };
+    expect(JSON.parse(serializePaneLayout(arranged))).toEqual(
+      JSON.parse(
+        serializePaneLayout({ ...ARRANGED, first: { kind: 'pane', content: { type: 'empty' } } }),
+      ),
+    );
+  });
+
+  it('keeps the arrangement around it: the split, the ratio and the place', () => {
+    const saved = parsePaneLayout(serializePaneLayout({ ...ARRANGED, first: pendingPane(7) }));
+    expect(saved).toEqual({ ...ARRANGED, first: { kind: 'pane', content: { type: 'empty' } } });
+  });
+
+  it('reads one written by some other build as empty, not as a pane it could resolve', () => {
+    // A start handle names a frame on a socket that is gone. There is nothing
+    // here for this connection to wait on, so the honest reading is the empty
+    // pane this build would have written.
+    const text = '{"v":1,"root":{"kind":"pane","content":{"type":"pending","startId":7}}}';
+    expect(parsePaneLayout(text)).toEqual({ kind: 'pane', content: { type: 'empty' } });
   });
 });
 

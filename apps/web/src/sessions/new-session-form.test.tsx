@@ -2,7 +2,12 @@
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CatalogueQuery } from '@agentplex/protocol';
+import {
+  parseClientFrame,
+  parseTextFrame,
+  type CatalogueQuery,
+  type ClientFrame,
+} from '@agentplex/protocol';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
@@ -129,7 +134,11 @@ describe('the new-session form meeting a holder', () => {
    * with exactly one store in it -- one store is not a choice, so the only
    * thing left to pick is the provider, which `chooseProvider` below does.
    */
+  /** Every start handle the form opened a pane on, in the order it did. */
+  let opened: number[] = [];
+
   async function mountForm(): Promise<FakeSocket> {
+    opened = [];
     await act(async () => {
       root = createRoot(container);
       root.render(
@@ -140,6 +149,7 @@ describe('the new-session form meeting a holder', () => {
             onClose={() => {}}
             scheme="dark"
             navigate={() => {}}
+            onPending={(startId) => opened.push(startId)}
           />,
         ),
       );
@@ -159,6 +169,15 @@ describe('the new-session form meeting a holder', () => {
       void store.queryCatalogue(LIST_QUERY).catch(() => undefined);
     });
     return socket;
+  }
+
+  /** What the form put on the wire, read back through the hub's own parser. */
+  function sentFrames(socket: FakeSocket): ClientFrame[] {
+    return socket.sent.map((text) => {
+      const parsed = parseTextFrame(parseClientFrame, text);
+      if (!parsed.ok) throw new Error(`the form sent something unreadable: ${parsed.reason}`);
+      return parsed.value;
+    });
   }
 
   /** The dialog renders into a portal, so the whole document is the haystack. */
@@ -199,6 +218,36 @@ describe('the new-session form meeting a holder', () => {
       option.click();
     });
   }
+
+  it('opens a pane on the start itself, by the id of the frame that carried it', async () => {
+    const socket = await mountForm();
+    await chooseProvider('claude');
+
+    await submit();
+
+    // The start this form sent is frame 4 -- the list behind it asks for the
+    // tree and a catalogue page first -- and that number is the whole of what
+    // a pending pane is opened on. In the click that sent it, before the hub
+    // has answered anything: a spawn prints from the fork onwards, and the
+    // frame id is the only name it has until the provider writes one.
+    expect(opened).toEqual([4]);
+    const sent = sentFrames(socket).at(-1);
+    expect(sent?.type === 'session-start' ? sent.id : null).toBe(4);
+  });
+
+  it('opens no pane for a start the queue would not take', async () => {
+    await mountForm();
+    await chooseProvider('claude');
+    // The connection goes, so the command is neither sent nor queued for a
+    // start, which is intent about now. Nothing was asked, so there is nothing
+    // for a pane to wait on.
+    await act(() => {
+      sockets.sockets[0]?.drop();
+    });
+
+    expect(button('Start session').disabled).toBe(true);
+    expect(opened).toEqual([]);
+  });
 
   it('names the machine already running the session it was refused for', async () => {
     const socket = await mountForm();

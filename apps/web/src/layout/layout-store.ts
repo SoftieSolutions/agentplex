@@ -1,11 +1,15 @@
-import type { NodeId, SessionRef } from '@agentplex/protocol';
+import type { FrameId, NodeId, SessionRef } from '@agentplex/protocol';
+import { terminalKey, type StartedView } from '../store/hub-store.js';
 import type { Timers } from '../store/timers.js';
+import { pendingSession, type NamedTerminal } from '../terminal/pending-pane-model.js';
 import {
   closePane,
   findPaneShowing,
   moveFocus,
   paneAt,
   panes,
+  pendingStarts,
+  rebindPending,
   setPaneContent,
   setRatio,
   splitPane,
@@ -71,7 +75,21 @@ export interface LayoutSnapshot {
 /** The slice of the hub store the layout needs; `HubStore` satisfies it. */
 export interface LayoutHub {
   subscribe(listener: () => void): () => void;
-  getSnapshot(): { readonly paneLayout: { readonly layout: string | null } | null };
+  getSnapshot(): {
+    readonly paneLayout: { readonly layout: string | null } | null;
+    /**
+     * The watched terminals, which is where a pending pane learns its name.
+     *
+     * Read here rather than reported up from the pane that is watching,
+     * because the tree is this store's and a component that had to tell it
+     * "the start I am drawing turned out to be this session" could only do it
+     * from an effect. The store already hears every hub change; the session a
+     * start became is one of them.
+     */
+    readonly terminals: ReadonlyMap<string, NamedTerminal>;
+    /** The hub's answer to the newest start, for the one a resume names. */
+    readonly lastStarted: StartedView | null;
+  };
   /** Standing interest in the stored pane layout, replayed on reconnection. */
   subscribePaneLayout(): () => void;
   sendCommand(command: { type: 'pane-layout-save'; layout: string }): unknown;
@@ -107,6 +125,15 @@ export interface LayoutStore {
    * hub's answer rather than arranging a screen over the stored one.
    */
   showDoc(nodeId: NodeId): void;
+  /**
+   * Opens a pane on a session that has just been asked for, by the handle the
+   * asking has: the id of the `session-start` frame that carried it.
+   *
+   * The same three rules again, and one more that is this call's own: the pane
+   * stops being pending the moment the hub says which session that start
+   * became, and the store is what notices -- see `rebindPendingPanes`.
+   */
+  showPendingSession(startId: FrameId): void;
   /** Moves focus to the pane across the boundary. Never saves. */
   focusMove(direction: FocusDirection): void;
   /** Focuses the pane at `path` (a click landed in it). Never saves. */
@@ -192,6 +219,41 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     if (waiting !== null) show(waiting);
   }
 
+  /**
+   * Every pending pane whose start has since been named, become its session.
+   *
+   * Run on every hub change, which is what makes the moment exact: the store
+   * publishes when the hub's own answer says which session a start turned out
+   * to be -- the subscription's reply, or a chunk of output carrying both
+   * names -- and this is the next thing that happens. Nothing here compares
+   * times, and nothing waits for a scan to appear in a list.
+   *
+   * It is structural, so it saves. That is the point of the rebind rather than
+   * a side effect of it: the pending pane was saved as an empty one, and the
+   * session pane it becomes is the first version of this arrangement worth
+   * writing down.
+   */
+  function rebindPendingPanes(): void {
+    const waiting = pendingStarts(snapshot.tree);
+    if (waiting.length === 0) return;
+    const answer = hub.getSnapshot();
+    let tree = snapshot.tree;
+    for (const startId of waiting) {
+      const watch = answer.terminals.get(terminalKey({ by: 'start', startId })) ?? null;
+      const session = pendingSession(startId, answer.lastStarted, watch);
+      if (session === null) continue;
+      tree = rebindPending(tree, startId, session);
+    }
+    if (tree === snapshot.tree) return;
+    structural({ tree });
+  }
+
+  /** Everything this store does when the hub publishes, in the order it does it. */
+  function onHubChange(): void {
+    adoptAnswer();
+    rebindPendingPanes();
+  }
+
   /** The showing rules, shared by the live call and the deferred one. */
   function show(content: PaneContent): void {
     const showing = findPaneShowing(snapshot.tree, content);
@@ -231,8 +293,8 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
       listeners.add(listener);
       if (listeners.size === 1) {
         detachInterest = hub.subscribePaneLayout();
-        detachHub = hub.subscribe(adoptAnswer);
-        adoptAnswer();
+        detachHub = hub.subscribe(onHubChange);
+        onHubChange();
       }
       let active = true;
       return () => {
@@ -282,6 +344,10 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
 
     showDoc(nodeId: NodeId): void {
       showOrWait({ type: 'doc', nodeId });
+    },
+
+    showPendingSession(startId: FrameId): void {
+      showOrWait({ type: 'pending', startId });
     },
 
     focusMove(direction: FocusDirection): void {
