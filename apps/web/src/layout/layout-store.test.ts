@@ -8,7 +8,7 @@ import {
   type FrameId,
   type SessionRef,
 } from '@agentplex/protocol';
-import { terminalKey, type StartedView } from '../store/hub-store.js';
+import { terminalKey, type StartedView, type StartView } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { createLayoutStore, type LayoutHub } from './layout-store.js';
 import {
@@ -37,13 +37,14 @@ function fakeHub() {
   let interest = 0;
   /** What each watched terminal turned out to be, as the store publishes it. */
   let terminals = new Map<string, { readonly session: SessionRef | null }>();
-  let lastStarted: StartedView | null = null;
+  /** What the hub said about each start, as the store files it: per start. */
+  let starts = new Map<FrameId, StartView>();
   const hub: LayoutHub = {
     subscribe(listener: () => void): () => void {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    getSnapshot: () => ({ paneLayout: answer, terminals, lastStarted }),
+    getSnapshot: () => ({ paneLayout: answer, terminals, starts }),
     subscribePaneLayout(): () => void {
       interest += 1;
       return () => {
@@ -74,7 +75,7 @@ function fakeHub() {
     },
     /** The hub answers a start, the way it answers a resume: with the session. */
     started(view: StartedView): void {
-      lastStarted = view;
+      starts = new Map([...starts, [view.replyTo, { started: view, refusal: null }]]);
       notify();
     },
   };
@@ -435,6 +436,44 @@ describe('a pending pane', () => {
     });
 
     expect(h.store.getSnapshot().tree).toEqual(pendingPane(7));
+  });
+
+  it('keeps every start asked for before the answer, not only the newest', () => {
+    const h = harness();
+    // Two starts submitted while the hub has not answered with the stored
+    // layout yet: two sessions are being started, and a slot would drop the
+    // first outright -- nothing on screen would ever have pointed at it.
+    h.store.showPendingSession(7);
+    h.store.showPendingSession(9);
+
+    h.answer(
+      serializePaneLayout({
+        kind: 'split',
+        direction: 'row',
+        ratio: 0.5,
+        first: { kind: 'pane', content: { type: 'empty' } },
+        second: { kind: 'pane', content: { type: 'empty' } },
+      }),
+    );
+
+    // One each, in the order they were asked for: the first lands in the pane
+    // adopting focused, and the second in the empty pane left beside it.
+    const tree = h.store.getSnapshot().tree;
+    expect(tree.kind === 'split' && tree.first).toEqual(pendingPane(7));
+    expect(tree.kind === 'split' && tree.second).toEqual(pendingPane(9));
+  });
+
+  it('gives the later start the pane when the stored layout has only one', () => {
+    const h = harness();
+    h.store.showPendingSession(7);
+    h.store.showPendingSession(9);
+
+    h.answer(serializePaneLayout(DEFAULT_TREE));
+
+    // No second pane to move to, so the second request takes the one there is
+    // -- which is what the same two clicks a moment later would have done.
+    // Nothing here invents a split to hold them both.
+    expect(h.store.getSnapshot().tree).toEqual(pendingPane(9));
   });
 
   it('waits for the stored layout rather than arranging a screen over it', () => {

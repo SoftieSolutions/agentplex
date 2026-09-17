@@ -1,5 +1,5 @@
 import type { FrameId, NodeId, SessionRef } from '@agentplex/protocol';
-import { terminalKey, type StartedView } from '../store/hub-store.js';
+import { terminalKey, type StartView } from '../store/hub-store.js';
 import type { Timers } from '../store/timers.js';
 import { pendingSession, type NamedTerminal } from '../terminal/pending-pane-model.js';
 import {
@@ -87,8 +87,14 @@ export interface LayoutHub {
      * start became is one of them.
      */
     readonly terminals: ReadonlyMap<string, NamedTerminal>;
-    /** The hub's answer to the newest start, for the one a resume names. */
-    readonly lastStarted: StartedView | null;
+    /**
+     * What the hub said about each start, by the frame that asked it.
+     *
+     * Per start rather than the newest answer, for the reason `StartView`
+     * gives: two starts in flight is an ordinary thing for a screen of panes,
+     * and a shared slot would give the older pane the younger one's answer.
+     */
+    readonly starts: ReadonlyMap<FrameId, StartView>;
   };
   /** Standing interest in the stored pane layout, replayed on reconnection. */
   subscribePaneLayout(): () => void;
@@ -170,8 +176,24 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
   let cancelSave: (() => void) | null = null;
   /** True while an edit has happened that no save has carried yet. */
   let dirty = false;
-  /** Something asked for before the answer arrived, waiting for it. */
-  let requested: PaneContent | null = null;
+  /**
+   * Everything asked for before the answer arrived, in the order it was asked.
+   *
+   * A list and not a slot, because two of these can be owed at once and they
+   * are not alternatives: a person who submits two starts before the hub has
+   * answered with the stored layout has asked for two panes, and a slot would
+   * drop the first outright -- a session running on a machine with nothing on
+   * screen ever having pointed at it.
+   *
+   * What they cannot be given is a pane each out of nothing. Showing something
+   * puts it in the focused pane, here and on the live path alike, so a second
+   * request lands where the first one did unless the stored layout has an
+   * empty pane to move to -- which `adoptAnswer` does between them, and which
+   * is the whole of the placement rule this store has. Two starts into a
+   * single-pane layout end with the second one showing, exactly as two clicks
+   * a moment later would have.
+   */
+  const requested: PaneContent[] = [];
 
   let detachHub: (() => void) | null = null;
   let detachInterest: (() => void) | null = null;
@@ -214,9 +236,22 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     rest = stored.rest;
     const firstPane = panes(tree)[0];
     update({ loaded: true, tree, focus: firstPane?.path ?? [], collapsed: stored.collapsed });
-    const waiting = requested;
-    requested = null;
-    if (waiting !== null) show(waiting);
+    const waiting = requested.splice(0, requested.length);
+    waiting.forEach((content, at) => {
+      show(content);
+      // Between them and never after the last, so one deferred request leaves
+      // focus exactly where adopting the layout put it. A second one moves to
+      // an empty pane if the stored arrangement has one, rather than being
+      // shown into the pane the first is now in.
+      if (at < waiting.length - 1) focusFirstEmptyPane();
+    });
+  }
+
+  /** Moves focus to the first pane showing nothing, if the tree has one. */
+  function focusFirstEmptyPane(): void {
+    const empty = panes(snapshot.tree).find(({ leaf }) => leaf.content.type === 'empty');
+    if (empty === undefined) return;
+    update({ focus: empty.path });
   }
 
   /**
@@ -240,7 +275,7 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
     let tree = snapshot.tree;
     for (const startId of waiting) {
       const watch = answer.terminals.get(terminalKey({ by: 'start', startId })) ?? null;
-      const session = pendingSession(startId, answer.lastStarted, watch);
+      const session = pendingSession(answer.starts.get(startId) ?? null, watch);
       if (session === null) continue;
       tree = rebindPending(tree, startId, session);
     }
@@ -282,7 +317,7 @@ export function createLayoutStore(dependencies: LayoutStoreDependencies): Layout
    */
   function showOrWait(content: PaneContent): void {
     if (!snapshot.loaded) {
-      requested = content;
+      requested.push(content);
       return;
     }
     show(content);
