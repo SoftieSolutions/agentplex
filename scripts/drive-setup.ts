@@ -1,4 +1,5 @@
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 /**
  * An operator at a terminal, for the one check that has a machine to run on.
@@ -40,7 +41,7 @@ import process from 'node:process';
  */
 
 /** Where the pty seam is, and the run to drive on it. */
-interface Invocation {
+export interface Invocation {
   /**
    * The module to load the pty seam from, as an absolute path.
    *
@@ -69,6 +70,19 @@ interface Invocation {
  * this long still catches an unanswered question inside one build.
  */
 const SILENCE_MS = 300_000;
+
+/**
+ * How long the whole run gets, however talkative it is.
+ *
+ * The bound above watches for a child that stopped; this one watches for a
+ * child that never will. A wizard that asks the same question again on every
+ * turn -- see `ANOTHER_PATH_QUESTION` -- is never silent for a second, so the
+ * only thing that can end it is a clock over the run rather than over the gaps
+ * in it. Ten minutes is longer than any honest run of this: the install it
+ * drives takes about one, and the slowest part of that is a compile the layer
+ * above has already done once.
+ */
+const DEADLINE_MS = 600_000;
 
 /**
  * The size the child is told its terminal is.
@@ -111,7 +125,7 @@ const CURSOR = new RegExp(`${ESCAPE}\\[[0-9;?]*[A-Za-z]`, 'g');
  * rule that recognises "a line ending in a bracket and a space" would eventually
  * find one there and type into it.
  */
-const WIZARD_BANNER = 'agentplex setup';
+export const WIZARD_BANNER = 'agentplex setup';
 
 /**
  * The offer to log a provider in, which this machine has to turn down.
@@ -128,7 +142,7 @@ const WIZARD_BANNER = 'agentplex setup';
  */
 const LOGIN_OFFER = { starts: 'Log ', ends: ' in now? ' } as const;
 
-function isALoginOffer(prompt: string): boolean {
+export function isALoginOffer(prompt: string): boolean {
   return prompt.startsWith(LOGIN_OFFER.starts) && prompt.includes(LOGIN_OFFER.ends);
 }
 
@@ -142,6 +156,22 @@ function isALoginOffer(prompt: string): boolean {
 const SAVE_QUESTION = 'Save this plan to a file?';
 
 /**
+ * The question that would turn this wizard into a loop, and the reason the rule
+ * cannot simply take the default.
+ *
+ * `offerToSave` never writes over a file that is already there: it says the file
+ * was left alone, offers the same path again, and asks whether to try another
+ * one -- defaulting to yes. On a machine where `setup-plan.json` already exists,
+ * taking that default is a run that goes round for ever, printing a line every
+ * turn. The bound on silence cannot see that, because it is not silent; the
+ * wall-clock bound can, and this is what stops it needing to.
+ *
+ * So the answer is no. This check saves the plan once or says out loud that it
+ * could not, and either is a fact the `RUN` lines can read.
+ */
+const ANOTHER_PATH_QUESTION = 'Try another path?';
+
+/**
  * The offer a provider this machine does not have is made, and the one offer
  * this operator turns down.
  *
@@ -151,6 +181,12 @@ const SAVE_QUESTION = 'Save this plan to a file?';
  * PATH is the one under test, it is found, and what it is offered is adoption.
  */
 const INSTALL_OFFER = '[install] ';
+
+/**
+ * How every question this wizard asks ends: the default it is offering, in
+ * brackets, and the space the cursor sits after.
+ */
+const DEFAULT_OFFERED = '] ';
 
 /**
  * What a person sitting at this terminal would type at the question in front of
@@ -166,11 +202,20 @@ const INSTALL_OFFER = '[install] ';
  * three end in `] ` like every other one, and the default rule would take the
  * default at each.
  */
-function asAnOperatorWould(prompt: string): string | undefined {
+export function asAnOperatorWould(prompt: string): string | undefined {
+  // A question is only a question once its default and the space after it have
+  // arrived. Recognising one by its opening words alone would answer a prompt
+  // the child is still drawing -- and an answer that arrives before its question
+  // is exactly what `node-setup-terminal.ts` reads as a script behind a
+  // terminal, which is the one thing this must never look like. A chunk
+  // boundary falls wherever the kernel puts it, so this is not hypothetical.
+  if (!prompt.endsWith(DEFAULT_OFFERED)) return undefined;
+
   if (isALoginOffer(prompt)) return `n${RETURN}`;
   if (prompt.startsWith(SAVE_QUESTION)) return `y${RETURN}`;
+  if (prompt.startsWith(ANOTHER_PATH_QUESTION)) return `n${RETURN}`;
   if (prompt.endsWith(INSTALL_OFFER)) return `skip${RETURN}`;
-  return prompt.endsWith('] ') ? RETURN : undefined;
+  return RETURN;
 }
 
 /**
@@ -187,7 +232,7 @@ function asAnOperatorWould(prompt: string): string | undefined {
  * means something: it is a program going back to the start of the line it is
  * on.
  */
-function written(text: string): string {
+export function written(text: string): string {
   return text.replaceAll(CURSOR, '').replaceAll('\r\n', '\n');
 }
 
@@ -197,7 +242,7 @@ function written(text: string): string {
  * A prompt is written without a newline, so it is whatever the child wrote after
  * the last one: `Role [server] `, `Apply it to this machine? [Y/n] `.
  */
-function pendingPrompt(text: string): string {
+export function pendingPrompt(text: string): string {
   const last = text.split(/[\r\n]/).at(-1) ?? '';
   return last.trim().length === 0 ? '' : last;
 }
@@ -231,7 +276,7 @@ interface PtyFactory {
   }): Pty;
 }
 
-type Parsed<T> =
+export type Parsed<T> =
   { readonly ok: true; readonly value: T } | { readonly ok: false; readonly problem: string };
 
 const PTY_FLAG = '--pty';
@@ -242,7 +287,7 @@ function usage(): string {
 }
 
 /** The command line, refused rather than assumed. */
-function parseInvocation(argv: readonly string[]): Parsed<Invocation> {
+export function parseInvocation(argv: readonly string[]): Parsed<Invocation> {
   if (argv[0] !== PTY_FLAG)
     return { ok: false, problem: `the first argument has to be ${PTY_FLAG}` };
 
@@ -302,14 +347,95 @@ function environment(): Readonly<Record<string, string>> {
   return Object.fromEntries(pairs);
 }
 
+/**
+ * Everything the driver carries from one chunk of output to the next.
+ *
+ * Two facts, and both are about the transcript rather than about the clock.
+ */
+export interface Typing {
+  /**
+   * Whether the wizard has started talking.
+   *
+   * Nothing is typed before it has. Everything above the handover is an
+   * installer talking, and a rule that recognises "a line ending in a bracket
+   * and a space" would eventually find one in an npm progress bar and type into
+   * it.
+   */
+  readonly armed: boolean;
+  /**
+   * How much the child had written before the question that was last answered.
+   *
+   * The text only ever grows, so every new question sits further along than the
+   * one before it and a redraw of the current one sits at exactly this offset.
+   * `-1` is a run that has answered nothing.
+   */
+  readonly answeredAfter: number;
+}
+
+/** A driver that has read nothing yet. */
+export const BEFORE_THE_WIZARD: Typing = { armed: false, answeredAfter: -1 };
+
+/** What to do about everything the child has written so far. */
+export interface Keystrokes {
+  /** What to type, or `null` for nothing to type yet. */
+  readonly type: string | null;
+  /** The question `type` answers, as it appeared, or `null` when nothing is typed. */
+  readonly question: string | null;
+  /** What to carry into the next chunk. */
+  readonly state: Typing;
+}
+
+/** Nothing to type, and nothing learned. */
+function waiting(state: Typing): Keystrokes {
+  return { type: null, question: null, state };
+}
+
+/**
+ * The whole of the decision, as a function of what has been written.
+ *
+ * Pure, and deliberately so: everything this program gets wrong it gets wrong
+ * here -- typing before the wizard is listening, typing twice at a redraw,
+ * taking a default that loops -- and none of it needs a pty to be shown. `drive`
+ * below is the plumbing that feeds this and writes what it says.
+ *
+ * It takes the transcript as `written` leaves it, because the offsets it
+ * remembers are offsets into that.
+ */
+export function whatToType(text: string, state: Typing): Keystrokes {
+  const armed = state.armed || text.includes(WIZARD_BANNER);
+  if (!armed) return waiting({ ...state, armed });
+
+  const question = pendingPrompt(text);
+  if (question.length === 0) return waiting({ ...state, armed });
+
+  const type = asAnOperatorWould(question);
+  if (type === undefined) return waiting({ ...state, armed });
+
+  // A question is answered once where it stands. Readline redraws a line it is
+  // sitting on by moving the cursor, which changes nothing once the moves are
+  // taken out -- so "the same prompt at the same offset" is a redraw, and typing
+  // at it again would put the second line in front of the *next* question.
+  const answeredAfter = text.length - question.length;
+  if (answeredAfter === state.answeredAfter) return waiting({ ...state, armed });
+
+  return { type, question, state: { armed, answeredAfter } };
+}
+
+/** Why the driver stopped waiting, when it was not the child that ended. */
+interface GaveUp {
+  readonly why: string;
+  /** The question it was sitting on when it gave up. */
+  readonly prompt: string;
+}
+
 /** What a driven run leaves behind. */
 interface Driven {
   readonly exitCode: number;
   readonly signal: number | null;
   /** The questions it answered, in the order it answered them. */
   readonly asked: readonly string[];
-  /** Set when the child went quiet on a question nobody could answer. */
-  readonly stuckOn: string | null;
+  /** Set when the driver gave up rather than the child ending. */
+  readonly gaveUp: GaveUp | null;
 }
 
 /**
@@ -324,13 +450,12 @@ interface Driven {
  * **The rule is also the trigger.** There is no clock deciding when to type: a
  * prompt the rule recognises is itself the signal that the child is waiting,
  * because every wizard question is written as `<question> [<default>] ` and
- * parked on without a newline. The silence bound below is a failure detector and
- * never a pacer.
+ * parked on without a newline. Both bounds are failure detectors and neither is
+ * a pacer.
  *
- * A question is answered once where it stands. Readline redraws a line it is
- * sitting on by moving the cursor, which changes nothing once the moves are
- * taken out -- so "the same prompt at the same offset" is a redraw, and typing
- * at it again would put the second line in front of the next question.
+ * What to type is `whatToType`'s to decide. This opens the pty, feeds it the
+ * transcript, writes what it says, and holds the two clocks that end a run
+ * nothing else would.
  *
  * The transcript goes out as it arrives, a line at a time. A `RUN` step that
  * printed nothing until it finished would be a build that looks hung for the
@@ -353,11 +478,7 @@ function drive(factory: PtyFactory, invocation: Invocation): Promise<Driven> {
   const chunks: string[] = [];
   const asked: string[] = [];
   const decoder = new TextDecoder();
-  // How much the child had written before the question that was last answered.
-  // The text only ever grows, so every new question sits further along than the
-  // one before it and a redraw of the current one sits exactly here.
-  let answeredAfter = -1;
-  let armed = false;
+  let state = BEFORE_THE_WIZARD;
 
   // How much of the stripped transcript has already been printed.
   let printed = 0;
@@ -374,23 +495,37 @@ function drive(factory: PtyFactory, invocation: Invocation): Promise<Driven> {
 
     let finish = (driven: Driven): void => {
       finish = () => undefined;
+      clearTimeout(quiet);
+      clearTimeout(deadline);
       flush(seen(), true);
       resolve(driven);
     };
 
+    // Killed and reported rather than left running: this process is about to
+    // stop being anybody's parent, and a child holding a pty after it would
+    // outlive the `RUN` step that started it.
+    const giveUp = (why: string): void => {
+      const prompt = pendingPrompt(seen());
+      pty.kill();
+      finish({
+        exitCode: -1,
+        signal: null,
+        asked,
+        gaveUp: {
+          why,
+          prompt: prompt.length === 0 ? '(nothing: the child was mid-line)' : prompt,
+        },
+      });
+    };
+
     const silence = (): ReturnType<typeof setTimeout> =>
-      setTimeout(() => {
-        const stuckOn = pendingPrompt(seen());
-        pty.kill();
-        finish({
-          exitCode: -1,
-          signal: null,
-          asked,
-          stuckOn: stuckOn.length === 0 ? '(nothing: the child went quiet mid-line)' : stuckOn,
-        });
-      }, SILENCE_MS);
+      setTimeout(() => giveUp(`nothing was written for ${SILENCE_MS / 1000}s`), SILENCE_MS);
 
     let quiet = silence();
+    const deadline = setTimeout(
+      () => giveUp(`the run was still going after ${DEADLINE_MS / 1000}s`),
+      DEADLINE_MS,
+    );
 
     pty.onData((chunk) => {
       clearTimeout(quiet);
@@ -399,61 +534,66 @@ function drive(factory: PtyFactory, invocation: Invocation): Promise<Driven> {
       chunks.push(decoder.decode(chunk, { stream: true }));
       const text = seen();
       flush(text, false);
-      // Nothing is typed until the wizard is the one asking.
-      armed ||= text.includes(WIZARD_BANNER);
-      if (!armed) return;
 
-      const prompt = pendingPrompt(text);
-      if (prompt.length === 0) return;
-      const next = asAnOperatorWould(prompt);
-      if (next === undefined) return;
-      const startsAt = text.length - prompt.length;
-      if (startsAt === answeredAfter) return;
-      answeredAfter = startsAt;
-      asked.push(prompt.trim());
-      pty.write(next);
+      const keystrokes = whatToType(text, state);
+      state = keystrokes.state;
+      if (keystrokes.type === null || keystrokes.question === null) return;
+      asked.push(keystrokes.question.trim());
+      pty.write(keystrokes.type);
     });
 
     pty.onExit((exit) => {
-      clearTimeout(quiet);
-      finish({
-        exitCode: exit.exitCode,
-        signal: exit.signal,
-        asked,
-        stuckOn: null,
-      });
+      finish({ exitCode: exit.exitCode, signal: exit.signal, asked, gaveUp: null });
     });
   });
 }
 
-const say = (line: string): void => void process.stdout.write(`${line}\n`);
+/**
+ * A run, driven, and everything it did printed for the `RUN` lines that read
+ * this log.
+ *
+ * Its exit code says only whether a run was driven to an end. A wizard that
+ * exited 2 is a successful drive and a failed check, and those are two
+ * different questions; a driver that gave up never reached either.
+ */
+async function main(): Promise<number> {
+  const say = (line: string): void => void process.stdout.write(`${line}\n`);
 
-const invocation = parseInvocation(process.argv.slice(2));
-if (!invocation.ok) {
-  say(`drive-setup: ${invocation.problem}`);
-  say(usage());
-  process.exit(1);
+  const invocation = parseInvocation(process.argv.slice(2));
+  if (!invocation.ok) {
+    say(`drive-setup: ${invocation.problem}`);
+    say(usage());
+    return 1;
+  }
+
+  const factory = await loadPtyFactory(invocation.value.ptyModule);
+  if (!factory.ok) {
+    say(`drive-setup: ${factory.problem}`);
+    return 1;
+  }
+
+  const driven = await drive(factory.value, invocation.value);
+
+  say('');
+  say('drive-setup: the questions it answered, in order:');
+  for (const question of driven.asked) say(`  ${question}`);
+
+  if (driven.gaveUp !== null) {
+    say(
+      `drive-setup: gave up -- ${driven.gaveUp.why}. The last prompt was: ${driven.gaveUp.prompt}`,
+    );
+    return 1;
+  }
+
+  // The line every assertion after this one reads. It is printed for a run that
+  // ended badly as readily as for one that ended well: which code the run
+  // deserved is the Dockerfile's question, and answering it here would put the
+  // check in the harness.
+  say(`drive-setup: the run exited ${driven.exitCode}, signal ${String(driven.signal)}`);
+  return 0;
 }
 
-const factory = await loadPtyFactory(invocation.value.ptyModule);
-if (!factory.ok) {
-  say(`drive-setup: ${factory.problem}`);
-  process.exit(1);
+// Imported by its test; executed by the `RUN` line in `bootstrap-check`.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  process.exitCode = await main();
 }
-
-const driven = await drive(factory.value, invocation.value);
-
-say('');
-say('drive-setup: the questions it answered, in order:');
-for (const question of driven.asked) say(`  ${question}`);
-
-if (driven.stuckOn !== null) {
-  say(`drive-setup: nothing was written for ${SILENCE_MS / 1000}s at: ${driven.stuckOn}`);
-  process.exit(1);
-}
-
-// The line every assertion after this one reads. It is printed for a run that
-// ended badly as readily as for one that ended well: which code the run
-// deserved is the Dockerfile's question, and answering it here would put the
-// check in the harness.
-say(`drive-setup: the run exited ${driven.exitCode}, signal ${String(driven.signal)}`);
