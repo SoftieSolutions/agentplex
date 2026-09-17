@@ -1,10 +1,14 @@
 import { useState, type JSX } from 'react';
+import type { ServerRegistrationId } from '@agentplex/protocol';
 import type { DiscoveredCandidate } from '../settings/pairing-form.js';
 import type { PairingOperations } from '../settings/pairing-operations.js';
 import { PairingPanel } from '../settings/pairing-panel.js';
+import type { ServerRowView } from '../settings/server-rows.js';
 import { Button, Group, Stack, Text, Title } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { EnrollPanel } from './enroll-panel.js';
+import { MachineCard } from './machine-card.js';
+import { pairProgress } from './pair-progress-model.js';
 
 /**
  * The wizard's live step: pairing the first machine.
@@ -38,29 +42,58 @@ type Answer = 'already-running' | 'needs-one';
 export interface PairStepProps {
   readonly pairing: PairingOperations;
   readonly candidates: readonly DiscoveredCandidate[];
+  /**
+   * Every paired server the hub has published, as the settings list projects
+   * them. Handed down rather than read here, because the screen above already
+   * holds the store's snapshot: two `useHubSnapshot` calls would be two
+   * readings of one fact, and this step would then need the store to draw a
+   * card. The rows are re-read on every render of that snapshot, so the card
+   * follows the hub's broadcasts with no timer and no effect -- a poll would
+   * only ask a store that already knows.
+   */
+  readonly rows: readonly ServerRowView[];
   readonly scheme: Scheme;
   /** Closes the wizard: the same way out the hero's skip takes. */
   readonly onDone: () => void;
+  /** The clock the card measures a connection's age against; see `MachineCard`. */
+  readonly now?: number | undefined;
 }
 
-export function PairStep({ pairing, candidates, scheme, onDone }: PairStepProps): JSX.Element {
+export function PairStep({
+  pairing,
+  candidates,
+  rows,
+  scheme,
+  onDone,
+  now,
+}: PairStepProps): JSX.Element {
   const [answer, setAnswer] = useState<Answer | null>(null);
   /**
-   * Whether the hub has recorded a pairing from this step. A boolean and not
-   * the registration id the panel hands over: nothing on this screen names one
-   * row yet, and state nothing reads is state that goes stale unnoticed. The
-   * id is in the panel's `onPaired` argument for whoever wants to point at
-   * that row.
+   * The registration the hub recorded for this step, or `null` before it has
+   * recorded one.
+   *
+   * It was a boolean while nothing on this screen named a row. It is the id
+   * now because the card does name one: the wizard's last screen is a reading
+   * of what the hub published about this one registration, and the id is the
+   * only thing that picks it out. The machine's label cannot -- two machines
+   * somebody called `gpu-box` are one row twice -- and the newest row cannot
+   * either, because the hub publishes them sorted by label.
+   *
+   * What is *not* held here is anything the rows already say. The card's state
+   * is derived per render, so a machine that answers, drains and goes stale
+   * walks through all three without this step storing a word of it.
    */
-  const [recorded, setRecorded] = useState(false);
+  const [paired, setPaired] = useState<ServerRegistrationId | null>(null);
 
-  if (recorded) {
+  if (paired !== null) {
     return (
       <Stack gap={16} maw={520} align="flex-start">
         <StepTitle scheme={scheme} />
-        <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
-          Pairing recorded; the hub dials it from here.
-        </Text>
+        <MachineCard progress={pairProgress(rows, paired)} scheme={scheme} now={now} />
+        {/* The way out, in every state the card can reach. A wizard that only
+            let somebody leave once the dial had landed would trap the reader
+            whose machine is the one that never answers -- which is the reader
+            this screen was drawn for. */}
         <Button onClick={onDone}>Done</Button>
       </Stack>
     );
@@ -95,7 +128,7 @@ export function PairStep({ pairing, candidates, scheme, onDone }: PairStepProps)
           pairing={pairing}
           candidates={candidates}
           scheme={scheme}
-          onPaired={() => setRecorded(true)}
+          onPaired={(registrationId) => setPaired(registrationId)}
         />
       )}
       {answer === 'needs-one' && (
