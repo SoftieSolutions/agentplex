@@ -320,7 +320,10 @@ prerelease suffix, or `>=x.y.z <X.0.0` written with a single space between the
 two comparators and `X` at least 1. Everything else fails, `^` and `~`
 included, and the message names the manifest, the dependency and the bound it
 wanted. `engines`, `packageManager` and anything under a `pnpm` key are not
-dependency fields and are not read.
+dependency fields and are not read. That check is
+`scripts/check-dependency-ranges.ts`, which `pnpm lint` runs ahead of eslint and
+prettier; it takes the member globs from `pnpm-workspace.yaml`, so a new package
+is covered the moment it exists.
 
 ## Connectivity
 

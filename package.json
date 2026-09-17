@@ -19,7 +19,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:coverage": "pnpm -r test:coverage",
-    "lint": "eslint . && prettier --check .",
+    "lint": "node scripts/check-dependency-ranges.ts && eslint . && prettier --check .",
     "lint:shell": "shellcheck scripts/install.sh",
     "format": "prettier --write .",
     "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm test",
