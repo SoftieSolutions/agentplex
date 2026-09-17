@@ -4,10 +4,24 @@
 #   pnpm docker:lint        lint only
 #   pnpm docker:typecheck   typecheck only
 #   pnpm docker:test        tests only
+#   pnpm docker:install     the published package, installed by a bare npm
+#   pnpm docker:bootstrap   install.sh, both roles, on containers with no Node
 #
 # One service per check, because CI runs them as separate jobs and a
 # contributor reproducing a red check should be able to run that check alone
 # rather than waiting on the three that were already green.
+#
+# Every command above is a script in the root manifest, and a job that runs one
+# of these checks runs that script rather than a version of it assembled in the
+# workflow. That is what the scripts are for: a workflow that builds its own
+# leaves two commands where there was one, and the one nobody runs is the one
+# that rots -- which is exactly how the bootstrap below came to fail on a
+# laptop while CI called it green.
+#
+# Not every service is a container to run, though. The four checks are a
+# command in an image. The two bootstraps are a stage whose every RUN line is
+# an assertion, so building them is running them and there is nothing left to
+# start afterwards -- `pnpm docker:bootstrap` is a `docker compose build`.
 #
 # No database service, and none is needed: the hub's database is a file, so the
 # migration and query suites open one in a temporary directory and run
@@ -83,20 +97,20 @@ services:
   # `debian:bookworm-slim` with no Node, no compiler and no agentplex, where
   # `install.sh` has to produce all three as an unprivileged user.
   #
-  # The assertions are RUN lines inside `bootstrap-check`, so this passes or
-  # fails during `--build`. The command below prints the report a person wants
-  # to see afterwards: which provider `doctor` found, and which directory it
-  # came out of.
+  # Every assertion is a RUN line inside `bootstrap-check`, so this service is
+  # built and never run, and the reports a person wants to read -- which
+  # provider `doctor` found, and which directory it came out of -- are printed
+  # by the stage that produced them.
+  #
+  # Running it is not merely redundant, it is impossible: the stage ends by
+  # undoing both installs it made, the user one and the `--system` one, because
+  # this is the only machine in the repository an uninstall can be exercised
+  # against something that was really installed. The image it finishes with has
+  # no `agentplex` on it to type.
   bootstrap:
     build:
       context: .
       target: bootstrap-check
-    command:
-      - bash
-      - -c
-      - PATH=/home/alice/.agentplex/bin:$$PATH agentplex doctor --role=server
-        --bin-path=/home/alice/.agentplex/bin
-        --server-identity-file=/home/alice/.agentplex/server.json
 
   # The same bootstrap for the other role, on the machine that makes it a claim:
   # a stock `debian:bookworm-slim` where no compiler was ever installed. A hub
@@ -105,14 +119,13 @@ services:
   # cannot show it, because by the time it installs a hub its own server install
   # has already put a toolchain on the box.
   #
-  # The assertions are RUN lines inside `hub-bootstrap-check`. The command below
-  # prints the report a person wants to see: a hub that says it opens no
-  # terminals and exits 0 on a machine that could not compile one.
+  # Built and never run, for the same reason as its sibling: every assertion is
+  # a RUN line inside `hub-bootstrap-check`, including the report a person
+  # wants to read -- a hub that says it opens no terminals and exits 0 on a
+  # machine that could not compile one. That run needs the database path and
+  # the client token a setup would have written, which the stage supplies and a
+  # bare `agentplex doctor --role=hub` on the finished image cannot.
   bootstrap-hub:
     build:
       context: .
       target: hub-bootstrap-check
-    command:
-      - bash
-      - -c
-      - PATH=/home/alice/.agentplex/bin:$$PATH agentplex doctor --role=hub

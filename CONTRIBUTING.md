@@ -40,7 +40,7 @@ and CI runs each under its own name for that reason:
 
 ```sh
 pnpm docker:install    # the published package, installed by a bare npm
-pnpm docker:bootstrap  # install.sh, on a Debian container with no Node on it
+pnpm docker:bootstrap  # install.sh, both roles, on containers with no Node
 pnpm lint:shell        # shellcheck over install.sh
 ```
 
