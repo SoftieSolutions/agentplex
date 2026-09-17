@@ -1,9 +1,37 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 
+import { pinTestEnvironment } from '../../scripts/test-env.js';
 import { MANIFEST_PATH, buildWebManifest } from './src/pwa/manifest.js';
 import { shellStyles } from './src/pwa/shell-styles.js';
 import { hues } from './src/ui/tokens.js';
+
+/**
+ * The timezone and locale every test run gets, pinned here because this file is
+ * the only config a suite in this package loads.
+ *
+ * This package is excepted from `scripts/vitest.config.ts` -- it owns the React
+ * plugin its component suites are transformed by -- and the argument for that
+ * exception is about `$HOME`: a browser bundle starts no child process, so it
+ * has no home to leak. Nothing in that carries over to here. A browser bundle
+ * is where timestamps are actually rendered for a person to read, and a
+ * component test asserting on a formatted time would pass in one timezone and
+ * fail in the next. So the two halves of the shared config land differently:
+ * the home redirect stays where it is needed, and the pins are called from
+ * both. `scripts/test-env.ts` holds the values, so there is still one place
+ * they are decided, and this is a second call site rather than a second answer.
+ *
+ * At module scope, because `TZ` is read by the engine when a worker starts
+ * rather than looked up per `Date` -- `scripts/vitest.config.ts` carries what
+ * was measured. Guarded, because this config is also what `vite build` and
+ * `vite dev` load: a developer's dev server should render the times their
+ * machine would, and only the test run wants them pinned. `VITEST` is set by
+ * the vitest CLI in the process that loads this file, which is the same process
+ * the pin has to happen in.
+ */
+if (process.env.VITEST) {
+  pinTestEnvironment(process.env);
+}
 
 /**
  * Serves the web manifest in dev and emits it into the build, and composes the

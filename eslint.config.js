@@ -423,13 +423,16 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
-    // The suite that checks the suite's own isolation. Its subject is what a
+    // The suites that check the suite's own isolation. Their subject is what a
     // child process inherits, and starting one is the only way to have that as
-    // a subject: in process it would be asserting about the variable it just
-    // read rather than about the boundary the variable has to cross, which is
-    // the whole of what `scripts/test-home.ts` claims and the half that fails
-    // silently when it stops being true.
-    files: ['scripts/test-home.test.ts'],
+    // a subject: in process they would be asserting about the variable they
+    // just read rather than about the boundary the variable has to cross,
+    // which is the whole of what `scripts/test-home.ts` claims and the half
+    // that fails silently when it stops being true. The environment pins are
+    // the same shape of claim -- `LANG` and `LC_ALL` do nothing to this
+    // process on macOS, and everything to the program a parser here reads the
+    // output of.
+    files: ['scripts/test-home.test.ts', 'scripts/test-env.test.ts'],
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
