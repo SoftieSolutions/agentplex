@@ -43,6 +43,25 @@ import {
  * real child about.
  */
 
+/**
+ * The guards below are claims about the default run, not about every run.
+ *
+ * `AGENTPLEX_TEST_KEEP_CREDENTIALS=1` is somebody saying they want the
+ * credentials for this one run -- the eval suite asking for the thing it is
+ * about -- so a guard that went red on it would make the documented way in a
+ * broken one, and the first thing anyone would do about that is stop running
+ * the guards. Skipped rather than inverted: in that mode there is nothing here
+ * to assert, because the environment is exactly what it was asked to be.
+ *
+ * Nothing is lost by the gate. What the deletion does is asserted
+ * unconditionally by the `pinTestEnvironment` tests, which hand it an object
+ * and read no environment at all -- including the case where the opt-in is
+ * present and the case where it is a value other than `1`. These two are the
+ * separate claim that the call actually happened for this process, and that
+ * claim only exists when the run did not opt out of it.
+ */
+const keepingCredentials = process.env[TEST_KEEP_CREDENTIALS] === '1';
+
 /** Enough for a child to start and print on a loaded machine. */
 const TIMEOUT_MS = 20_000;
 
@@ -184,13 +203,13 @@ describe('the suite environment', () => {
     expect(seen).toEqual({ ...TEST_ENVIRONMENT_PINS });
   });
 
-  it('carries no provider credential', () => {
+  it.skipIf(keepingCredentials)('carries no provider credential', () => {
     for (const name of TEST_CREDENTIAL_VARIABLES) {
       expect(process.env[name], `${name} is visible to this run`).toBeUndefined();
     }
   });
 
-  it('hands a child no provider credential either', () => {
+  it.skipIf(keepingCredentials)('hands a child no provider credential either', () => {
     // The half that matters most here: what a test spawning a real `claude` or
     // `codex` hands it is what decides whether the answer came from the
     // machine's login or from the state the test built.
