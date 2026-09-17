@@ -32,9 +32,12 @@ name: agentplex-test
 # running checks at the same time would otherwise fight over one name: export
 # `COMPOSE_PROJECT_NAME` and each keeps its own image. The default matches the
 # `name:` above, which is what `COMPOSE_PROJECT_NAME` already resolves to when
-# nothing is exported. The cost is that a name we chose counts as a custom tag,
-# so tearing these down needs `docker compose down --rmi all`; `--rmi local`
-# only removes images Compose named itself, and skips this one.
+# nothing is exported. Tearing one down is `docker compose -f
+# docker-compose.test.yml down --rmi local`, run for the project that built it:
+# Compose removes every image labelled as the project's own, and a name we chose
+# is still one of those. The `-f` is load-bearing. Without it the command
+# resolves to docker-compose.yml instead, and stops the hub and removes its
+# image.
 x-checks: &checks
   build:
     context: .
