@@ -12,8 +12,10 @@ import {
 /**
  * What the pairing form collects and how it is checked before anything is
  * submitted. Pairing is always the user typing that server's token into the
- * hub: a name for the row, the address the hub will dial, and the token the
- * server printed.
+ * hub: a name for the row, the address the hub will dial, and the token out
+ * of that server's identity file. Nothing prints that token -- it is read
+ * off disk on the machine that owns it -- so the message that asks for one
+ * says where it is rather than sending somebody hunting through a log.
  *
  * Every rule here is the protocol's, applied to what was typed. This file used
  * to carry its own copy of the address rules, with a header saying they
@@ -84,7 +86,7 @@ export function parsePairingForm(input: PairingFormInput): PairingFormResult {
   }
 
   const token = serverTokenSchema.safeParse(input.token);
-  if (!token.success) problems.token = 'expected the token this server printed';
+  if (!token.success) problems.token = "expected the token in that server's identity file";
 
   if (!name.success || !address.success || !token.success) return { ok: false, problems };
   return { ok: true, request: { label: name.data, address: address.data, token: token.data } };

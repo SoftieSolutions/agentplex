@@ -10,19 +10,14 @@ import {
   PasswordInput,
   Stack,
   Text,
-  TextInput,
   Title,
   useComputedColorScheme,
 } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
 import { ColorSchemeControl } from './color-scheme-control.js';
-import {
-  parsePairingForm,
-  prefillFromCandidate,
-  type DiscoveredCandidate,
-  type PairingFormProblems,
-} from './pairing-form.js';
+import type { DiscoveredCandidate } from './pairing-form.js';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
+import { PairingPanel } from './pairing-panel.js';
 import type { PairingOperations } from './pairing-operations.js';
 import { serverRows, type ProviderRowView, type ServerRowView } from './server-rows.js';
 
@@ -31,6 +26,11 @@ import { serverRows, type ProviderRowView, type ServerRowView } from './server-r
  * list. Everything drawn here is either typed by the user or read out of the
  * snapshot; every failure is shown in words, because a settings screen is
  * exactly the place a person goes to find out why something is not working.
+ *
+ * The pairing form is not drawn here: it is `PairingPanel`, which the
+ * first-run wizard draws too. What this screen keeps is the section it sits
+ * in, because a screen decides where a panel goes and a panel decides what
+ * pairing is.
  *
  * The visual language is the approved mockup direction (design mockups, turn
  * 7): bordered surfaces on the app background, 7-10px radii, Fira Code for
@@ -128,7 +128,7 @@ export function SettingsScreen({
         <HubAccessSection snapshot={snapshot} tokens={tokens} scheme={scheme} />
       </Section>
       <Section scheme={scheme}>
-        <PairingFormSection pairing={pairing} candidates={candidates} scheme={scheme} />
+        <PairingPanel pairing={pairing} candidates={candidates} scheme={scheme} />
       </Section>
       <Section scheme={scheme}>
         <PairedServersSection snapshot={snapshot} pairing={pairing} scheme={scheme} />
@@ -238,176 +238,6 @@ function HubAccessSection({
         Open the first-run guide
       </Anchor>
     </Stack>
-  );
-}
-
-function PairingFormSection({
-  pairing,
-  candidates,
-  scheme,
-}: {
-  readonly pairing: PairingOperations;
-  readonly candidates: readonly DiscoveredCandidate[];
-  readonly scheme: Scheme;
-}): JSX.Element {
-  const [name, setName] = useState('');
-  const [address, setAddress] = useState('');
-  const [token, setToken] = useState('');
-  const [problems, setProblems] = useState<PairingFormProblems>({});
-  const [outcome, setOutcome] = useState<{ ok: boolean; words: string } | null>(null);
-  const [sending, setSending] = useState(false);
-
-  function submit(): void {
-    const parsed = parsePairingForm({ name, address, token });
-    if (!parsed.ok) {
-      setProblems(parsed.problems);
-      setOutcome(null);
-      return;
-    }
-    setProblems({});
-    setSending(true);
-    void pairing.pairServer(parsed.request).then((answer) => {
-      setSending(false);
-      if (answer.ok) {
-        setName('');
-        setAddress('');
-        setToken('');
-        setOutcome({
-          ok: true,
-          words: 'Pairing recorded. The hub dials it from here; its row appears below.',
-        });
-      } else {
-        setOutcome({ ok: false, words: answer.reason });
-      }
-    });
-  }
-
-  return (
-    <Stack gap="sm">
-      <Title order={4}>Pair a server</Title>
-      <Text size="sm" c="dimmed">
-        The address is where this hub dials out to; the token is the one that server printed. Each
-        server has its own token, so revoking one later touches nothing else.
-      </Text>
-      {candidates.length > 0 && (
-        <Stack gap={6}>
-          <Text size="sm" c="dimmed">
-            Heard on the network — selecting one fills in the address and stops. You still type that
-            server&apos;s token: being heard is not being trusted.
-          </Text>
-          <Stack gap={4}>
-            {candidates.map((candidate) => (
-              <CandidateRow
-                key={candidate.serverId}
-                candidate={candidate}
-                scheme={scheme}
-                onSelect={setAddress}
-              />
-            ))}
-          </Stack>
-        </Stack>
-      )}
-      <TextInput
-        label="Name"
-        placeholder="gpu-box-01"
-        value={name}
-        onChange={(event) => setName(event.currentTarget.value)}
-        error={problems.name}
-      />
-      <TextInput
-        label="Address"
-        placeholder="wss://gpu-box-01.example:8443"
-        value={address}
-        onChange={(event) => setAddress(event.currentTarget.value)}
-        error={problems.address}
-        styles={MONO_INPUT}
-      />
-      <PasswordInput
-        label="Server token"
-        placeholder="the token that server printed"
-        value={token}
-        onChange={(event) => setToken(event.currentTarget.value)}
-        error={problems.token}
-        styles={MONO_INPUT}
-      />
-      <Group>
-        <Button onClick={submit} loading={sending}>
-          Pair server
-        </Button>
-      </Group>
-      {outcome !== null &&
-        (outcome.ok ? (
-          <Text size="sm" c="dimmed">
-            {outcome.words}
-          </Text>
-        ) : (
-          <Text size="sm" style={{ color: colorForTone('blocked', scheme) }}>
-            {outcome.words}
-          </Text>
-        ))}
-    </Stack>
-  );
-}
-
-/**
- * One machine heard on the network.
- *
- * Everything the beacon claimed is shown — what it calls itself, where it says
- * it is, the port, and the protocol it speaks — because every one of those is a
- * claim and the row is how the user judges it. A machine this build cannot
- * speak to is drawn all the same, marked and with its selection refused: the
- * honest report is "it is there and these two cannot talk", and leaving it out
- * would report an empty network instead.
- */
-function CandidateRow({
-  candidate,
-  scheme,
-  onSelect,
-}: {
-  readonly candidate: DiscoveredCandidate;
-  readonly scheme: Scheme;
-  readonly onSelect: (address: string) => void;
-}): JSX.Element {
-  const prefill = prefillFromCandidate(candidate);
-  return (
-    <Paper
-      withBorder
-      radius="md"
-      p="xs"
-      style={{
-        background: colorForRole('surfaceAlt', scheme),
-        borderColor: colorForRole('border', scheme),
-      }}
-    >
-      <Group gap={10} align="center" wrap="nowrap">
-        {/* Idle, not running: this machine is offering itself, and nothing
-            about hearing it says anything is working. */}
-        <ToneDot tone={candidate.unusable === null ? 'idle' : 'blocked'} scheme={scheme} />
-        <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
-          <Text size="sm" ff="monospace">
-            {candidate.serverId}
-          </Text>
-          <Text size="xs" ff="monospace" c="dimmed">
-            {candidate.host}:{candidate.port} · protocol {candidate.protocolVersion}
-          </Text>
-          {candidate.unusable !== null && (
-            <Text size="xs" style={{ color: colorForTone('blocked', scheme) }}>
-              {candidate.unusable}
-            </Text>
-          )}
-        </Stack>
-        <Button
-          variant="default"
-          size="xs"
-          disabled={prefill === null}
-          onClick={() => {
-            if (prefill !== null) onSelect(prefill.address);
-          }}
-        >
-          Use address
-        </Button>
-      </Group>
-    </Paper>
   );
 }
 
