@@ -1,15 +1,19 @@
 /**
  * Which of two released versions is newer.
  *
- * Two questions need this and neither of them is a resolver. The passive notice
- * asks "is what is published newer than what is running", and `agentplex
- * update` asks the same thing of every installed component so that a machine
- * ahead of the manifest is told so rather than quietly moved backwards. Both
- * compare two versions that already exist. Nothing here selects a version out
- * of a set, because there is no set: `versions.json` names exactly one release
- * per component, which is why `hub@1.3` is refused at the flag (AGX-198 is the
- * ticket that would give the manifest history, and it is deliberately not this
- * one).
+ * Three questions need this and none of them is a resolver. The passive notice
+ * asks "is what is published newer than what is running"; `agentplex update`
+ * asks the same thing of every installed component so that a machine ahead of
+ * the manifest is told so rather than quietly moved backwards; and the manifest
+ * writer asks it of two keys to keep a component's history sorted newest first.
+ * All three compare two versions that already exist.
+ *
+ * Nothing here selects a version out of a set. `install.sh` does that -- it is
+ * what resolves `--role=hub@1.3` against the history `versions.json` carries --
+ * and it does it in bash, because it runs before there is a Node on the
+ * machine. So the resolver and this module are two programs by necessity, and
+ * what holds them together is that the resolver's candidates are keys this
+ * ordering wrote.
  *
  * ## What it implements, and what it does not
  *

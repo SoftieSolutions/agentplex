@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  currentRelease,
   parseVersionsManifest,
   serializeVersionsManifest,
   updateVersionsManifest,
@@ -15,17 +16,17 @@ import {
  */
 
 const current = JSON.stringify({
-  cli: { version: '1.4.0', protocol: 3 },
-  hub: { version: '1.2.0', protocol: 3 },
-  server: { version: '1.5.0', protocol: 3 },
-  web: { version: '1.1.0', protocol: 3 },
+  cli: { current: '1.4.0', releases: { '1.4.0': 3, '1.3.0': 2 } },
+  hub: { current: '1.2.0', releases: { '1.2.0': 3 } },
+  server: { current: '1.5.0', releases: { '1.5.0': 3 } },
+  web: { current: '1.1.0', releases: { '1.1.0': 3 } },
 });
 
 describe('parseVersionsManifest', () => {
   it('reads what a previous release left behind', () => {
-    expect(parseVersionsManifest('versions.json', current)['hub']).toEqual({
-      version: '1.2.0',
-      protocol: 3,
+    expect(parseVersionsManifest('versions.json', current)['cli']).toEqual({
+      current: '1.4.0',
+      releases: { '1.4.0': 3, '1.3.0': 2 },
     });
   });
 
@@ -53,49 +54,143 @@ describe('parseVersionsManifest', () => {
     ['a JSON array', '[]'],
     ['a JSON string', '"1.4.0"'],
     ['an entry that is not an object', '{"cli":"1.4.0"}'],
-    ['an entry with no protocol', '{"cli":{"version":"1.4.0"}}'],
-    ['an entry with no version', '{"cli":{"protocol":3}}'],
-    ['a version that is not one', '{"cli":{"version":"latest","protocol":3}}'],
-    ['a partial version', '{"cli":{"version":"1.4","protocol":3}}'],
-    ['a protocol that is a string', '{"cli":{"version":"1.4.0","protocol":"3"}}'],
-    ['a protocol of zero', '{"cli":{"version":"1.4.0","protocol":0}}'],
-    ['a field nobody listed', '{"cli":{"version":"1.4.0","protocol":3,"channel":"beta"}}'],
+    ['an entry with no releases', '{"cli":{"current":"1.4.0"}}'],
+    ['an entry with no current version', '{"cli":{"releases":{"1.4.0":3}}}'],
+    ['the shape before this file carried history', '{"cli":{"version":"1.4.0","protocol":3}}'],
+    ['a current version that is not one', '{"cli":{"current":"latest","releases":{"latest":3}}}'],
+    ['a partial current version', '{"cli":{"current":"1.4","releases":{"1.4":3}}}'],
+    ['a released version that is not one', '{"cli":{"current":"1.4.0","releases":{"1.4":3}}}'],
+    ['a protocol that is a string', '{"cli":{"current":"1.4.0","releases":{"1.4.0":"3"}}}'],
+    ['a protocol of zero', '{"cli":{"current":"1.4.0","releases":{"1.4.0":0}}}'],
+    ['a field nobody listed', '{"cli":{"current":"1.4.0","releases":{"1.4.0":3},"channel":"b"}}'],
   ])('refuses %s', (_name, text) => {
     expect(() => parseVersionsManifest('versions.json', text)).toThrow();
   });
 
   /**
-   * A prerelease is a version this can publish -- the workflow decides
-   * separately whether a prerelease should advance `v1` at all -- so the
-   * parser has no business refusing one.
+   * The invariant that makes the file answerable in one read. A manifest
+   * calling a version current and listing no protocol for it is a `v1` branch
+   * somebody hand-edited, and every machine that installs would read it.
+   */
+  it('refuses an entry whose current version is not one of its releases', () => {
+    expect(() =>
+      parseVersionsManifest('versions.json', '{"cli":{"current":"1.5.0","releases":{"1.4.0":3}}}'),
+    ).toThrow('versions.json');
+  });
+
+  /**
+   * A prerelease is a version this publishes and records. The workflow decides
+   * separately whether one may advance the `v1` *tree* -- it may not -- and
+   * `updateVersionsManifest` decides that it is never `current`. What it is is
+   * installable by name, which is the whole reason it is in the file.
    */
   it('accepts a prerelease version', () => {
     expect(
-      parseVersionsManifest('versions.json', '{"cli":{"version":"2.0.0-rc.1","protocol":4}}'),
-    ).toEqual({ cli: { version: '2.0.0-rc.1', protocol: 4 } });
+      parseVersionsManifest(
+        'versions.json',
+        '{"cli":{"current":"2.0.0-rc.1","releases":{"2.0.0-rc.1":4}}}',
+      ),
+    ).toEqual({ cli: { current: '2.0.0-rc.1', releases: { '2.0.0-rc.1': 4 } } });
+  });
+});
+
+describe('currentRelease', () => {
+  it('gives the version the entry calls current and the protocol it speaks', () => {
+    const entry = parseVersionsManifest('versions.json', current)['cli'];
+    if (entry === undefined) throw new Error('the fixture names a cli');
+
+    expect(currentRelease(entry)).toEqual({ version: '1.4.0', protocol: 3 });
   });
 });
 
 describe('updateVersionsManifest', () => {
   /** A tag releases one component, so a release knows one entry and inherits the rest. */
-  it('replaces one entry and leaves the others exactly as they were', () => {
+  it('appends to one component and leaves the others exactly as they were', () => {
     const previous = parseVersionsManifest('versions.json', current);
 
     const updated = updateVersionsManifest(previous, 'hub', { version: '1.3.0', protocol: 3 });
 
-    expect(updated).toEqual({
-      cli: { version: '1.4.0', protocol: 3 },
-      hub: { version: '1.3.0', protocol: 3 },
-      server: { version: '1.5.0', protocol: 3 },
-      web: { version: '1.1.0', protocol: 3 },
+    expect(updated['hub']).toEqual({ current: '1.3.0', releases: { '1.3.0': 3, '1.2.0': 3 } });
+    expect(updated['server']).toEqual({ current: '1.5.0', releases: { '1.5.0': 3 } });
+    expect(previous['hub']).toEqual({ current: '1.2.0', releases: { '1.2.0': 3 } });
+  });
+
+  /**
+   * The whole of what history is for. A patch to an older line is published
+   * after the newer line exists, and the file has to keep both -- otherwise
+   * `--role=hub@1.2` resolves to nothing the week after 1.3.0 ships.
+   */
+  it('keeps an older series when a patch to it is released after a newer one', () => {
+    const previous = updateVersionsManifest({}, 'hub', { version: '1.3.0', protocol: 3 });
+
+    const updated = updateVersionsManifest(previous, 'hub', { version: '1.2.1', protocol: 2 });
+
+    expect(updated['hub']?.releases).toEqual({ '1.3.0': 3, '1.2.1': 2 });
+  });
+
+  /**
+   * And it does not make that patch current. Every unpinned install on the
+   * fleet reads this field, so a release to an older line that moved it would
+   * downgrade all of them.
+   */
+  it('leaves current where it is when an older line is patched', () => {
+    const previous = updateVersionsManifest({}, 'hub', { version: '1.3.0', protocol: 3 });
+
+    const updated = updateVersionsManifest(previous, 'hub', { version: '1.2.1', protocol: 2 });
+
+    expect(updated['hub']?.current).toBe('1.3.0');
+  });
+
+  /**
+   * A prerelease is recorded so that `--role=hub@1.3.8-rc1` can be installed at
+   * all -- the installer refuses a pin the manifest does not list -- and is
+   * never made current, so nobody who asked for nothing in particular gets it.
+   */
+  it('records a prerelease without making it current', () => {
+    const previous = updateVersionsManifest({}, 'hub', { version: '1.3.7', protocol: 3 });
+
+    const updated = updateVersionsManifest(previous, 'hub', { version: '1.3.8-rc1', protocol: 3 });
+
+    expect(updated['hub']).toEqual({
+      current: '1.3.7',
+      releases: { '1.3.8-rc1': 3, '1.3.7': 3 },
     });
-    expect(previous['hub']).toEqual({ version: '1.2.0', protocol: 3 });
+  });
+
+  /**
+   * The one case where a prerelease is current: there is nothing else. `current`
+   * is what an unpinned install takes and the schema will not let it be absent,
+   * so the only release there is beats naming none -- and it stops being current
+   * the moment anything else ships.
+   */
+  it('makes a prerelease current only while it is the only release', () => {
+    const first = updateVersionsManifest({}, 'hub', { version: '1.0.0-rc.1', protocol: 1 });
+    expect(first['hub']?.current).toBe('1.0.0-rc.1');
+
+    const second = updateVersionsManifest(first, 'hub', { version: '1.0.0', protocol: 1 });
+    expect(second['hub']?.current).toBe('1.0.0');
+  });
+
+  /** Build metadata carries a `-` of its own, and it is not a prerelease marker. */
+  it('does not read a dash inside build metadata as a prerelease', () => {
+    const manifest = updateVersionsManifest({}, 'hub', { version: '1.4.0+build-7', protocol: 3 });
+
+    expect(manifest['hub']?.current).toBe('1.4.0+build-7');
   });
 
   it('adds a component the manifest did not carry yet', () => {
     expect(
       Object.keys(updateVersionsManifest({}, 'cli', { version: '1.0.0', protocol: 1 })),
     ).toEqual(['cli']);
+  });
+
+  /** A tag re-cut is one release published twice, not two. */
+  it('writes the same version once when it is released again', () => {
+    const previous = updateVersionsManifest({}, 'cli', { version: '1.0.0', protocol: 1 });
+
+    const updated = updateVersionsManifest(previous, 'cli', { version: '1.0.0', protocol: 2 });
+
+    expect(updated['cli']).toEqual({ current: '1.0.0', releases: { '1.0.0': 2 } });
   });
 
   /**
@@ -118,20 +213,39 @@ describe('updateVersionsManifest', () => {
    */
   it('sorts the components, so a release is a one-line diff', () => {
     const manifest = updateVersionsManifest(
-      { web: { version: '1.1.0', protocol: 3 }, cli: { version: '1.4.0', protocol: 3 } },
+      {
+        web: { current: '1.1.0', releases: { '1.1.0': 3 } },
+        cli: { current: '1.4.0', releases: { '1.4.0': 3 } },
+      },
       'hub',
       { version: '1.2.0', protocol: 3 },
     );
 
     expect(Object.keys(manifest)).toEqual(['cli', 'hub', 'web']);
   });
+
+  /**
+   * By precedence and not by string, newest first: `1.3.10` is newer than
+   * `1.3.9` and sorts above it, which no lexical ordering of these keys does.
+   */
+  it('sorts a component history newest first', () => {
+    let manifest = updateVersionsManifest({}, 'hub', { version: '1.3.9', protocol: 3 });
+    manifest = updateVersionsManifest(manifest, 'hub', { version: '1.10.0', protocol: 4 });
+    manifest = updateVersionsManifest(manifest, 'hub', { version: '1.3.10', protocol: 3 });
+
+    expect(Object.keys(manifest['hub']?.releases ?? {})).toEqual(['1.10.0', '1.3.10', '1.3.9']);
+  });
 });
 
 describe('serializeVersionsManifest', () => {
   it('writes indented JSON with a trailing newline, which is what a file on a branch is', () => {
-    const text = serializeVersionsManifest({ cli: { version: '1.4.0', protocol: 3 } });
+    const text = serializeVersionsManifest({
+      cli: { current: '1.4.0', releases: { '1.4.0': 3 } },
+    });
 
-    expect(text).toBe('{\n  "cli": {\n    "version": "1.4.0",\n    "protocol": 3\n  }\n}\n');
+    expect(text).toBe(
+      '{\n  "cli": {\n    "current": "1.4.0",\n    "releases": {\n      "1.4.0": 3\n    }\n  }\n}\n',
+    );
   });
 
   /** Round trip: what a release writes is what the next release reads back. */

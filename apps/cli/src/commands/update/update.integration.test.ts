@@ -117,10 +117,10 @@ beforeAll(async () => {
     join(mirror, 'versions.json'),
     JSON.stringify(
       {
-        cli: { version: '1.5.0', protocol: 3 },
-        hub: { version: '1.2.0', protocol: 3 },
-        server: { version: '1.5.0', protocol: 3 },
-        web: { version: '1.1.0', protocol: 3 },
+        cli: { current: '1.5.0', releases: { '1.5.0': 3 } },
+        hub: { current: '1.2.0', releases: { '1.2.0': 3 } },
+        server: { current: '1.5.0', releases: { '1.5.0': 3 } },
+        web: { current: '1.1.0', releases: { '1.1.0': 3 } },
       },
       null,
       2,
@@ -154,7 +154,7 @@ describe('agentplex update --check against a real prefix', () => {
       );
       expect(cached).toMatchObject({
         source: join(mirror, 'versions.json'),
-        manifest: { cli: { version: '1.5.0', protocol: 3 } },
+        manifest: { cli: { current: '1.5.0', releases: { '1.5.0': 3 } } },
       });
 
       // Nothing on stderr: the notice is silent when stderr is not a terminal,

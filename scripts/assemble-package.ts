@@ -1111,41 +1111,33 @@ export async function assemblePackages(options: {
 }
 
 /**
- * Where a release's loose files go: the metadata asset, and the description of
- * the release the workflow reads back.
+ * Where a release's loose files go: the description of the release the workflow
+ * reads back.
  *
  * Beside the staging directories rather than inside one. Everything in
- * `apps/<app>/release` is packed into the tarball, and neither of these belongs
- * inside the package they describe.
+ * `apps/<app>/release` is packed into the tarball, and a file describing the
+ * package does not belong inside it.
  */
 export const RELEASE_ASSETS = 'release-assets';
 
 /**
- * The small JSON published beside a tarball at every tag, carrying that
- * release's protocol.
+ * What one tag releases: the component, the version its tag names and the
+ * protocol the build it packs declares.
  *
- * It exists for one case, and it is the case the whole grammar is about:
- * `install.sh --role=hub@1.3.0` has to know what protocol 1.3.0 speaks
- * *before* it installs anything. `versions.json` cannot answer it -- that file
- * describes what is current, and a pin is by definition a request for
- * something else -- and reading the protocol out of the tarball means
- * downloading and unpacking the tarball, which is the half-installed machine
- * this is trying to prevent.
- *
- * The cost is one more small file per release. What it buys is that a pinned
- * set that cannot talk to itself is refused with both numbers named and nothing
- * written to the disk, rather than found when a hub and a server that are both
- * installed and both running decline to pair.
+ * This used to be published as well as described -- a small
+ * `<component>-v<version>.json` beside every tarball -- because
+ * `install.sh --role=hub@1.3.0` has to know what protocol 1.3.0 speaks before
+ * it installs anything, and `versions.json` described only what was current.
+ * It does not any more: the manifest carries every release of every component
+ * and the protocol each one speaks, so a pin is answered out of the file the
+ * installer fetches anyway. The second artifact, its upload and the extra
+ * download every pin used to cost went with it, and the release got smaller by
+ * giving one file more to say.
  */
 export interface ReleaseMetadata {
   readonly component: Component;
   readonly version: string;
   readonly protocol: number;
-}
-
-/** The metadata asset's name, which is its tarball's with the suffix swapped. */
-export function metadataAsset(target: PackageTarget): string {
-  return `${target.asset.replace(/\.tgz$/, '')}.json`;
 }
 
 /**
@@ -1155,18 +1147,17 @@ export function metadataAsset(target: PackageTarget): string {
  * The workflow used to read the package name and the version back out of each
  * assembled manifest, which was right when the only questions were "what is it
  * called" and "at what version". A per-component release also has to know which
- * directory to pack, what to rename the tarball to, and what to call the
- * metadata beside it -- and every one of those is a fact this module already
- * holds. A file the workflow reads with the same `node -p` it already uses
- * keeps them here, where the tag was parsed, instead of turning the workflow
- * into a second place that knows how a component maps to a directory.
+ * directory to pack and what to rename the tarball to, and both are facts this
+ * module already holds. A file the workflow reads with the same `node -p` it
+ * already uses keeps them here, where the tag was parsed, instead of turning
+ * the workflow into a second place that knows how a component maps to a
+ * directory.
  */
 export interface ReleaseDescription extends ReleaseMetadata {
   readonly package: string;
   /** Relative to the workspace root. */
   readonly directory: string;
   readonly asset: string;
-  readonly metadataAsset: string;
 }
 
 export function releaseDescription(target: PackageTarget, version: string): ReleaseDescription {
@@ -1177,13 +1168,12 @@ export function releaseDescription(target: PackageTarget, version: string): Rele
     package: target.name,
     directory: target.output,
     asset: target.asset,
-    metadataAsset: metadataAsset(target),
   };
 }
 
 /**
- * One component, at the version its tag names, plus the loose files the release
- * publishes beside its tarball.
+ * One component, at the version its tag names, plus the description of the
+ * release the workflow reads back.
  */
 export async function assembleRelease(options: {
   readonly workspaceRoot: string;
@@ -1204,8 +1194,6 @@ export async function assembleRelease(options: {
 
   const assets = join(options.workspaceRoot, RELEASE_ASSETS);
   await rm(assets, { recursive: true, force: true });
-  const metadata: ReleaseMetadata = { component, version, protocol: release.protocol };
-  await writeJson(join(assets, release.metadataAsset), metadata);
   await writeJson(join(assets, 'release.json'), release);
 
   return { assembled, release };
@@ -1240,7 +1228,7 @@ async function main(): Promise<void> {
       `assembled the ${release.component} component, ${release.package}@${release.version}, ` +
         `speaking protocol ${release.protocol}, into ${relative(workspaceRoot, assembled.directory)}`,
     );
-    log(`wrote ${RELEASE_ASSETS}/${release.metadataAsset} and ${RELEASE_ASSETS}/release.json`);
+    log(`wrote ${RELEASE_ASSETS}/release.json`);
     return;
   }
 

@@ -16,7 +16,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { HUB, metadataAsset, PACKAGES } from './assemble-package.js';
+import {
+  serializeVersionsManifest,
+  updateVersionsManifest,
+  type VersionsManifest,
+} from '@agentplex/release';
+import { PACKAGES } from './assemble-package.js';
 
 /**
  * `install.sh`, exercised the two ways it can be exercised without a machine to
@@ -138,43 +143,54 @@ const CURRENT: Readonly<Record<string, string>> = {
 
 const FIXTURE_PROTOCOL = 3;
 
-/** The manifest the release publishes on the `v1` branch, as a fixture. */
+/**
+ * The manifest a run of releases leaves on the `v1` branch, as a fixture.
+ *
+ * Folded through `updateVersionsManifest`, which is the code the release job
+ * really writes this file with, rather than assembled out of an object literal.
+ * A hand-built fixture can be a shape no release could ever produce, and this
+ * one was: the prerelease test below described a history the workflow had no
+ * way to emit, so it passed against a file that could not exist. Going through
+ * the writer means a fixture is a manifest some sequence of releases would
+ * really leave behind, and that `current` is whatever that code decides rather
+ * than whatever a test asserted.
+ *
+ * `history` is what a pin resolves against. The manifest lists every release a
+ * component has published and the installer refuses a pin it does not list, so
+ * a test about a pin says which release it is pinning to rather than naming one
+ * out of the air. Those releases are published *before* the one in `latest`,
+ * which is the order a fixture has to state because the merge is order
+ * sensitive in exactly one way -- a re-cut tag overwrites its own protocol.
+ */
 function writeVersions(
   directory: string,
-  versions: Readonly<Record<string, string>>,
-  protocols: Readonly<Record<string, number>> = {},
+  latest: Readonly<Record<string, string>> = CURRENT,
+  options: {
+    /** The protocol each component's last release speaks. */
+    readonly protocols?: Readonly<Record<string, number>>;
+    /** Releases published before it, as `<version>: <protocol>`. */
+    readonly history?: Readonly<Record<string, Readonly<Record<string, number>>>>;
+  } = {},
 ): void {
-  const entries = Object.entries(versions).map(([component, version]) => [
-    component,
-    { version, protocol: protocols[component] ?? FIXTURE_PROTOCOL },
-  ]);
-  writeFile(join(directory, 'versions.json'), JSON.stringify(Object.fromEntries(entries), null, 2));
+  let manifest: VersionsManifest = {};
+  for (const [component, version] of Object.entries(latest)) {
+    for (const [older, protocol] of Object.entries(options.history?.[component] ?? {})) {
+      manifest = updateVersionsManifest(manifest, component, { version: older, protocol });
+    }
+    manifest = updateVersionsManifest(manifest, component, {
+      version,
+      protocol: options.protocols?.[component] ?? FIXTURE_PROTOCOL,
+    });
+  }
+  writeFile(join(directory, 'versions.json'), serializeVersionsManifest(manifest).trimEnd());
 }
 
-/**
- * The metadata published beside one release's tarball, as a fixture, at the
- * path a release publishes it at: a directory per tag, holding the asset under
- * the name the assembler gave it.
- */
-function writeReleaseMetadata(
+/** The same manifest, with releases published before each component's last one. */
+function writeHistory(
   directory: string,
-  component: string,
-  version: string,
-  protocol = FIXTURE_PROTOCOL,
+  history: Readonly<Record<string, Readonly<Record<string, number>>>>,
 ): void {
-  writeFile(
-    releaseMetadataPath(directory, component, version),
-    JSON.stringify({ component, version, protocol }),
-  );
-}
-
-function releaseMetadataPath(directory: string, component: string, version: string): string {
-  const target = PACKAGES.find((candidate) => candidate.component === component);
-  if (target === undefined) throw new Error(`no package assembles ${component}`);
-  const tag = join(directory, `${component}-v${version}`);
-  mkdirSync(tag, { recursive: true });
-  chmodSync(tag, 0o777);
-  return join(tag, metadataAsset(target));
+  writeVersions(directory, CURRENT, { history });
 }
 
 /** A fixture the script reads as `nobody`, so the mode is part of writing it. */
@@ -894,7 +910,7 @@ describe('the plan a dry run prints', () => {
    */
   it('pins the command it was given a version for, and resolves the rest', () => {
     const { script, home, versions } = scratch();
-    writeReleaseMetadata(versions, 'cli', '1.2.3');
+    writeHistory(versions, { cli: { '1.2.3': FIXTURE_PROTOCOL } });
 
     const result = run(script, home, ['--dry-run', '--role=hub', '--package-version=1.2.3']);
 
@@ -1933,8 +1949,10 @@ describe('the --role grammar, which is repeatable and takes a pin', () => {
 
   it('pins each component independently when both are named', () => {
     const { script, home, versions } = scratch();
-    writeReleaseMetadata(versions, 'hub', '1.3.0');
-    writeReleaseMetadata(versions, 'server', '1.4.0');
+    writeHistory(versions, {
+      hub: { '1.3.0': FIXTURE_PROTOCOL },
+      server: { '1.4.0': FIXTURE_PROTOCOL },
+    });
 
     const result = run(script, home, ['--dry-run', '--role=hub@1.3.0', '--role=server@1.4.0']);
 
@@ -1953,7 +1971,7 @@ describe('the --role grammar, which is repeatable and takes a pin', () => {
    */
   it('pins one component and resolves the rest around it', () => {
     const { script, home, versions } = scratch();
-    writeReleaseMetadata(versions, 'hub', '1.3.0');
+    writeHistory(versions, { hub: { '1.3.0': FIXTURE_PROTOCOL } });
 
     const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
 
@@ -2034,25 +2052,27 @@ describe('the --role grammar, which is repeatable and takes a pin', () => {
   });
 
   /**
-   * The one place this grammar is narrower than an npm range, and it is
-   * narrower because delivery changed. A pin names the release tag
-   * `hub-v1.3.0`; there is no registry to resolve `1.3` against and no
-   * per-version history to resolve it from, so accepting it would mean either
-   * guessing which release was meant or building a URL that 404s partway
-   * through an install.
+   * Still narrower than an npm range, and narrower because delivery is not a
+   * registry. A pin is either a release tag or a series that resolves to one,
+   * and everything else -- a caret, a wildcard, a word -- would mean guessing
+   * which release was meant or building a URL that 404s partway through an
+   * install.
    */
-  it.each(['1.3', 'latest', '^1.3.0', '1.3.x'])('refuses the pin %s, which names no tag', (pin) => {
-    const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', `--role=hub@${pin}`]);
+  it.each(['latest', '^1.3.0', '1.3.x', 'v1.3.0', '1.2.3.4', '01.3'])(
+    'refuses the pin %s, which names neither a tag nor a series',
+    (pin) => {
+      const { script, home } = scratch();
+      const result = run(script, home, ['--dry-run', `--role=hub@${pin}`]);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`"${pin}" is not a version this can install`);
-    expect(result.stderr).toContain('hub-v<version>');
-  });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`"${pin}" is not a version this can install`);
+      expect(result.stderr).toContain('hub-v<version>');
+    },
+  );
 
   it('refuses the same shape on --package-version', () => {
     const { script, home } = scratch();
-    const result = run(script, home, ['--dry-run', '--package-version=1.3']);
+    const result = run(script, home, ['--dry-run', '--package-version=1.3.x']);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('is not a version this can install');
@@ -2128,24 +2148,64 @@ describe('the versions manifest, which is read off the network and parsed', () =
     expect(result.stderr).toContain('names no web');
   });
 
-  it.each([
-    ['a version that is not one', { cli: 'latest', hub: '1.2.0', web: '1.1.0' }, 'not a version'],
-  ])('refuses %s', (_name, entries, message) => {
-    const { script, home, versions } = scratch();
-    writeVersions(versions, entries);
-
-    const result = run(script, home, ['--dry-run', '--role=hub']);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(message);
-  });
-
-  it('refuses an entry with no protocol number', () => {
+  /**
+   * Written by hand and not through the writer, which is the only fixture here
+   * that has to be: the whole point of it is a manifest the writer would refuse
+   * to produce. A `v1` branch anybody with write access can push to is where
+   * one comes from.
+   */
+  it('refuses a current version that is not one', () => {
     const { script, home, versions } = scratch();
     writeFile(
       join(versions, 'versions.json'),
       JSON.stringify({
-        cli: { version: '1.4.0' },
+        cli: { current: 'latest', releases: { latest: FIXTURE_PROTOCOL } },
+        hub: { current: '1.2.0', releases: { '1.2.0': FIXTURE_PROTOCOL } },
+        web: { current: '1.1.0', releases: { '1.1.0': FIXTURE_PROTOCOL } },
+      }),
+    );
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('not a version');
+  });
+
+  /**
+   * The invariant that makes the file answerable in one read: what is current
+   * has to be one of the releases listed beside it, because that is where its
+   * protocol is. A manifest where the two disagree is a `v1` branch somebody
+   * hand-edited, and every installing machine reads it.
+   */
+  it('refuses an entry whose current version is not one of its releases', () => {
+    const { script, home, versions } = scratch();
+    writeFile(
+      join(versions, 'versions.json'),
+      JSON.stringify({
+        cli: { current: '1.4.0', releases: { '1.3.0': FIXTURE_PROTOCOL } },
+        hub: { current: '1.2.0', releases: { '1.2.0': FIXTURE_PROTOCOL } },
+        web: { current: '1.1.0', releases: { '1.1.0': FIXTURE_PROTOCOL } },
+      }),
+    );
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('lists no protocol beside it');
+  });
+
+  /**
+   * The shape this file had before it carried history. Nothing on the `v1`
+   * branch is ever written by hand, but the branch outlives any one release and
+   * a reader that took `{version, protocol}` for an entry with no releases would
+   * be an installer with no answer for a pin.
+   */
+  it('refuses the shape the manifest had before it carried history', () => {
+    const { script, home, versions } = scratch();
+    writeFile(
+      join(versions, 'versions.json'),
+      JSON.stringify({
+        cli: { version: '1.4.0', protocol: FIXTURE_PROTOCOL },
         hub: { version: '1.2.0', protocol: FIXTURE_PROTOCOL },
         web: { version: '1.1.0', protocol: FIXTURE_PROTOCOL },
       }),
@@ -2154,7 +2214,7 @@ describe('the versions manifest, which is read off the network and parsed', () =
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('no protocol number');
+    expect(result.stderr).toContain('gives cli no current version');
   });
 
   /**
@@ -2166,7 +2226,7 @@ describe('the versions manifest, which is read off the network and parsed', () =
    */
   it('refuses a set whose components disagree, naming both numbers', () => {
     const { script, home, versions } = scratch();
-    writeVersions(versions, CURRENT, { hub: FIXTURE_PROTOCOL + 1 });
+    writeVersions(versions, CURRENT, { protocols: { hub: FIXTURE_PROTOCOL + 1 } });
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
@@ -2183,7 +2243,7 @@ describe('the versions manifest, which is read off the network and parsed', () =
    */
   it('ignores a disagreement in a component this machine does not install', () => {
     const { script, home, versions } = scratch();
-    writeVersions(versions, CURRENT, { server: FIXTURE_PROTOCOL + 1 });
+    writeVersions(versions, CURRENT, { protocols: { server: FIXTURE_PROTOCOL + 1 } });
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
@@ -2239,15 +2299,17 @@ describe('the versions manifest, which is read off the network and parsed', () =
   });
 
   /**
-   * Nothing to resolve, so nothing is read. The manifest describes what is
-   * current, and a run that asked for something else has nothing to learn from
-   * it.
+   * Read even when nothing was left to resolve, which is the change history
+   * made. The manifest lists every release of every component, so a pinned run
+   * needs it too -- to find out what the release it was pinned to speaks, and
+   * to refuse a pin naming a release nobody published.
    */
-  it('is not read when every component this machine installs is pinned', () => {
+  it('is read even when every component this machine installs is pinned', () => {
     const { script, home, versions } = scratch();
-    writeReleaseMetadata(versions, 'cli', '1.2.3');
-    writeReleaseMetadata(versions, 'server', '1.4.0');
-    rmSync(join(versions, 'versions.json'));
+    writeHistory(versions, {
+      cli: { '1.2.3': FIXTURE_PROTOCOL },
+      server: { '1.4.0': FIXTURE_PROTOCOL },
+    });
 
     const result = run(script, home, [
       '--dry-run',
@@ -2256,24 +2318,40 @@ describe('the versions manifest, which is read off the network and parsed', () =
     ]);
 
     expect(result.status).toBe(0);
-    expect(planned(result.stdout, 'release')).toContain('every component pinned');
+    expect(planned(result.stdout, 'release')).toContain(join(versions, 'versions.json'));
+    expect(planned(result.stdout, 'protocol')).toContain(String(FIXTURE_PROTOCOL));
     expect(planned(result.stdout, 'package')).toBe(
       `${packageSpecs('server', { cli: '1.2.3', server: '1.4.0' })} into ${home}/.agentplex`,
     );
+  });
+
+  /**
+   * And a run with no manifest at all now stops, where pinning everything used
+   * to be the way around it. The trade is deliberate: one fetch of a file this
+   * script already fetches, in exchange for a protocol pre-check that covers
+   * pinned components and a partial pin that can be resolved at all.
+   */
+  it('names the mirror seam when it cannot be read', () => {
+    const { script, home, versions } = scratch();
+    rmSync(join(versions, 'versions.json'));
+
+    const result = run(script, home, ['--dry-run', '--role=server@1.4.0']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('holds no versions.json');
   });
 });
 
 describe('the protocol a pinned release speaks, checked before anything is installed', () => {
   /**
-   * The judgement call in this grammar. `versions.json` describes what is
-   * current and a pin is by definition a request for something else, so the
-   * only place a pinned release's protocol exists is at its own tag. Installing
+   * The judgement call in this grammar, and it is answered out of the manifest
+   * now rather than out of a second artifact published at each tag. Installing
    * first and checking after ends at the machine this is trying to prevent: a
    * hub and a server that are installed, running and unable to pair.
    */
   it('refuses a pinned component that speaks a different protocol', () => {
     const { script, home, versions } = scratch();
-    writeReleaseMetadata(versions, 'hub', '1.3.0', FIXTURE_PROTOCOL + 1);
+    writeHistory(versions, { hub: { '1.3.0': FIXTURE_PROTOCOL + 1 } });
 
     const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
 
@@ -2283,30 +2361,158 @@ describe('the protocol a pinned release speaks, checked before anything is insta
   });
 
   /**
-   * A pin naming a release nobody published is the other thing this catches,
-   * and it catches it before the first tarball rather than at a 404 partway
-   * through an npm install.
+   * A pin the manifest does not offer is the other thing this catches, and it
+   * catches it before the first tarball rather than at a 404 partway through an
+   * npm install.
    */
-  it('stops when the pinned release has no metadata beside it', () => {
+  it('stops when the manifest offers no such release', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--role=hub@9.9.9']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`hub-v9.9.9/${metadataAsset(HUB)}`);
+    expect(result.stderr).toContain('offers no hub release at 9.9.9');
+    expect(result.stderr).toContain('hub-v9.9.9');
   });
 
-  /** Metadata served from the wrong tag parses perfectly and describes something else. */
-  it('refuses metadata describing another component', () => {
-    const { script, home, versions } = scratch();
-    writeFile(
-      releaseMetadataPath(versions, 'hub', '1.3.0'),
-      JSON.stringify({ component: 'server', version: '1.3.0', protocol: FIXTURE_PROTOCOL }),
-    );
-
-    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
+  /**
+   * And it says what the file is rather than what exists. `v1` advertises the
+   * 1.x train, so a 2.x tag can be real and absent from it at the same time --
+   * as can any release a mirror was not given. A refusal that said the tag did
+   * not exist would be a sentence this script has no way to know is true.
+   */
+  it('refuses a release it does not offer without claiming the tag is unpublished', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=hub@2.0.0']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('describes the server component');
+    expect(result.stderr).toContain('the set of releases it advertises');
+    expect(result.stderr).not.toMatch(/there is no hub-v2\.0\.0 release/);
+  });
+});
+
+describe('a pin that names a series rather than a tag', () => {
+  /**
+   * The shape a fleet operator wanting security patches without a minor jump
+   * reaches for, and the whole reason the manifest carries history.
+   */
+  it('takes the newest release in the series, and not the newest overall', () => {
+    const { script, home, versions } = scratch();
+    writeHistory(versions, {
+      hub: { '1.2.9': FIXTURE_PROTOCOL, '1.1.4': FIXTURE_PROTOCOL },
+    });
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1.1']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toBe(
+      `${packageSpecs('hub', { ...CURRENT, hub: '1.1.4' })} into ${home}/.agentplex`,
+    );
+  });
+
+  /**
+   * Numerically and field by field, which is the reason the comparison is
+   * written out in the script rather than handed to `sort`: `1.3.10` is newer
+   * than `1.3.9` and sorts before it in every ordering that compares text.
+   */
+  it('compares the patch as a number and not as text', () => {
+    const { script, home, versions } = scratch();
+    writeHistory(versions, {
+      hub: { '1.3.9': FIXTURE_PROTOCOL, '1.3.10': FIXTURE_PROTOCOL, '1.3.2': FIXTURE_PROTOCOL },
+    });
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toContain('/hub-v1.3.10/');
+  });
+
+  /**
+   * A major on its own resolves too, and that was the open question. It is the
+   * same resolver -- a prefix at a dot boundary and the newest release under it
+   * -- so refusing it would mean a second grammar and a second refusal to
+   * explain, in exchange for withholding the pin semver says constrains the
+   * breaking axis.
+   */
+  it('takes the newest release under a major', () => {
+    const { script, home, versions } = scratch();
+    writeHistory(versions, {
+      hub: { '1.9.1': FIXTURE_PROTOCOL, '2.0.0': FIXTURE_PROTOCOL },
+    });
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toContain('/hub-v1.9.1/');
+  });
+
+  /**
+   * A series is how a fleet asks for the newest patch, and a release candidate
+   * is not one. Naming it exactly still installs it -- that is a tag, and it
+   * exists.
+   */
+  it('never resolves a series to a prerelease, and still pins one by name', () => {
+    const { script, home, versions } = scratch();
+    // The order a release job would publish them in, through the code that
+    // writes the file: the candidate lands in `releases` and never in
+    // `current`, which is what makes the second half of this test possible at
+    // all.
+    writeHistory(versions, {
+      hub: { '1.3.7': FIXTURE_PROTOCOL, '1.3.8-rc1': FIXTURE_PROTOCOL },
+    });
+
+    const series = run(script, home, ['--dry-run', '--role=hub@1.3']);
+    expect(series.status).toBe(0);
+    expect(planned(series.stdout, 'package')).toContain('/hub-v1.3.7/');
+
+    const exact = run(script, home, ['--dry-run', '--role=hub@1.3.8-rc1']);
+    expect(exact.status).toBe(0);
+    expect(planned(exact.stdout, 'package')).toContain('/hub-v1.3.8-rc1/');
+  });
+
+  /** A prefix at a dot boundary: `1.3` is not the start of `1.30`. */
+  it('does not take a series to be a prefix of a longer number', () => {
+    const { script, home, versions } = scratch();
+    writeHistory(versions, { hub: { '1.30.0': FIXTURE_PROTOCOL } });
+
+    const result = run(script, home, ['--dry-run', '--role=hub@1.3']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('offers no hub release under 1.3');
+  });
+
+  it('stops when the series holds no release at all', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=hub@7']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('offers no hub release under 7');
+  });
+
+  /** The command takes the same pins, through its own flag. */
+  it('resolves a series given to --package-version', () => {
+    const { script, home, versions } = scratch();
+    writeHistory(versions, { cli: { '1.4.7': FIXTURE_PROTOCOL } });
+
+    const result = run(script, home, ['--dry-run', '--role=hub', '--package-version=1.4']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'package')).toContain('/cli-v1.4.7/');
+  });
+
+  /**
+   * A dry run downloads nothing, so a run with no manifest to resolve against
+   * says the question went unasked rather than printing a version it guessed.
+   * An exact pin is still an answer there -- it names the tag outright.
+   */
+  it('resolves nothing without a manifest, and says so', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=server@1.4'], {
+      environment: { AGENTPLEX_VERSIONS: '' },
+    });
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'release')).toContain('server (not resolved)');
+    expect(packagePlan(result.stdout).source).not.toContain('-v');
   });
 });
 
@@ -2323,19 +2529,6 @@ describe('the release assets, which two directories have to agree about', () => 
       expect(releaseUrl(component, '1.0.0')).toContain(`/${component}-v1.0.0/${asset}`);
     },
   );
-
-  it('reads the pinned metadata at the path the release publishes it at', () => {
-    const { script, home, versions } = scratch();
-    writeReleaseMetadata(versions, 'hub', '1.3.0');
-
-    const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
-
-    expect(result.status).toBe(0);
-    // Written at the assembler's own name for the metadata asset, inside the
-    // tag directory -- which is the shape of the published URL with the host
-    // taken off the front.
-    expect(existsSync(join(versions, 'hub-v1.3.0', metadataAsset(HUB)))).toBe(true);
-  });
 });
 
 describe('the shape a prefix has to have, because --uninstall takes one', () => {
