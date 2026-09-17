@@ -761,14 +761,14 @@ describe('what the user said', () => {
 
   it('says nothing about a session nobody has spoken about', () => {
     const [row] = only(reducerWithSession().snapshot().stores).sessions;
-    expect(row?.attention).toEqual({ acknowledgedAt: null, mutedAt: null });
+    expect(row?.attention).toEqual({ acknowledgedThrough: null, mutedAt: null });
   });
 
   it('merges an acknowledgement onto the row the servers reported', () => {
     const reducer = reducerWithSession();
-    reducer.applyAttention(ref, { acknowledgedAt: START + 5, mutedAt: null });
+    reducer.applyAttention(ref, { acknowledgedThrough: START, mutedAt: null });
     const [row] = only(reducer.snapshot().stores).sessions;
-    expect(row?.attention).toEqual({ acknowledgedAt: START + 5, mutedAt: null });
+    expect(row?.attention).toEqual({ acknowledgedThrough: START, mutedAt: null });
     // The fact the machine reported is untouched: mute and acknowledgement are
     // what a person said, and neither may edit what a transcript says.
     expect(row?.descriptor.status).toBe('awaiting-permission');
@@ -778,18 +778,18 @@ describe('what the user said', () => {
   it('bumps the version, so the broadcast does not keep serving the row as it was', () => {
     const reducer = reducerWithSession();
     const before = reducer.snapshot().version;
-    reducer.applyAttention(ref, { acknowledgedAt: START, mutedAt: null });
+    reducer.applyAttention(ref, { acknowledgedThrough: START, mutedAt: null });
     expect(reducer.snapshot().version).toBeGreaterThan(before);
   });
 
   it('changes nothing when told the same thing twice', () => {
     const reducer = reducerWithSession();
-    reducer.applyAttention(ref, { acknowledgedAt: START, mutedAt: null });
+    reducer.applyAttention(ref, { acknowledgedThrough: START, mutedAt: null });
     const settled = reducer.snapshot().version;
     // Two tabs acknowledging one prompt, or a client re-asserting a mute after
     // a reconnection. Waking every client for it would make the version mean
     // "somebody clicked" rather than "something changed".
-    reducer.applyAttention(ref, { acknowledgedAt: START, mutedAt: null });
+    reducer.applyAttention(ref, { acknowledgedThrough: START, mutedAt: null });
     expect(reducer.snapshot().version).toBe(settled);
   });
 
@@ -797,7 +797,7 @@ describe('what the user said', () => {
     const reducer = reduce();
     // The order a restart produces: the rows are read off this hub's own disk
     // before any machine has answered a dial.
-    reducer.applyAttention(ref, { acknowledgedAt: START, mutedAt: START });
+    reducer.applyAttention(ref, { acknowledgedThrough: START, mutedAt: START });
     reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
     reducer.applySessions({
       holding: [],
@@ -808,39 +808,56 @@ describe('what the user said', () => {
     });
 
     const [row] = only(reducer.snapshot().stores).sessions;
-    expect(row?.attention).toEqual({ acknowledgedAt: START, mutedAt: START });
+    expect(row?.attention).toEqual({ acknowledgedThrough: START, mutedAt: START });
   });
 
   it('keeps a muted session in the list, saying exactly what it said before', () => {
     const reducer = reducerWithSession();
-    reducer.applyAttention(ref, { acknowledgedAt: null, mutedAt: START });
+    reducer.applyAttention(ref, { acknowledgedThrough: null, mutedAt: START });
     const view = only(reducer.snapshot().stores);
     expect(sessionIds(view)).toEqual(['session-1']);
     expect(view.sessions[0]?.descriptor.status).toBe('awaiting-permission');
     expect(view.sessions[0]?.attention.mutedAt).toBe(START);
   });
 
-  it('knows the sessions it has been told about, and no others', () => {
+  it("answers a known session with the provider's own last write, and others with null", () => {
     const reducer = reducerWithSession();
-    expect(reducer.knowsSession(ref)).toBe(true);
+    // The descriptor's number, which is what an acknowledgement records: a
+    // reading of the hub's clock here would be the wrong side of the one
+    // comparison this whole feature is.
+    expect(reducer.sessionActivity(ref)).toBe(START);
     expect(
-      reducer.knowsSession({
+      reducer.sessionActivity({
         storeId: store('store-work'),
         sessionId: sessionIdSchema.parse('session-9'),
       }),
-    ).toBe(false);
+    ).toBeNull();
     expect(
-      reducer.knowsSession({
+      reducer.sessionActivity({
         storeId: store('store-elsewhere'),
         sessionId: sessionIdSchema.parse('session-1'),
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
-  it('still knows a session on a machine that went away: unreachable is not gone', () => {
+  it('follows the reading: a later report answers with the later activity', () => {
+    const reducer = reducerWithSession();
+    reducer.applySessions({
+      holding: [],
+      registrationId: 'registration-laptop' as ServerRegistrationId,
+      storeId: store('store-work'),
+      sessions: [
+        session('session-1', { status: 'awaiting-permission', updatedAt: START + 30_000 }),
+      ],
+      reportedAt: START,
+    });
+    expect(reducer.sessionActivity(ref)).toBe(START + 30_000);
+  });
+
+  it('still answers for a session on a machine that went away: unreachable is not gone', () => {
     const reducer = reducerWithSession();
     reducer.applyConnection(connection('laptop', 'stale', ['store-work']));
-    expect(reducer.knowsSession(ref)).toBe(true);
+    expect(reducer.sessionActivity(ref)).toBe(START);
     // Which is the point: this is exactly the session somebody reaches for the
     // mute on, and a refusal here would be a badge that cannot be quieted.
     expect(only(reducer.snapshot().stores).sessions[0]?.reachable).toBe(false);

@@ -606,7 +606,7 @@ describe('client and hub round trips', () => {
                   server: serverRegistrationIdSchema.parse('registration-1'),
                   stoppable: true,
                 },
-                acknowledgedAt: 950,
+                acknowledgedThrough: 900,
                 mutedAt: null,
               },
             ],

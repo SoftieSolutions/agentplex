@@ -284,20 +284,27 @@ export interface FleetState {
    */
   sessionHolder(ref: SessionRef): SessionHolder | null;
   /**
-   * Whether the hub currently believes this session exists.
+   * When the provider last wrote to this session, as the hub currently
+   * believes it, or `null` when the hub knows of no such session.
    *
-   * Existence and not reachability: a session on a machine that went away
-   * keeps its row, labelled, and is still a session a person can see and act
-   * on. The one caller is the bound on the attention table -- a hub that
-   * recorded an acknowledgement for any pair of strings a client sent would
-   * have a table a client could grow without limit, and an acknowledgement of
-   * something nobody can see has nothing to be spent against.
+   * Two answers in one, because its one caller asks both at one instant: an
+   * acknowledgement is refused for a session the hub cannot see, and what it
+   * records for one it can see is exactly this number. Two calls could be
+   * answered out of two snapshots, and the pair would then describe a session
+   * as it was at two different moments.
+   *
+   * `null` is existence and not reachability: a session on a machine that went
+   * away keeps its row, labelled, and is still a session a person can see and
+   * act on -- and is exactly the session somebody reaches for the mute on.
+   * What the `null` bounds is the attention table: a hub that recorded an
+   * acknowledgement for any pair of strings a client sent would have a table a
+   * client could grow without limit.
    *
    * Here rather than worked out by the caller for the reason `sessionHolder`
    * is here: it is an answer about the merged view, and a second reader doing
    * the merge is a second answer waiting to differ from the one on screen.
    */
-  knowsSession(ref: SessionRef): boolean;
+  sessionActivity(ref: SessionRef): number | null;
   /**
    * The same state, projected onto the shape the wire carries.
    *
@@ -495,7 +502,10 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
       // the version mean "somebody clicked" rather than "something changed".
       // It happens for real: two tabs acknowledging the same prompt, and a
       // mute re-asserted by a client catching up after a reconnection.
-      if (previous.acknowledgedAt === next.acknowledgedAt && previous.mutedAt === next.mutedAt) {
+      if (
+        previous.acknowledgedThrough === next.acknowledgedThrough &&
+        previous.mutedAt === next.mutedAt
+      ) {
         return;
       }
       attention.set(key, next);
@@ -514,8 +524,8 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
       return findRow(snapshot(), ref)?.holder ?? null;
     },
 
-    knowsSession(ref: SessionRef): boolean {
-      return findRow(snapshot(), ref) !== undefined;
+    sessionActivity(ref: SessionRef): number | null {
+      return findRow(snapshot(), ref)?.descriptor.updatedAt ?? null;
     },
 
     published(): MachineState {

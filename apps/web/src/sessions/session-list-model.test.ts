@@ -270,26 +270,43 @@ describe('degradation, said in words', () => {
 });
 
 describe('an acknowledgement', () => {
-  const START = 1_756_000_000_000;
+  /** A provider's clock, which is the only clock either argument comes off. */
+  const WROTE_AT = 1_755_999_820_000;
 
-  it('holds while the session has said nothing since', () => {
-    expect(acknowledgementHolds(START, START - 1)).toBe(true);
-    expect(acknowledgementHolds(START, START)).toBe(true);
+  it('holds while the session has not been written to since', () => {
+    // Equal is the common case, not a tie-break: the hub recorded exactly this
+    // reading, and nothing has been written since.
+    expect(acknowledgementHolds(WROTE_AT, WROTE_AT)).toBe(true);
   });
 
-  it('is spent by a second prompt, which is the whole reason it is a moment', () => {
+  it('is spent by a second prompt, which is the whole reason it is a timestamp', () => {
     // A boolean set at the first prompt would still be saying yes here, and
-    // the agent sitting at the second one would never be mentioned again.
-    expect(acknowledgementHolds(START, START + 1)).toBe(false);
+    // the agent sitting at the second one would never be mentioned again. One
+    // millisecond is enough, because both numbers come off one clock -- there
+    // is no skew to leave room for.
+    expect(acknowledgementHolds(WROTE_AT, WROTE_AT + 1)).toBe(false);
+  });
+
+  it('holds for a reading older than the acknowledgement, which a late scan can produce', () => {
+    // Two servers on one volume, or a scan that arrived out of order. The
+    // session has not said anything new, so neither has this.
+    expect(acknowledgementHolds(WROTE_AT, WROTE_AT - 1_000)).toBe(true);
   });
 
   it('is absent rather than false for a session nobody has acknowledged', () => {
-    expect(acknowledgementHolds(null, START)).toBe(false);
+    expect(acknowledgementHolds(null, WROTE_AT)).toBe(false);
   });
 
   it('reads off the captured row: the acknowledged prompt is seen, the others are not', () => {
     const acknowledged = item(attended, 'migrate-db-v9');
     expect(acknowledged.acknowledged).toBe(true);
+    // The row the hub really sent: what it recorded is the session's own
+    // `updatedAt`, not the moment the click landed, so the comparison this
+    // model makes is between two readings of one provider's clock.
+    const row = attended.stores
+      .flatMap((store) => store.sessions)
+      .find((candidate) => candidate.descriptor.sessionId === 'session-migrate-db');
+    expect(row?.acknowledgedThrough).toBe(row?.descriptor.updatedAt);
     // The fact is untouched. It still wants a human and it is still in the
     // needs-you half of the list; what has changed is that it is not asking.
     expect(acknowledged.needsYou).toBe(true);
@@ -337,9 +354,16 @@ describe('what is worth interrupting somebody for', () => {
   it('never includes a session on a machine nobody can reach', () => {
     // A badge you cannot clear by looking is worse than no badge, which is the
     // rule `needsYou` already carries; this is the half that must not undo it.
-    // In the captured stale state the reachable prompt is the acknowledged one
-    // and the unreachable one is `docs-sweep`, so nothing is left asking.
+    // `docs-sweep` is on the machine that went away and is asking for nobody;
+    // the prompt on the machine that stayed is still asking, which is what
+    // keeps this from passing for the wrong reason.
+    expect(item(stale, 'docs-sweep').status).toBe('awaiting-input');
     expect(item(stale, 'docs-sweep').reachable).toBe(false);
-    expect(listSessions(stale).filter(wantsAttention)).toEqual([]);
+    expect(item(stale, 'migrate-db-v9').acknowledged).toBe(false);
+    expect(
+      listSessions(stale)
+        .filter(wantsAttention)
+        .map((entry) => entry.name),
+    ).toEqual(['migrate-db-v9']);
   });
 });

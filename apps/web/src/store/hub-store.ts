@@ -262,7 +262,7 @@ export interface AttentionView {
   readonly replyTo: FrameId;
   readonly storeId: StoreId;
   readonly sessionId: SessionId;
-  readonly acknowledgedAt: number | null;
+  readonly acknowledgedThrough: number | null;
   readonly mutedAt: number | null;
 }
 
@@ -1082,7 +1082,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
             replyTo: frame.replyTo,
             storeId: frame.storeId,
             sessionId: frame.sessionId,
-            acknowledgedAt: frame.acknowledgedAt,
+            acknowledgedThrough: frame.acknowledgedThrough,
             mutedAt: frame.mutedAt,
           },
         });

@@ -38,12 +38,12 @@ export interface SessionListItem {
   /**
    * Whether the prompt this session is sitting on has been seen.
    *
-   * Derived here and carried nowhere: the hub sends an acknowledgement moment
-   * and the moment the provider last wrote, on one row, and this is the
-   * comparison between them. An acknowledgement older than the last thing the
-   * provider said is spent -- which is what stops a session going quiet
-   * forever because somebody dismissed its first prompt and it stopped at a
-   * second one.
+   * Derived here and carried nowhere: the hub sends how far through this
+   * session somebody has looked and how far it has got, both as readings of
+   * one provider's clock, and this is the comparison between them. A session
+   * the provider has written to since is no longer acknowledged -- which is
+   * what stops one going quiet forever because somebody dismissed its first
+   * prompt and it stopped at a second.
    *
    * False for a session nobody has acknowledged, and false for one nobody
    * needs to: the flag is about the acknowledgement, not about whether
@@ -124,18 +124,30 @@ export function wantsHuman(status: SessionStatus): boolean {
  * Whether an acknowledgement still holds.
  *
  * The one rule the attention epic turns on, in one line: an acknowledgement is
- * a moment, and it holds only while the session has said nothing since. A
+ * a timestamp, and it holds only while the session has said nothing since. A
  * boolean would go sticky through a second prompt -- dismiss the first, let
  * the agent run on to a second, and a flag set once claims that one has been
- * seen too. Comparing the two moments cannot make that mistake.
+ * seen too.
  *
- * `>=` and not `>`: an acknowledgement stamped in the same millisecond as the
- * last thing the provider wrote is an acknowledgement of it. The other reading
- * would leave a badge up over a tie, which is the one direction of error a
- * person notices.
+ * Both numbers are `descriptor.updatedAt` values, off the one clock that wrote
+ * the transcript: `acknowledgedThrough` is the reading the hub saw when
+ * somebody said they had looked, and `updatedAt` is the reading now. Nothing
+ * here touches a wall clock, which is the point. The hub's clock on one side
+ * of this comparison would make the answer depend on how far the hub had
+ * drifted from the machine running the agent -- and a hub a few seconds ahead
+ * would read a second prompt as already seen, silently, which is the exact
+ * failure a timestamp was chosen over a boolean to avoid.
+ *
+ * Equal is held, and that is not a tie-break: the two numbers are equal
+ * precisely while the session has not been written to since the
+ * acknowledgement, which is the common case and the whole of what an
+ * acknowledgement claims.
  */
-export function acknowledgementHolds(acknowledgedAt: number | null, updatedAt: number): boolean {
-  return acknowledgedAt !== null && acknowledgedAt >= updatedAt;
+export function acknowledgementHolds(
+  acknowledgedThrough: number | null,
+  updatedAt: number,
+): boolean {
+  return acknowledgedThrough !== null && updatedAt <= acknowledgedThrough;
 }
 
 /**
@@ -198,7 +210,7 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         status: descriptor.status,
         tone: toneForStatus(descriptor.status),
         needsYou: wantsHuman(descriptor.status) && row.reachable,
-        acknowledged: acknowledgementHolds(row.acknowledgedAt, descriptor.updatedAt),
+        acknowledged: acknowledgementHolds(row.acknowledgedThrough, descriptor.updatedAt),
         muted: row.mutedAt !== null,
         reachable: row.reachable,
         machine: serverLabel(state, machineId),

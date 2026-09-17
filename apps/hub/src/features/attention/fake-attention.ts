@@ -29,13 +29,22 @@ export interface FakeAttention extends Attention {
 }
 
 export interface FakeAttentionOptions {
-  /** The moment this fake stamps. A number, because a fake clock is a number. */
+  /** The moment this fake stamps a mute at. */
   readonly now?: number;
+  /**
+   * The session `updatedAt` this fake acknowledges through.
+   *
+   * Its own knob rather than `now` reused, because the real feature reads two
+   * different clocks for the two verbs and a fake that used one number for
+   * both could not fail a test that conflated them.
+   */
+  readonly through?: number;
   readonly onChanged?: (ref: SessionRef, attention: SessionAttention) => void;
 }
 
 export function createFakeAttention(options: FakeAttentionOptions = {}): FakeAttention {
   const now = options.now ?? 1_000;
+  const through = options.through ?? 500;
   const rows = new Map<string, SessionAttention>();
   const acknowledged: SessionRef[] = [];
   const mutes: { ref: SessionRef; muted: boolean }[] = [];
@@ -67,14 +76,17 @@ export function createFakeAttention(options: FakeAttentionOptions = {}): FakeAtt
       acknowledged.push(ref);
       if (refusal !== null) return refusal;
       const held = rows.get(keyOf(ref)) ?? UNATTENDED;
-      return write(ref, { acknowledgedAt: now, mutedAt: held.mutedAt });
+      return write(ref, { acknowledgedThrough: through, mutedAt: held.mutedAt });
     },
 
     async setMuted(ref: SessionRef, muted: boolean): Promise<AttentionOutcome> {
       mutes.push({ ref, muted });
       if (refusal !== null) return refusal;
       const held = rows.get(keyOf(ref)) ?? UNATTENDED;
-      return write(ref, { acknowledgedAt: held.acknowledgedAt, mutedAt: muted ? now : null });
+      return write(ref, {
+        acknowledgedThrough: held.acknowledgedThrough,
+        mutedAt: muted ? now : null,
+      });
     },
 
     refuseWith(outcome: Extract<AttentionOutcome, { ok: false }>): void {

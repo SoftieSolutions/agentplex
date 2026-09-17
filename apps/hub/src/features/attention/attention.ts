@@ -31,20 +31,36 @@ import type { Database, Queryable } from '../../db/database.js';
  * reducer holds is the current reading of them, handed to it the way a
  * connection report is.
  *
- * ## The two facts, and why both are moments
+ * ## The two facts, and the two different clocks they belong to
  *
  * An acknowledgement is a timestamp, never a flag. A flag goes sticky: a
  * person answers a permission prompt, the agent runs on and stops at a second
  * one, and a boolean set once says the second prompt has been seen too. A
- * moment is spent by the session speaking again -- it is compared against the
- * `updatedAt` a provider wrote, and an acknowledgement older than that is no
- * longer an acknowledgement of anything.
+ * timestamp is spent by the session speaking again.
  *
- * That comparison is not made here and is not made anywhere in the hub. Both
- * moments travel on the same session row, so every reader reaches the same
- * verdict from the same two numbers; a third field stating the verdict could
- * only ever disagree with the two it came from, and it would have to be
- * recomputed on every clock tick rather than on every change.
+ * Which timestamp is the whole of it. What is recorded is the session's own
+ * `updatedAt` as this hub saw it at that moment -- a number a *provider* wrote
+ * into a transcript on another machine -- and never a reading of this hub's
+ * clock. The comparison downstream is against the next such number, so both
+ * sides of it come off one clock and the answer does not depend on whose watch
+ * is fast. A hub-stamped acknowledgement compared against a provider-written
+ * `updatedAt` is two unsynchronised clocks: a hub five seconds ahead reads a
+ * second prompt two seconds later as already seen, silently, which is the
+ * failure a timestamp was chosen over a boolean to avoid in the first place.
+ *
+ * That comparison is not made here and is not made anywhere in the hub. The
+ * recorded number travels on the same session row as the `updatedAt` it is
+ * compared with, so every reader reaches the same verdict from the same two
+ * numbers; a third field stating the verdict could only ever disagree with the
+ * two it came from, and it would have to be recomputed on every clock tick
+ * rather than on every change.
+ *
+ * The narrow race this leaves is one turn wide and deliberate: the hub records
+ * what it can see, and a session that spoke between the click and the frame
+ * arriving is acknowledged through a reading the person did not look at. The
+ * alternative is a client sending the number, which puts a value this hub
+ * cannot check back into the frame -- and the window it would close is the one
+ * the round trip already bounds.
  *
  * A mute is a timestamp for the same reason it is not a deletion: it silences
  * the alert and never the fact. Nothing here removes a row, hides a status or
@@ -52,28 +68,32 @@ import type { Database, Queryable } from '../../db/database.js';
  * push, and all three of those are decided by whoever is about to make a
  * noise, out of a field that is right there on the row.
  *
- * ## Stamped by the hub
+ * `mutedAt` *is* this hub's own clock, and that is not an inconsistency: it is
+ * compared with nothing. It answers "since when" for a person to read, and no
+ * rule anywhere uses it as a threshold.
  *
- * Neither frame carries a moment. The hub stamps both off its own injected
- * clock, because the stamp exists to be compared against a moment a provider
- * wrote on a third machine -- and a comparison between a browser's clock and a
- * provider's is a question about whose watch is fast. One clock stamps, one
- * clock's readings are compared, and the remaining skew (hub against provider)
- * degrades in the direction that does not over-claim: an acknowledgement born
- * behind a provider's clock reads as already spent, which leaves the badge up
- * rather than clearing one nobody has looked at.
+ * Neither frame carries either number. A client that supplied one would be
+ * making a claim about a clock nothing here can check.
  */
 
 /** What the hub records about one session's attention. */
 export interface SessionAttention {
-  /** When somebody last said they had seen this session's prompt. */
-  readonly acknowledgedAt: number | null;
-  /** When this session was muted, or `null` when it is not muted. */
+  /**
+   * The session's own `updatedAt`, as the hub saw it when somebody last said
+   * they had seen this session's prompt, or `null` when nobody has.
+   *
+   * A provider's clock, not this hub's, and named for what it means rather
+   * than for when it was written: everything that reads it compares it with
+   * another `updatedAt`, and a name ending in `At` would invite somebody to
+   * render it as a wall-clock time or compare it with one.
+   */
+  readonly acknowledgedThrough: number | null;
+  /** When this session was muted, on this hub's clock, or `null` when it is not. */
   readonly mutedAt: number | null;
 }
 
 /** Nothing said about a session, which is what most sessions have. */
-export const UNATTENDED: SessionAttention = { acknowledgedAt: null, mutedAt: null };
+export const UNATTENDED: SessionAttention = { acknowledgedThrough: null, mutedAt: null };
 
 /**
  * What a write answered, in the terms a client is answered in.
@@ -95,7 +115,7 @@ export type AttentionOutcome =
 const storedRowSchema = z.object({
   store_id: z.string().min(1),
   session_id: z.string().min(1),
-  acknowledged_at: z.int().nonnegative().nullable(),
+  acknowledged_through: z.int().nonnegative().nullable(),
   muted_at: z.int().nonnegative().nullable(),
 });
 
@@ -127,17 +147,25 @@ export interface AttentionDependencies {
    */
   readonly onChanged: (ref: SessionRef, attention: SessionAttention) => void;
   /**
-   * Whether the hub currently believes this session exists.
+   * The session's `updatedAt` as the hub currently sees it, or `null` when the
+   * hub believes there is no such session.
    *
-   * A predicate rather than the reducer itself, so that nothing in this file
+   * One function answering both of this feature's questions, because they are
+   * asked at the same instant and a second call could be answered out of a
+   * different snapshot: whether there is a session to talk about at all, and
+   * what the acknowledgement is an acknowledgement *through*.
+   *
+   * A function rather than the reducer itself, so that nothing in this file
    * imports the thing that publishes what it writes -- the same one-way edge
-   * `onChanged` keeps, stated on the read side.
+   * `onChanged` keeps, stated on the read side. The reducer imports this file,
+   * for the shape it is handed and the value it uses for a session nobody has
+   * spoken about; nothing here imports the reducer.
    *
-   * It is existence and not reachability: a session on a machine that went
+   * `null` is existence and not reachability: a session on a machine that went
    * away is still a row on screen, still says it wants a human, and is exactly
    * the session somebody reaches for the mute on.
    */
-  readonly knowsSession: (ref: SessionRef) => boolean;
+  readonly sessionActivity: (ref: SessionRef) => number | null;
 }
 
 export interface Attention {
@@ -169,7 +197,7 @@ export function createAttention({
   clock,
   logger: parent,
   onChanged,
-  knowsSession,
+  sessionActivity,
 }: AttentionDependencies): Attention {
   const logger = parent.child({ part: 'attention' });
 
@@ -199,49 +227,54 @@ export function createAttention({
    * statements is a window in which the row this hub is about to answer with
    * is not the row on disk. `excluded` names only the column being written, so
    * an acknowledgement cannot reach `muted_at` and a mute cannot reach
-   * `acknowledged_at` -- the rule the two verbs promise, stated where the
+   * `acknowledged_through` -- the rule the two verbs promise, stated where the
    * write happens rather than trusted to the caller.
    */
   const upsert = async (
     db: Queryable,
     ref: SessionRef,
-    column: 'acknowledged_at' | 'muted_at',
-    moment: number | null,
+    column: 'acknowledged_through' | 'muted_at',
+    value: number | null,
   ): Promise<void> => {
     await db.query(
-      `INSERT INTO session_attention (store_id, session_id, acknowledged_at, muted_at)
+      `INSERT INTO session_attention (store_id, session_id, acknowledged_through, muted_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT (store_id, session_id) DO UPDATE SET ${column} = excluded.${column}`,
       [
         ref.storeId,
         ref.sessionId,
-        column === 'acknowledged_at' ? moment : null,
-        column === 'muted_at' ? moment : null,
+        column === 'acknowledged_through' ? value : null,
+        column === 'muted_at' ? value : null,
       ],
     );
   };
 
   /**
-   * The one rule either verb applies, or `null` when there is nothing to
-   * refuse.
+   * The one rule either verb applies: a session this hub cannot see is refused.
    *
-   * Checked before the clock is read, so that a refused frame leaves no moment
-   * in a log that nothing ever recorded.
+   * It answers with the session's own last activity when it does not refuse,
+   * because that is the number an acknowledgement records and reading it twice
+   * would be reading two snapshots.
    */
-  const refuseUnknown = (ref: SessionRef): AttentionOutcome | null => {
-    if (knowsSession(ref)) return null;
+  const refuseUnknown = (
+    ref: SessionRef,
+  ): { readonly refusal: AttentionOutcome } | { readonly updatedAt: number } => {
+    const updatedAt = sessionActivity(ref);
+    if (updatedAt !== null) return { updatedAt };
     logger.info('attention refused', { ...ref, problem: 'no such session' });
     return {
-      ok: false,
-      code: 'refused',
-      problem: 'this hub knows no session by that id',
+      refusal: {
+        ok: false,
+        code: 'refused',
+        problem: 'this hub knows no session by that id',
+      },
     };
   };
 
   return {
     async load(): Promise<void> {
       const result = await database.query(
-        'SELECT store_id, session_id, acknowledged_at, muted_at FROM session_attention',
+        'SELECT store_id, session_id, acknowledged_through, muted_at FROM session_attention',
       );
       let loaded = 0;
       for (const row of result.rows) {
@@ -265,7 +298,7 @@ export function createAttention({
           continue;
         }
         record(refParsed.data, {
-          acknowledgedAt: parsed.data.acknowledged_at,
+          acknowledgedThrough: parsed.data.acknowledged_through,
           mutedAt: parsed.data.muted_at,
         });
         loaded += 1;
@@ -274,21 +307,29 @@ export function createAttention({
     },
 
     async acknowledge(ref: SessionRef): Promise<AttentionOutcome> {
-      const known = refuseUnknown(ref);
-      if (known !== null) return known;
-      const acknowledgedAt = clock.now();
-      await upsert(database, ref, 'acknowledged_at', acknowledgedAt);
-      return { ok: true, attention: record(ref, { acknowledgedAt, mutedAt: readOf(ref).mutedAt }) };
+      const seen = refuseUnknown(ref);
+      if ('refusal' in seen) return seen.refusal;
+      // The session's own last activity, not `clock.now()`. See the note at
+      // the top: this number exists to be compared with the next one off the
+      // same provider's clock.
+      const acknowledgedThrough = seen.updatedAt;
+      await upsert(database, ref, 'acknowledged_through', acknowledgedThrough);
+      return {
+        ok: true,
+        attention: record(ref, { acknowledgedThrough, mutedAt: readOf(ref).mutedAt }),
+      };
     },
 
     async setMuted(ref: SessionRef, muted: boolean): Promise<AttentionOutcome> {
-      const known = refuseUnknown(ref);
-      if (known !== null) return known;
+      const seen = refuseUnknown(ref);
+      if ('refusal' in seen) return seen.refusal;
+      // This hub's clock, unlike the acknowledgement above, because nothing
+      // compares it with anything: it says since when, for a person to read.
       const mutedAt = muted ? clock.now() : null;
       await upsert(database, ref, 'muted_at', mutedAt);
       return {
         ok: true,
-        attention: record(ref, { acknowledgedAt: readOf(ref).acknowledgedAt, mutedAt }),
+        attention: record(ref, { acknowledgedThrough: readOf(ref).acknowledgedThrough, mutedAt }),
       };
     },
   };

@@ -183,7 +183,7 @@ function labelFor(text: string): string {
     // the reason everything here is: the reply is one shape for two questions,
     // and what a client has to be able to read is the answer.
     if (frame.mutedAt !== null) return 'sessionMuted';
-    if (frame.acknowledgedAt !== null) return 'sessionAcknowledged';
+    if (frame.acknowledgedThrough !== null) return 'sessionAcknowledged';
     return 'sessionUnmuted';
   }
   if (frame.type === 'pane-layout') {
@@ -887,11 +887,30 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     const machineStatePopulated = await captureState(populated.hub);
 
+    // The same fleet after one machine goes away without saying so: its rows
+    // stay, labelled unreachable, and its needs-you session leaves the
+    // attention count. The degradation states are tested against this frame.
+    fleetLive.get('gpu-box.example')?.close({ code: 1006, reason: 'the machine went away' });
+    await until(
+      () =>
+        populated.hub.connections
+          .snapshot()
+          .some((report) => report.label === 'gpu-box-01' && report.phase === 'stale'),
+      'the gpu box to go stale',
+    );
+    const machineStateStale = await captureState(populated.hub);
+
+    await populated.cleanup();
+
     // Attention: the two facts on a session row that no machine reported and
-    // no scan can rebuild. Captured after `machineStatePopulated`, so that one
-    // carries the nulls a hub with nothing said to it publishes and this one
-    // carries a person's word; the mute is undone afterwards, so the states
-    // below are about a machine going away and nothing else.
+    // no scan can rebuild.
+    //
+    // Its own hub over the same fleet, rather than more conversation on the
+    // one above. The two states captured from that hub are about a machine
+    // going away and must stay about only that -- and an acknowledgement
+    // cannot be taken back, so a hub that had been spoken to could not be
+    // handed back clean. A second hub costs one more dial and keeps each
+    // fixture a claim about one thing.
     //
     // Both land on a session that is asking for a human, because that is the
     // case the whole epic turns on and the two answers to it are different
@@ -902,7 +921,23 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // differently. The unmute afterwards is the third answer this one reply
     // shape can carry, both moments null, and a client that could not read it
     // would be a client that cannot undo a mute.
-    const attender = await openClient(populated.hub);
+    const attentiveLive = new Map<string, MessageSocket>();
+    const attentive = await startFleetHub(
+      fleet,
+      [
+        { label: 'mbp-robert', host: 'mbp-robert.example' },
+        { label: 'gpu-box-01', host: 'gpu-box.example' },
+      ],
+      attentiveLive,
+    );
+    await until(
+      () =>
+        attentive.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sessionCount(attentive.hub) === 6,
+      () => `the fleet to connect and report: ${JSON.stringify(attentive.hub.state.snapshot())}`,
+    );
+
+    const attender = await openClient(attentive.hub);
     attender.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
     await attender.framesReceived(2);
     attender.send({
@@ -926,7 +961,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       () => attender.received.some((text) => labelFor(text) === 'sessionMuted'),
       'the mute to be answered',
     );
-    const machineStateAttended = await captureState(populated.hub);
+    const machineStateAttended = await captureState(attentive.hub);
 
     // An acknowledgement of a session this hub has never heard of, refused.
     // The bound on the attention table, in the words a person reads: an
@@ -958,21 +993,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const sessionMuted = firstFrame(attender, 'sessionMuted');
     const sessionUnmuted = firstFrame(attender, 'sessionUnmuted');
     const refusalAttention = firstFrame(attender, 'refusal');
-
-    // The same fleet after one machine goes away without saying so: its rows
-    // stay, labelled unreachable, and its needs-you session leaves the
-    // attention count. The degradation states are tested against this frame.
-    fleetLive.get('gpu-box.example')?.close({ code: 1006, reason: 'the machine went away' });
-    await until(
-      () =>
-        populated.hub.connections
-          .snapshot()
-          .some((report) => report.label === 'gpu-box-01' && report.phase === 'stale'),
-      'the gpu box to go stale',
-    );
-    const machineStateStale = await captureState(populated.hub);
-
-    await populated.cleanup();
+    await attentive.cleanup();
 
     // One machine, one store, one provider: the state in which no store or
     // provider narrowing may be drawn, captured rather than derived.

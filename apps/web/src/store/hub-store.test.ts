@@ -424,7 +424,9 @@ describe('commands', () => {
       replyTo: 2,
       storeId: 'store-agentplex',
       sessionId: 'session-migrate-db',
-      acknowledgedAt: 1_756_000_000_000,
+      // A `descriptor.updatedAt` value, which is what the hub records: the
+      // session's own last write, not the moment the click landed.
+      acknowledgedThrough: 1_755_999_820_000,
       mutedAt: null,
     });
 
@@ -433,7 +435,7 @@ describe('commands', () => {
       replyTo: 5,
       storeId: 'store-universe',
       sessionId: 'session-docs-sweep',
-      acknowledgedAt: null,
+      acknowledgedThrough: null,
       mutedAt: null,
     });
   });

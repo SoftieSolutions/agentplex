@@ -64,14 +64,33 @@ import { startHub, type Hub } from '../../../apps/hub/src/hub.js';
 
 const logger = createLogger('error', () => {});
 const START = 1_756_000_000_000;
-const MINUTE = 60_000;
 const CLIENT_TOKEN = 'the-client-token-typed-on-the-device';
 const HOST = '127.0.0.1';
 
 const WORK = storeIdSchema.parse('store-work');
 const PROMPTED = 'session-migrate-db';
 
-/** The hub's clock, moved by the tests: an acknowledgement is stamped off it. */
+/**
+ * When the provider wrote the first prompt, on the machine's own clock.
+ *
+ * Five minutes behind the hub's, deliberately. The two clocks in this suite
+ * are never the same number, so a hub that recorded its own time where a
+ * provider's belongs fails here rather than on somebody's laptop in a month.
+ */
+const FIRST_PROMPT = START - 5 * 60_000;
+
+/**
+ * The second prompt, one second after the first and still minutes behind the
+ * hub.
+ *
+ * This is the case the whole ticket is about, and the interval is chosen to
+ * sit *inside* the clock skew: a hub comparing its own stamp against this
+ * number would call it already seen, silently, and the agent waiting at the
+ * second prompt would never be mentioned again.
+ */
+const SECOND_PROMPT = FIRST_PROMPT + 1_000;
+
+/** The hub's clock. Nothing an acknowledgement records comes off it. */
 let now = START;
 const clock = { now: () => now };
 
@@ -290,9 +309,15 @@ function rowOf(client: Client, sessionId: string = PROMPTED): SessionRow {
   return row;
 }
 
-/** Whether the row's acknowledgement still holds: the whole rule, in one line. */
+/**
+ * Whether the row's acknowledgement still holds: the whole rule, in one line.
+ *
+ * Both numbers are readings of the provider's clock -- how far somebody has
+ * looked, and how far the session has got -- which is the point of the field
+ * being `acknowledgedThrough` rather than a moment on the hub's clock.
+ */
 function acknowledged(row: SessionRow): boolean {
-  return row.acknowledgedAt !== null && row.acknowledgedAt >= row.descriptor.updatedAt;
+  return row.acknowledgedThrough !== null && row.descriptor.updatedAt <= row.acknowledgedThrough;
 }
 
 let fleet: Fleet | null = null;
@@ -319,7 +344,7 @@ describe('an acknowledgement, over a hub and a server', () => {
     now = START;
     machine.controller.setReport({
       storeId: WORK,
-      sessions: [descriptor(PROMPTED, 'awaiting-permission', START - 5 * MINUTE)],
+      sessions: [descriptor(PROMPTED, 'awaiting-permission', FIRST_PROMPT)],
       holding: [],
     });
   });
@@ -328,7 +353,7 @@ describe('an acknowledgement, over a hub and a server', () => {
   // the server scans, and the hub dials as soon as it starts.
   machine.controller.setReport({
     storeId: WORK,
-    sessions: [descriptor(PROMPTED, 'awaiting-permission', START - 5 * MINUTE)],
+    sessions: [descriptor(PROMPTED, 'awaiting-permission', FIRST_PROMPT)],
     holding: [],
   });
 
@@ -341,39 +366,55 @@ describe('an acknowledgement, over a hub and a server', () => {
       storeId: WORK,
       sessionId: PROMPTED,
     });
-    expect(answer).toMatchObject({ type: 'session-attention', acknowledgedAt: START });
+    // The session's own last write, not the hub's clock, which is five
+    // minutes ahead of it.
+    expect(answer).toMatchObject({
+      type: 'session-attention',
+      acknowledgedThrough: FIRST_PROMPT,
+    });
+    expect(now).not.toBe(FIRST_PROMPT);
 
-    await until(() => rowOf(client).acknowledgedAt !== null, 'the acknowledgement to be published');
+    await until(
+      () => rowOf(client).acknowledgedThrough !== null,
+      'the acknowledgement to be published',
+    );
     const seen = rowOf(client);
     expect(acknowledged(seen)).toBe(true);
     // The fact itself is untouched: the session still says it wants a human,
     // and the row is still there. An acknowledgement quiets the alert.
     expect(seen.descriptor.status).toBe('awaiting-permission');
 
-    // The second prompt. The agent ran on and stopped again, which the
-    // provider records as a later write, and the scan that follows reports it.
+    // The second prompt: the agent ran on and stopped again one second later,
+    // which the provider records as a later write, and the scan that follows
+    // reports it.
     machine.controller.setReport({
       storeId: WORK,
-      sessions: [descriptor(PROMPTED, 'awaiting-permission', START + MINUTE)],
+      sessions: [descriptor(PROMPTED, 'awaiting-permission', SECOND_PROMPT)],
       holding: [],
     });
     await machine.audience?.reportToAll(WORK);
     await until(
-      () => rowOf(client).descriptor.updatedAt === START + MINUTE,
+      () => rowOf(client).descriptor.updatedAt === SECOND_PROMPT,
       'the second prompt to reach the client',
     );
 
     const again = rowOf(client);
-    // Still stamped, and no longer an acknowledgement of anything: this is the
-    // line a boolean could not have drawn.
-    expect(again.acknowledgedAt).toBe(START);
+    // Still recorded, and no longer an acknowledgement of anything: this is
+    // the line a boolean could not have drawn. It is also the line a
+    // hub-stamped moment could not have drawn -- the hub's clock is minutes
+    // past this prompt, so a stamp would still be covering it.
+    expect(again.acknowledgedThrough).toBe(FIRST_PROMPT);
+    expect(again.descriptor.updatedAt).toBeLessThan(now);
     expect(acknowledged(again)).toBe(false);
   });
 
   it('is not spent by a scan that says what the last one said', async () => {
     const { client } = await start();
     await client.ask({ type: 'session-acknowledge', storeId: WORK, sessionId: PROMPTED });
-    await until(() => rowOf(client).acknowledgedAt !== null, 'the acknowledgement to be published');
+    await until(
+      () => rowOf(client).acknowledgedThrough !== null,
+      'the acknowledgement to be published',
+    );
 
     // Servers scan on a schedule. A store nobody touched between two scans
     // reports the same descriptor, and an acknowledgement that expired on the
@@ -401,7 +442,7 @@ describe('an acknowledgement, over a hub and a server', () => {
     expect(muted.descriptor.status).toBe('awaiting-permission');
     expect(muted.reachable).toBe(true);
     expect(muted.mutedAt).toBe(START);
-    expect(muted.acknowledgedAt).toBeNull();
+    expect(muted.acknowledgedThrough).toBeNull();
   });
 
   it('survives a restart, because a hub that forgot a mute would start nagging again', async () => {
