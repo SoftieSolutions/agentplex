@@ -1,5 +1,7 @@
-import { assertNever, type ServerRegistrationId } from '@agentplex/protocol';
-import type { ProviderRowView, ServerRowView } from '../settings/server-rows.js';
+import { assertNever, type ServerRegistrationId, type StaleReason } from '@agentplex/protocol';
+import type { ServerRowView } from '../settings/server-rows.js';
+import type { ProviderRowView } from '../ui/provider-line.js';
+import type { Tone } from '../ui/tokens.js';
 
 /**
  * What the wizard says about the one machine somebody just paired, as a pure
@@ -55,6 +57,16 @@ export type PairProgress =
       readonly address: string;
       /** The row's own phase words, so a drain reads as a drain. */
       readonly words: string;
+      /**
+       * The row's own tone, because two of them reach this one state.
+       *
+       * A connected machine runs and a draining one needs a look, and the
+       * difference is the whole reason `needs-you` exists. Carrying the words
+       * without the tone left the colour to be chosen again where the card is
+       * drawn -- and a card drawing one state has one colour to choose, so
+       * every drain came out green over words that said it was shutting down.
+       */
+      readonly tone: Tone;
       readonly connectedSince: number | null;
       readonly stores: readonly string[];
       readonly providers: readonly ProviderRowView[];
@@ -64,25 +76,62 @@ export type PairProgress =
       readonly kind: 'unreachable';
       readonly label: string;
       readonly address: string;
+      /**
+       * The row's own phase words, which are not always `unreachable`.
+       *
+       * A machine that announced a shutdown and then closed is `shut down`,
+       * and that is the whole return on having been warned: the same red row,
+       * with the one word that says waiting is the answer. A headline that
+       * said `unreachable` over it would throw the warning away and send
+       * somebody to debug a machine that did exactly what it said it would.
+       */
+      readonly words: string;
       /** The hub's own sentence, or `null` when it published none. */
       readonly problem: string | null;
       readonly nextAction: string;
     };
 
 /**
- * The two things worth checking, in the direction the connection actually
- * runs, and the way out.
+ * What to do about a machine the hub could not reach, branched on the reason
+ * the hub gave.
  *
- * The hub dials the server. Advice to open a port on the hub, or to point the
- * server at the hub, would send a first-run reader to configure the wrong
- * machine -- the single most expensive misreading this product has, because
- * everything about it looks like an agent reporting home. The unpair is named
- * because the other real possibility is a typo in the address, and a wizard
- * that offers no way to undo its one irreversible-looking step is a wizard
- * people close.
+ * One sentence for every failure was wrong wherever the hub had already said
+ * something else. A server that refuses the token gets "the server refused
+ * this hub's token; pair again with the token the server printed" from the
+ * hub, and answering that with "check the port is reachable" put a firewall
+ * hunt and the real fix on the same card, arguing. The branch is over
+ * `staleReason`, which is the hub's closed union and the field it publishes
+ * for exactly this, rather than over `problem`, which is prose.
+ *
+ * The default is advice and never a diagnosis, which is what makes it safe
+ * when the reason is `null`: it names the two things worth checking and the
+ * way out, and claims nothing about what went wrong. Nothing here writes a
+ * sentence about the cause -- when the hub published no `problem`, the card
+ * shows none rather than one this file made up.
+ *
+ * All three keep the direction straight. The hub dials the server, so advice
+ * to open a port on the hub, or to point the server at the hub, would send a
+ * first-run reader to configure the wrong machine -- the most expensive
+ * misreading this product has, because everything about it looks like an agent
+ * reporting home. The unpair is named in the two cases where the row is going
+ * to stay stale: a wizard that offers no way to undo its one
+ * irreversible-looking step is a wizard people close.
  */
-const NEXT_ACTION =
-  'Check the server is running and its port is reachable from the hub; Settings can unpair it.';
+function nextActionFor(staleReason: StaleReason | null): string {
+  switch (staleReason) {
+    case 'unauthorized':
+      // Only a new token fixes this, and it is not the one the wizard was
+      // handed: setup wrote it into the server's identity file and printed it
+      // nowhere, which is where somebody has to go back to read it.
+      return "Pair again with the token from that machine's identity file; Settings can unpair the stale row.";
+    case 'protocol-version':
+      // The port is open and the token was fine. Nothing about either
+      // machine's network changes which protocol its build speaks.
+      return 'Update the server or the hub so both speak the same protocol version.';
+    default:
+      return 'Check the server is running and its port is reachable from the hub; Settings can unpair it.';
+  }
+}
 
 /**
  * The progress for one registration, read off the rows.
@@ -92,8 +141,10 @@ const NEXT_ACTION =
  * (`shutting down, 2 sessions finishing` is a phase word). Switching on the
  * prose would be re-deriving, by string match, a decision `serverRows` already
  * made -- and it could not end in `assertNever`, so a phase added later would
- * fall out of the bottom of the switch in silence. The prose is still carried
- * through to `online`, where the drain is the part worth reading.
+ * fall out of the bottom of the switch in silence. Both the prose and the tone
+ * are carried onto the state, so nothing downstream has to decide either
+ * again: the row said `needs-you` over `shutting down, 2 sessions finishing`,
+ * and that is the pair a card draws.
  *
  * `needs-you` reaches `online` on purpose: a draining machine is answering the
  * hub, so it is connected, and the wizard saying anything else about a box
@@ -119,6 +170,7 @@ export function pairProgress(
         label: row.label,
         address: row.address,
         words: row.phase,
+        tone: row.tone,
         connectedSince: row.connectedSince,
         stores: row.stores,
         providers: row.providers,
@@ -128,8 +180,9 @@ export function pairProgress(
         kind: 'unreachable',
         label: row.label,
         address: row.address,
+        words: row.phase,
         problem: row.problem,
-        nextAction: NEXT_ACTION,
+        nextAction: nextActionFor(row.staleReason),
       };
     default:
       return assertNever(row.tone, 'server row tone');

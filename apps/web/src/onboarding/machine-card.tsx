@@ -1,8 +1,8 @@
 import type { JSX, ReactNode } from 'react';
 import { assertNever } from '@agentplex/protocol';
-import type { ProviderRowView } from '../settings/server-rows.js';
 import { ageLabel } from '../sessions/session-list-model.js';
 import { Group, Paper, Stack, Text } from '../ui/components.js';
+import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
 import type { PairProgress } from './pair-progress-model.js';
@@ -65,8 +65,16 @@ export function MachineCard({ progress, scheme, now = Date.now() }: MachineCardP
         </CardFrame>
       );
     case 'online':
+      /* The tone comes off the progress and is not chosen here. Two rows read
+         as online -- a machine that is connected and one that is draining --
+         and a constant in this line drew the second one as healthy under words
+         that said it was shutting down. */
       return (
-        <CardFrame tone="running" scheme={scheme} headline={`${progress.label} ${progress.words}`}>
+        <CardFrame
+          tone={progress.tone}
+          scheme={scheme}
+          headline={`${progress.label} ${progress.words}`}
+        >
           <DetailLine
             scheme={scheme}
             text={detailFor(progress.address, progress.connectedSince, now)}
@@ -92,8 +100,13 @@ export function MachineCard({ progress, scheme, now = Date.now() }: MachineCardP
         </CardFrame>
       );
     case 'unreachable':
+      /* The headline is the row's words, not the state's name: a machine that
+         announced a shutdown and then closed reads `shut down`, which is the
+         whole return on having been warned. `blocked` is the tone of this
+         state rather than a second reading of the row -- every row that gets
+         here is one. */
       return (
-        <CardFrame tone="blocked" scheme={scheme} headline={`${progress.label} unreachable`}>
+        <CardFrame tone="blocked" scheme={scheme} headline={`${progress.label} ${progress.words}`}>
           <DetailLine scheme={scheme} text={progress.address} />
           {progress.problem !== null && (
             <Text fz={13} lh={1.6} style={{ color: colorForTone('blocked', scheme) }}>
@@ -202,37 +215,5 @@ function Sentence({
     <Text fz={13} lh={1.6} c={colorForRole('textSecondary', scheme)}>
       {children}
     </Text>
-  );
-}
-
-/**
- * One agent that machine can, or cannot, start.
- *
- * Drawn on the happy card and not only the unhappy one: a machine whose
- * `claude` is missing is connected, has its stores, and refuses every start,
- * and this is the first screen in a first run where somebody could see that
- * before their first session appears and vanishes.
- */
-function ProviderLine({
-  provider,
-  scheme,
-}: {
-  readonly provider: ProviderRowView;
-  readonly scheme: Scheme;
-}): JSX.Element {
-  return (
-    <Stack gap={0}>
-      <Group gap={6} align="center">
-        <ToneDot tone={provider.tone} scheme={scheme} />
-        <Text size="xs" ff="monospace" c="dimmed">
-          {provider.words}
-        </Text>
-      </Group>
-      {provider.problem !== null && (
-        <Text size="xs" style={{ color: colorForTone(provider.tone, scheme) }}>
-          {provider.problem}
-        </Text>
-      )}
-    </Stack>
   );
 }

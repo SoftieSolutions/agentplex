@@ -4,7 +4,9 @@ import type {
   ServerDraining,
   ServerRegistrationId,
   ServerView,
+  StaleReason,
 } from '@agentplex/protocol';
+import type { ProviderRowView } from '../ui/provider-line.js';
 import type { Tone } from '../ui/tokens.js';
 
 /**
@@ -39,6 +41,18 @@ export interface ServerRowView {
   /** What is wrong, in the hub's words, or `null` while nothing is. */
   readonly problem: string | null;
   /**
+   * Why the connection went stale, or `null` while none has -- and `null` too
+   * when the hub named no reason for one that did.
+   *
+   * It rides beside `problem` rather than inside it because the two are for
+   * different readers. `problem` is the hub's sentence, for a person; this is
+   * the hub's closed union, for a screen deciding what to offer next. A
+   * refused token and an unreachable port are the same red row and opposite
+   * instructions, and a client that told them apart by matching on the prose
+   * would be parsing English to recover something the frame already said.
+   */
+  readonly staleReason: StaleReason | null;
+  /**
    * When the connection now held was established, or `null` when none is.
    *
    * The hub stamped this with its own clock, which is why it is the one instant
@@ -67,15 +81,6 @@ export interface ServerRowView {
    * appeared and vanished, with nothing on any screen pointing at the cause.
    */
   readonly providers: readonly ProviderRowView[];
-}
-
-export interface ProviderRowView {
-  readonly name: string;
-  readonly tone: Tone;
-  /** The provider and what it is, as one short line: `claude 2.1.259`. */
-  readonly words: string;
-  /** The machine's own sentence about what is wrong, or `null`. */
-  readonly problem: string | null;
 }
 
 /**
@@ -185,6 +190,7 @@ export function serverRows(state: MachineState | null): readonly ServerRowView[]
     tone: toneFor(view),
     phase: phaseWords(view),
     problem: view.problem,
+    staleReason: view.staleReason,
     connectedSince: view.connectedSince,
     stores: view.stores,
     providers: view.providers.map(providerRow),

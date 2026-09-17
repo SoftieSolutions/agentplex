@@ -71,6 +71,19 @@ describe('the paired-server rows', () => {
     expect(stale?.connectedSince).toBeNull();
   });
 
+  it('carries the stale reason beside the words, because a screen has to act on it', () => {
+    // `problem` is a sentence to read; this is the field a screen may branch
+    // on. A token the server refused and a port nobody can reach need
+    // different next steps, and telling them apart from the prose would mean
+    // a client parsing English.
+    const [stale] = serverRows(stateFrom(hubFrames.machineStateWithServer));
+    expect(stale?.staleReason).toBe('unreachable');
+
+    // Nothing is wrong, so there is no reason to carry.
+    const [connected] = serverRows(stateFrom(hubFrames.machineStateJustPaired));
+    expect(connected?.staleReason).toBeNull();
+  });
+
   it('carries no token on any row, because no frame the hub sends has one', () => {
     const drawn = JSON.stringify(serverRows(stateFrom(hubFrames.machineStateJustPaired)));
     expect(drawn).not.toContain('tok-');
