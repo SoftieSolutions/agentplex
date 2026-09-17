@@ -1,6 +1,8 @@
+import { join, relative } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vitest/config';
+import { defineConfig, type ViteUserConfig } from 'vitest/config';
+import { TEST_TIMINGS } from './test-write-guard.js';
 
 /**
  * The one vitest configuration every Node suite in the workspace runs under,
@@ -21,6 +23,33 @@ import { defineConfig } from 'vitest/config';
  * transformed by, and it is a browser bundle that starts no child process --
  * nothing there has a home to leak.
  */
+const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
+
+/**
+ * The reporters, which are the default one unless `test-write-guard.ts` is
+ * running this suite.
+ *
+ * The guard compares two walks of the filesystem and can say when a path
+ * outside the sandbox appeared; what it cannot say on its own is which test
+ * wrote it, and "something wrote to /root" costs more to diagnose than the leak
+ * it caught. A JSON report carries a start and an end per test file, which
+ * turns that timestamp into a list of the files that were running.
+ *
+ * One file per workspace member, named after the member, because `pnpm test` is
+ * `pnpm -r test`: every member runs this config with its own `root`, and a
+ * fixed name would be nine members overwriting one report.
+ *
+ * Off unless the variable is set, so a native `pnpm test` writes nothing it did
+ * not write before.
+ */
+function reporters(): ViteUserConfig['test'] {
+  const directory = process.env[TEST_TIMINGS];
+  if (directory === undefined) return {};
+
+  const member = relative(workspaceRoot, process.cwd()).replaceAll('/', '-') || 'workspace';
+  return { reporters: ['default', ['json', { outputFile: join(directory, `${member}.json`) }]] };
+}
+
 export default defineConfig({
   test: {
     root: process.cwd(),
@@ -28,5 +57,6 @@ export default defineConfig({
     // so that a file whose tests are all skipped still gives its own back.
     globalSetup: [fileURLToPath(new URL('test-home-root.ts', import.meta.url))],
     setupFiles: [fileURLToPath(new URL('test-home.ts', import.meta.url))],
+    ...reporters(),
   },
 });

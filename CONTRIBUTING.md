@@ -26,6 +26,15 @@ pnpm docker:typecheck
 pnpm docker:test
 ```
 
+`pnpm docker:test` also checks where the suite wrote. Every suite runs with
+`$HOME` pointing at a throwaway directory — `scripts/test-home.ts` argues why —
+and the container run holds it to that by walking the filesystem before and
+after: a path that changed outside the workspace and `$TMPDIR` fails the check,
+named, together with the test files that were running when it changed. Only the
+container run does this. A laptop's filesystem is busy with a browser and an
+editor for the seconds a suite takes, so the same walk there would report their
+writes as the suite's; a native `pnpm test` is unchanged.
+
 Two further checks are about what a stranger gets rather than about this tree,
 and CI runs each under its own name for that reason:
 

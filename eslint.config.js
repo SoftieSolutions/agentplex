@@ -433,6 +433,17 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
+    // The guard that keeps the claim above true: it runs the suite in the
+    // container and fails if anything outside the workspace and `$TMPDIR`
+    // changed while it ran. Starting a child is what it is -- the two walks of
+    // the filesystem have to bracket a process this one did not join -- and the
+    // rule it lifts is about what a daemon may spawn. Nothing here ships,
+    // nothing imports it, and the one thing that runs it is a line of
+    // docker-compose.test.yml.
+    files: ['scripts/test-write-guard.ts'],
+    rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
+  },
+  {
     // The third, for the same reason as the second. This suite's subject is an
     // install script that npm runs as a program and reads an exit code from, so
     // running it as a program is the only way to assert on the exit code. The
