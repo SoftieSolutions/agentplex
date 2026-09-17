@@ -222,13 +222,13 @@ judgement in it, so that applying it across a manifest is mechanical and a
 check can enforce it afterwards.
 
 **A caret is the absence of a decision.** `pnpm add` writes one by default, so
-`^4.1.13` is what a manifest holds when nobody chose anything, which is the
-half of that sentence with nothing behind it. It is also a bound whose value is
-not in the file: `^4.1.13` stops below 5.0.0 and `^0.11.0` stops below 0.12.0,
-one character meaning two different things depending on the version it is
-attached to, so a reader applies a semver special case to learn what a manifest
-permits. Writing the bound out makes it a fact in the file rather than a
-derivation from one, and it is what lets a failing check name the bound it
+`^4.1.13` is what a manifest holds when nobody chose anything, which is exactly
+the half of that directive with nothing behind it. It is also a bound whose
+value is not in the file: `^4.1.13` stops below 5.0.0 and `^0.11.0` stops below
+0.12.0, one character meaning two different things depending on the version it
+is attached to, so a reader applies a semver special case to learn what a
+manifest permits. Writing the bound out makes it a fact in the file rather than
+a derivation from one, and it is what lets a failing check name the bound it
 wanted instead of pointing at a document.
 
 **Three forms, and nothing else.** Every value under `dependencies`,
@@ -236,14 +236,26 @@ wanted instead of pointing at a document.
 manifest in this workspace, is one of:
 
 - `workspace:*` for a sibling in this tree. It never resolves against a
-  registry, and `scripts/assemble-package.ts` replaces it with the exact
-  version it bundled before the package is published.
-- `>=x.y.z <X.0.0` for a third-party package at 1.0.0 or later, where `X` is
-  `x + 1`. The floor is the version the lockfile resolves today, not a guess at
-  the oldest that might work.
-- `x.y.z`, exact, for a package below 1.0 and for anything that compiles at
-  install. Exact is also always allowed to win an argument the other two forms
-  lost, and then the argument is written next to it.
+  registry. `scripts/assemble-package.ts` replaces it with the exact version of
+  the copy it bundled, or drops it altogether when it names one of the four
+  published packages, which is how the hub declares a client it does not
+  bundle.
+- A window, floor `x.y.z` and ceiling the next major, for a third-party package
+  at 1.0.0 or later. The floor is the version the lockfile resolves today, not
+  a guess at the oldest that might work, and the ceiling is one major above it
+  and not two: a range that spans two majors is a different rule, not a wider
+  reading of this one.
+- An exact `x.y.z`, for a package below 1.0, for anything that compiles at
+  install, and anywhere else somebody wants one. A pin is the stricter answer
+  rather than an exemption from a rule about bounds. It trades the upstream
+  patch for a version somebody ran, the commit that writes it is where that
+  trade is argued, and nothing reads a justification at check time.
+
+One range per dependency, across every manifest that declares it.
+`publishedManifest` in `scripts/assemble-package.ts` refuses to assemble a
+tarball whose manifests disagree about a name, on the grounds that the
+alternative is shipping a dependency at a version one of them was never tested
+against.
 
 **A window above 1.0, because there is a promise to take.** Inside the
 workspace a range decides nothing: the lockfile is committed, `pnpm install` in
@@ -257,17 +269,21 @@ upstream patch reach a daemon that has been running for months without waiting
 for a release of ours, and it stops where the author's compatibility promise
 stops. An exact pin there would turn every upstream patch into a release of
 ours, which is a maintenance burden we would pay in order to publish a claim we
-have no more evidence for.
+have no more evidence for. Taking the trade the other way is still allowed and
+seven dependencies already do: `@mantine/core`, `@mantine/hooks`, the two
+`@fontsource` packages, `@xterm/xterm`, `jsdom` and
+`@modelcontextprotocol/sdk`. A sweep applying this section converts carets and
+leaves every one of those alone, which is the point of admitting the form.
 
 **Exact below 1.0, because there is no promise to take.** Below 1.0 semver
-makes the minor the breaking change, so the widest honest window is
-`>=0.11.0 <0.12.0`: patch releases only, of a package whose author has not
-committed to patches being safe either. That window admits one kind of release
-and costs a second grammar, and the tree already agrees it is not worth it.
-Every dependency here below 1.0 is one of the four `@xterm/addon-*` packages,
-each pinned exactly, and nobody argued about it. Keeping it that way leaves the
-window form with exactly one shape, `<X.0.0` with `X` at least 1, so neither
-the rule nor the check that follows it has a 0.x branch.
+makes the minor the breaking change, so the widest honest window is one minor
+wide: patch releases only, of a package whose author has not committed to
+patches being safe either. That window admits one kind of release and costs a
+second grammar, and the tree already agrees it is not worth it. Every
+dependency here below 1.0 is one of the four `@xterm/addon-*` packages, each
+pinned exactly, and nobody argued about it. Keeping it that way leaves the
+window form with exactly one shape, a ceiling one major above the floor, so
+neither the rule nor the check that follows it has a 0.x branch.
 
 **Exact for anything that compiles, and `node-pty` is the instance rather than
 the exception.** A package that builds a native addon is the only kind whose
@@ -276,10 +292,11 @@ happens to have. A minor there is a different binary, and the failure it
 produces is a compiler error during somebody else's install rather than a test
 failure here, so the version has to be one that was built and run. `node-pty`
 sits at `1.1.0` in `packages/pty` for that reason, and so does the next such
-dependency. The set this can be true of is legible: `allowBuilds` in
-`pnpm-workspace.yaml` is the list of packages permitted to run an install
-script at all, and a package that cannot run one has no opportunity to compile
-anything.
+dependency. The set this can be true of is legible, and so is the reason: a
+package appears in `allowBuilds` in `pnpm-workspace.yaml` because it compiles
+something, the comment beside its entry says what, and that is the same fact
+that makes its version exact. A package with no install script to run has no
+opportunity to compile anything.
 
 **Dev tooling is held to the same rule, for a different reason.** Nothing under
 a `devDependencies` key reaches a tarball — the manifest schema in
@@ -296,31 +313,45 @@ every review about which manifest is which.
 
 **`engines` is not a dependency range, and carries no upper bound.** The root
 manifest's node floor of `>=24` and its pnpm floor of `>=11` resolve nothing
-and fetch nothing. They are evaluated against the runtime already on the
-machine, so there is no version to choose and no drift to bound: the entry
-either accepts what is there or refuses it. Capping the first at `<25` would
-make every package refuse Node 25 on the day it ships, and that refusal would
-be a claim we had tested something, when in truth nobody has run Node 25 and
-nobody has run Node 24.11 either. Only one of those two would be enforced. So
-the floors stay floors, and a check does not read the field. `packageManager` is exact already, at `pnpm@11.17.0`,
-because corepack needs one version rather than a range, and it is not a
-dependency either. `scripts/assemble-package.ts` carries `engines.node` into
-every published manifest and deliberately drops `engines.pnpm`, since a
-published package is installed by npm on a machine that has no pnpm.
+and fetch nothing. They are evaluated against whatever runtime is already on
+the machine, so there is no version to choose and no drift to bound: the entry
+accepts what it finds or refuses it. Capping node at `<25` would make every
+package refuse Node 25 on the day it ships and dress that refusal up as a test
+result, when nobody has run Node 25 and nobody has run Node 24.11 either — the
+difference being that only the refusal would be enforced. So the floors stay
+floors, and a check does not read the field.
+
+How much a floor refuses is a property of the installer and its configuration
+rather than of the entry, which is the second reason not to read one as a
+range. Measured against npm 11.16.0 and pnpm 11.17.0: npm warns on a mismatch
+and errors instead when `engine-strict=true`, which the `.npmrc` in this
+repository sets, so a wrong Node stops an npm install here and only warns for a
+stranger who has not set it; pnpm warns on the node floor even with that
+setting, and refuses on the pnpm floor whether or not it is there.
+`packageManager` is exact already, at `pnpm@11.17.0`, because corepack needs
+one version rather than a range, and it is not a dependency either.
+`scripts/assemble-package.ts` carries `engines.node` into every published
+manifest and deliberately drops `engines.pnpm`, since a published package is
+installed by npm on a machine that has no pnpm.
 
 **No git or URL dependencies.** There are none today. If one is ever needed it
 names a 40-character commit SHA, because a tag and a branch both move, and a
 dependency whose version can change with no diff anywhere is the thing this
 whole section exists to prevent.
 
-**What a check reads.** Every `package.json` in the workspace outside
-`node_modules`, and every value under the four dependency fields named above. A
-value passes when it is `workspace:*`, or an exact `x.y.z` with an optional
-prerelease suffix, or `>=x.y.z <X.0.0` written with a single space between the
-two comparators and `X` at least 1. Everything else fails, `^` and `~`
-included, and the message names the manifest, the dependency and the bound it
-wanted. `engines`, `packageManager` and anything under a `pnpm` key are not
-dependency fields and are not read.
+**What a check reads.** Every manifest git tracks, which is the root and the
+workspace members and not the assembled manifests under the `dist/` and
+`apps/*/release/` output that `.gitignore` covers, and every value under the
+four dependency fields named above. A value passes when it is `workspace:*`, or
+an exact `x.y.z` with an optional prerelease suffix, or a window written as the
+floor and the ceiling with a single space between the two comparators, where
+the ceiling is the floor's major plus one and its minor and patch are zero.
+Everything else fails: a caret, a tilde, a comparator with nothing on the other
+side, and a window reaching further than one major, so that widening one is an
+edit to this section rather than a range that quietly passes. The message names
+the manifest, the dependency and the bound it wanted. `engines`,
+`packageManager` and anything under a `pnpm` key are not dependency fields and
+are not read.
 
 ## Connectivity
 
