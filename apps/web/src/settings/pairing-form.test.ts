@@ -63,7 +63,7 @@ describe('the pairing form parser', () => {
     if (parsed.ok) return;
     expect(parsed.problems.name).toBe('expected a name for this server');
     expect(parsed.problems.address).toContain('wss://');
-    expect(parsed.problems.token).toBe('expected the token this server printed');
+    expect(parsed.problems.token).toBe("expected the token in that server's identity file");
   });
 
   it('refuses a name longer than the hub would store', () => {
@@ -109,7 +109,8 @@ describe('discovered candidates', () => {
 
   it('pre-fills and stops: what it returns cannot pair anything', () => {
     // Selecting is not a shortcut past the token. The form still wants a name
-    // and the token that server printed, and the parser is what says so.
+    // and the token out of that server's identity file, and the parser is
+    // what says so.
     const prefill = prefillFromCandidate(candidate);
     expect(prefill).not.toBeNull();
     if (prefill === null) return;
@@ -117,7 +118,7 @@ describe('discovered candidates', () => {
     expect(parsed.ok).toBe(false);
     if (parsed.ok) return;
     expect(parsed.problems.address).toBeUndefined();
-    expect(parsed.problems.token).toBe('expected the token this server printed');
+    expect(parsed.problems.token).toBe("expected the token in that server's identity file");
   });
 
   it('reads what the hub actually broadcasts, one row per machine heard', () => {
