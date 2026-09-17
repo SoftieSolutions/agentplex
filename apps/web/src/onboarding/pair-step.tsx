@@ -68,8 +68,8 @@ export function PairStep({ pairing, candidates, scheme, onDone }: PairStepProps)
       <StepTitle scheme={scheme} />
       <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
         A server is the agentplex process on a machine your agents run on. This hub dials out to it
-        and merges what it reports, so what pairing needs is an address this hub can reach and the
-        token that machine printed.
+        and merges what it reports, so what pairing needs is an address this hub can reach and that
+        machine&apos;s token, which setup wrote into its identity file and showed nowhere.
       </Text>
       <Group gap="sm">
         <Button
@@ -97,10 +97,12 @@ export function PairStep({ pairing, candidates, scheme, onDone }: PairStepProps)
       )}
       {answer === 'needs-one' && (
         <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
-          Install one on that machine first: apps/cli/README.md has the install, and the install.sh
-          it points at does the whole of it -- the runtime, the toolchain where one is needed, and
-          the unit that keeps it up. It prints a token at the end; come back here with that and the
-          address, and pick &quot;I already run a server&quot;.
+          Install one on that machine first. A later change puts the install command here; until
+          then the server&apos;s README on the machine you install on carries it, and the install.sh
+          it points at does the whole of it — the runtime, the toolchain where one is needed, and
+          the unit that keeps it up. Setup leaves that server&apos;s token in its identity file
+          (~/.agentplex/server.json by default) and shows it nowhere, so read it there; come back
+          with it and the address, and pick &quot;I already run a server&quot;.
         </Text>
       )}
     </Stack>
