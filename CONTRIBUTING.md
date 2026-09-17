@@ -235,12 +235,15 @@ the thing it could not do.
 **1. A new file in the package or feature that already owns the concern.** This
 is where almost everything belongs, and it is the rung the rest of the ladder
 exists to protect. `packages/providers` is the worked example because the claim
-was tested rather than asserted: `provider-adapter.ts` says the seam exists so
-that "the second adapter is a new file rather than an edit to the server", and
-AGX-175 added codex as the first thing permitted to disprove it. The diff is six
-new files and three touched, all inside `packages/providers`. No frame changed,
-no field was added to `ProviderAdapter`, `apps/server` was never opened, and
-registering the adapter is one line in `registered-providers.ts`.
+was tested rather than asserted: `provider-adapter.ts` says the store path is
+configuration and the adapter knows only its layout within a store, which is
+"what makes the second adapter a new file rather than an edit to the server",
+and AGX-175 added codex as the first thing permitted to disprove it. The diff is
+nine new source and test files under `packages/providers/src`, eleven captured
+fixtures beside them, and three files touched -- all of it inside
+`packages/providers`. No frame changed, no field was added to `ProviderAdapter`,
+`apps/server` was never opened, and registering the adapter is one line in
+`registered-providers.ts`.
 
 **The rung is cheap only when the seam has already been paid for, and writing
 the file is how you find out whether it has.** Two defects surfaced by drafting
@@ -254,8 +257,8 @@ not paid for is to write the second thing and watch what it drags.
 **A leak the second thing exposes is usually another file beside it, not a rung
 up.** Both provisioning files parsed npm's `--json` install report, which is a
 fact about npm and about neither provider; the second adapter is what turned one
-parser into two copies of one, and the fix (AGX-219) is `npm-install.ts` in the
-same package. The argv did not move with it, because `--no-ignore-scripts` is
+parser into two copies of one; AGX-219 (PR #179) extracts it into one module in
+the same package. The argv does not move with it, because `--no-ignore-scripts` is
 Claude Code's answer to Claude Code's postinstall, and putting it behind a
 parameter would hide a provider's own fact from the provider's own file.
 
@@ -271,22 +274,35 @@ is not an argument for a wider interface.
 
 **2. A new feature folder in the app**, when the concern is nobody's yet and
 holds state of its own. It costs a folder with one entry file, a
-`fake-<feature>.ts` beside it, a line in `HUB_FEATURES` in `eslint.config.js`
-and a line of composition in `hub.ts`, and nothing outside that app moves.
-`features/docs` (AGX-242) is `docs.ts`, `doc-rows.ts`, `fake-docs.ts` and a
-forward-only migration. Two callers are what make it a feature rather than a
-file: the client connection calls its four functions on a frame and the MCP
-document tools call the same four in the same process, and a second caller
-putting its own `doc-write` on a socket would be a second answer to what a
-document write means.
+`fake-<feature>.ts` beside it, a line in `HUB_FEATURES` in `eslint.config.js`,
+and in `hub.ts` an import, the factory call naming the seams and features it
+takes, and its entry in the composition -- and nothing outside that app moves.
+`features/docs` (AGX-242) is `docs.ts`, `doc-rows.ts`, `fake-docs.ts`, a
+forward-only migration, and a `createDocs` block in `hub.ts` whose eight
+dependencies are most of what the folder costs to reach. Two callers are what
+make it a feature rather than a file: the client connection calls its four
+functions on a frame and the MCP document tools call the same four in the same
+process, and a second caller putting its own `doc-write` on a socket would be a
+second answer to what a document write means.
 
 **3. A package, once the second consumer actually exists.** `AGENTS.md` states
 the rule -- `packages/` holds seams with at least two consumers, and one
 consumer is a folder -- and the cost is why the rule has a number in it: a
 manifest, a tsconfig, a build, a block in `eslint.config.js` naming what the
-package may import, and a place in the packaging step. `node-shared` (the hub
-and the server), `release` (the bin and `scripts/`) and `providers` each had
-both consumers on the day they were created.
+package may import, and a place in the packaging step. `release` is the clean
+case: the bin and `scripts/` both imported it the day it landed.
+
+`node-shared` and `providers` are the exception the rule allows, and it is
+narrower than it looks. Both were carved out of `apps/agentplexd` while `apps/`
+still held only that daemon and `web`, so on the day each was created it had one
+consumer and the second was a plan -- `apps/hub` and `apps/server` arrived two
+tickets later, and AGX-92's own pull request says "once `providers` and `pty`
+exist it has four consumers", in the future tense. What makes that defensible is
+that the split was not a hope: it was the epic being executed, written down in a
+design document, with the tickets that create the second consumer already filed.
+A second consumer somebody intends to write is not one, and cutting a package
+ahead of a split that is merely likely buys a manifest, a build and a lint block
+in exchange for nothing.
 
 Placement on this rung can carry more than the rule. AGX-174 put the adapter
 list in `packages/providers` rather than in `apps/cli`, which holds two of its
