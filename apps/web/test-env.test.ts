@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { TEST_ENVIRONMENT_PINS } from '../../scripts/test-env.js';
+import {
+  TEST_CREDENTIAL_VARIABLES,
+  TEST_ENVIRONMENT_PINS,
+  TEST_KEEP_CREDENTIALS,
+} from '../../scripts/test-env.js';
 
 /**
  * The same claim `scripts/test-env.test.ts` makes, asked in the one package
@@ -14,6 +18,14 @@ import { TEST_ENVIRONMENT_PINS } from '../../scripts/test-env.js';
  *
  * It sits beside `vite.config.ts`, which is the file under test.
  */
+/**
+ * The credential guard is a claim about the default run, for the reason
+ * `scripts/test-env.test.ts` gives at length: `AGENTPLEX_TEST_KEEP_CREDENTIALS`
+ * is a sanctioned mode, and a guard that failed in it would be a guard people
+ * turn off.
+ */
+const keepingCredentials = process.env[TEST_KEEP_CREDENTIALS] === '1';
+
 describe('the browser suite environment', () => {
   it('carries every pin', () => {
     for (const [name, value] of Object.entries(TEST_ENVIRONMENT_PINS)) {
@@ -26,6 +38,16 @@ describe('the browser suite environment', () => {
     // worker started would set the second and leave the first alone.
     expect(new Date('2024-01-15T12:00:00Z').getTimezoneOffset()).toBe(0);
     expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC');
+  });
+
+  it.skipIf(keepingCredentials)('carries no provider credential', () => {
+    // The other half of the one call `vite.config.ts` makes. This package
+    // spawns nothing, so a leaked key could not reach a provider from here --
+    // but the claim being checked is that this call site got the whole
+    // decision and not just the pins, and that is what a dropped call breaks.
+    for (const name of TEST_CREDENTIAL_VARIABLES) {
+      expect(process.env[name], `${name} is visible to this run`).toBeUndefined();
+    }
   });
 
   it('formats a local timestamp as the UTC one', () => {
