@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import {
+  parseHubFrame,
+  parseTextFrame,
+  type MachineState,
+  type StaleReason,
+} from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { serverRows, type ServerRowView } from '../settings/server-rows.js';
 import { pairProgress } from './pair-progress-model.js';
@@ -33,6 +38,29 @@ function onlyRow(rows: readonly ServerRowView[]): ServerRowView {
 const justPaired = rowsFrom(hubFrames.machineStateJustPaired);
 const unreachable = rowsFrom(hubFrames.machineStateWithServer);
 const draining = rowsFrom(hubFrames.machineStateDraining);
+
+/**
+ * The captured stale row, re-read with only the fields behind a refusal
+ * varied.
+ *
+ * No fixture carries one: a hub publishes `unauthorized` or
+ * `protocol-version` only after a real server has rejected a real token or a
+ * real build mismatch, and every capture here is of a hub that was never
+ * refused. So this follows what `settings/server-rows.test.ts` does for the
+ * phases the capture did not catch -- vary the two fields on a captured row
+ * and read it back through the same parser -- rather than writing a row by
+ * hand. The problem sentences are the hub's own, transcribed from
+ * `refusalText` in apps/hub/src/features/servers/server-handshake.ts.
+ */
+function staleAs(
+  staleReason: StaleReason | null,
+  problem: string | null,
+): readonly ServerRowView[] {
+  const captured = stateFrom(hubFrames.machineStateWithServer);
+  const row = captured.servers[0];
+  if (row === undefined) throw new Error('the fixture carries no server');
+  return serverRows({ ...captured, servers: [{ ...row, staleReason, problem }] });
+}
 
 describe('a registration the rows do not name yet', () => {
   it('is recorded, because the hub has answered without it', () => {
@@ -80,6 +108,7 @@ describe('a registration that answered', () => {
       label: 'mbp-robert',
       address: 'wss://mbp-robert.example:8443',
       words: 'connected',
+      tone: 'running',
       connectedSince: 1_756_000_000_000,
       stores: ['store-agentplex'],
       providers: [{ name: 'claude', tone: 'running', words: 'claude 9.9.9', problem: null }],
@@ -98,6 +127,7 @@ describe('a registration that answered', () => {
       'label',
       'providers',
       'stores',
+      'tone',
       'words',
     ]);
   });
@@ -122,6 +152,21 @@ describe('a registration that answered', () => {
       words: 'shutting down, 1 session finishing',
     });
   });
+
+  it('carries the row tone, so a machine on its way out is not a healthy one', () => {
+    // Two tones reach this one state: a connected machine runs, and a
+    // draining one needs a look. The state that kept only the words left the
+    // tone to be decided again where the card is drawn, and a card that
+    // decides it has only one answer -- so every drain was drawn green.
+    expect(pairProgress(draining, onlyRow(draining).registrationId)).toMatchObject({
+      kind: 'online',
+      tone: 'needs-you',
+    });
+    expect(pairProgress(justPaired, onlyRow(justPaired).registrationId)).toMatchObject({
+      kind: 'online',
+      tone: 'running',
+    });
+  });
 });
 
 describe('a registration the hub cannot reach', () => {
@@ -134,7 +179,63 @@ describe('a registration the hub cannot reach', () => {
       kind: 'unreachable',
       label: 'gpu-box-01',
       address: 'wss://gpu-box-01.example:8443',
+      words: 'unreachable',
       problem: 'connection refused',
+      nextAction:
+        'Check the server is running and its port is reachable from the hub; Settings can unpair it.',
+    });
+  });
+
+  it('carries the row words, so a machine that shut down is not one nobody reached', () => {
+    // The drain said this was coming and the close confirmed it. "unreachable"
+    // would throw away the one thing the warning bought: that waiting, not
+    // debugging, is the answer.
+    const rows = staleAs(
+      'draining',
+      'the server said it was shutting down with 1 session finishing, and then closed the connection',
+    );
+    expect(pairProgress(rows, onlyRow(rows).registrationId)).toMatchObject({
+      kind: 'unreachable',
+      words: 'shut down',
+    });
+  });
+
+  it('answers a refused token with the token, not with a port to check', () => {
+    // The hub already said the token was refused. Following that with "check
+    // the port is reachable" sends somebody into a firewall while the fix is a
+    // string they can read off the machine -- and the hub's sentence and the
+    // next step would be arguing with each other on one card.
+    const rows = staleAs(
+      'unauthorized',
+      "the server refused this hub's token; pair again with the token the server printed",
+    );
+    expect(pairProgress(rows, onlyRow(rows).registrationId)).toMatchObject({
+      kind: 'unreachable',
+      problem: "the server refused this hub's token; pair again with the token the server printed",
+      nextAction:
+        "Pair again with the token from that machine's identity file; Settings can unpair the stale row.",
+    });
+  });
+
+  it('answers a version mismatch with the upgrade, the only thing that fixes it', () => {
+    // The port is open and the token is fine; the two builds do not speak the
+    // same protocol. Nothing on either machine's network settings changes that.
+    const rows = staleAs('protocol-version', 'the server does not speak protocol version 21');
+    expect(pairProgress(rows, onlyRow(rows).registrationId)).toMatchObject({
+      kind: 'unreachable',
+      nextAction: 'Update the server or the hub so both speak the same protocol version.',
+    });
+  });
+
+  it('checks reachability when the hub named no reason, and invents no cause', () => {
+    // A stale row with neither a reason nor a sentence is the hub saying it
+    // does not know. The next step is still the two things worth checking --
+    // advice, not a diagnosis -- and `problem` stays null rather than being
+    // filled in with a sentence nobody sent.
+    const rows = staleAs(null, null);
+    expect(pairProgress(rows, onlyRow(rows).registrationId)).toMatchObject({
+      kind: 'unreachable',
+      problem: null,
       nextAction:
         'Check the server is running and its port is reachable from the hub; Settings can unpair it.',
     });

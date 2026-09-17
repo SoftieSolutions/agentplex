@@ -7,6 +7,7 @@ import { serverRows, type ServerRowView } from '../settings/server-rows.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
+import { colorForTone } from '../ui/tokens.js';
 import { MachineCard } from './machine-card.js';
 import { pairProgress, type PairProgress } from './pair-progress-model.js';
 
@@ -72,6 +73,17 @@ function progressFrom(text: string): PairProgress {
 const CONNECTED_SINCE = 1_756_000_000_000;
 const FOUR_MINUTES_LATER = CONNECTED_SINCE + 4 * 60_000;
 
+/**
+ * A hue as jsdom reports it once drawn: an inline hex comes back as
+ * `rgb(...)`, so the expected colour goes through the same normalisation
+ * rather than through conversion arithmetic written in a test.
+ */
+function asDrawn(color: string): string {
+  const probe = document.createElement('span');
+  probe.style.background = color;
+  return probe.style.background;
+}
+
 describe('the wizard machine card', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
@@ -117,6 +129,15 @@ describe('the wizard machine card', () => {
     return clone.textContent ?? '';
   }
 
+  /** The card's own tone dot: the round span above any provider line. */
+  function headlineDotColor(): string {
+    const dot = [...container.querySelectorAll('span')].find(
+      (span) => span.style.borderRadius === '50%',
+    );
+    if (dot === undefined) throw new Error('the card drew no tone dot');
+    return dot.style.background;
+  }
+
   it('says only that the pairing is on file while no row names it', async () => {
     await draw({ kind: 'recorded' });
 
@@ -160,6 +181,48 @@ describe('the wizard machine card', () => {
     const said = copy();
     expect(said).not.toMatch(/macOS|Linux|Windows/i);
     expect(said).not.toMatch(/daemon/i);
+  });
+
+  it('draws a draining machine in its own tone, not in a healthy one', async () => {
+    await draw(progressFrom(hubFrames.machineStateDraining));
+
+    // The socket is up and the hub is being answered, so this is the online
+    // card -- but the tone is the row's rather than a constant in the markup.
+    // A machine with fifteen seconds left on it used to be drawn exactly like
+    // one that had just come up.
+    expect(copy()).toContain('mbp-robert shutting down, 1 session finishing');
+    expect(headlineDotColor()).toBe(asDrawn(colorForTone('needs-you', 'dark')));
+    expect(headlineDotColor()).not.toBe(asDrawn(colorForTone('running', 'dark')));
+  });
+
+  it('says a machine shut down rather than that nobody could reach it', async () => {
+    // The drain warned this was coming and the row carries the word. A card
+    // that headlines every stale row "unreachable" throws that warning away
+    // and sends somebody to debug a machine that did what it said it would.
+    const captured = stateFrom(hubFrames.machineStateDraining);
+    const row = captured.servers[0];
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+    const rows = serverRows({
+      ...captured,
+      servers: [
+        {
+          ...row,
+          phase: 'stale',
+          staleReason: 'draining',
+          connectedSince: null,
+          staleSince: 1_756_000_015_000,
+          problem:
+            'the server said it was shutting down with 1 session finishing, and then closed the connection',
+        },
+      ],
+    });
+
+    await draw(pairProgress(rows, row.registrationId));
+
+    const said = copy();
+    expect(said).toContain('mbp-robert shut down');
+    expect(said).not.toMatch(/unreachable/i);
   });
 
   it('shows a dial in progress without claiming it landed', async () => {

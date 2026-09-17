@@ -13,6 +13,7 @@ import {
   Title,
   useComputedColorScheme,
 } from '../ui/components.js';
+import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
 import { ColorSchemeControl } from './color-scheme-control.js';
@@ -20,7 +21,7 @@ import type { DiscoveredCandidate } from './pairing-form.js';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import { PairingPanel } from './pairing-panel.js';
 import type { PairingOperations } from './pairing-operations.js';
-import { serverRows, type ProviderRowView, type ServerRowView } from './server-rows.js';
+import { serverRows, type ServerRowView } from './server-rows.js';
 
 /**
  * The settings screen: hub access, server pairing, and the paired-server
@@ -223,39 +224,6 @@ function HubAccessSection({
       <Anchor href={ONBOARDING_HASH} size="sm">
         Open the first-run guide
       </Anchor>
-    </Stack>
-  );
-}
-
-/**
- * One agent this machine can, or cannot, run.
- *
- * Drawn on every row rather than only on the unhappy ones: which version of
- * `claude` a box will actually start is the thing an operator comes here to
- * check, and a line that only appears when something is broken teaches nobody
- * where to look. The tone carries the verdict, the words carry the version, and
- * the machine's own sentence sits underneath when there is one.
- */
-function ProviderLine({
-  provider,
-  scheme,
-}: {
-  readonly provider: ProviderRowView;
-  readonly scheme: Scheme;
-}): JSX.Element {
-  return (
-    <Stack gap={0}>
-      <Group gap={6} align="center">
-        <ToneDot tone={provider.tone} scheme={scheme} />
-        <Text size="xs" ff="monospace" c="dimmed">
-          {provider.words}
-        </Text>
-      </Group>
-      {provider.problem !== null && (
-        <Text size="xs" style={{ color: colorForTone(provider.tone, scheme) }}>
-          {provider.problem}
-        </Text>
-      )}
     </Stack>
   );
 }
