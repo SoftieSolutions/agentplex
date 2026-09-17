@@ -55,12 +55,36 @@ const EXACT =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?$/;
 
 /**
- * The window, in the one shape it is ever written: a floor, a single space, and
- * an upper bound at a major boundary of at least 1. `[1-9]\d*` on the upper
- * major is what keeps a 0.x window -- `>=0.11.0 <0.12.0` -- out, which is the
- * exemption `CONTRIBUTING.md` declined to grant so that the form has no branch.
+ * The window's shape: a floor, a single space, a ceiling. The shape is all a
+ * regular expression can say, because the rule is arithmetic -- the ceiling is
+ * the floor's major plus one, with a zero minor and patch -- and `isWindow`
+ * below does that part.
  */
-const WINDOW = /^>=(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*) <[1-9]\d*\.0\.0$/;
+const WINDOW =
+  /^>=(0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*) <(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+/**
+ * A window, with its ceiling where the policy puts it.
+ *
+ * One major above the floor and not two. A range spanning two majors is a
+ * different rule rather than a wider reading of this one, so widening one is an
+ * edit to `CONTRIBUTING.md` and a review of it, not a value that quietly passes
+ * a lint. This is the half the grammar used to leave to inference: `X` at least
+ * 1 admitted `>=4.1.13 <9.0.0`, which broke the rule while passing the check.
+ *
+ * There is no 0.x branch here and the policy says there should not be: the
+ * formula is the same at every floor, so a floor of `0.11.0` takes a ceiling of
+ * `<1.0.0`. What keeps the tree's sub-1.0 dependencies exact is the paragraph
+ * that argues for exact pins below 1.0 -- and `wantedFor` names one, for a
+ * value that has already failed -- rather than a case in this function.
+ */
+function isWindow(value: string): boolean {
+  const [, floorMajor, ceilingMajor, ceilingMinor, ceilingPatch] = WINDOW.exec(value) ?? [];
+  if (floorMajor === undefined || ceilingMajor === undefined) return false;
+  return (
+    ceilingMajor === String(Number(floorMajor) + 1) && ceilingMinor === '0' && ceilingPatch === '0'
+  );
+}
 
 /**
  * The floor hiding inside a value that failed. Deliberately looser than the two
@@ -73,7 +97,7 @@ const FLOOR =
 
 /** Whether a value is one of the three forms the policy names. */
 export function isAllowed(value: string): boolean {
-  return value === WORKSPACE || EXACT.test(value) || WINDOW.test(value);
+  return value === WORKSPACE || EXACT.test(value) || isWindow(value);
 }
 
 /**
@@ -196,6 +220,20 @@ async function exists(path: string): Promise<boolean> {
  * Every manifest the policy covers: the root's, which is a package.json in this
  * workspace whether or not pnpm calls it a member, and one per member directory
  * that has one. Sorted, so that a failing run reads the same way twice.
+ *
+ * This is the set git tracks, reached through the member list rather than
+ * through git. The two coincide by construction: a manifest on disk that git
+ * does not track is an assembled one, under a `dist/` or an app's `release/`, and
+ * neither of those is a workspace member -- a member is a directory a glob in
+ * `pnpm-workspace.yaml` matches, and no glob reaches inside one. So the
+ * assembled manifests are not skipped by a rule that could be got wrong; they
+ * are never candidates. `git ls-files '*package.json'` returns exactly what
+ * this does, and was run to check it.
+ *
+ * Asking git directly would mean starting a child, which nothing in this
+ * directory may do: `eslint.config.js` refuses `node:child_process` under
+ * `scripts/**` and says why. Reading `.git/index` to get around that would be a
+ * worse answer than the member list, which is what the policy is about anyway.
  *
  * A member glob can match a directory with no manifest -- `tests/*` matched a
  * README once -- and that is not an offence, it is not a package.

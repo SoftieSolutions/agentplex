@@ -54,6 +54,10 @@ describe('the three forms', () => {
     '>=4.5.4 <5.0.0',
     '>=24.13.3 <25.0.0',
     '>=1.0.0 <2.0.0',
+    // The ceiling is the floor's major plus one at every floor, so this is the
+    // same formula and not a 0.x case. The tree pins below 1.0 exactly because
+    // the policy's prose argues for that, not because the grammar has a branch.
+    '>=0.11.0 <1.0.0',
   ])('takes %s', (value) => {
     expect(
       manifestOffences('package.json', JSON.stringify({ dependencies: { a: value } })),
@@ -73,6 +77,15 @@ describe('the three forms', () => {
     ['>=8.21.3', '>=8.21.3 <9.0.0'],
     // An upper bound that is not a major boundary is still not the one form.
     ['>=1.2.3 <1.5.0', '>=1.2.3 <2.0.0'],
+    ['>=1.2.3 <2.1.0', '>=1.2.3 <2.0.0'],
+    ['>=1.2.3 <2.0.1', '>=1.2.3 <2.0.0'],
+    // A window reaching past the next major. It satisfies every shape the
+    // grammar used to name -- a floor, one space, a ceiling at a major boundary
+    // above 1 -- and it is the case the policy was rewritten to refuse: two
+    // majors is a different rule, so widening one is an edit to CONTRIBUTING
+    // rather than a range that passes the lint on its way through.
+    ['>=4.1.13 <9.0.0', '>=4.1.13 <5.0.0'],
+    ['>=0.11.0 <2.0.0', '0.11.0'],
     // Two spaces between the comparators: one grammar, written one way.
     ['>=1.2.3  <2.0.0', '>=1.2.3 <2.0.0'],
     ['>= 1.2.3 <2.0.0', '>=1.2.3 <2.0.0'],
@@ -172,7 +185,31 @@ describe('the workspace it reads', () => {
         'tests/hub-server/package.json',
       ]),
     );
-    expect(manifests.filter((path) => path.split('/').includes('node_modules'))).toEqual([]);
+    // The tracked set and nothing else: `git ls-files '*package.json'` returns
+    // these twelve, and the directories `.gitignore` covers are absent because
+    // none of them is a workspace member.
+    // `.gitignore`, as paths: `apps/*/release/` names an app's staged package
+    // and not `packages/release`, which is a member with a manifest of its own.
+    const ignored = /(?:^|\/)(?:node_modules|dist|coverage|release-assets)\//;
+    expect(
+      manifests.filter((path) => ignored.test(path) || /^apps\/[^/]+\/release\//.test(path)),
+    ).toEqual([]);
+    expect(manifests.every((path) => /^(?:[^/]+\/){0,2}package\.json$/.test(path))).toBe(true);
+  });
+
+  it('reads no manifest git does not track, assembled output included', async () => {
+    const root = await syntheticWorkspace({
+      'package.json': {},
+      'pkg/a/package.json': {},
+      // What `pnpm package` leaves behind. `.gitignore` covers both, and the
+      // ranges in them are the assembler's output rather than anybody's
+      // decision, so the policy does not govern them.
+      'pkg/a/dist/package.json': { dependencies: { zod: '^4.5.4' } },
+      'pkg/a/release/package.json': { dependencies: { zod: '^4.5.4' } },
+      'pkg/a/node_modules/zod/package.json': { dependencies: { a: '^1.0.0' } },
+    });
+    expect(await workspaceManifests(root)).toEqual(['package.json', 'pkg/a/package.json']);
+    expect(await checkWorkspace(root)).toEqual([]);
   });
 
   it('skips a member directory that has no manifest of its own', async () => {
