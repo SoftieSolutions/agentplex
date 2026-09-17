@@ -68,11 +68,22 @@ function installMatchMedia(): FakeMedia {
 }
 
 /**
+ * Every scheme the probe has been rendered with, oldest first. A frame is not
+ * observable once `act` has flushed, so what a person would have seen is
+ * recorded as it is rendered.
+ */
+const painted: Scheme[] = [];
+
+/**
  * A stand-in for the screens: one element coloured the way every tone dot in
  * the app is coloured, so the assertions can read the hue a person would see.
  */
 function ToneProbe(): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
+  // Written during render on purpose: this is the record of what was painted,
+  // and an effect would only ever see the last of it. Nothing reads it back
+  // during a render, and the suite mounts no StrictMode.
+  painted.push(scheme);
   return (
     <span data-testid="probe" data-scheme={scheme} data-running={colorForTone('running', scheme)} />
   );
@@ -98,6 +109,7 @@ describe('the colour scheme control', () => {
     installResizeObserver();
     window.localStorage.clear();
     document.documentElement.removeAttribute('data-mantine-color-scheme');
+    painted.length = 0;
     container = document.createElement('div');
     document.body.append(container);
   });
@@ -219,6 +231,19 @@ describe('the colour scheme control', () => {
     // The segment shows what was chosen, not what it resolved to: the standing
     // instruction is still to follow the device.
     expect(segment('system').checked).toBe(true);
+  });
+
+  it('paints a light device light on the first frame, with no flash of the dark palette', async () => {
+    window.localStorage.setItem(COLOR_SCHEME_STORAGE_KEY, 'auto');
+    media.prefersDark = false;
+
+    await mount();
+
+    // Not just "it ends up light": the whole record, because the scheme
+    // reaches the screens as inline hues read at paint. Mantine's default is
+    // to answer the media query in an effect, which would put one dark frame
+    // in front of this.
+    expect(painted).toEqual(['light']);
   });
 
   it('stops following the device once a scheme is chosen outright', async () => {
