@@ -169,4 +169,47 @@ describe('reading a project back', () => {
     expect(await feature.directoryOf(made.nodeId)).toBeNull();
     expect(await db().query('SELECT node_id FROM projects')).toMatchObject({ rowCount: 0 });
   });
+
+  /**
+   * The listing, which is the join the side table always meant to cost: the
+   * name is the node's and the directory is the project row's, and neither is
+   * a project on its own.
+   */
+  it('lists every project with the name off its node and the directory off its row', async () => {
+    const feature = projects();
+    await feature.create({ name: 'agentplex', directory: '/srv/work/agentplex' });
+
+    expect(await feature.list()).toEqual([
+      { nodeId: 'node-1', name: 'agentplex', directory: '/srv/work/agentplex' },
+    ]);
+  });
+
+  it('lists by name, so two calls hand back one order', async () => {
+    const feature = projects();
+    await feature.create({ name: 'web', directory: '/srv/work/web' });
+    await feature.create({ name: 'agentplex', directory: '/srv/work/agentplex' });
+
+    // Insertion order is the other candidate and it is the wrong one: an agent
+    // reads this listing to pick the row it is about to start in, and a list
+    // that reorders itself as somebody makes a project is one it has to read
+    // twice.
+    expect((await feature.list()).map((project) => project.name)).toEqual(['agentplex', 'web']);
+  });
+
+  it('answers a hub with no projects with an empty list', async () => {
+    expect(await projects().list()).toEqual([]);
+  });
+
+  it('drops a project whose node has gone, because the pair is what a project is', async () => {
+    const feature = projects();
+    const made = await feature.create({ name: 'agentplex', directory: '/srv/work' });
+    if (!made.ok) throw new Error('the project should have been made');
+
+    await db().query('DELETE FROM nodes WHERE id = ?', [made.nodeId]);
+
+    // The cascade above is what makes this true, and the join is what makes it
+    // true even if that cascade ever stopped being: a row with no node has no
+    // name, and a project with no name is not something to put in a listing.
+    expect(await feature.list()).toEqual([]);
+  });
 });

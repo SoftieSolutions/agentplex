@@ -1,5 +1,5 @@
-import { docNameSchema, nodeIdSchema, DOC_NAME_EXTENSIONS } from '@agentplex/protocol';
-import type { DocName, NodeId } from '@agentplex/protocol';
+import { docNameSchema, DOC_NAME_EXTENSIONS } from '@agentplex/protocol';
+import type { DocName } from '@agentplex/protocol';
 import type { DocRefusal } from '../docs/docs.js';
 import { refuses, type McpAnswer } from './tool-registry.js';
 
@@ -16,13 +16,9 @@ import { refuses, type McpAnswer } from './tool-registry.js';
  * ## A node id, and never a path
  *
  * These tools name a project by node id and a document by node id or by name
- * in a project, and there is nowhere in any of them to put a directory. That
- * is not politeness about argument design: the hub is the only party that
- * turns a node into a path, on the machine that holds the file, and a tool
- * that took a path would be an agent choosing where a write lands -- the one
- * thing `client.ts` shapes the document frames to make unrepresentable. The
- * MCP endpoint is a projection of what a client may ask for, and a client may
- * not ask for that either.
+ * in a project, and there is nowhere in any of them to put a directory.
+ * `node-args.ts` holds the id half and the argument for it; what is left here
+ * is the half that is a document's alone.
  *
  * ## Why a parse and not a cast
  *
@@ -33,13 +29,6 @@ import { refuses, type McpAnswer } from './tool-registry.js';
  * `doc.ts` refuses to let a convention decide. `safeParse`, so the refusal is
  * words rather than a throw carrying zod's.
  */
-
-/** A project or a document, as the hub's tree names one. */
-export function parsedNodeId(nodeId: string): McpAnswer<NodeId> {
-  const parsed = nodeIdSchema.safeParse(nodeId);
-  if (!parsed.success) return refuses('a node id is one to two hundred characters');
-  return { ok: true, value: parsed.data };
-}
 
 /**
  * What a document may be called.

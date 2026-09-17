@@ -1,7 +1,8 @@
 import { DOC_CONTENT_MAX_CHARS, type NodeId } from '@agentplex/protocol';
 import { z } from 'zod';
 import type { DocSaved } from '../docs/docs.js';
-import { parsedNodeId, refusedDoc } from './doc-args.js';
+import { refusedDoc } from './doc-args.js';
+import { parsedNodeId } from './node-args.js';
 import { acts, answers, defineMcpTool, type McpTool } from './tool-registry.js';
 
 /**

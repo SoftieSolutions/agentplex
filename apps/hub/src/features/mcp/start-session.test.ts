@@ -1,4 +1,9 @@
-import { serverRegistrationIdSchema, startIdSchema, storeIdSchema } from '@agentplex/protocol';
+import {
+  nodeIdSchema,
+  serverRegistrationIdSchema,
+  startIdSchema,
+  storeIdSchema,
+} from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
 import { startSessionTool } from './start-session.js';
@@ -19,6 +24,7 @@ import { callTool, type ToolCall } from './test-tool-call.js';
 const WORK = storeIdSchema.parse('store-work');
 const ATTIC = serverRegistrationIdSchema.parse('registration-attic');
 const START = startIdSchema.parse('start-1');
+const HUB_PROJECT = nodeIdSchema.parse('node-hub');
 
 const started = {
   ok: true,
@@ -51,9 +57,8 @@ describe('start_session', () => {
 
     // The whole request, field by field, because what is not on it is the
     // subject: there is no argv, no environment and no working directory here,
-    // and the one piece of user content is the prompt. `project` is on the
-    // frame and is `null`, which is the store's own directory -- an agent that
-    // may name one is AGX-249, and this asserts that this build does not.
+    // and the one piece of user content is the prompt. `project` is `null`
+    // because this caller named none, which is the store's own directory.
     expect(sessions.starts).toEqual([
       {
         storeId: WORK,
@@ -66,16 +71,82 @@ describe('start_session', () => {
     ]);
   });
 
-  it('names no project, however the caller spells one', async () => {
+  it('passes the project a caller named through as the node id it is', async () => {
+    const sessions = createFakeSessions({ outcome: started });
+
+    await starting(sessions, { projectId: HUB_PROJECT });
+
+    // A node id and nothing else. Where that project is, and whether any
+    // machine will spawn there, are the sessions feature's to answer out of
+    // this hub's own rows -- this tool holds no directory to be wrong about.
+    expect(sessions.starts[0]?.project).toBe(HUB_PROJECT);
+  });
+
+  it('names no directory, however the caller spells one', async () => {
     const sessions = createFakeSessions({ outcome: started });
 
     // A directory is the thing the frame shape exists to make unrepresentable,
-    // and a project is a decision nobody has taken yet. Neither has anywhere to
-    // go: the SDK drops what the input schema does not declare, so a caller
-    // that tried lands on a request with `project: null` like every other.
-    await starting(sessions, { project: 'node-anything', cwd: '/volumes/work' });
+    // and none of these spellings has anywhere to go: the SDK drops what the
+    // input schema does not declare, so a caller that tried lands on the same
+    // request as one that did not.
+    await starting(sessions, {
+      cwd: '/volumes/work',
+      directory: '/volumes/work',
+      path: '/volumes/work',
+      project: '/volumes/work',
+    });
 
     expect(sessions.starts[0]?.project).toBeNull();
+  });
+
+  it('refuses a project id that is not one, before the rows are asked', async () => {
+    const sessions = createFakeSessions({ outcome: started });
+
+    const result = await starting(sessions, { projectId: 'x'.repeat(201) });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe('a node id is one to two hundred characters');
+    expect(sessions.starts).toHaveLength(0);
+  });
+
+  it('hands back the feature refusal for a project this hub does not have', async () => {
+    const sessions = createFakeSessions({
+      outcome: {
+        ok: false,
+        code: 'refused',
+        problem: 'this hub has no project by that id',
+        holder: null,
+      },
+    });
+
+    const result = await starting(sessions, { projectId: HUB_PROJECT });
+
+    // Decided in `sessions.ts` against the rows and not here, which is the
+    // whole point of the tool being the feature call: an agent gets the
+    // sentence a browser's own frame gets.
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe('this hub has no project by that id');
+  });
+
+  it('hands back the machine own words when it will not open the directory', async () => {
+    const sessions = createFakeSessions({
+      outcome: {
+        ok: false,
+        code: 'refused',
+        problem: 'no directory this server is configured to browse holds /volumes/elsewhere',
+        holder: null,
+      },
+    });
+
+    const result = await starting(sessions, { projectId: HUB_PROJECT });
+
+    // The refusal comes from the box that would have spawned, and it names the
+    // path because it is the one party entitled to: the roots are its
+    // operator's and the sentence is what somebody would go and change.
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe(
+      'no directory this server is configured to browse holds /volumes/elsewhere',
+    );
   });
 
   it('leaves a prompt nobody gave as null rather than undefined', async () => {
@@ -191,8 +262,15 @@ describe('start_session', () => {
 
     // A start that could name a session is a resume, which this tool is not.
     // Asserted on the published schema rather than in prose, because the schema
-    // is what a model is handed.
-    expect(Object.keys(tool.input).sort()).toEqual(['prompt', 'provider', 'server', 'storeId']);
+    // is what a model is handed -- and what is on it is four names and a
+    // prompt, with no spelling of a path among them.
+    expect(Object.keys(tool.input).sort()).toEqual([
+      'projectId',
+      'prompt',
+      'provider',
+      'server',
+      'storeId',
+    ]);
   });
 
   it('says it changes something, and that it destroys nothing', () => {

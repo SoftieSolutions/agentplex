@@ -175,3 +175,47 @@ export async function readProjectDirectories(
   }
   return directories;
 }
+
+/**
+ * A project, whole: the node's name beside the row that makes it a project.
+ *
+ * The join this table was always going to cost, and it is read here rather
+ * than in the catalogue for the reason the two inserts are written here. This
+ * feature writes both rows; a listing of projects is those two rows read back,
+ * and the name column it reads is the one it wrote. What it is *not* is a
+ * second reader of the tree: no parent, no position, no kind and no ordering
+ * of children -- everything about where a project sits on a screen is still
+ * the catalogue's, and nothing here can answer it.
+ *
+ * `INNER JOIN` rather than a left one, because 0006 made the pair inseparable:
+ * `ON DELETE CASCADE` takes the project row with the node, so a row here with
+ * no node is a state the schema cannot hold, and a left join would be code
+ * handling a case by producing a project with no name.
+ */
+const projectSummaryRowSchema = z
+  .object({ node_id: nodeIdSchema, name: z.string(), directory: z.string().min(1) })
+  .transform((row) => ({ nodeId: row.node_id, name: row.name, directory: row.directory }));
+
+/** One project, parsed: what it is called and where it is. */
+export type ProjectSummaryRow = z.infer<typeof projectSummaryRowSchema>;
+
+/**
+ * Every project this hub holds, by name.
+ *
+ * Unbounded and unpaged, unlike the catalogue query beside it, and the
+ * difference is what a project is: one row per repository a person went and
+ * picked by hand. A pagination here would be a cursor over a list that fits on
+ * a screen.
+ *
+ * Ordered by name and then by node id, so two projects a person gave one name
+ * come back in the same order on every call rather than in whatever order the
+ * planner reached them.
+ */
+export async function readProjects(database: Queryable): Promise<readonly ProjectSummaryRow[]> {
+  const result = await database.query(
+    `SELECT projects.node_id AS node_id, nodes.name AS name, projects.directory AS directory
+       FROM projects JOIN nodes ON nodes.id = projects.node_id
+      ORDER BY nodes.name, projects.node_id`,
+  );
+  return result.rows.map((row) => projectSummaryRowSchema.parse(row));
+}

@@ -1,5 +1,5 @@
 import { nodeIdSchema, type NodeId, type ServerRegistrationId } from '@agentplex/protocol';
-import type { DirectoryOutcome, ProjectOutcome, Projects } from './projects.js';
+import type { DirectoryOutcome, ProjectOutcome, ProjectSummary, Projects } from './projects.js';
 
 /**
  * The hub's projects, driven by hand.
@@ -12,8 +12,8 @@ import type { DirectoryOutcome, ProjectOutcome, Projects } from './projects.js';
  * where they live, and end to end against a real server over a real handshake.
  * This is for the tests whose subject is the socket.
  *
- * The directories it holds are a map rather than a table, and the lookups read
- * it both ways: `findByDirectory` is what the catalogue asks as it places a
+ * The projects it holds are a map rather than a table, and the lookups read it
+ * both ways: `findByDirectory` is what the catalogue asks as it places a
  * session, so a suite about placement can say "this directory is that project"
  * in one line without a migrated schema.
  */
@@ -26,8 +26,15 @@ export interface FakeProjects extends Projects {
   readonly looked: readonly string[];
   /** What every later browse answers with. */
   answerWith(outcome: DirectoryOutcome): void;
-  /** Puts a project in this fake without going through `create`. */
-  hold(nodeId: NodeId, directory: string): void;
+  /**
+   * Puts a project in this fake without going through `create`.
+   *
+   * The name is optional and falls back to the node id, because most suites
+   * that hold a project are asking a question about its directory and naming
+   * it would be a line of noise in each of them. The one that is about the
+   * listing says a name, and reads it back.
+   */
+  hold(nodeId: NodeId, directory: string, name?: string): void;
 }
 
 export interface FakeProjectsOptions {
@@ -38,7 +45,7 @@ export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProje
   const listed: { server: ServerRegistrationId; directory: string | null }[] = [];
   const created: { nodeId: NodeId; name: string; directory: string }[] = [];
   const looked: string[] = [];
-  const directories = new Map<NodeId, string>();
+  const held = new Map<NodeId, { readonly name: string; readonly directory: string }>();
   let minted = 0;
 
   let outcome: DirectoryOutcome = options.outcome ?? {
@@ -56,8 +63,8 @@ export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProje
       if (name === '') {
         return { ok: false, code: 'refused', problem: 'a project needs a name' };
       }
-      for (const directory of directories.values()) {
-        if (directory !== request.directory) continue;
+      for (const project of held.values()) {
+        if (project.directory !== request.directory) continue;
         return {
           ok: false,
           code: 'refused',
@@ -65,22 +72,30 @@ export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProje
         };
       }
       const nodeId = nodeIdSchema.parse(`project-${String((minted += 1))}`);
-      directories.set(nodeId, request.directory);
+      held.set(nodeId, { name, directory: request.directory });
       created.push({ nodeId, name, directory: request.directory });
       return { ok: true, nodeId };
     },
 
     async directoryOf(nodeId: NodeId): Promise<string | null> {
-      return directories.get(nodeId) ?? null;
+      return held.get(nodeId)?.directory ?? null;
     },
 
     async directories(): Promise<ReadonlyMap<NodeId, string>> {
-      return new Map(directories);
+      return new Map([...held].map(([nodeId, project]) => [nodeId, project.directory]));
+    },
+
+    async list(): Promise<readonly ProjectSummary[]> {
+      // Sorted the way the statement sorts, so a suite that asserts an order
+      // is asserting the one the real feature answers in.
+      return [...held]
+        .map(([nodeId, project]) => ({ nodeId, name: project.name, directory: project.directory }))
+        .sort((left, right) => left.name.localeCompare(right.name));
     },
 
     async findByDirectory(directory: string): Promise<NodeId | null> {
       looked.push(directory);
-      for (const [nodeId, held] of directories) if (held === directory) return nodeId;
+      for (const [nodeId, project] of held) if (project.directory === directory) return nodeId;
       return null;
     },
 
@@ -96,8 +111,8 @@ export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProje
       outcome = next;
     },
 
-    hold(nodeId: NodeId, directory: string): void {
-      directories.set(nodeId, directory);
+    hold(nodeId: NodeId, directory: string, name = nodeId): void {
+      held.set(nodeId, { name, directory });
     },
 
     get listed(): readonly { server: ServerRegistrationId; directory: string | null }[] {

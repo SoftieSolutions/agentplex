@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import type { NodeId } from '@agentplex/protocol';
 import type { DocListed, DocOpened } from '../docs/docs.js';
-import { parsedDocName, parsedNodeId, refusedDoc } from './doc-args.js';
+import { parsedDocName, refusedDoc } from './doc-args.js';
+import { parsedNodeId } from './node-args.js';
 import { answers, defineMcpTool, readOnly, refuses, type McpTool } from './tool-registry.js';
 
 /**
