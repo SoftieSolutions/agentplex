@@ -41,6 +41,18 @@ const scriptPath = join(scriptsDirectory, 'install.sh');
 // the package it installs, so the two are a directory apart rather than
 // siblings. The assertions below are what keeps them saying the same thing.
 const documentation = join(workspaceRoot, 'apps', 'cli', 'README.md');
+// The third place the same URL is printed: the first-run wizard offers it as a
+// command to copy, so a reader who never opens a README still gets the fetch
+// that resolves. Read as a file rather than imported, because this suite runs
+// outside that app and the tie being tested is that the string is there.
+const clientInstallCommand = join(
+  workspaceRoot,
+  'apps',
+  'web',
+  'src',
+  'onboarding',
+  'install-command.ts',
+);
 const rootManifest = join(workspaceRoot, 'package.json');
 const releaseWorkflow = join(workspaceRoot, '.github', 'workflows', 'release.yml');
 
@@ -1645,6 +1657,17 @@ describe('where the script says it is served from', () => {
     const declared = declaredUrl();
     expect(declared).toMatch(/^https:\/\//);
     expect(readFileSync(documentation, 'utf8')).toContain(declared);
+  });
+
+  /**
+   * And the same URL the client hands somebody who has no server yet. Three
+   * printers of one string, so the constant that can drift is held against the
+   * script from both sides rather than from the documentation alone -- a wizard
+   * offering a 404 is the same failure as a README offering one, reached by
+   * somebody less likely to go looking for the real address.
+   */
+  it('prints the same URL the first-run wizard offers to copy', () => {
+    expect(readFileSync(clientInstallCommand, 'utf8')).toContain(declaredUrl());
   });
 
   /**
