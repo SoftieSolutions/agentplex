@@ -528,6 +528,40 @@ describe('publishedManifest', () => {
 });
 
 /**
+ * Whether a published manifest may declare a dependency at this range.
+ *
+ * A predicate rather than one regular expression, because the grammar has an
+ * arithmetic condition in it that a pattern cannot state: the ceiling is one
+ * major above the floor. A pattern can only say that the ceiling looks like a
+ * major, which admits `>=4.5.4 <9.0.0` -- a window spanning five majors, shaped
+ * exactly like a compliant one. The floor's own major carries the second
+ * condition: it is at least 1, so `>=0.11.0 <1.0.0` is refused despite being
+ * the widest honest window below 1.0, because below 1.0 the minor is the
+ * breaking change and an exact pin is the only thing to say.
+ *
+ * See CONTRIBUTING.md, "Dependency versions", which this mirrors and which
+ * AGX-187 turns into a check over every manifest git tracks. Here it is applied
+ * to what `publishedManifest` writes, where `workspace:*` no longer appears:
+ * the assembler has already replaced every sibling with the exact version it
+ * bundled.
+ */
+function isPublishedRange(range: string): boolean {
+  if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(range)) return true;
+
+  const window = /^>=(\d+)\.\d+\.\d+ <(\d+)\.(\d+)\.(\d+)$/.exec(range);
+  if (window === null) return false;
+
+  const floorMajor = Number(window[1]);
+  const ceilingMajor = Number(window[2]);
+  const ceilingMinor = Number(window[3]);
+  const ceilingPatch = Number(window[4]);
+
+  return (
+    floorMajor >= 1 && ceilingMajor === floorMajor + 1 && ceilingMinor === 0 && ceilingPatch === 0
+  );
+}
+
+/**
  * The one place a version range is the only thing there is.
  *
  * Inside the workspace a range decides nothing: the lockfile is committed and
@@ -546,14 +580,6 @@ describe('the ranges the real workspace publishes', () => {
   /** Where this test file sits, one directory below the workspace root. */
   const workspaceRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-  /**
-   * Exact `x.y.z` with an optional prerelease, or a window whose upper bound is
-   * written out. A caret is neither, which is the point: `^0.11.0` and `^4.1.13`
-   * are the same character meaning two different bounds, and neither bound is in
-   * the file.
-   */
-  const publishedRange = /^(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?|>=\d+\.\d+\.\d+ <[1-9]\d*\.0\.0)$/;
-
   async function manifestAt(directory: string): Promise<Manifest> {
     const path = join(workspaceRoot, directory, 'package.json');
     return parseManifest(path, await readFile(path, 'utf8'));
@@ -568,6 +594,34 @@ describe('the ranges the real workspace publishes', () => {
     });
   }
 
+  /**
+   * The near misses the policy names, so that the predicate the assertions
+   * below lean on is itself held to something. The first two are the ones a
+   * pattern over the shape alone would let through.
+   */
+  it.each([
+    ['1.1.0', true],
+    ['3.2.7', true],
+    ['1.0.0-rc.1', true],
+    ['>=4.5.4 <5.0.0', true],
+    ['>=19.2.8 <20.0.0', true],
+    // A window spanning five majors, shaped like a compliant one.
+    ['>=4.5.4 <9.0.0', false],
+    // The widest honest window below 1.0, and still not a form this permits.
+    ['>=0.11.0 <1.0.0', false],
+    ['>=4.5.4 <5.1.0', false],
+    ['>=4.5.4 <5.0.1', false],
+    ['^4.1.13', false],
+    ['~4.1.13', false],
+    ['>4.1.12 <5.0.0', false],
+    ['>=4.1.13 <=5.0.0', false],
+    ['>=4.5.4  <5.0.0', false],
+    ['>=4.5.4', false],
+    ['*', false],
+  ])('reads %s as a range a published manifest may carry: %s', (range, allowed) => {
+    expect(isPublishedRange(range)).toBe(allowed);
+  });
+
   it.each(PACKAGES.map((target) => [target.name, target] as const))(
     'bounds every range %s publishes',
     async (_name, target) => {
@@ -578,7 +632,9 @@ describe('the ranges the real workspace publishes', () => {
       };
 
       for (const [dependency, range] of Object.entries(declared)) {
-        expect(range, `${target.name} declares ${dependency} at ${range}`).toMatch(publishedRange);
+        expect(isPublishedRange(range), `${target.name} declares ${dependency} at ${range}`).toBe(
+          true,
+        );
       }
     },
   );
@@ -586,13 +642,18 @@ describe('the ranges the real workspace publishes', () => {
   /**
    * The assertion above passes on a manifest that declares nothing, and the
    * client's does exactly that. This names the two third-party ranges that do
-   * reach a tarball, so the grammar is being checked against something.
+   * reach a tarball, so the grammar is being checked against something -- and
+   * checks that each is a window rather than an exact pin, which the predicate
+   * alone would not distinguish.
    */
   it('carries a window rather than a caret into the command', async () => {
     const declared = (await publishedFor(CLI))['dependencies'] as Record<string, string>;
 
-    expect(declared['zod']).toMatch(/^>=\d+\.\d+\.\d+ <\d+\.0\.0$/);
-    expect(declared['ws']).toMatch(/^>=\d+\.\d+\.\d+ <\d+\.0\.0$/);
+    for (const dependency of ['zod', 'ws']) {
+      const range = declared[dependency] ?? '';
+      expect(range, `${dependency} at ${range}`).toMatch(/^>=/);
+      expect(isPublishedRange(range), `${dependency} at ${range}`).toBe(true);
+    }
   });
 
   /**
@@ -603,9 +664,11 @@ describe('the ranges the real workspace publishes', () => {
   it('keeps node-pty exact in both packages that carry it', async () => {
     const server = (await publishedFor(SERVER))['dependencies'] as Record<string, string>;
     const cli = (await publishedFor(CLI))['optionalDependencies'] as Record<string, string>;
+    const range = server['node-pty'] ?? '';
 
-    expect(server['node-pty']).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(cli['node-pty']).toBe(server['node-pty']);
+    expect(range).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(isPublishedRange(range)).toBe(true);
+    expect(cli['node-pty']).toBe(range);
   });
 });
 
