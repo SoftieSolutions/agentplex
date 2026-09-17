@@ -70,8 +70,8 @@ Each package is released on its own, at its own version, under a tag shaped
 a fix to this command should not force every server on the fleet to recompile a
 native addon.
 
-Which releases exist, and which of them is current, is published as one small
-file on the `v1` branch, beside `install.sh`:
+Which releases the `v1` train offers, and which of them is current, is published
+as one small file on the `v1` branch, beside `install.sh`:
 
 ```json
 {
@@ -85,7 +85,17 @@ file on the `v1` branch, beside `install.sh`:
 `install.sh` reads it before it downloads anything, so one unauthenticated fetch
 answers what to install, whether the set agrees, and everything a pin leaves
 open. The file is append-only: a release adds a line to its component's history
-and never removes one, so a version that was ever published stays installable.
+and never removes one, so a version that was ever advertised here stays
+installable.
+
+It is what this branch advertises rather than every tag that exists, and the
+difference is worth knowing before you read a refusal. A prerelease _is_ listed
+-- it is how `hub@1.3.8-rc1` installs at all -- and it is never what `current`
+names, so nothing unpinned picks one up. A `2.x` release is not listed, because
+a v2 train advertises itself from its own branch. `current` is the newest
+release that is not a prerelease, worked out from the history rather than set to
+whatever shipped last, so a patch to an older line -- `1.2.1` landing the week
+after `1.3.0` -- does not move the fleet backwards.
 
 A release history in a file that is fetched anyway is what makes a partial pin
 possible without the GitHub releases API, which is deeply nested JSON no shell
@@ -120,11 +130,17 @@ last one.
 
 A pin is either an exact version, which names the release tag
 `<component>-v<version>`, or a series -- `1.3` or `1` -- which resolves to the
-newest release published under it. A series never resolves to a prerelease:
-`hub@1.3` will not pick up `1.3.8-rc1`, though naming that version exactly
-installs it. Nothing wider is accepted; `^1.3.0`, `1.3.x` and `latest` are
-refused at the flag, because delivery here is a set of tags and not a registry
-with a resolver behind it.
+newest release the manifest offers under it. A series never resolves to a
+prerelease: `hub@1.3` will not pick up `1.3.8-rc1`, though `hub@1.3.8-rc1`
+installs it, because the manifest lists it. Nothing wider is accepted; `^1.3.0`,
+`1.3.x` and `latest` are refused at the flag, because delivery here is a set of
+tags and not a registry with a resolver behind it.
+
+A pin the manifest does not offer is refused before the first download, and the
+refusal says that rather than that the tag does not exist -- `install.sh` has no
+way to know the second. A `2.0.0` that really was released is simply not
+something the `v1` manifest advertises, and neither is anything missing from a
+mirror.
 
 A pinned component is checked before anything is installed: `versions.json` says
 what protocol every release speaks, so a pin that would leave this machine

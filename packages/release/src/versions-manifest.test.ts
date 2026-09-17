@@ -79,10 +79,10 @@ describe('parseVersionsManifest', () => {
   });
 
   /**
-   * A prerelease is a version this can publish -- the workflow decides
-   * separately whether a prerelease should advance `v1` at all -- so the
-   * parser has no business refusing one. `install.sh` is where a prerelease is
-   * excluded, and only from a *partial* pin's candidates.
+   * A prerelease is a version this publishes and records. The workflow decides
+   * separately whether one may advance the `v1` *tree* -- it may not -- and
+   * `updateVersionsManifest` decides that it is never `current`. What it is is
+   * installable by name, which is the whole reason it is in the file.
    */
   it('accepts a prerelease version', () => {
     expect(
@@ -125,7 +125,57 @@ describe('updateVersionsManifest', () => {
 
     const updated = updateVersionsManifest(previous, 'hub', { version: '1.2.1', protocol: 2 });
 
-    expect(updated['hub']).toEqual({ current: '1.2.1', releases: { '1.3.0': 3, '1.2.1': 2 } });
+    expect(updated['hub']?.releases).toEqual({ '1.3.0': 3, '1.2.1': 2 });
+  });
+
+  /**
+   * And it does not make that patch current. Every unpinned install on the
+   * fleet reads this field, so a release to an older line that moved it would
+   * downgrade all of them.
+   */
+  it('leaves current where it is when an older line is patched', () => {
+    const previous = updateVersionsManifest({}, 'hub', { version: '1.3.0', protocol: 3 });
+
+    const updated = updateVersionsManifest(previous, 'hub', { version: '1.2.1', protocol: 2 });
+
+    expect(updated['hub']?.current).toBe('1.3.0');
+  });
+
+  /**
+   * A prerelease is recorded so that `--role=hub@1.3.8-rc1` can be installed at
+   * all -- the installer refuses a pin the manifest does not list -- and is
+   * never made current, so nobody who asked for nothing in particular gets it.
+   */
+  it('records a prerelease without making it current', () => {
+    const previous = updateVersionsManifest({}, 'hub', { version: '1.3.7', protocol: 3 });
+
+    const updated = updateVersionsManifest(previous, 'hub', { version: '1.3.8-rc1', protocol: 3 });
+
+    expect(updated['hub']).toEqual({
+      current: '1.3.7',
+      releases: { '1.3.8-rc1': 3, '1.3.7': 3 },
+    });
+  });
+
+  /**
+   * The one case where a prerelease is current: there is nothing else. `current`
+   * is what an unpinned install takes and the schema will not let it be absent,
+   * so the only release there is beats naming none -- and it stops being current
+   * the moment anything else ships.
+   */
+  it('makes a prerelease current only while it is the only release', () => {
+    const first = updateVersionsManifest({}, 'hub', { version: '1.0.0-rc.1', protocol: 1 });
+    expect(first['hub']?.current).toBe('1.0.0-rc.1');
+
+    const second = updateVersionsManifest(first, 'hub', { version: '1.0.0', protocol: 1 });
+    expect(second['hub']?.current).toBe('1.0.0');
+  });
+
+  /** Build metadata carries a `-` of its own, and it is not a prerelease marker. */
+  it('does not read a dash inside build metadata as a prerelease', () => {
+    const manifest = updateVersionsManifest({}, 'hub', { version: '1.4.0+build-7', protocol: 3 });
+
+    expect(manifest['hub']?.current).toBe('1.4.0+build-7');
   });
 
   it('adds a component the manifest did not carry yet', () => {

@@ -16,6 +16,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import {
+  serializeVersionsManifest,
+  updateVersionsManifest,
+  type VersionsManifest,
+} from '@agentplex/release';
 import { PACKAGES } from './assemble-package.js';
 
 /**
@@ -152,37 +157,48 @@ const CURRENT: Readonly<Record<string, string>> = {
 const FIXTURE_PROTOCOL = 3;
 
 /**
- * The manifest the release publishes on the `v1` branch, as a fixture.
+ * The manifest a run of releases leaves on the `v1` branch, as a fixture.
  *
- * `history` is what a pin is resolved against. The manifest lists every release
- * a component has published, so a version nothing here published is a version
- * the script refuses -- which means a test about a pin says which release it is
- * pinning to, rather than naming one out of the air.
+ * Folded through `updateVersionsManifest`, which is the code the release job
+ * really writes this file with, rather than assembled out of an object literal.
+ * A hand-built fixture can be a shape no release could ever produce, and this
+ * one was: the prerelease test below described a history the workflow had no
+ * way to emit, so it passed against a file that could not exist. Going through
+ * the writer means a fixture is a manifest some sequence of releases would
+ * really leave behind, and that `current` is whatever that code decides rather
+ * than whatever a test asserted.
+ *
+ * `history` is what a pin resolves against. The manifest lists every release a
+ * component has published and the installer refuses a pin it does not list, so
+ * a test about a pin says which release it is pinning to rather than naming one
+ * out of the air. Those releases are published *before* the one in `latest`,
+ * which is the order a fixture has to state because the merge is order
+ * sensitive in exactly one way -- a re-cut tag overwrites its own protocol.
  */
 function writeVersions(
   directory: string,
-  versions: Readonly<Record<string, string>> = CURRENT,
+  latest: Readonly<Record<string, string>> = CURRENT,
   options: {
-    /** The protocol each component's current release speaks. */
+    /** The protocol each component's last release speaks. */
     readonly protocols?: Readonly<Record<string, number>>;
-    /** Releases beside the current one, as `<version>: <protocol>`. */
+    /** Releases published before it, as `<version>: <protocol>`. */
     readonly history?: Readonly<Record<string, Readonly<Record<string, number>>>>;
   } = {},
 ): void {
-  const entries = Object.entries(versions).map(([component, version]) => [
-    component,
-    {
-      current: version,
-      releases: {
-        [version]: options.protocols?.[component] ?? FIXTURE_PROTOCOL,
-        ...options.history?.[component],
-      },
-    },
-  ]);
-  writeFile(join(directory, 'versions.json'), JSON.stringify(Object.fromEntries(entries), null, 2));
+  let manifest: VersionsManifest = {};
+  for (const [component, version] of Object.entries(latest)) {
+    for (const [older, protocol] of Object.entries(options.history?.[component] ?? {})) {
+      manifest = updateVersionsManifest(manifest, component, { version: older, protocol });
+    }
+    manifest = updateVersionsManifest(manifest, component, {
+      version,
+      protocol: options.protocols?.[component] ?? FIXTURE_PROTOCOL,
+    });
+  }
+  writeFile(join(directory, 'versions.json'), serializeVersionsManifest(manifest).trimEnd());
 }
 
-/** The same manifest, with releases added to one or more components' history. */
+/** The same manifest, with releases published before each component's last one. */
 function writeHistory(
   directory: string,
   history: Readonly<Record<string, Readonly<Record<string, number>>>>,
@@ -2145,16 +2161,27 @@ describe('the versions manifest, which is read off the network and parsed', () =
     expect(result.stderr).toContain('names no web');
   });
 
-  it.each([
-    ['a version that is not one', { cli: 'latest', hub: '1.2.0', web: '1.1.0' }, 'not a version'],
-  ])('refuses %s', (_name, entries, message) => {
+  /**
+   * Written by hand and not through the writer, which is the only fixture here
+   * that has to be: the whole point of it is a manifest the writer would refuse
+   * to produce. A `v1` branch anybody with write access can push to is where
+   * one comes from.
+   */
+  it('refuses a current version that is not one', () => {
     const { script, home, versions } = scratch();
-    writeVersions(versions, entries);
+    writeFile(
+      join(versions, 'versions.json'),
+      JSON.stringify({
+        cli: { current: 'latest', releases: { latest: FIXTURE_PROTOCOL } },
+        hub: { current: '1.2.0', releases: { '1.2.0': FIXTURE_PROTOCOL } },
+        web: { current: '1.1.0', releases: { '1.1.0': FIXTURE_PROTOCOL } },
+      }),
+    );
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(message);
+    expect(result.stderr).toContain('not a version');
   });
 
   /**
@@ -2347,18 +2374,32 @@ describe('the protocol a pinned release speaks, checked before anything is insta
   });
 
   /**
-   * A pin naming a release nobody published is the other thing this catches,
-   * and it catches it before the first tarball rather than at a 404 partway
-   * through an npm install. The manifest is append-only, so a version missing
-   * from it is a tag that was never cut.
+   * A pin the manifest does not offer is the other thing this catches, and it
+   * catches it before the first tarball rather than at a 404 partway through an
+   * npm install.
    */
-  it('stops when the manifest lists no such release', () => {
+  it('stops when the manifest offers no such release', () => {
     const { script, home } = scratch();
     const result = run(script, home, ['--dry-run', '--role=hub@9.9.9']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('does not list 9.9.9');
+    expect(result.stderr).toContain('offers no hub release at 9.9.9');
     expect(result.stderr).toContain('hub-v9.9.9');
+  });
+
+  /**
+   * And it says what the file is rather than what exists. `v1` advertises the
+   * 1.x train, so a 2.x tag can be real and absent from it at the same time --
+   * as can any release a mirror was not given. A refusal that said the tag did
+   * not exist would be a sentence this script has no way to know is true.
+   */
+  it('refuses a release it does not offer without claiming the tag is unpublished', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=hub@2.0.0']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('the set of releases it advertises');
+    expect(result.stderr).not.toMatch(/there is no hub-v2\.0\.0 release/);
   });
 });
 
@@ -2424,6 +2465,10 @@ describe('a pin that names a series rather than a tag', () => {
    */
   it('never resolves a series to a prerelease, and still pins one by name', () => {
     const { script, home, versions } = scratch();
+    // The order a release job would publish them in, through the code that
+    // writes the file: the candidate lands in `releases` and never in
+    // `current`, which is what makes the second half of this test possible at
+    // all.
     writeHistory(versions, {
       hub: { '1.3.7': FIXTURE_PROTOCOL, '1.3.8-rc1': FIXTURE_PROTOCOL },
     });
@@ -2445,7 +2490,7 @@ describe('a pin that names a series rather than a tag', () => {
     const result = run(script, home, ['--dry-run', '--role=hub@1.3']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('lists no released hub under 1.3');
+    expect(result.stderr).toContain('offers no hub release under 1.3');
   });
 
   it('stops when the series holds no release at all', () => {
@@ -2453,7 +2498,7 @@ describe('a pin that names a series rather than a tag', () => {
     const result = run(script, home, ['--dry-run', '--role=hub@7']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('lists no released hub under 7');
+    expect(result.stderr).toContain('offers no hub release under 7');
   });
 
   /** The command takes the same pins, through its own flag. */

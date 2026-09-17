@@ -349,7 +349,13 @@ Usage: bash install.sh [options]
 
   A version is exact -- 1.4.0, naming the release tag <component>-v<version> --
   or a series: 1.4 takes the newest 1.4.x and 1 the newest 1.x, never a
-  prerelease. Anything left unpinned comes from ${VERSIONS_URL}
+  prerelease.
+
+  ${VERSIONS_URL}
+  is read by every install, pinned or not: it lists the releases of each
+  component and what each one speaks, which is what an unpinned component
+  resolves through and what a pin is checked against. Set AGENTPLEX_VERSIONS to
+  a directory holding a copy of it to install without reaching that host.
 
   Served from ${INSTALL_SH_URL}
   Documentation at ${DOCS_URL}
@@ -828,10 +834,13 @@ record_component() {
 # second artifact, no extra download, and the same refusal with both numbers
 # named and nothing written.
 #
-# A pin the manifest does not list stops the run. The file is the record of
-# every release there has been, so a version missing from it is a tag that was
-# never published -- and finding that out here is a refusal, where finding it
-# out later is a 404 partway through an npm install.
+# A pin the manifest does not list stops the run, and the refusal says what the
+# file is rather than what exists. It is the set of releases this source
+# advertises: the `v1` branch lists every 1.x release including prereleases, so
+# `--role=hub@1.3.8-rc1` resolves here like any other, but it lists no 2.x --
+# that train advertises itself from its own branch -- and a mirror holds
+# whatever was copied into it. Refusing here is still better than the
+# alternative, which is a 404 partway through an npm install.
 read_pinned_release() {
   local component="$1" pin="$2"
   read_component_entry "$component"
@@ -840,10 +849,10 @@ read_pinned_release() {
     RESOLVED_VERSION="$pin"
   else
     RESOLVED_VERSION="$(newest_in_series "$MANIFEST_RELEASES" "$pin")"
-    [ -n "$RESOLVED_VERSION" ] || die "$VERSIONS_SOURCE lists no released $component under $pin, so ${component}@${pin} names a series nothing has been published in. A series resolves to the newest release under it and never to a prerelease"
+    [ -n "$RESOLVED_VERSION" ] || die "$VERSIONS_SOURCE offers no $component release under $pin, so ${component}@${pin} names a series it advertises nothing in. A series takes the newest release under it and never a prerelease; a prerelease named exactly is installed"
   fi
 
-  RESOLVED_PROTOCOL="$(json_number "$MANIFEST_RELEASES" "$RESOLVED_VERSION")" || die "$VERSIONS_SOURCE lists every $component release there has been and does not list $RESOLVED_VERSION, so there is no ${component}-v${RESOLVED_VERSION} to install"
+  RESOLVED_PROTOCOL="$(json_number "$MANIFEST_RELEASES" "$RESOLVED_VERSION")" || die "$VERSIONS_SOURCE offers no $component release at $RESOLVED_VERSION, so there is nothing here to install ${component}-v${RESOLVED_VERSION} from. This file is the set of releases it advertises and not the set of tags that exist: a 2.x release is advertised from its own branch, and a mirror holds whatever was copied into it"
 }
 
 # Every component this machine would install, speaking one protocol.
@@ -1092,7 +1101,8 @@ read_versions_entry() {
 # suffix is excluded by the same expression that fixes the depth -- `hub@1.3`
 # must not select `1.3.8-rc1`, because a series is how a fleet asks for the
 # newest patch and a release candidate is not one. Naming `1.3.8-rc1` exactly
-# still installs it: that is a tag, and it exists.
+# still installs it: the release job records a prerelease in the manifest for
+# that reason, and only keeps it from being what the file calls current.
 #
 # **Why the comparison is written out.** `sort -V` was the obvious reach and it
 # is not used. It is there on both machines this was run against -- BSD sort
