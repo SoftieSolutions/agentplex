@@ -2,6 +2,11 @@ import { useState, type JSX, type ReactNode } from 'react';
 import type { ServerRegistrationId } from '@agentplex/protocol';
 import type { HubSnapshot } from '../store/hub-store.js';
 import type { TokenStore } from '../auth/token.js';
+// The chrome's connection line owns this mapping now (AGX-119). Imported
+// rather than kept here as a second copy: this screen and the top bar draw
+// the same phase, and two switches over it are two chances to disagree about
+// what "reconnecting" looks like.
+import { toneForPhase } from '../shell/connection-model.js';
 import {
   Button,
   Group,
@@ -13,7 +18,8 @@ import {
   Title,
   useComputedColorScheme,
 } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
+import { ToneDot } from '../ui/tone-dot.js';
+import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import {
   parsePairingForm,
   prefillFromCandidate,
@@ -41,21 +47,6 @@ export interface SettingsScreenProps {
   readonly candidates: readonly DiscoveredCandidate[];
 }
 
-/** The connection phase as the tone dot beside the hub line. */
-function toneForPhase(phase: HubSnapshot['phase']): Tone {
-  switch (phase) {
-    case 'connected':
-      return 'running';
-    case 'connecting':
-    case 'idle':
-      return 'idle';
-    case 'reconnecting':
-      return 'needs-you';
-    case 'failed':
-      return 'blocked';
-  }
-}
-
 function phaseWords(snapshot: HubSnapshot): string {
   switch (snapshot.phase) {
     case 'idle':
@@ -69,21 +60,6 @@ function phaseWords(snapshot: HubSnapshot): string {
     case 'failed':
       return 'failed';
   }
-}
-
-/** The mockup's status dot: 7px, round, colored by tone and nothing else. */
-function ToneDot({ tone, scheme }: { readonly tone: Tone; readonly scheme: Scheme }): JSX.Element {
-  return (
-    <span
-      style={{
-        width: 7,
-        height: 7,
-        borderRadius: '50%',
-        background: colorForTone(tone, scheme),
-        flex: 'none',
-      }}
-    />
-  );
 }
 
 /** One bordered surface, the way every t7 panel sits on the background. */
@@ -447,9 +423,7 @@ function PairedServersSection({
           Nothing to list yet — the hub&apos;s first state has not arrived.
         </Text>
       ) : rows.length === 0 ? (
-        <Text size="sm" c="dimmed">
-          No servers are paired with this hub.
-        </Text>
+        <NoServersPaired scheme={scheme} />
       ) : (
         <Stack gap="xs">
           {rows.map((row) => (
@@ -457,6 +431,40 @@ function PairedServersSection({
           ))}
         </Stack>
       )}
+    </Stack>
+  );
+}
+
+/**
+ * No servers, and what to do about it.
+ *
+ * Both halves of the answer are named because a person reaching this line is
+ * stuck at one of two different places. If a server is already running, the
+ * thing that resolves this is the form directly above -- so it is named by its
+ * own heading rather than linked, since a link to the screen you are reading
+ * is a route to nowhere. If no server is running anywhere, no form helps, and
+ * what resolves it is the installer on the machine that will hold the
+ * sessions.
+ *
+ * The command is the README's, exactly, and carries no host: where the
+ * bootstrap is fetched from is a fact about a deployment and not something a
+ * screen may invent. What it is here to say is the flag.
+ */
+function NoServersPaired({ scheme }: { readonly scheme: Scheme }): JSX.Element {
+  return (
+    <Stack gap={4}>
+      <Text size="sm" c="dimmed">
+        No servers are paired with this hub, so it has nothing to run a session on and no store to
+        read.
+      </Text>
+      <Text size="sm" c="dimmed">
+        Pair one above. A server is the machine that holds the sessions; it prints the token that
+        form asks for when{' '}
+        <Text component="span" size="sm" ff="monospace" c={colorForRole('text', scheme)}>
+          install.sh --role=server
+        </Text>{' '}
+        sets it up.
+      </Text>
     </Stack>
   );
 }

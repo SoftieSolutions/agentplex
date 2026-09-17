@@ -167,6 +167,13 @@ export function LayoutScreen({
     focus: snapshot.focus,
     onCommitRatio: (path, ratio) => layout.commitRatio(path, ratio),
     onFocusPane: (path) => layout.focusPane(path),
+    // Focus first, then show: `showSession` puts a session in the focused
+    // pane, and the picker that called this is naming a pane rather than
+    // relying on the click that reached it having already moved focus there.
+    onShowSession: (path, session) => {
+      layout.focusPane(path);
+      layout.showSession(session);
+    },
     registerPane,
   };
 

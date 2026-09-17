@@ -46,7 +46,7 @@ export type PaneContent =
    * them would be a saved arrangement that could contradict the tree.
    */
   | { readonly type: 'doc'; readonly nodeId: NodeId }
-  /** No session here yet. Later tickets put a picker in it. */
+  /** No session here yet. `split-view.tsx` draws the picker that fills it. */
   | { readonly type: 'empty' }
   /**
    * A pane this build cannot read: a newer client's pane type, or damage.

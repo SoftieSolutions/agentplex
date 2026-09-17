@@ -228,6 +228,58 @@ describe('the shell', () => {
     expect(brand?.getAttribute('href')).toBe(destinationHash('sessions'));
   });
 
+  it('fills the top bar slot with how the connection is doing', async () => {
+    await mount();
+
+    // Said even when all is well: a status line that empties when there is
+    // nothing wrong is one nobody can tell apart from a broken one.
+    const status = container.querySelector('header [role="status"]');
+    expect(status?.textContent).toContain('connected');
+    expect(status?.querySelector('a')).toBeNull();
+  });
+
+  it('names the missing token in the chrome, and links to where one is typed', async () => {
+    // What an empty Bearer earns from the hub: an ordinary 401, a rejected
+    // ticket exchange, and a retry that will never succeed. The store's own
+    // words for that are honest and terminal; the chrome's name the token.
+    store = createHubStore({
+      fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+    });
+    await act(async () => {
+      root = createRoot(container);
+      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+    });
+    await act(settle);
+
+    const status = container.querySelector('header [role="status"]');
+    expect(status?.textContent).toContain('no hub token on this device');
+    const link = status?.querySelector('a');
+    expect(link?.textContent).toBe('Settings');
+    expect(link?.getAttribute('href')).toBe(destinationHash('settings'));
+  });
+
+  it('stops naming the token once one is stored, even while the hub refuses', async () => {
+    tokens.write('token-typed-on-this-device');
+    store = createHubStore({
+      fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+    });
+    await act(async () => {
+      root = createRoot(container);
+      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+    });
+    await act(settle);
+
+    const status = container.querySelector('header [role="status"]');
+    expect(status?.textContent).not.toContain('no hub token');
+    expect(status?.querySelector('a')).toBeNull();
+  });
+
   it('keeps the sidebar when the address names a session', async () => {
     window.location.hash = sessionHash(SESSION);
 
@@ -402,7 +454,13 @@ describe('the shell on a phone', () => {
     );
     expect(chips).toContain('Needs you · 2');
     expect(container.querySelector('[data-needs-you]')?.textContent).toBe('2');
-    expect(container.querySelector('[role="status"]')?.textContent).toBe('2 sessions need you');
+    // The live region is addressed through the button: the header holds one
+    // too since AGX-119 -- the connection line -- and the first one on screen
+    // is that one.
+    expect(
+      container.querySelector('button[aria-label="Start a session"] + [role="status"]')
+        ?.textContent,
+    ).toBe('2 sessions need you');
   });
 
   it('puts the tree in the content region, where the Projects tab leads', async () => {
