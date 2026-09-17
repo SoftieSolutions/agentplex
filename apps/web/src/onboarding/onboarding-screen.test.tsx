@@ -2,6 +2,7 @@
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parseClientFrame, parseTextFrame, type ClientFrame } from '@agentplex/protocol';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
@@ -45,6 +46,27 @@ function installMatchMedia(): void {
   });
 }
 
+/** Mantine's inputs observe their own box; jsdom has no layout and no observer. */
+function installResizeObserver(): void {
+  globalThis.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
+}
+
+/**
+ * React tracks an input's value itself, so assigning `input.value` and firing
+ * an event is a change React has already decided did not happen. The setter
+ * off the prototype is the one the tracker does not intercept.
+ */
+function typeInto(input: HTMLInputElement, text: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  if (setter === undefined) throw new Error('no value setter on HTMLInputElement');
+  setter.call(input, text);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 /** Lets the ticket promise inside `connect` settle. */
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -79,6 +101,7 @@ describe('the onboarding wizard', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     installMatchMedia();
+    installResizeObserver();
     container = document.createElement('div');
     document.body.append(container);
     sockets = createFakeSocketFactory();
@@ -158,6 +181,34 @@ describe('the onboarding wizard', () => {
     return button;
   }
 
+  function button(text: string): HTMLButtonElement {
+    const found = [...container.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent === text,
+    );
+    if (found === undefined) throw new Error(`no ${text} button`);
+    return found;
+  }
+
+  function field(label: string): HTMLInputElement {
+    const input = [...container.querySelectorAll('label')]
+      .find((element) => element.textContent === label)
+      ?.closest('.mantine-InputWrapper-root')
+      ?.querySelector<HTMLInputElement>('input');
+    if (input === undefined || input === null) throw new Error(`no ${label} field`);
+    return input;
+  }
+
+  /** Everything the page sent, read back through the hub's own parser. */
+  function sentFrames(): ClientFrame[] {
+    const socket = sockets.sockets[0];
+    if (socket === undefined) throw new Error('the screen dialled nothing');
+    return socket.sent.map((text) => {
+      const parsed = parseTextFrame(parseClientFrame, text);
+      if (!parsed.ok) throw new Error(`the wizard sent something unreadable: ${parsed.reason}`);
+      return parsed.value;
+    });
+  }
+
   it('says what the product is before it asks for anything', async () => {
     await mount();
 
@@ -187,16 +238,46 @@ describe('the onboarding wizard', () => {
     expect(liveStep()).toContain('Pair a server');
   });
 
-  it('draws the pairing step beside the stepper, saying where pairing happens today', async () => {
+  it('draws the live step beside the stepper, asking before it asks for anything', async () => {
     await mountConnected();
 
-    expect(container.querySelector('h2')?.textContent).toBe('Pair a server');
-    // The placeholder may not send the reader to a panel below: this screen is
-    // the whole route, and the only pairing control is the one behind Skip.
-    expect(container.textContent).toContain('The pairing form arrives here in a later change.');
-    expect(container.textContent).toContain(
-      'Skip for now leads to the session list, where Settings pairs a server today',
-    );
+    expect(container.querySelector('h2')?.textContent).toBe('Point this hub at a machine');
+    // The step's own test covers the two answers; what is asserted here is
+    // that the wizard draws that step rather than a form nobody chose.
+    expect(container.textContent).toContain('I already run a server');
+    expect(container.textContent).toContain('I need to run one');
+  });
+
+  it('pairs over the connection the page already has, in one readable frame', async () => {
+    await mountConnected();
+
+    await act(() => {
+      button('I already run a server').click();
+    });
+    await act(() => {
+      typeInto(field('Name'), 'gpu-box-01');
+      typeInto(field('Address'), 'wss://gpu-box-01.example:8443');
+      typeInto(field('Server token'), 'printed-nowhere');
+    });
+    await act(() => {
+      button('Pair server').click();
+    });
+
+    // Read back through `parseClientFrame` rather than compared as text: what
+    // matters is that the hub's own parser accepts what this screen sent, on
+    // the socket the page already had. One frame, because the wizard mounts
+    // the panel over the same operations settings uses -- a second pairing
+    // path over a second socket is the failure this catches.
+    const pairs = sentFrames().filter((frame) => frame.type === 'server-pair');
+    expect(pairs).toEqual([
+      {
+        type: 'server-pair',
+        id: expect.any(Number),
+        label: 'gpu-box-01',
+        address: 'wss://gpu-box-01.example:8443',
+        token: 'printed-nowhere',
+      },
+    ]);
   });
 
   it('carries the app icon, named', async () => {

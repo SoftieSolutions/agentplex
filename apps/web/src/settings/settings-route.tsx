@@ -23,10 +23,16 @@ import { SettingsScreen } from './settings-screen.js';
  * render throws away its component is still a pairing the hub is answering.
  * The store arrives as a prop (the page builds exactly one), so the memo is
  * keyed by it rather than held at module scope.
+ *
+ * Exported because the first-run wizard pairs over the same store: the two
+ * screens are two places the same panel is drawn, and a wizard that built its
+ * own operations would put a second pairing path on one socket. It stays here,
+ * beside the store-keyed memo it is the whole of, rather than moving to a file
+ * of its own for the sake of the second caller.
  */
 const pairingByStore = new WeakMap<HubStore, PairingOperations>();
 
-function pairingFor(store: HubStore): PairingOperations {
+export function pairingFor(store: HubStore): PairingOperations {
   const existing = pairingByStore.get(store);
   if (existing !== undefined) return existing;
   const built = createBrowserPairingOperations(store);
