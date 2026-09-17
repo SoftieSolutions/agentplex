@@ -35,10 +35,28 @@ name: agentplex-test
 # build stage runs `pnpm build`, so every service below starts from a tree that
 # compiled — which is also why there is no `build` service here. A failing
 # build fails the image, and no check gets as far as running.
+#
+# The four services below build the same target from the same context, so they
+# are one image wearing four names. Without an explicit `image:` Compose tags
+# the build per service — `agentplex-test-lint`, `-typecheck`, `-test`,
+# `-check` — and `docker compose run --rm` removes the container but never the
+# image, so the tags are what accumulate. Naming the image once leaves one.
+#
+# The tag is the project's rather than a constant, because two worktrees
+# running checks at the same time would otherwise fight over one name: export
+# `COMPOSE_PROJECT_NAME` and each keeps its own image. The default matches the
+# `name:` above, which is what `COMPOSE_PROJECT_NAME` already resolves to when
+# nothing is exported. Tearing one down is `docker compose -f
+# docker-compose.test.yml down --rmi local`, run for the project that built it:
+# Compose removes every image labelled as the project's own, and a name we chose
+# is still one of those. The `-f` is load-bearing. Without it the command
+# resolves to docker-compose.yml instead, and stops the hub and removes its
+# image.
 x-checks: &checks
   build:
     context: .
     target: build
+  image: ${COMPOSE_PROJECT_NAME:-agentplex-test}-checks
 
 services:
   # The whole set in one container, still. CI no longer runs this, but it is
