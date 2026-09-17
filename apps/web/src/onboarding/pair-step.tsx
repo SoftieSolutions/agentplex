@@ -4,6 +4,7 @@ import type { PairingOperations } from '../settings/pairing-operations.js';
 import { PairingPanel } from '../settings/pairing-panel.js';
 import { Button, Group, Stack, Text, Title } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
+import { EnrollPanel } from './enroll-panel.js';
 
 /**
  * The wizard's live step: pairing the first machine.
@@ -18,11 +19,13 @@ import { colorForRole, type Scheme } from '../ui/tokens.js';
  * hearing a beacon says a machine is there, not that it is the one they meant
  * or that they have its token.
  *
- * The form itself is `PairingPanel`, the same component the settings screen
- * mounts, over the same `PairingOperations` the page already holds. What this
- * file owns is the question, the two answers, and what follows a pairing --
- * which is the difference between the two mounts: settings has a list under it
- * and nowhere to go, and this step has a next thing to say.
+ * Neither answer is drawn here. The form is `PairingPanel`, the same component
+ * the settings screen mounts, over the same `PairingOperations` the page
+ * already holds; the other is `EnrollPanel`, which is the install command and
+ * nothing this step has to know about. What this file owns is the question,
+ * the routing between the two, and what follows a pairing -- which is the
+ * difference between this mount of the form and settings': settings has a list
+ * under it and nowhere to go, and this step has a next thing to say.
  *
  * The direction is load-bearing in every sentence here. The hub dials the
  * server; the server listens and dials nothing. Copy that read the other way
@@ -96,14 +99,11 @@ export function PairStep({ pairing, candidates, scheme, onDone }: PairStepProps)
         />
       )}
       {answer === 'needs-one' && (
-        <Text fz={14} lh={1.6} c={colorForRole('textSecondary', scheme)}>
-          Install one on that machine first. A later change puts the install command here; until
-          then the server&apos;s README on the machine you install on carries it, and the install.sh
-          it points at does the whole of it — the runtime, the toolchain where one is needed, and
-          the unit that keeps it up. Setup leaves that server&apos;s token in its identity file
-          (~/.agentplex/server.json by default) and shows it nowhere, so read it there; come back
-          with it and the address, and pick &quot;I already run a server&quot;.
-        </Text>
+        /* The other branch, and the reason this step asks its question at all:
+           a reader with no server needs a command, not a form. The panel hands
+           them back here once they have been to that machine, so the two
+           answers are a round trip rather than two dead ends. */
+        <EnrollPanel scheme={scheme} onHaveToken={() => setAnswer('already-running')} />
       )}
     </Stack>
   );
