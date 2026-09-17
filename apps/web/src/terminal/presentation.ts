@@ -8,7 +8,7 @@ import type {
   SubscriptionEndReason,
 } from '@agentplex/protocol';
 import { serverLabel } from '../sessions/session-list-model.js';
-import type { HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
+import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
 import { EMULATOR_SCROLLBACK_LINES, type SearchResults } from './emulator.js';
 
@@ -157,6 +157,71 @@ export function terminalFeedNotice(
       return 'the machine running this session is shutting down: nothing is reaching this pane until it is back, and the hub is waiting the time it asked for';
     case 'session-ended':
       return 'this terminal is gone: the machine that held it no longer has it, so what is above is the last of what it printed';
+  }
+}
+
+/**
+ * The slice of a watched terminal the attachment indicator reads.
+ *
+ * One field, and `TerminalWatchView` satisfies it, for the reason the pending
+ * pane narrows the same view: what the indicator needs is not a feed and not a
+ * byte count, and a function that took the whole view would be a function
+ * every future field could change the meaning of.
+ *
+ * It is also where the next fact goes. AGX-247 adds a `session-subscription-
+ * ended` frame and an `ended` flag on the store's view -- the hub saying this
+ * terminal is over rather than merely unanswered -- and feeding it in is a
+ * field here and a branch below, above the `attached` question, since a watch
+ * that ended was attached a moment ago and saying "Attached" about it would be
+ * the over-claim this whole indicator exists to prevent.
+ */
+export interface AttachmentTerminal {
+  /** Whether the hub has answered this pane's subscription. */
+  readonly attached: boolean;
+}
+
+/** What the pane says about its own attachment, and how loudly. */
+export interface Attachment {
+  readonly tone: Tone;
+  /** Capitalised: this is a chip in the header, not a sentence in a row. */
+  readonly words: string;
+}
+
+/**
+ * Whether this pane is attached, in one word, from the two facts that decide
+ * it: the socket, and the subscription on it.
+ *
+ * The connection is read first and that ordering is the substance of this
+ * function. A watch record keeps `attached` true until the store tears the
+ * connection down, so a pane that asked the terminal alone would go on saying
+ * "Attached" over a socket that is being redialled -- which is precisely the
+ * moment a person is looking at the word to find out why their keystrokes are
+ * going nowhere. The route the pane is on says nothing about any of it: an
+ * address is where a user pointed, not what a hub answered.
+ *
+ * `connected` with no answered watch is "Attaching" rather than a failure.
+ * There is no socket state in which a subscribe has been sent and refused and
+ * nothing is said: a refusal arrives as a `problem` and the pane repeats the
+ * hub's own words underneath, which is a better sentence than any word a chip
+ * could hold.
+ */
+export function paneAttachment(
+  phase: ConnectionPhase,
+  terminal: AttachmentTerminal | null,
+): Attachment {
+  switch (phase) {
+    case 'idle':
+      return { tone: 'idle', words: 'Not connected' };
+    case 'connecting':
+      return { tone: 'idle', words: 'Connecting' };
+    case 'reconnecting':
+      return { tone: 'blocked', words: 'Reconnecting' };
+    case 'failed':
+      return { tone: 'blocked', words: 'Dropped' };
+    case 'connected':
+      return terminal !== null && terminal.attached
+        ? { tone: 'running', words: 'Attached' }
+        : { tone: 'idle', words: 'Attaching' };
   }
 }
 
