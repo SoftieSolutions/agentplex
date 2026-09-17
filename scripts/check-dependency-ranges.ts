@@ -158,7 +158,17 @@ const manifestSchema = z.object({
  * answer than refusing the file by name.
  */
 export function manifestOffences(manifest: string, text: string): readonly Offence[] {
-  const parsed = manifestSchema.safeParse(JSON.parse(text));
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (cause) {
+    // A `SyntaxError` names a position and not a file, and this walks twelve of
+    // them, so the bare message would send a reader looking through all twelve
+    // for the one with a trailing comma in it.
+    throw new Error(`${manifest} is not JSON: ${String(cause)}`, { cause });
+  }
+
+  const parsed = manifestSchema.safeParse(json);
   if (!parsed.success) {
     throw new Error(`${manifest} is not a manifest this can read: ${parsed.error.message}`);
   }
@@ -185,6 +195,14 @@ export function manifestOffences(manifest: string, text: string): readonly Offen
  * dependency, and what is wanted here is a block of list items under `packages:`
  * ending at the next key. Anything else in the file -- `allowBuilds`, the
  * comments that carry its argument -- is none of this program's business.
+ *
+ * The part that has to be right is what an item's value ends at, because getting
+ * it wrong is silent. `- packages/*` with a comment after it is a glob pnpm
+ * reads as `packages/*`, and taking the comment as part of the glob would match
+ * no directory, skip five manifests and print a smaller count that nobody would
+ * think to disbelieve. So a trailing comment is stripped, and anything still
+ * holding whitespace afterwards is refused by name rather than guessed at: this
+ * reads a subset of YAML, and the honest failure for the rest is to say so.
  */
 export function parseWorkspaceGlobs(source: string, text: string): readonly string[] {
   const lines = text.split('\n');
@@ -196,17 +214,43 @@ export function parseWorkspaceGlobs(source: string, text: string): readonly stri
   const globs: string[] = [];
   for (const line of lines.slice(start + 1)) {
     if (line.trim() === '' || /^\s*#/.test(line)) continue;
-    const item = /^\s+-\s+(.+?)\s*$/.exec(line);
-    // The first line that is neither blank, a comment nor an item is the next
-    // key, and the list ended above it.
+    // A sequence under a key may be indented or start at column 0; pnpm takes
+    // both, so this does too. The first line that is neither blank, a comment
+    // nor an item is the next key, and the list ended above it.
+    const item = /^\s*-\s+(.+?)\s*$/.exec(line);
     if (item?.[1] === undefined) break;
-    globs.push(item[1].replace(/^(['"])(.*)\1$/, '$2'));
+    globs.push(globFrom(source, line, item[1]));
   }
 
   if (globs.length === 0) {
     throw new Error(`${source} lists no members under packages:, so there is nothing to check`);
   }
   return globs;
+}
+
+/**
+ * One item's value: what is left after a quoted scalar is unwrapped and an
+ * unquoted trailing comment is dropped.
+ *
+ * A `#` opens a comment in YAML only when a space precedes it, so `a#b` is the
+ * scalar `a#b` and ` # b` is a comment -- which is why the strip is anchored to
+ * the whitespace rather than to the `#`.
+ *
+ * Whitespace left in the value means this did not understand the line. A glob
+ * with a space in it is not something this tree has, and inventing a reading
+ * for one would put the check back where the comment bug had it: looking at
+ * fewer manifests than it says it did.
+ */
+function globFrom(source: string, line: string, item: string): string {
+  const quoted = /^(['"])(.*?)\1\s*(?:#.*)?$/.exec(item);
+  const glob = quoted?.[2] ?? item.replace(/\s+#.*$/, '');
+  if (glob === '' || /\s/.test(glob)) {
+    throw new Error(
+      `${source} has a member this cannot read: ${line.trim()}. ` +
+        'One glob per item, optionally quoted, with an optional trailing comment.',
+    );
+  }
+  return glob;
 }
 
 /** Whether a path exists, asked of the filesystem rather than assumed. */

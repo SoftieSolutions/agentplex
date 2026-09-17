@@ -150,6 +150,14 @@ describe('the three forms', () => {
       manifestOffences('package.json', JSON.stringify({ dependencies: { a: 1 } })),
     ).toThrow(/package\.json/);
   });
+
+  it('names the manifest when it is not JSON at all', () => {
+    // A SyntaxError names a position and not a file, and this walks twelve of
+    // them, so the bare message sends a reader looking through all twelve.
+    expect(() => manifestOffences('apps/web/package.json', '{ "dependencies": }')).toThrow(
+      /apps\/web\/package\.json is not JSON/,
+    );
+  });
 });
 
 describe('the workspace it reads', () => {
@@ -168,6 +176,44 @@ describe('the workspace it reads', () => {
     expect(parseWorkspaceGlobs('pnpm-workspace.yaml', text)).toEqual(['a/*', 'b']);
   });
 
+  it('takes an item with a comment after it, and the glob stops at the comment', () => {
+    // Valid YAML, and pnpm reads the glob as `packages/*`. Taking the comment as
+    // part of it would match no directory, skip five manifests, and print a
+    // smaller count than the run before it with nothing to say why.
+    const text = 'packages:\n  - apps/* # the deployables\n  - packages/*\t# the seams\n';
+    expect(parseWorkspaceGlobs('pnpm-workspace.yaml', text)).toEqual(['apps/*', 'packages/*']);
+  });
+
+  it('takes a quoted item, with or without a comment after it', () => {
+    const text = 'packages:\n  - \'apps/*\'\n  - "packages/*" # the seams\n';
+    expect(parseWorkspaceGlobs('pnpm-workspace.yaml', text)).toEqual(['apps/*', 'packages/*']);
+  });
+
+  it('keeps a # that opens no comment, because a space is what opens one', () => {
+    expect(parseWorkspaceGlobs('pnpm-workspace.yaml', 'packages:\n  - apps/a#b\n')).toEqual([
+      'apps/a#b',
+    ]);
+  });
+
+  it('takes a sequence at column 0, which pnpm takes too', () => {
+    expect(parseWorkspaceGlobs('pnpm-workspace.yaml', 'packages:\n- apps/*\n- scripts\n')).toEqual([
+      'apps/*',
+      'scripts',
+    ]);
+  });
+
+  it('refuses an item it cannot read rather than guessing at a glob', () => {
+    // Whitespace left after the comment strip means this did not understand the
+    // line. Reading a subset of YAML is fine; reading fewer manifests than it
+    // claims to is not, so the refusal names the line.
+    expect(() =>
+      parseWorkspaceGlobs('pnpm-workspace.yaml', 'packages:\n  - apps/* extra\n'),
+    ).toThrow(/pnpm-workspace\.yaml has a member this cannot read: - apps\/\* extra/);
+    expect(() => parseWorkspaceGlobs('pnpm-workspace.yaml', 'packages:\n  - "a b"\n')).toThrow(
+      /cannot read/,
+    );
+  });
+
   it('refuses a workspace file that declares no members', () => {
     expect(() =>
       parseWorkspaceGlobs('pnpm-workspace.yaml', 'allowBuilds:\n  esbuild: true\n'),
@@ -175,29 +221,28 @@ describe('the workspace it reads', () => {
   });
 
   it('finds the root manifest and every member that has one', async () => {
-    const manifests = await workspaceManifests(workspaceRoot);
-    expect(manifests).toContain('package.json');
-    expect(manifests).toEqual(
-      expect.arrayContaining([
-        'apps/cli/package.json',
-        'apps/hub/package.json',
-        'apps/server/package.json',
-        'apps/web/package.json',
-        'packages/protocol/package.json',
-        'scripts/package.json',
-        'tests/hub-server/package.json',
-      ]),
-    );
+    // `git ls-files '*package.json'` verbatim. Written out rather than asserted
+    // loosely because the failure this guards against is a quiet one: a member
+    // glob this stopped understanding would drop manifests and still report a
+    // clean workspace, and a count nobody knows the right value of is not
+    // evidence. A new package is a line here, which is the cheap half.
+    expect(await workspaceManifests(workspaceRoot)).toEqual([
+      'apps/cli/package.json',
+      'apps/hub/package.json',
+      'apps/server/package.json',
+      'apps/web/package.json',
+      'package.json',
+      'packages/node-shared/package.json',
+      'packages/protocol/package.json',
+      'packages/providers/package.json',
+      'packages/pty/package.json',
+      'packages/release/package.json',
+      'scripts/package.json',
+      'tests/hub-server/package.json',
+    ]);
     // The tracked set and nothing else: `git ls-files '*package.json'` returns
     // these twelve, and the directories `.gitignore` covers are absent because
     // none of them is a workspace member.
-    // `.gitignore`, as paths: `apps/*/release/` names an app's staged package
-    // and not `packages/release`, which is a member with a manifest of its own.
-    const ignored = /(?:^|\/)(?:node_modules|dist|coverage|release-assets)\//;
-    expect(
-      manifests.filter((path) => ignored.test(path) || /^apps\/[^/]+\/release\//.test(path)),
-    ).toEqual([]);
-    expect(manifests.every((path) => /^(?:[^/]+\/){0,2}package\.json$/.test(path))).toBe(true);
   });
 
   it('reads no manifest git does not track, assembled output included', async () => {
