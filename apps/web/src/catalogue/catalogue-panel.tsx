@@ -102,19 +102,6 @@ const SORT_KEYS: readonly { readonly value: CatalogueSortKey; readonly label: st
   { value: 'server', label: 'Machine' },
 ];
 
-/**
- * What is collapsed while the tree filter is on: nothing.
- *
- * A collapsed folder is an arrangement of the whole tree, and a filter is a
- * different question -- "where is the thing I typed" -- whose answer must not
- * be sitting behind a disclosure somebody closed last week. Honouring both
- * would also make the footer a lie: with the filter the only thing hiding
- * anything, `N hidden by filter` accounts for every node held and not drawn.
- * Nothing is written when this applies, so clearing the box brings the closed
- * folders back exactly as they were.
- */
-const NOTHING_COLLAPSED: ReadonlySet<NodeId> = new Set();
-
 /** Everything with a screen's lifetime, built once per mount. */
 interface HeldStores {
   readonly catalogue: CatalogueStore;
@@ -161,9 +148,13 @@ export function CataloguePanel({
   // the search box above is the one that narrows a list.
   const filtering = shape.view === 'tree' && treeFilter.trim() !== '';
   const filtered = filterTree(pages.items, filtering ? treeFilter : '');
+  // What a filter does to the collapsed folders and to the disclosures is
+  // `rowsFor`'s rule and is argued on `RowOptions.filtering`: it lives there
+  // rather than here so that a test can reach it without a DOM.
   const rows = rowsFor(filtered.items, {
     view: shape.view,
-    collapsed: filtering ? NOTHING_COLLAPSED : new Set(arrangement.collapsed),
+    collapsed: new Set(arrangement.collapsed),
+    filtering,
   });
   const hiding = filtering ? filterNote(filtered, pages.nextCursor === null) : null;
   const counts = sessionCounts(pages);
@@ -380,8 +371,17 @@ export function CataloguePanel({
 
       {/* Where the sessions the tree does not hold moved to. They belong in
           this view rather than beside the cards: the question "why is this not
-          in my tree" is a question about the tree. */}
-      <AbsentSessions store={store} state={state} layout={layout} scheme={scheme} />
+          in my tree" is a question about the tree.
+
+          Not while the tree is filtered, though. These are by definition not
+          in the tree, so the filter neither narrows them nor counts them, and
+          a list left standing under "nothing in the tree matches this filter"
+          reads as the rows that survived it. Clearing the box brings it
+          straight back, and nothing here is a session that has gone anywhere:
+          it is a section of this panel, not a row of the tree. */}
+      {filtering ? null : (
+        <AbsentSessions store={store} state={state} layout={layout} scheme={scheme} />
+      )}
     </Stack>
   );
 }

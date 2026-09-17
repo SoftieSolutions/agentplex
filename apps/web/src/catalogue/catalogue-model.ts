@@ -233,6 +233,9 @@ export function countLabel(pages: CataloguePages): string {
   return `${String(held)} of ${String(pages.total)}`;
 }
 
+/** What is collapsed while a tree filter is on. See `RowOptions.filtering`. */
+const NOTHING_COLLAPSED: ReadonlySet<NodeId> = new Set();
+
 /** One row of either view: a heading, or an item at a depth. */
 export type CatalogueRow =
   | { readonly kind: 'group'; readonly key: string; readonly group: CatalogueGroup }
@@ -259,6 +262,23 @@ export type CatalogueRow =
 export interface RowOptions {
   readonly view: CatalogueView;
   readonly collapsed: ReadonlySet<NodeId>;
+  /**
+   * Whether a tree filter is narrowing these items, which changes two things.
+   *
+   * The collapsed folders stop being honoured: a disclosure closed last week
+   * is an arrangement of the whole tree, not an answer to "where is the thing
+   * I typed", and it must not be sitting over the hit. It is also what makes
+   * `filterNote` honest -- with the filter the only thing hiding anything, one
+   * number accounts for every node held and not drawn.
+   *
+   * And no row offers a disclosure, because there is nothing left for one to
+   * do. A chevron that still wrote the arrangement would have somebody
+   * reordering their tree by trying to open a folder that is already open, and
+   * the write is a real one: it goes to the hub and to every other client.
+   * Nothing is written while this is true, so clearing the box brings the
+   * closed folders back exactly as they were.
+   */
+  readonly filtering?: boolean;
 }
 
 /**
@@ -278,7 +298,7 @@ export function rowsFor(
   options: RowOptions,
 ): readonly CatalogueRow[] {
   if (options.view === 'list') return listRows(items);
-  return treeRows(items, options.collapsed);
+  return treeRows(items, options.collapsed, options.filtering ?? false);
 }
 
 function listRows(items: readonly CatalogueItem[]): readonly CatalogueRow[] {
@@ -310,8 +330,13 @@ function listRows(items: readonly CatalogueItem[]): readonly CatalogueRow[] {
 
 function treeRows(
   items: readonly CatalogueItem[],
-  collapsed: ReadonlySet<NodeId>,
+  asked: ReadonlySet<NodeId>,
+  filtering: boolean,
 ): readonly CatalogueRow[] {
+  // See `RowOptions.filtering`: a filter answers a question the arrangement is
+  // not the answer to, so while one is on nothing is closed and nothing offers
+  // to close.
+  const collapsed = filtering ? NOTHING_COLLAPSED : asked;
   const present = new Set(items.map((item) => item.id));
   const childCount = new Map<NodeId, number>();
   for (const item of items) {
@@ -333,7 +358,7 @@ function treeRows(
   const rows: CatalogueRow[] = [];
   for (const item of items) {
     if (hidden.has(item.id)) continue;
-    const expandable = isContainer(item.kind) || (childCount.get(item.id) ?? 0) > 0;
+    const expandable = !filtering && (isContainer(item.kind) || (childCount.get(item.id) ?? 0) > 0);
     rows.push({
       kind: 'item',
       key: item.id,
@@ -407,20 +432,25 @@ export function filterTree(items: readonly CatalogueItem[], filter: string): Fil
  * that quietly omits branches lets somebody conclude a thing is not there when
  * it is only hidden. So the count is stated, and it accounts for every node
  * the client holds and is not drawing -- while a filter is on, nothing else is
- * hiding anything, because the panel stops honouring the collapsed folders for
+ * hiding anything, because `rowsFor` stops honouring the collapsed folders for
  * as long as one is typed.
  *
- * `whole` is whether the pages held are the whole answer. Without it, a filter
- * that matched none of the fifty rows loaded so far would say the catalogue
- * holds nothing like this, which is a claim about the pages it has not asked
- * for. It says what it holds instead.
+ * `whole` is whether the pages held are the whole answer, and both sentences
+ * need it. A filter that matched none of the fifty rows loaded so far would
+ * otherwise say the catalogue holds nothing like this, and a bare "12 hidden
+ * by filter" under a tree with a "Load more" button under that would be read
+ * as twelve out of everything there is. Both are claims about pages nobody has
+ * asked for yet. Each says what it holds instead.
  */
 export function filterNote(filtered: FilteredTree, whole: boolean): string | null {
   if (filtered.hidden === 0) return null;
-  if (filtered.items.length > 0) return `${String(filtered.hidden)} hidden by filter`;
-  return whole
-    ? 'nothing in the tree matches this filter'
-    : 'nothing loaded so far matches this filter';
+  if (filtered.items.length === 0) {
+    return whole
+      ? 'nothing in the tree matches this filter'
+      : 'nothing loaded so far matches this filter';
+  }
+  const count = `${String(filtered.hidden)} hidden by filter`;
+  return whole ? count : `${count}, of what has loaded so far`;
 }
 
 /**

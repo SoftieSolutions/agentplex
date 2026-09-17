@@ -332,6 +332,28 @@ describe('filtering the tree', () => {
     expect(filterNote(filtered, true)).toBe('2 hidden by filter');
   });
 
+  it('offers no disclosure and honours no closed folder while it is on', () => {
+    // Every node the filter kept is drawn, whatever was closed before: the
+    // footer's count is only honest while the filter is the one thing hiding
+    // anything. And no row offers a chevron, because there is nothing for it
+    // to do -- one that wrote the arrangement anyway would have a person
+    // reordering their tree by trying to open a folder that is already open.
+    const rows = rowsFor(items, {
+      view: 'tree',
+      collapsed: new Set([id('p'), id('f')]),
+      filtering: true,
+    });
+    expect(rows.map((row) => row.kind === 'item' && row.item.displayName)).toEqual([
+      'agentplex',
+      'this week',
+      'fix-auth-refresh',
+      'spike-wasm',
+    ]);
+    expect(rows.every((row) => row.kind === 'item' && !row.expandable && !row.collapsed)).toBe(
+      true,
+    );
+  });
+
   it('says the filter matched nothing rather than drawing an empty tree', () => {
     const filtered = filterTree(items, 'nothing here is called this');
     expect(filtered.items).toEqual([]);
@@ -340,11 +362,15 @@ describe('filtering the tree', () => {
   });
 
   it('claims nothing about the pages it has not been given', () => {
-    // Half an answer is on screen, so "nothing matches" would be a statement
-    // about a catalogue this has not seen. What it can say is what it holds.
+    // Half an answer is on screen, so both sentences are about the half that
+    // is: "nothing matches" would be a statement about a catalogue this has
+    // not seen, and a bare count would be read as a count over the whole of
+    // it. Each says what it holds instead.
     const filtered = filterTree(items, 'nothing here is called this');
     expect(filterNote(filtered, false)).toBe('nothing loaded so far matches this filter');
-    expect(filterNote(filterTree(items, 'auth'), false)).toBe('1 hidden by filter');
+    expect(filterNote(filterTree(items, 'auth'), false)).toBe(
+      '1 hidden by filter, of what has loaded so far',
+    );
   });
 
   it('terminates on ids that describe a cycle rather than walking forever', () => {
