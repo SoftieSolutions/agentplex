@@ -64,6 +64,18 @@ function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * One animation frame. Mantine's popovers place themselves with a floating-ui
+ * measurement and open through a transition, so a dropdown reaches the
+ * document a frame after the click that asked for it rather than in the same
+ * flush.
+ */
+function frame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
 const SESSION = sessionRefSchema.parse({
   storeId: 'store-agentplex',
   sessionId: 'session-migrate-db',
@@ -142,6 +154,37 @@ describe('the shell', () => {
     return [...container.querySelectorAll<HTMLAnchorElement>('nav a')];
   }
 
+  /** Every session address a part of the page links to, in the order drawn. */
+  function addresses(selector: string): string[] {
+    return [...container.querySelectorAll<HTMLAnchorElement>(selector)].map(
+      (link) => link.getAttribute('href') ?? '',
+    );
+  }
+
+  /**
+   * Picks a machine the way a person does: open the selector, then choose.
+   * The dropdown is a portal, so it is looked for in the document rather than
+   * in the container, and it is waited for rather than assumed -- see
+   * `frame`.
+   */
+  async function pickMachine(label: string): Promise<void> {
+    const target = container.querySelector<HTMLElement>('aside button');
+    if (target === null) throw new Error('the sidebar drew no machine selector');
+    await act(() => {
+      target.click();
+    });
+    await act(settle);
+    await act(frame);
+    await act(settle);
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (candidate) => candidate.textContent?.includes(label) ?? false,
+    );
+    if (item === undefined) throw new Error(`the menu offers no ${label}`);
+    await act(() => {
+      item.click();
+    });
+  }
+
   /** The Projects/Sessions pair, by the name the sidebar gives that control. */
   function sidebarTabs(): HTMLInputElement[] {
     return [
@@ -191,6 +234,67 @@ describe('the shell', () => {
 
     const rows = [...container.querySelectorAll<HTMLAnchorElement>('aside a[href^="#/session/"]')];
     expect(rows.map((row) => row.getAttribute('aria-label'))).toContain('open migrate-db-v9');
+  });
+
+  /** The classes Mantine's breakpoint props leave behind, which is what the
+   * shell uses to say which of the two is on screen below `md`. */
+  function hiddenBelowMd(element: Element | null): boolean {
+    return element?.classList.contains('mantine-visible-from-md') ?? false;
+  }
+
+  function theSidebarToggle(): HTMLButtonElement {
+    const button = container.querySelector<HTMLButtonElement>(
+      'header button[aria-label$="the sidebar"]',
+    );
+    if (button === null) throw new Error('the bar drew no sidebar toggle');
+    return button;
+  }
+
+  it('closes the sidebar when the address changes, so the tap lands somewhere', async () => {
+    await mount();
+    await act(() => {
+      theSidebarToggle().click();
+    });
+
+    // Open below the breakpoint: the sidebar is drawn at every width and the
+    // content is the one that is not.
+    expect(hiddenBelowMd(container.querySelector('aside'))).toBe(false);
+    expect(hiddenBelowMd(container.querySelector('main'))).toBe(true);
+
+    await act(async () => {
+      window.location.hash = sessionHash(SESSION);
+      await settle();
+    });
+
+    // And closed again by going somewhere -- a session row, a nav link or the
+    // brand mark, all of which are this. Without it the phone shows the
+    // sidebar it was tapped in and none of what was tapped.
+    expect(hiddenBelowMd(container.querySelector('aside'))).toBe(true);
+    expect(hiddenBelowMd(container.querySelector('main'))).toBe(false);
+  });
+
+  it('narrows both readings to the machine the selector picked', async () => {
+    await mount();
+
+    await pickMachine('gpu-box-01');
+
+    // The cards are the fleet's own reading and the sidebar list is the
+    // other; the selection is one fact with one writer, so the two cannot
+    // answer it differently.
+    const cards = addresses('main a[href^="#/session/"]');
+    expect(cards).toEqual([
+      '#/session/store-universe/session-docs-sweep',
+      '#/session/store-universe/session-bench-tokenizer',
+      '#/session/store-universe/session-train-lora',
+    ]);
+
+    const sessionsTab = sidebarTabs().find((input) => input.value === 'sessions');
+    if (sessionsTab === undefined) throw new Error('the sidebar drew no sessions tab');
+    await act(() => {
+      sessionsTab.click();
+    });
+
+    expect(addresses('aside a[href^="#/session/"]')).toEqual(cards);
   });
 
   it('draws no nav row for a destination nothing is behind', async () => {

@@ -9,7 +9,7 @@ import { SessionListScreen } from '../sessions/session-list-screen.js';
 import { SettingsRoute } from '../settings/settings-route.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
-import { useSessionRoute } from '../terminal/session-route.js';
+import { sessionHash, useSessionRoute } from '../terminal/session-route.js';
 import { Box, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { useDestination, type Destination } from './destinations.js';
@@ -36,8 +36,10 @@ import { TopBar } from './top-bar.js';
  *     region read it. `machine-selector-model.ts` argues why it is one fact.
  *   * the catalogue question itself, as a store. The panel draws it and the
  *     selection narrows it, and the store outlives both the panel's tab and
- *     whatever screen is mounted, so switching tabs or opening a session is
- *     not a new question.
+ *     whatever screen is mounted, so the question and the rows already paged
+ *     survive a screen being swapped. Leaving the Projects tab does drop the
+ *     interest and returning asks again -- the store is what the answer is
+ *     kept in, not what stops it being re-asked.
  *
  * Narrow widths: the sidebar and the content cannot both be on screen, so each
  * is rendered exactly once and carries `visibleFrom` while the other is the
@@ -71,7 +73,17 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
   // Built once and inert until something subscribes: creating a catalogue
   // store dials nothing, and the panel's first subscriber is what asks.
   const [catalogue] = useState<CatalogueStore>(() => createCatalogueStore({ hub }));
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // The sidebar's own openness below the breakpoint, and the address it was
+  // opened at. Two fields and not one because the content is `display: none`
+  // while the sidebar is open there: a tap on a session row or a nav link
+  // would otherwise change the address and leave the person looking at the
+  // sidebar they tapped in. Reading it back against the current address is
+  // what closes it, rather than a handler on every link -- the address is
+  // what "somewhere else" means, and this way the rows, the nav and the brand
+  // mark all count without any of them knowing about the sidebar.
+  const [sidebar, setSidebar] = useState<SidebarOpening>({ open: false, address: '' });
+  const address = addressOf(destination, sessionRef, doc);
+  const sidebarOpen = sidebar.open && sidebar.address === address;
 
   /**
    * The one place the selection moves from. Two things read it -- the cards
@@ -98,7 +110,7 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
       <TopBar
         scheme={scheme}
         sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+        onToggleSidebar={() => setSidebar({ open: !sidebarOpen, address })}
       />
       <Box style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Box
@@ -132,6 +144,27 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
       </Box>
     </Box>
   );
+}
+
+/** The sidebar being open, and the address it was opened at. */
+interface SidebarOpening {
+  readonly open: boolean;
+  readonly address: string;
+}
+
+/**
+ * The address the shell resolved, as one string to compare. Every route this
+ * file reads is in it, so a session row, a nav link and the brand mark are all
+ * a change of address -- which is the only thing the sidebar has to notice.
+ */
+function addressOf(
+  destination: Destination,
+  sessionRef: SessionRef | null,
+  doc: NodeId | null,
+): string {
+  if (sessionRef !== null) return sessionHash(sessionRef);
+  if (doc !== null) return `doc/${doc}`;
+  return destination;
 }
 
 interface ContentProps {

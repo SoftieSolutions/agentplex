@@ -20,8 +20,11 @@ import { SidebarSessions } from './sidebar-sessions.js';
  *
  * The tab pair chooses which reading is drawn, and only one is mounted at a
  * time: the choice is an act of the user's rather than a breakpoint, so there
- * is nothing for CSS to decide, and the catalogue store outlives the panel --
- * the shell holds it -- so switching away and back is not a new question.
+ * is nothing for CSS to decide. Leaving the Projects tab unmounts the panel
+ * and drops the catalogue interest with it, so coming back asks the question
+ * again; what the shell's store keeps across that is the question itself and
+ * the rows already paged, which is why the tab is cheap to leave and why the
+ * rows are there before the answer is.
  *
  * The nav is whatever `destinations.ts` says can honestly be reached. Graphs
  * and Library are named in the mockups and built by nobody yet, so they are
