@@ -114,4 +114,10 @@ export const hubFrames = {
     '{"type":"session-subscription-ended","target":{"by":"session","storeId":"store-work","sessionId":"session-build"},"reason":"server-dropped"}',
   refusalTerminal:
     '{"type":"refusal","replyTo":2,"code":"refused","message":"the hub cannot reach mbp-robert right now","holder":null}',
+  sessionSubscribedPending:
+    '{"type":"session-subscribed","replyTo":2,"storeId":"store-work","sessionId":null,"startId":5,"replayChunks":0,"droppedBytes":0}',
+  terminalOutputPending:
+    '{"type":"terminal-output","storeId":"store-work","sessionId":null,"startId":5,"chunk":"c3RhcnRpbmcgdXANCg==","droppedChunks":0}',
+  terminalOutputNamed:
+    '{"type":"terminal-output","storeId":"store-work","sessionId":"session-spawned","startId":5,"chunk":"bmFtZWQgbm93DQo=","droppedChunks":0}',
 } as const;

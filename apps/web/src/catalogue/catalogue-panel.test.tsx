@@ -126,6 +126,7 @@ function recordingLayout(collapsed: readonly NodeId[]): RecordingLayout {
     commitRatio: () => {},
     showSession: () => {},
     showDoc: () => {},
+    showPendingSession: () => {},
     focusMove: () => {},
     focusPane: () => {},
     toggleCollapsed: (nodeId: NodeId) => {

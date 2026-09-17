@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { nodeIdSchema, sessionRefSchema } from '@agentplex/protocol';
+import {
+  nodeIdSchema,
+  serverRegistrationIdSchema,
+  sessionIdSchema,
+  sessionRefSchema,
+  storeIdSchema,
+  type FrameId,
+  type SessionRef,
+} from '@agentplex/protocol';
+import { terminalKey, type StartedView } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { createLayoutStore, type LayoutHub } from './layout-store.js';
 import {
   DEFAULT_TREE,
   docPane,
   parsePaneLayout,
+  pendingPane,
   serializePaneLayout,
   sessionPane,
 } from './tree.js';
@@ -25,12 +35,15 @@ function fakeHub() {
   const listeners = new Set<() => void>();
   let answer: { layout: string | null } | null = null;
   let interest = 0;
+  /** What each watched terminal turned out to be, as the store publishes it. */
+  let terminals = new Map<string, { readonly session: SessionRef | null }>();
+  let lastStarted: StartedView | null = null;
   const hub: LayoutHub = {
     subscribe(listener: () => void): () => void {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    getSnapshot: () => ({ paneLayout: answer }),
+    getSnapshot: () => ({ paneLayout: answer, terminals, lastStarted }),
     subscribePaneLayout(): () => void {
       interest += 1;
       return () => {
@@ -42,13 +55,27 @@ function fakeHub() {
       return { accepted: true };
     },
   };
+  function notify(): void {
+    for (const listener of [...listeners]) listener();
+  }
+
   return {
     hub,
     saves,
     interest: () => interest,
     answer(layout: string | null): void {
       answer = { layout };
-      for (const listener of [...listeners]) listener();
+      notify();
+    },
+    /** The hub says which session a start-addressed watch turned out to be. */
+    names(startId: FrameId, session: SessionRef | null): void {
+      terminals = new Map([[terminalKey({ by: 'start', startId }), { session }]]);
+      notify();
+    },
+    /** The hub answers a start, the way it answers a resume: with the session. */
+    started(view: StartedView): void {
+      lastStarted = view;
+      notify();
     },
   };
 }
@@ -328,5 +355,108 @@ describe('what is collapsed', () => {
 
     h.answer(serializeWorkspace({ panes: DEFAULT_TREE, collapsed: [PROJECT], rest: {} }));
     expect(h.store.getSnapshot().collapsed).toEqual([PROJECT]);
+  });
+});
+
+describe('a pending pane', () => {
+  it('opens on the start handle, in the focused pane, and saves as an empty one', () => {
+    const h = harness();
+    h.answer(serializePaneLayout(DEFAULT_TREE));
+
+    h.store.showPendingSession(7);
+
+    expect(h.store.getSnapshot().tree).toEqual(pendingPane(7));
+    h.timers.fireAll();
+    // The arrangement is written down; the handle is not. A tab on another
+    // device has no connection this start was made on and could resolve
+    // nothing from it.
+    expect(parseWorkspace(h.saves[0] ?? null).panes).toEqual({
+      kind: 'pane',
+      content: { type: 'empty' },
+    });
+  });
+
+  it('becomes the session the moment the hub says which one the start was', () => {
+    const h = harness();
+    h.answer(serializePaneLayout(DEFAULT_TREE));
+    h.store.showPendingSession(7);
+    h.timers.fireAll();
+
+    // The watch this pane declared, now carrying what the hub answered about
+    // it: a session id that came off the server's own report, relayed.
+    h.names(7, SESSION);
+
+    expect(h.store.getSnapshot().tree).toEqual(sessionPane(SESSION));
+    h.timers.fireAll();
+    // And this time the pane is worth writing down.
+    expect(parseWorkspace(h.saves.at(-1) ?? null).panes).toEqual(sessionPane(SESSION));
+  });
+
+  it('stays pending while the watch has no session, however long that is', () => {
+    const h = harness();
+    h.answer(serializePaneLayout(DEFAULT_TREE));
+    h.store.showPendingSession(7);
+
+    h.names(7, null);
+    h.names(9, SESSION);
+
+    // Nothing about another start's watch, and nothing about time, moves this
+    // pane: the rebind is by the handle the pane holds and by nothing else.
+    expect(h.store.getSnapshot().tree).toEqual(pendingPane(7));
+  });
+
+  it('becomes the session a resume named, off the hub answer to that start', () => {
+    const h = harness();
+    h.answer(serializePaneLayout(DEFAULT_TREE));
+    h.store.showPendingSession(7);
+
+    h.started({
+      replyTo: 7,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      server: serverRegistrationIdSchema.parse('registration-1'),
+    });
+
+    // A start that named a session is answered with it, so the pane can stop
+    // being pending before a byte has arrived. Correlated by `replyTo`.
+    expect(h.store.getSnapshot().tree).toEqual(sessionPane(SESSION));
+  });
+
+  it('ignores an answer to a start no pane here is waiting on', () => {
+    const h = harness();
+    h.answer(serializePaneLayout(DEFAULT_TREE));
+    h.store.showPendingSession(7);
+
+    h.started({
+      replyTo: 9,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-2'),
+      server: serverRegistrationIdSchema.parse('registration-1'),
+    });
+
+    expect(h.store.getSnapshot().tree).toEqual(pendingPane(7));
+  });
+
+  it('waits for the stored layout rather than arranging a screen over it', () => {
+    const h = harness();
+    h.store.showPendingSession(7);
+
+    // Nothing yet: a pane put in the default layout now, and marked the
+    // user's, would be saved over the arrangement that has not arrived.
+    expect(h.store.getSnapshot().loaded).toBe(false);
+    expect(h.saves).toEqual([]);
+
+    h.answer(
+      serializePaneLayout({
+        kind: 'split',
+        direction: 'row',
+        ratio: 0.5,
+        first: sessionPane(OTHER),
+        second: { kind: 'pane', content: { type: 'empty' } },
+      }),
+    );
+
+    const tree = h.store.getSnapshot().tree;
+    expect(tree.kind === 'split' && tree.first).toEqual(pendingPane(7));
   });
 });

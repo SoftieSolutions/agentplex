@@ -1,6 +1,7 @@
 import { useRef, useState, type JSX, type PointerEvent } from 'react';
 import { DocPane } from '../docs/doc-pane.js';
 import type { HubStore } from '../store/hub-store.js';
+import { PendingPane } from '../terminal/pending-pane.js';
 import { SessionPane } from '../terminal/session-pane.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { Stack, Text } from '../ui/components.js';
@@ -188,6 +189,19 @@ function PaneContentView({
         <SessionPane
           key={sessionHash(content.session)}
           sessionRef={content.session}
+          store={view.hub}
+        />
+      );
+    case 'pending':
+      // Keyed on the start handle for the reason a session pane is keyed on
+      // its session: the feed and the emulator belong to one terminal. It is
+      // also what makes the rebind a remount -- the pane goes from `pending 7`
+      // to a session pane with its own key, so nothing of the pending one's
+      // emulator is carried into the session's.
+      return (
+        <PendingPane
+          key={`start-${String(content.startId)}`}
+          startId={content.startId}
           store={view.hub}
         />
       );

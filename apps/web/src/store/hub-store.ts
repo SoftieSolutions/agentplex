@@ -946,6 +946,38 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     record.bound = null;
   }
 
+  /**
+   * A start-addressed record learns which session it turned out to be.
+   *
+   * The moment a pending pane becomes a session's pane. The record keeps its
+   * start-addressed key -- the hub still answers to it -- and gains a second
+   * name, so a chunk carrying only the session id reaches it too.
+   *
+   * Taken off the hub's own frames rather than guessed from what arrived
+   * around the same time: a spawn and a scan racing is exactly the case where
+   * guessing by timing attaches a pane to somebody else's agent. Two frames
+   * can carry the answer and both are read, because which of them arrives
+   * first is not this store's to decide. The subscription's reply carries it
+   * when the provider had already named the session; for the spawn this whole
+   * path exists for it has not, and the first frame that can say so is a chunk
+   * of output carrying both names -- which is the server's reading of its own
+   * store report, relayed down the terminal path rather than inferred here.
+   *
+   * Answers whether anything changed, so the output path does not publish a
+   * snapshot per chunk.
+   */
+  function nameStart(record: TerminalRecord, storeId: StoreId, sessionId: SessionId): boolean {
+    if (record.target.by !== 'start' || record.session !== null) return false;
+    record.session = { storeId, sessionId };
+    unbind(record);
+    const key = sessionTerminalKey(storeId, sessionId);
+    record.bound = key;
+    const held = rebound.get(key) ?? new Set<TerminalRecord>();
+    held.add(record);
+    rebound.set(key, held);
+    return true;
+  }
+
   function connect(): void {
     cancelRetry = null;
     const mine = (generation += 1);
@@ -1252,22 +1284,16 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         record.problem = null;
         record.replayChunks = frame.replayChunks;
         record.droppedBytes = frame.droppedBytes;
-        record.session =
-          frame.sessionId === null ? null : { storeId: frame.storeId, sessionId: frame.sessionId };
-
-        // The moment a pending pane becomes a session's pane. The record keeps
-        // its start-addressed key -- the hub still answers to it -- and gains a
-        // second name, so a chunk carrying only the session id reaches it too.
-        // Taken off the hub's own answer rather than guessed from what arrived
-        // around the same time: a spawn and a scan racing is exactly the case
-        // where guessing by timing attaches a pane to somebody else's agent.
-        if (record.target.by === 'start' && frame.sessionId !== null) {
-          unbind(record);
-          const key = sessionTerminalKey(frame.storeId, frame.sessionId);
-          record.bound = key;
-          const held = rebound.get(key) ?? new Set<TerminalRecord>();
-          held.add(record);
-          rebound.set(key, held);
+        if (record.target.by === 'start') {
+          // A subscription by start handle, answered by a hub that already
+          // knows the session: `nameStart` is where a pending record stops
+          // being pending, whichever frame brings the news.
+          if (frame.sessionId !== null) nameStart(record, frame.storeId, frame.sessionId);
+        } else {
+          record.session =
+            frame.sessionId === null
+              ? null
+              : { storeId: frame.storeId, sessionId: frame.sessionId };
         }
         publishTerminals();
         return;
@@ -1307,10 +1333,18 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           const evicted = record.feed.truncated;
           const repeating = stillRepeating(record);
           record.feed.push(chunk);
+          // The frame that names a spawn, in the ordinary case. A subscription
+          // made before the provider wrote its session id was answered with a
+          // `null` one, and output is what carries the answer afterwards: the
+          // server puts the session on every chunk from the moment it binds
+          // the terminal to it.
+          const named =
+            frame.sessionId === null ? false : nameStart(record, frame.storeId, frame.sessionId);
           // Only the facts, and only when one of them moved. The bytes went
           // to the feed above and the emulator has them already; publishing
           // per chunk would re-render the app at the speed the agent prints.
           const changed =
+            named ||
             !record.printed ||
             record.droppedChunks !== frame.droppedChunks ||
             evicted !== record.feed.truncated ||
