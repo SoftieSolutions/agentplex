@@ -16,14 +16,17 @@ import { colorForRole, type Scheme } from '../ui/tokens.js';
 import type { ShellForm } from '../shell/shell-form.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
+import { NextActionLink } from '../shell/next-action.js';
 import {
   chipCounts,
   connectionNotice,
+  emptyListing,
   listSessions,
   providerOptions,
   storeOptions,
   visibleSessions,
   type ChipCount,
+  type EmptyListing as EmptyListingView,
   type StatusChip,
 } from './session-list-model.js';
 import { appLayoutStore } from '../layout/app-layout.js';
@@ -258,11 +261,7 @@ export function SessionListScreen({
       </Group>
 
       {visible.length === 0 ? (
-        <Text c="dimmed" fz={13}>
-          {everySession.length === 0
-            ? 'no sessions in any store yet'
-            : 'no session matches the current narrowing'}
-        </Text>
+        <EmptyListing listing={emptyListing(state, everySession.length > 0)} scheme={scheme} />
       ) : (
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
           {visible.map((item) => {
@@ -295,6 +294,33 @@ export function SessionListScreen({
         </SimpleGrid>
       )}
     </Stack>
+  );
+}
+
+/**
+ * The list with nothing in it, worded by `emptyListing` and drawn here.
+ *
+ * The words and the link are one sentence and one line: a person reads why the
+ * list is empty and, where there is one, where to go about it, without the
+ * screen shouting. An empty list is not an error.
+ */
+function EmptyListing({
+  listing,
+  scheme,
+}: {
+  readonly listing: EmptyListingView;
+  readonly scheme: Scheme;
+}): JSX.Element {
+  return (
+    <Text c="dimmed" fz={13}>
+      {listing.words}
+      {listing.action === null ? null : (
+        <>
+          {' '}
+          <NextActionLink action={listing.action} scheme={scheme} />
+        </>
+      )}
+    </Text>
   );
 }
 
