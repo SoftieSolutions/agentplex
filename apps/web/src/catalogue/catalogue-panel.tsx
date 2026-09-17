@@ -16,6 +16,7 @@ import { NodeMenu } from '../tree/node-menu.js';
 import {
   Box,
   Button,
+  CloseButton,
   Group,
   SegmentedControl,
   Select,
@@ -27,7 +28,9 @@ import {
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import {
   countLabel,
+  filterNote,
   filterOptions,
+  filterTree,
   isNarrowed,
   rowsFor,
   sessionCounts,
@@ -49,9 +52,15 @@ import { createCatalogueStore, type CatalogueStore } from './catalogue-store.js'
  * it decides which, because that is a fact about the screen and not about the
  * catalogue. Everything the user turns here maps onto a field of the query
  * frame: the view, the grouping, the sort key and direction, and the four
- * narrowings the filter names. Nothing is sorted, grouped or filtered in this
- * file; the hub answers one order and this draws it, which is the whole point
- * of decision 4.
+ * narrowings the filter names. Nothing is sorted or grouped in this file; the
+ * hub answers one order and this draws it, which is the whole point of
+ * decision 4.
+ *
+ * The one thing drawn out of less than the hub answered is the tree filter,
+ * and it is a second control rather than a second opinion: the search box asks
+ * the hub a narrower question over the whole catalogue, and the filter box
+ * narrows the page already on screen so that it can say, underneath, how many
+ * nodes that took away. `filterTree` in the model argues the division.
  *
  * No effects. The query goes out because something subscribed -- the store's
  * first subscriber is what asks -- and a change to the catalogue comes back
@@ -128,11 +137,26 @@ export function CataloguePanel({
     held.arrangement.getSnapshot,
   );
 
+  // What the tree filter box holds. A screen's fact and not the query's: it
+  // narrows what is drawn out of the page already held rather than asking the
+  // hub a narrower question, which is what lets the footer say how many nodes
+  // it took away. `filterTree` argues the division.
+  const [treeFilter, setTreeFilter] = useState('');
+
   const { shape, pages } = snapshot;
-  const rows = rowsFor(pages.items, {
+  // The tree only: the list view has no containment to keep a hit inside, and
+  // the search box above is the one that narrows a list.
+  const filtering = shape.view === 'tree' && treeFilter.trim() !== '';
+  const filtered = filterTree(pages.items, filtering ? treeFilter : '');
+  // What a filter does to the collapsed folders and to the disclosures is
+  // `rowsFor`'s rule and is argued on `RowOptions.filtering`: it lives there
+  // rather than here so that a test can reach it without a DOM.
+  const rows = rowsFor(filtered.items, {
     view: shape.view,
     collapsed: new Set(arrangement.collapsed),
+    filtering,
   });
+  const hiding = filtering ? filterNote(filtered, pages.nextCursor === null) : null;
   const counts = sessionCounts(pages);
   const machines = shortMachinesOf(state);
   const options = filterOptions(state);
@@ -249,6 +273,33 @@ export function CataloguePanel({
         </Text>
       )}
 
+      {/* The tree's own filter, directly over the rows it narrows, and a
+          separate control from the search box above on purpose. The search
+          asks the hub a narrower question -- over the whole catalogue, and
+          over working directories, session ids and machine names as well as
+          names -- and answers with a page. This narrows the page already on
+          screen, by the name drawn on the row, at the speed of a keystroke,
+          and it is the one that can say what it took away. */}
+      {shape.view === 'tree' ? (
+        <TextInput
+          size="xs"
+          aria-label="Filter tree"
+          placeholder="Filter tree"
+          value={treeFilter}
+          onChange={(event) => setTreeFilter(event.currentTarget.value)}
+          rightSectionPointerEvents="auto"
+          rightSection={
+            treeFilter === '' ? null : (
+              <CloseButton
+                size="sm"
+                aria-label="Clear the tree filter"
+                onClick={() => setTreeFilter('')}
+              />
+            )
+          }
+        />
+      ) : null}
+
       <Stack gap={2}>
         {rows.map((row) =>
           row.kind === 'group' ? (
@@ -284,7 +335,20 @@ export function CataloguePanel({
         )}
       </Stack>
 
-      {rows.length === 0 && pages.answered ? (
+      {/* What the filter is hiding, under the tree it is hiding it from. The
+          substance of AGX-135: a tree that silently omits branches lets
+          somebody conclude a thing is not there when it is only hidden, so
+          the count of what went is on screen beside what stayed. */}
+      {hiding === null ? null : (
+        <Text fz={11} c={muted}>
+          {hiding}
+        </Text>
+      )}
+
+      {/* Not while the filter is speaking for the empty tree: the catalogue
+          does hold things, and two sentences disagreeing about why the rows
+          are gone is worse than either. */}
+      {rows.length === 0 && pages.answered && hiding === null ? (
         <Text fz={12} c={muted}>
           {isNarrowed(shape)
             ? 'nothing in the catalogue matches this'
@@ -307,8 +371,17 @@ export function CataloguePanel({
 
       {/* Where the sessions the tree does not hold moved to. They belong in
           this view rather than beside the cards: the question "why is this not
-          in my tree" is a question about the tree. */}
-      <AbsentSessions store={store} state={state} layout={layout} scheme={scheme} />
+          in my tree" is a question about the tree.
+
+          Not while the tree is filtered, though. These are by definition not
+          in the tree, so the filter neither narrows them nor counts them, and
+          a list left standing under "nothing in the tree matches this filter"
+          reads as the rows that survived it. Clearing the box brings it
+          straight back, and nothing here is a session that has gone anywhere:
+          it is a section of this panel, not a row of the tree. */}
+      {filtering ? null : (
+        <AbsentSessions store={store} state={state} layout={layout} scheme={scheme} />
+      )}
     </Stack>
   );
 }

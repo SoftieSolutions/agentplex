@@ -29,10 +29,16 @@ import { DOC_KIND, FOLDER_KIND, PROJECT_KIND } from '../tree/node-kinds.js';
  * is the reason the query is hub-side at all: the order, the paging and the
  * grouping are the hub's answer, and a client that recomputed any of them
  * would be the second opinion decision 4 exists to prevent. So nothing below
- * sorts, filters or groups. What it does is the part the hub cannot: which
- * rows a collapsed folder hides, what a page adds to the pages already held,
- * what to do when a cursor is refused, and what to call a machine in the four
+ * sorts or groups. What it does is the part the hub cannot: which rows a
+ * collapsed folder hides, what a page adds to the pages already held, what to
+ * do when a cursor is refused, and what to call a machine in the four
  * characters a tree row has room for.
+ *
+ * `filterTree` is the one narrowing here and the exception that the rule is
+ * about: it narrows what is drawn out of the rows the client already holds,
+ * not what the hub answered, and it exists because the number it reports --
+ * how many nodes the filter is hiding -- is a fact only the holder of the
+ * unnarrowed tree can state. Its own comment argues it.
  *
  * The components in this folder hold what a person clicked and nothing else,
  * which is the pattern AGX-238 and AGX-243 landed on: this stack renders under
@@ -227,6 +233,9 @@ export function countLabel(pages: CataloguePages): string {
   return `${String(held)} of ${String(pages.total)}`;
 }
 
+/** What is collapsed while a tree filter is on. See `RowOptions.filtering`. */
+const NOTHING_COLLAPSED: ReadonlySet<NodeId> = new Set();
+
 /** One row of either view: a heading, or an item at a depth. */
 export type CatalogueRow =
   | { readonly kind: 'group'; readonly key: string; readonly group: CatalogueGroup }
@@ -253,6 +262,23 @@ export type CatalogueRow =
 export interface RowOptions {
   readonly view: CatalogueView;
   readonly collapsed: ReadonlySet<NodeId>;
+  /**
+   * Whether a tree filter is narrowing these items, which changes two things.
+   *
+   * The collapsed folders stop being honoured: a disclosure closed last week
+   * is an arrangement of the whole tree, not an answer to "where is the thing
+   * I typed", and it must not be sitting over the hit. It is also what makes
+   * `filterNote` honest -- with the filter the only thing hiding anything, one
+   * number accounts for every node held and not drawn.
+   *
+   * And no row offers a disclosure, because there is nothing left for one to
+   * do. A chevron that still wrote the arrangement would have somebody
+   * reordering their tree by trying to open a folder that is already open, and
+   * the write is a real one: it goes to the hub and to every other client.
+   * Nothing is written while this is true, so clearing the box brings the
+   * closed folders back exactly as they were.
+   */
+  readonly filtering?: boolean;
 }
 
 /**
@@ -272,7 +298,7 @@ export function rowsFor(
   options: RowOptions,
 ): readonly CatalogueRow[] {
   if (options.view === 'list') return listRows(items);
-  return treeRows(items, options.collapsed);
+  return treeRows(items, options.collapsed, options.filtering ?? false);
 }
 
 function listRows(items: readonly CatalogueItem[]): readonly CatalogueRow[] {
@@ -304,8 +330,13 @@ function listRows(items: readonly CatalogueItem[]): readonly CatalogueRow[] {
 
 function treeRows(
   items: readonly CatalogueItem[],
-  collapsed: ReadonlySet<NodeId>,
+  asked: ReadonlySet<NodeId>,
+  filtering: boolean,
 ): readonly CatalogueRow[] {
+  // See `RowOptions.filtering`: a filter answers a question the arrangement is
+  // not the answer to, so while one is on nothing is closed and nothing offers
+  // to close.
+  const collapsed = filtering ? NOTHING_COLLAPSED : asked;
   const present = new Set(items.map((item) => item.id));
   const childCount = new Map<NodeId, number>();
   for (const item of items) {
@@ -327,7 +358,7 @@ function treeRows(
   const rows: CatalogueRow[] = [];
   for (const item of items) {
     if (hidden.has(item.id)) continue;
-    const expandable = isContainer(item.kind) || (childCount.get(item.id) ?? 0) > 0;
+    const expandable = !filtering && (isContainer(item.kind) || (childCount.get(item.id) ?? 0) > 0);
     rows.push({
       kind: 'item',
       key: item.id,
@@ -339,6 +370,87 @@ function treeRows(
     });
   }
   return rows;
+}
+
+/** What the tree filter kept, and how much of the tree it took away. */
+export interface FilteredTree {
+  /** The items given, in the order they were given, minus what was filtered. */
+  readonly items: readonly CatalogueItem[];
+  /** How many of the items handed in are not in `items`. */
+  readonly hidden: number;
+}
+
+/**
+ * The tree narrowed by what somebody typed into the filter box.
+ *
+ * This is the one narrowing in this file, and the exception is deliberate. It
+ * is not a second opinion about the hub's answer: the order, the paging, the
+ * grouping and every field of `CatalogueFilter` are still the hub's and are
+ * untouched here. It is a question about the rows already on screen -- "which
+ * of these is the one I am after" -- answered without a round trip, and the
+ * reason it cannot be the hub's is `filterNote`: the count of what a filter
+ * hid is a fact about the tree the client was holding when it typed, and a
+ * hub that answered a narrower query would have counted nothing.
+ *
+ * Case-insensitive substring over `displayName`, which is the name on the row
+ * -- a person types what they can see, so matching anything else would hide a
+ * row whose visible name contains what they typed. Every ancestor of a hit is
+ * kept, by the rule the hub's own tree order states: a folder is not the thing
+ * being filtered for, it is where the thing is, and dropping it would move the
+ * hit somewhere it is not. Nothing else is: a child of a container that
+ * matched is a row the filter was asked to take away, which is the same answer
+ * the hub gives its own search and keeps the two narrowings one rule rather
+ * than two.
+ */
+export function filterTree(items: readonly CatalogueItem[], filter: string): FilteredTree {
+  const needle = filter.trim().toLocaleLowerCase();
+  if (needle === '') return { items, hidden: 0 };
+
+  const parents = new Map<NodeId, NodeId | null>(items.map((item) => [item.id, item.parentId]));
+  const kept = new Set<NodeId>();
+  for (const item of items) {
+    if (!item.displayName.toLocaleLowerCase().includes(needle)) continue;
+    // Up to the root, stopping at the first ancestor already kept: that both
+    // saves re-walking a shared spine and terminates the walk if the ids ever
+    // describe a cycle, which nothing in the hub can write but a client that
+    // hangs on one would be a client that hangs.
+    let walking: NodeId | null = item.id;
+    while (walking !== null && !kept.has(walking)) {
+      kept.add(walking);
+      walking = parents.get(walking) ?? null;
+    }
+  }
+
+  const remaining = items.filter((item) => kept.has(item.id));
+  return { items: remaining, hidden: items.length - remaining.length };
+}
+
+/**
+ * The line under a filtered tree that says what the filter is not showing.
+ *
+ * The substance of AGX-135, and the reason the filter is drawn at all: a tree
+ * that quietly omits branches lets somebody conclude a thing is not there when
+ * it is only hidden. So the count is stated, and it accounts for every node
+ * the client holds and is not drawing -- while a filter is on, nothing else is
+ * hiding anything, because `rowsFor` stops honouring the collapsed folders for
+ * as long as one is typed.
+ *
+ * `whole` is whether the pages held are the whole answer, and both sentences
+ * need it. A filter that matched none of the fifty rows loaded so far would
+ * otherwise say the catalogue holds nothing like this, and a bare "12 hidden
+ * by filter" under a tree with a "Load more" button under that would be read
+ * as twelve out of everything there is. Both are claims about pages nobody has
+ * asked for yet. Each says what it holds instead.
+ */
+export function filterNote(filtered: FilteredTree, whole: boolean): string | null {
+  if (filtered.hidden === 0) return null;
+  if (filtered.items.length === 0) {
+    return whole
+      ? 'nothing in the tree matches this filter'
+      : 'nothing loaded so far matches this filter';
+  }
+  const count = `${String(filtered.hidden)} hidden by filter`;
+  return whole ? count : `${count}, of what has loaded so far`;
 }
 
 /**

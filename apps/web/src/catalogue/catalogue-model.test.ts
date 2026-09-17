@@ -14,7 +14,9 @@ import {
   CATALOGUE_PAGE_LIMIT,
   countLabel,
   DEFAULT_SHAPE,
+  filterNote,
   filterOptions,
+  filterTree,
   isNarrowed,
   matchWords,
   nameStyleOf,
@@ -259,6 +261,126 @@ describe('the rows a tree draws', () => {
     expect(
       rowsFor(grouped, { view: 'tree', collapsed: new Set() }).every((row) => row.kind === 'item'),
     ).toBe(true);
+  });
+});
+
+describe('filtering the tree', () => {
+  const project = item({
+    id: id('p'),
+    kind: PROJECT_KIND,
+    name: 'agentplex',
+    named: true,
+    displayName: 'agentplex',
+    depth: 0,
+  });
+  const folder = item({
+    id: id('f'),
+    kind: FOLDER_KIND,
+    parentId: id('p'),
+    name: 'this week',
+    named: true,
+    displayName: 'this week',
+    depth: 1,
+  });
+  const session = item({
+    id: id('s'),
+    parentId: id('f'),
+    depth: 2,
+    displayName: 'fix-auth-refresh',
+    anchor: anchorOf('session-1'),
+  });
+  const elsewhere = item({ id: id('o'), displayName: 'spike-wasm', anchor: anchorOf('session-2') });
+  const items = [project, folder, session, elsewhere];
+
+  it('hides nothing at all until something is typed', () => {
+    for (const blank of ['', '   ']) {
+      const filtered = filterTree(items, blank);
+      expect(filtered.items).toBe(items);
+      expect(filtered.hidden).toBe(0);
+      expect(filterNote(filtered, true)).toBeNull();
+    }
+  });
+
+  it('matches a name however it was typed, and counts what that took away', () => {
+    const filtered = filterTree(items, '  SPIKE  ');
+    expect(filtered.items.map((entry) => entry.displayName)).toEqual(['spike-wasm']);
+    expect(filtered.hidden).toBe(3);
+    expect(filterNote(filtered, true)).toBe('3 hidden by filter');
+  });
+
+  it('keeps every ancestor of a hit, so the hit stays where the user put it', () => {
+    const filtered = filterTree(items, 'auth');
+    expect(filtered.items.map((entry) => entry.displayName)).toEqual([
+      'agentplex',
+      'this week',
+      'fix-auth-refresh',
+    ]);
+    expect(filtered.hidden).toBe(1);
+  });
+
+  it('keeps the order the hub answered in', () => {
+    const filtered = filterTree([elsewhere, project, folder, session], 'e');
+    expect(filtered.items.map((entry) => entry.id)).toEqual([id('o'), id('p'), id('f'), id('s')]);
+  });
+
+  it('draws a container that matched without pulling what is under it along', () => {
+    // The rule the hub's tree order already follows: a container is kept when
+    // it matches or when something under it does, and a child that matched
+    // nothing is a child the filter was asked to take away.
+    const filtered = filterTree(items, 'this week');
+    expect(filtered.items.map((entry) => entry.displayName)).toEqual(['agentplex', 'this week']);
+    expect(filterNote(filtered, true)).toBe('2 hidden by filter');
+  });
+
+  it('offers no disclosure and honours no closed folder while it is on', () => {
+    // Every node the filter kept is drawn, whatever was closed before: the
+    // footer's count is only honest while the filter is the one thing hiding
+    // anything. And no row offers a chevron, because there is nothing for it
+    // to do -- one that wrote the arrangement anyway would have a person
+    // reordering their tree by trying to open a folder that is already open.
+    const rows = rowsFor(items, {
+      view: 'tree',
+      collapsed: new Set([id('p'), id('f')]),
+      filtering: true,
+    });
+    expect(rows.map((row) => row.kind === 'item' && row.item.displayName)).toEqual([
+      'agentplex',
+      'this week',
+      'fix-auth-refresh',
+      'spike-wasm',
+    ]);
+    expect(rows.every((row) => row.kind === 'item' && !row.expandable && !row.collapsed)).toBe(
+      true,
+    );
+  });
+
+  it('says the filter matched nothing rather than drawing an empty tree', () => {
+    const filtered = filterTree(items, 'nothing here is called this');
+    expect(filtered.items).toEqual([]);
+    expect(filtered.hidden).toBe(4);
+    expect(filterNote(filtered, true)).toBe('nothing in the tree matches this filter');
+  });
+
+  it('claims nothing about the pages it has not been given', () => {
+    // Half an answer is on screen, so both sentences are about the half that
+    // is: "nothing matches" would be a statement about a catalogue this has
+    // not seen, and a bare count would be read as a count over the whole of
+    // it. Each says what it holds instead.
+    const filtered = filterTree(items, 'nothing here is called this');
+    expect(filterNote(filtered, false)).toBe('nothing loaded so far matches this filter');
+    expect(filterNote(filterTree(items, 'auth'), false)).toBe(
+      '1 hidden by filter, of what has loaded so far',
+    );
+  });
+
+  it('terminates on ids that describe a cycle rather than walking forever', () => {
+    // Nothing in the hub can write one; this is the belt to that brace.
+    const one = item({ id: id('a'), parentId: id('b'), displayName: 'one' });
+    const other = item({ id: id('b'), parentId: id('a'), displayName: 'other' });
+    expect(filterTree([one, other], 'one').items.map((entry) => entry.id)).toEqual([
+      id('a'),
+      id('b'),
+    ]);
   });
 });
 
