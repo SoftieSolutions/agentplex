@@ -15,6 +15,7 @@ import {
 } from '../settings/fake-pairing-operations.js';
 import { discoveredCandidates } from '../settings/pairing-form.js';
 import type { PairingOutcome } from '../settings/pairing-operations.js';
+import { serverRows, type ServerRowView } from '../settings/server-rows.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
@@ -93,6 +94,23 @@ function stateFrom(text: string): MachineState {
 const PAIRED = serverRegistrationIdSchema.parse('registration-1');
 const YES: PairingOutcome = { ok: true, registrationId: PAIRED };
 
+/** The machine `machineStateWithServer` carries, which never answered. */
+const UNREACHED = serverRegistrationIdSchema.parse('pairing-1');
+const REACHED_NOBODY: PairingOutcome = { ok: true, registrationId: UNREACHED };
+
+/** The rows a captured frame projects into, the way the screen above gets them. */
+function rowsFrom(text: string): readonly ServerRowView[] {
+  return serverRows(stateFrom(text));
+}
+
+/**
+ * The hub stamped the captured `connected` row at this instant, so the age the
+ * card draws is a function of the `now` this file injects rather than of the
+ * day the suite happens to run.
+ */
+const CONNECTED_SINCE = 1_756_000_000_000;
+const FOUR_MINUTES_LATER = CONNECTED_SINCE + 4 * 60_000;
+
 /** The two machines the captured state announces, read the way the app reads them. */
 const CANDIDATES = discoveredCandidates(stateFrom(hubFrames.machineStateDiscovered));
 
@@ -120,9 +138,24 @@ describe('the wizard pairing step', () => {
 
   async function mount(answer: PairingOutcome = YES): Promise<FakePairingOperations> {
     const pairing = createFakePairingOperations({ answer });
+    root = createRoot(container);
+    await render(pairing, []);
+    return pairing;
+  }
+
+  /**
+   * Draws the step over one set of rows. Calling it again is how this file
+   * delivers a machine-state broadcast: the rows are a prop from the screen
+   * that holds the store's snapshot, so a new state arriving is a re-render
+   * with new rows, and the step is supposed to follow it without being told
+   * anything else.
+   */
+  async function render(
+    pairing: FakePairingOperations,
+    rows: readonly ServerRowView[],
+  ): Promise<void> {
     await act(async () => {
-      root = createRoot(container);
-      root.render(
+      root?.render(
         <MantineProvider
           theme={theme}
           cssVariablesResolver={cssVariablesResolver}
@@ -131,7 +164,9 @@ describe('the wizard pairing step', () => {
           <PairStep
             pairing={pairing}
             candidates={CANDIDATES}
+            rows={rows}
             scheme="dark"
+            now={FOUR_MINUTES_LATER}
             onDone={() => {
               done += 1;
             }}
@@ -139,7 +174,6 @@ describe('the wizard pairing step', () => {
         </MantineProvider>,
       );
     });
-    return pairing;
   }
 
   function button(text: string): HTMLButtonElement {
@@ -229,13 +263,63 @@ describe('the wizard pairing step', () => {
         token: 'printed-nowhere',
       },
     ]);
-    expect(container.textContent).toContain('Pairing recorded; the hub dials it from here');
     // The form goes: a second pairing of the same machine is not what the next
     // click should be, and a filled form left standing invites one.
     expect(hasButton('Pair server')).toBe(false);
 
     await click('Done');
 
+    expect(done).toBe(1);
+  });
+
+  it('draws the machine once the hub publishes the row that names it', async () => {
+    const pairing = await mount();
+
+    await pair();
+    await render(pairing, rowsFrom(hubFrames.machineStateJustPaired));
+
+    // The card's own states are pinned in `machine-card.test.tsx`. What this
+    // holds is the wiring: the id the panel handed back picks this row out of
+    // the broadcast, and the rows reach the card without a poll or an effect
+    // between them.
+    const said = copy();
+    expect(said).toContain('mbp-robert connected');
+    expect(said).toContain('wss://mbp-robert.example:8443');
+    expect(said).toContain('connected 4m');
+    expect(said).toContain('store-agentplex');
+    expect(said).toContain('claude 9.9.9');
+    expect(said).not.toContain('Pairing recorded');
+  });
+
+  it('stops on the machine that never answered, and still lets the reader out', async () => {
+    const pairing = await mount(REACHED_NOBODY);
+
+    await pair();
+    await render(pairing, rowsFrom(hubFrames.machineStateWithServer));
+
+    const said = copy();
+    expect(said).toMatch(/unreachable/i);
+    expect(said).toContain('connection refused');
+    expect(said).toContain('Settings can unpair it');
+    // No spinner: the dial failed, so there is nothing in flight to spin at.
+    expect(container.querySelector('[class*="Loader"]')).toBe(null);
+
+    // And the way out is still there. The reader whose machine never answers
+    // is the one a wizard most easily traps.
+    await click('Done');
+    expect(done).toBe(1);
+  });
+
+  it('says only that the pairing is recorded until a row names it', async () => {
+    await mount();
+
+    await pair();
+
+    // The `server-paired` reply and the state that includes the row are two
+    // broadcasts. Between them the only true sentence is that the hub wrote
+    // the pairing down.
+    expect(copy()).toContain('Pairing recorded; the hub dials it from here');
+    await click('Done');
     expect(done).toBe(1);
   });
 
@@ -296,20 +380,23 @@ describe('the wizard pairing step', () => {
   });
 
   it('never says a server dials the hub, because it does not', async () => {
-    await mount();
+    const pairing = await mount();
 
     await click('I need to run one');
     const installing = container.textContent ?? '';
     await click('I already run a server');
-    const pairing = container.textContent ?? '';
+    const paired = container.textContent ?? '';
     await pair();
     const recorded = container.textContent ?? '';
+    await render(pairing, rowsFrom(hubFrames.machineStateJustPaired));
+    const online = container.textContent ?? '';
 
     // The hub dials the server. A sentence the other way round on this step is
     // an instruction to open a port on the machine that needs none.
     const backwards = /server[^.]*\b(dials?|connects? to|points? at|reaches?)\b[^.]*hub/i;
     expect(installing).not.toMatch(backwards);
-    expect(pairing).not.toMatch(backwards);
+    expect(paired).not.toMatch(backwards);
     expect(recorded).not.toMatch(backwards);
+    expect(online).not.toMatch(backwards);
   });
 });

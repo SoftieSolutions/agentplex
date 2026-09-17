@@ -38,6 +38,23 @@ export interface ServerRowView {
   readonly phase: string;
   /** What is wrong, in the hub's words, or `null` while nothing is. */
   readonly problem: string | null;
+  /**
+   * When the connection now held was established, or `null` when none is.
+   *
+   * The hub stamped this with its own clock, which is why it is the one instant
+   * on the row worth drawing: a machine's own idea of when it connected is a
+   * reading from a clock that disagrees with the hub's, and the phase words
+   * beside it say nothing about whether this connection is four seconds or four
+   * days old -- the difference between a box that is up and one that is
+   * flapping.
+   *
+   * Carried as the moment rather than as "up 4 minutes", because a duration
+   * computed here is computed once. This projection runs when a frame arrives,
+   * not on a tick, so a rendered age would freeze at the last frame and read as
+   * a machine that stopped ageing. Turning it into words is the drawing's job,
+   * where the clock that ticks lives.
+   */
+  readonly connectedSince: number | null;
   /** The stores it had mounted when last connected. */
   readonly stores: readonly string[];
   /**
@@ -168,6 +185,7 @@ export function serverRows(state: MachineState | null): readonly ServerRowView[]
     tone: toneFor(view),
     phase: phaseWords(view),
     problem: view.problem,
+    connectedSince: view.connectedSince,
     stores: view.stores,
     providers: view.providers.map(providerRow),
   }));
