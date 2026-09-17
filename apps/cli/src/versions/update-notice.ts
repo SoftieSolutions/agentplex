@@ -135,7 +135,7 @@ export async function updateNotice(
 
   if (runningVersion === null || runningVersion === UNRELEASED) return [];
 
-  const available = cached.manifest[CLI_COMPONENT]?.version;
+  const available = cached.manifest[CLI_COMPONENT]?.current;
   if (available === undefined || !isNewerVersion(available, runningVersion)) return [];
 
   return [

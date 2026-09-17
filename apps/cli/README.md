@@ -70,20 +70,28 @@ Each package is released on its own, at its own version, under a tag shaped
 a fix to this command should not force every server on the fleet to recompile a
 native addon.
 
-What is current for each of them is published as one small file on the `v1`
-branch, beside `install.sh`:
+Which releases exist, and which of them is current, is published as one small
+file on the `v1` branch, beside `install.sh`:
 
 ```json
 {
-  "cli": { "version": "1.4.0", "protocol": 3 },
-  "hub": { "version": "1.2.0", "protocol": 3 },
-  "server": { "version": "1.5.0", "protocol": 3 },
-  "web": { "version": "1.1.0", "protocol": 3 }
+  "cli": { "current": "1.4.0", "releases": { "1.4.0": 3, "1.3.9": 3 } },
+  "hub": { "current": "1.2.0", "releases": { "1.2.0": 3, "1.1.7": 2 } },
+  "server": { "current": "1.5.0", "releases": { "1.5.0": 3 } },
+  "web": { "current": "1.1.0", "releases": { "1.1.0": 3 } }
 }
 ```
 
 `install.sh` reads it before it downloads anything, so one unauthenticated fetch
-answers both what to install and whether the set agrees.
+answers what to install, whether the set agrees, and everything a pin leaves
+open. The file is append-only: a release adds a line to its component's history
+and never removes one, so a version that was ever published stays installable.
+
+A release history in a file that is fetched anyway is what makes a partial pin
+possible without the GitHub releases API, which is deeply nested JSON no shell
+grammar should be reading, rate limited to sixty unauthenticated requests an
+hour, and paginated past a hundred releases. A thousand releases here is roughly
+thirty kilobytes.
 
 **`protocol` is what makes independent versions safe.** It is the single
 compatibility constant -- the wire frames the hub and the server speak, and the
@@ -100,20 +108,33 @@ is a tripwire and not something you have to resolve.
 bash install.sh --role=both                          # hub and server, current
 bash install.sh --role=hub@1.3.0 --role=server@1.4.0 # each pinned on its own
 bash install.sh --role=hub@1.3.0                     # hub only, pinned
+bash install.sh --role=hub@1.3                       # newest 1.3.x
+bash install.sh --role=hub@1                         # newest 1.x
 bash install.sh --role=hub --package-version=1.4.0   # the command pinned
 ```
 
 `--role` is repeatable and each may carry its own pin. `--role=both` takes no
 `@`: a version names one component and `both` names two, so pin them
 separately. Naming the same component twice stops the run rather than taking the
-last one. A version is exact -- `1.4.0`, not `1.4` -- because it names the
-release tag, and there is no registry here to resolve a range against.
+last one.
 
-A pinned component is checked before anything is installed: every release
-publishes a small metadata file beside its tarball carrying that release's
-protocol, and `install.sh` reads it first. The failure it exists to prevent is a
-machine whose hub and server are both installed, both running, and unable to
-pair.
+A pin is either an exact version, which names the release tag
+`<component>-v<version>`, or a series -- `1.3` or `1` -- which resolves to the
+newest release published under it. A series never resolves to a prerelease:
+`hub@1.3` will not pick up `1.3.8-rc1`, though naming that version exactly
+installs it. Nothing wider is accepted; `^1.3.0`, `1.3.x` and `latest` are
+refused at the flag, because delivery here is a set of tags and not a registry
+with a resolver behind it.
+
+A pinned component is checked before anything is installed: `versions.json` says
+what protocol every release speaks, so a pin that would leave this machine
+unable to talk to itself is refused with both numbers named and nothing written.
+The failure it exists to prevent is a machine whose hub and server are both
+installed, both running, and unable to pair.
+
+Because the manifest is what answers all of that, every install reads it,
+pinned or not. A machine that cannot reach it -- an air-gapped fleet, a mirror
+-- sets `AGENTPLEX_VERSIONS` to a directory holding a copy.
 
 ## Installing a server needs a C++ toolchain on Linux; a hub does not
 

@@ -57,14 +57,14 @@ describe('reading one back', () => {
   const written = serializeCachedVersions({
     checkedAt: 1_800_000_000_000,
     source: 'https://example.invalid/versions.json',
-    manifest: { cli: { version: '1.5.0', protocol: 3 } },
+    manifest: { cli: { current: '1.5.0', releases: { '1.5.0': 3 } } },
   });
 
   it('round trips what was written', () => {
     expect(parseCachedVersions(written)).toEqual({
       checkedAt: 1_800_000_000_000,
       source: 'https://example.invalid/versions.json',
-      manifest: { cli: { version: '1.5.0', protocol: 3 } },
+      manifest: { cli: { current: '1.5.0', releases: { '1.5.0': 3 } } },
     });
   });
 
@@ -81,7 +81,7 @@ describe('reading one back', () => {
     ['a manifest that is not one', '{"checkedAt":1,"source":"x","manifest":{"cli":"1.5.0"}}'],
     [
       'a version that is not one',
-      '{"checkedAt":1,"source":"x","manifest":{"cli":{"version":"latest","protocol":3}}}',
+      '{"checkedAt":1,"source":"x","manifest":{"cli":{"current":"latest","releases":{}}}}',
     ],
   ])('refuses %s', (_name, text) => {
     expect(parseCachedVersions(text)).toBeNull();
@@ -93,7 +93,7 @@ describe('how old it is', () => {
     const cached = {
       checkedAt: 1000,
       source: 'x',
-      manifest: { cli: { version: '1.5.0', protocol: 3 } },
+      manifest: { cli: { current: '1.5.0', releases: { '1.5.0': 3 } } },
     };
 
     expect(isStale(cached, 1000 + CACHE_MAX_AGE_MS - 1)).toBe(false);

@@ -172,15 +172,31 @@ readonly VERSIONS_URL='https://raw.githubusercontent.com/SoftieSolutions/agentpl
 # client serves 503. Neither is something --role can name.
 readonly COMPONENTS='cli hub server web'
 
-# The exact version a pin may name.
-#
-# Exact, and that is forced rather than chosen. A pin names a release tag --
-# `hub-v1.3.0` -- and a tag is a string that either exists or does not. There is
-# no registry here to resolve `1.3` against and no per-version history to
-# resolve it from, so accepting a range would mean either guessing which release
-# was meant or building a URL that 404s partway through an install. Refusing it
-# at the flag, with the tag grammar named, is the honest end of that.
+# The exact version a pin may name: the release tag `<component>-v<version>`
+# with the stem taken off.
 readonly RELEASE_VERSION='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+
+# The series a pin may name instead: `1.3`, or `1`.
+#
+# A series names no tag, so it is resolved before a URL is built -- against the
+# release history `versions.json` carries, to the newest release in that series.
+# That file is fetched anyway and is read by the grammar below anyway, so a
+# partial pin costs no request and no second parser; what it buys is the shape a
+# fleet operator wanting security patches without a minor jump actually reaches
+# for.
+#
+# `1` is accepted as well as `1.3`, and that was the open question. The argument
+# for refusing it is that a major-only pin is barely a pin. The argument that
+# won: it is the same resolver either way -- a prefix at a dot boundary and the
+# newest release under it -- so refusing `1` would mean a second grammar and a
+# second refusal to explain, in exchange for withholding the pin semver says is
+# the one that constrains the breaking axis. An operator who wants less movement
+# than that types more digits.
+#
+# Prereleases are excluded from what a series can select, in `newest_in_series`
+# and not here: `hub@1.3` must not resolve to `1.3.8-rc1`. Naming that candidate
+# exactly still works, because an exact pin names a tag and that tag exists.
+readonly PARTIAL_VERSION='^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))?$'
 
 # The Node major this service declares in `engines`. No `.npmrc` ships in the
 # tarball -- engine-strict governs the workspace -- so a consumer's npm only
@@ -276,10 +292,19 @@ STATE_DIR=''
 # when a dry run could not resolve one. Set by resolve_release.
 PACKAGE_SPECS=''
 # The versions manifest as text, and where it was read from -- empty when it was
-# not read at all, which is every run whose components are all pinned and every
-# dry run that would have had to download it. Set by load_versions.
+# not read at all, which is every dry run that would have had to download it.
+# Set by load_versions.
 VERSIONS_TEXT=''
 VERSIONS_SOURCE=''
+# One component's line out of that manifest: the version it calls current, and
+# its release history as `"<version>":<protocol>` pairs. Set by
+# read_component_entry, read by the two functions that resolve a version.
+MANIFEST_CURRENT=''
+MANIFEST_RELEASES=''
+# The release one component resolved to, as a version and the protocol it
+# speaks. Set by read_versions_entry and read_pinned_release.
+RESOLVED_VERSION=''
+RESOLVED_PROTOCOL=''
 # `<component>=<version>` and `<component>=<protocol>` for what this run would
 # install. A component with no entry is one whose version this run has no way to
 # know, which is a dry run that declined to download and nothing else.
@@ -322,8 +347,9 @@ Usage: bash install.sh [options]
   --role pre-seeds setup rather than replacing it. --no-setup is for a machine
   that will receive a plan file and run \`${PACKAGE_NAME} setup --plan\` itself.
 
-  A version is exact -- 1.4.0, not 1.4 -- because it names the release tag
-  <component>-v<version>. Anything left unpinned comes from ${VERSIONS_URL}
+  A version is exact -- 1.4.0, naming the release tag <component>-v<version> --
+  or a series: 1.4 takes the newest 1.4.x and 1 the newest 1.x, never a
+  prerelease. Anything left unpinned comes from ${VERSIONS_URL}
 
   Served from ${INSTALL_SH_URL}
   Documentation at ${DOCS_URL}
@@ -493,7 +519,9 @@ set_pin() {
   local component="$1" pin="$2" flag="$3"
 
   [ -n "$pin" ] || die "${flag} was given with nothing after it, which is usually an unset variable: name a version, as ${flag}1.4.0, or leave the pin off to take what is current"
-  [[ "$pin" =~ $RELEASE_VERSION ]] || die "$(quote "$pin") is not a version this can install: a pin names the release tag ${component}-v<version>, so it is an exact <major>.<minor>.<patch> and not a range"
+  if ! [[ "$pin" =~ $RELEASE_VERSION ]] && ! [[ "$pin" =~ $PARTIAL_VERSION ]]; then
+    die "$(quote "$pin") is not a version this can install: a pin is an exact <major>.<minor>.<patch>, naming the release tag ${component}-v<version>, or a series -- <major>.<minor> or <major> -- which resolves to the newest release published under it"
+  fi
 
   case " $COMPONENT_PINS " in
     *" $component="*) die "$component is pinned twice, and two versions of one component is a contradiction rather than a last-one-wins" ;;
@@ -531,8 +559,7 @@ resolve_role() {
   fi
 }
 
-# The published name, the stable asset name and the metadata beside it, for one
-# component.
+# The published name and the stable asset name, for one component.
 #
 # Three cases rather than three strings built out of the component word. The
 # names happen to end in the component's word today, and what a machine
@@ -557,10 +584,6 @@ component_asset() {
     web) printf 'agentplex-web.tgz' ;;
     *) die "no asset holds the $1 component" ;;
   esac
-}
-
-component_metadata_asset() {
-  printf '%s.json' "$(basename "$(component_asset "$1")" .tgz)"
 }
 
 # One file published at one release tag.
@@ -672,7 +695,7 @@ resolve_layout() {
 # What npm is handed, one entry per component this role installs, and the one
 # check made before anything is downloaded.
 #
-# Three sources, and only one of them is a release.
+# Two sources, and only one of them is a release.
 #
 # **AGENTPLEX_PACKAGE** is the seam this repository's own container check
 # installs through: a directory of packed tarballs from a build that has never
@@ -682,12 +705,14 @@ resolve_layout() {
 # release, so nothing is resolved and no protocol is checked, and this says so
 # rather than implying a version it does not have.
 #
-# **A pin** names a release tag outright, so the URL is known without asking
-# anything. What is not known is what that release speaks, which is why a pin
-# costs one small extra download -- see `pinned_protocol`.
-#
 # **versions.json** answers everything else, in one unauthenticated fetch,
-# before a byte of any tarball is downloaded.
+# before a byte of any tarball is downloaded -- including everything a pin
+# leaves open. It carries every release each component has published, so it
+# says what an exact pin speaks and which release a series resolves to. This
+# used to be two questions with two answers: the file said what was current, and
+# a second artifact published beside each tarball said what that one tag spoke,
+# at one extra download per pin. History in the file already being fetched
+# retires both.
 resolve_release() {
   if [ -n "${AGENTPLEX_PACKAGE:-}" ]; then
     [ -d "$AGENTPLEX_PACKAGE" ] || die "AGENTPLEX_PACKAGE names $(quote "$AGENTPLEX_PACKAGE"), which is not a directory: it is the directory holding the packed tarballs to install, one per package"
@@ -708,12 +733,16 @@ resolve_release() {
   report_release
 }
 
-# The versions manifest, off the network or off a disk, and only when something
-# is going to read it.
+# The versions manifest, off the network or off a disk.
 #
-# Not fetched when every component this machine installs is pinned: the manifest
-# describes what is current, and a run that asked for something else has nothing
-# to learn from it.
+# Always, now, and not only when something was left unpinned. The file carries
+# every release each component has published, so a pinned run reads it too: an
+# exact pin to learn what that release speaks, a series to find out which
+# release it is. That is one fetch where a fully pinned install used to make one
+# per pin against a second artifact, so this is fewer requests and not more --
+# what it costs is that a machine that cannot reach the manifest at all can no
+# longer install by pinning everything. `AGENTPLEX_VERSIONS` is the answer to
+# that, and it is the one an air-gapped fleet was going to need anyway.
 #
 # **A dry run downloads nothing**, which is the rule `ensure_node` already keeps
 # about the Node release file, and for the same reason: "would install 1.4.0" is
@@ -722,21 +751,15 @@ resolve_release() {
 # went unasked, rather than printing a version it guessed.
 #
 # AGENTPLEX_VERSIONS is what makes that testable and what an air-gapped mirror
-# would use. It names a directory laid out as the release is: `versions.json` at
-# its root, and `<component>-v<version>/<asset>.json` for each pinned release --
-# the same paths, at the same names, one origin further down. Reading a local
-# file is not a download, so a dry run reads it.
+# would use. It names a directory holding `versions.json` at its root -- the
+# same file at the same name, one origin further down. Reading a local file is
+# not a download, so a dry run reads it.
 load_versions() {
-  local component unpinned='no' file
-
-  for component in $INSTALL_COMPONENTS; do
-    [ -n "$(component_pin "$component")" ] || unpinned='yes'
-  done
-  [ "$unpinned" = 'yes' ] || return 0
+  local file
 
   if [ -n "${AGENTPLEX_VERSIONS:-}" ]; then
     file="$AGENTPLEX_VERSIONS/versions.json"
-    [ -f "$file" ] || die "AGENTPLEX_VERSIONS names $(quote "$AGENTPLEX_VERSIONS"), which holds no versions.json: it is the directory holding the metadata a release publishes"
+    [ -f "$file" ] || die "AGENTPLEX_VERSIONS names $(quote "$AGENTPLEX_VERSIONS"), which holds no versions.json: it is the directory holding a copy of the manifest the release publishes"
     VERSIONS_TEXT="$(cat "$file")"
     VERSIONS_SOURCE="$file"
     return 0
@@ -747,7 +770,7 @@ load_versions() {
   file="$(mktemp)"
   if ! fetch "$VERSIONS_URL" "$file"; then
     rm -f "$file"
-    die "could not reach $VERSIONS_URL, which is what says which version of each component is current. Pin every component with --role=<role>@<version> and --package-version=<version> to install without it"
+    die "could not reach $VERSIONS_URL, which is what says which releases of each component exist and what each one speaks. Every install reads it, pinned or not, because a pin is a claim about a release and this is the record of which releases there are. Point AGENTPLEX_VERSIONS at a directory holding a copy of it to install without reaching this host"
   fi
   VERSIONS_TEXT="$(cat "$file")"
   rm -f "$file"
@@ -756,28 +779,30 @@ load_versions() {
 
 # A version and a protocol for every component this machine installs.
 resolve_component_versions() {
-  local component pin entry protocol
+  local component pin
   COMPONENT_VERSIONS=''
   COMPONENT_PROTOCOLS=''
 
   for component in $INSTALL_COMPONENTS; do
     pin="$(component_pin "$component")"
-    if [ -n "$pin" ]; then
-      # Assigned and then passed, rather than substituted into the call. `die`
-      # inside `$(...)` exits the subshell, and the exit status of a command
-      # substitution used as an *argument* is thrown away -- so a pre-check that
-      # failed would print its refusal and the install would carry on. Captured
-      # here: a pin whose metadata was missing said so and then installed
-      # anyway. An assignment is what makes `set -e` see it.
-      protocol="$(pinned_protocol "$component" "$pin")"
-      record_component "$component" "$pin" "$protocol"
+
+    # Only a dry run reaches here with no manifest; a real run has already died
+    # trying to fetch one. An exact pin is still an answer without it -- it
+    # names the tag outright, and only its protocol went unread -- and a series
+    # is not, because resolving one is exactly what needed the file.
+    if [ -z "$VERSIONS_SOURCE" ]; then
+      if [ -n "$pin" ] && [[ "$pin" =~ $RELEASE_VERSION ]]; then
+        record_component "$component" "$pin" ''
+      fi
       continue
     fi
-    # Only a dry run reaches here with no manifest; a real run has already died
-    # trying to fetch one.
-    [ -n "$VERSIONS_SOURCE" ] || continue
-    entry="$(versions_entry "$component")"
-    record_component "$component" "${entry%% *}" "${entry##* }"
+
+    if [ -n "$pin" ]; then
+      read_pinned_release "$component" "$pin"
+    else
+      read_versions_entry "$component"
+    fi
+    record_component "$component" "$RESOLVED_VERSION" "$RESOLVED_PROTOCOL"
   done
 }
 
@@ -786,62 +811,51 @@ record_component() {
   [ -z "$3" ] || COMPONENT_PROTOCOLS="${COMPONENT_PROTOCOLS:+$COMPONENT_PROTOCOLS }$1=$3"
 }
 
-# What a pinned release speaks, read before anything is installed.
+# The release a pin names, decided before anything is installed. Sets
+# RESOLVED_VERSION and RESOLVED_PROTOCOL.
 #
-# This is the judgement call in the delivery grammar, so it is written down.
-# `versions.json` only describes what is current, and a pin is by definition a
-# request for something else -- so the only place a pinned release's protocol
-# exists is at its own tag. The alternatives were to install first and check
-# afterwards, or not to check a pinned component at all, and both of them end at
-# the same machine: a hub and a server that are installed, running, and unable
-# to pair, which is exactly the failure this whole grammar exists to prevent.
-# Pre-checking costs one small extra artifact per release and one small extra
-# download per pin, and it turns that machine into a refusal with both numbers
+# This is the judgement call in the delivery grammar, so it is written down. A
+# pinned component's protocol has to be known *before* the install, because the
+# alternatives were to install first and check afterwards or not to check a
+# pinned component at all, and both end at the same machine: a hub and a server
+# that are installed, running, and unable to pair, which is exactly the failure
+# this whole grammar exists to prevent.
+#
+# What changed is where the answer comes from. It used to be a second artifact
+# published at each tag, because the manifest described only what was current
+# and a pin is by definition a request for something else. The manifest carries
+# every release now, so the answer is in the file this run has already read: no
+# second artifact, no extra download, and the same refusal with both numbers
 # named and nothing written.
 #
-# A dry run downloads nothing, so it leaves the protocol unknown rather than
-# claiming one -- and `check_protocol_agreement` skips what it does not know
-# instead of treating "unknown" as "agrees".
-pinned_protocol() {
-  local component="$1" version="$2" asset url file text protocol
-  asset="$(component_metadata_asset "$component")"
+# A pin the manifest does not list stops the run. The file is the record of
+# every release there has been, so a version missing from it is a tag that was
+# never published -- and finding that out here is a refusal, where finding it
+# out later is a 404 partway through an npm install.
+read_pinned_release() {
+  local component="$1" pin="$2"
+  read_component_entry "$component"
 
-  if [ -n "${AGENTPLEX_VERSIONS:-}" ]; then
-    # Laid out as the release is -- a directory per tag, holding the asset at
-    # the name it is published under -- rather than flattened to one file per
-    # pin. A seam whose paths are shaped differently from the thing it stands in
-    # for is a seam that agrees with the code and not with the world.
-    file="$AGENTPLEX_VERSIONS/${component}-v${version}/${asset}"
-    [ -f "$file" ] || die "AGENTPLEX_VERSIONS holds no ${component}-v${version}/${asset}, and $component is pinned to $version"
-    release_protocol "$(cat "$file")" "$file" "$component"
-    return 0
+  if [[ "$pin" =~ $RELEASE_VERSION ]]; then
+    RESOLVED_VERSION="$pin"
+  else
+    RESOLVED_VERSION="$(newest_in_series "$MANIFEST_RELEASES" "$pin")"
+    [ -n "$RESOLVED_VERSION" ] || die "$VERSIONS_SOURCE lists no released $component under $pin, so ${component}@${pin} names a series nothing has been published in. A series resolves to the newest release under it and never to a prerelease"
   fi
 
-  [ "$DRY_RUN" = 'no' ] || return 0
-
-  url="$(release_url "$component" "$version" "$asset")"
-  file="$(mktemp)"
-  if ! fetch "$url" "$file"; then
-    rm -f "$file"
-    die "nothing is published at $url, so there is no ${component}-v${version} release to install -- or it predates the metadata every release now publishes beside its tarball"
-  fi
-  # Read, then removed, then parsed: the parse is what can die, and a file left
-  # in /tmp by every refusal is litter this run has no trap to sweep up.
-  text="$(cat "$file")"
-  rm -f "$file"
-  protocol="$(release_protocol "$text" "$url" "$component")"
-  printf '%s' "$protocol"
+  RESOLVED_PROTOCOL="$(json_number "$MANIFEST_RELEASES" "$RESOLVED_VERSION")" || die "$VERSIONS_SOURCE lists every $component release there has been and does not list $RESOLVED_VERSION, so there is no ${component}-v${RESOLVED_VERSION} to install"
 }
 
 # Every component this machine would install, speaking one protocol.
 #
 # A tripwire and not a resolver, and the difference is the whole design. A
-# protocol change releases every affected component together, so the entries in
-# `versions.json` always agree; if they ever do not, that is a release process
-# that broke rather than a choice this script should be making. Working out "the
-# newest set of versions that happens to agree" would need per-version history
-# this has no way to read, one request per candidate, and it would quietly paper
-# over exactly the mistake the tripwire is there to report.
+# protocol change releases every affected component together, so the current
+# entries in `versions.json` always agree; if they ever do not, that is a release
+# process that broke rather than a choice this script should be making. Working
+# out "the newest set of versions that happens to agree" is something the release
+# history would now let this attempt, and it is still not done: it would quietly
+# paper over exactly the mistake the tripwire is there to report, and a machine
+# installed at a set nobody released is worse than a machine that refused.
 #
 # Asked of the components this machine installs and not of the whole manifest. A
 # hub install refused because the `server` entry disagrees would be refusing over
@@ -884,8 +898,8 @@ build_package_specs() {
 # The versions, the protocol they agree on, and where each of those came from.
 #
 # One line, and it says what it does not know. A component with no version is a
-# dry run that declined to download; a set with no protocol is the same run,
-# or every component pinned on a machine that could not be asked.
+# dry run that declined to download, or one whose pin named a series there was
+# no manifest to resolve it against; a set with no protocol is the same run.
 report_release() {
   local component line='' protocol='' version
 
@@ -897,17 +911,15 @@ report_release() {
 
   if [ -n "$VERSIONS_SOURCE" ]; then
     line="$line (from $VERSIONS_SOURCE)"
-  elif [ -z "$PACKAGE_SPECS" ]; then
-    line="$line: a dry run downloads nothing, and $VERSIONS_URL is a download"
   else
-    line="$line (every component pinned, so $VERSIONS_URL was not read)"
+    line="$line: a dry run downloads nothing, and $VERSIONS_URL is a download"
   fi
 
   report 'release' "$line"
   if [ -n "$protocol" ]; then
     report 'protocol' "$protocol, which every component above agrees on"
   else
-    report 'protocol' "not checked: a dry run downloads nothing, and the protocol of a release is published with it"
+    report 'protocol' "not checked: a dry run downloads nothing, and the file that says what a release speaks is a download"
   fi
 }
 
@@ -915,24 +927,31 @@ report_release() {
 # Reading the JSON a release publishes
 # ---------------------------------------------------------------------------
 #
-# Two files, both small, both written by the release workflow out of the
-# assembled manifests, and both read off the network:
+# One file, small, written by the release workflow out of the assembled
+# manifests, and read off the network:
 #
-#   versions.json   {"cli":{"version":"1.4.0","protocol":3}, ...}
-#   <component>-v<version>.json
-#                   {"component":"hub","version":"1.2.0","protocol":3}
+#   versions.json   {"cli":{"current":"1.4.0","releases":{"1.4.0":3,"1.3.0":2}}, ...}
 #
-# Parsed and not read. Every one of them is a claim out of another program, and
-# the whole reason this script fetches them before it downloads anything is so
-# that a bad one costs a refusal rather than a half-installed machine. There is
-# no jq on a stock debian:bookworm-slim and no node either -- this runs before
-# `ensure_node` has put one there -- so the parser is bash, and it is written as
-# a grammar that refuses rather than as an extractor that guesses: a field that
-# is not there, a version that is not a version and a protocol that is not a
-# number each stop the run naming the file.
+# Parsed and not read. It is a claim out of another program, off a branch
+# anybody with write access can push to, and the whole reason this script
+# fetches it before it downloads anything is so that a bad one costs a refusal
+# rather than a half-installed machine. There is no jq on a stock
+# debian:bookworm-slim and no node either -- this runs before `ensure_node` has
+# put one there -- so the parser is bash, and it is written as a grammar that
+# refuses rather than as an extractor that guesses: a field that is not there, a
+# version that is not a version and a protocol that is not a number each stop
+# the run naming the file.
+#
+# There used to be a second file, `<component>-v<version>.json` beside each
+# tarball, and the release history is what deleted it -- see `read_pinned_release`.
+#
+# One level of nesting is the whole of what this has to handle: `releases` is an
+# object of `<version>: <protocol>` and nothing inside it nests further. That is
+# why `object_body` counts braces rather than the entry readers slicing at the
+# first `}` they meet, which is what a flat object allowed and this one does not.
 #
 # Whitespace is deleted outright rather than skipped over, which is what makes
-# the field patterns below one-liners. Nothing these files hold can contain a
+# the field patterns below one-liners. Nothing this file holds can contain a
 # space: a component is one of four words, a version is a semver and a protocol
 # is an integer, and anything that did contain one would fail the checks that
 # follow rather than slip through reshaped.
@@ -969,13 +988,68 @@ json_number() {
   printf '%s' "$value"
 }
 
-# One component's entry out of the versions manifest, as `<version> <protocol>`.
+# The text of one JSON object, given everything after its opening brace, with
+# the brace that closes it removed.
+#
+# A brace counter and not a slice at the first `}`, because `releases` is an
+# object inside an object and the first `}` after a component's name is the one
+# that ends its history rather than its entry. Non-zero when the text runs out
+# first, which is a truncated file rather than an empty object.
+#
+# It walks brace to brace rather than character to character, so the loop runs
+# four times for a component's entry however many releases are listed in it.
+object_body() {
+  local rest="$1" body='' depth=1 open close
+
+  while [ -n "$rest" ]; do
+    # Two expansions and a length compare, rather than one pattern matching
+    # either brace. `${rest%%[{}]*}` is the obvious way to write that and it
+    # does not work: the `}` inside the bracket expression closes the expansion
+    # before the pattern is ever read, so the whole thing silently matches
+    # nothing and the loop never advances. Verified at the origin, by watching
+    # it not advance.
+    open="${rest%%\{*}"
+    close="${rest%%\}*}"
+    # An expansion that changed nothing means the brace is not in the rest of
+    # the text at all, and no closing brace is a file that ends mid-object.
+    [ "$close" != "$rest" ] || return 1
+
+    if [ "$open" != "$rest" ] && [ "${#open}" -lt "${#close}" ]; then
+      depth=$((depth + 1))
+      body="$body$open{"
+      rest="${rest#"$open"\{}"
+      continue
+    fi
+
+    depth=$((depth - 1))
+    if [ "$depth" -eq 0 ]; then
+      printf '%s' "$body$close"
+      return 0
+    fi
+    body="$body$close}"
+    rest="${rest#"$close"\}}"
+  done
+  return 1
+}
+
+# One component's line out of the versions manifest. Sets MANIFEST_CURRENT and
+# MANIFEST_RELEASES.
+#
+# It assigns rather than prints, and that is not a style choice. A refusal in
+# here is a `die`, and `die` inside `$(...)` exits the subshell -- which the
+# bash macOS ships as /bin/bash, still 3.2, then declines to propagate out of a
+# *nested* substitution even under `set -e`. Verified at the origin: a manifest
+# that was not an object printed its refusal from two substitutions down and the
+# run carried on to a second, vaguer one about the same file. Assigning keeps
+# every refusal in the process that has to stop. The pure readers below are
+# still called through `$(...)`, because they return a status rather than dying
+# and every caller of one writes the `|| die` out.
 #
 # A component this run needs and the manifest does not name is a refusal and not
-# a fallback to anything: the manifest is what says which version is current,
+# a fallback to anything: the manifest is what says which releases there are,
 # and a machine that carried on would install three quarters of a set.
-versions_entry() {
-  local component="$1" flat entry version protocol
+read_component_entry() {
+  local component="$1" flat entry
 
   flat="$(flatten_json "$VERSIONS_TEXT")"
   case "$flat" in
@@ -985,32 +1059,87 @@ versions_entry() {
 
   case "$flat" in
     *"\"$component\":{"*) ;;
-    *) die "$VERSIONS_SOURCE names no $component, and this machine installs one. It is the manifest of what is current for every component, so a missing entry is a release that did not finish rather than something to guess at" ;;
+    *) die "$VERSIONS_SOURCE names no $component, and this machine installs one. It is the manifest of every release of every component, so a missing entry is a release that did not finish rather than something to guess at" ;;
   esac
-  entry="${flat#*\""$component"\":\{}"
-  entry="${entry%%\}*}"
+  entry="$(object_body "${flat#*\""$component"\":\{}")" || die "$VERSIONS_SOURCE ends in the middle of the $component entry"
 
-  version="$(json_string "$entry" 'version')" || die "$VERSIONS_SOURCE gives $component no version"
-  [[ "$version" =~ $RELEASE_VERSION ]] || die "$VERSIONS_SOURCE gives $component the version $(quote "$version"), which is not a version this can install"
-  protocol="$(json_number "$entry" 'protocol')" || die "$VERSIONS_SOURCE gives $component no protocol number, and the protocol is what says whether the components on this machine can talk to each other"
-
-  printf '%s %s' "$version" "$protocol"
+  MANIFEST_CURRENT="$(json_string "$entry" 'current')" || die "$VERSIONS_SOURCE gives $component no current version"
+  case "$entry" in
+    *'"releases":{'*) ;;
+    *) die "$VERSIONS_SOURCE gives $component no releases, and that list is what says which versions of it exist and what each one speaks" ;;
+  esac
+  MANIFEST_RELEASES="$(object_body "${entry#*\"releases\":\{}")" || die "$VERSIONS_SOURCE ends in the middle of the $component releases"
 }
 
-# The protocol out of the metadata published beside one release's tarball.
+# The release a component's entry calls current. Sets RESOLVED_VERSION and
+# RESOLVED_PROTOCOL.
+read_versions_entry() {
+  local component="$1"
+
+  read_component_entry "$component"
+  [[ "$MANIFEST_CURRENT" =~ $RELEASE_VERSION ]] || die "$VERSIONS_SOURCE gives $component the current version $(quote "$MANIFEST_CURRENT"), which is not a version this can install"
+  RESOLVED_VERSION="$MANIFEST_CURRENT"
+  RESOLVED_PROTOCOL="$(json_number "$MANIFEST_RELEASES" "$RESOLVED_VERSION")" || die "$VERSIONS_SOURCE calls $RESOLVED_VERSION the current $component and lists no protocol beside it, and the protocol is what says whether the components on this machine can talk to each other"
+}
+
+# The newest release in one series, out of a component's release history, or
+# nothing at all when the series holds none.
 #
-# The component is checked as well as read: an asset served from the wrong tag
-# -- a redirect followed somewhere unexpected, a release edited by hand -- is a
-# file that parses perfectly and describes something else.
-release_protocol() {
-  local flat component protocol
-  flat="$(flatten_json "$1")"
+# **What counts as in the series.** A prefix at a dot boundary, with the
+# remaining fields plain numbers: `1.3` takes `1.3.<patch>` and `1` takes
+# `1.<minor>.<patch>`. Built as a pattern rather than tested as a string prefix
+# so that `1.3` cannot match `1.30.0`, and so that a prerelease or a build
+# suffix is excluded by the same expression that fixes the depth -- `hub@1.3`
+# must not select `1.3.8-rc1`, because a series is how a fleet asks for the
+# newest patch and a release candidate is not one. Naming `1.3.8-rc1` exactly
+# still installs it: that is a tag, and it exists.
+#
+# **Why the comparison is written out.** `sort -V` was the obvious reach and it
+# is not used. It is there on both machines this was run against -- BSD sort
+# 2.3-Apple on macOS 26 and GNU coreutils 9.1 in the debian:bookworm-slim the
+# install tests use, agreeing on the ordering this needs -- but the loop that
+# filters candidates is already a loop, and six lines of numeric compare inside
+# it cost less than a claim about every sort on every machine this script is
+# piped into. Nothing is spawned per candidate either way.
+newest_in_series() {
+  local releases="$1" series="$2" best='' pair key
+  local number='(0|[1-9][0-9]*)' pattern
+  case "$series" in
+    *.*) pattern="^${series//./\\.}\.${number}$" ;;
+    *) pattern="^${series}\.${number}\.${number}$" ;;
+  esac
 
-  component="$(json_string "$flat" 'component')" || die "$2 is not release metadata: it names no component"
-  [ "$component" = "$3" ] || die "$2 describes the $component component and this machine is asking about $3"
-  protocol="$(json_number "$flat" 'protocol')" || die "$2 states no protocol number for $3"
+  while IFS= read -r pair; do
+    case "$pair" in
+      \"*\":*) ;;
+      *) continue ;;
+    esac
+    key="${pair#\"}"
+    key="${key%%\"*}"
+    [[ "$key" =~ $pattern ]] || continue
+    if [ -z "$best" ] || newer_version "$key" "$best"; then best="$key"; fi
+  done <<<"${releases//,/$'\n'}"
 
-  printf '%s' "$protocol"
+  printf '%s' "$best"
+}
+
+# Whether the first of two `<major>.<minor>.<patch>` versions is the newer.
+#
+# Field by field and numerically, which is the whole point: `1.3.10` is newer
+# than `1.3.9` and sorts before it in every ordering that compares text. Only
+# ever asked of two candidates `newest_in_series` has already matched against
+# its pattern, so there are exactly three fields and each is digits.
+newer_version() {
+  local -a left right
+  IFS='.' read -r -a left <<<"$1"
+  IFS='.' read -r -a right <<<"$2"
+
+  local index
+  for index in 0 1 2; do
+    if [ "${left[index]}" -gt "${right[index]}" ]; then return 0; fi
+    if [ "${left[index]}" -lt "${right[index]}" ]; then return 1; fi
+  done
+  return 1
 }
 
 # The tarball in that directory that holds one package.

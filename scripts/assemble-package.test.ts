@@ -13,7 +13,6 @@ import {
   DAEMONS,
   ENTRYPOINT,
   HUB,
-  metadataAsset,
   missingInputs,
   PACKAGES,
   parseManifest,
@@ -726,15 +725,6 @@ describe('the assets a release publishes', () => {
     ]);
   });
 
-  it('names the metadata beside each tarball after it', () => {
-    expect(PACKAGES.map(metadataAsset)).toEqual([
-      'agentplex.json',
-      'agentplex-hub.json',
-      'agentplex-server.json',
-      'agentplex-web.json',
-    ]);
-  });
-
   /**
    * What the workflow reads instead of knowing which directory holds which
    * component. Everything here is a fact this module already had, and a copy of
@@ -748,7 +738,6 @@ describe('the assets a release publishes', () => {
       package: '@softiesolutions/agentplex-hub',
       directory: 'apps/hub/release',
       asset: 'agentplex-hub.tgz',
-      metadataAsset: 'agentplex-hub.json',
     });
   });
 });

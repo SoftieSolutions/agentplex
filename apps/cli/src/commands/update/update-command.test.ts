@@ -91,17 +91,32 @@ function wholeMachine(): Record<string, string> {
  */
 const OWNED_NPM = `${PREFIX}/node/bin/npm`;
 
-/** What the release branch is serving, in the shape a release writes. */
+/**
+ * What the release branch is serving, in the shape a release writes.
+ *
+ * Stated as one release per component and expanded into the `{current,
+ * releases}` shape here, because what every test below is saying is "this is
+ * the version that is current" -- a history written out at each call site
+ * would be the fixture asserting things no test is about.
+ */
 function published(
   entries: Readonly<Record<string, { version: string; protocol: number }>> = {},
 ): string {
-  return JSON.stringify({
+  const current: Readonly<Record<string, { version: string; protocol: number }>> = {
     cli: { version: '1.5.0', protocol: 3 },
     hub: { version: '1.2.0', protocol: 3 },
     server: { version: '1.5.0', protocol: 3 },
     web: { version: '1.1.0', protocol: 3 },
     ...entries,
-  });
+  };
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(current).map(([component, release]) => [
+        component,
+        { current: release.version, releases: { [release.version]: release.protocol } },
+      ]),
+    ),
+  );
 }
 
 /** What nodejs.org serves, cut to the two lines that matter. */
