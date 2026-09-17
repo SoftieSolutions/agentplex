@@ -5,6 +5,7 @@ import { Box, Group } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { BottomTabs } from './bottom-tabs.js';
 import type { Destination } from './destinations.js';
+import { withSafeArea } from './safe-area.js';
 import { StartSessionButton } from './start-session-button.js';
 
 /**
@@ -33,7 +34,16 @@ export interface MobileChromeProps {
   readonly state: MachineState | null;
   readonly machine: ServerRegistrationId | null;
   readonly onPickMachine: (machine: ServerRegistrationId | null) => void;
-  /** The tab to mark, or `null` when the address names a session or a document. */
+  /**
+   * The tab to mark, or `null` when the address names a thing -- a session or
+   * a document -- rather than one of the three places.
+   *
+   * That absence decides two things, because it is one fact: no tab claims to
+   * be where the app is, and the action button does not float. A terminal is
+   * read to its last line and a round button in that corner covers it, so the
+   * button belongs to the places a session is started from. The bar stays, and
+   * is the way back to them.
+   */
   readonly current: Destination | null;
   /** How many sessions want a human, as the session list's chip counts them. */
   readonly needsYou: number;
@@ -71,9 +81,17 @@ export function MobileChrome({
         gap={10}
         align="center"
         wrap="nowrap"
-        px={12}
-        py={8}
-        style={{ borderBottom: `1px solid ${colorForRole('border', scheme)}`, flexShrink: 0 }}
+        style={{
+          borderBottom: `1px solid ${colorForRole('border', scheme)}`,
+          flexShrink: 0,
+          // Under the status bar in a PWA taken to a home screen, and under the
+          // cutout in landscape: the header is the top edge the way the tab bar
+          // is the bottom one.
+          paddingTop: withSafeArea(8, 'top'),
+          paddingBottom: 8,
+          paddingLeft: withSafeArea(12, 'left'),
+          paddingRight: withSafeArea(12, 'right'),
+        }}
       >
         <MachineSelector state={state} chosen={machine} onPick={onPickMachine} scheme={scheme} />
       </Group>
@@ -82,7 +100,9 @@ export function MobileChrome({
         {children}
       </Box>
 
-      <StartSessionButton needsYou={needsYou} onStart={onStartSession} scheme={scheme} />
+      {current === null ? null : (
+        <StartSessionButton needsYou={needsYou} onStart={onStartSession} scheme={scheme} />
+      )}
       <BottomTabs current={current} scheme={scheme} />
     </Box>
   );

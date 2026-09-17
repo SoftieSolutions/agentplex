@@ -6,7 +6,6 @@ import {
   ageLabel,
   chipCounts,
   connectionNotice,
-  chipForStatus,
   listSessions,
   matchesSearch,
   needsYouCount,
@@ -180,21 +179,33 @@ describe('chips', () => {
 });
 
 describe('the needs-you count', () => {
-  it('is the number the Needs you chip carries', () => {
+  it('counts the sessions waiting on a human', () => {
     const items = listSessions(populated);
     const chip = chipCounts(items).find((entry) => entry.chip === 'needs-you');
 
+    // Everything in this fleet is reachable, so the badge and the chip agree,
+    // which is the ordinary case and the one a reader will assume.
+    expect(needsYouCount(items)).toBe(2);
     expect(chip?.count).toBe(2);
-    expect(needsYouCount(items)).toBe(chip?.count);
+  });
+
+  it('leaves out a session nobody can reach, which the chip still counts', () => {
+    // The stale fleet: one session awaiting permission on the machine that is
+    // up, one awaiting input on the machine that dropped. The chip is a facet
+    // and promises two rows to anyone who presses it, so it says two. The
+    // badge is a claim on attention and there is one thing attention can do
+    // anything about, so it says one -- a badge you cannot bring down by
+    // looking is a badge people stop believing.
+    const items = listSessions(stale);
+
+    expect(chipCounts(items).find((entry) => entry.chip === 'needs-you')?.count).toBe(2);
+    expect(needsYouCount(items)).toBe(1);
   });
 
   it('counts where there is no chip row to read a count off', () => {
     // The chip row is not drawn when one state is all there is, and the badge
-    // on the action button still has to say two. Same derivation, one of the
-    // two readers with a rule of its own about when to draw at all.
-    const waiting = listSessions(populated).filter(
-      (item) => chipForStatus(item.status) === 'needs-you',
-    );
+    // still has to say two: it is not read off the row.
+    const waiting = listSessions(populated).filter((item) => item.needsYou);
 
     expect(chipCounts(waiting)).toEqual([]);
     expect(needsYouCount(waiting)).toBe(2);

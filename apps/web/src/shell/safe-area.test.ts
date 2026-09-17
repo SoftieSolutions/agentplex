@@ -20,8 +20,9 @@ describe('room left for the display cutout', () => {
     expect(withSafeArea(0, 'left')).toContain(', 0px)');
   });
 
-  it('answers for each side a bar can be pushed off', () => {
+  it('answers for each side a display can keep for itself', () => {
     expect(withSafeArea(12, 'left')).toBe('calc(12px + env(safe-area-inset-left, 0px))');
     expect(withSafeArea(12, 'right')).toBe('calc(12px + env(safe-area-inset-right, 0px))');
+    expect(withSafeArea(8, 'top')).toBe('calc(8px + env(safe-area-inset-top, 0px))');
   });
 });

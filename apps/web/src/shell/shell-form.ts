@@ -12,19 +12,18 @@ import { useSyncExternalStore } from 'react';
 export type ShellForm = 'phone' | 'wide';
 
 /**
- * The one width the shell changes shape at, in CSS pixels.
+ * The one width the shell changes shape at, in CSS pixels: the width below
+ * which a 240px sidebar and a readable content region stop fitting side by
+ * side.
  *
- * 768 is Mantine's `sm`, which is the breakpoint the screens inside the shell
- * already draw against: the session list's New session button is
- * `visibleFrom="sm"`, and the phone chrome's action button is what stands in
- * for it below. One number for both, so a band where a screen shows neither --
- * or both -- cannot exist.
- *
- * Read against `window.innerWidth`, which is CSS pixels, while Mantine's `sm`
- * is `48em` against the root font size. They are the same 768 at the 16px root
- * this app ships and they drift together if that ever changes, which is the
- * direction that costs nothing: a reader who has scaled text up gets the phone
- * chrome slightly sooner, which is the chrome that fits scaled text.
+ * Every rule that has to agree with it is driven from this form rather than
+ * from a breakpoint of its own. The session list's New session button is the
+ * one that matters: below this width the phone chrome's action button is what
+ * starts a session, so the screen takes the form as a prop and draws its
+ * button only in the wide one. Written as a media query there instead -- which
+ * is what it used to be -- the two rules would be a CSS `em` against the
+ * browser's font size and a JS CSS-pixel width, and a reader whose default
+ * font is 20px would open a band where neither button is drawn.
  */
 export const WIDE_FROM = 768;
 
