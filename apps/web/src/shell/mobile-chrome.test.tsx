@@ -185,6 +185,19 @@ describe('the phone chrome', () => {
     expect(header?.querySelector('a')).toBeNull();
   });
 
+  it('lets the long reconnect sentence truncate rather than shove the header', () => {
+    draw({ status: <ConnectionStatus view={DOWN} scheme="dark" /> });
+
+    const words = container.querySelector<HTMLElement>(
+      'header [role="status"] span:nth-of-type(2)',
+    );
+    expect(words?.style.textOverflow).toBe('ellipsis');
+    // The whole sentence survives where it can be got at: on the title, and
+    // unshortened in the live region a screen reader hears.
+    expect(words?.getAttribute('title')).toBe(DOWN.words);
+    expect(words?.textContent).toBe(DOWN.words);
+  });
+
   it('carries the next action through that slot when the state has one', () => {
     draw({ status: <ConnectionStatus view={NO_TOKEN} scheme="dark" /> });
 

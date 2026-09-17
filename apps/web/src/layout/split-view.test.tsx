@@ -8,9 +8,11 @@ import {
   type MachineState,
   type SessionRef,
 } from '@agentplex/protocol';
+import { NO_FILTERS, visibleSessions } from '../sessions/session-list-model.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import type { HubSnapshot, HubStore } from '../store/hub-store.js';
 import { destinationHash } from '../shell/destinations.js';
+import { sessionHash } from '../terminal/session-route.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { NodeView, type PaneViewDependencies } from './split-view.js';
@@ -122,6 +124,7 @@ describe('the divider between two panes', () => {
       onCommitRatio: () => {},
       onFocusPane: () => {},
       onShowSession: () => {},
+      sessionsOnScreen: new Set(),
       registerPane: () => {},
     };
 
@@ -145,8 +148,14 @@ describe('the divider between two panes', () => {
 
 describe('the picker in an empty pane', () => {
   const populated = stateFrom(hubFrames.machineStatePopulated);
+  const storeId = visibleSessions(populated, NO_FILTERS)[0]?.ref.storeId;
+  if (storeId === undefined) throw new Error('the captured fleet holds no session');
 
-  function drawEmptyPane(hub: HubStore, path: PanePath = []): (PanePath | SessionRef)[][] {
+  function drawEmptyPane(
+    hub: HubStore,
+    path: PanePath = [],
+    sessionsOnScreen: ReadonlySet<string> = new Set(),
+  ): (PanePath | SessionRef)[][] {
     const picked: (PanePath | SessionRef)[][] = [];
     const view: PaneViewDependencies = {
       hub,
@@ -155,6 +164,7 @@ describe('the picker in an empty pane', () => {
       onCommitRatio: () => {},
       onFocusPane: () => {},
       onShowSession: (paneAt, session) => picked.push([paneAt, session]),
+      sessionsOnScreen,
       registerPane: () => {},
     };
     act(() => {
@@ -191,6 +201,43 @@ describe('the picker in an empty pane', () => {
 
     expect(picked).toHaveLength(1);
     expect(picked[0]?.[0]).toEqual(['second']);
+  });
+
+  it('leaves out a session another pane is already showing', () => {
+    // `showSession` moves the focus for a session already on screen rather
+    // than putting a second copy of it anywhere, so a row for one would jump
+    // the focus away and leave this pane exactly as empty. The arrangement is
+    // the ordinary one: open a session, split, look at the new pane.
+    drawEmptyPane(
+      hubWith(populated),
+      ['second'],
+      new Set([sessionHash({ storeId, sessionId: 'session-migrate-db' } as SessionRef)]),
+    );
+
+    const rows = [...host.querySelectorAll('button')].map((button) => button.textContent ?? '');
+    expect(rows).toHaveLength(5);
+    expect(rows.join(' ')).not.toContain('migrate-db-v9');
+  });
+
+  it('offers nothing, and says why, when every session is already in a pane', () => {
+    const everySession = new Set(
+      visibleSessions(populated, NO_FILTERS).map((item) => sessionHash(item.ref)),
+    );
+
+    drawEmptyPane(hubWith(populated), [], everySession);
+
+    expect(host.querySelectorAll('button')).toHaveLength(0);
+    expect(host.textContent).toContain('Every session is already open in a pane');
+    // Starting another is the way out that is not closing the pane, so both
+    // are offered.
+    expect(host.querySelector('a')?.getAttribute('href')).toBe(destinationHash('sessions'));
+    expect(host.textContent).toContain('Ctrl+Shift+X');
+  });
+
+  it('keeps the way out of a pane it cannot fill', () => {
+    drawEmptyPane(NO_HUB);
+
+    expect(host.textContent).toContain('Ctrl+Shift+X');
   });
 
   it('says the hub has not answered rather than showing an empty picker', () => {
