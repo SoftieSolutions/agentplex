@@ -284,7 +284,13 @@ async function start(
     clock,
     logger,
     backoff: createExponentialBackoff({ baseMs: 500, maxMs: 8_000, random: () => 0 }),
-    onChange: (report) => state.applyConnection(report),
+    onChange: (report) => {
+      state.applyConnection(report);
+      // The same wiring `hub.ts` has, and the subject of the last suite in
+      // this file: a subscription is held on a connection, so the relay is
+      // told when one ends and when one comes back.
+      terminal.noteConnection(report);
+    },
     onReport: (report) => {
       state.applySessions({
         registrationId: report.registrationId,
@@ -780,5 +786,145 @@ describe('a pane opened on a spawn the provider has not named', () => {
     expect(
       instructions(machine('workshop')).filter((frame) => frame.type === 'session-subscribe'),
     ).toEqual([]);
+  });
+});
+
+/**
+ * The machine under a watched terminal, going away and coming back.
+ *
+ * AGX-212 built the relay and left this out on purpose: the hub holds one
+ * subscription per terminal on the server that owns it, and when that
+ * connection ends the pane watching it is being fed by nothing while looking
+ * exactly like a pane whose agent has gone quiet. What the whole suite is
+ * about is the two frames that close that gap -- the one that says the feed
+ * ended and why, and the fresh reply that comes with the history when the
+ * machine answers again.
+ *
+ * One machine, because two on one volume give the hub somewhere else to ask,
+ * which is the right behaviour and the wrong scenario. The server end is
+ * rebuilt on the redial the way a real reconnection rebuilds one, over the
+ * same terminal manager and the same pty -- which is what a machine whose hub
+ * blinked actually looks like from here, and is why there is a scrollback to
+ * replay at all.
+ */
+describe('a watched terminal whose machine drops and comes back', () => {
+  beforeEach(async () => {
+    harness = await start({ machines: ['attic'] });
+    await until(
+      () =>
+        held()
+          .connections.snapshot()
+          .every((report) => report.phase === 'connected'),
+      'the server to be connected',
+    );
+    await until(
+      () => (held().state.snapshot().stores[0]?.sessions.length ?? 0) > 0,
+      'the store to be reported',
+    );
+  });
+
+  afterEach(async () => {
+    await harness?.connections.stop();
+    harness?.clients.stop();
+    await migrated?.close();
+    harness = null;
+    migrated = null;
+  });
+
+  /** A client watching `session-quiet` on attic, with two chunks behind it. */
+  async function watching(): Promise<Client> {
+    const client = await attach();
+    await runQuietOn(client, 'attic', 2);
+    machine('attic').ptys.last?.emit('building\r\n');
+    await settle();
+    await client.say({
+      type: 'session-subscribe',
+      id: 3,
+      target: { by: 'session', storeId: WORK, sessionId: QUIET },
+    });
+    expect(client.reply(3).type).toBe('session-subscribed');
+    return client;
+  }
+
+  /** Drops the machine's socket and waits for the hub to notice. */
+  async function drop(): Promise<void> {
+    machine('attic').live?.close(PEER_GONE);
+    await until(
+      () => held().connections.snapshot()[0]?.phase === 'stale' && held().timers.pending > 0,
+      'the redial to be scheduled',
+    );
+    await settle();
+  }
+
+  it('tells the pane its feed ended, and re-establishes it when the machine answers', async () => {
+    const client = await watching();
+
+    await drop();
+
+    const ended = client.received.filter((frame) => frame.type === 'session-subscription-ended');
+    expect(ended).toEqual([
+      {
+        type: 'session-subscription-ended',
+        target: { by: 'session', storeId: WORK, sessionId: QUIET },
+        reason: 'server-dropped',
+      },
+    ]);
+
+    held().timers.fireAll();
+    await until(
+      () => held().connections.snapshot()[0]?.phase === 'connected',
+      'the machine to come back',
+    );
+    await settle();
+
+    // A second `session-subscribed` under the id this pane subscribed with,
+    // which is the only name it has for this subscription. Nothing was sent
+    // from the client: it asked once, an hour ago.
+    const answers = client.received.filter((frame) => frame.type === 'session-subscribed');
+    expect(answers).toHaveLength(2);
+    expect(answers[1]).toMatchObject({
+      type: 'session-subscribed',
+      replyTo: 3,
+      storeId: WORK,
+      sessionId: QUIET,
+      // The scrollback on that machine survived the connection that was
+      // reading it, so the pane is given it again with the count that says
+      // how much is on its way.
+      replayChunks: 1,
+      droppedBytes: 0,
+    });
+
+    // And the replay arrives, followed by what the session prints next: the
+    // pane is live again rather than merely labelled.
+    machine('attic').ptys.last?.emit('still building\r\n');
+    await settle();
+    expect(client.printed).toEqual(['building\r\n', 'building\r\n', 'still building\r\n']);
+  });
+
+  it('says the session ended when the terminal did not survive the restart', async () => {
+    const client = await watching();
+
+    // What a real restart does to a pty: the process is gone, and the
+    // transcript it wrote is still on the disk, so the session is still a
+    // session and only the terminal has ended.
+    machine('attic').terminals.closeAll();
+    await drop();
+
+    held().timers.fireAll();
+    await until(
+      () => held().connections.snapshot()[0]?.phase === 'connected',
+      'the machine to come back',
+    );
+    await settle();
+
+    const ended = client.received.filter((frame) => frame.type === 'session-subscription-ended');
+    // Two frames, and the second is the one that matters: the feed stopped
+    // because a machine went away, and then it turned out there was nothing
+    // to go back to. A pane told only the first would wait forever.
+    expect(ended.map((frame) => frame.reason)).toEqual(['server-dropped', 'session-ended']);
+    // Not a refusal, either. This client asked once and was answered; a second
+    // answer to that frame would be the hub saying two different things about
+    // one question.
+    expect(client.received.filter((frame) => frame.type === 'refusal')).toEqual([]);
   });
 });

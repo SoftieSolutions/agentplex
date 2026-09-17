@@ -367,6 +367,69 @@ export type ClientTerminalTarget = z.infer<typeof clientTerminalTargetSchema>;
 export const serverTerminalTargetSchema = serverTerminalFrames.target;
 export type ServerTerminalTarget = z.infer<typeof serverTerminalTargetSchema>;
 
+/**
+ * Why a subscription stopped feeding a pane.
+ *
+ * Three, because they are three different things to do about it. A machine
+ * that dropped is one the hub is already dialling again, and the pane it was
+ * feeding will be re-attached without anybody clicking anything. A machine
+ * that said it was going down first is one to leave alone for a minute: the
+ * hub waits the grace it named rather than hammering a box that is trying to
+ * exit. And a terminal that is no longer there is the one case where waiting
+ * changes nothing -- the process is gone, or the machine holding it was
+ * restarted -- so the pane is showing the last of a session rather than a feed
+ * that is about to resume.
+ *
+ * The first two are the connection's own words, taken off the reason the hub
+ * recorded when it lost the machine; the third is what a server answered a
+ * re-subscribe with on the redial, which is the only end that can say whether
+ * a terminal survived.
+ */
+export const subscriptionEndReasonSchema = z.enum([
+  'server-dropped',
+  'server-draining',
+  'session-ended',
+]);
+export type SubscriptionEndReason = z.infer<typeof subscriptionEndReasonSchema>;
+
+/**
+ * A subscription this client holds has stopped, and why.
+ *
+ * The one terminal frame that is not relayed, which is why it is written here
+ * once rather than instantiated for both legs. Every other frame in this file
+ * travels two hops almost unchanged, because a chunk a server produced is a
+ * chunk a browser paints. This one is the hub's own sentence about its own
+ * bookkeeping: the hub holds one upstream subscription per terminal on behalf
+ * of whoever is watching, and when the machine holding that terminal goes
+ * away there is nothing on the other leg to relay -- the server did not say
+ * this, it stopped saying anything.
+ *
+ * Unsolicited, so no `replyTo`. The alternative was `session-unsubscribed`,
+ * which is a reply and needs the id of the frame that asked; nobody asked for
+ * this, and a reply to a frame that was already answered would be the hub
+ * answering a question twice with two different meanings.
+ *
+ * Addressed by `target` rather than by the `storeId`/`sessionId`/`startId`
+ * that `terminal-output` carries, and the difference is who a frame is for. A
+ * chunk is addressed by what the session *is*, so that one copy of it answers
+ * every subscriber however each of them named it. This is addressed to one
+ * subscription, under the name that subscription used -- which is the name the
+ * pane waiting on it is keyed by, and the only one that reaches a pane still
+ * watching a start the provider has not named yet.
+ *
+ * It does not mean the watch is over. A client that still wants the terminal
+ * keeps its standing interest and its buffered bytes: the hub re-subscribes
+ * for it when the machine answers again, and the fresh `session-subscribed`
+ * that follows is what says how much history is being replayed into a pane
+ * that has a gap in it. The exception is `session-ended`, where there is
+ * nothing left to re-attach to and the hub has given the subscription back.
+ */
+export const subscriptionEndedFrameSchema = z.object({
+  type: z.literal('session-subscription-ended'),
+  target: clientTerminalFrames.target,
+  reason: subscriptionEndReasonSchema,
+});
+
 /** How many bytes are turned into characters at once. Kept off the call stack. */
 const ENCODE_BLOCK_BYTES = 8_192;
 

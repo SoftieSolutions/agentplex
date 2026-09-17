@@ -235,6 +235,7 @@ function labelFor(text: string): string {
     ['doc-saved', 'docSaved'],
     ['doc-content', 'docContent'],
     ['session-unsubscribed', 'sessionUnsubscribed'],
+    ['session-subscription-ended', 'sessionSubscriptionEnded'],
     ['protocol-error', 'protocolError'],
   ]);
   const label = labels.get(frame.type);
@@ -1993,6 +1994,13 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       () => terminalHub.hub.connections.snapshot().some((report) => report.phase === 'stale'),
       'the machine holding the terminal to go stale',
     );
+    // The pane that was watching when it went. The server said nothing on its
+    // way out -- it stopped saying anything -- so this frame is the hub's own,
+    // and it is the only thing that tells a still rectangle from a quiet agent.
+    await until(
+      () => latecomer.received.some((text) => labelFor(text) === 'sessionSubscriptionEnded'),
+      'the watching pane to be told that its feed ended',
+    );
     const orphan = await openClient(terminalHub.hub);
     orphan.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
     await orphan.framesReceived(2);
@@ -2007,6 +2015,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const terminalOutputDropped = lastFrame(watcher, 'terminalOutputDropped');
     const sessionUnsubscribed = firstFrame(watcher, 'sessionUnsubscribed');
     const sessionSubscribedTruncated = firstFrame(latecomer, 'sessionSubscribedTruncated');
+    const sessionSubscriptionEnded = firstFrame(latecomer, 'sessionSubscriptionEnded');
     const refusalTerminal = firstFrame(orphan, 'refusal');
     await terminalHub.cleanup();
 
@@ -2086,6 +2095,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('terminalOutput', terminalOutput);
     captured.set('terminalOutputDropped', terminalOutputDropped);
     captured.set('sessionUnsubscribed', sessionUnsubscribed);
+    captured.set('sessionSubscriptionEnded', sessionSubscriptionEnded);
     captured.set('refusalTerminal', refusalTerminal);
 
     const entries = [...captured]

@@ -1,4 +1,10 @@
-import type { MachineState, SessionRef, SessionRow, SessionStatus } from '@agentplex/protocol';
+import type {
+  MachineState,
+  SessionRef,
+  SessionRow,
+  SessionStatus,
+  SubscriptionEndReason,
+} from '@agentplex/protocol';
 import { serverLabel } from '../sessions/session-list-model.js';
 import type { HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
@@ -80,6 +86,33 @@ export function terminalInputNotice(
 }
 
 /**
+ * The sentence for a pane nothing is feeding any more, or `null` while
+ * something is.
+ *
+ * The case this whole frame exists for: an agent that has stopped printing and
+ * a relay that has stopped relaying are the same still rectangle, and a user
+ * looking at one has no way to tell which they are waiting on. Each reason
+ * gets its own words because each is a different thing to do -- wait a moment,
+ * wait for a machine that is deliberately restarting, or stop waiting.
+ *
+ * The first two say the hub is dialling, because it is: the watch survives the
+ * machine that was serving it, and a pane that is told to wait is a pane
+ * nobody reloads. The third does not, because nothing is coming back.
+ */
+export function terminalFeedNotice(terminal: TerminalWatchView | null): string | null {
+  const ended: SubscriptionEndReason | null = terminal?.ended ?? null;
+  if (ended === null) return null;
+  switch (ended) {
+    case 'server-dropped':
+      return 'the machine running this session stopped answering: nothing is reaching this pane, and the hub is dialling it again';
+    case 'server-draining':
+      return 'the machine running this session is shutting down: nothing is reaching this pane until it is back, and the hub is waiting the time it asked for';
+    case 'session-ended':
+      return 'this terminal is gone: the machine that held it no longer has it, so what is above is the last of what it printed';
+  }
+}
+
+/**
  * A count of bytes as a person reads one.
  *
  * Powers of two, because the thing being measured is a buffer and the number
@@ -135,7 +168,21 @@ export function terminalScopeNotice(terminal: TerminalWatchView | null): string 
     missing.push('this pane has since thrown away its own oldest output');
   }
 
-  if (missing.length > 0) return `showing less than everything: ${missing.join('; ')}`;
+  const said: string[] = [];
+  if (missing.length > 0) said.push(`showing less than everything: ${missing.join('; ')}`);
+  // Not one of the losses above, and deliberately not phrased as one: a feed
+  // that was re-established is showing MORE than once rather than less than
+  // everything. The machine's scrollback survived whatever interrupted the
+  // subscription, so what was replayed into this pane overlaps what it already
+  // had -- and the bytes are kept rather than cleared, because they are what
+  // the emulator has painted and clearing them would throw away a screenful of
+  // a session to make a label unnecessary.
+  if (terminal.resumed) {
+    said.push(
+      'this feed was re-established and the session replayed what it still held, so output above may appear twice',
+    );
+  }
+  if (said.length > 0) return said.join(' — ');
   if (!terminal.printed && terminal.replayChunks === 0) {
     return 'nothing here yet: this session has printed nothing, and this pane is showing all of it';
   }
