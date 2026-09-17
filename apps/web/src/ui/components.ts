@@ -11,6 +11,7 @@
 import '@mantine/core/styles.css';
 
 export {
+  Anchor,
   Box,
   Button,
   Group,
