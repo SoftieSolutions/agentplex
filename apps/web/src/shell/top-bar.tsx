@@ -26,9 +26,12 @@ export interface TopBarProps {
   readonly scheme: Scheme;
   /**
    * The right-hand slot: how the connection is doing, and whatever else the
-   * chrome has to say at every width. AGX-119 fills it -- the shell already
-   * holds the snapshot that knows, and this is where it goes, so that ticket
-   * is a component and a prop rather than a second row of chrome.
+   * chrome has to say at every width.
+   *
+   * A node and not a snapshot, because the phone header holds the same one:
+   * the shell builds it once from the facts it already has
+   * (`connection-model.ts`) and hands it to whichever chrome is drawn, so a
+   * dropped socket is worded once rather than once per form.
    */
   readonly status?: ReactNode;
 }

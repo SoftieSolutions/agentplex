@@ -2,6 +2,11 @@ import { useState, type JSX, type ReactNode } from 'react';
 import type { ServerRegistrationId } from '@agentplex/protocol';
 import type { HubSnapshot } from '../store/hub-store.js';
 import type { TokenStore } from '../auth/token.js';
+// The chrome's connection line owns this mapping now (AGX-119). Imported
+// rather than kept here as a second copy: this screen and the top bar draw
+// the same phase, and two switches over it are two chances to disagree about
+// what "reconnecting" looks like.
+import { toneForPhase } from '../shell/connection-model.js';
 import {
   Button,
   Group,
@@ -13,7 +18,8 @@ import {
   Title,
   useComputedColorScheme,
 } from '../ui/components.js';
-import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
+import { ToneDot } from '../ui/tone-dot.js';
+import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import {
   parsePairingForm,
   prefillFromCandidate,
@@ -41,21 +47,6 @@ export interface SettingsScreenProps {
   readonly candidates: readonly DiscoveredCandidate[];
 }
 
-/** The connection phase as the tone dot beside the hub line. */
-function toneForPhase(phase: HubSnapshot['phase']): Tone {
-  switch (phase) {
-    case 'connected':
-      return 'running';
-    case 'connecting':
-    case 'idle':
-      return 'idle';
-    case 'reconnecting':
-      return 'needs-you';
-    case 'failed':
-      return 'blocked';
-  }
-}
-
 function phaseWords(snapshot: HubSnapshot): string {
   switch (snapshot.phase) {
     case 'idle':
@@ -69,21 +60,6 @@ function phaseWords(snapshot: HubSnapshot): string {
     case 'failed':
       return 'failed';
   }
-}
-
-/** The mockup's status dot: 7px, round, colored by tone and nothing else. */
-function ToneDot({ tone, scheme }: { readonly tone: Tone; readonly scheme: Scheme }): JSX.Element {
-  return (
-    <span
-      style={{
-        width: 7,
-        height: 7,
-        borderRadius: '50%',
-        background: colorForTone(tone, scheme),
-        flex: 'none',
-      }}
-    />
-  );
 }
 
 /** One bordered surface, the way every t7 panel sits on the background. */
@@ -447,9 +423,7 @@ function PairedServersSection({
           Nothing to list yet — the hub&apos;s first state has not arrived.
         </Text>
       ) : rows.length === 0 ? (
-        <Text size="sm" c="dimmed">
-          No servers are paired with this hub.
-        </Text>
+        <NoServersPaired scheme={scheme} />
       ) : (
         <Stack gap="xs">
           {rows.map((row) => (
@@ -458,6 +432,65 @@ function PairedServersSection({
         </Stack>
       )}
     </Stack>
+  );
+}
+
+/**
+ * No servers, and what to do about it.
+ *
+ * Both halves of the answer are named because a person reaching this line is
+ * stuck at one of two different places. If a server is already running, the
+ * thing that resolves this is the form directly above -- so it is named by its
+ * own heading rather than linked, since a link to the screen you are reading
+ * is a route to nowhere. If no server is running anywhere, no form helps, and
+ * what resolves it is the installer on the machine that will hold the
+ * sessions.
+ *
+ * Where the token comes from is stated the way the two programs actually
+ * behave, because the obvious guess is wrong in both halves. `install.sh`
+ * writes no token -- it says so itself, and for a reason: "it never writes a
+ * database path, a store path or a token, because it has no way to know one
+ * and a guessed value is worse than an absent one". And `agentplex setup`,
+ * which it hands over to, deliberately never prints one: `describe-outcome.ts`
+ * reports the identity file and says "the pairing token is in that file",
+ * which `setup-command.test.ts` pins. So the sentence here names the file and
+ * not a program that hands you a secret, and the operator is sent to read it.
+ *
+ * Neither command carries a host. Where the bootstrap is fetched from is a
+ * fact about a deployment, and the identity file's path is whatever that
+ * machine was configured with -- which is exactly why setup reports it rather
+ * than this screen naming one.
+ */
+function NoServersPaired({ scheme }: { readonly scheme: Scheme }): JSX.Element {
+  return (
+    <Stack gap={4}>
+      <Text size="sm" c="dimmed">
+        No servers are paired with this hub, so it has nothing to run a session on and no store to
+        read.
+      </Text>
+      <Text size="sm" c="dimmed">
+        Pair one above. A server is the machine that holds the sessions:{' '}
+        <Mono scheme={scheme}>install.sh --role=server</Mono> puts one there and hands over to{' '}
+        <Mono scheme={scheme}>agentplex setup</Mono>, which reports an identity file on that machine
+        and says the pairing token is in it. The token is never printed, so it is read out of that
+        file and typed above.
+      </Text>
+    </Stack>
+  );
+}
+
+/** A command or a path, in the face addresses and ids are set in everywhere here. */
+function Mono({
+  scheme,
+  children,
+}: {
+  readonly scheme: Scheme;
+  readonly children: string;
+}): JSX.Element {
+  return (
+    <Text component="span" size="sm" ff="monospace" c={colorForRole('text', scheme)}>
+      {children}
+    </Text>
   );
 }
 

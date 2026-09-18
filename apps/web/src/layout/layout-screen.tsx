@@ -1,11 +1,14 @@
 import { useCallback, useState, useSyncExternalStore, type JSX } from 'react';
 import type { NodeId, SessionRef } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
+import { sessionHash } from '../terminal/session-route.js';
 import { createShortcutRegistry, type ShortcutRegistry } from '../terminal/shortcuts.js';
 import { Stack, Text, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { appLayoutStore } from './app-layout.js';
 import { type LayoutStore } from './layout-store.js';
+import type { LayoutTree } from './tree.js';
+import { panes } from './operations.js';
 import { NodeView, pathKey, type PaneViewDependencies } from './split-view.js';
 import type { FocusDirection } from './operations.js';
 
@@ -126,6 +129,23 @@ function buildHeldStores(hub: HubStore, injected: LayoutStore | undefined): Held
   return { layout, registry, registerPane };
 }
 
+/**
+ * Which sessions the tree is already showing, by session hash.
+ *
+ * Derived here rather than in the pane that reads it, because it is a fact
+ * about the whole tree and the pane can only see itself. Cheap enough to do
+ * per render -- `panes` is one walk of a tree with as many leaves as there are
+ * panes on screen -- and the alternative, caching it, would be caching a value
+ * that changes on exactly the renders it is read on.
+ */
+function showingSessions(tree: LayoutTree): ReadonlySet<string> {
+  const shown = new Set<string>();
+  for (const { leaf } of panes(tree)) {
+    if (leaf.content.type === 'session') shown.add(sessionHash(leaf.content.session));
+  }
+  return shown;
+}
+
 export interface LayoutScreenProps {
   /** The session the address names, or `null` for no session route. */
   readonly session: SessionRef | null;
@@ -167,7 +187,15 @@ export function LayoutScreen({
     focus: snapshot.focus,
     onCommitRatio: (path, ratio) => layout.commitRatio(path, ratio),
     onFocusPane: (path) => layout.focusPane(path),
+    // Focus first, then show: `showSession` puts a session in the focused
+    // pane, and the picker that called this is naming a pane rather than
+    // relying on the click that reached it having already moved focus there.
+    onShowSession: (path, session) => {
+      layout.focusPane(path);
+      layout.showSession(session);
+    },
     registerPane,
+    sessionsOnScreen: showingSessions(snapshot.tree),
   };
 
   return (

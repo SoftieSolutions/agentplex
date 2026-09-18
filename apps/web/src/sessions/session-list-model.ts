@@ -7,6 +7,9 @@ import type {
   SessionStatus,
   StoreId,
 } from '@agentplex/protocol';
+import { destinationHash } from '../shell/destinations.js';
+import type { NextAction } from '../shell/next-action.js';
+import type { ShellForm } from '../shell/shell-form.js';
 import type { ConnectionPhase } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
 
@@ -321,6 +324,69 @@ export function visibleSessions(
       matchesSearch(item, filters.search),
   );
   return partitionNeedsYou(orderByActivity(narrowed));
+}
+
+/** An empty list, worded for the reason it is empty. */
+export interface EmptyListing {
+  readonly words: string;
+  /** Where to go about it, or `null` when the control is on this screen. */
+  readonly action: NextAction | null;
+}
+
+/**
+ * Why the list is empty, and what resolves it.
+ *
+ * One sentence -- "no sessions in any store yet" -- used to answer four
+ * different situations, and it was true in all four and useful in none. The
+ * chain a session hangs off is pairing, then a store, then a session, and a
+ * person looking at an empty list is stuck at exactly one link of it. Naming
+ * which link is the whole of this function.
+ *
+ * Only the first case has somewhere to send anybody. A store is a directory on
+ * the server's own disk with an `agentplex-store.json` at its root; nothing in
+ * this app creates one, so the honest answer there is the fact and no link,
+ * rather than a link to a screen that cannot help. A narrowing is undone by
+ * the controls directly above the list, and starting the first session is a
+ * control on this screen or in the chrome around it -- and a link to the
+ * screen you are reading is a route to nowhere.
+ *
+ * Which control that is depends on the form the shell is in, which is why the
+ * form is an argument. The New session button is `visibleFrom="sm"`, and below
+ * that width the thing that starts one is the chrome's round button, whose
+ * name is "Start a session". Naming the wrong one is worse than naming none:
+ * it sends somebody hunting for a button that is not drawn at their width.
+ */
+export function emptyListing(
+  state: MachineState,
+  anySession: boolean,
+  form: ShellForm,
+): EmptyListing {
+  if (anySession) {
+    return { words: 'no session matches the current narrowing', action: null };
+  }
+  if (state.servers.length === 0) {
+    return {
+      words:
+        'No server is paired with this hub, and a paired server is what reports the stores ' +
+        'sessions live in.',
+      action: { label: 'Pair one in Settings', hash: destinationHash('settings') },
+    };
+  }
+  if (state.stores.length === 0) {
+    // Named when there is one to name: "gpu-box-01 reports no store" sends
+    // somebody to the right machine, where "no store is reported" sends them
+    // looking for which.
+    const which =
+      state.servers.length === 1 && state.servers[0] !== undefined
+        ? `${state.servers[0].label} is paired and reports no store yet`
+        : 'No paired server reports a store yet';
+    return {
+      words: `${which}. A store is a directory with an agentplex-store.json at its root.`,
+      action: null,
+    };
+  }
+  const starter = form === 'phone' ? 'the Start a session button' : 'New session';
+  return { words: `No sessions in any store yet — ${starter} starts one.`, action: null };
 }
 
 /** The age on a card: how long since the provider last wrote, in one word. */

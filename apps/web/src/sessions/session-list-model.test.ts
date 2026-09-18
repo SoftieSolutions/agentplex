@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { destinationHash } from '../shell/destinations.js';
 import {
   ageLabel,
   chipCounts,
   connectionNotice,
+  emptyListing,
   listSessions,
   matchesSearch,
   needsYouCount,
@@ -36,6 +38,7 @@ const populated = stateFrom(hubFrames.machineStatePopulated);
 const stale = stateFrom(hubFrames.machineStateStale);
 const single = stateFrom(hubFrames.machineStateSingle);
 const empty = stateFrom(hubFrames.machineState);
+const pairedOnly = stateFrom(hubFrames.machineStateWithServer);
 
 function names(state: MachineState): readonly string[] {
   return visibleSessions(state, NO_FILTERS).map((item) => item.name);
@@ -289,5 +292,52 @@ describe('degradation, said in words', () => {
     expect(connectionNotice('failed', 'this hub speaks protocol 4, not 5', false)).toBe(
       'this hub speaks protocol 4, not 5',
     );
+  });
+});
+
+/**
+ * The empty list, which until AGX-119 said one sentence to four different
+ * situations. Every case below is a different person stuck at a different
+ * place, and the words are what tell them which one they are in.
+ */
+describe('an empty list, and what resolves it', () => {
+  it('names the narrowing when there are sessions the narrowing is hiding', () => {
+    const listing = emptyListing(populated, true, 'wide');
+
+    expect(listing.words).toBe('no session matches the current narrowing');
+    // The control that undoes it is the narrowing directly above the list.
+    expect(listing.action).toBeNull();
+  });
+
+  it('names pairing, and points at Settings, when no server is paired', () => {
+    const listing = emptyListing(empty, false, 'wide');
+
+    expect(listing.words).toContain('No server is paired');
+    expect(listing.words).toContain('reports the stores');
+    expect(listing.action).toEqual({
+      label: 'Pair one in Settings',
+      hash: destinationHash('settings'),
+    });
+  });
+
+  it('names the starter that is actually drawn at this width', () => {
+    // Both forms have one, and they are two different controls with two
+    // different names: New session is `visibleFrom="sm"`, and below that the
+    // chrome's round button is what starts one. A single wording would send
+    // half the readers hunting for a button that is not there.
+    expect(emptyListing(populated, false, 'wide').words).toContain('New session starts one');
+    expect(emptyListing(populated, false, 'phone').words).toContain(
+      'the Start a session button starts one',
+    );
+  });
+
+  it('says the paired server has no store, by name, rather than blaming pairing', () => {
+    const listing = emptyListing(pairedOnly, false, 'wide');
+
+    expect(listing.words).toContain('gpu-box-01');
+    expect(listing.words).toContain('no store');
+    // Nothing in this app makes a store: it is a directory on the server's own
+    // disk. Pointing anywhere would be pointing at a screen that cannot help.
+    expect(listing.action).toBeNull();
   });
 });
