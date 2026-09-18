@@ -32,6 +32,19 @@ declare global {
 const STORED_TOKEN = 'the-token-typed-on-the-device';
 const SESSION = sessionRefSchema.parse({ storeId: 'store-observatory', sessionId: 'session-11' });
 
+/**
+ * The shell's tab pair draws Mantine's floating indicator, which measures its
+ * target; jsdom has no layout and no observer. A stub that reports nothing is
+ * enough -- nothing here asserts on a measurement.
+ */
+function installResizeObserver(): void {
+  globalThis.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
+}
+
 /** Mantine consults the media query for its colour scheme; jsdom has none. */
 function installMatchMedia(): void {
   window.matchMedia = (query: string): MediaQueryList => ({
@@ -84,6 +97,7 @@ describe('the page', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     installMatchMedia();
+    installResizeObserver();
     container = document.createElement('div');
     document.body.append(container);
   });

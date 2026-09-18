@@ -1,10 +1,8 @@
 import { useState, type JSX } from 'react';
 import type { ServerRegistrationId } from '@agentplex/protocol';
 import {
-  Box,
   Button,
   Group,
-  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
@@ -27,11 +25,7 @@ import {
   type ChipCount,
   type StatusChip,
 } from './session-list-model.js';
-import { CataloguePanel } from '../catalogue/catalogue-panel.js';
-import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogue-store.js';
 import { ProjectDocuments } from '../docs/project-docs.js';
-import { MachineSelector } from '../machines/machine-selector.js';
-import { narrowedToMachine } from '../machines/machine-selector-model.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
 import { NodeMenu } from '../tree/node-menu.js';
 import { nodeForSession } from '../tree/tree-model.js';
@@ -47,28 +41,15 @@ import { stoppedNotice } from './stop-model.js';
  * card grid (turn 7, 7a/7b), which collapses to the mobile card feed (7e) by
  * dropping to one column rather than by being a second view.
  *
- * The catalogue sits beside it: a sidebar at desk widths and a tab at phone
- * widths, which is the one decision this file makes about it. The two are
- * different answers to different questions -- "what am I working on" against
- * "where did I put things" -- and the cards are the fleet's own reading while
- * the panel is a page of the hub's catalogue query.
- *
- * Which of the two is on screen is decided without a media query: each column
- * is rendered exactly once and carries `visibleFrom="md"` only while the other
- * tab is the chosen one, so above the breakpoint both are drawn and below it
- * the tab decides. A media query hook would be a second source of truth about
- * the same breakpoint, and two panels rendered so one can be hidden would be
- * two catalogue queries for one screen.
- *
- * The machine selector sits above both, and it is a narrowing rather than a
- * place: a session is `{ storeId, sessionId }` and never a machine, so picking
- * one sets the catalogue query's `filter.server` and the same constraint over
- * the cards, and does nothing else. That is why the selection is held here and
- * not in either column -- it is one fact about this screen, written by one
- * function, and the panel carries no machine control of its own for the same
- * reason. The catalogue store is built here for the same reason: the selection
- * has to reach the query the panel is drawing, and a store the panel made
- * privately could only be reached through an effect.
+ * The catalogue tree and the machine selector used to stand beside the cards
+ * here, because until AGX-122 this screen was the only place with room for
+ * them. They are the shell's now (`shell/sidebar.tsx`): they belong to every
+ * screen rather than to this one, and a session route no longer replaces the
+ * page, so a tree drawn here would be a second tree the moment a session is
+ * open. What arrives in their place is one prop -- the machine the chrome is
+ * narrowed to -- because the cards narrow by the same fact the hub narrows the
+ * catalogue by, and `machine-selector-model.ts` argues why that is one fact
+ * with one writer.
  *
  * All UI state here is what the user did to this screen; everything derived
  * from the machine state comes from session-list-model.ts, and the snapshot
@@ -76,11 +57,20 @@ import { stoppedNotice } from './stop-model.js';
  */
 export interface SessionListScreenProps {
   readonly store: HubStore;
+  /**
+   * The machine the shell is narrowed to, or `null` for all of them. Read and
+   * never written: the selector that writes it is in the chrome.
+   */
+  readonly machine?: ServerRegistrationId | null;
   /** The clock, injected so a test can render fixed ages. */
   readonly now?: () => number;
 }
 
-export function SessionListScreen({ store, now = Date.now }: SessionListScreenProps): JSX.Element {
+export function SessionListScreen({
+  store,
+  machine = null,
+  now = Date.now,
+}: SessionListScreenProps): JSX.Element {
   const snapshot = useHubSnapshot(store);
   // Declaring interest, which is what sends the layout request and what has it
   // re-sent after every reconnection and every `catalogue-changed`. The tree is
@@ -91,20 +81,15 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
   const [chip, setChip] = useState<StatusChip | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
-  const [machine, setMachine] = useState<ServerRegistrationId | null>(null);
-  // Built once and inert until something subscribes: creating a catalogue
-  // store dials nothing, and the panel's first subscriber is what asks.
-  const [catalogue] = useState<CatalogueStore>(() => createCatalogueStore({ hub: store }));
   const [creating, setCreating] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
-  const [tab, setTab] = useState<Tab>('sessions');
 
   const state = snapshot.machineState;
   const notice = connectionNotice(snapshot.phase, snapshot.problem, state !== null);
 
   if (state === null) {
     return (
-      <Stack component="main" p="md" gap="xs">
+      <Stack p="md" gap="xs">
         <Title order={1} fz={16}>
           Sessions
         </Title>
@@ -146,23 +131,8 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
   // session stopped in another tab is a row that quietly stops being held.
   const stopped = stoppedNotice(state, snapshot.lastStopped);
 
-  /**
-   * The one place the selection moves from.
-   *
-   * Two things read it -- the cards above and the catalogue query the panel
-   * draws -- and they are written together here rather than kept in step
-   * afterwards. The query's copy is the filter field itself, because that is
-   * what goes on the wire, and nothing else in this screen sets it. It is in
-   * the body because it writes this screen's state and the store this screen
-   * holds; everything it decides is in the model it calls.
-   */
-  function pickMachine(next: ServerRegistrationId | null): void {
-    setMachine(next);
-    catalogue.reshape(narrowedToMachine(catalogue.getSnapshot().shape, next));
-  }
-
   return (
-    <Stack component="main" p="md" gap="sm">
+    <Stack p="md" gap="sm">
       <Group justify="space-between" align="center">
         <Group gap={14} align="baseline">
           <Title order={1} fz={16}>
@@ -247,108 +217,66 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
         </Group>
       )}
 
-      <MachineSelector state={state} chosen={machine} onPick={pickMachine} scheme={scheme} />
-
-      {/* Below the breakpoint the two columns are one at a time, and this is
-          what chooses. Above it the control is not drawn and both are. */}
-      <SegmentedControl
-        hiddenFrom="md"
-        size="xs"
-        fullWidth
-        aria-label="What to show"
-        value={tab}
-        onChange={(value) => setTab(value === 'projects' ? 'projects' : 'sessions')}
-        data={[
-          { value: 'sessions', label: 'Sessions' },
-          { value: 'projects', label: 'Projects' },
-        ]}
-      />
-
-      <Group align="flex-start" wrap="nowrap" gap="md">
-        <Box
-          w={{ base: '100%', md: 300 }}
-          style={{ flexShrink: 0, minWidth: 0 }}
-          {...(tab === 'projects' ? {} : { visibleFrom: 'md' as const })}
-        >
-          <CataloguePanel
-            store={store}
-            state={state}
-            layout={layout}
+      <Group gap={10}>
+        {chips.length === 0 ? null : (
+          <StatusChips
+            chips={chips}
+            total={narrowed.length}
+            active={activeChip}
+            onPick={setChip}
             scheme={scheme}
-            catalogue={catalogue}
           />
-        </Box>
-
-        <Stack
-          gap="sm"
-          style={{ flex: 1, minWidth: 0 }}
-          {...(tab === 'sessions' ? {} : { visibleFrom: 'md' as const })}
-        >
-          <Group gap={10}>
-            {chips.length === 0 ? null : (
-              <StatusChips
-                chips={chips}
-                total={narrowed.length}
-                active={activeChip}
-                onPick={setChip}
-                scheme={scheme}
-              />
-            )}
-            <TextInput
-              size="xs"
-              aria-label="Search sessions"
-              placeholder="Search sessions"
-              value={search}
-              onChange={(event) => setSearch(event.currentTarget.value)}
-              style={{ flex: 1, maxWidth: 380 }}
-            />
-          </Group>
-
-          {visible.length === 0 ? (
-            <Text c="dimmed" fz={13}>
-              {everySession.length === 0
-                ? 'no sessions in any store yet'
-                : 'no session matches the current narrowing'}
-            </Text>
-          ) : (
-            <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
-              {visible.map((item) => {
-                // A session the tree holds no node for gets no menu: there is
-                // nothing to rename, move or remove, and a menu that opened onto
-                // three refusals would be worse than no menu.
-                const node = nodeForSession(layout, item.ref);
-                return (
-                  <SessionCard
-                    key={item.key}
-                    item={item}
-                    scheme={scheme}
-                    now={moment}
-                    store={store}
-                    actions={
-                      node === null ? null : (
-                        <NodeMenu
-                          store={store}
-                          nodeId={node.id}
-                          name={node.name ?? item.name}
-                          layout={layout}
-                          anchor={item.ref}
-                          scheme={scheme}
-                        />
-                      )
-                    }
-                  />
-                );
-              })}
-            </SimpleGrid>
-          )}
-        </Stack>
+        )}
+        <TextInput
+          size="xs"
+          aria-label="Search sessions"
+          placeholder="Search sessions"
+          value={search}
+          onChange={(event) => setSearch(event.currentTarget.value)}
+          style={{ flex: 1, maxWidth: 380 }}
+        />
       </Group>
+
+      {visible.length === 0 ? (
+        <Text c="dimmed" fz={13}>
+          {everySession.length === 0
+            ? 'no sessions in any store yet'
+            : 'no session matches the current narrowing'}
+        </Text>
+      ) : (
+        <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
+          {visible.map((item) => {
+            // A session the tree holds no node for gets no menu: there is
+            // nothing to rename, move or remove, and a menu that opened onto
+            // three refusals would be worse than no menu.
+            const node = nodeForSession(layout, item.ref);
+            return (
+              <SessionCard
+                key={item.key}
+                item={item}
+                scheme={scheme}
+                now={moment}
+                store={store}
+                actions={
+                  node === null ? null : (
+                    <NodeMenu
+                      store={store}
+                      nodeId={node.id}
+                      name={node.name ?? item.name}
+                      layout={layout}
+                      anchor={item.ref}
+                      scheme={scheme}
+                    />
+                  )
+                }
+              />
+            );
+          })}
+        </SimpleGrid>
+      )}
     </Stack>
   );
 }
-
-/** Which of the two columns a narrow screen is showing. */
-type Tab = 'sessions' | 'projects';
 
 interface StatusChipsProps {
   readonly chips: readonly ChipCount[];
