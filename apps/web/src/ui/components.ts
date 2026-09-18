@@ -11,6 +11,7 @@
 import '@mantine/core/styles.css';
 
 export {
+  Anchor,
   Box,
   Button,
   CloseButton,
@@ -24,6 +25,7 @@ export {
   Select,
   SimpleGrid,
   Stack,
+  Stepper,
   Text,
   Textarea,
   TextInput,
