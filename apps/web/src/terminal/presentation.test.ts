@@ -4,6 +4,7 @@ import {
   sessionRefSchema,
   sessionStatusSchema,
   type MachineState,
+  type ServerView,
 } from '@agentplex/protocol';
 import type { HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import { createTerminalFeed } from './chunk-feed.js';
@@ -11,9 +12,11 @@ import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
 import {
   findSessionRow,
   formatBytes,
+  machineFor,
   machineLabel,
   matchSummary,
   searchScopeNotice,
+  terminalFeedNotice,
   terminalInputNotice,
   terminalIsPartial,
   terminalScopeNotice,
@@ -30,6 +33,8 @@ const ref = sessionRefSchema.parse({ storeId: 'store-a', sessionId: 'sess-1' });
 
 function stateWith(overrides?: {
   holder?: { server: string; stoppable: boolean } | null;
+  /** What that machine's connectivity is, for the panes that read it. */
+  server?: Record<string, unknown>;
 }): MachineState {
   return machineStateSchema.parse({
     version: 3,
@@ -93,6 +98,7 @@ function stateWith(overrides?: {
         // that is answering, and a drain is the settings screen's subject.
         draining: null,
         problem: null,
+        ...overrides?.server,
       },
     ],
     // Nothing heard on the network: this file is about drawing sessions, and
@@ -142,6 +148,8 @@ function terminalWith(overrides: Partial<TerminalWatchView> = {}): TerminalWatch
     evicted: false,
     printed: true,
     problem: null,
+    ended: null,
+    resumed: false,
     ...overrides,
   };
 }
@@ -276,6 +284,86 @@ describe('terminalScopeNotice', () => {
       'showing less than everything: the first 4 KB this session printed was gone before this pane attached; ' +
         '2 chunks of output did not fit down this connection and were dropped; ' +
         'this pane has since thrown away its own oldest output',
+    );
+  });
+});
+
+describe('machineFor', () => {
+  it('finds the machine a session is on, and says nothing when there is none', () => {
+    const state = stateWith();
+    const row = findSessionRow(state, ref);
+    expect(machineFor(state, row)?.label).toBe('mbp-robert');
+    expect(machineFor(null, row)).toBeNull();
+    expect(machineFor(state, null)).toBeNull();
+  });
+});
+
+describe('terminalFeedNotice', () => {
+  /** The machine this session is on, as the state has it. */
+  function machine(server?: Record<string, unknown>): ServerView | null {
+    const state = stateWith(server === undefined ? undefined : { server });
+    return machineFor(state, findSessionRow(state, ref));
+  }
+
+  it('says nothing about a pane something is feeding', () => {
+    expect(terminalFeedNotice(null)).toBeNull();
+    expect(terminalFeedNotice(terminalWith())).toBeNull();
+  });
+
+  it('does not tell a user to wait out something only they can fix', () => {
+    const dropped = terminalFeedNotice(terminalWith({ ended: 'server-dropped' }), machine());
+    expect(dropped).toContain('dialling it again');
+
+    // The hub does go on dialling this one -- and every dial is refused the
+    // same way, so a pane that said "dialling it again" would be telling
+    // somebody to wait for a minute that changes nothing.
+    const wrongToken = terminalFeedNotice(
+      terminalWith({ ended: 'server-dropped' }),
+      machine({
+        phase: 'stale',
+        connectedSince: null,
+        staleSince: 1_756_000_000_000,
+        staleReason: 'unauthorized',
+        problem: 'the server did not accept this pairing; pair the machine again',
+      }),
+    );
+    expect(wrongToken).toContain('waiting will not fix it');
+    // In the machine's own words, which name what to do: nothing else in this
+    // pane knows that a token is what is wrong.
+    expect(wrongToken).toContain('pair the machine again');
+    expect(wrongToken).not.toContain('dialling it again');
+  });
+
+  it('tells a machine that went away from one that is going down on purpose', () => {
+    // Two silences that draw the same rectangle and mean two different things
+    // to do: wait a moment, or leave a box that is restarting alone.
+    expect(terminalFeedNotice(terminalWith({ ended: 'server-dropped' }))).toContain(
+      'stopped answering',
+    );
+    expect(terminalFeedNotice(terminalWith({ ended: 'server-draining' }))).toContain(
+      'shutting down',
+    );
+  });
+
+  it('says outright when there is nothing left to wait for', () => {
+    const notice = terminalFeedNotice(terminalWith({ ended: 'session-ended' }));
+    // The one reason the hub is not about to re-attach this pane, so the words
+    // do not tell the user to wait for something that is not coming.
+    expect(notice).toContain('this terminal is gone');
+    expect(notice).not.toContain('dialling');
+  });
+
+  it('says a replayed history repeats rather than that something is missing', () => {
+    const notice = terminalScopeNotice(terminalWith({ resumed: true }));
+    // Not one of the losses: a feed that came back is showing something twice,
+    // not showing less, and a label that said "showing less than everything"
+    // about it would send a user looking for output that is right there.
+    expect(notice).toBe(
+      'this feed was re-established and the session replayed what it still held, so output above may appear twice',
+    );
+    expect(terminalScopeNotice(terminalWith({ resumed: true, droppedChunks: 2 }))).toBe(
+      'showing less than everything: 2 chunks of output did not fit down this connection and were dropped' +
+        ' — this feed was re-established and the session replayed what it still held, so output above may appear twice',
     );
   });
 });

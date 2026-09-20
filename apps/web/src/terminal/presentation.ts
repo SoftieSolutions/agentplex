@@ -1,4 +1,12 @@
-import type { MachineState, SessionRef, SessionRow, SessionStatus } from '@agentplex/protocol';
+import type {
+  MachineState,
+  ServerView,
+  SessionRef,
+  SessionRow,
+  SessionStatus,
+  StaleReason,
+  SubscriptionEndReason,
+} from '@agentplex/protocol';
 import { serverLabel } from '../sessions/session-list-model.js';
 import type { HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
@@ -80,6 +88,79 @@ export function terminalInputNotice(
 }
 
 /**
+ * The machine a session is running on, as the published state has it.
+ *
+ * The holder when something is holding it, and otherwise the server whose
+ * reading the row is -- the same choice `machineLabel` makes, because they are
+ * answering the same question about the same row.
+ */
+export function machineFor(state: MachineState | null, row: SessionRow | null): ServerView | null {
+  if (state === null || row === null) return null;
+  const registrationId = row.holder?.server ?? row.source;
+  return state.servers.find((server) => server.registrationId === registrationId) ?? null;
+}
+
+/**
+ * Reasons no amount of waiting changes, as the fleet state names them.
+ *
+ * The hub goes on dialling all three -- it should notice a re-pairing without
+ * being restarted -- but on a floor of a minute, and nothing that happens in
+ * that minute helps. The same set the dial loop keeps for the same three, and
+ * it is here rather than imported because what it decides here is a sentence
+ * rather than a schedule.
+ */
+const NEEDS_A_PERSON: ReadonlySet<StaleReason> = new Set<StaleReason>([
+  'unauthorized',
+  'protocol-version',
+  'identity-changed',
+]);
+
+/**
+ * The sentence for a pane nothing is feeding any more, or `null` while
+ * something is.
+ *
+ * The case this whole frame exists for: an agent that has stopped printing and
+ * a relay that has stopped relaying are the same still rectangle, and a user
+ * looking at one has no way to tell which they are waiting on. Each reason
+ * gets its own words because each is a different thing to do -- wait a moment,
+ * wait for a machine that is deliberately restarting, or stop waiting.
+ *
+ * `machine` is the server row for the machine this session is on, when the
+ * state has one, and it is what keeps `server-dropped` from promising too
+ * much. The frame carries three reasons and not ten, deliberately: a
+ * subscription ends for reasons about the connection, and the connection's own
+ * vocabulary for why it is down already reaches this client on every
+ * `machine-state`. So the words are joined here, where both facts are, rather
+ * than by widening a wire enum that a second pull request is already building
+ * on -- and a wrong token or a build that disagrees says so instead of telling
+ * somebody to wait for a dial that will be refused exactly as it was.
+ */
+export function terminalFeedNotice(
+  terminal: TerminalWatchView | null,
+  machine: ServerView | null = null,
+): string | null {
+  const ended: SubscriptionEndReason | null = terminal?.ended ?? null;
+  if (ended === null) return null;
+  switch (ended) {
+    case 'server-dropped': {
+      const reason = machine?.staleReason ?? null;
+      if (reason !== null && NEEDS_A_PERSON.has(reason)) {
+        const problem = machine?.problem ?? null;
+        return (
+          'nothing is reaching this pane: the hub cannot connect to the machine running this session, ' +
+          `and waiting will not fix it${problem === null ? '' : ` — ${problem}`}`
+        );
+      }
+      return 'the machine running this session stopped answering: nothing is reaching this pane, and the hub is dialling it again';
+    }
+    case 'server-draining':
+      return 'the machine running this session is shutting down: nothing is reaching this pane until it is back, and the hub is waiting the time it asked for';
+    case 'session-ended':
+      return 'this terminal is gone: the machine that held it no longer has it, so what is above is the last of what it printed';
+  }
+}
+
+/**
  * A count of bytes as a person reads one.
  *
  * Powers of two, because the thing being measured is a buffer and the number
@@ -135,7 +216,21 @@ export function terminalScopeNotice(terminal: TerminalWatchView | null): string 
     missing.push('this pane has since thrown away its own oldest output');
   }
 
-  if (missing.length > 0) return `showing less than everything: ${missing.join('; ')}`;
+  const said: string[] = [];
+  if (missing.length > 0) said.push(`showing less than everything: ${missing.join('; ')}`);
+  // Not one of the losses above, and deliberately not phrased as one: a feed
+  // that was re-established is showing MORE than once rather than less than
+  // everything. The machine's scrollback survived whatever interrupted the
+  // subscription, so what was replayed into this pane overlaps what it already
+  // had -- and the bytes are kept rather than cleared, because they are what
+  // the emulator has painted and clearing them would throw away a screenful of
+  // a session to make a label unnecessary.
+  if (terminal.resumed) {
+    said.push(
+      'this feed was re-established and the session replayed what it still held, so output above may appear twice',
+    );
+  }
+  if (said.length > 0) return said.join(' — ');
   if (!terminal.printed && terminal.replayChunks === 0) {
     return 'nothing here yet: this session has printed nothing, and this pane is showing all of it';
   }

@@ -35,6 +35,8 @@ import {
   machineLabel,
   terminalInputNotice,
   terminalIsPartial,
+  machineFor,
+  terminalFeedNotice,
   terminalScopeNotice,
   toneForStatus,
 } from './presentation.js';
@@ -377,6 +379,9 @@ export function SessionPane({
           .join(' · ');
   const notice = terminalInputNotice(snapshot, terminal);
   const scope = terminalScopeNotice(terminal);
+  // The machine's own reading, so a pane whose hub cannot connect at all says
+  // that rather than telling somebody to wait for a dial that will be refused.
+  const feed = terminalFeedNotice(terminal, machineFor(state, row));
   const border = `1px solid ${colorForRole('border', scheme)}`;
   /**
    * Whether to draw the paste control, asked at render.
@@ -504,6 +509,17 @@ export function SessionPane({
           emulatorReady={emulatorReady}
           emulators={emulators}
         />
+      )}
+
+      {feed !== null && (
+        <Text
+          fz={11}
+          px={18}
+          py={6}
+          style={{ color: colorForTone('blocked', scheme), borderTop: border }}
+        >
+          {feed}
+        </Text>
       )}
 
       {scope !== null && (
