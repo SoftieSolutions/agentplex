@@ -3,6 +3,7 @@ import {
   machineStateSchema,
   sessionRefSchema,
   sessionStatusSchema,
+  subscriptionEndReasonSchema,
   type MachineState,
   type ServerView,
 } from '@agentplex/protocol';
@@ -478,5 +479,33 @@ describe('paneAttachment', () => {
   it('has a word for every phase the store can be in', () => {
     const words = connectionPhaseNames.map((phase) => paneAttachment(phase, null).words);
     expect(new Set(words).size).toBe(connectionPhaseNames.length);
+  });
+
+  it('says a watch the hub ended is detached, whichever reason ended it', () => {
+    // The reasons off the parser rather than a list written here: a fourth one
+    // added to the wire is a fourth one this chip has to have an answer for,
+    // and the answer is the same for all of them. Which of them it was is the
+    // sentence under the terminal, where there is room to say what to do about
+    // it; the chip has one word and spends it on the fact that nothing is
+    // arriving. "Attaching" would be the wrong one -- it promises a subscribe
+    // that is on its way, and there is none.
+    for (const ended of subscriptionEndReasonSchema.options) {
+      expect(paneAttachment('connected', terminalWith({ attached: false, ended }))).toEqual({
+        tone: 'blocked',
+        words: 'Detached',
+      });
+    }
+  });
+
+  it('reads the ended flag before the attached one, not after', () => {
+    // The store clears `attached` in the same step it sets `ended`, so today
+    // the two never disagree and this case does not arise. The order is
+    // asserted anyway, because it is what stops being free the moment they do:
+    // a pane that asked `attached` first would go on saying "Attached" about a
+    // terminal the hub has said is over, which is the over-claim this whole
+    // indicator exists to prevent.
+    expect(
+      paneAttachment('connected', terminalWith({ attached: true, ended: 'session-ended' })),
+    ).toEqual({ tone: 'blocked', words: 'Detached' });
   });
 });

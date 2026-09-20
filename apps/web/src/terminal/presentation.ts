@@ -163,21 +163,27 @@ export function terminalFeedNotice(
 /**
  * The slice of a watched terminal the attachment indicator reads.
  *
- * One field, and `TerminalWatchView` satisfies it, for the reason the pending
- * pane narrows the same view: what the indicator needs is not a feed and not a
- * byte count, and a function that took the whole view would be a function
- * every future field could change the meaning of.
+ * Two fields, and `TerminalWatchView` satisfies them, for the reason the
+ * pending pane narrows the same view: what the indicator needs is not a feed
+ * and not a byte count, and a function that took the whole view would be a
+ * function every future field could change the meaning of.
  *
- * It is also where the next fact goes. AGX-247 adds a `session-subscription-
- * ended` frame and an `ended` flag on the store's view -- the hub saying this
- * terminal is over rather than merely unanswered -- and feeding it in is a
- * field here and a branch below, above the `attached` question, since a watch
- * that ended was attached a moment ago and saying "Attached" about it would be
- * the over-claim this whole indicator exists to prevent.
+ * They are two rather than one because a watch that was never answered and a
+ * watch the hub has ended are different facts that `attached === false`
+ * spells the same way, and the pane owes them different words.
  */
 export interface AttachmentTerminal {
   /** Whether the hub has answered this pane's subscription. */
   readonly attached: boolean;
+  /**
+   * Why the hub ended this pane's subscription, or `null` while it has not.
+   *
+   * Carried rather than collapsed to a boolean because the sentence under the
+   * terminal is worded from the same flag, and two readings of one fact that
+   * could disagree is how a chip and a sentence end up contradicting each
+   * other.
+   */
+  readonly ended: SubscriptionEndReason | null;
 }
 
 /** What the pane says about its own attachment, and how loudly. */
@@ -199,11 +205,28 @@ export interface Attachment {
  * going nowhere. The route the pane is on says nothing about any of it: an
  * address is where a user pointed, not what a hub answered.
  *
- * `connected` with no answered watch is "Attaching" rather than a failure.
- * There is no socket state in which a subscribe has been sent and refused and
- * nothing is said: a refusal arrives as a `problem` and the pane repeats the
- * hub's own words underneath, which is a better sentence than any word a chip
- * could hold.
+ * On a live connection the subscription is read in the same direction, ended
+ * before attached. The hub ends one with a frame of its own -- the machine
+ * went, the machine is draining, the session is over -- and all three mean the
+ * same thing about this pane: nothing is arriving, and no subscribe is on its
+ * way to change that. "Attached" would be the over-claim, and so would
+ * "Attaching", which promises exactly the subscribe that is not coming. The
+ * word is "Detached" for all three, in the tone a dropped connection takes,
+ * because the reason is not a chip's to carry: `terminalFeedNotice` words it
+ * underneath, where there is room to say which of the three it was and what
+ * waiting will and will not do about it.
+ *
+ * Ended is read first for a second reason as well. The store clears `attached`
+ * as it sets `ended`, so the two cannot disagree today -- and a function whose
+ * correctness rests on that would be one an invariant somewhere else can break
+ * silently. Asking the stronger fact first costs a line and holds whichever
+ * way that invariant goes.
+ *
+ * `connected` with no answered watch and nothing ended is "Attaching" rather
+ * than a failure. There is no socket state in which a subscribe has been sent
+ * and refused and nothing is said: a refusal arrives as a `problem` and the
+ * pane repeats the hub's own words underneath, which is a better sentence than
+ * any word a chip could hold.
  */
 export function paneAttachment(
   phase: ConnectionPhase,
@@ -219,6 +242,8 @@ export function paneAttachment(
     case 'failed':
       return { tone: 'blocked', words: 'Dropped' };
     case 'connected':
+      if (terminal !== null && terminal.ended !== null)
+        return { tone: 'blocked', words: 'Detached' };
       return terminal !== null && terminal.attached
         ? { tone: 'running', words: 'Attached' }
         : { tone: 'idle', words: 'Attaching' };

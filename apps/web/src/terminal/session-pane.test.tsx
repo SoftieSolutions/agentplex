@@ -1056,6 +1056,27 @@ describe('the session tab strip', () => {
     expect(attachment()).toBe('Reconnecting');
   });
 
+  it('stops claiming attachment once the hub says nothing is feeding this pane', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await deliver(socket, hubFrames.sessionSubscribed);
+    expect(attachment()).toBe('Attached');
+
+    // The socket is still up: this is the hub ending one subscription on it,
+    // not the connection going. So nothing else in the pane changes phase, and
+    // the chip is the only thing that can say the terminal stopped being fed.
+    await deliver(socket, hubFrames.sessionSubscriptionEnded);
+
+    expect(attachment()).toBe('Detached');
+    // Both, and this is the pairing worth holding to a real frame: the
+    // sentence says what happened and what to do, and a chip still reading
+    // "Attached" beside it would contradict it in the reassuring direction --
+    // a user would believe the word and read the sentence as stale.
+    expect(container.textContent).toContain('stopped answering');
+    expect(container.textContent).not.toContain('Attached');
+  });
+
   it('says a connection that is not coming back is gone', async () => {
     const hub = buildStore();
     await mountOn(hub);
