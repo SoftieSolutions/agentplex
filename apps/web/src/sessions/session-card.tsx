@@ -4,14 +4,20 @@ import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import type { HubStore } from '../store/hub-store.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { AttentionControls } from './attention-controls.js';
-import { ageLabel, type SessionListItem } from './session-list-model.js';
+import { ageLabel, placeLabel, type SessionListItem } from './session-list-model.js';
 import { SessionSummaryLine } from './session-summary-line.js';
 import { StopButton } from './stop-button.js';
 
 /**
  * One compact session card, from the approved mockup (turn 7, screens 7a/7e):
- * tone dot, name, machine label in the monospace face, one summary line, and
- * a provider-and-age line. A needs-you card carries the accent border -- the
+ * tone dot, name, where the session is in the monospace face, one summary
+ * line, and a provider-and-age line. That meta line is the project and the
+ * machine, or the store and the machine where the tree places the session in
+ * no project, and it is `placeLabel` rather than a join written here: the
+ * sidebar draws the same line about the same session, and a fallback spelled
+ * twice is a fallback one of the two will forget.
+ *
+ * A needs-you card carries the accent border -- the
  * partition is also visible per card -- and its age reads as waiting time.
  * The Allow/Deny affordances the mockup shows belong to the approvals
  * milestone and are deliberately absent: an approval that cannot be granted
@@ -102,7 +108,7 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
           {item.name}
         </Text>
         <Text ff="monospace" fz={10} fw={500} c={muted}>
-          {item.machine}
+          {placeLabel(item)}
         </Text>
         {actions}
       </Group>
