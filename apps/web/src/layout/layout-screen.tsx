@@ -1,10 +1,12 @@
 import { useCallback, useState, useSyncExternalStore, type JSX } from 'react';
 import type { NodeId, SessionRef } from '@agentplex/protocol';
+import type { TokenStore } from '../auth/token.js';
 import type { HubStore } from '../store/hub-store.js';
 import { createShortcutRegistry, type ShortcutRegistry } from '../terminal/shortcuts.js';
 import { Stack, Text, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { appLayoutStore } from './app-layout.js';
+import { ConnectionBar } from './connection-bar.js';
 import { type LayoutStore } from './layout-store.js';
 import { NodeView, pathKey, type PaneViewDependencies } from './split-view.js';
 import type { FocusDirection } from './operations.js';
@@ -133,6 +135,12 @@ export interface LayoutScreenProps {
   readonly doc?: NodeId | null;
   /** The page's one hub store, handed down from the root. */
   readonly store: HubStore;
+  /**
+   * This device's credential store, handed down for the connection bar: the
+   * step it offers is either "type a token" or "check the one you typed", and
+   * only the store that holds it can tell those two apart.
+   */
+  readonly tokens: TokenStore;
   readonly layoutStore?: LayoutStore;
 }
 
@@ -140,6 +148,7 @@ export function LayoutScreen({
   session,
   doc = null,
   store: hub,
+  tokens,
   layoutStore,
 }: LayoutScreenProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
@@ -172,20 +181,35 @@ export function LayoutScreen({
 
   return (
     <div
-      style={{ height: '100dvh', background: colorForRole('background', scheme) }}
+      style={{
+        height: '100dvh',
+        background: colorForRole('background', scheme),
+        // A column, so the bar can take the height it needs and the panes the
+        // rest. `minHeight: 0` on the pane region is what stops a flex child
+        // from refusing to shrink below its content and pushing the last rows
+        // of a terminal off the bottom of the viewport.
+        display: 'flex',
+        flexDirection: 'column',
+      }}
       // Capture phase, outermost: a layout chord is decided before any pane
       // — or its emulator — can turn the keydown into terminal bytes.
       onKeyDownCapture={(event) => registry.handleKeyDown(event)}
     >
-      {snapshot.loaded ? (
-        <NodeView node={snapshot.tree} path={[]} view={view} />
-      ) : (
-        <Stack align="center" justify="center" style={{ height: '100%' }}>
-          <Text fz={12} style={{ color: colorForRole('textMuted', scheme) }}>
-            Waiting for the hub to answer with the stored layout
-          </Text>
-        </Stack>
-      )}
+      {/* Above the panes, because a notice under a viewport of panes is a
+          notice nobody reads. It draws nothing while the hub is there, so the
+          panes are the whole height in the case that is almost every case. */}
+      <ConnectionBar store={hub} tokens={tokens} />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        {snapshot.loaded ? (
+          <NodeView node={snapshot.tree} path={[]} view={view} />
+        ) : (
+          <Stack align="center" justify="center" style={{ height: '100%' }}>
+            <Text fz={12} style={{ color: colorForRole('textMuted', scheme) }}>
+              Waiting for the hub to answer with the stored layout
+            </Text>
+          </Stack>
+        )}
+      </div>
     </div>
   );
 }

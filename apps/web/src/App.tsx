@@ -66,7 +66,7 @@ function AppShell({ hub, tokens, dismissal }: AppProps): JSX.Element {
     // Deliberately not keyed on the route: the layout outlives navigation,
     // and the screen shows the addressed session -- or document -- in its
     // focused pane. The panes key their own mounts.
-    return <LayoutScreen session={sessionRef} doc={doc} store={hub} />;
+    return <LayoutScreen session={sessionRef} doc={doc} store={hub} tokens={tokens} />;
   }
   return (
     <Stack component="main" gap="md">
