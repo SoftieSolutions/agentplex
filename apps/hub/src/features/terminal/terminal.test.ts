@@ -169,6 +169,7 @@ function row(
     reachable: true,
     holder,
     attention: UNATTENDED,
+    project: null,
   };
 }
 
