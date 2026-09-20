@@ -18,6 +18,7 @@ import type { PairingOutcome } from '../settings/pairing-operations.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
+import { installCommand } from './install-command.js';
 import { PairStep } from './pair-step.js';
 
 /**
@@ -249,16 +250,30 @@ describe('the wizard pairing step', () => {
     expect(container.textContent).not.toContain('its row appears below');
   });
 
-  it('points a reader with no server at the install, and asks them for nothing', async () => {
+  it('gives a reader with no server the command, and asks them for nothing', async () => {
     await mount();
 
     await click('I need to run one');
 
-    // A repository path is not something a browser reader can open, so what
-    // this points at is the README that ships onto the machine they install.
-    expect(container.textContent).toContain('README');
-    expect(container.textContent).not.toContain('apps/cli/README.md');
+    // The enroll panel, whose own tests pin what it draws. What this holds is
+    // that this branch mounts it at all, and that it is still not a form: an
+    // address and a token are the two values this reader has not got yet.
+    expect(container.textContent).toContain(installCommand('linux'));
     expect(hasButton('Pair server')).toBe(false);
+    expect(container.querySelector('input')).toBe(null);
+  });
+
+  it('takes the reader back to the form once they have been to that machine', async () => {
+    await mount();
+
+    await click('I need to run one');
+    await click('I have the token, pair it');
+
+    // The two answers are a round trip. A reader who followed the install and
+    // came back with a token would otherwise have to work out that the way on
+    // is the button they already said no to.
+    expect(hasButton('Pair server')).toBe(true);
+    expect(field('Address').value).toBe('');
   });
 
   it('puts the token where setup puts it, and never says anything printed it', async () => {
