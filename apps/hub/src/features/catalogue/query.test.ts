@@ -15,7 +15,9 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { createFakeDatabase } from '../../db/fake-database.js';
-import { queryCatalogue, type CataloguePageOutcome } from './query.js';
+import { sessionKey } from '../fleet-state/fleet-state.js';
+import { queryCatalogue, sessionProjectsIn, type CataloguePageOutcome } from './query.js';
+import { nodeRowSchema } from './rows.js';
 
 /**
  * The catalogue query, over a few hundred nodes and no database.
@@ -647,5 +649,56 @@ describe('the catalogue cursor', () => {
     if (refused.ok) return;
     expect(refused.code).toBe('bad-request');
     expect(refused.problem).toContain('not a cursor this hub minted');
+  });
+});
+
+/**
+ * Where the tree puts each session, read for the fleet state rather than for a
+ * page.
+ *
+ * Which project a session is in reaches a client twice: as the group a page
+ * grouped by project puts an item in, and as the project on the session row
+ * itself. Two walks would be two answers about one session, free to disagree
+ * on the screen that draws both, so there is one walk and this is it -- held
+ * here to the same tree the grouped suite above is held to.
+ */
+describe('the project each session is filed under', () => {
+  const rows = [
+    project('project', null, 0, 'universe'),
+    folder('bench', 'project', 0, 'benchmarks'),
+    session('filed', 'bench', 0, 'session-bench'),
+    folder('drafts', null, 1, 'drafts'),
+    session('unfiled', 'drafts', 0, 'session-draft'),
+  ];
+  const readings: Reading[] = [{ sessionId: 'session-bench' }, { sessionId: 'session-draft' }];
+
+  const placements = (): ReadonlyMap<string, { nodeId: NodeId; name: string }> =>
+    sessionProjectsIn(rows.map((row) => nodeRowSchema.parse(row)));
+
+  const keyFor = (sessionId: string): string =>
+    sessionKey({ storeId: STORE, sessionId: sessionIdSchema.parse(sessionId) });
+
+  it('names the project above a session, however many folders are between them', () => {
+    expect(placements().get(keyFor('session-bench'))).toEqual({
+      nodeId: 'project',
+      name: 'universe',
+    });
+  });
+
+  it('leaves a session in no project out of the reading rather than filing it somewhere', () => {
+    const read = placements();
+
+    expect(read.has(keyFor('session-draft'))).toBe(false);
+    expect(read.size).toBe(1);
+  });
+
+  it('says what a page grouped by project says about the same tree', async () => {
+    const answered = await over(rows, readings).page({ groupBy: 'project' });
+    const groups = new Map(answered.items.map((item) => [item.id, item.group?.key ?? null]));
+    const read = placements();
+
+    expect(read.get(keyFor('session-bench'))?.nodeId).toBe(groups.get(nodeIdSchema.parse('filed')));
+    expect(read.get(keyFor('session-draft'))).toBeUndefined();
+    expect(groups.get(nodeIdSchema.parse('unfiled'))).toBeNull();
   });
 });

@@ -54,10 +54,19 @@ interface Harness {
   readonly stores: Map<StoreId, readonly SessionDescriptor[] | null>;
 }
 
-function harness(options: { readonly failOn?: RegExp } = {}): Harness {
-  const database = createFakeDatabase(
-    options.failOn === undefined ? {} : { failOn: options.failOn },
-  );
+function harness(
+  options: { readonly failOn?: RegExp; readonly nodes?: readonly unknown[] } = {},
+): Harness {
+  const database = createFakeDatabase({
+    ...(options.failOn === undefined ? {} : { failOn: options.failOn }),
+    // The rows a read of the whole tree comes back with. Scripted rather than
+    // written by a migrated schema, for the reason the rest of this file is a
+    // fake: what it is about is when the tree is read and what is done with the
+    // answer, and the statement itself is `reads.test`'s subject.
+    ...(options.nodes === undefined
+      ? {}
+      : { respondWith: [{ match: /FROM nodes/, rows: options.nodes }] }),
+  });
   const logs: LogRecord[] = [];
   const stores = new Map<StoreId, readonly SessionDescriptor[] | null>();
   // Where the directories are, driven by hand. The placement itself is written
@@ -252,5 +261,54 @@ describe('the catalogue following what a store was read to hold', () => {
     const opened = [...transactions(test.database).values()];
     expect(opened).toHaveLength(2);
     expect(opened[1]?.some((text) => text.includes('DELETE FROM nodes'))).toBe(true);
+  });
+});
+
+describe('the catalogue saying which project each session is in', () => {
+  const PROJECT_NODE = {
+    id: 'node-universe',
+    parent_id: null,
+    kind: 'project',
+    position: 0,
+    name: 'universe',
+    name_source: 'user',
+    anchor_store_id: null,
+    anchor_session_id: null,
+    created_at: NOW,
+  };
+  const SESSION_NODE = {
+    id: 'node-bench',
+    parent_id: 'node-universe',
+    kind: 'session',
+    position: 0,
+    name: null,
+    name_source: 'discovered',
+    anchor_store_id: 'store-a',
+    anchor_session_id: 'session-bench',
+    created_at: NOW,
+  };
+
+  it('reads the tree and answers where it puts each session', async () => {
+    const test = harness({ nodes: [PROJECT_NODE, SESSION_NODE] });
+
+    const reading = await test.catalogue.sessionProjects();
+
+    expect([...reading.placements.values()]).toEqual([
+      { nodeId: 'node-universe', name: 'universe' },
+    ]);
+  });
+
+  it('carries the version the tree was at when the read began, not when it ended', async () => {
+    const test = harness({ nodes: [PROJECT_NODE, SESSION_NODE] });
+    test.catalogue.changed();
+
+    // The change lands while the read is in flight, which is the case the
+    // number is for: a reading labelled with the version it finished at would
+    // claim to hold a change it read the tree before.
+    const reading = test.catalogue.sessionProjects();
+    test.catalogue.changed();
+
+    expect((await reading).version).toBe(1);
+    expect((await test.catalogue.sessionProjects()).version).toBe(2);
   });
 });

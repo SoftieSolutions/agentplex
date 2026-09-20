@@ -14,6 +14,7 @@ import {
 } from '@agentplex/protocol';
 import { z } from 'zod';
 import type { Queryable } from '../../db/database.js';
+import { sessionKey, type SessionProject } from '../fleet-state/fleet-state.js';
 import { listNodeKinds, listNodes } from './reads.js';
 import { PROJECT_KIND, type TreeNode } from './rows.js';
 
@@ -388,6 +389,43 @@ function projectAncestorOf(node: TreeNode, byId: ReadonlyMap<NodeId, TreeNode>):
     walking = walking.parentId === null ? undefined : byId.get(walking.parentId);
   }
   return null;
+}
+
+/**
+ * Where the tree puts each session, for the sessions it puts anywhere, keyed
+ * the way the fleet state keys a session.
+ *
+ * Here and not in `reads.ts` because it is the walk above, run over the rows
+ * one `SELECT` brought back: an ancestor relation in SQLite is a recursive CTE,
+ * and `reads.ts` has already argued that this tree is a few hundred rows and
+ * that the rule is worth more where a test can read it. It is also the same
+ * walk a page grouped by project runs, which is the point of it being here
+ * rather than written a second time beside the reducer -- two walks would be
+ * two answers about one session, free to disagree on a screen drawing both.
+ *
+ * Absent rather than null for a session in no project. The reducer's map is a
+ * reading of where sessions *are*, and a key per session saying "nowhere"
+ * would be this walk claiming to know every session there is; it knows only
+ * what the tree holds, and a session no node anchors is not in it at all.
+ *
+ * A project with no name is skipped for the same reason. The row is the name a
+ * client draws, so a placement carrying none would put a session under a
+ * project the screen could not write down. The tree names a project at
+ * creation and nothing can blank it, so this is the branch that exists so a
+ * row which got there anyway costs itself and not the reading.
+ */
+export function sessionProjectsIn(nodes: readonly TreeNode[]): ReadonlyMap<string, SessionProject> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const placements = new Map<string, SessionProject>();
+  for (const node of nodes) {
+    if (node.anchor === null) continue;
+    const projectId = projectAncestorOf(node, byId);
+    if (projectId === null) continue;
+    const name = byId.get(projectId)?.name ?? null;
+    if (name === null) continue;
+    placements.set(sessionKey(node.anchor), { nodeId: projectId, name });
+  }
+  return placements;
 }
 
 /**

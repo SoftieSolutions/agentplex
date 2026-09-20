@@ -909,6 +909,78 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
         sessionCount(populated.hub) === 6,
       () => `the fleet to connect and report: ${JSON.stringify(populated.hub.state.snapshot())}`,
     );
+
+    // A project, with the sessions that ran on that volume filed under it.
+    //
+    // The one fact on these rows that no machine reported and no scan could
+    // rebuild: the hub reads it off its own tree. It is set up on this hub
+    // rather than a second one because the screens the mockups draw name a
+    // project wherever a session appears, and a fleet fixture whose every row
+    // was unfiled would leave the session list tested against a field that is
+    // null in every state the web has.
+    //
+    // Filed by moving the nodes rather than by matching a directory:
+    // discovery places a session exactly once, when it first sees it, so a
+    // project made after the fleet reported adopts nothing. What a person does
+    // at that point is move the sessions into it, and this is that, over the
+    // real frames.
+    const filer = await openClient(populated.hub);
+    filer.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await filer.framesReceived(2);
+    filer.send({
+      type: 'project-create',
+      id: 2,
+      name: 'universe',
+      directory: '/mnt/volumes/universe',
+    });
+    await until(
+      () => filer.received.some((text) => labelFor(text) === 'projectCreated'),
+      'the project to be made',
+    );
+    const universe = parseTextFrame(parseHubFrame, firstFrame(filer, 'projectCreated'));
+    if (!universe.ok || universe.value.type !== 'project-created') {
+      throw new Error('the project create was answered with something else');
+    }
+    filer.send({ type: 'layout-request', id: 3 });
+    await until(
+      () => filer.received.some((text) => labelFor(text) === 'layout'),
+      'the tree the fleet filled in',
+    );
+    const placed = parseTextFrame(parseHubFrame, firstFrame(filer, 'layout'));
+    if (!placed.ok || placed.value.type !== 'layout') {
+      throw new Error('the layout was answered with something else');
+    }
+    const universeNodes = placed.value.nodes.filter(
+      (node) => node.anchor?.storeId === 'store-universe',
+    );
+    if (universeNodes.length !== 3) {
+      throw new Error(`the tree placed ${String(universeNodes.length)} of that volume's sessions`);
+    }
+    let moving = 3;
+    for (const node of universeNodes) {
+      filer.send({
+        type: 'node-move',
+        id: (moving += 1),
+        nodeId: node.id,
+        parentId: universe.value.nodeId,
+        position: 0,
+      });
+    }
+    await until(
+      () => filer.received.filter((text) => labelFor(text) === 'nodeMoved').length === 3,
+      'the sessions to be filed under it',
+    );
+    // The hub's reading of its own tree is behind two promises nothing awaits,
+    // so what is waited for is the row rather than the reply to the move.
+    await until(
+      () =>
+        populated.hub.state
+          .snapshot()
+          .stores.filter((view) => view.storeId === 'store-universe')
+          .every((view) => view.sessions.every((row) => row.project !== null)),
+      () => `the project to reach the rows: ${JSON.stringify(populated.hub.state.snapshot())}`,
+    );
+
     const machineStatePopulated = await captureState(populated.hub);
 
     // The same fleet after one machine goes away without saying so: its rows

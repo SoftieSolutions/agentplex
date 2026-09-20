@@ -10,9 +10,11 @@ import type {
   NewFolderRequest,
   NodeCreated,
   NodePlacementRequest,
+  SessionProjectReading,
   TreeChanged,
   TreeRefusal,
 } from './catalogue.js';
+import type { SessionProject } from '../fleet-state/fleet-state.js';
 import type { CataloguePageOutcome } from './query.js';
 
 /**
@@ -51,6 +53,16 @@ export interface FakeCatalogue extends Catalogue {
   readonly queried: readonly CatalogueQuery[];
   /** What every later query answers with. */
   answerPageWith(outcome: CataloguePageOutcome): void;
+  /**
+   * What every later reading of where sessions sit answers with, keyed by the
+   * fleet state's `sessionKey`.
+   *
+   * The version on that reading is this fake's own, for the reason the real
+   * one carries it: its reader drops a reading older than the one it applied,
+   * and a fake that answered a constant would be a seam that cannot show the
+   * drop happening.
+   */
+  answerProjectsWith(placements: ReadonlyMap<string, SessionProject>): void;
   /** Bumps the version and tells every watcher, as a real change would. */
   change(): void;
   /** The version this fake is at. */
@@ -78,6 +90,7 @@ export function createFakeCatalogue(options: FakeCatalogueOptions = {}): FakeCat
   let version = 0;
   let minted = 0;
   let page: CataloguePageOutcome = { ok: true, items: [], nextCursor: null, total: 0, version: 0 };
+  let placements: ReadonlyMap<string, SessionProject> = new Map();
 
   const bump = (): void => {
     version += 1;
@@ -106,6 +119,10 @@ export function createFakeCatalogue(options: FakeCatalogueOptions = {}): FakeCat
     async observe(): Promise<void> {
       // A fake reaches no store and scans nothing. What `observe` means to a
       // caller here is only that it settles.
+    },
+
+    async sessionProjects(): Promise<SessionProjectReading> {
+      return { version, placements };
     },
 
     changed: bump,
@@ -158,6 +175,10 @@ export function createFakeCatalogue(options: FakeCatalogueOptions = {}): FakeCat
 
     answerPageWith(next: CataloguePageOutcome): void {
       page = next;
+    },
+
+    answerProjectsWith(next: ReadonlyMap<string, SessionProject>): void {
+      placements = next;
     },
 
     change: bump,

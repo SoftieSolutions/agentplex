@@ -260,6 +260,49 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     readFleet: () => state.published(),
   });
 
+  /**
+   * The highest catalogue version whose reading of the tree is on the rows.
+   *
+   * Held because the two places below both start a read without waiting for it:
+   * one is a synchronous watcher, the other runs behind a store's tree write,
+   * and two reads in flight can settle in either order. Without this the older
+   * one landing last would publish the tree as it was before the change that
+   * started the newer -- a project the user had just renamed, or a session back
+   * in the folder they had just moved it out of, with nothing to correct it
+   * until the next change.
+   */
+  let projectsReadThrough = -1;
+  /**
+   * Asks the tree where it puts each session, and hands the answer to the
+   * reducer.
+   *
+   * Not awaited by either caller and deliberately not awaitable: a server's
+   * report is answered by the fleet state and the broadcast, and this is one of
+   * the things that happens after that. A failed read costs this reading and
+   * nothing else -- the next change starts another, and the rows keep saying
+   * what the last good reading said rather than losing the projects they had.
+   */
+  const followProjects = (): void => {
+    void catalogue
+      .sessionProjects()
+      .then((reading) => {
+        if (reading.version < projectsReadThrough) return;
+        projectsReadThrough = reading.version;
+        state.applyProjects(reading.placements);
+      })
+      .catch((error: unknown) => {
+        logger.warn('the tree could not be read for the projects its sessions are in', {
+          problem: String(error),
+        });
+      });
+  };
+
+  // Every change to the tree, whoever made it: a project created, a node
+  // moved, a rename, or a store's own discovery pass. The version is already
+  // the one number every writer of this tree bumps, so following it is one
+  // subscription rather than a hook per writer, each free to be forgotten.
+  catalogue.subscribe(() => followProjects());
+
   // Constructed here and dialling nothing yet. That is what the split between
   // building this and calling `sync` below buys: everything that has to see a
   // connectivity change -- the fleet state, and the broadcast attached to it --
@@ -301,7 +344,16 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // is answered by the fleet state and the broadcast, and the tree write is
       // what happens after that. A failed one costs this store's tree update
       // and is logged where it happened.
-      if (accepted) void catalogue.observe(report.storeId);
+      //
+      // Read again once that write has settled, on top of the subscription
+      // above. A pass bumps the version from inside itself, store by store, so
+      // a reading started by one of those bumps may be taken between two
+      // stores' transactions; this one is taken after the whole pass and
+      // carries the version to prove it, which is what makes the drop above
+      // settle on the newest reading rather than on whichever landed last.
+      // There is no rejection to handle: `observe` swallows its own failure by
+      // contract, which is the same reason it is safe to leave unawaited here.
+      if (accepted) void catalogue.observe(report.storeId).then(followProjects);
       // The one part of a report the reducer wants nothing to do with: a start
       // is not a session and a tag is not a row. It goes to the relay, which is
       // the only thing that has been waiting to hear which session a spawn it

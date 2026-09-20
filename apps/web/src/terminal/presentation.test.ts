@@ -70,6 +70,10 @@ function stateWith(overrides?: {
                 : overrides.holder,
             acknowledgedThrough: null,
             mutedAt: null,
+            // In no project: the case this file's subject has to draw as
+            // readily as one in a project, since a pane's metadata falls back
+            // to what it said before the field existed.
+            project: null,
           },
         ],
       },

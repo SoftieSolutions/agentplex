@@ -12,12 +12,13 @@ import type {
 } from '@agentplex/protocol';
 import type { Clock, IdGenerator, Logger } from '@agentplex/node-shared';
 import type { Database, Queryable } from '../../db/database.js';
+import type { SessionProject } from '../fleet-state/fleet-state.js';
 import type { Projects } from '../projects/projects.js';
 import { discoverNodes, type SessionPlacements } from './discovery.js';
 import { createTreeMutations } from './mutations.js';
 import { pruneNodes } from './prune.js';
-import { queryCatalogue, type CataloguePageOutcome } from './query.js';
-import { readLayout } from './reads.js';
+import { queryCatalogue, sessionProjectsIn, type CataloguePageOutcome } from './query.js';
+import { listNodes, readLayout } from './reads.js';
 import type { TreeNode } from './rows.js';
 
 /**
@@ -267,6 +268,21 @@ export interface CatalogueDependencies {
   readonly readFleet: () => MachineState;
 }
 
+/**
+ * One whole reading of where the tree puts sessions, and when it was taken.
+ *
+ * The map is keyed by `sessionKey`, which is the fleet state's own key: its
+ * reader files the placements under exactly the sessions it already holds, and
+ * a second spelling of that key would be a second definition waiting to drift
+ * -- two sessions colliding on one would put one project's name on another
+ * session.
+ */
+export interface SessionProjectReading {
+  /** The catalogue version this reading was taken at. */
+  readonly version: number;
+  readonly placements: ReadonlyMap<string, SessionProject>;
+}
+
 export interface Catalogue extends ClientCatalogue {
   /**
    * The tree as a client reads it, ordered parents-first. Read per request
@@ -293,6 +309,23 @@ export interface Catalogue extends ClientCatalogue {
    * broadcast, and not the next store's turn.
    */
   observe(storeId: StoreId): Promise<void>;
+  /**
+   * Where this tree puts each session, whole, with the version it was read at.
+   *
+   * The tree is the hub's only answer to which project a session is in, and a
+   * session row is assembled in the fleet state, which cannot import this
+   * feature -- so the answer is read here and handed over rather than reached
+   * for there. A whole reading and not a change per session, because a session
+   * leaves a project by being absent from the next one and a rename high in the
+   * tree moves everything under it at once.
+   *
+   * The version is the tree's at the moment the read began and not the one it
+   * finished at. Readings overlap -- nothing on the frame path waits for one --
+   * and one labelled with a change it was taken before could displace an answer
+   * that really did hold that change. Labelled with what it actually saw, the
+   * newest reading wins and an older one that lands late is dropped.
+   */
+  sessionProjects(): Promise<SessionProjectReading>;
   /**
    * Says the tree changed under another writer's hand.
    *
@@ -543,6 +576,13 @@ export function createCatalogue({
     },
 
     observe,
+
+    async sessionProjects(): Promise<SessionProjectReading> {
+      // Read before the statement and not after it: see the interface for why
+      // a reading may be labelled older than what it holds but never newer.
+      const at = version;
+      return { version: at, placements: sessionProjectsIn(await listNodes(database)) };
+    },
 
     changed,
 
