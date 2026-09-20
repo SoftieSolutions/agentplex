@@ -55,6 +55,25 @@ describe('the connection line in the chrome', () => {
     expect(view.action).toBeNull();
   });
 
+  it('keeps a protocol refusal in its own words, whatever this device has stored', () => {
+    // `failed` is set in exactly two places (`hub-store.ts`): a
+    // `protocol-version` refusal and a `protocol-error`. A 401 at the ticket
+    // exchange is neither -- it goes through `scheduleRetry` and the phase is
+    // `reconnecting`. So a token is never what is missing here, and a line
+    // that named one the moment somebody cleared theirs on the settings
+    // screen would be pointing at the wrong cause while hiding the hub's.
+    const view = connectionView({
+      phase: 'failed',
+      problem: 'this hub speaks protocol 23, not 24',
+      hasState: false,
+      hasToken: false,
+    });
+
+    expect(view.words).toBe('this hub speaks protocol 23, not 24');
+    expect(view.tone).toBe('blocked');
+    expect(view.action).toBeNull();
+  });
+
   it('names the missing token, and where it is typed, before naming the socket', () => {
     const view = connectionView({
       phase: 'reconnecting',

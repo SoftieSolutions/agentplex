@@ -291,6 +291,49 @@ describe('the shell', () => {
     expect(navLinks().map((link) => link.textContent)).toEqual(['Settings']);
   });
 
+  it('lands on Settings when the chrome’s action is followed from over a session', async () => {
+    // The one place an AGX-119 action is drawn over a session route is the
+    // chrome, which is on screen at every address, so this is the click a
+    // person actually makes: no token, from a session. It lands because
+    // `destinationHash` is a route and not a fragment id -- the hash moves,
+    // `useSessionRoute` stops parsing one, `parseDestinationHash` starts, and
+    // the content region is decided again. Nothing is scrolled to, so there
+    // is no element that has to be mounted when the browser goes looking.
+    window.location.hash = sessionHash(SESSION);
+    store = createHubStore({
+      fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+    });
+    await act(async () => {
+      root = createRoot(container);
+      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+    });
+    await act(settle);
+
+    const link = container.querySelector<HTMLAnchorElement>('header [role="status"] a');
+    if (link === null) throw new Error('the chrome offered no next action');
+    await act(() => {
+      link.click();
+    });
+    await act(settle);
+    expect(window.location.hash).toBe(destinationHash('settings'));
+    // jsdom moves the address on a task of its own and delivers no
+    // `hashchange` for the move; a browser fires one for a click onto a
+    // different fragment, and that event is what every route in this app
+    // subscribes to. The same stand-in `onboarding-route.test.ts` uses,
+    // delivered once the address has actually landed.
+    await act(() => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+
+    // The screen the link named, by the field only it draws -- and the layout
+    // screen gone, which is the half the address had to undo.
+    expect(container.querySelector('main input[type="password"]')).not.toBeNull();
+    expect(container.querySelector('main')?.textContent).not.toContain('stored layout');
+  });
+
   it('offers both readings of the fleet, and the projects tree first', async () => {
     await mount();
 

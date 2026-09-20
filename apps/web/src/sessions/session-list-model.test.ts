@@ -446,13 +446,22 @@ describe('an empty list, and what resolves it', () => {
     );
   });
 
-  it('says the paired server has no store, by name, rather than blaming pairing', () => {
+  it('blames the connection, not the store, for a server the hub has never reached', () => {
+    // `machineStateWithServer` is that state as a hub really sent it: one
+    // pairing, phase `stale`, `staleReason` unreachable, `lastConnectedAt`
+    // null, and "connection refused" in the hub's own words. "reports no
+    // store" would credit a machine that has never said anything with having
+    // said something, which is the over-claim.
     const listing = emptyListing(pairedOnly, false, 'wide');
 
     expect(listing.words).toContain('gpu-box-01');
-    expect(listing.words).toContain('no store');
-    // Nothing in this app makes a store: it is a directory on the server's own
-    // disk. Pointing anywhere would be pointing at a screen that cannot help.
-    expect(listing.action).toBeNull();
+    expect(listing.words).toContain('has never connected');
+    expect(listing.words).not.toContain('reports no store');
+    // And the one screen that can help: the row there carries the phase, the
+    // address that was typed, and the hub's sentence about what went wrong.
+    expect(listing.action).toEqual({
+      label: 'See why in Settings',
+      hash: destinationHash('settings'),
+    });
   });
 });

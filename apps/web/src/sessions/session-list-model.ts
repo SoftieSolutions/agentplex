@@ -421,10 +421,12 @@ export interface EmptyListing {
  * person looking at an empty list is stuck at exactly one link of it. Naming
  * which link is the whole of this function.
  *
- * Only the first case has somewhere to send anybody. A store is a directory on
- * the server's own disk with an `agentplex-store.json` at its root; nothing in
- * this app creates one, so the honest answer there is the fact and no link,
- * rather than a link to a screen that cannot help. A narrowing is undone by
+ * Two cases have somewhere to send anybody, and they are the two the app can
+ * do something about: nothing paired, and a pairing the hub has never reached.
+ * A store is a directory on the server's own disk with an
+ * `agentplex-store.json` at its root; nothing in this app creates one, so the
+ * honest answer there is the fact and no link, rather than a link to a screen
+ * that cannot help. A narrowing is undone by
  * the controls directly above the list, and starting the first session is a
  * control on this screen or in the chrome around it -- and a link to the
  * screen you are reading is a route to nowhere.
@@ -455,10 +457,28 @@ export function emptyListing(
     // Named when there is one to name: "gpu-box-01 reports no store" sends
     // somebody to the right machine, where "no store is reported" sends them
     // looking for which.
+    const only = state.servers.length === 1 ? state.servers[0] : undefined;
+    // A pairing the hub has never held a connection to has reported nothing,
+    // so "reports no store" credits it with a report it never made. What is
+    // missing there is the connection, not a directory on a disk -- and that
+    // one does have somewhere to send anybody, because the row in Settings
+    // carries the phase, the address that was typed and the hub's own
+    // sentence about what went wrong.
+    if (state.servers.every((server) => server.lastConnectedAt === null)) {
+      const which =
+        only === undefined
+          ? 'No paired server has ever connected to this hub, so nothing has reported a store'
+          : `${only.label} is paired but has never connected to this hub, so nothing has ` +
+            'reported a store';
+      return {
+        words: `${which}.`,
+        action: { label: 'See why in Settings', hash: destinationHash('settings') },
+      };
+    }
     const which =
-      state.servers.length === 1 && state.servers[0] !== undefined
-        ? `${state.servers[0].label} is paired and reports no store yet`
-        : 'No paired server reports a store yet';
+      only === undefined
+        ? 'No paired server reports a store yet'
+        : `${only.label} is paired and reports no store yet`;
     return {
       words: `${which}. A store is a directory with an agentplex-store.json at its root.`,
       action: null,

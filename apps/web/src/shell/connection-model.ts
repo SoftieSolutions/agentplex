@@ -25,7 +25,8 @@ import type { NextAction } from './next-action.js';
  * exactly what it saw -- a ticket exchange that refused, and a retry pending.
  * That is true and it is a dead end, because no number of retries invents a
  * token. So when there is none, this says so instead, and names the screen
- * where one is typed.
+ * where one is typed -- but only while retrying is what is happening. Which
+ * phases those are is `tokenIsWhatIsMissing`, and the argument is there.
  */
 
 /** The dot beside the words. Same vocabulary the settings screen's line uses. */
@@ -62,11 +63,31 @@ export interface ConnectionView {
   readonly action: NextAction | null;
 }
 
+/**
+ * Whether a missing token is what this connection is actually stuck on.
+ *
+ * Two phases say no, for opposite reasons.
+ *
+ * `connected` is a live socket this tab was given a ticket for. A token
+ * cleared in another tab, or a storage this browser has since started
+ * refusing, does not make that socket a lie.
+ *
+ * `failed` is the store's word for a refusal that retrying cannot fix, and it
+ * is set in exactly two places (`hub-store.ts`): a `protocol-version` refusal
+ * and a `protocol-error`. Neither is about a credential -- a 401 at the ticket
+ * exchange is a rejected promise, `scheduleRetry`, and `reconnecting`. So the
+ * hub's own sentence is the honest one here, and it is the one that stays: a
+ * line reading "no hub token on this device" over a protocol mismatch would
+ * name a cause that is not the cause and bury the one the hub gave. It gets no
+ * action either, because what resolves a version mismatch is a new build of
+ * one side or the other, and neither is an address this app can offer.
+ */
+function tokenIsWhatIsMissing(facts: ConnectionFacts): boolean {
+  return !facts.hasToken && facts.phase !== 'connected' && facts.phase !== 'failed';
+}
+
 export function connectionView(facts: ConnectionFacts): ConnectionView {
-  // A live connection outranks a missing token: this tab holds a socket it was
-  // given a ticket for, and a token cleared in another tab (or a storage this
-  // browser has since started refusing) does not make the socket a lie.
-  if (!facts.hasToken && facts.phase !== 'connected') {
+  if (tokenIsWhatIsMissing(facts)) {
     return {
       tone: 'blocked',
       words: 'no hub token on this device',

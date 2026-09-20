@@ -295,12 +295,15 @@ describe('the session list', () => {
     expect(link?.textContent).toBe('Pair one in Settings');
   });
 
-  it('blames the store and not the pairing once a server is paired', async () => {
+  it('blames the connection, not the store, for a pairing the hub never reached', async () => {
+    // The captured state has one pairing, phase `stale`, `lastConnectedAt`
+    // null and "connection refused" in the hub's words: a machine that has
+    // never said anything cannot have reported that it has no store.
     await mountWith(hubFrames.machineStateWithServer);
 
-    expect(container.textContent).toContain('gpu-box-01 is paired and reports no store yet');
-    // Nothing in this app makes a store, so there is nowhere honest to point.
-    expect(container.querySelector('a[href="#/settings"]')).toBeNull();
+    expect(container.textContent).toContain('gpu-box-01 is paired but has never connected');
+    const link = container.querySelector<HTMLAnchorElement>('a[href="#/settings"]');
+    expect(link?.textContent).toBe('See why in Settings');
   });
 
   it('blames the narrowing, and nothing else, when the fleet has sessions', async () => {
