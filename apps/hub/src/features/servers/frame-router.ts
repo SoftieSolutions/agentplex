@@ -114,6 +114,15 @@ export function routeServerFrame(frame: ServerToHubFrame, handlers: ServerFrameH
     case 'terminal-output':
       handlers.onOutput(frame);
       return;
+    case 'approval-requested':
+    case 'approval-withdrawn':
+    case 'approval-settled':
+      // Parsed and not yet routed: the approvals feature that holds them is
+      // AGX-127 step 4, and this arm is what lets the protocol carry them in
+      // the meantime. Named rather than left to the `default`, which is the
+      // whole point of the switch ending in `assertNever` -- a frame nobody
+      // handles is a decision somebody wrote down, not a silence.
+      return;
     case 'handshake-accepted':
     case 'handshake-rejected':
     case 'pong':

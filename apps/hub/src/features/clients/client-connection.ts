@@ -676,6 +676,21 @@ export function serveClientConnection(
         return;
       }
 
+      case 'approval-decide': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Refused rather than ignored, until the approvals feature answers it
+        // in AGX-127 step 4. `bad-request` is exactly its own definition --
+        // "the frame parsed but named something the peer does not implement"
+        // -- and a client that is told no stops waiting, where a client whose
+        // frame fell out of a switch waits forever on a hub that will never
+        // speak. Nothing can send this yet; a build mismatch can.
+        refuse(frame.id, 'bad-request', 'this hub does not answer approvals yet');
+        return;
+      }
+
       case 'protocol-error': {
         // The client could not read something the hub sent. There is no reply
         // to an unsolicited error and nothing useful to retry: a client that

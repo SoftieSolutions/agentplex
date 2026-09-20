@@ -1600,6 +1600,15 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         }
         return;
       }
+      case 'approval-decided': {
+        // The outcome is read but not yet published: the slot it lands in, and
+        // the follow-up that turns it into a sentence beside the buttons, are
+        // AGX-127 step 6. What matters now is that the frame stops being
+        // outstanding, so a receipt cannot sit in `pending` forever and make a
+        // connection look like it is still waiting on something.
+        pending.delete(frame.replyTo);
+        return;
+      }
       case 'protocol-error': {
         // The hub could not read something this client sent. The hub closes
         // the socket after saying so, and a client that produced one

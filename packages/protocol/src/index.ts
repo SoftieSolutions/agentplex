@@ -37,6 +37,28 @@ export type {
 } from './catalogue.js';
 
 export {
+  APPROVAL_PROPOSAL_MAX_CHARS,
+  approvalDecisionSchema,
+  approvalIdSchema,
+  approvalOutcomeSchema,
+  approvalRequestSchema,
+  approvalRuleSchema,
+  approvalSettlementSchema,
+  approvalSuggestionSchema,
+  pendingApprovalSchema,
+} from './approval.js';
+export type {
+  ApprovalDecision,
+  ApprovalId,
+  ApprovalOutcome,
+  ApprovalRequest,
+  ApprovalRule,
+  ApprovalSettlement,
+  ApprovalSuggestion,
+  PendingApproval,
+} from './approval.js';
+
+export {
   BEACON_ANNOUNCE_INTERVAL_MS,
   BEACON_EXPIRY_MS,
   BEACON_MISSED_LIMIT,

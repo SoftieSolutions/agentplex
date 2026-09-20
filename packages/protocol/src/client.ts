@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { approvalDecisionSchema, approvalIdSchema, approvalOutcomeSchema } from './approval.js';
 import {
   catalogueCursorSchema,
   catalogueFilterSchema,
@@ -559,6 +560,30 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     id: frameIdSchema,
     nodeId: nodeIdSchema,
   }),
+  /**
+   * Answers an approval the agent is blocked on: let it through, or refuse it.
+   *
+   * The session is named because a client names a session and the hub resolves
+   * which machine holds it -- the rule a stop follows. The approval is named
+   * beside it because a session can have more than one open at a time, and
+   * because the id is what deciding once keys on: two clients tapping at the
+   * same moment send the same id, and the second one is told what the first
+   * one's answer did rather than being applied on top of it.
+   *
+   * `decision` is two words and there is nowhere to put a third thing. No
+   * proposal comes back -- the text a client rendered is the hub's to
+   * remember, and a client returning it would be a client choosing what the
+   * agent runs -- and no message either: the sentence a denied agent reads is
+   * composed on the machine that answers the hook.
+   */
+  z.object({
+    type: z.literal('approval-decide'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    approvalId: approvalIdSchema,
+    decision: approvalDecisionSchema,
+  }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
 ]);
@@ -933,6 +958,32 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     replyTo: frameIdSchema,
     content: docContentSchema,
     updatedAt: z.int().nonnegative(),
+  }),
+  /**
+   * What became of the approval this client answered.
+   *
+   * A receipt, and it is about the request rather than about the click. Four
+   * outcomes, because four things can have happened and a client draws each
+   * differently: the answer was applied (`granted`, `denied`) -- possibly
+   * somebody else's answer, which is what deciding once means and why this
+   * carries no "you won" -- or the agent had already taken the question back
+   * (`withdrawn`), or nothing could be applied any more because the blocked
+   * hook had stopped waiting (`expired`). A client answering a request it had
+   * missed the withdrawal of is told the truth rather than a success.
+   *
+   * A reply and never a broadcast, like every other yes on this direction. The
+   * change itself reaches every client where every change does: the approval
+   * leaves the session row of the next machine state, which is the one place
+   * any of them reads what is pending.
+   *
+   * It carries no approval id. The client named it, the id is spent the moment
+   * the request ends, and restating it would be a second copy of what was
+   * asked -- `replyTo` already says which question this answers.
+   */
+  z.object({
+    type: z.literal('approval-decided'),
+    replyTo: frameIdSchema,
+    outcome: approvalOutcomeSchema,
   }),
   protocolErrorFrameSchema,
 ]);

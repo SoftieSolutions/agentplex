@@ -85,6 +85,7 @@ function stateWith(overrides?: {
             // places the session nowhere falls back to what it said before the
             // field existed.
             project: overrides?.project ?? null,
+            approvals: [],
           },
         ],
       },

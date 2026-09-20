@@ -64,6 +64,7 @@ function fleetWith(
         acknowledgedThrough: null,
         mutedAt: null,
         project: null,
+        approvals: [],
       },
     ],
   };

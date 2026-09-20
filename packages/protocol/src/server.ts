@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import {
+  approvalDecisionSchema,
+  approvalIdSchema,
+  approvalRequestSchema,
+  approvalSettlementSchema,
+} from './approval.js';
+import {
   directoryListFrameSchema,
   directoryListingFrameSchema,
   directorySchema,
@@ -202,6 +208,35 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
    * server which server it is.
    */
   directoryListFrameSchema,
+  /**
+   * Answer the approval this server is holding open: let the tool call through,
+   * or refuse it.
+   *
+   * The id is the server's own -- it minted it when the hook blocked, because
+   * nothing upstream identifies a tool call -- and it is the whole address. A
+   * store and a session beside it would be two more fields that have to agree
+   * with the registry on this machine, and this machine is the only source any
+   * of the three ever had.
+   *
+   * What this frame does not do is wait for the tool. The server answers *this
+   * instruction* as soon as it has handed the decision to the blocked hook, and
+   * what the agent then does with a granted command may take ten minutes; a hub
+   * that held the round trip open for it would time out on every long tool call
+   * and call a working decision a failure. The result travels separately, as
+   * `approval-settled`.
+   *
+   * There is no message on it. A denial does put a sentence in front of the
+   * agent -- that is the difference between a denied tool call and a killed
+   * session -- but the words are composed here, where the hook is answered.
+   * Text chosen by a client and delivered into an agent's context two hops
+   * away is the surface this direction keeps shut everywhere else.
+   */
+  z.object({
+    type: z.literal('approval-decide'),
+    id: frameIdSchema,
+    approvalId: approvalIdSchema,
+    decision: approvalDecisionSchema,
+  }),
   protocolErrorFrameSchema,
 ]);
 export type HubToServerFrame = z.infer<typeof hubToServerFrameSchema>;
@@ -456,6 +491,75 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
     replyTo: frameIdSchema,
     code: refusalCodeSchema,
     message: z.string(),
+  }),
+  /**
+   * An agent on this machine is blocked, asking to do something.
+   *
+   * Unsolicited, like a store report and for the same reason: nobody asked, and
+   * the hub cannot poll for a question that has not been asked yet. It names
+   * the session by `{ storeId, sessionId }`, which is a session's identity
+   * everywhere in this protocol and never the machine -- the machine is the
+   * connection this arrived on.
+   *
+   * The approval is nested rather than spread across the frame, so that what a
+   * server reports and what a client eventually reads off a session row are one
+   * shape with one field added to it. See `approval.ts` for why the id is
+   * minted here, and for why the proposal is display text that nothing may act
+   * on.
+   *
+   * There is no date on it. The hub stamps what it receives with its own clock,
+   * for the reason a store report carries none: two machines' clocks disagree,
+   * and how long somebody has been waiting is a fact the receiver can state
+   * honestly and the sender cannot.
+   *
+   * This is not a status. A session's `awaiting-permission` comes from the
+   * provider's own record of the session, and an approval object that also set
+   * a status would be a second source for one word -- free to say a session is
+   * waiting after the provider has recorded that it stopped.
+   */
+  z.object({
+    type: z.literal('approval-requested'),
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    approval: approvalRequestSchema,
+  }),
+  /**
+   * The agent is not asking any more, and nothing was decided.
+   *
+   * The session ended, the turn was interrupted, or the process holding the
+   * hook went away. It is its own frame rather than a settlement, because the
+   * two are different facts: a settlement says what happened to a decision, and
+   * here there is no decision to have happened to anything. A client that
+   * answered a moment too late is told `withdrawn`, which is the honest word
+   * for "the question stopped existing", and is not told that its answer was
+   * applied or refused.
+   */
+  z.object({
+    type: z.literal('approval-withdrawn'),
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    approvalId: approvalIdSchema,
+  }),
+  /**
+   * The approval is over, and this is what actually happened at the hook.
+   *
+   * The frame that keeps the hub from over-claiming. A hub that sent `deny` and
+   * reported a denial would be reporting what it asked for rather than what
+   * occurred: a hook has a timeout, and an answer that arrives after it changes
+   * nothing -- the tool call falls through as though no hook had run. Only the
+   * machine holding the blocked process can tell those apart, so it says so,
+   * and `expired` is a real outcome rather than a silence.
+   *
+   * It is unsolicited rather than a reply to `approval-decide`, because it can
+   * be neither prompt nor certain: it follows a decision the hub sent, or
+   * follows nothing at all when the hook gave up on its own.
+   */
+  z.object({
+    type: z.literal('approval-settled'),
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    approvalId: approvalIdSchema,
+    outcome: approvalSettlementSchema,
   }),
   protocolErrorFrameSchema,
 ]);

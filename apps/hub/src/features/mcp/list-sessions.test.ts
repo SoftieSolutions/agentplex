@@ -54,6 +54,7 @@ function rowOf(descriptor: SessionDescriptor, overrides: Partial<SessionRow> = {
     acknowledgedThrough: null,
     mutedAt: null,
     project: null,
+    approvals: [],
     ...overrides,
   };
 }

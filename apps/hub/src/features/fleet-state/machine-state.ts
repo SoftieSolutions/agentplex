@@ -162,5 +162,9 @@ function toSessionRow(row: ReducedSessionRow): SessionRow {
     // to copy defensively here: both fields are values, and a row is rebuilt
     // rather than mutated whenever the tree says something new.
     project: row.project,
+    // Present and empty until the approvals feature fills it, in AGX-127 step
+    // 4. Empty is the true value now rather than a placeholder: this hub holds
+    // no request open yet, so nothing on any row is waiting on a person.
+    approvals: [],
   };
 }

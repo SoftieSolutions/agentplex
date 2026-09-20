@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { approvalIdSchema } from './approval.js';
 import { PROTOCOL_VERSION } from './version.js';
 import { parseClientFrame, parseHubFrame, type ClientFrame, type HubFrame } from './client.js';
 import { pairedServerAddressSchema } from './pairing.js';
@@ -492,6 +493,14 @@ describe('client and hub round trips', () => {
     { type: 'doc-save', id: 24, nodeId: nodeIdSchema.parse('node-3'), content: '' },
     { type: 'doc-open', id: 25, nodeId: nodeIdSchema.parse('node-3') },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
+    {
+      type: 'approval-decide',
+      id: 26,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      approvalId: approvalIdSchema.parse('approval-7f21'),
+      decision: 'grant',
+    },
   ];
 
   const hubFrames: readonly HubFrame[] = [
@@ -609,6 +618,24 @@ describe('client and hub round trips', () => {
                 acknowledgedThrough: 900,
                 mutedAt: null,
                 project: { nodeId: nodeIdSchema.parse('node-1'), name: 'universe' },
+                // The row this session is on is the one place a client reads
+                // what is pending, which is what makes a reconnection cheap:
+                // the state it is sent is the whole truth about what is open.
+                approvals: [
+                  {
+                    approvalId: approvalIdSchema.parse('approval-7f21'),
+                    tool: 'Bash',
+                    proposal: 'command: prisma migrate deploy --schema ./db',
+                    suggestions: [
+                      {
+                        behavior: 'allow',
+                        destination: 'projectSettings',
+                        rules: [{ tool: 'Bash', content: 'prisma migrate deploy:*' }],
+                      },
+                    ],
+                    requestedAt: 1_100,
+                  },
+                ],
               },
             ],
           },
@@ -749,6 +776,8 @@ describe('client and hub round trips', () => {
       content: '# Plan\n\n- read the failing test\n',
       updatedAt: 1_756_000_000_000,
     },
+    { type: 'approval-decided', replyTo: 26, outcome: 'granted' },
+    { type: 'approval-decided', replyTo: 26, outcome: 'withdrawn' },
   ];
 
   it('sends terminal output with no replyTo either: a stream is nobody\u2019s reply', () => {
@@ -897,5 +926,72 @@ describe('parseClientFrame on the document frames', () => {
         content: '',
       },
     });
+  });
+});
+
+/**
+ * The client leg of an approval: one answer out, one outcome back.
+ *
+ * What a client may say about a pending request is two words, and what it is
+ * told is what became of the request rather than what became of its own click.
+ * Two clients answering at once is the case the whole shape is for: both are
+ * answered, one of them decided it, and neither is told a different story.
+ */
+describe('the approval frames on the client leg', () => {
+  const A_DECISION = {
+    type: 'approval-decide',
+    id: 30,
+    storeId: storeIdSchema.parse('store-work'),
+    sessionId: sessionIdSchema.parse('session-1'),
+    approvalId: approvalIdSchema.parse('approval-7f21'),
+    decision: 'deny',
+  };
+
+  it('accepts an answer naming the session and the approval', () => {
+    expect(parseClientFrame(A_DECISION).ok).toBe(true);
+  });
+
+  it('refuses an answer that names no session', () => {
+    // A client names a session, and the hub resolves which machine holds it.
+    // An approval id alone would have the hub searching every server it has
+    // for a request a client is only guessing still exists.
+    const { storeId: _store, ...withoutStore } = A_DECISION;
+    expect(parseClientFrame(withoutStore).ok).toBe(false);
+  });
+
+  it('carries no message, no argv and no proposal back toward the agent', () => {
+    const parsed = parseClientFrame({
+      ...A_DECISION,
+      message: 'use staging',
+      proposal: 'command: prisma migrate deploy --schema ./db',
+      command: 'rm -rf /',
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).not.toHaveProperty('message');
+    expect(parsed.value).not.toHaveProperty('proposal');
+    expect(parsed.value).not.toHaveProperty('command');
+  });
+
+  it('refuses a decision spelled as an outcome', () => {
+    expect(parseClientFrame({ ...A_DECISION, decision: 'denied' }).ok).toBe(false);
+  });
+
+  it('answers with what became of the request, including the two races', () => {
+    for (const outcome of ['granted', 'denied', 'withdrawn', 'expired']) {
+      expect(parseHubFrame({ type: 'approval-decided', replyTo: 30, outcome }).ok).toBe(true);
+    }
+  });
+
+  it('refuses an outcome outside the four', () => {
+    expect(parseHubFrame({ type: 'approval-decided', replyTo: 30, outcome: 'pending' }).ok).toBe(
+      false,
+    );
+  });
+
+  it('is a reply and never a broadcast: it says which frame it answers', () => {
+    // The change itself reaches every other client on the session row of the
+    // next machine state. This is the receipt for the one that asked.
+    expect(parseHubFrame({ type: 'approval-decided', outcome: 'granted' }).ok).toBe(false);
   });
 });

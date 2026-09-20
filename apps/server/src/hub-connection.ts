@@ -618,6 +618,26 @@ export function serveHubConnection(
         return;
       }
 
+      case 'approval-decide': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        // Answered with a no until the hook listener holding the blocked tool
+        // call exists, which is AGX-127 step 3. `session-refused` is this
+        // direction's "the server said no, and to which frame", and a refusal
+        // is the only honest answer while this machine holds no approval:
+        // silence would leave a hub believing a decision had landed.
+        send({
+          type: 'session-refused',
+          replyTo: frame.id,
+          code: 'bad-request',
+          message: 'this server does not hold approvals yet',
+          hold: null,
+        });
+        return;
+      }
+
       case 'protocol-error': {
         // The hub could not read something this server sent. There is no reply
         // to an unsolicited error and nothing useful to retry, so it is a log
