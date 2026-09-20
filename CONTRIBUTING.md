@@ -223,6 +223,156 @@ line, and neither app may import the other. `pnpm lint` enforces this.
 `packages/protocol` is shared by a Node service and a browser bundle, so it may
 use neither Node builtins nor another workspace package.
 
+## Dependency versions
+
+`AGENTS.md` says to install the latest version of a new dependency and pin it
+deliberately. This section is what deliberately means. It is one rule with no
+judgement in it, so that applying it across a manifest is mechanical and a
+check can enforce it afterwards.
+
+**A caret is the absence of a decision.** `pnpm add` writes one by default, so
+`^4.1.13` is what a manifest holds when nobody chose anything, which is exactly
+the half of that directive with nothing behind it. It is also a bound whose
+value is not in the file: `^4.1.13` stops below 5.0.0 and `^0.11.0` stops below
+0.12.0, one character meaning two different things depending on the version it
+is attached to, so a reader applies a semver special case to learn what a
+manifest permits. Writing the bound out makes it a fact in the file rather than
+a derivation from one, and it is what lets a failing check name the bound it
+wanted instead of pointing at a document.
+
+**Three forms, and nothing else.** Every value under `dependencies`,
+`devDependencies`, `optionalDependencies` and `peerDependencies`, in every
+manifest in this workspace, is one of:
+
+- `workspace:*` for a sibling in this tree. It never resolves against a
+  registry. Assembling a published manifest, `scripts/assemble-package.ts`
+  replaces it with the exact version of the copy it bundled, or leaves it out
+  entirely when it names one of the four published packages. The hub is the
+  case: its workspace manifest declares `@softiesolutions/agentplex-web` as a
+  sibling so that pnpm links it, the published hub manifest declares nothing
+  for it at all, and `install.sh --role=hub` installs that package beside the
+  hub.
+- A window, written `>=x.y.z <X.0.0`, for a third-party package at 1.0.0 or
+  later: those two comparators and no others, one space between them, `x` at
+  least 1, `X` equal to `x + 1`, and the ceiling's minor and patch both zero.
+  The floor is the version the lockfile resolves today, not a guess at the
+  oldest that might work, and the ceiling is one major above it and not two,
+  because a range spanning two majors is a different rule rather than a wider
+  reading of this one.
+- An exact `x.y.z`, for a package below 1.0, for anything that compiles at
+  install, and anywhere else somebody wants one. A pin is the stricter answer
+  rather than an exemption from a rule about bounds. It trades the upstream
+  patch for a version somebody ran, the commit that writes it is where that
+  trade is argued, and nothing reads a justification at check time.
+
+One range per dependency, across every manifest that declares it.
+`publishedManifest` in `scripts/assemble-package.ts` refuses to assemble a
+tarball whose manifests disagree about a name, on the grounds that the
+alternative is shipping a dependency at a version one of them was never tested
+against.
+
+**A window above 1.0, because there is a promise to take.** Inside the
+workspace a range decides nothing: the lockfile is committed, `pnpm install` in
+a fresh worktree resolves through it, and CI installs frozen, so a contributor
+gets what CI ran either way. The range is the only thing there is exactly once,
+on a stranger's machine: `scripts/assemble-package.ts` copies a third-party
+range verbatim out of a manifest into the published package's `dependencies`,
+and npm resolves it there against the registry with no lockfile of ours in
+sight. A window is the honest thing to say in that position. It lets an
+upstream patch reach a daemon that has been running for months without waiting
+for a release of ours, and it stops where the author's compatibility promise
+stops. An exact pin there would turn every upstream patch into a release of
+ours, which is a maintenance burden we would pay in order to publish a claim we
+have no more evidence for. Taking the trade the other way is still allowed and
+seven dependencies already do: `@mantine/core`, `@mantine/hooks`, the two
+`@fontsource` packages, `@xterm/xterm`, `jsdom` and
+`@modelcontextprotocol/sdk`. A sweep applying this section converts carets and
+leaves every one of those alone, which is the point of admitting the form.
+
+**Exact below 1.0, because there is no promise to take.** Below 1.0 semver
+makes the minor the breaking change, so the widest honest window is one minor
+wide: patch releases only, of a package whose author has not committed to
+patches being safe either. That window admits one kind of release and costs a
+second grammar, and the tree already agrees it is not worth it. Every
+dependency here below 1.0 is one of the four `@xterm/addon-*` packages, each
+pinned exactly, and nobody argued about it. Keeping it that way leaves the
+window form with exactly one shape, a ceiling one major above the floor. What
+the check needs for 0.x is then a condition on the floor rather than a second
+grammar to carry.
+
+**Exact for anything that compiles, and `node-pty` is the instance rather than
+the exception.** A package that builds a native addon is the only kind whose
+install is a compilation, against whatever compiler and Node ABI the machine
+happens to have. A minor there is a different binary, and the failure it
+produces is a compiler error during somebody else's install rather than a test
+failure here, so the version has to be one that was built and run. `node-pty`
+sits at `1.1.0` in `packages/pty` for that reason, and so does the next such
+dependency. The set this can be true of is legible, and so is the reason: a
+package appears in `allowBuilds` in `pnpm-workspace.yaml` because it compiles
+something, the comment beside its entry says what, and that is the same fact
+that makes its version exact. A package with no install script to run has no
+opportunity to compile anything.
+
+**Dev tooling is held to the same rule, for a different reason.** Nothing under
+a `devDependencies` key reaches a tarball — the manifest schema in
+`scripts/assemble-package.ts` does not even read the field — so the paragraph
+about a stranger's machine does not reach the root manifest, which is dev
+tooling only and publishes nothing. The rule still applies there, because the
+root manifest is where `pnpm add -D` gets run most often and therefore where a
+default caret is most likely to be written, and an exemption at exactly the
+place the default appears is an exemption that eats the rule. It also costs
+nothing to hold: the window changes nothing a contributor installs, since the
+lockfile does that, and the saving a looser rule would buy is an occasional
+one-line edit. The price would be a check with a branch in it and a question at
+every review about which manifest is which.
+
+**`engines` is not a dependency range, and carries no upper bound.** The root
+manifest's node floor of `>=24` and its pnpm floor of `>=11` resolve nothing
+and fetch nothing. They are evaluated against whatever runtime is already on
+the machine, so there is no version to choose and no drift to bound: the entry
+accepts what it finds or refuses it. Capping node at `<25` would make every
+package refuse Node 25 on the day it ships and dress that refusal up as a test
+result, when nobody has run Node 25 and nobody has run Node 24.11 either — the
+difference being that only the refusal would be enforced. So the floors stay
+floors, and a check does not read the field.
+
+How much a floor refuses is a property of the installer and its configuration
+rather than of the entry, which is the second reason not to read one as a
+range. Measured against npm 11.16.0 and pnpm 11.17.0: npm warns on a mismatch
+and errors instead when `engine-strict=true`, which the `.npmrc` in this
+repository sets, so a wrong Node stops an npm install here and only warns for a
+stranger who has not set it; pnpm warns on the node floor even with that
+setting, and refuses on the pnpm floor whether or not it is there.
+`packageManager` is exact already, at `pnpm@11.17.0`, because corepack needs
+one version rather than a range, and it is not a dependency either.
+`scripts/assemble-package.ts` carries `engines.node` into every published
+manifest and deliberately drops `engines.pnpm`, since a published package is
+installed by npm on a machine that has no pnpm.
+
+**No git or URL dependencies.** There are none today. If one is ever needed it
+names a 40-character commit SHA, because a tag and a branch both move, and a
+dependency whose version can change with no diff anywhere is the thing this
+whole section exists to prevent.
+
+**What a check reads.** Every manifest git tracks, which is the root and the
+workspace members and not the assembled manifests under the `dist/` and
+`apps/*/release/` output that `.gitignore` covers, and every value under the
+four dependency fields named above. A value passes when it is `workspace:*`, or
+an exact `x.y.z` with an optional prerelease suffix, or a window of the form
+`>=x.y.z <X.0.0`, where `>=` and `<` are the only comparators, a single space
+separates them, `X` is `x + 1`, and the ceiling's minor and patch are zero.
+One condition beyond the shape: `x` is at least 1. A floor below 1.0 has no
+compliant window at all, so `>=0.11.0 <1.0.0` fails despite being shaped
+correctly, and an exact version is the only thing a sub-1.0 dependency may say.
+Everything else fails too, and naming the near misses is the point of writing
+the form out: a caret, a tilde, a comparator with nothing on the other side, a
+window reaching further than one major, and a window whose comparators are not
+those two, so `>4.1.12 <5.0.0` and `>=4.1.13 <=5.0.0` are refused as surely as
+`^4.1.13` is. Widening a window is then an edit to this section rather than a
+range that quietly passes. The message names the manifest, the dependency and
+the bound it wanted. `engines`, `packageManager` and anything under a `pnpm`
+key are not dependency fields and are not read.
+
 ## Connectivity
 
 **The hub dials. A server dials out to nothing.** Every socket a server has is
