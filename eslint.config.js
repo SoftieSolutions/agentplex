@@ -398,6 +398,27 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
+    // The fixture capture beside it, which is not service code and runs only
+    // when `$CAPTURE_FIXTURES` says so. Its subject is a real `claude` being
+    // handed a real permission request, so a program is the only way to have
+    // one -- and it needs the field the one-shot runner deliberately does not
+    // have: a working directory. The capture runs in a throwaway directory
+    // precisely so that the payload it records carries nothing of the
+    // operator's, which is a privacy property of the fixture and not a
+    // convenience. Nothing here is reachable from a socket, a frame or a
+    // running daemon.
+    files: ['packages/providers/src/capture-claude-permission-fixture.test.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['@agentplex/*', '!@agentplex/protocol', '!@agentplex/node-shared'],
+          message:
+            'packages/providers may import @agentplex/protocol and @agentplex/node-shared and no other workspace package.',
+        },
+      ]),
+    },
+  },
+  {
     // The other exceptions, which are not service code at all. One suite's
     // subject is a shell script -- the bootstrap that installs the package on a
     // machine that does not have it yet -- and the other's is the `agentplex`

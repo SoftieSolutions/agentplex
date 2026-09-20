@@ -39,6 +39,19 @@ export {
   CLAUDE_SCRUB_PREFIXES,
   planClaudeLaunch,
 } from './claude-launch.js';
+export {
+  CLAUDE_PERMISSION_HOOK_EVENT,
+  PROPOSAL_MAX_CHARS,
+  encodeClaudePermissionAnswer,
+  parseClaudePermissionRequest,
+} from './claude-permission.js';
+export type {
+  ClaudePermissionAnswer,
+  ClaudePermissionParse,
+  ClaudePermissionRequest,
+  ClaudePermissionRule,
+  ClaudePermissionSuggestion,
+} from './claude-permission.js';
 export { CLAUDE_PACKAGE, NPM_COMMAND, createClaudeProvisioning } from './claude-provisioning.js';
 export {
   CLAUDE_REGISTRY_STATUSES,
