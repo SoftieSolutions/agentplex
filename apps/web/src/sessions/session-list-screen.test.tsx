@@ -3,6 +3,8 @@ import { parseClientFrame, parseTextFrame, type ClientFrame } from '@agentplex/p
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fakeStorage } from '../auth/fake-storage.js';
+import { createTokenStore, type TokenStore } from '../auth/token.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
@@ -19,6 +21,11 @@ import { SessionListScreen } from './session-list-screen.js';
  * stop. Everything inbound here is captured output -- the fleet state, the
  * refusal a real hub answered a real stop with, the reply it sent when one
  * landed -- and everything outbound is read back through the hub's own parser.
+ *
+ * The screen's other job with no cards on it is here too: what a person can do
+ * about an empty list or a connection that is not up. Those are assertions
+ * about anchors and not about click handlers on purpose -- the next step is a
+ * place, so it has to be openable in a new tab and readable in a status bar.
  */
 
 declare global {
@@ -66,6 +73,8 @@ describe('the session list', () => {
   let root: Root | null = null;
   let store: HubStore;
   let sockets: ReturnType<typeof createFakeSocketFactory>;
+  /** This device's credential store: empty unless a test writes to it. */
+  let tokens: TokenStore;
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -74,6 +83,10 @@ describe('the session list', () => {
     container = document.createElement('div');
     document.body.append(container);
     sockets = createFakeSocketFactory();
+    // One storage for the mount, so a token a test writes is one the screen
+    // reads back -- a fresh fake per access would swallow the write.
+    const storage = fakeStorage();
+    tokens = createTokenStore(() => storage);
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
@@ -107,7 +120,9 @@ describe('the session list', () => {
   async function mountWith(state: string): Promise<FakeSocket> {
     await act(async () => {
       root = createRoot(container);
-      root.render(withProvider(<SessionListScreen store={store} now={() => NOW} />));
+      root.render(
+        withProvider(<SessionListScreen store={store} tokens={tokens} now={() => NOW} />),
+      );
     });
     await act(settle);
     const socket = sockets.sockets[0];
@@ -142,6 +157,41 @@ describe('the session list', () => {
     const only = buttons[0];
     if (buttons.length !== 1 || only === undefined) {
       throw new Error(`expected one stop button, found ${String(buttons.length)}`);
+    }
+    return only;
+  }
+
+  /** Mounts the screen and leaves the dial in flight, so no state ever arrives. */
+  async function mountDialling(): Promise<FakeSocket> {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        withProvider(<SessionListScreen store={store} tokens={tokens} now={() => NOW} />),
+      );
+    });
+    await act(settle);
+    const socket = sockets.sockets[0];
+    if (socket === undefined) throw new Error('the screen dialled nothing');
+    return socket;
+  }
+
+  /**
+   * The next-action links: the two addresses the model can name, and nothing
+   * else the screen happens to draw an anchor for.
+   */
+  function actionLinks(): HTMLAnchorElement[] {
+    return [
+      ...container.querySelectorAll<HTMLAnchorElement>(
+        'a[href="#settings"], a[href="#/onboarding"]',
+      ),
+    ];
+  }
+
+  function theActionLink(): HTMLAnchorElement {
+    const links = actionLinks();
+    const only = links[0];
+    if (links.length !== 1 || only === undefined) {
+      throw new Error(`expected one next action, found ${String(links.length)}`);
     }
     return only;
   }
@@ -270,5 +320,61 @@ describe('the session list', () => {
     });
 
     expect(container.textContent).toContain('stopped migrate-db-v9 on mbp-robert');
+  });
+
+  it('names the token beside the notice when nothing is stored and no state has arrived', async () => {
+    const socket = await mountDialling();
+
+    // The dial ends without a welcome: the store retries, and this device has
+    // never had a state, so nothing here proves its credential was accepted.
+    await act(() => {
+      socket.drop();
+    });
+
+    expect(container.textContent).toContain('connection lost; reconnecting');
+    const action = theActionLink();
+    expect(action.textContent).toBe('Save the hub token in Settings');
+    expect(action.getAttribute('href')).toBe('#settings');
+  });
+
+  it('sends a device with a token and no fleet to check what it typed', async () => {
+    tokens.write('the-hub-token');
+    const socket = await mountDialling();
+    await act(() => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(hubFrames.machineStatePopulated);
+      // Unreadable in the other direction: the hub says this client sent a
+      // frame it could not parse, which no retry can fix.
+      socket.deliver(hubFrames.protocolError);
+    });
+
+    const action = theActionLink();
+    expect(action.textContent).toBe('Check the hub token in Settings');
+    expect(action.getAttribute('href')).toBe('#settings');
+  });
+
+  it('points an empty fleet at the wizard, under the words it already says', async () => {
+    await mountWith(hubFrames.machineState);
+
+    expect(container.textContent).toContain('no sessions in any store yet');
+    const action = theActionLink();
+    expect(action.textContent).toBe('Pair a server');
+    expect(action.getAttribute('href')).toBe('#/onboarding');
+  });
+
+  it('asks a paired server with no store for one, rather than for another server', async () => {
+    await mountWith(hubFrames.machineStateWithServer);
+
+    expect(container.textContent).toContain('no sessions in any store yet');
+    const action = theActionLink();
+    expect(action.textContent).toBe('Mount a store on a paired server');
+    expect(action.getAttribute('href')).toBe('#settings');
+  });
+
+  it('names no next step while there are sessions on screen', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    expect(actionLinks()).toEqual([]);
   });
 });

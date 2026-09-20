@@ -105,7 +105,7 @@ function OnboardingGate({ hub, tokens, dismissal }: AppProps): JSX.Element {
   // waiting screen over it would be this file inventing one.
   return (
     <>
-      <SessionListScreen store={hub} />
+      <SessionListScreen store={hub} tokens={tokens} />
       <SettingsRoute store={hub} tokens={tokens} />
     </>
   );

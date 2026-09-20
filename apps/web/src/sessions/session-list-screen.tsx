@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
-import type { ServerRegistrationId } from '@agentplex/protocol';
+import type { MachineState, ServerRegistrationId } from '@agentplex/protocol';
 import {
+  Anchor,
   Box,
   Button,
   Group,
@@ -15,16 +16,20 @@ import {
   useComputedColorScheme,
 } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
+import type { TokenStore } from '../auth/token.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import {
   chipCounts,
   connectionNotice,
+  emptyListNotice,
   listSessions,
+  nextAction,
   providerOptions,
   storeOptions,
   visibleSessions,
   type ChipCount,
+  type NextAction,
   type StatusChip,
 } from './session-list-model.js';
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
@@ -76,11 +81,27 @@ import { stoppedNotice } from './stop-model.js';
  */
 export interface SessionListScreenProps {
   readonly store: HubStore;
+  /**
+   * The device's credential, read and never written here.
+   *
+   * The screen needs it for one question -- is there a token on this device at
+   * all -- because that is what tells a connection that will not come up from
+   * one nobody has given a credential to yet, and the two want different words.
+   * Read once per render rather than subscribed to: the store offers no
+   * subscription, and every phase this screen names an action in is one the hub
+   * store is already moving through, so the render that would notice a new
+   * token is a render that happens anyway.
+   */
+  readonly tokens: TokenStore;
   /** The clock, injected so a test can render fixed ages. */
   readonly now?: () => number;
 }
 
-export function SessionListScreen({ store, now = Date.now }: SessionListScreenProps): JSX.Element {
+export function SessionListScreen({
+  store,
+  tokens,
+  now = Date.now,
+}: SessionListScreenProps): JSX.Element {
   const snapshot = useHubSnapshot(store);
   // Declaring interest, which is what sends the layout request and what has it
   // re-sent after every reconnection and every `catalogue-changed`. The tree is
@@ -100,7 +121,11 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
   const [tab, setTab] = useState<Tab>('sessions');
 
   const state = snapshot.machineState;
+  // The two halves of one answer about the connection, off one snapshot: what
+  // is happening, and the one thing a person can do about it. Both are drawn,
+  // and neither stands in for the other.
   const notice = connectionNotice(snapshot.phase, snapshot.problem, state !== null);
+  const connectionAction = nextAction(snapshot.phase, state !== null, tokens.read() !== null);
 
   if (state === null) {
     return (
@@ -109,6 +134,7 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
           Sessions
         </Title>
         <Text c="dimmed">{notice ?? 'waiting for the hub'}</Text>
+        {connectionAction === null ? null : <NextStep action={connectionAction} fz={14} />}
       </Stack>
     );
   }
@@ -173,6 +199,7 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
               {notice}
             </Text>
           )}
+          {connectionAction === null ? null : <NextStep action={connectionAction} fz={12} />}
           {stopped === null ? null : (
             <Text fz={12} c="dimmed" role="status">
               {stopped}
@@ -305,11 +332,7 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
           </Group>
 
           {visible.length === 0 ? (
-            <Text c="dimmed" fz={13}>
-              {everySession.length === 0
-                ? 'no sessions in any store yet'
-                : 'no session matches the current narrowing'}
-            </Text>
+            <EmptyList state={state} narrowed={everySession.length > 0} />
           ) : (
             <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
               {visible.map((item) => {
@@ -343,6 +366,59 @@ export function SessionListScreen({ store, now = Date.now }: SessionListScreenPr
           )}
         </Stack>
       </Group>
+    </Stack>
+  );
+}
+
+interface NextStepProps {
+  readonly action: NextAction;
+  readonly fz: number;
+}
+
+/**
+ * The one thing to do about the state the screen is in.
+ *
+ * An anchor and never a button with a handler: every action the model names is
+ * a place, and a place has to survive a middle click, a long press and a
+ * glance at the status bar. A handler that set `location.hash` would look the
+ * same and be none of those.
+ */
+function NextStep({ action, fz }: NextStepProps): JSX.Element {
+  return (
+    <Anchor href={action.href} fz={fz}>
+      {action.words}
+    </Anchor>
+  );
+}
+
+interface EmptyListProps {
+  readonly state: MachineState;
+  /** Whether sessions exist and the narrowing is what hid them. */
+  readonly narrowed: boolean;
+}
+
+/**
+ * Nothing to show, and why not.
+ *
+ * A narrowing that matched nothing is the screen's own doing and says so; an
+ * empty fleet is the state's, and the model decides both the words and what --
+ * if anything -- to offer beside them.
+ */
+function EmptyList({ state, narrowed }: EmptyListProps): JSX.Element {
+  if (narrowed) {
+    return (
+      <Text c="dimmed" fz={13}>
+        no session matches the current narrowing
+      </Text>
+    );
+  }
+  const { words, action } = emptyListNotice(state);
+  return (
+    <Stack gap={4}>
+      <Text c="dimmed" fz={13}>
+        {words}
+      </Text>
+      {action === null ? null : <NextStep action={action} fz={13} />}
     </Stack>
   );
 }
