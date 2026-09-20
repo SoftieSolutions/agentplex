@@ -499,7 +499,9 @@ those two, so `>4.1.12 <5.0.0` and `>=4.1.13 <=5.0.0` are refused as surely as
 `^4.1.13` is. Widening a window is then an edit to this section rather than a
 range that quietly passes. The message names the manifest, the dependency and
 the bound it wanted. `engines`, `packageManager` and anything under a `pnpm`
-key are not dependency fields and are not read.
+key are not dependency fields and are not read. That check is
+`scripts/check-dependency-ranges.ts`, run by `pnpm lint` ahead of eslint and
+prettier.
 
 ## Connectivity
 
