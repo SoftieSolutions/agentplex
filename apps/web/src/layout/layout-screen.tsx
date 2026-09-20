@@ -172,7 +172,11 @@ export function LayoutScreen({
 
   return (
     <div
-      style={{ height: '100dvh', background: colorForRole('background', scheme) }}
+      // The height of the region the shell gives it, not the height of the
+      // viewport: since AGX-122 the session screen mounts inside the chrome
+      // rather than replacing the page, and `100dvh` here would push the
+      // panes down by the height of the top bar.
+      style={{ height: '100%', background: colorForRole('background', scheme) }}
       // Capture phase, outermost: a layout chord is decided before any pane
       // — or its emulator — can turn the keydown into terminal bytes.
       onKeyDownCapture={(event) => registry.handleKeyDown(event)}

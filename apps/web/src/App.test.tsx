@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
-import { sessionRefSchema } from '@agentplex/protocol';
+import { nodeIdSchema, sessionRefSchema } from '@agentplex/protocol';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { App } from './App.js';
 import { fakeStorage } from './auth/fake-storage.js';
 import { createTokenStore, type TokenStore } from './auth/token.js';
+import { docHash } from './docs/doc-route.js';
 import { createBrowserDependencies } from './store/browser.js';
 import { createOnboardingDismissal, type OnboardingDismissal } from './onboarding/dismissal.js';
 import { ONBOARDING_HASH } from './onboarding/onboarding-route.js';
+import { destinationHash } from './shell/destinations.js';
 import { createFakeSocketFactory, type FakeSocketFactory } from './store/fake-socket.js';
 import { hubFrames } from './store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from './store/hub-store.js';
@@ -39,6 +41,7 @@ declare global {
 
 const STORED_TOKEN = 'the-token-typed-on-the-device';
 const SESSION = sessionRefSchema.parse({ storeId: 'store-observatory', sessionId: 'session-11' });
+const DOC = nodeIdSchema.parse('node-observatory-notes');
 
 /** Mantine consults the media query for its colour scheme; jsdom has none. */
 function installMatchMedia(): void {
@@ -55,10 +58,10 @@ function installMatchMedia(): void {
 }
 
 /**
- * Mantine measures its target's box in two places this page mounts: the
- * session list's popover-backed controls and Settings' segmented control.
- * jsdom has neither layout nor observer, and nothing here asserts on a
- * measurement, so a stub that reports nothing is enough.
+ * Mantine measures its target's box in three places this page mounts: the
+ * shell's tab pair, the session list's popover-backed controls and Settings'
+ * segmented control. jsdom has neither layout nor observer, and nothing here
+ * asserts on a measurement, so a stub that reports nothing is enough.
  */
 function installResizeObserver(): void {
   globalThis.ResizeObserver = class {
@@ -151,11 +154,21 @@ describe('the page', () => {
   /** The wizard's one sentence, which no other screen says. */
   const HERO = 'Every agent session, every machine, one place.';
 
-  /** The settings panel's first heading, which the wizard replaces rather than joins. */
-  const SETTINGS = 'Hub access';
-
   function text(): string {
     return container.textContent ?? '';
+  }
+
+  /**
+   * Whether the app's frame is on screen, asked of the two elements only the
+   * shell draws: its top bar is the page's one `header` and its sidebar the
+   * page's one `aside` (src/shell/top-bar.tsx, src/shell/app-shell.tsx). The
+   * wizard is a `main` of its own and has neither, so this is what "the app
+   * instead of the wizard" looks like from the document -- and it stays true
+   * of whichever destination the shell's content region happens to hold,
+   * which a heading from one screen would not.
+   */
+  function shellIsDrawn(): boolean {
+    return container.querySelector('header') !== null && container.querySelector('aside') !== null;
   }
 
   it('dials the session route with the token saved through the token store', async () => {
@@ -189,12 +202,14 @@ describe('the page', () => {
     // The wizard instead of the app, not above it: a first-time reader who has
     // nothing paired has nothing to do on the list or in the pairing form that
     // the wizard is not already walking them through, and two pairing controls
-    // on one screen is two places to get it wrong.
+    // on one screen is two places to get it wrong. Since AGX-122 that means
+    // the shell's own chrome is gone too -- the wizard replaces the frame and
+    // does not mount inside it.
     expect(text()).toContain(HERO);
-    expect(text()).not.toContain(SETTINGS);
+    expect(shellIsDrawn()).toBe(false);
   });
 
-  it('draws the app, and a way back to the wizard, once a server is paired', async () => {
+  it('draws the app once a server is paired', async () => {
     const page = buildPage();
     page.tokens.write(STORED_TOKEN);
 
@@ -202,12 +217,53 @@ describe('the page', () => {
     await hubAnswers(page, hubFrames.machineStateWithServer);
 
     expect(text()).not.toContain(HERO);
-    expect(text()).toContain(SETTINGS);
+    expect(shellIsDrawn()).toBe(true);
+  });
+
+  it('keeps a way back to the wizard in Settings', async () => {
+    const page = buildPage();
+    page.tokens.write(STORED_TOKEN);
+    // Settings is a destination of the shell now rather than a panel below the
+    // list, so the link is asked for where it is drawn.
+    window.location.hash = destinationHash('settings');
+
+    await mount(page);
+    await hubAnswers(page, hubFrames.machineStateWithServer);
+
     // The auto-show stops the moment a server exists, so the only way back is
     // an address. Settings carries it, because that is where a reader who
     // wants to add a machine already is.
     const link = container.querySelector('a[href="#/onboarding"]');
     expect(link?.textContent).toBe('Open the first-run guide');
+  });
+
+  it('yields to a session address on a fleet the wizard would otherwise open for', async () => {
+    const page = buildPage();
+    page.tokens.write(STORED_TOKEN);
+    window.location.hash = sessionHash(SESSION);
+
+    await mount(page);
+    await hubAnswers(page, hubFrames.machineState);
+
+    // Nothing paired and nothing dismissed, which is exactly the fleet the
+    // auto-show fires on -- but somebody followed a link to one session. An
+    // address that names a thing outranks the wizard, because answering the
+    // link with a walkthrough of pairing a first machine loses the address
+    // the link carried and there is no way back to it.
+    expect(text()).not.toContain(HERO);
+    expect(shellIsDrawn()).toBe(true);
+  });
+
+  it('yields to a document address for the same reason', async () => {
+    const page = buildPage();
+    page.tokens.write(STORED_TOKEN);
+    window.location.hash = docHash(DOC);
+
+    await mount(page);
+    await hubAnswers(page, hubFrames.machineState);
+
+    expect(text()).not.toContain(HERO);
+    expect(shellIsDrawn()).toBe(true);
   });
 
   it('draws neither the wizard nor a conclusion before the hub has answered', async () => {
@@ -256,6 +312,6 @@ describe('the page', () => {
     });
 
     expect(text()).not.toContain(HERO);
-    expect(text()).toContain(SETTINGS);
+    expect(shellIsDrawn()).toBe(true);
   });
 });
