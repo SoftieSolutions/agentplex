@@ -5,6 +5,8 @@ import { Group, Paper, Stack, Text } from '../ui/components.js';
 import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
+import { AdoptedSessions } from './adopted-sessions.js';
+import type { AdoptedSession } from './adopted-sessions-model.js';
 import type { PairProgress } from './pair-progress-model.js';
 
 /**
@@ -40,9 +42,25 @@ export interface MachineCardProps {
    * screen can change anyway.
    */
   readonly now?: number | undefined;
+  /**
+   * The sessions the hub attributes to this machine, for the `online` state
+   * to report. Read per render by the step above from the state the hub last
+   * published, and drawn nowhere else: a machine the hub never reached has no
+   * holdings to describe, and the dialling card would be claiming a reading
+   * from a box that has not answered.
+   */
+  readonly sessions: readonly AdoptedSession[];
+  /** The way out of the wizard, for a machine that was holding nothing yet. */
+  readonly onGoToSessions: () => void;
 }
 
-export function MachineCard({ progress, scheme, now = Date.now() }: MachineCardProps): JSX.Element {
+export function MachineCard({
+  progress,
+  scheme,
+  now = Date.now(),
+  sessions,
+  onGoToSessions,
+}: MachineCardProps): JSX.Element {
   switch (progress.kind) {
     case 'recorded':
       /* No card. The pairing reply carried an id and the state that includes
@@ -97,6 +115,17 @@ export function MachineCard({ progress, scheme, now = Date.now() }: MachineCardP
               ))
             )}
           </Stack>
+          {/* What it was already running, which is the last thing this wizard
+              has to say. Under the stores rather than above them: a session is
+              something found in a store, and the list reads as a consequence
+              of the line above it. */}
+          <AdoptedSessions
+            sessions={sessions}
+            label={progress.label}
+            scheme={scheme}
+            now={now}
+            onGoToSessions={onGoToSessions}
+          />
         </CardFrame>
       );
     case 'unreachable':

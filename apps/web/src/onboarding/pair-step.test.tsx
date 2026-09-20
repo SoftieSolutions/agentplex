@@ -8,6 +8,7 @@ import {
   serverAddressSchema,
   serverRegistrationIdSchema,
   type MachineState,
+  type ServerRegistrationId,
 } from '@agentplex/protocol';
 import {
   createFakePairingOperations,
@@ -104,6 +105,20 @@ function rowsFrom(text: string): readonly ServerRowView[] {
 }
 
 /**
+ * A registration id as the capture spells it, found by the label a person
+ * would read. Ids are branded, and a literal parsed here would be this file
+ * asserting what an id is rather than the frame saying it.
+ */
+function registrationFor(state: MachineState, label: string): ServerRegistrationId {
+  const server = state.servers.find((view) => view.label === label);
+  if (server === undefined) throw new Error(`the capture names no machine called ${label}`);
+  return server.registrationId;
+}
+
+/** A state naming no machine, for the renders that are not about one. */
+const NO_MACHINES = stateFrom(hubFrames.machineState);
+
+/**
  * The hub stamped the captured `connected` row at this instant, so the age the
  * card draws is a function of the `now` this file injects rather than of the
  * day the suite happens to run.
@@ -153,6 +168,7 @@ describe('the wizard pairing step', () => {
   async function render(
     pairing: FakePairingOperations,
     rows: readonly ServerRowView[],
+    machineState: MachineState = NO_MACHINES,
   ): Promise<void> {
     await act(async () => {
       root?.render(
@@ -165,6 +181,7 @@ describe('the wizard pairing step', () => {
             pairing={pairing}
             candidates={CANDIDATES}
             rows={rows}
+            machineState={machineState}
             scheme="dark"
             now={FOUR_MINUTES_LATER}
             onDone={() => {
@@ -289,6 +306,40 @@ describe('the wizard pairing step', () => {
     expect(said).toContain('store-agentplex');
     expect(said).toContain('claude 9.9.9');
     expect(said).not.toContain('Pairing recorded');
+  });
+
+  it('reports the sessions the paired machine was already holding', async () => {
+    const state = stateFrom(hubFrames.machineStatePopulated);
+    const registrationId = registrationFor(state, 'mbp-robert');
+    const pairing = await mount({ ok: true, registrationId });
+
+    await pair();
+    await render(pairing, serverRows(state), state);
+
+    // The list's own states are pinned in `adopted-sessions.test.tsx`. What
+    // this holds is the wiring: the id the panel handed back picks this
+    // machine's sessions out of the same broadcast the card's row comes from.
+    const said = copy();
+    expect(said).toContain('fix-auth-refresh');
+    expect(said).toContain('/Users/robert/code/agentplex');
+  });
+
+  it('lets a reader whose machine held nothing go start one', async () => {
+    const pairing = await mount();
+
+    await pair();
+    await render(
+      pairing,
+      rowsFrom(hubFrames.machineStateJustPaired),
+      stateFrom(hubFrames.machineStateJustPaired),
+    );
+
+    // A machine that has just been installed has an empty store, which is the
+    // ordinary case rather than a fault. The way on is the way out of the
+    // wizard, because the session list is where a session gets started.
+    expect(copy()).toContain('No agent sessions were found on mbp-robert yet');
+    await click('Go to the session list');
+    expect(done).toBe(1);
   });
 
   it('stops on the machine that never answered, and still lets the reader out', async () => {

@@ -42,6 +42,11 @@ export interface AdoptedSession {
 /**
  * The sessions attributed to one machine, last activity first.
  *
+ * A state of `null` is a hub that has broadcast nothing yet, and reads as
+ * nothing found: the same null `serverRows` and `discoveredCandidates` take,
+ * so every projection the wizard holds takes the snapshot as it comes rather
+ * than making each screen branch on it.
+ *
  * Attribution is `listSessions`' own, not a second copy of it: a session
  * counts for the machine whose reading it is (`server`) or for the machine
  * running it (`holder`). The two differ for a volume two machines have
@@ -51,9 +56,10 @@ export interface AdoptedSession {
  * machine is the one that read it.
  */
 export function sessionsOnServer(
-  state: MachineState,
+  state: MachineState | null,
   registrationId: ServerRegistrationId,
 ): readonly AdoptedSession[] {
+  if (state === null) return [];
   const mine = listSessions(state).filter(
     (item) => item.server === registrationId || item.holder?.server === registrationId,
   );
