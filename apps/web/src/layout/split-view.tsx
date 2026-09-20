@@ -1,9 +1,9 @@
-import { useRef, useState, type JSX, type PointerEvent } from 'react';
+import { useRef, useState, type JSX, type PointerEvent, type ReactNode } from 'react';
 import { DocPane } from '../docs/doc-pane.js';
 import type { HubStore } from '../store/hub-store.js';
 import { SessionPane } from '../terminal/session-pane.js';
 import { sessionHash } from '../terminal/session-route.js';
-import { Stack, Text } from '../ui/components.js';
+import { Anchor, Stack, Text } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { RATIO_BOUNDS, type LayoutTree, type PaneLeaf, type PanePath, type Split } from './tree.js';
 
@@ -27,6 +27,14 @@ export function pathKey(path: PanePath): string {
 }
 
 const DIVIDER_PX = 5;
+
+/**
+ * The list's address: every hash the app parses, and therefore the one that
+ * parses as none of them. Spelled here rather than imported, because there is
+ * no route module that owns it -- the list is what the shell draws when the
+ * session and document parsers both say no.
+ */
+const SESSION_LIST_HASH = '#/';
 
 export interface PaneViewDependencies {
   readonly hub: HubStore;
@@ -199,7 +207,18 @@ function PaneContentView({
     case 'empty':
       return (
         <Placeholder scheme={view.scheme} title="No session here yet">
-          Open a session address, or close this pane with Ctrl+Shift+X.
+          {/* The sentence this pane always said, and beside it the way out.
+              An empty pane is where somebody lands who closed the last
+              session in it, and the list is the only place with addresses to
+              open -- naming it is the difference between a dead end and a
+              step. An anchor, because it is a place: the address bar, a
+              middle click and a long press all work on it, and a handler
+              setting `location.hash` would look identical and be none of
+              those. */}
+          Open a session address, or close this pane with Ctrl+Shift+X.{' '}
+          <Anchor href={SESSION_LIST_HASH} fz={11}>
+            Back to the session list
+          </Anchor>
         </Placeholder>
       );
     case 'unknown':
@@ -214,6 +233,10 @@ function PaneContentView({
   }
 }
 
+/**
+ * `ReactNode` and no longer a bare string, because a placeholder now says what
+ * to do as well as what is the matter, and what to do is a link.
+ */
 function Placeholder({
   scheme,
   title,
@@ -221,7 +244,7 @@ function Placeholder({
 }: {
   readonly scheme: Scheme;
   readonly title: string;
-  readonly children: string;
+  readonly children: ReactNode;
 }): JSX.Element {
   return (
     <Stack align="center" justify="center" gap={4} style={{ width: '100%', height: '100%' }}>

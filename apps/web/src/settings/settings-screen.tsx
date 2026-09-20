@@ -18,6 +18,7 @@ import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
 import type { DiscoveredCandidate } from './pairing-form.js';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
+import { nextAction, type NextAction } from '../sessions/session-list-model.js';
 import { PairingPanel } from './pairing-panel.js';
 import type { PairingOperations } from './pairing-operations.js';
 import { serverRows, type ServerRowView } from './server-rows.js';
@@ -100,6 +101,19 @@ function Section({
 
 const MONO_INPUT = { input: { fontFamily: 'var(--mantine-font-family-monospace)' } };
 
+/**
+ * The screen's own address, and the one every next action elsewhere names.
+ *
+ * Settings has no route of its own -- it is drawn under the list on the
+ * default route -- so the id is what makes `#settings` a place the browser can
+ * land on. Without it the anchors the session list draws are addresses that
+ * resolve to nothing, and a next step that goes nowhere is worse than none.
+ */
+const SETTINGS_ID = 'settings';
+
+/** The step a fleet with no machine in it has not taken. */
+const PAIR_A_SERVER: NextAction = { words: 'Pair a server', href: ONBOARDING_HASH };
+
 export function SettingsScreen({
   snapshot,
   tokens,
@@ -107,8 +121,17 @@ export function SettingsScreen({
   candidates,
 }: SettingsScreenProps): JSX.Element {
   const scheme = useComputedColorScheme('dark');
+  // The one thing to do about the connection, off the same facts the session
+  // list asks with. It is read here rather than inside the server list because
+  // the token is this screen's to know about, and the list below is where an
+  // unproven connection changes what an empty list is allowed to claim.
+  const connectionAction = nextAction(
+    snapshot.phase,
+    snapshot.machineState !== null,
+    tokens.read() !== null,
+  );
   return (
-    <Stack gap="md" maw={720}>
+    <Stack id={SETTINGS_ID} gap="md" maw={720}>
       <Title order={2}>Settings</Title>
       <Section scheme={scheme}>
         <HubAccessSection snapshot={snapshot} tokens={tokens} scheme={scheme} />
@@ -117,7 +140,12 @@ export function SettingsScreen({
         <PairingPanel pairing={pairing} candidates={candidates} scheme={scheme} />
       </Section>
       <Section scheme={scheme}>
-        <PairedServersSection snapshot={snapshot} pairing={pairing} scheme={scheme} />
+        <PairedServersSection
+          snapshot={snapshot}
+          pairing={pairing}
+          scheme={scheme}
+          connectionAction={connectionAction}
+        />
       </Section>
     </Stack>
   );
@@ -224,16 +252,40 @@ function HubAccessSection({
   );
 }
 
+/**
+ * What to offer under a server list with nothing in it, or `null` when the
+ * list has rows and the section is simply reporting them.
+ *
+ * The connection comes first. A list is empty either because the hub named no
+ * server or because nothing was ever heard from the hub, and only the first of
+ * those is a reason to go and pair one -- inviting somebody to pair a machine
+ * over a connection that is not up sends them to a wizard that cannot finish.
+ * So the pairing step is offered only when a state actually arrived and named
+ * no server: the proven fact, not the absence of one.
+ */
+function emptyListAction(
+  snapshot: HubSnapshot,
+  rows: readonly ServerRowView[],
+  connectionAction: NextAction | null,
+): NextAction | null {
+  if (rows.length > 0) return null;
+  if (connectionAction !== null) return connectionAction;
+  return snapshot.machineState === null ? null : PAIR_A_SERVER;
+}
+
 function PairedServersSection({
   snapshot,
   pairing,
   scheme,
+  connectionAction,
 }: {
   readonly snapshot: HubSnapshot;
   readonly pairing: PairingOperations;
   readonly scheme: Scheme;
+  readonly connectionAction: NextAction | null;
 }): JSX.Element {
   const rows = serverRows(snapshot.machineState);
+  const action = emptyListAction(snapshot, rows, connectionAction);
   return (
     <Stack gap="sm">
       <Title order={4}>Paired servers</Title>
@@ -251,6 +303,15 @@ function PairedServersSection({
             <ServerRow key={row.registrationId} row={row} pairing={pairing} scheme={scheme} />
           ))}
         </Stack>
+      )}
+      {/* Beside the words, never instead of them: the sentence above is the
+          honest report of what the hub said, and this is the step it leaves
+          open. Both actions are anchors for the reason the list's are --
+          a step is a place. */}
+      {action === null ? null : (
+        <Anchor href={action.href} size="sm">
+          {action.words}
+        </Anchor>
       )}
     </Stack>
   );

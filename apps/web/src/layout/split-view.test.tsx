@@ -26,7 +26,9 @@ import type { LayoutTree } from './tree.js';
  * the two declarations was redundant. Neither is.
  *
  * Two empty panes, so nothing reaches the hub: `PaneViewDependencies.hub` is
- * read by `SessionPane` and by nothing else in this tree.
+ * read by `SessionPane` and by nothing else in this tree. Which makes an empty
+ * pane the other thing this file can hold: what it offers somebody who has
+ * just closed the last session in it.
  */
 
 declare global {
@@ -42,6 +44,8 @@ const SPLIT: LayoutTree = {
   first: { kind: 'pane', content: { type: 'empty' } },
   second: { kind: 'pane', content: { type: 'empty' } },
 };
+
+const EMPTY_PANE: LayoutTree = { kind: 'pane', content: { type: 'empty' } };
 
 let host: HTMLDivElement;
 let root: Root;
@@ -100,5 +104,40 @@ describe('the divider between two panes', () => {
     const divider = host.querySelector('[role="separator"]');
     if (!(divider instanceof HTMLElement)) throw new Error('the split drew no divider');
     expect(getComputedStyle(divider).touchAction).toBe('none');
+  });
+});
+
+describe('a pane with nothing in it', () => {
+  it('offers the way back to the list, beside the sentence it already says', () => {
+    const view: PaneViewDependencies = {
+      hub: NO_HUB,
+      scheme: 'dark',
+      focus: [],
+      onCommitRatio: () => {},
+      onFocusPane: () => {},
+      registerPane: () => {},
+    };
+
+    act(() => {
+      root.render(
+        <MantineProvider
+          theme={theme}
+          cssVariablesResolver={cssVariablesResolver}
+          defaultColorScheme="dark"
+        >
+          <NodeView node={EMPTY_PANE} path={[]} view={view} />
+        </MantineProvider>,
+      );
+    });
+
+    // The words the pane already said are untouched: the action is added
+    // beside them, never in place of them.
+    expect(host.textContent).toContain('No session here yet');
+    expect(host.textContent).toContain(
+      'Open a session address, or close this pane with Ctrl+Shift+X.',
+    );
+
+    const links = [...host.querySelectorAll<HTMLAnchorElement>('a[href="#/"]')];
+    expect(links.map((link) => link.textContent)).toEqual(['Back to the session list']);
   });
 });
