@@ -3,10 +3,11 @@ import {
   machineStateSchema,
   sessionRefSchema,
   sessionStatusSchema,
+  subscriptionEndReasonSchema,
   type MachineState,
   type ServerView,
 } from '@agentplex/protocol';
-import type { HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
+import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import { createTerminalFeed } from './chunk-feed.js';
 import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
 import {
@@ -15,6 +16,7 @@ import {
   machineFor,
   machineLabel,
   matchSummary,
+  paneAttachment,
   searchScopeNotice,
   terminalFeedNotice,
   terminalInputNotice,
@@ -415,5 +417,95 @@ describe('searchScopeNotice', () => {
     const notice = searchScopeNotice(true);
     expect(notice).toContain(String(EMULATOR_SCROLLBACK_LINES));
     expect(notice).toContain('not proof of absence');
+  });
+});
+
+/**
+ * Every phase the store can be in, written out so the strip's indicator can be
+ * held to saying something different in each. The compiler keeps this list
+ * honest in the other direction: `paneAttachment` switches over the union and
+ * a phase added to it fails to typecheck until it has words here too.
+ */
+const connectionPhaseNames: readonly ConnectionPhase[] = [
+  'idle',
+  'connecting',
+  'connected',
+  'reconnecting',
+  'failed',
+];
+
+describe('paneAttachment', () => {
+  it('claims attachment only when the socket is up and the watch was answered', () => {
+    expect(paneAttachment('connected', terminalWith())).toEqual({
+      tone: 'running',
+      words: 'Attached',
+    });
+  });
+
+  it('says it is still attaching while the hub has not answered the watch', () => {
+    // The first frames of a pane's life, and every reconnection's: the
+    // subscribe is out and nothing has come back. "Attached" here would be a
+    // claim about a terminal this pane is not being sent yet.
+    expect(paneAttachment('connected', terminalWith({ attached: false }))).toEqual({
+      tone: 'idle',
+      words: 'Attaching',
+    });
+    expect(paneAttachment('connected', null)).toEqual({ tone: 'idle', words: 'Attaching' });
+  });
+
+  it('says the connection is down rather than what the last frame said', () => {
+    // The watch record keeps `attached` true until the store tears the
+    // connection down, and a pane reading only that would go on saying
+    // "Attached" over a socket that is gone. The connection is read first for
+    // exactly that reason.
+    expect(paneAttachment('reconnecting', terminalWith())).toEqual({
+      tone: 'blocked',
+      words: 'Reconnecting',
+    });
+    expect(paneAttachment('failed', terminalWith())).toEqual({
+      tone: 'blocked',
+      words: 'Dropped',
+    });
+    expect(paneAttachment('connecting', terminalWith())).toEqual({
+      tone: 'idle',
+      words: 'Connecting',
+    });
+    expect(paneAttachment('idle', terminalWith())).toEqual({
+      tone: 'idle',
+      words: 'Not connected',
+    });
+  });
+
+  it('has a word for every phase the store can be in', () => {
+    const words = connectionPhaseNames.map((phase) => paneAttachment(phase, null).words);
+    expect(new Set(words).size).toBe(connectionPhaseNames.length);
+  });
+
+  it('says a watch the hub ended is detached, whichever reason ended it', () => {
+    // The reasons off the parser rather than a list written here: a fourth one
+    // added to the wire is a fourth one this chip has to have an answer for,
+    // and the answer is the same for all of them. Which of them it was is the
+    // sentence under the terminal, where there is room to say what to do about
+    // it; the chip has one word and spends it on the fact that nothing is
+    // arriving. "Attaching" would be the wrong one -- it promises a subscribe
+    // that is on its way, and there is none.
+    for (const ended of subscriptionEndReasonSchema.options) {
+      expect(paneAttachment('connected', terminalWith({ attached: false, ended }))).toEqual({
+        tone: 'blocked',
+        words: 'Detached',
+      });
+    }
+  });
+
+  it('reads the ended flag before the attached one, not after', () => {
+    // The store clears `attached` in the same step it sets `ended`, so today
+    // the two never disagree and this case does not arise. The order is
+    // asserted anyway, because it is what stops being free the moment they do:
+    // a pane that asked `attached` first would go on saying "Attached" about a
+    // terminal the hub has said is over, which is the over-claim this whole
+    // indicator exists to prevent.
+    expect(
+      paneAttachment('connected', terminalWith({ attached: true, ended: 'session-ended' })),
+    ).toEqual({ tone: 'blocked', words: 'Detached' });
   });
 });

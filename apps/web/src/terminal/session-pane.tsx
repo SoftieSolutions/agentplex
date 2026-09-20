@@ -25,6 +25,7 @@ import { FindBar } from './find-bar.js';
 import {
   findSessionRow,
   machineLabel,
+  paneAttachment,
   terminalInputNotice,
   terminalIsPartial,
   machineFor,
@@ -34,17 +35,23 @@ import {
 } from './presentation.js';
 import { StopButton } from '../sessions/stop-button.js';
 import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
+import { TabStrip } from './tab-strip.js';
+import { activeTab, type SessionTab } from './tab-strip-model.js';
 import { chunkTerminalInput } from './terminal-input.js';
 import { TerminalView } from './terminal-view.js';
 import { useTerminalWatch } from './use-terminal-watch.js';
 
 /**
- * The open-session screen (mockup 7c): header row, terminal, steer bar.
+ * The open-session screen (mockup 7c): header row, tab strip, terminal, steer
+ * bar.
  *
- * What the mockup shows and this deliberately does not draw yet: the tab
- * strip (Transcript, Diff and Approvals are their own tickets, and a control
- * with one option is not drawn), the context panel, and the Pause / Hand off
- * / Replay buttons — all later tickets.
+ * The strip is drawn with the one tab that is built. It stopped being the
+ * control with a single option that is not worth drawing the moment it became
+ * the mount point three other screens need: Transcript (AGX-82), Diff
+ * (AGX-105) and Approvals (AGX-104) each append a tab to a list rather than
+ * introduce a control, and until they do, nothing disabled and nothing
+ * placeholder stands in for them. What the mockup shows and this still does
+ * not draw: the context panel and the Pause / Hand off / Replay buttons.
  *
  * The terminal itself is fed by the store: the pane declares standing
  * interest in a target, and the bytes that come back go to the feed the store
@@ -55,6 +62,19 @@ import { useTerminalWatch } from './use-terminal-watch.js';
  */
 
 const MONO_META = { fontFamily: 'var(--mantine-font-family-monospace)' } as const;
+
+/**
+ * The tabs this pane has. One, today.
+ *
+ * A module constant and not a memo: it depends on nothing about a session yet,
+ * and a list rebuilt per render would give the strip a new array to diff on
+ * every keystroke that re-renders the pane. When Transcript, Diff and
+ * Approvals land, the ones carrying a count (`+142 -38`, `3`) become a
+ * derivation of what the hub published and this stops being a constant --
+ * which is exactly why the strip takes the list as a prop.
+ */
+const TERMINAL_TAB = 'terminal';
+const SESSION_TABS: readonly SessionTab[] = [{ id: TERMINAL_TAB, label: 'Terminal', badge: null }];
 
 /**
  * Whether this device's main pointer is a finger, which is the whole of what
@@ -136,6 +156,12 @@ export function SessionPane({
   // Whether the find bar is drawn. State and not a ref: it is the one thing
   // about the terminal that the pane renders differently.
   const [finding, setFinding] = useState(false);
+  /**
+   * The tab the user last asked for, which is a request and not the answer.
+   * `activeTab` resolves it against the strip as it stands now, because the
+   * strip grows a tab at a time and a pane can outlive the one it was on.
+   */
+  const [requestedTab, setRequestedTab] = useState<string>(TERMINAL_TAB);
   /**
    * The last thing the clipboard would not do, or `null` while it has done
    * everything asked of it.
@@ -356,6 +382,11 @@ export function SessionPane({
   // The machine's own reading, so a pane whose hub cannot connect at all says
   // that rather than telling somebody to wait for a dial that will be refused.
   const feed = terminalFeedNotice(terminal, machineFor(state, row));
+  const shownTab = activeTab(SESSION_TABS, requestedTab);
+  // Attachment is a claim about a socket and the subscription on it, which is
+  // why it is read off the store and never off the route: an address says
+  // where a user pointed, not what a hub answered.
+  const attachment = paneAttachment(snapshot.phase, terminal);
   const border = `1px solid ${colorForRole('border', scheme)}`;
   /**
    * Whether to draw the paste control, asked at render.
@@ -413,32 +444,73 @@ export function SessionPane({
             {metadata}
           </Text>
         )}
-        {pasteControl && (
-          // `ml="auto"` rather than a spacer, so the control sits at the end of
-          // the header whether or not there is a metadata line to push it
-          // there. Labelled for the same reason the find bar's controls are:
-          // the word on it is one word, and what it acts on is the terminal.
-          <Button
-            size="compact-xs"
-            variant="default"
-            ml="auto"
-            onClick={() => void pasteFromClipboard()}
-            aria-label="paste into the terminal"
+        {/* The trailing controls as one group with the `ml="auto"` on it,
+            rather than on whichever of them happens to come first. Two items
+            each asking for the free space would have the flexbox share it
+            between them and leave a gap in the middle of the controls; and
+            the attachment has to be last whether or not a paste button or a
+            stop is drawn beside it, which is the mockup's order and also the
+            one place a person looks for it. */}
+        <Group gap={8} ml="auto" wrap="nowrap" style={{ flex: 'none' }}>
+          {pasteControl && (
+            // Labelled for the same reason the find bar's controls are: the
+            // word on it is one word, and what it acts on is the terminal.
+            <Button
+              size="compact-xs"
+              variant="default"
+              onClick={() => void pasteFromClipboard()}
+              aria-label="paste into the terminal"
+            >
+              Paste
+            </Button>
+          )}
+          {/* The same button the card carries, off the same published fact.
+              Nothing is drawn for a session nobody is running, or for a holder
+              mid-turn. */}
+          <StopButton
+            store={hub}
+            sessionRef={sessionRef}
+            holder={row?.holder ?? null}
+            scheme={scheme}
+            size="xs"
+          />
+          {/**
+           * Whether this pane is attached, where the mockup puts it.
+           *
+           * The mockup draws a keyboard glyph before the word. This draws a
+           * tone marker instead -- the same dot the status beside the session
+           * name uses, in the same four tones -- because the app has no icon
+           * set and the pictograph the mockup's HTML uses renders as a colour
+           * emoji on the platform this is primarily read on. A marker whose
+           * colour is the state says more than a glyph that is the same
+           * picture whatever the state, and status here is a tone by rule.
+           */}
+          <Group
+            gap={6}
+            wrap="nowrap"
+            px={10}
+            py={4}
+            style={{ borderRadius: 6, background: colorForRole('raised', scheme) }}
           >
-            Paste
-          </Button>
-        )}
-        {/* The same button the card carries, off the same published fact.
-            Nothing is drawn for a session nobody is running, or for a holder
-            mid-turn. */}
-        <StopButton
-          store={hub}
-          sessionRef={sessionRef}
-          holder={row?.holder ?? null}
-          scheme={scheme}
-          size="xs"
-        />
+            <Box
+              w={6}
+              h={6}
+              style={{ borderRadius: '50%', background: colorForTone(attachment.tone, scheme) }}
+            />
+            <Text fz={12} fw={600} role="status" style={{ whiteSpace: 'nowrap' }}>
+              {attachment.words}
+            </Text>
+          </Group>
+        </Group>
       </Group>
+
+      <TabStrip
+        tabs={SESSION_TABS}
+        activeId={shownTab}
+        onSelect={setRequestedTab}
+        scheme={scheme}
+        label="session views"
+      />
 
       {clipboardNotice !== null && (
         // Under the header rather than inside it, and its own row rather than
@@ -468,6 +540,13 @@ export function SessionPane({
         />
       )}
 
+      {/* What is under the Terminal tab, drawn unconditionally because it is
+          the only tab there is: a switch on `shownTab` today would be a branch
+          with one arm, and the ticket that adds the second tab adds it with
+          the panel it is a tab for. The strip carries no `aria-controls` for
+          the same reason -- the element a tab would point at is the emulator's
+          own box, which belongs to `terminal-view.tsx`, and the ids arrive
+          with the real panels. */}
       {terminal === null ? (
         // The watch is declared in a subscription, which React runs after the
         // first commit, so there is one frame in which this pane has no feed

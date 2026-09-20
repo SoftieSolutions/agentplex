@@ -8,7 +8,7 @@ import type {
   SubscriptionEndReason,
 } from '@agentplex/protocol';
 import { serverLabel } from '../sessions/session-list-model.js';
-import type { HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
+import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
 import { EMULATOR_SCROLLBACK_LINES, type SearchResults } from './emulator.js';
 
@@ -157,6 +157,96 @@ export function terminalFeedNotice(
       return 'the machine running this session is shutting down: nothing is reaching this pane until it is back, and the hub is waiting the time it asked for';
     case 'session-ended':
       return 'this terminal is gone: the machine that held it no longer has it, so what is above is the last of what it printed';
+  }
+}
+
+/**
+ * The slice of a watched terminal the attachment indicator reads.
+ *
+ * Two fields, and `TerminalWatchView` satisfies them, for the reason the
+ * pending pane narrows the same view: what the indicator needs is not a feed
+ * and not a byte count, and a function that took the whole view would be a
+ * function every future field could change the meaning of.
+ *
+ * They are two rather than one because a watch that was never answered and a
+ * watch the hub has ended are different facts that `attached === false`
+ * spells the same way, and the pane owes them different words.
+ */
+export interface AttachmentTerminal {
+  /** Whether the hub has answered this pane's subscription. */
+  readonly attached: boolean;
+  /**
+   * Why the hub ended this pane's subscription, or `null` while it has not.
+   *
+   * Carried rather than collapsed to a boolean because the sentence under the
+   * terminal is worded from the same flag, and two readings of one fact that
+   * could disagree is how a chip and a sentence end up contradicting each
+   * other.
+   */
+  readonly ended: SubscriptionEndReason | null;
+}
+
+/** What the pane says about its own attachment, and how loudly. */
+export interface Attachment {
+  readonly tone: Tone;
+  /** Capitalised: this is a chip in the header, not a sentence in a row. */
+  readonly words: string;
+}
+
+/**
+ * Whether this pane is attached, in one word, from the two facts that decide
+ * it: the socket, and the subscription on it.
+ *
+ * The connection is read first and that ordering is the substance of this
+ * function. A watch record keeps `attached` true until the store tears the
+ * connection down, so a pane that asked the terminal alone would go on saying
+ * "Attached" over a socket that is being redialled -- which is precisely the
+ * moment a person is looking at the word to find out why their keystrokes are
+ * going nowhere. The route the pane is on says nothing about any of it: an
+ * address is where a user pointed, not what a hub answered.
+ *
+ * On a live connection the subscription is read in the same direction, ended
+ * before attached. The hub ends one with a frame of its own -- the machine
+ * went, the machine is draining, the session is over -- and all three mean the
+ * same thing about this pane: nothing is arriving, and no subscribe is on its
+ * way to change that. "Attached" would be the over-claim, and so would
+ * "Attaching", which promises exactly the subscribe that is not coming. The
+ * word is "Detached" for all three, in the tone a dropped connection takes,
+ * because the reason is not a chip's to carry: `terminalFeedNotice` words it
+ * underneath, where there is room to say which of the three it was and what
+ * waiting will and will not do about it.
+ *
+ * Ended is read first for a second reason as well. The store clears `attached`
+ * as it sets `ended`, so the two cannot disagree today -- and a function whose
+ * correctness rests on that would be one an invariant somewhere else can break
+ * silently. Asking the stronger fact first costs a line and holds whichever
+ * way that invariant goes.
+ *
+ * `connected` with no answered watch and nothing ended is "Attaching" rather
+ * than a failure. There is no socket state in which a subscribe has been sent
+ * and refused and nothing is said: a refusal arrives as a `problem` and the
+ * pane repeats the hub's own words underneath, which is a better sentence than
+ * any word a chip could hold.
+ */
+export function paneAttachment(
+  phase: ConnectionPhase,
+  terminal: AttachmentTerminal | null,
+): Attachment {
+  switch (phase) {
+    case 'idle':
+      return { tone: 'idle', words: 'Not connected' };
+    case 'connecting':
+      return { tone: 'idle', words: 'Connecting' };
+    case 'reconnecting':
+      return { tone: 'blocked', words: 'Reconnecting' };
+    case 'failed':
+      return { tone: 'blocked', words: 'Dropped' };
+    case 'connected':
+      if (terminal !== null && terminal.ended !== null)
+        return { tone: 'blocked', words: 'Detached' };
+      return terminal !== null && terminal.attached
+        ? { tone: 'running', words: 'Attached' }
+        : { tone: 'idle', words: 'Attaching' };
   }
 }
 
