@@ -24,9 +24,9 @@
  * user is trying to read a terminal.
  *
  * It applies to the viewport, which is why it is on the root element and not
- * on the layout screen. The layout is `100dvh` with nothing overflowing it, so
- * the thing that bounces is not the layout: it is the page behind it, and the
- * page takes this declaration from `html`. Measured against the built app
+ * on the app shell. The shell is `100dvh` with nothing overflowing it, so the
+ * thing that bounces is not the shell: it is the page behind it, and the page
+ * takes this declaration from `html`. Measured against the built app
  * before it was added -- both `html` and `body` computed `auto`, and the
  * document's scroll height was exactly its client height, so there was
  * nothing to scroll and every gesture that reached the page was an overscroll.

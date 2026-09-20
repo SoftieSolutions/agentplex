@@ -1,19 +1,15 @@
 import { useSyncExternalStore, type JSX } from 'react';
 
 import type { TokenStore } from './auth/token.js';
-import { useDocRoute } from './docs/doc-route.js';
-import { LayoutScreen } from './layout/layout-screen.js';
 import type { OnboardingDismissal } from './onboarding/dismissal.js';
 import { onboardingVerdict } from './onboarding/onboarding-model.js';
 import { useOnboardingRoute } from './onboarding/onboarding-route.js';
 import { OnboardingScreen } from './onboarding/onboarding-screen.js';
-import { SessionListScreen } from './sessions/session-list-screen.js';
-import { SettingsRoute } from './settings/settings-route.js';
+import { AppShell } from './shell/app-shell.js';
 import type { HubStore } from './store/hub-store.js';
 import { useHubSnapshot } from './store/use-hub-store.js';
-import { useSessionRoute } from './terminal/session-route.js';
 import { colorSchemeManager } from './ui/color-scheme.js';
-import { MantineProvider, Stack } from './ui/components.js';
+import { MantineProvider } from './ui/components.js';
 import { cssVariablesResolver, theme } from './ui/theme.js';
 
 export interface AppProps {
@@ -39,9 +35,11 @@ export interface AppProps {
 }
 
 /**
- * The root: provider chrome only. Everything a feature ticket adds mounts
- * inside AppShell, so this file changes when the provider stack changes and
- * for no other reason.
+ * The root: provider chrome only. What the page is -- the first-run wizard or
+ * the app -- is the gate below, and the app's own frame, the top bar, the
+ * sidebar and the content region every screen mounts into, is
+ * `shell/app-shell.tsx`. So this file changes when the provider stack changes
+ * and for no other reason.
  */
 export function App({ hub, tokens, dismissal }: AppProps): JSX.Element {
   return (
@@ -51,46 +49,26 @@ export function App({ hub, tokens, dismissal }: AppProps): JSX.Element {
       colorSchemeManager={colorSchemeManager}
       defaultColorScheme="dark"
     >
-      <AppShell hub={hub} tokens={tokens} dismissal={dismissal} />
+      <OnboardingGate hub={hub} tokens={tokens} dismissal={dismissal} />
     </MantineProvider>
   );
 }
 
 /**
- * Where the application lives. The stacked tickets -- terminal pane, layout
- * tree, settings -- mount their routes and panes here beside the session list;
- * the provider stack above stays out of their way.
- */
-function AppShell({ hub, tokens, dismissal }: AppProps): JSX.Element {
-  const sessionRef = useSessionRoute();
-  const doc = useDocRoute();
-  if (sessionRef !== null || doc !== null) {
-    // Deliberately not keyed on the route: the layout outlives navigation,
-    // and the screen shows the addressed session -- or document -- in its
-    // focused pane. The panes key their own mounts.
-    return <LayoutScreen session={sessionRef} doc={doc} store={hub} />;
-  }
-  return (
-    <Stack component="main" gap="md">
-      <OnboardingGate hub={hub} tokens={tokens} dismissal={dismissal} />
-    </Stack>
-  );
-}
-
-/**
- * Which screen the page is on its default route: the first-run wizard, or the
- * app.
+ * Which screen the page is: the first-run wizard, or the app.
  *
- * A component of its own rather than three more hooks in AppShell, because
- * AppShell returns early for the session and document routes and hooks may not
- * follow a return. Moving the early return below the gate's hooks would make
- * every session screen subscribe to the hash, the dismissal and the whole
- * machine state to decide a question it never asks. So the gate is mounted
- * where its answer matters and reads its three facts there.
+ * Above the shell rather than inside it, because the wizard is what the shell
+ * is replaced by. It is a `component="main"` page of its own at a full
+ * `100dvh` (src/onboarding/onboarding-screen.tsx), so mounting it in the
+ * shell's content region would nest one `main` in another and give a person
+ * with nothing paired a chrome full of controls for a fleet that does not
+ * exist. The wizard instead of the app, not above it, which is the rule
+ * AGX-114 landed and this ticket keeps.
  *
- * All three are read as external stores -- the hub's state, the address, the
- * dismissal -- so none of them needs an effect mirroring it into state, and a
- * dismissal clicked inside the wizard puts the app on screen without a remount.
+ * Every fact here is read as an external store -- the hub's state, the
+ * address, the dismissal -- so none of them needs an effect mirroring it into
+ * state, and a dismissal clicked inside the wizard puts the app on screen
+ * without a remount.
  */
 function OnboardingGate({ hub, tokens, dismissal }: AppProps): JSX.Element {
   const snapshot = useHubSnapshot(hub);
@@ -105,10 +83,5 @@ function OnboardingGate({ hub, tokens, dismissal }: AppProps): JSX.Element {
   // 'wait' draws the app too: the list already says it is waiting for the hub,
   // in the words it uses for every other unanswered render, and a second
   // waiting screen over it would be this file inventing one.
-  return (
-    <>
-      <SessionListScreen store={hub} />
-      <SettingsRoute store={hub} tokens={tokens} />
-    </>
-  );
+  return <AppShell hub={hub} tokens={tokens} />;
 }
