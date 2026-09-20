@@ -3,6 +3,8 @@ import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import { notificationList } from '../sessions/notification-model.js';
+import { listSessions } from '../sessions/session-list-model.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider, Text } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
@@ -61,6 +63,14 @@ function stateFrom(text: string): MachineState {
 }
 
 const populated = stateFrom(hubFrames.machineStatePopulated);
+const quiet = stateFrom(hubFrames.machineState);
+
+/** The moment the fixtures were reported, so the ages are the real elapsed ones. */
+const NOW = 1_756_000_000_000;
+
+/** What the shell hands the bell: two sessions asking, and none. */
+const twoWaiting = notificationList(listSessions(populated), NOW);
+const nothingWaiting = notificationList(listSessions(quiet), NOW);
 
 const DOWN = connectionView({
   phase: 'reconnecting',
@@ -243,7 +253,7 @@ describe('the phone chrome', () => {
   });
 
   it('carries the chrome’s actions slot in the header, so the bell is on a phone too', () => {
-    draw({ actions: <AttentionBell count={2} scheme="dark" /> });
+    draw({ actions: <AttentionBell list={twoWaiting} form="phone" scheme="dark" /> });
 
     const header = container.querySelector('header');
     expect(header?.querySelector('[data-attention-bell]')?.getAttribute('aria-label')).toBe(
@@ -252,7 +262,7 @@ describe('the phone chrome', () => {
   });
 
   it('leaves the count to the bell: the action button is a way to start and nothing else', () => {
-    draw({ actions: <AttentionBell count={2} scheme="dark" /> });
+    draw({ actions: <AttentionBell list={twoWaiting} form="phone" scheme="dark" /> });
 
     // One screen, one attention number. The button used to wear a badge of
     // its own, narrowed by the machine the header had picked, so a phone
@@ -264,7 +274,7 @@ describe('the phone chrome', () => {
   });
 
   it('draws no mark anywhere when nothing is waiting on anyone', () => {
-    draw({ actions: <AttentionBell count={0} scheme="dark" /> });
+    draw({ actions: <AttentionBell list={nothingWaiting} form="phone" scheme="dark" /> });
 
     expect(attentionMark()).toBeNull();
     // And the button is still there: it is how a session is started, which

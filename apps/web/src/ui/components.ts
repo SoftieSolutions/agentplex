@@ -17,6 +17,7 @@ export {
   Button,
   CloseButton,
   Code,
+  Drawer,
   Group,
   MantineProvider,
   Menu,
