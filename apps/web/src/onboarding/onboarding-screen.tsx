@@ -100,6 +100,10 @@ export function OnboardingScreen({ store, dismissal }: OnboardingScreenProps): J
           pairing={pairingFor(store)}
           candidates={discoveredCandidates(snapshot.machineState)}
           rows={serverRows(snapshot.machineState)}
+          /* The state the rows were projected from, for the sessions the
+             step reports under its card. One snapshot feeds both, so the
+             machine and its holdings are always the same broadcast. */
+          machineState={snapshot.machineState}
           scheme={scheme}
           onDone={leave}
         />

@@ -87,6 +87,14 @@ describe('the sessions a machine brought with it', () => {
     expect(sessionsOnServer(justPaired, registrationFor(justPaired, 'mbp-robert'))).toEqual([]);
   });
 
+  it('reports nothing before the hub has published a state at all', () => {
+    // The screen above holds the store's snapshot, whose state is null until
+    // the first broadcast lands -- the same null `serverRows` and
+    // `discoveredCandidates` take. Nothing found is the honest reading of a
+    // hub that has not said anything yet.
+    expect(sessionsOnServer(null, mbpRobert)).toEqual([]);
+  });
+
   it('reports nothing for a machine the state does not name', () => {
     expect(sessionsOnServer(populated, strangerToPopulated)).toEqual([]);
   });
