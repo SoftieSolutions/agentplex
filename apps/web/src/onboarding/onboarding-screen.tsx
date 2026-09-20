@@ -1,5 +1,6 @@
 import type { JSX } from 'react';
 import { discoveredCandidates } from '../settings/pairing-form.js';
+import { serverRows } from '../settings/server-rows.js';
 import { pairingFor } from '../settings/settings-route.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
@@ -98,6 +99,7 @@ export function OnboardingScreen({ store, dismissal }: OnboardingScreenProps): J
         <PairStep
           pairing={pairingFor(store)}
           candidates={discoveredCandidates(snapshot.machineState)}
+          rows={serverRows(snapshot.machineState)}
           scheme={scheme}
           onDone={leave}
         />

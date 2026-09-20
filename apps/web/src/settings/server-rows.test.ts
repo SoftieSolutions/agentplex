@@ -57,6 +57,33 @@ describe('the paired-server rows', () => {
     });
   });
 
+  it('carries the moment the connection was established, and nothing when there is none', () => {
+    // The hub's own clock stamped this, not the machine's, so it is the one
+    // instant on the row two boxes cannot disagree about. It is carried raw
+    // rather than as "up 4 minutes", because a duration computed here would be
+    // frozen at projection time and go quietly wrong on a row nobody redraws.
+    const [paired] = serverRows(stateFrom(hubFrames.machineStateJustPaired));
+    expect(paired?.connectedSince).toBe(1_756_000_000_000);
+
+    // Never connected: there is no connection to have started, and a row that
+    // invented one would claim an uptime for a machine nobody has reached.
+    const [stale] = serverRows(stateFrom(hubFrames.machineStateWithServer));
+    expect(stale?.connectedSince).toBeNull();
+  });
+
+  it('carries the stale reason beside the words, because a screen has to act on it', () => {
+    // `problem` is a sentence to read; this is the field a screen may branch
+    // on. A token the server refused and a port nobody can reach need
+    // different next steps, and telling them apart from the prose would mean
+    // a client parsing English.
+    const [stale] = serverRows(stateFrom(hubFrames.machineStateWithServer));
+    expect(stale?.staleReason).toBe('unreachable');
+
+    // Nothing is wrong, so there is no reason to carry.
+    const [connected] = serverRows(stateFrom(hubFrames.machineStateJustPaired));
+    expect(connected?.staleReason).toBeNull();
+  });
+
   it('carries no token on any row, because no frame the hub sends has one', () => {
     const drawn = JSON.stringify(serverRows(stateFrom(hubFrames.machineStateJustPaired)));
     expect(drawn).not.toContain('tok-');
