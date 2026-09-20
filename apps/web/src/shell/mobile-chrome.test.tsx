@@ -6,6 +6,8 @@ import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/pro
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider, Text } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
+import { connectionView } from './connection-model.js';
+import { ConnectionStatus } from './connection-status.js';
 import { destinationHash } from './destinations.js';
 import { MobileChrome } from './mobile-chrome.js';
 
@@ -59,6 +61,20 @@ function stateFrom(text: string): MachineState {
 
 const populated = stateFrom(hubFrames.machineStatePopulated);
 
+const DOWN = connectionView({
+  phase: 'reconnecting',
+  problem: null,
+  hasState: true,
+  hasToken: true,
+});
+
+const NO_TOKEN = connectionView({
+  phase: 'reconnecting',
+  problem: null,
+  hasState: false,
+  hasToken: false,
+});
+
 describe('the phone chrome', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
@@ -84,9 +100,10 @@ describe('the phone chrome', () => {
   interface Options {
     readonly needsYou?: number;
     readonly current?: 'sessions' | 'projects' | 'more' | null;
+    readonly status?: JSX.Element;
   }
 
-  function draw({ needsYou = 0, current = 'sessions' }: Options = {}): void {
+  function draw({ needsYou = 0, current = 'sessions', status }: Options = {}): void {
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
@@ -102,6 +119,7 @@ describe('the phone chrome', () => {
           onStartSession={() => {
             started += 1;
           }}
+          status={status}
           scheme="dark"
         >
           <Text>the content region</Text>
@@ -128,9 +146,17 @@ describe('the phone chrome', () => {
     return button;
   }
 
-  /** The live region. Mounted at every count, which is half of what it is for. */
+  /**
+   * The live region. Mounted at every count, which is half of what it is for.
+   *
+   * Addressed through the button rather than as "the live region on screen":
+   * the header holds one too since AGX-119 -- the connection line -- and a
+   * query that took the first would have started reading that one instead.
+   */
   function announcement(): HTMLElement | null {
-    return container.querySelector<HTMLElement>('[role="status"]');
+    return container.querySelector<HTMLElement>(
+      'button[aria-label="Start a session"] + [role="status"]',
+    );
   }
 
   /** The drawn badge, which exists only above zero. */
@@ -146,6 +172,38 @@ describe('the phone chrome', () => {
     // The palette is not built (AGX-139), so nothing is drawn that looks like
     // a place to type into.
     expect(header?.querySelectorAll('input')).toHaveLength(0);
+  });
+
+  it('carries the chrome’s status slot in the header, beside the selector', () => {
+    // The same node the top bar is handed: the shell builds one connection
+    // line and both forms draw it, so a phone never words a dropped socket
+    // differently from a desk.
+    draw({ status: <ConnectionStatus view={DOWN} scheme="dark" /> });
+
+    const header = container.querySelector('header');
+    expect(header?.textContent).toContain('connection lost');
+    expect(header?.querySelector('a')).toBeNull();
+  });
+
+  it('lets the long reconnect sentence truncate rather than shove the header', () => {
+    draw({ status: <ConnectionStatus view={DOWN} scheme="dark" /> });
+
+    const words = container.querySelector<HTMLElement>(
+      'header [role="status"] span:nth-of-type(2)',
+    );
+    expect(words?.style.textOverflow).toBe('ellipsis');
+    // The whole sentence survives where it can be got at: on the title, and
+    // unshortened in the live region a screen reader hears.
+    expect(words?.getAttribute('title')).toBe(DOWN.words);
+    expect(words?.textContent).toBe(DOWN.words);
+  });
+
+  it('carries the next action through that slot when the state has one', () => {
+    draw({ status: <ConnectionStatus view={NO_TOKEN} scheme="dark" /> });
+
+    const link = container.querySelector<HTMLAnchorElement>('header a');
+    expect(link?.textContent).toBe('Settings');
+    expect(link?.getAttribute('href')).toBe(destinationHash('settings'));
   });
 
   it('draws the content region between the header and the bar', () => {

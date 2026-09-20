@@ -228,6 +228,58 @@ describe('the shell', () => {
     expect(brand?.getAttribute('href')).toBe(destinationHash('sessions'));
   });
 
+  it('fills the top bar slot with how the connection is doing', async () => {
+    await mount();
+
+    // Said even when all is well: a status line that empties when there is
+    // nothing wrong is one nobody can tell apart from a broken one.
+    const status = container.querySelector('header [role="status"]');
+    expect(status?.textContent).toContain('connected');
+    expect(status?.querySelector('a')).toBeNull();
+  });
+
+  it('names the missing token in the chrome, and links to where one is typed', async () => {
+    // What an empty Bearer earns from the hub: an ordinary 401, a rejected
+    // ticket exchange, and a retry that will never succeed. The store's own
+    // words for that are honest and terminal; the chrome's name the token.
+    store = createHubStore({
+      fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+    });
+    await act(async () => {
+      root = createRoot(container);
+      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+    });
+    await act(settle);
+
+    const status = container.querySelector('header [role="status"]');
+    expect(status?.textContent).toContain('no hub token on this device');
+    const link = status?.querySelector('a');
+    expect(link?.textContent).toBe('Settings');
+    expect(link?.getAttribute('href')).toBe(destinationHash('settings'));
+  });
+
+  it('stops naming the token once one is stored, even while the hub refuses', async () => {
+    tokens.write('token-typed-on-this-device');
+    store = createHubStore({
+      fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+    });
+    await act(async () => {
+      root = createRoot(container);
+      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+    });
+    await act(settle);
+
+    const status = container.querySelector('header [role="status"]');
+    expect(status?.textContent).not.toContain('no hub token');
+    expect(status?.querySelector('a')).toBeNull();
+  });
+
   it('keeps the sidebar when the address names a session', async () => {
     window.location.hash = sessionHash(SESSION);
 
@@ -237,6 +289,49 @@ describe('the shell', () => {
     // the page: the chrome is still there, and it is still one of it.
     expect(sidebars()).toHaveLength(1);
     expect(navLinks().map((link) => link.textContent)).toEqual(['Settings']);
+  });
+
+  it('lands on Settings when the chrome’s action is followed from over a session', async () => {
+    // The one place an AGX-119 action is drawn over a session route is the
+    // chrome, which is on screen at every address, so this is the click a
+    // person actually makes: no token, from a session. It lands because
+    // `destinationHash` is a route and not a fragment id -- the hash moves,
+    // `useSessionRoute` stops parsing one, `parseDestinationHash` starts, and
+    // the content region is decided again. Nothing is scrolled to, so there
+    // is no element that has to be mounted when the browser goes looking.
+    window.location.hash = sessionHash(SESSION);
+    store = createHubStore({
+      fetchTicket: () => Promise.reject(new Error('the hub answered 401 at the ticket exchange')),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+    });
+    await act(async () => {
+      root = createRoot(container);
+      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+    });
+    await act(settle);
+
+    const link = container.querySelector<HTMLAnchorElement>('header [role="status"] a');
+    if (link === null) throw new Error('the chrome offered no next action');
+    await act(() => {
+      link.click();
+    });
+    await act(settle);
+    expect(window.location.hash).toBe(destinationHash('settings'));
+    // jsdom moves the address on a task of its own and delivers no
+    // `hashchange` for the move; a browser fires one for a click onto a
+    // different fragment, and that event is what every route in this app
+    // subscribes to. The same stand-in `onboarding-route.test.ts` uses,
+    // delivered once the address has actually landed.
+    await act(() => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+
+    // The screen the link named, by the field only it draws -- and the layout
+    // screen gone, which is the half the address had to undo.
+    expect(container.querySelector('main input[type="password"]')).not.toBeNull();
+    expect(container.querySelector('main')?.textContent).not.toContain('stored layout');
   });
 
   it('offers both readings of the fleet, and the projects tree first', async () => {
@@ -405,7 +500,13 @@ describe('the shell on a phone', () => {
     );
     expect(chips).toContain('Needs you · 2');
     expect(container.querySelector('[data-needs-you]')?.textContent).toBe('2');
-    expect(container.querySelector('[role="status"]')?.textContent).toBe('2 sessions need you');
+    // The live region is addressed through the button: the header holds one
+    // too since AGX-119 -- the connection line -- and the first one on screen
+    // is that one.
+    expect(
+      container.querySelector('button[aria-label="Start a session"] + [role="status"]')
+        ?.textContent,
+    ).toBe('2 sessions need you');
   });
 
   it('puts the tree in the content region, where the Projects tab leads', async () => {

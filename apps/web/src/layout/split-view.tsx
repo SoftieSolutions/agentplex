@@ -1,10 +1,16 @@
-import { useRef, useState, type JSX, type PointerEvent } from 'react';
+import { useRef, useState, type JSX, type PointerEvent, type ReactNode } from 'react';
+import type { SessionRef } from '@agentplex/protocol';
 import { DocPane } from '../docs/doc-pane.js';
+import { NO_FILTERS, visibleSessions } from '../sessions/session-list-model.js';
+import { destinationHash } from '../shell/destinations.js';
+import { NextActionLink } from '../shell/next-action.js';
 import type { HubStore } from '../store/hub-store.js';
+import { useHubSnapshot } from '../store/use-hub-store.js';
 import { PendingPane } from '../terminal/pending-pane.js';
 import { SessionPane } from '../terminal/session-pane.js';
 import { sessionHash } from '../terminal/session-route.js';
-import { Stack, Text } from '../ui/components.js';
+import { Group, Stack, Text, UnstyledButton } from '../ui/components.js';
+import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { RATIO_BOUNDS, type LayoutTree, type PaneLeaf, type PanePath, type Split } from './tree.js';
 
@@ -35,6 +41,32 @@ export interface PaneViewDependencies {
   readonly focus: PanePath;
   onCommitRatio(path: PanePath, ratio: number): void;
   onFocusPane(path: PanePath): void;
+  /**
+   * Puts a session in the pane at `path`: what the empty pane's picker calls.
+   *
+   * The path is passed rather than left to the focus, although a click in a
+   * pane focuses it first. Two reasons: the picker is a control that says
+   * which pane it belongs to, and a focus change that happened to arrive out
+   * of order would put the session somewhere else entirely -- which is a bug
+   * whose symptom is a session opening in the pane next door.
+   */
+  onShowSession(path: PanePath, session: SessionRef): void;
+  /**
+   * Every session some pane of this tree is already showing, by session hash.
+   *
+   * The empty pane's picker subtracts these, and it has to. `showSession` has
+   * one rule -- a session is on screen once, and asking for it again is a
+   * focus change rather than a second copy -- so a row for a session already
+   * in another pane would move the focus away and leave this pane exactly as
+   * empty as it was. The arrangement that produces it is the ordinary one:
+   * open a session, split, and pick the only session there is.
+   *
+   * Subtracting rather than relaxing that rule, because the rule is the one
+   * that keeps a terminal from being mounted twice over one subscription, and
+   * because this codebase does not draw a control that cannot do anything --
+   * the same call the nav makes for a destination with nothing behind it.
+   */
+  readonly sessionsOnScreen: ReadonlySet<string>;
   /** Where each pane's element lands, so a focus move can focus the DOM too. */
   registerPane(key: string, element: HTMLDivElement | null): void;
 }
@@ -168,16 +200,18 @@ function PaneView({
         border: `1px solid ${colorForRole(focused ? 'accent' : 'border', view.scheme)}`,
       }}
     >
-      <PaneContentView leaf={leaf} view={view} />
+      <PaneContentView leaf={leaf} path={path} view={view} />
     </div>
   );
 }
 
 function PaneContentView({
   leaf,
+  path,
   view,
 }: {
   readonly leaf: PaneLeaf;
+  readonly path: PanePath;
   readonly view: PaneViewDependencies;
 }): JSX.Element {
   const content = leaf.content;
@@ -211,31 +245,143 @@ function PaneContentView({
       // document, and a pane whose content changed must not carry it over.
       return <DocPane key={content.nodeId} nodeId={content.nodeId} store={view.hub} />;
     case 'empty':
-      return (
-        <Placeholder scheme={view.scheme} title="No session here yet">
-          Open a session address, or close this pane with Ctrl+Shift+X.
-        </Placeholder>
-      );
+      return <EmptyPaneView path={path} view={view} />;
     case 'unknown':
       // The placeholder costs itself, not the tree, and says why it is one:
       // the pane came from a build that knows a kind this one does not. It is
       // preserved verbatim in every save, so nothing is lost by looking.
       return (
-        <Placeholder scheme={view.scheme} title="A newer pane">
+        <Placeholder scheme={view.scheme} title="A newer pane" hint={CLOSE_HINT}>
           This pane was arranged by a newer client and is kept as saved.
         </Placeholder>
       );
   }
 }
 
+/**
+ * An empty pane, offering the sessions it can actually put here.
+ *
+ * `tree.ts` reserved this spot -- "no session here yet; later tickets put a
+ * picker in it" -- and until AGX-119 what stood in it was a sentence telling
+ * somebody to go and type an address. This is that picker, and it is built
+ * out of what already exists: the rows are `visibleSessions`, which is the
+ * session list's own ordering (needs-you first, then activity), so the pane
+ * offers the fleet in the order the list shows it rather than in a second
+ * order of its own.
+ *
+ * Minus whatever is already on screen -- see `sessionsOnScreen`. A row for a
+ * session another pane holds would move the focus there and leave this pane
+ * empty, which is the one failure a picker must not have.
+ *
+ * The subscription is here rather than in the layout screen on purpose. An
+ * empty pane is rare and a session pane is not: putting the hub snapshot at
+ * the root would re-render every pane in the tree on every broadcast, when
+ * only this one reads it. `useSyncExternalStore` through `useHubSnapshot`, so
+ * there is no effect and no second socket.
+ */
+function EmptyPaneView({
+  path,
+  view,
+}: {
+  readonly path: PanePath;
+  readonly view: PaneViewDependencies;
+}): JSX.Element {
+  const snapshot = useHubSnapshot(view.hub);
+  const state = snapshot.machineState;
+  const fleet = state === null ? [] : visibleSessions(state, NO_FILTERS);
+  const offerable = fleet.filter((item) => !view.sessionsOnScreen.has(sessionHash(item.ref)));
+
+  if (offerable.length === 0) {
+    return (
+      <Placeholder scheme={view.scheme} title="No session here yet" hint={CLOSE_HINT}>
+        {state === null ? (
+          'The hub has not answered with the fleet yet, so there is nothing to offer.'
+        ) : (
+          <>
+            {fleet.length === 0
+              ? 'No session exists to put here.'
+              : 'Every session is already open in a pane.'}{' '}
+            <NextActionLink
+              action={{
+                label: fleet.length === 0 ? 'Start one' : 'Start another',
+                hash: destinationHash('sessions'),
+              }}
+              scheme={view.scheme}
+            />
+          </>
+        )}
+      </Placeholder>
+    );
+  }
+
+  return (
+    <Stack gap={4} p={10} style={{ width: '100%', height: '100%', overflowY: 'auto' }}>
+      <Text fz={11} fw={600} style={{ color: colorForRole('textMuted', view.scheme) }}>
+        Show a session here
+      </Text>
+      {offerable.map((item) => (
+        <UnstyledButton
+          key={item.key}
+          onClick={() => view.onShowSession(path, item.ref)}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 6,
+            border: `1px solid ${colorForRole('border', view.scheme)}`,
+            background: colorForRole('surfaceAlt', view.scheme),
+          }}
+        >
+          <Group gap={8} align="center" wrap="nowrap">
+            <ToneDot tone={item.tone} scheme={view.scheme} />
+            <Text
+              component="span"
+              fz={12}
+              style={{
+                color: colorForRole('text', view.scheme),
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {item.name}
+            </Text>
+            <Text
+              component="span"
+              fz={11}
+              style={{ color: colorForRole('textFaint', view.scheme), marginLeft: 'auto' }}
+            >
+              {item.machine}
+            </Text>
+          </Group>
+        </UnstyledButton>
+      ))}
+      <Text fz={11} style={{ color: colorForRole('textFaint', view.scheme) }}>
+        {CLOSE_HINT}
+      </Text>
+    </Stack>
+  );
+}
+
+/**
+ * The way out of a pane that is showing nothing usable.
+ *
+ * On every branch that draws no picker as well as on the one that does: a pane
+ * the app cannot fill is exactly where somebody needs to know how to be rid of
+ * it, and the hint used to be the one thing the old empty-pane sentence got
+ * right.
+ */
+const CLOSE_HINT = 'Or close this pane with Ctrl+Shift+X.';
+
 function Placeholder({
   scheme,
   title,
   children,
+  hint,
 }: {
   readonly scheme: Scheme;
   readonly title: string;
-  readonly children: string;
+  readonly children: ReactNode;
+  /** A second, fainter line under the body. The close chord, where it applies. */
+  readonly hint?: string;
 }): JSX.Element {
   return (
     <Stack align="center" justify="center" gap={4} style={{ width: '100%', height: '100%' }}>
@@ -245,6 +391,11 @@ function Placeholder({
       <Text fz={11} style={{ color: colorForRole('textFaint', scheme) }}>
         {children}
       </Text>
+      {hint === undefined ? null : (
+        <Text fz={11} style={{ color: colorForRole('textFaint', scheme) }}>
+          {hint}
+        </Text>
+      )}
     </Stack>
   );
 }

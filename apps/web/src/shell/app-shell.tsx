@@ -21,6 +21,8 @@ import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import { useSessionRoute } from '../terminal/session-route.js';
 import { Box, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
+import { connectionView } from './connection-model.js';
+import { ConnectionStatus } from './connection-status.js';
 import { resolveDestination, useDestination, type Destination } from './destinations.js';
 import { MobileChrome } from './mobile-chrome.js';
 import { MoreScreen } from './more-screen.js';
@@ -104,6 +106,28 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
   // Where the address lands in the form the shell is actually in: Projects and
   // More are places only where there is no sidebar holding both already.
   const place = resolveDestination(destination, form);
+  /**
+   * The connection line, built once and drawn by whichever chrome is on.
+   *
+   * The token is read during render, the way the settings screen reads it: it
+   * is not a reactive source, and nothing here can subscribe to another tab's
+   * localStorage. It does not need to be. A token typed on the settings screen
+   * is picked up by the next ticket exchange, that exchange moves the phase,
+   * and a phase change is a snapshot change and therefore this render again --
+   * so the line corrects itself within one backoff rather than needing a
+   * watcher nothing can supply.
+   */
+  const status = (
+    <ConnectionStatus
+      view={connectionView({
+        phase: snapshot.phase,
+        problem: snapshot.problem,
+        hasState: state !== null,
+        hasToken: tokens.read() !== null,
+      })}
+      scheme={scheme}
+    />
+  );
   const region = content({
     hub,
     tokens,
@@ -129,6 +153,7 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
         current={sessionRef !== null || doc !== null ? null : place}
         needsYou={attentionCount(state, machine)}
         onStartSession={() => setStarting(true)}
+        status={status}
         scheme={scheme}
       >
         {region}
@@ -154,7 +179,7 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
         background: colorForRole('background', scheme),
       }}
     >
-      <TopBar scheme={scheme} />
+      <TopBar scheme={scheme} status={status} />
       <Box style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Box
           component="aside"

@@ -16,14 +16,17 @@ import { colorForRole, type Scheme } from '../ui/tokens.js';
 import type { ShellForm } from '../shell/shell-form.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
+import { NextActionLink } from '../shell/next-action.js';
 import {
   chipCounts,
   connectionNotice,
+  emptyListing,
   listSessions,
   providerOptions,
   storeOptions,
   visibleSessions,
   type ChipCount,
+  type EmptyListing as EmptyListingView,
   type StatusChip,
 } from './session-list-model.js';
 import { appLayoutStore } from '../layout/app-layout.js';
@@ -72,10 +75,12 @@ export interface SessionListScreenProps {
    */
   readonly machine?: ServerRegistrationId | null;
   /**
-   * The form the shell is in, because one control here depends on it: below
-   * the breakpoint the chrome's action button is what starts a session. Read
-   * from the shell rather than measured again, so the two cannot disagree
-   * about which of them is drawing that button.
+   * The form the shell is in, because two things here depend on it: below the
+   * breakpoint the chrome's action button is what starts a session, and an
+   * empty list names whichever of the two is actually drawn. Read from the
+   * shell rather than measured again, so the two cannot disagree about which
+   * of them is drawing that button -- or about which one the sentence should
+   * send somebody to.
    */
   readonly form?: ShellForm;
   /** The clock, injected so a test can render fixed ages. */
@@ -258,11 +263,10 @@ export function SessionListScreen({
       </Group>
 
       {visible.length === 0 ? (
-        <Text c="dimmed" fz={13}>
-          {everySession.length === 0
-            ? 'no sessions in any store yet'
-            : 'no session matches the current narrowing'}
-        </Text>
+        <EmptyListing
+          listing={emptyListing(state, everySession.length > 0, form)}
+          scheme={scheme}
+        />
       ) : (
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
           {visible.map((item) => {
@@ -295,6 +299,33 @@ export function SessionListScreen({
         </SimpleGrid>
       )}
     </Stack>
+  );
+}
+
+/**
+ * The list with nothing in it, worded by `emptyListing` and drawn here.
+ *
+ * The words and the link are one sentence and one line: a person reads why the
+ * list is empty and, where there is one, where to go about it, without the
+ * screen shouting. An empty list is not an error.
+ */
+function EmptyListing({
+  listing,
+  scheme,
+}: {
+  readonly listing: EmptyListingView;
+  readonly scheme: Scheme;
+}): JSX.Element {
+  return (
+    <Text c="dimmed" fz={13}>
+      {listing.words}
+      {listing.action === null ? null : (
+        <>
+          {' '}
+          <NextActionLink action={listing.action} scheme={scheme} />
+        </>
+      )}
+    </Text>
   );
 }
 

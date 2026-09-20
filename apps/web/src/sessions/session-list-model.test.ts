@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { destinationHash } from '../shell/destinations.js';
 import {
   acknowledgementHolds,
   ageLabel,
   chipCounts,
   connectionNotice,
+  emptyListing,
   listSessions,
   matchesSearch,
   needsYouCount,
@@ -45,6 +47,7 @@ const single = stateFrom(hubFrames.machineStateSingle);
  */
 const attended = stateFrom(hubFrames.machineStateAttended);
 const empty = stateFrom(hubFrames.machineState);
+const pairedOnly = stateFrom(hubFrames.machineStateWithServer);
 
 /** One named item out of a state, or a failure that says which one was missing. */
 function item(state: MachineState, name: string): SessionListItem {
@@ -404,5 +407,61 @@ describe('what is worth interrupting somebody for', () => {
         .filter(wantsAttention)
         .map((entry) => entry.name),
     ).toEqual(['migrate-db-v9']);
+  });
+});
+
+/**
+ * The empty list, which until AGX-119 said one sentence to four different
+ * situations. Every case below is a different person stuck at a different
+ * place, and the words are what tell them which one they are in.
+ */
+describe('an empty list, and what resolves it', () => {
+  it('names the narrowing when there are sessions the narrowing is hiding', () => {
+    const listing = emptyListing(populated, true, 'wide');
+
+    expect(listing.words).toBe('no session matches the current narrowing');
+    // The control that undoes it is the narrowing directly above the list.
+    expect(listing.action).toBeNull();
+  });
+
+  it('names pairing, and points at Settings, when no server is paired', () => {
+    const listing = emptyListing(empty, false, 'wide');
+
+    expect(listing.words).toContain('No server is paired');
+    expect(listing.words).toContain('reports the stores');
+    expect(listing.action).toEqual({
+      label: 'Pair one in Settings',
+      hash: destinationHash('settings'),
+    });
+  });
+
+  it('names the starter that is actually drawn at this width', () => {
+    // Both forms have one, and they are two different controls with two
+    // different names: New session is `visibleFrom="sm"`, and below that the
+    // chrome's round button is what starts one. A single wording would send
+    // half the readers hunting for a button that is not there.
+    expect(emptyListing(populated, false, 'wide').words).toContain('New session starts one');
+    expect(emptyListing(populated, false, 'phone').words).toContain(
+      'the Start a session button starts one',
+    );
+  });
+
+  it('blames the connection, not the store, for a server the hub has never reached', () => {
+    // `machineStateWithServer` is that state as a hub really sent it: one
+    // pairing, phase `stale`, `staleReason` unreachable, `lastConnectedAt`
+    // null, and "connection refused" in the hub's own words. "reports no
+    // store" would credit a machine that has never said anything with having
+    // said something, which is the over-claim.
+    const listing = emptyListing(pairedOnly, false, 'wide');
+
+    expect(listing.words).toContain('gpu-box-01');
+    expect(listing.words).toContain('has never connected');
+    expect(listing.words).not.toContain('reports no store');
+    // And the one screen that can help: the row there carries the phase, the
+    // address that was typed, and the hub's sentence about what went wrong.
+    expect(listing.action).toEqual({
+      label: 'See why in Settings',
+      hash: destinationHash('settings'),
+    });
   });
 });

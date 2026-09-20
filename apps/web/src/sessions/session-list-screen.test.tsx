@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
-import { parseClientFrame, parseTextFrame, type ClientFrame } from '@agentplex/protocol';
+import {
+  parseClientFrame,
+  parseTextFrame,
+  serverRegistrationIdSchema,
+  type ClientFrame,
+} from '@agentplex/protocol';
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -118,10 +123,18 @@ describe('the session list', () => {
   }
 
   /** Mounts the screen and walks its store's connection through to a state. */
-  async function mountWith(state: string): Promise<FakeSocket> {
+  async function mountWith(state: string, machine?: string): Promise<FakeSocket> {
     await act(async () => {
       root = createRoot(container);
-      root.render(withProvider(<SessionListScreen store={store} now={() => NOW} />));
+      root.render(
+        withProvider(
+          <SessionListScreen
+            store={store}
+            machine={machine === undefined ? null : serverRegistrationIdSchema.parse(machine)}
+            now={() => NOW}
+          />,
+        ),
+      );
     });
     await act(settle);
     const socket = sockets.sockets[0];
@@ -272,6 +285,34 @@ describe('the session list', () => {
     // Still offered: the session is still running, and this attempt is what
     // did not stop it.
     expect(theStopButton().disabled).toBe(false);
+  });
+
+  it('sends a first-run empty list to Settings, where pairing is', async () => {
+    await mountWith(hubFrames.machineState);
+
+    expect(container.textContent).toContain('No server is paired with this hub');
+    const link = container.querySelector<HTMLAnchorElement>('a[href="#/settings"]');
+    expect(link?.textContent).toBe('Pair one in Settings');
+  });
+
+  it('blames the connection, not the store, for a pairing the hub never reached', async () => {
+    // The captured state has one pairing, phase `stale`, `lastConnectedAt`
+    // null and "connection refused" in the hub's words: a machine that has
+    // never said anything cannot have reported that it has no store.
+    await mountWith(hubFrames.machineStateWithServer);
+
+    expect(container.textContent).toContain('gpu-box-01 is paired but has never connected');
+    const link = container.querySelector<HTMLAnchorElement>('a[href="#/settings"]');
+    expect(link?.textContent).toBe('See why in Settings');
+  });
+
+  it('blames the narrowing, and nothing else, when the fleet has sessions', async () => {
+    // Narrowed to a machine the fleet does not hold, which is a narrowing that
+    // hides everything rather than a fleet with nothing in it.
+    await mountWith(hubFrames.machineStatePopulated, 'registration-unpaired');
+
+    expect(container.textContent).toContain('no session matches the current narrowing');
+    expect(container.querySelector('a[href="#/settings"]')).toBeNull();
   });
 
   it('says what a landed stop landed on, whoever asked for it', async () => {

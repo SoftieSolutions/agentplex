@@ -20,10 +20,13 @@ import { StartSessionButton } from './start-session-button.js';
  * sidebar has nowhere to be on a phone, so its two readings became two tabs
  * and its nav became the third.
  *
- * The header carries the machine selector and nothing else. The mockup puts a
- * search entry beside it, which is the command palette (AGX-139) and is not
- * built; a box that looks like a search field and answers no keystroke is
- * worse than the space it would fill, which is the same call the top bar made.
+ * The header carries the machine selector and, across from it, the connection
+ * line -- the same slot the top bar keeps, because a socket that has dropped
+ * has dropped at every width and a phone that said so somewhere else would be
+ * a second wording. The mockup also puts a search entry here, which is the
+ * command palette (AGX-139) and is not built; a box that looks like a search
+ * field and answers no keystroke is worse than the space it would fill, which
+ * is the same call the top bar made.
  *
  * No effects: every fact here arrives as a prop, and the one thing this file
  * measures -- which form to be in -- was measured by `useShellForm` before this
@@ -49,6 +52,12 @@ export interface MobileChromeProps {
   readonly needsYou: number;
   /** Opens the start form the shell holds -- the same one New session opens. */
   readonly onStartSession: () => void;
+  /**
+   * How the connection is doing, in the header's own slot: the same node the
+   * top bar is handed, because a phone is a form of this shell and not a
+   * second app, and a connection that is down is down at every width.
+   */
+  readonly status?: ReactNode;
   readonly scheme: Scheme;
   /** The content region: whatever the address resolved to. */
   readonly children: ReactNode;
@@ -61,6 +70,7 @@ export function MobileChrome({
   current,
   needsYou,
   onStartSession,
+  status,
   scheme,
   children,
 }: MobileChromeProps): JSX.Element {
@@ -94,6 +104,9 @@ export function MobileChrome({
         }}
       >
         <MachineSelector state={state} chosen={machine} onPick={onPickMachine} scheme={scheme} />
+        <Group gap={8} align="center" wrap="nowrap" style={{ marginLeft: 'auto', minWidth: 0 }}>
+          {status}
+        </Group>
       </Group>
 
       <Box component="main" style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
