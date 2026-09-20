@@ -869,6 +869,181 @@ describe('terminal frames from the hub', () => {
     expect(terminal(h).resumed).toBe(false);
   });
 
+  it('names a pane that asked by start handle off the output that carries the session', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    // The captured conversation, frame for frame: hello, the start, the
+    // subscribe the hub refused because the handle was not written yet, and
+    // the subscribe sent again on reading the reply. Here only the last of
+    // those is wanted, so the refused one is spent on a browse instead.
+    const start = h.store.sendCommand(START);
+    if (!start.accepted) throw new Error(start.reason);
+    h.store.sendCommand(BROWSE);
+    const startKey = terminalKey({ by: 'start', startId: start.id });
+    const watched = () => h.store.getSnapshot().terminals.get(startKey);
+    h.store.watchTerminal({ by: 'start', startId: start.id });
+
+    socket.deliver(hubFrames.sessionSubscribedPending);
+    // Attached to a terminal nothing can address yet: the provider has not
+    // written a session id, and the hub says so rather than inventing one.
+    expect(watched()?.attached).toBe(true);
+    expect(watched()?.session).toBeNull();
+
+    const written: Uint8Array[] = [];
+    watched()?.feed.attach({ write: (chunk) => written.push(chunk) });
+    socket.deliver(hubFrames.terminalOutputPending);
+    expect(watched()?.session).toBeNull();
+
+    socket.deliver(hubFrames.terminalOutputNamed);
+
+    // The moment the pane stops being pending, off the hub's own frame: the
+    // server bound the terminal to the session its scan found and every chunk
+    // since has carried both names. Nothing here compared times.
+    expect(watched()?.session).toEqual({ storeId: 'store-work', sessionId: 'session-spawned' });
+    // And the bytes were never the price of learning that: both chunks went to
+    // the feed, in order, before and after the name arrived.
+    expect(written).toHaveLength(2);
+  });
+
+  it('asks again for a terminal refused because the start had not been written yet', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const start = h.store.sendCommand(START);
+    if (!start.accepted) throw new Error(start.reason);
+    // The pane opens in the click that sends the start, so its subscribe can
+    // reach the hub while the machine is still forking the process.
+    const startKey = terminalKey({ by: 'start', startId: start.id });
+    const watched = () => h.store.getSnapshot().terminals.get(startKey);
+    h.store.watchTerminal({ by: 'start', startId: start.id });
+
+    socket.deliver(hubFrames.refusalStartUnknown);
+    // The hub's answer to a handle it has not recorded, said on the pane
+    // rather than screen-wide: this is a no about one terminal.
+    expect(watched()?.attached).toBe(false);
+    expect(watched()?.problem).toBe('this connection did not start that session');
+
+    socket.deliver(hubFrames.sessionStarted);
+
+    // The reply is the frame that says the handle now exists -- the hub writes
+    // it before sending this -- so the same watch is asked for again rather
+    // than left refused forever on a start that did in fact happen.
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'session-subscribe',
+      id: 4,
+      target: { by: 'start', startId: start.id },
+    });
+    // And the refusal goes with it: it was about a moment that has passed.
+    expect(watched()?.problem).toBeNull();
+
+    socket.deliver(hubFrames.sessionSubscribedPending);
+    expect(watched()?.attached).toBe(true);
+
+    socket.deliver(hubFrames.terminalOutputNamed);
+    // The whole point of asking again: this pane can still become the session
+    // its start turned out to be.
+    expect(watched()?.session).toEqual({ storeId: 'store-work', sessionId: 'session-spawned' });
+  });
+
+  it('does not ask twice when the first subscribe has not been answered yet', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const start = h.store.sendCommand(START);
+    if (!start.accepted) throw new Error(start.reason);
+    h.store.watchTerminal({ by: 'start', startId: start.id });
+    const asked = sentFrames(socket).filter((frame) => frame.type === 'session-subscribe').length;
+
+    // The other order the race comes out in: the hub reads the subscribe after
+    // it sends this reply, so that subscribe is about to succeed. A second one
+    // would be refused as a duplicate -- the hub refuses two watches on one
+    // terminal from one connection deliberately -- and the pane would carry
+    // that "no" for life beside a terminal that is working.
+    socket.deliver(hubFrames.sessionStarted);
+
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-subscribe').length).toBe(
+      asked,
+    );
+    // And the watch is still exactly what it was: nothing was undone either.
+    const watched = h.store
+      .getSnapshot()
+      .terminals.get(terminalKey({ by: 'start', startId: start.id }));
+    expect(watched?.attached).toBe(false);
+    expect(watched?.problem).toBeNull();
+  });
+
+  it('keeps the start a pane is still waiting on when the remembered ones overflow', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    // The oldest start, and the one left unanswered: a pane opened on it is
+    // still waiting to read what the hub says.
+    const waiting = h.store.sendCommand(START);
+    if (!waiting.accepted) throw new Error(waiting.reason);
+    // Every start after it is answered, so there is always a settled entry to
+    // drop instead. The captured refusal answers frame 6.
+    h.store.sendCommand(BROWSE);
+    h.store.sendCommand(BROWSE);
+    h.store.sendCommand(BROWSE);
+    const answered = h.store.sendCommand(START);
+    if (!answered.accepted) throw new Error(answered.reason);
+    socket.deliver(hubFrames.refusal);
+    expect(h.store.getSnapshot().starts.get(answered.id)?.refusal).not.toBeNull();
+
+    // One past the cap of 64, so exactly one entry has to go.
+    for (let more = 0; more < 63; more += 1) h.store.sendCommand(START);
+
+    const starts = h.store.getSnapshot().starts;
+    expect(starts.size).toBe(64);
+    // The answered one went, although it is not the oldest: an answer nobody
+    // is reading is what the cap is for. The unanswered one stayed, because a
+    // pane reading its entry back as missing would go back to saying it was
+    // asking about a session that is running.
+    expect(starts.has(answered.id)).toBe(false);
+    expect(starts.get(waiting.id)).toEqual({ started: null, refusal: null });
+
+    // The exemption yields to the bound, which is the half that is not a
+    // preference: with nothing answered left to drop, the oldest goes anyway,
+    // because a map that could refuse to shrink is not a bound.
+    for (let more = 0; more < 40; more += 1) h.store.sendCommand(START);
+    expect(h.store.getSnapshot().starts.size).toBe(64);
+  });
+
+  it('keeps each start its own answer, so a later yes cannot clear an earlier no', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    // Two starts in flight, which is ordinary for a screen of panes. The
+    // browses in between are what put the second start on the frame its
+    // captured refusal answers; the fixtures carry the ids a real hub really
+    // replied to.
+    const succeeding = h.store.sendCommand(START);
+    h.store.sendCommand(BROWSE);
+    h.store.sendCommand(BROWSE);
+    h.store.sendCommand(BROWSE);
+    const refused = h.store.sendCommand(START);
+    if (!succeeding.accepted || !refused.accepted) throw new Error('a start was not accepted');
+
+    socket.deliver(hubFrames.refusal);
+    socket.deliver(hubFrames.sessionStarted);
+
+    const snapshot = h.store.getSnapshot();
+    // The shared slot behaves as it always has: the newest answer on the
+    // connection is a yes, so there is no "no" left to show beside it.
+    expect(snapshot.lastRefusal).toBeNull();
+    // And the start that was refused still carries its own refusal, because a
+    // pane waiting on it needs the answer it was given and not the newest one.
+    expect(snapshot.starts.get(refused.id)?.refusal).toMatchObject({
+      replyTo: refused.id,
+      message: 'no server the hub is paired with has that store mounted',
+    });
+    expect(snapshot.starts.get(succeeding.id)).toEqual({
+      started: {
+        replyTo: succeeding.id,
+        storeId: 'store-agentplex',
+        sessionId: null,
+        server: 'registration-mbp-robert',
+      },
+      refusal: null,
+    });
+  });
+
   it('says nothing to a pane about a detach it asked for', async () => {
     const h = harness();
     const socket = await watching(h);

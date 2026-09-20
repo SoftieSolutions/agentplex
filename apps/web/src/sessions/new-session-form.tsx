@@ -1,6 +1,6 @@
 import { useEffect, useState, type JSX } from 'react';
 import { nodeIdSchema, storeIdSchema, serverRegistrationIdSchema } from '@agentplex/protocol';
-import type { NodeId, SessionRef, StoreId } from '@agentplex/protocol';
+import type { FrameId, NodeId, SessionRef, StoreId } from '@agentplex/protocol';
 import { projectChoices } from '../projects/new-project-model.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
@@ -58,6 +58,21 @@ export interface NewSessionFormProps {
   readonly scheme: Scheme;
   /** How the pane route is entered, injected so a test never touches location. */
   readonly navigate?: (hash: string) => void;
+  /**
+   * Opens a pane on the start that has just gone out, by the handle it has:
+   * the id of the `session-start` frame itself.
+   *
+   * Called the moment the command is accepted, not when the hub answers,
+   * because that is the point of the pane: a spawn produces output from the
+   * fork onwards and the only name it has until the provider writes one is
+   * this handle. Everything the hub goes on to say about that start -- the
+   * machine it went to, a refusal, the session it turned out to be -- is
+   * correlated by the same id, in the pane rather than here.
+   *
+   * Optional, and this form works without it: a screen with no layout to open
+   * a pane in still starts sessions, and still says what happened.
+   */
+  readonly onPending?: (startId: FrameId) => void;
 }
 
 // Outside the component: it touches nothing but the browser it runs in.
@@ -71,6 +86,7 @@ export function NewSessionForm({
   onClose,
   scheme,
   navigate = assignHash,
+  onPending,
 }: NewSessionFormProps): JSX.Element {
   const snapshot = useHubSnapshot(store);
   // Interest in the tree, declared for as long as this form is mounted: the
@@ -176,6 +192,11 @@ export function NewSessionForm({
           ? { storeId: command.storeId, sessionId: command.sessionId }
           : null,
     });
+    // In the click that sent it, so the pane is open before the hub has
+    // answered -- which is the whole of what a pending pane is for. Nothing
+    // here waits for a reply, and nothing navigates: the route stays an
+    // address for sessions that exist.
+    onPending?.(outcome.id);
   }
 
   const waiting = followUp?.kind === 'waiting';

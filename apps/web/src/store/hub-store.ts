@@ -233,6 +233,32 @@ export interface StartedView {
 }
 
 /**
+ * Everything the hub has said about one start this client asked for.
+ *
+ * Kept per start and keyed by the frame that carried it, which the two fields
+ * beside it are not: `lastStarted` and `lastRefusal` are one slot each, and a
+ * screen reading them is reading whatever was answered most recently to
+ * anybody. That is the right shape for the connection line -- the newest "no",
+ * whoever asked for it -- and exactly the wrong one for a pane waiting on a
+ * start of its own: a second start succeeding clears the first one's refusal,
+ * and a pane reading the shared slot would quietly go back to saying it was
+ * starting.
+ *
+ * So the answers are filed against the start they answer. The key is the id of
+ * the `session-start` frame, which is the name the asking already has and the
+ * one every reply to it carries as `replyTo`; nothing here compares anything.
+ *
+ * Both fields are `null` while the hub has not answered. They are never both
+ * set: a start is answered once.
+ */
+export interface StartView {
+  /** The hub's yes, naming the machine it placed the start on. */
+  readonly started: StartedView | null;
+  /** The hub's no, in its own words. */
+  readonly refusal: RefusalView | null;
+}
+
+/**
  * The hub's answer to a stop, kept so a screen can say what landed.
  *
  * Kept beside `lastStarted` and for the same reason: the reply names the
@@ -420,6 +446,14 @@ export interface HubSnapshot {
   readonly lastRefusal: RefusalView | null;
   /** The hub's most recent yes to a start, kept until the next one. */
   readonly lastStarted: StartedView | null;
+  /**
+   * What the hub has said about each start this client made, by the id of the
+   * frame that carried it.
+   *
+   * A map rather than the slot above, for the reason `StartView` argues: a
+   * pane opened on a start reads its own answer and not the newest one.
+   */
+  readonly starts: ReadonlyMap<FrameId, StartView>;
   /** The hub's most recent yes to a stop, kept until the next one. */
   readonly lastStopped: StoppedView | null;
   /** The hub's most recent yes to an acknowledgement or a mute. */
@@ -661,6 +695,18 @@ export function encodeClientFrame(frame: ClientFrame): string {
  * which session a start became — and even then the pane goes on being
  * answered under the name it asked with.
  */
+/**
+ * How many starts a connection remembers the hub's answer to.
+ *
+ * Far above any arrangement of panes -- a screen of twelve panes is twelve
+ * starts -- and small enough that a tab left open all day starting sessions
+ * cannot grow this without bound. The oldest *answered* entry goes first, so
+ * what is dropped is an answer rather than a pane's expectation of one; see
+ * `evictOldestStarts` for what happens in the corner where nothing has been
+ * answered at all.
+ */
+const MAX_REMEMBERED_STARTS = 64;
+
 export function terminalKey(target: ClientTerminalTarget): string {
   return target.by === 'start'
     ? JSON.stringify(['start', target.startId])
@@ -754,6 +800,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     terminalInput: INITIAL_TERMINAL,
     lastRefusal: null,
     lastStarted: null,
+    starts: new Map(),
     lastStopped: null,
     lastAttention: null,
     lastListing: null,
@@ -779,6 +826,19 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   const queue: { readonly id: FrameId; readonly command: HubCommand }[] = [];
   /** Sent commands awaiting a reply, by the id the reply will name. */
   const pending = new Set<FrameId>();
+  /**
+   * What the hub has said about each start, by the frame that asked.
+   *
+   * Written when a start is accepted rather than when one is answered, so that
+   * a pane opened in the same click as the start finds an entry to read and
+   * can say it is asking rather than say nothing at all.
+   *
+   * Bounded, oldest first, because a tab that starts sessions all day would
+   * otherwise accumulate one entry per start for as long as it is open. The
+   * cap is far above any arrangement of panes, so nothing a pane is still
+   * waiting on is ever the entry that goes.
+   */
+  const starts = new Map<FrameId, StartView>();
   /**
    * Requests whose caller is waiting, by the id the answer will name.
    *
@@ -874,6 +934,49 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     update({ terminals: views });
   }
 
+  /**
+   * Opens an entry for a start the moment it is accepted, sent or queued.
+   *
+   * Not when the hub answers, because a pane is opened in the same click that
+   * sends the start and has to be able to say something before any answer
+   * exists. An entry with two nulls on it is that something: asked, and not
+   * yet answered.
+   */
+  function rememberStart(command: HubCommand, id: FrameId): void {
+    if (command.type !== 'session-start') return;
+    starts.set(id, { started: null, refusal: null });
+    evictOldestStarts();
+    update({ starts: new Map(starts) });
+  }
+
+  /**
+   * Brings the remembered starts back under the cap, answered ones first.
+   *
+   * A start the hub has not answered is the one a pane may still be waiting to
+   * read, so it is passed over while there is any settled entry left to drop --
+   * a pane that lost its entry would go back to saying it was asking, which is
+   * the over-claim this map exists to prevent. The bound is still hard: with
+   * nothing settled to drop, the oldest goes anyway, because a map that could
+   * refuse to shrink is not a bound.
+   */
+  function evictOldestStarts(): void {
+    while (starts.size > MAX_REMEMBERED_STARTS) {
+      const settled = [...starts].find(
+        ([, view]) => view.started !== null || view.refusal !== null,
+      );
+      const [oldest] = settled ?? [...starts][0] ?? [];
+      if (oldest === undefined) return;
+      starts.delete(oldest);
+    }
+  }
+
+  /** Files an answer against the start it answers, and publishes it. */
+  function noteStartAnswer(replyTo: FrameId, answer: StartView): void {
+    if (!starts.has(replyTo)) return;
+    starts.set(replyTo, answer);
+    update({ starts: new Map(starts) });
+  }
+
   function queueView(overflowed: string | null): CommandQueueView {
     return { queued: queue.length, capacity, overflowed };
   }
@@ -937,6 +1040,44 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     return matched;
   }
 
+  /**
+   * Asks again for a terminal this connection was refused by start handle.
+   *
+   * The race this exists for is real and is not the hub's fault: a pane opens
+   * in the click that sends the start, so its subscribe can arrive while the
+   * hub is still waiting for a machine to fork the process, and a handle the
+   * hub has not recorded yet is a handle it must refuse -- "this connection
+   * did not start that session" is the right answer to a handle that is not
+   * there, and would be the wrong answer to hold open.
+   *
+   * So the client asks again on the one frame that says the handle now exists.
+   * Only a record that is not attached, because a subscription that was
+   * answered needs nothing, and a second subscribe to a terminal this
+   * connection is already watching is refused by the hub on purpose.
+   *
+   * And only when nothing is outstanding, which is the same rule read for the
+   * other order the race can come out in. The hub may read the first subscribe
+   * *after* it sends this reply, in which case that subscribe is about to
+   * succeed and this connection is not attached yet -- so a retry here would
+   * be the second subscribe the hub refuses as a duplicate, and the pane would
+   * carry "the hub said no" for the rest of its life beside a terminal that is
+   * working perfectly. A subscribe with no answer yet is a subscribe that may
+   * still be answered; there is nothing to ask again for.
+   */
+  function retrySubscribeByStart(startId: FrameId): void {
+    const key = terminalKey({ by: 'start', startId });
+    const record = terminals.get(key);
+    if (record === undefined || record.attached) return;
+    for (const asked of terminalReplies.values()) {
+      if (asked.key === key && asked.ask === 'subscribe') return;
+    }
+    // The refusal that sent the pane here is answered rather than left on
+    // screen beside a terminal that is about to work.
+    record.problem = null;
+    publishTerminals();
+    subscribeTerminal(record);
+  }
+
   /** Forgets the second name a start-addressed record was given. */
   function unbind(record: TerminalRecord): void {
     if (record.bound === null) return;
@@ -944,6 +1085,38 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     held?.delete(record);
     if (held?.size === 0) rebound.delete(record.bound);
     record.bound = null;
+  }
+
+  /**
+   * A start-addressed record learns which session it turned out to be.
+   *
+   * The moment a pending pane becomes a session's pane. The record keeps its
+   * start-addressed key -- the hub still answers to it -- and gains a second
+   * name, so a chunk carrying only the session id reaches it too.
+   *
+   * Taken off the hub's own frames rather than guessed from what arrived
+   * around the same time: a spawn and a scan racing is exactly the case where
+   * guessing by timing attaches a pane to somebody else's agent. Two frames
+   * can carry the answer and both are read, because which of them arrives
+   * first is not this store's to decide. The subscription's reply carries it
+   * when the provider had already named the session; for the spawn this whole
+   * path exists for it has not, and the first frame that can say so is a chunk
+   * of output carrying both names -- which is the server's reading of its own
+   * store report, relayed down the terminal path rather than inferred here.
+   *
+   * Answers whether anything changed, so the output path does not publish a
+   * snapshot per chunk.
+   */
+  function nameStart(record: TerminalRecord, storeId: StoreId, sessionId: SessionId): boolean {
+    if (record.target.by !== 'start' || record.session !== null) return false;
+    record.session = { storeId, sessionId };
+    unbind(record);
+    const key = sessionTerminalKey(storeId, sessionId);
+    record.bound = key;
+    const held = rebound.get(key) ?? new Set<TerminalRecord>();
+    held.add(record);
+    rebound.set(key, held);
+    return true;
   }
 
   function connect(): void {
@@ -1076,15 +1249,28 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'session-started': {
         pending.delete(frame.replyTo);
-        update({
-          lastRefusal: null,
-          lastStarted: {
-            replyTo: frame.replyTo,
-            storeId: frame.storeId,
-            sessionId: frame.sessionId,
-            server: frame.server,
-          },
-        });
+        const started: StartedView = {
+          replyTo: frame.replyTo,
+          storeId: frame.storeId,
+          sessionId: frame.sessionId,
+          server: frame.server,
+        };
+        update({ lastRefusal: null, lastStarted: started });
+        noteStartAnswer(frame.replyTo, { started, refusal: null });
+        // The reply is also the moment a subscription by this start's handle
+        // becomes possible, which is why it is retried here. A pane opens in
+        // the same click that sends the start, so its subscribe can reach the
+        // hub while the spawn is still being forked on another machine -- and
+        // a handle the hub has not written yet is one it can only refuse. It
+        // writes the handle before sending this frame, so a retry on reading
+        // one is a retry that finds it.
+        //
+        // On the client rather than as a hold at the hub: a hub that parked a
+        // subscribe until a start resolved would be holding a frame for a
+        // start that may be refused, or may never answer at all, and would owe
+        // every one of them a timeout and a reply. The client already knows
+        // which start it is waiting on, and this is one frame.
+        retrySubscribeByStart(frame.replyTo);
         return;
       }
       case 'session-stopped': {
@@ -1252,22 +1438,16 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         record.problem = null;
         record.replayChunks = frame.replayChunks;
         record.droppedBytes = frame.droppedBytes;
-        record.session =
-          frame.sessionId === null ? null : { storeId: frame.storeId, sessionId: frame.sessionId };
-
-        // The moment a pending pane becomes a session's pane. The record keeps
-        // its start-addressed key -- the hub still answers to it -- and gains a
-        // second name, so a chunk carrying only the session id reaches it too.
-        // Taken off the hub's own answer rather than guessed from what arrived
-        // around the same time: a spawn and a scan racing is exactly the case
-        // where guessing by timing attaches a pane to somebody else's agent.
-        if (record.target.by === 'start' && frame.sessionId !== null) {
-          unbind(record);
-          const key = sessionTerminalKey(frame.storeId, frame.sessionId);
-          record.bound = key;
-          const held = rebound.get(key) ?? new Set<TerminalRecord>();
-          held.add(record);
-          rebound.set(key, held);
+        if (record.target.by === 'start') {
+          // A subscription by start handle, answered by a hub that already
+          // knows the session: `nameStart` is where a pending record stops
+          // being pending, whichever frame brings the news.
+          if (frame.sessionId !== null) nameStart(record, frame.storeId, frame.sessionId);
+        } else {
+          record.session =
+            frame.sessionId === null
+              ? null
+              : { storeId: frame.storeId, sessionId: frame.sessionId };
         }
         publishTerminals();
         return;
@@ -1307,10 +1487,18 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           const evicted = record.feed.truncated;
           const repeating = stillRepeating(record);
           record.feed.push(chunk);
+          // The frame that names a spawn, in the ordinary case. A subscription
+          // made before the provider wrote its session id was answered with a
+          // `null` one, and output is what carries the answer afterwards: the
+          // server puts the session on every chunk from the moment it binds
+          // the terminal to it.
+          const named =
+            frame.sessionId === null ? false : nameStart(record, frame.storeId, frame.sessionId);
           // Only the facts, and only when one of them moved. The bytes went
           // to the feed above and the emulator has them already; publishing
           // per chunk would re-render the app at the speed the agent prints.
           const changed =
+            named ||
             !record.printed ||
             record.droppedChunks !== frame.droppedChunks ||
             evicted !== record.feed.truncated ||
@@ -1356,14 +1544,17 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         const refused = pendingQueries.get(frame.replyTo);
         pendingQueries.delete(frame.replyTo);
         refused?.reject(new Error(frame.message));
-        update({
-          lastRefusal: {
-            replyTo: frame.replyTo,
-            code: frame.code,
-            message: frame.message,
-            holder: frame.holder,
-          },
-        });
+        const refusal: RefusalView = {
+          replyTo: frame.replyTo,
+          code: frame.code,
+          message: frame.message,
+          holder: frame.holder,
+        };
+        update({ lastRefusal: refusal });
+        // And against the start it answers, when it answers one. The slot
+        // above is the newest "no" on the connection and a later yes clears
+        // it; a pane waiting on this start needs the one that was said to it.
+        noteStartAnswer(frame.replyTo, { started: null, refusal });
         if (!established && frame.code === 'protocol-version') {
           // Redialling cannot change which protocol either side speaks, and a
           // capped backoff against a hub that will refuse forever is noise.
@@ -1564,6 +1755,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       if (established && wire !== null) {
         const id = frameIds.next();
         pending.add(id);
+        rememberStart(command, id);
         wire.send(encodeClientFrame({ ...command, id }));
         return { accepted: true, id, delivery: 'sent' };
       }
@@ -1576,6 +1768,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       const id = frameIds.next();
       queue.push({ id, command });
+      rememberStart(command, id);
       update({ commandQueue: queueView(snapshot.commandQueue.overflowed) });
       return { accepted: true, id, delivery: 'queued' };
     },

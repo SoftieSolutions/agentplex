@@ -1,3 +1,4 @@
+import type { FrameId, SessionRef } from '@agentplex/protocol';
 import {
   RATIO_BOUNDS,
   emptyPane,
@@ -71,10 +72,53 @@ export function samePaneContent(one: PaneContent, other: PaneContent): boolean {
       );
     case 'doc':
       return other.type === 'doc' && one.nodeId === other.nodeId;
+    case 'pending':
+      // By the handle and never by anything about the start it stands for: two
+      // starts made with the same store, provider and prompt are two sessions,
+      // and a pane that treated them as one would leave the second one's
+      // output arriving in the first one's pane.
+      return other.type === 'pending' && one.startId === other.startId;
     case 'empty':
     case 'unknown':
       return false;
   }
+}
+
+/**
+ * Every pending pane on `startId`, become the session that start turned out to
+ * be. The tree itself when none of them was waiting on it, so a caller can ask
+ * on every change and let identity answer whether anything happened.
+ *
+ * The replacement is exact rather than positional: the pane that asked is the
+ * pane that becomes it, wherever the user has since dragged it, and a pane
+ * waiting on some other start is untouched. What it deliberately does not do
+ * is look for a pane already showing that session and merge the two. A rebind
+ * is not a request to show a session -- `findPaneShowing` answers that, on the
+ * path that is a request -- and quietly closing the pane somebody watched a
+ * spawn start in, because the same session happens to be open elsewhere, would
+ * take a pane away at the one moment its owner was looking at it.
+ */
+export function rebindPending(tree: LayoutTree, startId: FrameId, session: SessionRef): LayoutTree {
+  if (tree.kind === 'pane') {
+    const { content } = tree;
+    if (content.type !== 'pending' || content.startId !== startId) return tree;
+    return { kind: 'pane', content: { type: 'session', session } };
+  }
+  const first = rebindPending(tree.first, startId, session);
+  const second = rebindPending(tree.second, startId, session);
+  if (first === tree.first && second === tree.second) return tree;
+  return { ...tree, first, second };
+}
+
+/** Every start a pane in this tree is still waiting on, first seen first. */
+export function pendingStarts(tree: LayoutTree): readonly FrameId[] {
+  const found: FrameId[] = [];
+  for (const { leaf } of panes(tree)) {
+    if (leaf.content.type === 'pending' && !found.includes(leaf.content.startId)) {
+      found.push(leaf.content.startId);
+    }
+  }
+  return found;
 }
 
 /** Where this is already showing, or `null` when it is not. */
