@@ -47,8 +47,13 @@ const APPROVAL_TOOL_MAX_CHARS = 200;
  * Enough remembered answers for one request, and a cap because this list rides
  * the machine state to every client. A provider with more to offer than this
  * has more than a person is going to read off a phone.
+ *
+ * Exported for the same reason the proposal bound is: the edge that builds an
+ * approval has to cut the list to what the wire takes, and a bound the edge
+ * guessed at would be a frame the receiving parser refuses -- which costs the
+ * whole request, and with it a blocked agent, over a shortcut nobody needed.
  */
-const APPROVAL_SUGGESTIONS_MAX = 16;
+export const APPROVAL_SUGGESTIONS_MAX = 16;
 
 /**
  * The server's name for one blocked tool call, minted when the request arrives

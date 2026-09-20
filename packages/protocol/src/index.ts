@@ -38,6 +38,7 @@ export type {
 
 export {
   APPROVAL_PROPOSAL_MAX_CHARS,
+  APPROVAL_SUGGESTIONS_MAX,
   approvalDecisionSchema,
   approvalIdSchema,
   approvalOutcomeSchema,
