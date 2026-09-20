@@ -199,7 +199,12 @@ export const toneHues = {
   },
 } as const satisfies Record<Scheme, Record<Tone, HueName>>;
 
-/** Dark is the default scheme, so it is the default here too. */
-export function colorForTone(tone: Tone, scheme: Scheme = 'dark'): string {
+/**
+ * The scheme is required, with no default, since the app grew a control that
+ * switches it (Settings, Appearance). A default here would be a call site
+ * that keeps painting a dark-scheme marker on paper, and the only thing that
+ * would notice is a person reading an unreadable dot.
+ */
+export function colorForTone(tone: Tone, scheme: Scheme): string {
   return hues[toneHues[scheme][tone]];
 }

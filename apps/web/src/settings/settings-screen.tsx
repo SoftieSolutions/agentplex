@@ -14,6 +14,7 @@ import {
   useComputedColorScheme,
 } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme, type Tone } from '../ui/tokens.js';
+import { ColorSchemeControl } from './color-scheme-control.js';
 import {
   parsePairingForm,
   prefillFromCandidate,
@@ -129,6 +130,9 @@ export function SettingsScreen({
       </Section>
       <Section scheme={scheme}>
         <PairedServersSection snapshot={snapshot} pairing={pairing} scheme={scheme} />
+      </Section>
+      <Section scheme={scheme}>
+        <ColorSchemeControl />
       </Section>
     </Stack>
   );
