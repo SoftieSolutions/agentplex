@@ -1,3 +1,4 @@
+import { assertNever } from '@agentplex/protocol';
 import type {
   MachineState,
   Provider,
@@ -7,6 +8,7 @@ import type {
   SessionStatus,
   StoreId,
 } from '@agentplex/protocol';
+import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import type { ConnectionPhase } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
 
@@ -349,4 +351,118 @@ export function connectionNotice(
     case 'connected':
       return hasState ? null : 'connected; waiting for the first state from the hub';
   }
+}
+
+/**
+ * Where the Hub access section of the settings screen is: the fragment the
+ * token actions below link to.
+ *
+ * A literal here and not a constant borrowed from the settings feature,
+ * because settings has no address of its own -- it is drawn under the list on
+ * the default route -- so this is a fragment onto a section of this page and
+ * not a route. `ONBOARDING_HASH` is imported rather than spelled out for the
+ * opposite reason: the wizard is a route, its address is its own, and two
+ * spellings of it would be two addresses the day it moves.
+ */
+const SETTINGS_HASH = '#settings';
+
+/**
+ * The one thing to do about a state that is empty or degraded: words, and
+ * where they go.
+ *
+ * Carried beside the notice rather than folded into it, because the notice is
+ * the honest sentence about what is happening and the action is a link. A
+ * screen that had to find the verb inside a sentence to make it clickable
+ * would be re-deciding here, and the careful wording of the notices is the
+ * point: the action is added beside the words, never in place of them.
+ */
+export interface NextAction {
+  readonly words: string;
+  readonly href: string;
+}
+
+const SAVE_TOKEN: NextAction = { words: 'Save the hub token in Settings', href: SETTINGS_HASH };
+const CHECK_TOKEN: NextAction = { words: 'Check the hub token in Settings', href: SETTINGS_HASH };
+
+/**
+ * What to do about the connection, or `null` when there is nothing a person
+ * can do that the app is not already doing.
+ *
+ * The companion of `connectionNotice`, and it takes the same facts for the
+ * same reason: one call each, side by side, off one snapshot.
+ *
+ * The token is the suspect whenever no connection is up, because it is the
+ * only part of the exchange this device owns: no token stored is an empty
+ * Bearer, which the hub answers with its ordinary 401, which is an ordinary
+ * connect failure. So a device with nothing stored never gets past dialling,
+ * and saying so beats letting it retry in silence.
+ *
+ * `hasState` is what keeps that suspicion honest. A fleet on screen is proof
+ * the stored token was accepted at least once, so while the store is
+ * reconnecting -- which it does for weather, a hub restart, a laptop lid --
+ * naming the token would be a guess at a cause, and the notice beside this
+ * already says the state may be stale. `failed` keeps the action either way:
+ * retrying cannot fix it, so the person has to do something, and checking
+ * what they typed is the thing they can do from here.
+ */
+export function nextAction(
+  phase: ConnectionPhase,
+  hasState: boolean,
+  tokenStored: boolean,
+): NextAction | null {
+  switch (phase) {
+    // Connected is the good case, and connecting is a dial in flight: nothing
+    // has been refused yet, and an action offered before the round trip would
+    // be this screen guessing at an answer the hub is about to give.
+    case 'connected':
+    case 'connecting':
+      return null;
+    case 'idle':
+      // Nothing is looking, so nothing is connected -- which is not a fault
+      // and gets no action, unless the device has no token, in which case the
+      // first thing anybody does here is type one.
+      return tokenStored ? null : SAVE_TOKEN;
+    case 'reconnecting':
+      if (!tokenStored) return SAVE_TOKEN;
+      return hasState ? null : CHECK_TOKEN;
+    case 'failed':
+      return tokenStored ? CHECK_TOKEN : SAVE_TOKEN;
+    default:
+      return assertNever(phase, 'connection phase');
+  }
+}
+
+/**
+ * The words for a list with nothing in it, and the one thing to do about it.
+ *
+ * The words do not change: a fleet with no machine, a machine with no store
+ * and a quiet store are all of them "no sessions in any store yet", which is
+ * true in every one of the three and claims nothing about why. What changes
+ * is what sits beside them, and only when this state names a step that has
+ * not been taken -- no server paired, or servers paired but not one of them
+ * reporting a store. When stores exist and are simply quiet there is no next
+ * action at all, and inventing one ("Start a session") would be this screen
+ * cheering at somebody whose sessions have merely finished.
+ */
+export interface EmptyListNotice {
+  readonly words: string;
+  readonly action: NextAction | null;
+}
+
+const EMPTY_LIST_WORDS = 'no sessions in any store yet';
+
+export function emptyListNotice(state: MachineState): EmptyListNotice {
+  if (state.servers.length === 0) {
+    return {
+      words: EMPTY_LIST_WORDS,
+      action: { words: 'Pair a server', href: ONBOARDING_HASH },
+    };
+  }
+  if (state.stores.length === 0) {
+    return {
+      words: EMPTY_LIST_WORDS,
+      action: { words: 'Mount a store on a paired server', href: SETTINGS_HASH },
+    };
+  }
+  return { words: EMPTY_LIST_WORDS, action: null };
 }

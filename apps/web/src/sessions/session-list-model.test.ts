@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import {
   ageLabel,
   chipCounts,
   connectionNotice,
+  emptyListNotice,
   listSessions,
   matchesSearch,
+  nextAction,
   NO_FILTERS,
   orderByActivity,
   partitionNeedsYou,
@@ -35,6 +38,7 @@ const populated = stateFrom(hubFrames.machineStatePopulated);
 const stale = stateFrom(hubFrames.machineStateStale);
 const single = stateFrom(hubFrames.machineStateSingle);
 const empty = stateFrom(hubFrames.machineState);
+const withServer = stateFrom(hubFrames.machineStateWithServer);
 
 function names(state: MachineState): readonly string[] {
   return visibleSessions(state, NO_FILTERS).map((item) => item.name);
@@ -250,5 +254,61 @@ describe('degradation, said in words', () => {
     expect(connectionNotice('failed', 'this hub speaks protocol 4, not 5', false)).toBe(
       'this hub speaks protocol 4, not 5',
     );
+  });
+});
+
+describe('the next action beside a degraded connection', () => {
+  const save = { words: 'Save the hub token in Settings', href: '#settings' };
+  const check = { words: 'Check the hub token in Settings', href: '#settings' };
+
+  it('asks for a token while no connection is up and none is stored', () => {
+    // An empty Bearer is a 401 at the ticket exchange, which is an ordinary
+    // connect failure -- so a device with no token never gets past dialling.
+    expect(nextAction('idle', false, false)).toEqual(save);
+    expect(nextAction('reconnecting', false, false)).toEqual(save);
+    expect(nextAction('failed', false, false)).toEqual(save);
+  });
+
+  it('asks for the stored token to be checked when nothing has arrived', () => {
+    expect(nextAction('reconnecting', false, true)).toEqual(check);
+    expect(nextAction('failed', false, true)).toEqual(check);
+    expect(nextAction('failed', true, true)).toEqual(check);
+  });
+
+  it('does not point at a token this connection has already spent', () => {
+    // A fleet is on screen, so the stored token was accepted at least once.
+    // Naming it as the thing to check would be a guess at a cause, and the
+    // notice beside this already says the state may be stale.
+    expect(nextAction('reconnecting', true, true)).toBeNull();
+  });
+
+  it('says nothing while the hub is answering or the first dial is in flight', () => {
+    expect(nextAction('connected', true, true)).toBeNull();
+    expect(nextAction('connected', false, true)).toBeNull();
+    expect(nextAction('connecting', false, false)).toBeNull();
+    expect(nextAction('idle', false, true)).toBeNull();
+  });
+});
+
+describe('the empty list', () => {
+  it('sends a fleet with no machine in it to the wizard', () => {
+    expect(emptyListNotice(empty)).toEqual({
+      words: 'no sessions in any store yet',
+      action: { words: 'Pair a server', href: ONBOARDING_HASH },
+    });
+  });
+
+  it('asks for a store once a machine is paired and holds none', () => {
+    expect(emptyListNotice(withServer)).toEqual({
+      words: 'no sessions in any store yet',
+      action: { words: 'Mount a store on a paired server', href: '#settings' },
+    });
+  });
+
+  it('keeps the words and offers nothing when the stores are simply quiet', () => {
+    expect(emptyListNotice(populated)).toEqual({
+      words: 'no sessions in any store yet',
+      action: null,
+    });
   });
 });
