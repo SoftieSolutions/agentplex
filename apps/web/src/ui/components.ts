@@ -12,6 +12,7 @@ import '@mantine/core/styles.css';
 import { useComputedColorScheme as useMantineComputedColorScheme } from '@mantine/core';
 
 export {
+  Anchor,
   Box,
   Button,
   CloseButton,
@@ -25,6 +26,7 @@ export {
   Select,
   SimpleGrid,
   Stack,
+  Stepper,
   Text,
   Textarea,
   TextInput,

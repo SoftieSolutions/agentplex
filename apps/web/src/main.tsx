@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { browserTokenStore } from './auth/token.js';
+import { browserOnboardingDismissal } from './onboarding/dismissal.js';
 import { registerServiceWorker } from './pwa/register-service-worker.js';
 import { createBrowserDependencies } from './store/browser.js';
 import { createHubStore } from './store/hub-store.js';
@@ -30,6 +31,6 @@ if (container === null) {
 
 createRoot(container).render(
   <StrictMode>
-    <App hub={hub} tokens={browserTokenStore} />
+    <App hub={hub} tokens={browserTokenStore} dismissal={browserOnboardingDismissal} />
   </StrictMode>,
 );
