@@ -14,6 +14,7 @@ import {
   NO_FILTERS,
   orderByActivity,
   partitionNeedsYou,
+  placeLabel,
   providerOptions,
   storeOptions,
   toneForStatus,
@@ -83,6 +84,28 @@ describe('flattening', () => {
     const spike = listSessions(populated).find((item) => item.name === 'spike-wasm');
     expect(spike?.summary).toBe('idle');
   });
+
+  it('carries the project the hub put on the row, the name and the id together', () => {
+    const docs = item(populated, 'docs-sweep');
+    expect(docs.project).toBe('universe');
+    expect(docs.projectId).toBe('hub-8');
+  });
+
+  it('carries no project for a session the tree places in none', () => {
+    const fixAuth = item(populated, 'fix-auth-refresh');
+    expect(fixAuth.project).toBeNull();
+    expect(fixAuth.projectId).toBeNull();
+  });
+});
+
+describe('the place line', () => {
+  it('names the project when the session is in one', () => {
+    expect(placeLabel(item(populated, 'docs-sweep'))).toBe('universe · gpu-box-01');
+  });
+
+  it('keeps the store it named before when the session is in no project', () => {
+    expect(placeLabel(item(populated, 'fix-auth-refresh'))).toBe('store-agentplex · mbp-robert');
+  });
 });
 
 describe('tones', () => {
@@ -146,6 +169,18 @@ describe("search, the table's one filter", () => {
   it('narrows by machine label', () => {
     const found = visibleSessions(populated, { ...NO_FILTERS, search: 'gpu-box' });
     expect(found.map((item) => item.machine)).toEqual(['gpu-box-01', 'gpu-box-01', 'gpu-box-01']);
+  });
+
+  it('narrows by project name, which the row now carries', () => {
+    // The fixture's one project is called after the store it sits over, so a
+    // search for its name cannot tell the two fields apart. One field varied
+    // off a captured item can: nothing but the project holds this word.
+    const inProject = { ...item(populated, 'docs-sweep'), project: 'cathedral' };
+    expect(matchesSearch(inProject, 'CATHED')).toBe(true);
+  });
+
+  it('matches nothing on a project name when the session is in no project', () => {
+    expect(matchesSearch(item(populated, 'fix-auth-refresh'), 'cathedral')).toBe(false);
   });
 
   it('treats whitespace as no filter', () => {
