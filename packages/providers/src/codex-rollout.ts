@@ -106,8 +106,24 @@ const sessionMetaSchema = z.object({
   cwd: z.string().min(1).optional(),
 });
 
-/** Written once per turn. Where a session that moved between turns says so. */
-const turnContextSchema = z.object({ cwd: z.string().min(1).optional() });
+/**
+ * Written once per turn. Where a session that moved between turns says so, and
+ * the one line in a rollout that states which model is answering.
+ *
+ * The model is read here and nowhere else, and the fixtures are why. codex
+ * writes the string `model` into a rollout in half a dozen places: a
+ * `model_provider` and a `base_instructions.provenance.model` on the
+ * `session_meta`, three more inside a `world_state`. The provenance one names
+ * the model that wrote the instruction text codex ships, which is a fact about
+ * a file in codex's own release and not about this session, and a parser that
+ * went looking for a `model` key would report it as the session's and be right
+ * by accident for as long as the two happened to agree. `turn_context.model`
+ * is codex stating what ran the turn it is the context for.
+ */
+const turnContextSchema = z.object({
+  cwd: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+});
 
 /**
  * The three events that open and close a turn.
@@ -146,6 +162,16 @@ export interface CodexRollout {
    * that cost zero.
    */
   readonly usage: SessionUsage | null;
+  /**
+   * The model the newest turn of this session ran on, as its `turn_context`
+   * named it, or `null` when no turn context in the file states one.
+   *
+   * `null` is the honest answer for a rollout that never said, and it is the
+   * only alternative to naming the model codex usually runs -- which would be
+   * a guess printed on the one line whose job is to say what is actually
+   * running. Nothing here interprets the string.
+   */
+  readonly model: string | null;
 }
 
 /**
@@ -169,6 +195,7 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
   let updatedAt = 0;
   let sessionId: string | null = null;
   let cwd: string | null = null;
+  let model: string | null = null;
   const open = new Set<string>();
   let lastClose: 'task_complete' | 'turn_aborted' | null = null;
   let usage: SessionUsage | null = null;
@@ -205,7 +232,13 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
 
     if (line.data.type === 'turn_context') {
       const context = turnContextSchema.safeParse(line.data.payload);
-      if (context.success && context.data.cwd !== undefined) cwd = context.data.cwd;
+      if (context.success) {
+        if (context.data.cwd !== undefined) cwd = context.data.cwd;
+        // Last wins, like the cwd beside it and for the same reason: `/model`
+        // mid-session is ordinary, and the question a reader is asking is what
+        // this session is running now rather than what it opened on.
+        if (context.data.model !== undefined) model = context.data.model;
+      }
       continue;
     }
 
@@ -240,7 +273,15 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
 
   return {
     ok: true,
-    rollout: { sessionId, turns, updatedAt, cwd, signal: signalOf(open, lastClose), usage },
+    rollout: {
+      sessionId,
+      turns,
+      updatedAt,
+      cwd,
+      signal: signalOf(open, lastClose),
+      usage,
+      model,
+    },
   };
 }
 
