@@ -238,6 +238,11 @@ async function readRollout(
     cwd: parsed.rollout.cwd,
     title: names.get(sessionId.data) ?? null,
     usage: parsed.rollout.usage,
+    // The rollout parser does not read a model off a turn context yet, and
+    // `null` is what this adapter knows rather than a placeholder for
+    // something it could have said. It becomes a reading the way the usage
+    // above it did, with a captured rollout behind it.
+    model: null,
   });
 }
 

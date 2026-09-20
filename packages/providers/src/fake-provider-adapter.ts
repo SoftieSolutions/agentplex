@@ -60,6 +60,13 @@ const fakeTranscriptSchema = z.object({
    * case the seam has to carry, and it is the one this fake defaults to.
    */
   usage: sessionUsageSchema.nullish(),
+  /**
+   * Which model this made-up provider says answered, when it says anything.
+   * Absent defaults to no model for the same reason `usage` does: a provider
+   * that never names one is a case the seam has to carry, and a caller that
+   * wants a model on the wire has to put one in the transcript to get it.
+   */
+  model: z.string().min(1).nullish(),
 });
 
 export interface FakeProviderAdapterOptions {
@@ -336,6 +343,7 @@ function parseTranscript(name: string, contents: string) {
       cwd: parsed.data.cwd ?? null,
       title: parsed.data.title ?? null,
       usage: parsed.data.usage ?? null,
+      model: parsed.data.model ?? null,
     },
   };
 }

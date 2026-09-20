@@ -67,6 +67,10 @@ describe('createCodexAdapter.discover', () => {
         // codex's own running thread total, with the cached part taken back
         // out of the input figure it is folded into. See `codex-rollout.ts`.
         usage: { inputTokens: 3380, cacheReadTokens: 9984, cacheWriteTokens: 0, outputTokens: 6 },
+        // What this adapter knows today: its rollout parser reads no model off
+        // a turn context yet, and an adapter that has not looked reports
+        // nothing rather than the model codex usually runs.
+        model: null,
       },
     ]);
   });
