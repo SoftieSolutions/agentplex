@@ -1,58 +1,35 @@
-import type { CSSProperties, JSX } from 'react';
+import type { JSX } from 'react';
 import { Box, Button, Text } from '../ui/components.js';
-import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { TAB_BAR_HEIGHT } from './bottom-tabs.js';
 import { withSafeArea } from './safe-area.js';
 
 /**
- * The round button floating above the phone chrome's tab bar: start a session,
- * and how many sessions are waiting on a human.
+ * The round button floating above the phone chrome's tab bar: start a session.
  *
- * One button doing two jobs is the mockup's, and it is defensible because the
- * two are the same errand: the badge is what makes a person open the app, and
- * starting work is what they do when nothing is waiting. It is the same start
- * the New session button opens on a wide screen -- the shell holds the form and
- * this opens it -- rather than a second way in with its own rules.
+ * That and nothing else. It carried a needs-you badge, which the mockup draws
+ * and which read well on its own, but the badge counted the sessions on the
+ * machine the header had picked while the bell above it counts the whole
+ * fleet -- so a phone could show two different numbers for one fleet and leave
+ * a person to work out which was which. One attention number per screen, and
+ * the bell is the one that keeps it, because it is the number the browser tab
+ * says too.
  *
- * The count comes from `needsYouCount`, which counts the sessions waiting on a
- * human that something can actually be done about. It is deliberately not the
- * Needs you chip's number, which is larger whenever a machine is unreachable:
- * a chip promises how many rows pressing it yields, and a badge claims
- * somebody's attention. `needsYouCount` carries the argument.
+ * What the button loses with the badge is the argument for putting it here at
+ * all, which was that a person opens the app because something is waiting.
+ * It stays because the other half of that argument holds: starting work is
+ * what somebody does when nothing is, and this is the same start the New
+ * session button opens on a wide screen -- the shell holds the form and this
+ * opens it -- rather than a second way in with its own rules.
  */
 
 /** The button's diameter. Comfortably past the 44px a fingertip needs. */
 const DIAMETER = 56;
 
-/**
- * Off screen, and still read out. `display: none` and `visibility: hidden` are
- * both dropped from the accessibility tree, which for a live region means it
- * announces nothing at all.
- */
-const OFF_SCREEN: CSSProperties = {
-  position: 'absolute',
-  width: 1,
-  height: 1,
-  margin: -1,
-  padding: 0,
-  overflow: 'hidden',
-  clip: 'rect(0 0 0 0)',
-  whiteSpace: 'nowrap',
-  border: 0,
-};
-
 export interface StartSessionButtonProps {
-  /** How many sessions want a human. Zero draws no badge at all. */
-  readonly needsYou: number;
   readonly onStart: () => void;
-  readonly scheme: Scheme;
 }
 
-export function StartSessionButton({
-  needsYou,
-  onStart,
-  scheme,
-}: StartSessionButtonProps): JSX.Element {
+export function StartSessionButton({ onStart }: StartSessionButtonProps): JSX.Element {
   return (
     <Box
       style={{
@@ -72,65 +49,13 @@ export function StartSessionButton({
         p={0}
         onClick={onStart}
       >
-        {/* A plus and not an icon set, the same way the machine selector's
-            disclosure is one character: the app ships no icons. */}
+        {/* A plus and not an icon, the same way the machine selector's
+            disclosure is one character: the app ships no icon set, and the
+            bell's glyph is the one drawn shape, argued where it is drawn. */}
         <Text component="span" aria-hidden fz={24} fw={500} lh={1}>
           +
         </Text>
       </Button>
-      {/* Mounted at every count, empty at zero. A live region inserted at the
-          moment its number appears is a region nothing was watching, so the
-          first session to start waiting -- the one announcement worth making
-          -- is the one that would be missed. */}
-      <Box role="status" style={OFF_SCREEN}>
-        {needsYou === 0 ? '' : needsYouWords(needsYou)}
-      </Box>
-      {needsYou === 0 ? null : <NeedsYouBadge count={needsYou} scheme={scheme} />}
     </Box>
   );
-}
-
-interface NeedsYouBadgeProps {
-  readonly count: number;
-  readonly scheme: Scheme;
-}
-
-/**
- * The count, stuck to the corner of the button.
- *
- * Drawing only, and outside the button: a badge inside would join the button's
- * accessible name, and "Start a session, 2" is not what either half means. The
- * words are said by the live region above, which is mounted whether or not
- * this is -- a screen reader announcing "2" on its own announces nothing.
- */
-function NeedsYouBadge({ count, scheme }: NeedsYouBadgeProps): JSX.Element {
-  return (
-    <Box
-      aria-hidden
-      data-needs-you={count}
-      style={{
-        position: 'absolute',
-        top: -2,
-        right: -2,
-        minWidth: 22,
-        height: 22,
-        paddingInline: 6,
-        borderRadius: 11,
-        display: 'grid',
-        placeItems: 'center',
-        pointerEvents: 'none',
-        background: colorForRole('background', scheme),
-        border: `1px solid ${colorForRole('borderStrong', scheme)}`,
-      }}
-    >
-      <Text component="span" fz={12} fw={700} lh={1} c={colorForRole('text', scheme)}>
-        {count}
-      </Text>
-    </Box>
-  );
-}
-
-/** What the badge says when it is read out rather than looked at. */
-export function needsYouWords(count: number): string {
-  return count === 1 ? '1 session needs you' : `${String(count)} sessions need you`;
 }

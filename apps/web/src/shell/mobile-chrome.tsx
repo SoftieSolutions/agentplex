@@ -20,13 +20,17 @@ import { StartSessionButton } from './start-session-button.js';
  * sidebar has nowhere to be on a phone, so its two readings became two tabs
  * and its nav became the third.
  *
- * The header carries the machine selector and, across from it, the connection
- * line -- the same slot the top bar keeps, because a socket that has dropped
- * has dropped at every width and a phone that said so somewhere else would be
- * a second wording. The mockup also puts a search entry here, which is the
+ * The header carries the machine selector and, across from it, the two slots
+ * the top bar keeps: the connection line and the chrome's actions, the bell
+ * among them. Both are nodes the shell builds once and hands to whichever
+ * chrome is drawn, because a socket that has dropped has dropped at every
+ * width and the count of what is waiting is the same count on a phone -- a
+ * second wording or a second number here would be the app disagreeing with
+ * itself. The mockup also puts a search entry in this header, which is the
  * command palette (AGX-139) and is not built; a box that looks like a search
  * field and answers no keystroke is worse than the space it would fill, which
- * is the same call the top bar made.
+ * is the same call the top bar made, and the New popover (AGX-124) is absent
+ * for the same reason.
  *
  * No effects: every fact here arrives as a prop, and the one thing this file
  * measures -- which form to be in -- was measured by `useShellForm` before this
@@ -48,8 +52,6 @@ export interface MobileChromeProps {
    * is the way back to them.
    */
   readonly current: Destination | null;
-  /** How many sessions are waiting on a human and can be reached: `needsYouCount`. */
-  readonly needsYou: number;
   /** Opens the start form the shell holds -- the same one New session opens. */
   readonly onStartSession: () => void;
   /**
@@ -58,6 +60,13 @@ export interface MobileChromeProps {
    * second app, and a connection that is down is down at every width.
    */
   readonly status?: ReactNode;
+  /**
+   * What the chrome offers at every address -- the attention bell today. The
+   * same node the top bar is handed, for the same reason `status` is: the
+   * shell builds it from the fleet it already holds, so the bell cannot count
+   * one thing on a phone and another on a desk.
+   */
+  readonly actions?: ReactNode;
   readonly scheme: Scheme;
   /** The content region: whatever the address resolved to. */
   readonly children: ReactNode;
@@ -68,9 +77,9 @@ export function MobileChrome({
   machine,
   onPickMachine,
   current,
-  needsYou,
   onStartSession,
   status,
+  actions,
   scheme,
   children,
 }: MobileChromeProps): JSX.Element {
@@ -106,6 +115,7 @@ export function MobileChrome({
         <MachineSelector state={state} chosen={machine} onPick={onPickMachine} scheme={scheme} />
         <Group gap={8} align="center" wrap="nowrap" style={{ marginLeft: 'auto', minWidth: 0 }}>
           {status}
+          {actions}
         </Group>
       </Group>
 
@@ -113,9 +123,7 @@ export function MobileChrome({
         {children}
       </Box>
 
-      {current === null ? null : (
-        <StartSessionButton needsYou={needsYou} onStart={onStartSession} scheme={scheme} />
-      )}
+      {current === null ? null : <StartSessionButton onStart={onStartSession} />}
       <BottomTabs current={current} scheme={scheme} />
     </Box>
   );

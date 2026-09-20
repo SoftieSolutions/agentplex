@@ -5,14 +5,20 @@ import { destinationHash } from './destinations.js';
 import { withSafeArea } from './safe-area.js';
 
 /**
- * The bar across the top: the brand mark, and the one slot the chrome keeps
- * for saying how things are.
+ * The bar across the top: the brand mark, and the two slots the chrome keeps
+ * -- how things are, and what it offers at every address.
  *
  * The mockups put a search field beside the mark. It is the command palette
  * (AGX-139) and it is not built, so nothing is drawn for it: a box that looks
  * like a search field and answers no keystroke is worse than the space it
- * would fill. The bell, the New popover (AGX-124) and the avatar are absent
- * for the same reason.
+ * would fill. The New popover (AGX-124) is absent for the same reason. The
+ * bell is not: it goes in the actions slot, and it is drawn because it has
+ * something true to say at every count and somewhere real to go.
+ *
+ * The avatar the mockups draw beside it is not built and is not waiting on a
+ * ticket. There is one person on a hub they paired themselves, so a portrait
+ * of them would be chrome that tells them who they are; what lives behind it
+ * elsewhere -- an account, a sign-out -- this app has no such thing.
  *
  * The mark is a link and not a picture, because it is how a person gets back
  * to the session list from a destination that has no other way out.
@@ -34,9 +40,19 @@ export interface TopBarProps {
    * dropped socket is worded once rather than once per form.
    */
   readonly status?: ReactNode;
+  /**
+   * The far end of that slot: the controls the chrome offers wherever the app
+   * is, which today is the attention bell.
+   *
+   * A node for the reason `status` is one -- the phone header draws the same
+   * one -- and after the status line rather than before it, so the bar reads
+   * as a sentence that ends in the thing a person clicks and the corner holds
+   * a control rather than prose.
+   */
+  readonly actions?: ReactNode;
 }
 
-export function TopBar({ scheme, status }: TopBarProps): JSX.Element {
+export function TopBar({ scheme, status, actions }: TopBarProps): JSX.Element {
   return (
     <Group
       component="header"
@@ -80,6 +96,7 @@ export function TopBar({ scheme, status }: TopBarProps): JSX.Element {
 
       <Group gap={8} align="center" wrap="nowrap" style={{ marginLeft: 'auto' }}>
         {status}
+        {actions}
       </Group>
     </Group>
   );

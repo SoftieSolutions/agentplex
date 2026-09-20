@@ -9,7 +9,12 @@ import {
   partitionNeedsYou,
   visibleSessions,
 } from './session-list-model.js';
-import { attentionFloorCount, titleFor } from './attention-floor.js';
+import {
+  attentionFloorCount,
+  fleetAttentionCount,
+  needsYouWords,
+  titleFor,
+} from './attention-floor.js';
 
 /**
  * The same captured hub frames the list model is tested against: a fleet where
@@ -86,6 +91,35 @@ describe('the attention floor count', () => {
 
     expect(attentionFloorCount(onlyGpuBox)).toBe(1);
     expect(attentionFloorCount(listSessions(populated))).toBe(2);
+  });
+});
+
+describe('the floor’s count for a whole fleet', () => {
+  it('counts every machine, because the surfaces that ask have no selector on them', () => {
+    // The tab strip and the bell both ask this, and they have to come back
+    // with one number: a bell that silently spoke for the machine somebody
+    // picked in the sidebar would disagree with the title beside it.
+    expect(fleetAttentionCount(populated)).toBe(2);
+    expect(fleetAttentionCount(attended)).toBe(0);
+  });
+
+  it('is zero before the hub has answered with a fleet at all', () => {
+    // `null` is "not answered yet" and not "nothing is asking": the surfaces
+    // stay quiet rather than publishing a zero nothing supports.
+    expect(fleetAttentionCount(null)).toBe(0);
+  });
+});
+
+describe('the words the count is spoken in', () => {
+  it('agrees in number with what it is counting', () => {
+    expect(needsYouWords(1)).toBe('1 session needs you');
+    expect(needsYouWords(2)).toBe('2 sessions need you');
+  });
+
+  it('says the quiet case in words rather than as a zero', () => {
+    // "0 sessions need you" is a sentence nobody says. A bell is labelled at
+    // every count, so the empty case needs wording of its own.
+    expect(needsYouWords(0)).toBe('Nothing needs you');
   });
 });
 

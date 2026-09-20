@@ -1,4 +1,5 @@
-import { wantsAttention, type SessionListItem } from './session-list-model.js';
+import type { MachineState } from '@agentplex/protocol';
+import { listSessions, wantsAttention, type SessionListItem } from './session-list-model.js';
 
 /**
  * The attention floor: the one number every ambient surface speaks from, and
@@ -31,6 +32,40 @@ import { wantsAttention, type SessionListItem } from './session-list-model.js';
  */
 export function attentionFloorCount(items: readonly SessionListItem[]): number {
   return items.filter(wantsAttention).length;
+}
+
+/**
+ * The same count for a whole fleet, which is what every ambient surface wants.
+ *
+ * The surfaces that speak from the floor -- the browser tab, the bell in the
+ * chrome -- are not screens and have no machine selector on them, so they ask
+ * about every machine. They ask through this one function rather than each
+ * assembling `listSessions` for itself, because the requirement is not that
+ * they happen to agree today but that they cannot come apart: a bell saying
+ * one and a title saying two is worse than neither of them existing.
+ *
+ * `null` is the hub not having answered yet, not a quiet fleet. It counts
+ * zero, which is what the surfaces draw nothing for -- the direction that does
+ * not over-claim.
+ */
+export function fleetAttentionCount(state: MachineState | null): number {
+  return state === null ? 0 : attentionFloorCount(listSessions(state));
+}
+
+/**
+ * The count, said out loud: what a bell is named and what a live region reads.
+ *
+ * One wording for every surface, for the reason there is one count. It was the
+ * phone action button's badge first, which is where the phrasing was settled;
+ * the badge is gone and the sentence outlived it.
+ *
+ * Zero is worded rather than counted. A badge is simply absent at zero and
+ * never has to say so, but a bell is drawn and labelled at every count, and
+ * "0 sessions need you" is not a sentence anybody says.
+ */
+export function needsYouWords(count: number): string {
+  if (count === 0) return 'Nothing needs you';
+  return count === 1 ? '1 session needs you' : `${String(count)} sessions need you`;
 }
 
 /** The product name, as `index.html` ships it, and the title's resting state. */

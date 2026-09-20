@@ -1,6 +1,5 @@
 import type { MachineState } from '@agentplex/protocol';
-import { attentionFloorCount, titleFor } from '../sessions/attention-floor.js';
-import { listSessions } from '../sessions/session-list-model.js';
+import { fleetAttentionCount, titleFor } from '../sessions/attention-floor.js';
 
 /**
  * The browser tab as an ambient surface: the attention floor, spoken in the
@@ -65,8 +64,9 @@ export function startDocumentTitle(source: TitleSource, target: TitleTarget): ()
   const found = target.title;
 
   const write = (): void => {
-    const state = source.getSnapshot().machineState;
-    target.title = titleFor(state === null ? 0 : attentionFloorCount(listSessions(state)));
+    // The same call the bell in the chrome makes, and not a second assembly of
+    // the same count: the two sit a centimetre apart and have to agree.
+    target.title = titleFor(fleetAttentionCount(source.getSnapshot().machineState));
   };
 
   const stopListening = source.subscribe(write);
