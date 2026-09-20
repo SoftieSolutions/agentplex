@@ -1,11 +1,12 @@
 import { useState, type JSX } from 'react';
-import type { ServerRegistrationId } from '@agentplex/protocol';
+import type { MachineState, ServerRegistrationId } from '@agentplex/protocol';
 import type { DiscoveredCandidate } from '../settings/pairing-form.js';
 import type { PairingOperations } from '../settings/pairing-operations.js';
 import { PairingPanel } from '../settings/pairing-panel.js';
 import type { ServerRowView } from '../settings/server-rows.js';
 import { Button, Group, Stack, Text, Title } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
+import { sessionsOnServer } from './adopted-sessions-model.js';
 import { EnrollPanel } from './enroll-panel.js';
 import { MachineCard } from './machine-card.js';
 import { pairProgress } from './pair-progress-model.js';
@@ -52,6 +53,21 @@ export interface PairStepProps {
    * only ask a store that already knows.
    */
   readonly rows: readonly ServerRowView[];
+  /**
+   * The same broadcast the rows were projected from, for the sessions the
+   * paired machine was already holding.
+   *
+   * Handed down beside the rows rather than instead of them: `serverRows` is
+   * the settings screen's projection of the machines and says nothing about
+   * sessions, and re-deriving the sessions from it is not possible. Reading
+   * both off one state is what keeps the card and the list under it describing
+   * the same moment -- two snapshots taken a broadcast apart would let the
+   * wizard name sessions on a machine whose row already reads unreachable.
+   *
+   * Nullable for the same reason the rows are derived from a nullable state:
+   * the hub has broadcast nothing until it has.
+   */
+  readonly machineState: MachineState | null;
   readonly scheme: Scheme;
   /** Closes the wizard: the same way out the hero's skip takes. */
   readonly onDone: () => void;
@@ -63,6 +79,7 @@ export function PairStep({
   pairing,
   candidates,
   rows,
+  machineState,
   scheme,
   onDone,
   now,
@@ -89,7 +106,17 @@ export function PairStep({
     return (
       <Stack gap={16} maw={520} align="flex-start">
         <StepTitle scheme={scheme} />
-        <MachineCard progress={pairProgress(rows, paired)} scheme={scheme} now={now} />
+        <MachineCard
+          progress={pairProgress(rows, paired)}
+          scheme={scheme}
+          now={now}
+          sessions={sessionsOnServer(machineState, paired)}
+          /* The session list is out of the wizard, which is where `onDone`
+             already goes: dismissing it and landing on the app are one act,
+             and a second exit that did half of it would leave the wizard
+             offering itself again on the next load. */
+          onGoToSessions={onDone}
+        />
         {/* The way out, in every state the card can reach. A wizard that only
             let somebody leave once the dial had landed would trap the reader
             whose machine is the one that never answers -- which is the reader

@@ -8,6 +8,7 @@ import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { colorForTone } from '../ui/tokens.js';
+import { sessionsOnServer, type AdoptedSession } from './adopted-sessions-model.js';
 import { MachineCard } from './machine-card.js';
 import { pairProgress, type PairProgress } from './pair-progress-model.js';
 
@@ -74,6 +75,20 @@ const CONNECTED_SINCE = 1_756_000_000_000;
 const FOUR_MINUTES_LATER = CONNECTED_SINCE + 4 * 60_000;
 
 /**
+ * A machine with sessions already on it, and the sessions themselves, read
+ * out of one capture: the card is handed what the hub published about this
+ * registration and what it published about that registration's sessions, so
+ * the two cannot disagree the way a hand-built pair could.
+ */
+const POPULATED = stateFrom(hubFrames.machineStatePopulated);
+const MBP_ROBERT = (() => {
+  const server = POPULATED.servers.find((view) => view.label === 'mbp-robert');
+  if (server === undefined) throw new Error('the capture names no mbp-robert');
+  return server.registrationId;
+})();
+const HOLDING: readonly AdoptedSession[] = sessionsOnServer(POPULATED, MBP_ROBERT);
+
+/**
  * A hue as jsdom reports it once drawn: an inline hex comes back as
  * `rgb(...)`, so the expected colour goes through the same normalisation
  * rather than through conversion arithmetic written in a test.
@@ -103,7 +118,11 @@ describe('the wizard machine card', () => {
     container.remove();
   });
 
-  async function draw(progress: PairProgress, now = FOUR_MINUTES_LATER): Promise<void> {
+  async function draw(
+    progress: PairProgress,
+    now = FOUR_MINUTES_LATER,
+    sessions: readonly AdoptedSession[] = [],
+  ): Promise<void> {
     await act(async () => {
       root ??= createRoot(container);
       root.render(
@@ -112,7 +131,13 @@ describe('the wizard machine card', () => {
           cssVariablesResolver={cssVariablesResolver}
           defaultColorScheme="dark"
         >
-          <MachineCard progress={progress} scheme="dark" now={now} />
+          <MachineCard
+            progress={progress}
+            scheme="dark"
+            now={now}
+            sessions={sessions}
+            onGoToSessions={() => {}}
+          />
         </MantineProvider>,
       );
     });
@@ -266,6 +291,28 @@ describe('the wizard machine card', () => {
     // the card stops with it.
     expect(container.querySelector('[role="progressbar"]')).toBe(null);
     expect(container.querySelector('[class*="Loader"]')).toBe(null);
+  });
+
+  it('reports the sessions that machine was already holding', async () => {
+    await draw(pairProgress(serverRows(POPULATED), MBP_ROBERT), FOUR_MINUTES_LATER, HOLDING);
+
+    // The card says what the machine reported it has; these are part of it.
+    // They are drawn from the same capture the card's own rows come from, so
+    // the list under the card cannot be describing another broadcast.
+    const said = copy();
+    expect(said).toContain('fix-auth-refresh');
+    expect(said).toContain('migrate-db-v9');
+  });
+
+  it('reports no sessions on a machine nobody reached, whatever it is handed', async () => {
+    await draw(progressFrom(hubFrames.machineStateWithServer), FOUR_MINUTES_LATER, HOLDING);
+
+    // The dial failed, so this card has no machine to describe the holdings
+    // of. Drawing a list here -- even the empty-state sentence -- would be the
+    // wizard reporting on a box it never got an answer from.
+    const said = copy();
+    expect(said).not.toContain('fix-auth-refresh');
+    expect(said).not.toMatch(/No agent sessions were found/);
   });
 
   it('never says a server dials the hub, in any state it can reach', async () => {

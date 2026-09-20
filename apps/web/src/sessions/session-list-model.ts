@@ -57,6 +57,14 @@ export interface SessionListItem {
    * screen would answer the same question differently.
    */
   readonly server: ServerRegistrationId;
+  /**
+   * The working directory the provider recorded, or `null` when it records
+   * none. Carried beside `summary` rather than folded into it, because
+   * `summary` substitutes the status words for an absent directory and no
+   * reader can undo that substitution -- `idle` is a legal path. A surface
+   * that already has its own column for the activity wants this one.
+   */
+  readonly cwd: string | null;
   /** The one-line body: the working directory, or the status in words. */
   readonly summary: string;
   readonly updatedAt: number;
@@ -145,6 +153,7 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         reachable: row.reachable,
         machine: serverLabel(state, machineId),
         server: row.source,
+        cwd: descriptor.cwd,
         summary: descriptor.cwd ?? statusWords(descriptor.status),
         updatedAt: descriptor.updatedAt,
         storeId: descriptor.storeId,
