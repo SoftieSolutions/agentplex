@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  nodeIdSchema,
   serverIdSchema,
   serverRegistrationIdSchema,
   sessionRefSchema,
@@ -302,6 +303,33 @@ export const sessionHolderSchema = z.object({
 export type SessionHolder = z.infer<typeof sessionHolderSchema>;
 
 /**
+ * Which project of the user's tree a session sits in.
+ *
+ * Two fields where the rest of this frame would carry one id, and the exception
+ * is deliberate. The no-duplication rule exists so that one frame cannot
+ * contradict itself about a thing it describes; this describes nothing. A
+ * project is described in the catalogue, which is a different frame on a
+ * different cadence, so a row carrying only a `nodeId` would leave every screen
+ * that draws a session joining two answers taken at two different moments --
+ * and drawing nothing, or a stale word, whenever it held only one of them.
+ *
+ * The name is the word a client draws and the id is what it navigates by. They
+ * travel together because a label with no destination is a dead end and a
+ * destination with no label is not something a person can read.
+ *
+ * `min(1)` on the name because an empty one reaches the screen as a separator
+ * with nothing before it. A project with no name is not a project a session can
+ * usefully be said to be in, and refusing it here is the one place that
+ * judgement has to be made -- rather than in each of the components that draw
+ * it, each free to forget.
+ */
+export const sessionProjectSchema = z.object({
+  nodeId: nodeIdSchema,
+  name: z.string().min(1),
+});
+export type SessionProject = z.infer<typeof sessionProjectSchema>;
+
+/**
  * One session, as the hub shows it.
  *
  * The descriptor is exactly what one server sent, whole. It is never assembled
@@ -379,6 +407,23 @@ export const sessionRowSchema = z.object({
    * because nothing compares it with anything.
    */
   mutedAt: momentSchema,
+  /**
+   * The project this session is in, or `null` when it is in none.
+   *
+   * Here and not on the descriptor, which is the decision this field turns on.
+   * A descriptor is exactly what one server sent, and a server watches a store
+   * on disk and has never heard of a project: putting the field there would
+   * either be the hub editing a reading it promised to pass through whole, or
+   * a question asked of a machine whose only honest answer is that it does not
+   * know. The association is the hub's own, off the same tree the catalogue
+   * reads, so it belongs beside the other two things on this row that no server
+   * reported.
+   *
+   * Nullable and never absent, for the reason the attention fields are: `null`
+   * says the tree places this session in no project, which is a fact, and the
+   * screens that name a project fall back to the storeId they named before.
+   */
+  project: sessionProjectSchema.nullable(),
 });
 export type SessionRow = z.infer<typeof sessionRowSchema>;
 
