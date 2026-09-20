@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { sessionRefSchema } from '@agentplex/protocol';
+import { nodeIdSchema, sessionRefSchema } from '@agentplex/protocol';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { App } from './App.js';
 import { fakeStorage } from './auth/fake-storage.js';
 import { createTokenStore, type TokenStore } from './auth/token.js';
+import { docHash } from './docs/doc-route.js';
 import { createBrowserDependencies } from './store/browser.js';
 import { createOnboardingDismissal, type OnboardingDismissal } from './onboarding/dismissal.js';
 import { ONBOARDING_HASH } from './onboarding/onboarding-route.js';
@@ -40,6 +41,7 @@ declare global {
 
 const STORED_TOKEN = 'the-token-typed-on-the-device';
 const SESSION = sessionRefSchema.parse({ storeId: 'store-observatory', sessionId: 'session-11' });
+const DOC = nodeIdSchema.parse('node-observatory-notes');
 
 /** Mantine consults the media query for its colour scheme; jsdom has none. */
 function installMatchMedia(): void {
@@ -233,6 +235,35 @@ describe('the page', () => {
     // wants to add a machine already is.
     const link = container.querySelector('a[href="#/onboarding"]');
     expect(link?.textContent).toBe('Open the first-run guide');
+  });
+
+  it('yields to a session address on a fleet the wizard would otherwise open for', async () => {
+    const page = buildPage();
+    page.tokens.write(STORED_TOKEN);
+    window.location.hash = sessionHash(SESSION);
+
+    await mount(page);
+    await hubAnswers(page, hubFrames.machineState);
+
+    // Nothing paired and nothing dismissed, which is exactly the fleet the
+    // auto-show fires on -- but somebody followed a link to one session. An
+    // address that names a thing outranks the wizard, because answering the
+    // link with a walkthrough of pairing a first machine loses the address
+    // the link carried and there is no way back to it.
+    expect(text()).not.toContain(HERO);
+    expect(shellIsDrawn()).toBe(true);
+  });
+
+  it('yields to a document address for the same reason', async () => {
+    const page = buildPage();
+    page.tokens.write(STORED_TOKEN);
+    window.location.hash = docHash(DOC);
+
+    await mount(page);
+    await hubAnswers(page, hubFrames.machineState);
+
+    expect(text()).not.toContain(HERO);
+    expect(shellIsDrawn()).toBe(true);
   });
 
   it('draws neither the wizard nor a conclusion before the hub has answered', async () => {

@@ -1,6 +1,7 @@
 import { useSyncExternalStore, type JSX } from 'react';
 
 import type { TokenStore } from './auth/token.js';
+import { useDocRoute } from './docs/doc-route.js';
 import type { OnboardingDismissal } from './onboarding/dismissal.js';
 import { onboardingVerdict } from './onboarding/onboarding-model.js';
 import { useOnboardingRoute } from './onboarding/onboarding-route.js';
@@ -8,6 +9,7 @@ import { OnboardingScreen } from './onboarding/onboarding-screen.js';
 import { AppShell } from './shell/app-shell.js';
 import type { HubStore } from './store/hub-store.js';
 import { useHubSnapshot } from './store/use-hub-store.js';
+import { useSessionRoute } from './terminal/session-route.js';
 import { colorSchemeManager } from './ui/color-scheme.js';
 import { MantineProvider } from './ui/components.js';
 import { cssVariablesResolver, theme } from './ui/theme.js';
@@ -65,21 +67,37 @@ export function App({ hub, tokens, dismissal }: AppProps): JSX.Element {
  * exist. The wizard instead of the app, not above it, which is the rule
  * AGX-114 landed and this ticket keeps.
  *
- * Every fact here is read as an external store -- the hub's state, the
- * address, the dismissal -- so none of them needs an effect mirroring it into
- * state, and a dismissal clicked inside the wizard puts the app on screen
- * without a remount.
+ * It yields to a session or a document address, though, which is the one rule
+ * the move up added. Those name a thing rather than a place: somebody was sent
+ * a link to one session, and answering it with a walkthrough of pairing a
+ * first machine drops them somewhere the address they followed cannot be
+ * recovered from. The auto-show is a guess about what the person in front of
+ * an empty fleet wants; an address is not a guess, so it wins. A typed
+ * `#/onboarding` is unaffected -- it is the request `onboardingVerdict` reads
+ * before anything else, and it names no thing.
+ *
+ * Every fact here is read as an external store -- the hub's state, the three
+ * addresses, the dismissal -- so none of them needs an effect mirroring it
+ * into state, and a dismissal clicked inside the wizard puts the app on screen
+ * without a remount. The shell reads the hub and the same two thing-addresses
+ * again for its own reasons: duplicate reads of one store and one hash rather
+ * than a second socket, because subscribing to a hub store only ever declares
+ * that somebody is looking.
  */
 function OnboardingGate({ hub, tokens, dismissal }: AppProps): JSX.Element {
   const snapshot = useHubSnapshot(hub);
   const requested = useOnboardingRoute();
+  const sessionRef = useSessionRoute();
+  const doc = useDocRoute();
   const dismissed = useSyncExternalStore(dismissal.subscribe, dismissal.read);
   const verdict = onboardingVerdict({
     machineState: snapshot.machineState,
     dismissed,
     requested,
   });
-  if (verdict === 'show') return <OnboardingScreen store={hub} dismissal={dismissal} />;
+  if (verdict === 'show' && sessionRef === null && doc === null) {
+    return <OnboardingScreen store={hub} dismissal={dismissal} />;
+  }
   // 'wait' draws the app too: the list already says it is waiting for the hub,
   // in the words it uses for every other unanswered render, and a second
   // waiting screen over it would be this file inventing one.
