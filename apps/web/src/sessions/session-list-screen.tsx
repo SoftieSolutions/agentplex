@@ -13,6 +13,7 @@ import {
   useComputedColorScheme,
 } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
+import type { ShellForm } from '../shell/shell-form.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import {
@@ -42,6 +43,13 @@ import { stoppedNotice } from './stop-model.js';
  * card grid (turn 7, 7a/7b), which collapses to the mobile card feed (7e) by
  * dropping to one column rather than by being a second view.
  *
+ * The mockup's floating action button used to be drawn here, fixed to the
+ * corner at narrow widths. It belongs to the phone chrome (AGX-125): it floats
+ * over every destination and its badge counts the whole narrowed fleet, so a
+ * copy owned by this screen would be one of two. New project stays, at every
+ * width: it is this screen's own, the chrome starts sessions and not projects,
+ * and a phone that could start neither would be a phone that can only watch.
+ *
  * The catalogue tree and the machine selector used to stand beside the cards
  * here, because until AGX-122 this screen was the only place with room for
  * them. They are the shell's now (`shell/sidebar.tsx`): they belong to every
@@ -63,6 +71,13 @@ export interface SessionListScreenProps {
    * never written: the selector that writes it is in the chrome.
    */
   readonly machine?: ServerRegistrationId | null;
+  /**
+   * The form the shell is in, because one control here depends on it: below
+   * the breakpoint the chrome's action button is what starts a session. Read
+   * from the shell rather than measured again, so the two cannot disagree
+   * about which of them is drawing that button.
+   */
+  readonly form?: ShellForm;
   /** The clock, injected so a test can render fixed ages. */
   readonly now?: () => number;
 }
@@ -70,6 +85,7 @@ export interface SessionListScreenProps {
 export function SessionListScreen({
   store,
   machine = null,
+  form = 'wide',
   now = Date.now,
 }: SessionListScreenProps): JSX.Element {
   const snapshot = useHubSnapshot(store);
@@ -152,29 +168,27 @@ export function SessionListScreen({
         </Group>
         {/* The mockup's New popover lists five node kinds; Session is the one
             live in this milestone, and a menu with one live option is not
-            drawn, so New is a direct button. On small screens the same action
-            is the mockup's floating button, bottom-right (7e). */}
-        {/* Two buttons and not a menu, for the reason the one above is a
+            drawn, so New is a direct button. */}
+        {/* Two buttons and not a menu, for the reason the one beside it is a
             button: a popover over two options is a click in front of every
             click. A project is where sessions get started from, so it sits
             beside the thing that starts them. */}
-        <Group gap={8} visibleFrom="sm">
+        <Group gap={8}>
           <Button size="xs" variant="default" onClick={() => setCreatingProject(true)}>
             New project
           </Button>
-          <Button size="xs" onClick={() => setCreating(true)}>
-            New session
-          </Button>
+          {/* In the phone form the chrome's action button is what starts a
+              session -- floating over every destination rather than only over
+              this one -- so this would be the second of two. Not a media query:
+              the shell's form is one rule in one place, and a `visibleFrom`
+              here would be a second spelling of it that disagrees at any font
+              size but the default. */}
+          {form === 'wide' ? (
+            <Button size="xs" onClick={() => setCreating(true)}>
+              New session
+            </Button>
+          ) : null}
         </Group>
-        <Button
-          hiddenFrom="sm"
-          size="md"
-          radius="xl"
-          onClick={() => setCreating(true)}
-          style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 20 }}
-        >
-          New session
-        </Button>
       </Group>
       <NewSessionForm
         store={store}
