@@ -76,7 +76,7 @@ function session(id: string): SessionDescriptor {
 }
 
 /** Two servers with one volume mounted, one of them down, and a session on it. */
-function published() {
+function published(attention?: { acknowledgedThrough: number | null; mutedAt: number | null }) {
   const state = createFleetState({ logger });
   state.applyConnection(connection('workshop', 'connected', ['store-work']));
   state.applyConnection(connection('laptop', 'stale', ['store-work']));
@@ -87,6 +87,12 @@ function published() {
     sessions: [session('session-1')],
     reportedAt: START,
   });
+  if (attention !== undefined) {
+    state.applyAttention(
+      { storeId: store('store-work'), sessionId: sessionIdSchema.parse('session-1') },
+      attention,
+    );
+  }
   return toMachineState(state.snapshot());
 }
 
@@ -129,6 +135,23 @@ describe('toMachineState', () => {
       problem: 'connection refused',
       stores: [store('store-work')],
     });
+  });
+
+  it('flattens the two attention fields onto the row, beside the descriptor', () => {
+    const [row] =
+      published({ acknowledgedThrough: START, mutedAt: START + 9 })?.stores[0]?.sessions ?? [];
+    expect(row?.acknowledgedThrough).toBe(START);
+    expect(row?.mutedAt).toBe(START + 9);
+    // Flat and not nested: the comparison a client makes is against
+    // `descriptor.updatedAt` on the same row, and a `null` object in the way
+    // of it would be a branch on the common case of a session nobody has said
+    // anything about.
+    expect(row).not.toHaveProperty('attention');
+  });
+
+  it('publishes nulls for a session nobody has spoken about, rather than leaving the fields out', () => {
+    const [row] = published().stores[0]?.sessions ?? [];
+    expect(row).toMatchObject({ acknowledgedThrough: null, mutedAt: null });
   });
 
   it('carries the session descriptor whole, with who saw it beside it', () => {

@@ -54,6 +54,7 @@ import {
   type TerminalManager,
 } from '../../../apps/server/src/terminal-manager.js';
 import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
+import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
 import { toMachineState } from '../../../apps/hub/src/features/fleet-state/machine-state.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
 import {
@@ -487,6 +488,9 @@ async function start(
     // The same two seams `hub.ts` hands the broadcast. Pairing is not this
     // file's subject -- it is the one the client-pairing suite is about -- but
     // a broadcast built without them would be a different broadcast.
+    // Not this suite's subject; the fake keeps the rows in memory and answers
+    // the two frames the way the real feature does.
+    attention: createFakeAttention(),
     pairing,
     syncServers: () => connections.sync(),
     projects,

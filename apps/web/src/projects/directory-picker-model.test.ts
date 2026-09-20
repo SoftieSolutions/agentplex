@@ -39,6 +39,7 @@ function snapshot(over: Partial<HubSnapshot> = {}): HubSnapshot {
     lastRefusal: null,
     lastStarted: null,
     lastStopped: null,
+    lastAttention: null,
     lastListing: null,
     lastTreeChange: null,
     catalogue: null,

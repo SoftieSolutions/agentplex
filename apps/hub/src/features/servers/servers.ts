@@ -158,8 +158,11 @@ export interface ServerConnectionReport {
  * the decision worth stating: attention is a claim about *now*, and the only
  * thing that knows whether a server is reachable now is the thing holding the
  * socket. It lives on the entry file because it is how other features read a
- * report; `attention.ts` builds the store-level answers on top of it and
- * carries the rest of the argument.
+ * report; `attention.ts` beside it builds the store-level answers on top and
+ * carries the rest of the argument. That file is about reachability, which is
+ * a different question from the `features/attention` feature: this decides
+ * whether a session *can* be answered, and that records whether somebody said
+ * they had seen it.
  */
 export function countsTowardAttention(report: ServerConnectionReport): boolean {
   return report.phase === 'connected';

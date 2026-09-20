@@ -146,5 +146,12 @@ function toSessionRow(row: ReducedSessionRow): SessionRow {
     // it from the status would be a second copy of the rule, free to disagree
     // with the machine that actually holds the terminal.
     holder: row.holder,
+    // Flattened onto the row rather than carried as the little object the
+    // reducer holds, because on the wire they are read beside `updatedAt` and
+    // never apart from it: the verdict a client wants is one comparison across
+    // two fields of one row, and a nested object would put a `null` in the way
+    // of it for the common case of a session nobody has said anything about.
+    acknowledgedThrough: row.attention.acknowledgedThrough,
+    mutedAt: row.attention.mutedAt,
   };
 }

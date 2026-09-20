@@ -35,6 +35,30 @@ export interface SessionListItem {
    * looking is worse than no badge.
    */
   readonly needsYou: boolean;
+  /**
+   * Whether the prompt this session is sitting on has been seen.
+   *
+   * Derived here and carried nowhere: the hub sends how far through this
+   * session somebody has looked and how far it has got, both as readings of
+   * one provider's clock, and this is the comparison between them. A session
+   * the provider has written to since is no longer acknowledged -- which is
+   * what stops one going quiet forever because somebody dismissed its first
+   * prompt and it stopped at a second.
+   *
+   * False for a session nobody has acknowledged, and false for one nobody
+   * needs to: the flag is about the acknowledgement, not about whether
+   * anything is wanted, and `needsYou` beside it is the other half.
+   */
+  readonly acknowledged: boolean;
+  /**
+   * Whether this session is muted.
+   *
+   * It does not touch `needsYou`, and that is the whole semantic: a muted
+   * session keeps its status, its badge and its place in the list. What it
+   * loses is the noise -- the card is dimmed here, and the bell, the title and
+   * the push skip it.
+   */
+  readonly muted: boolean;
   readonly reachable: boolean;
   /**
    * The machine to show on the card: the label of the server running it, or of
@@ -104,6 +128,50 @@ export function wantsHuman(status: SessionStatus): boolean {
   return status === 'awaiting-permission' || status === 'awaiting-input';
 }
 
+/**
+ * Whether an acknowledgement still holds.
+ *
+ * The one rule the attention epic turns on, in one line: an acknowledgement is
+ * a timestamp, and it holds only while the session has said nothing since. A
+ * boolean would go sticky through a second prompt -- dismiss the first, let
+ * the agent run on to a second, and a flag set once claims that one has been
+ * seen too.
+ *
+ * Both numbers are `descriptor.updatedAt` values, off the one clock that wrote
+ * the transcript: `acknowledgedThrough` is the reading the hub saw when
+ * somebody said they had looked, and `updatedAt` is the reading now. Nothing
+ * here touches a wall clock, which is the point. The hub's clock on one side
+ * of this comparison would make the answer depend on how far the hub had
+ * drifted from the machine running the agent -- and a hub a few seconds ahead
+ * would read a second prompt as already seen, silently, which is the exact
+ * failure a timestamp was chosen over a boolean to avoid.
+ *
+ * Equal is held, and that is not a tie-break: the two numbers are equal
+ * precisely while the session has not been written to since the
+ * acknowledgement, which is the common case and the whole of what an
+ * acknowledgement claims.
+ */
+export function acknowledgementHolds(
+  acknowledgedThrough: number | null,
+  updatedAt: number,
+): boolean {
+  return acknowledgedThrough !== null && updatedAt <= acknowledgedThrough;
+}
+
+/**
+ * Whether this session should be making a noise: it wants a human, nobody has
+ * said they have seen it, and it is not muted.
+ *
+ * The one derived fact the bell, the document title and the push all read, so
+ * that three surfaces cannot come to three different answers about whether to
+ * interrupt somebody. It is deliberately narrower than `needsYou`, which is
+ * what the list partitions and counts on: the fact stays visible when it has
+ * been acknowledged or muted, and only the noise stops.
+ */
+export function wantsAttention(item: SessionListItem): boolean {
+  return item.needsYou && !item.acknowledged && !item.muted;
+}
+
 export function statusWords(status: SessionStatus): string {
   switch (status) {
     case 'working':
@@ -150,6 +218,8 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         status: descriptor.status,
         tone: toneForStatus(descriptor.status),
         needsYou: wantsHuman(descriptor.status) && row.reachable,
+        acknowledged: acknowledgementHolds(row.acknowledgedThrough, descriptor.updatedAt),
+        muted: row.mutedAt !== null,
         reachable: row.reachable,
         machine: serverLabel(state, machineId),
         server: row.source,

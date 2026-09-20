@@ -8,6 +8,7 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
+import { UNATTENDED, type SessionAttention } from '../attention/attention.js';
 import { countsTowardAttention, type ServerConnectionReport } from '../servers/servers.js';
 import type { DiscoveredServer } from '../discovery/discovery.js';
 import { sameCandidates, sameConnection, sameHolds, sameSessions } from './equality.js';
@@ -33,7 +34,18 @@ import { chooseReportedSession, type ReportedSession } from './session-selection
  *     of two reports describes a session that exists on no disk anywhere, and
  *     nothing downstream could tell that it did.
  *
- * None of this is persisted, and that is the decision rather than an omission.
+ * One thing here is not a reading of a machine, and it is the exception that
+ * states the rule: `attention` on a session row -- an acknowledgement moment
+ * and a mute moment -- is the user talking, and no server knows it exists.
+ * Its rows live in the attention feature, which owns the table; what is held
+ * here is the current reading of them, applied through `applyAttention` the
+ * same way a connection report is. It is here at all because the version below
+ * means "a client holding this has the whole state", and a fact published on a
+ * session row that could change without moving that number would be a
+ * broadcast cache handing out the row as it was.
+ *
+ * None of the rest of this is persisted, and that is the decision rather than
+ * an omission.
  * What is durable already is: the pairing, the store anchor row, and the last
  * time each server was actually connected (migrations 0002 and 0003). What is
  * here is a claim about *now* -- these sessions, on these machines, reachable
@@ -108,6 +120,17 @@ export interface SessionRow {
    * can answer it.
    */
   readonly holder: SessionHolder | null;
+  /**
+   * What the user has said about this session: when its prompt was last
+   * acknowledged, and whether it is muted.
+   *
+   * The one thing on this row that no server reported and no scan can rebuild.
+   * It is merged in here rather than added by the projection because a row is
+   * what the hub believes about a session, and a client reading attention off
+   * a different object from the status it is about would be two answers a
+   * screen has to join.
+   */
+  readonly attention: SessionAttention;
 }
 
 /** One store, however many servers have it mounted. */
@@ -208,6 +231,19 @@ export interface FleetState {
    * hub's bookkeeping and no client is shown it.
    */
   applyCandidates(candidates: readonly DiscoveredServer[]): void;
+  /**
+   * Takes what the user has said about one session.
+   *
+   * The seam the attention feature's `onChanged` is wired to, and the one path
+   * by which an acknowledgement or a mute reaches the published state --
+   * whether it was just made or read back off disk at boot.
+   *
+   * It is filed under `{ storeId, sessionId }` and not under a store the hub
+   * has heard of: a row may arrive at boot for a session no server has scanned
+   * yet, and dropping it would lose a mute until somebody made it again. It
+   * surfaces when the session does.
+   */
+  applyAttention(ref: SessionRef, attention: SessionAttention): void;
   /** The whole state. The same object until something changes. */
   snapshot(): HubStateSnapshot;
   /**
@@ -247,6 +283,28 @@ export interface FleetState {
    * answer waiting to differ from the one the client is looking at.
    */
   sessionHolder(ref: SessionRef): SessionHolder | null;
+  /**
+   * When the provider last wrote to this session, as the hub currently
+   * believes it, or `null` when the hub knows of no such session.
+   *
+   * Two answers in one, because its one caller asks both at one instant: an
+   * acknowledgement is refused for a session the hub cannot see, and what it
+   * records for one it can see is exactly this number. Two calls could be
+   * answered out of two snapshots, and the pair would then describe a session
+   * as it was at two different moments.
+   *
+   * `null` is existence and not reachability: a session on a machine that went
+   * away keeps its row, labelled, and is still a session a person can see and
+   * act on -- and is exactly the session somebody reaches for the mute on.
+   * What the `null` bounds is the attention table: a hub that recorded an
+   * acknowledgement for any pair of strings a client sent would have a table a
+   * client could grow without limit.
+   *
+   * Here rather than worked out by the caller for the reason `sessionHolder`
+   * is here: it is an answer about the merged view, and a second reader doing
+   * the merge is a second answer waiting to differ from the one on screen.
+   */
+  sessionActivity(ref: SessionRef): number | null;
   /**
    * The same state, projected onto the shape the wire carries.
    *
@@ -293,6 +351,15 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
 
   const connections = new Map<ServerRegistrationId, ServerConnectionReport>();
   const reports = new Map<ServerRegistrationId, Map<StoreId, StoredReport>>();
+  /**
+   * What the user has said, by session.
+   *
+   * Keyed as JSON rather than by a joined string, because a store id and a
+   * session id are opaque and either may contain whatever separator was
+   * chosen -- two sessions colliding on one key would put one person's mute on
+   * another session.
+   */
+  const attention = new Map<string, SessionAttention>();
   const listeners = new Set<(snapshot: HubStateSnapshot) => void>();
 
   let version = 0;
@@ -307,7 +374,7 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
   let candidates: readonly DiscoveredServer[] = [];
 
   const build = (): HubStateSnapshot => {
-    const stores = buildStoreViews(connections, reports);
+    const stores = buildStoreViews(connections, reports, attention);
     return {
       version,
       stores,
@@ -428,6 +495,23 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
       changed();
     },
 
+    applyAttention(ref: SessionRef, next: SessionAttention): void {
+      const key = attentionKey(ref);
+      const previous = attention.get(key) ?? UNATTENDED;
+      // A repeat says nothing new, and waking every client for it would make
+      // the version mean "somebody clicked" rather than "something changed".
+      // It happens for real: two tabs acknowledging the same prompt, and a
+      // mute re-asserted by a client catching up after a reconnection.
+      if (
+        previous.acknowledgedThrough === next.acknowledgedThrough &&
+        previous.mutedAt === next.mutedAt
+      ) {
+        return;
+      }
+      attention.set(key, next);
+      changed();
+    },
+
     snapshot,
 
     storeSessions(storeId: StoreId): readonly SessionDescriptor[] | null {
@@ -437,9 +521,11 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
     },
 
     sessionHolder(ref: SessionRef): SessionHolder | null {
-      const view = snapshot().stores.find((candidate) => candidate.storeId === ref.storeId);
-      const row = view?.sessions.find((session) => session.ref.sessionId === ref.sessionId);
-      return row?.holder ?? null;
+      return findRow(snapshot(), ref)?.holder ?? null;
+    },
+
+    sessionActivity(ref: SessionRef): number | null {
+      return findRow(snapshot(), ref)?.descriptor.updatedAt ?? null;
     },
 
     published(): MachineState {
@@ -451,6 +537,17 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
       return () => void listeners.delete(listener);
     },
   };
+}
+
+/** One merged session row, or `undefined` when the hub has no such session. */
+function findRow(state: HubStateSnapshot, ref: SessionRef): SessionRow | undefined {
+  const view = state.stores.find((candidate) => candidate.storeId === ref.storeId);
+  return view?.sessions.find((session) => session.ref.sessionId === ref.sessionId);
+}
+
+/** One session's key in the attention map. See the map's own note on JSON. */
+function attentionKey(ref: SessionRef): string {
+  return JSON.stringify([ref.storeId, ref.sessionId]);
 }
 
 function byLabel(left: ServerConnectionReport, right: ServerConnectionReport): number {
@@ -468,6 +565,7 @@ function byLabel(left: ServerConnectionReport, right: ServerConnectionReport): n
 function buildStoreViews(
   connections: ReadonlyMap<ServerRegistrationId, ServerConnectionReport>,
   reports: ReadonlyMap<ServerRegistrationId, ReadonlyMap<StoreId, StoredReport>>,
+  attention: ReadonlyMap<string, SessionAttention>,
 ): readonly StoreView[] {
   const attached = new Map<StoreId, ServerConnectionReport[]>();
   for (const connection of connections.values()) {
@@ -490,7 +588,7 @@ function buildStoreViews(
       lastReachableAt: lastOf(
         servers.map((server) => server.connectedSince ?? server.lastConnectedAt),
       ),
-      sessions: buildSessionRows(storeId, servers, reports),
+      sessions: buildSessionRows(storeId, servers, reports, attention),
     });
   }
 
@@ -514,6 +612,7 @@ function buildSessionRows(
   storeId: StoreId,
   servers: readonly ServerConnectionReport[],
   reports: ReadonlyMap<ServerRegistrationId, ReadonlyMap<StoreId, StoredReport>>,
+  attention: ReadonlyMap<string, SessionAttention>,
 ): readonly SessionRow[] {
   const readings = new Map<string, ReportedSession[]>();
   const holders = new Map<string, SessionHolder>();
@@ -556,14 +655,19 @@ function buildSessionRows(
   const rows: SessionRow[] = [];
   for (const gathered of readings.values()) {
     const chosen = chooseReportedSession(gathered);
+    const ref = { storeId, sessionId: chosen.descriptor.sessionId };
     rows.push({
-      ref: { storeId, sessionId: chosen.descriptor.sessionId },
+      ref,
       descriptor: chosen.descriptor,
       source: chosen.registrationId,
       reportedBy: gathered.map((reading) => reading.registrationId).sort(),
       reportedAt: chosen.reportedAt,
       reachable: gathered.some((reading) => reading.reachable),
       holder: holders.get(chosen.descriptor.sessionId) ?? null,
+      // A session nobody has said anything about reads as unattended rather
+      // than as a gap: there is no third state between "not acknowledged" and
+      // "no row", and offering one would make every reader handle it.
+      attention: attention.get(attentionKey(ref)) ?? UNATTENDED,
     });
   }
 

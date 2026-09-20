@@ -33,6 +33,7 @@ import { createDocs } from './features/docs/docs.js';
 import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
+import { createAttention } from './features/attention/attention.js';
 import { createTerminal } from './features/terminal/terminal.js';
 import { createWeb, type WebAssetFileSystem } from './features/web/web.js';
 import { createHubRoutes } from './http/routes.js';
@@ -339,6 +340,28 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
 
   const sessions = createSessions({ state, projects, connections: servers, ids, logger });
 
+  // What the user has said about a session, as opposed to what a machine
+  // reports about one. The rows are this feature's and the current reading of
+  // them is the reducer's, joined by the two functions below and by nothing
+  // else. The edge runs one way: the attention feature imports nothing of the
+  // fleet state, so what it can reach is exactly these two callbacks. (The
+  // reducer does import the feature, for the type of what it is handed and the
+  // value it uses for a session nobody has spoken about.)
+  const attention = createAttention({
+    database,
+    clock,
+    logger,
+    onChanged: (ref, recorded) => state.applyAttention(ref, recorded),
+    sessionActivity: (ref) => state.sessionActivity(ref),
+  });
+
+  // Read back before the first client is served, so that a hub which restarted
+  // is quiet about the sessions it was told to be quiet about rather than
+  // noisy until somebody mutes them again. Awaited, unlike the dial loop: it
+  // is one read of one small table on this machine's own disk, and a client
+  // that arrived first would be shown a screen missing every mute.
+  await attention.load();
+
   // Documents: the index of files the hub does not hold, and the one path a
   // write to one takes. It reads projects for the directory a frame is
   // addressed to and nothing else of that feature, which is the same one-way
@@ -375,6 +398,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     readPaneLayout: () => paneLayout.read(),
     writePaneLayout: (layout) => paneLayout.write(layout),
     sessions,
+    attention,
     pairing,
     // The other half of a pairing frame: the row is the pairing feature's to
     // write, and dialling what the row now says is the supervisor's to do. A
