@@ -472,6 +472,41 @@ describe('commands', () => {
     });
   });
 
+  it('holds a project\u2019s rules by the project the answer names', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    // Captured from a real hub answering a real `approval-policy-add`. The
+    // rule in it is the tool and the whole proposal of a request a client had
+    // just been shown, which is what "always allow this" writes.
+    socket.deliver(hubFrames.approvalPolicy);
+    const held = h.store.getSnapshot().approvalPolicies.get(nodeIdSchema.parse('hub-3'));
+    expect(held?.replyTo).toBe(4);
+    expect(held?.rules).toHaveLength(1);
+    expect(held?.rules[0]?.rule.tool).toBe('Bash');
+    expect(held?.rules[0]?.rule.proposal).toContain('prisma migrate deploy');
+  });
+
+  it('a policy answer clears the refusal that preceded it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.refusal);
+    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
+    socket.deliver(hubFrames.approvalPolicy);
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('queues a rule while the connection is down, because it is still what the person meant', async () => {
+    const h = harness();
+    const outcome = h.store.sendCommand({
+      type: 'approval-policy-add',
+      projectId: nodeIdSchema.parse('hub-3'),
+      rule: { tool: 'Bash', proposal: 'command: pnpm test' },
+    });
+    expect(outcome).toEqual({ accepted: true, id: 1, delivery: 'queued' });
+  });
+
   it('an approval-decided reply clears the refusal that preceded it', async () => {
     const h = harness();
     const { socket } = await establish(h);

@@ -132,4 +132,6 @@ export const hubFrames = {
   pushUnsubscribed: '{"type":"push-unsubscribed","replyTo":3}',
   refusalNoPush:
     '{"type":"refusal","replyTo":2,"code":"refused","message":"this hub has no push key pair, so it cannot notify a browser; the in-page attention floor is what it has","holder":null}',
+  approvalPolicy:
+    '{"type":"approval-policy","replyTo":4,"projectId":"hub-3","rules":[{"ruleId":"hub-4","rule":{"tool":"Bash","proposal":"command: prisma migrate deploy --schema ./db\\ndescription: Apply pending Prisma migrations"},"createdAt":1756000000000}]}',
 } as const;

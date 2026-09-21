@@ -597,6 +597,15 @@ export interface HubSnapshot {
  * it is what the hub stores rather than a secret the user typed -- and turning
  * notifications on while the connection blinks is still turning them on.
  *
+ * The three policy frames are commands for the plainest reason too: reading a
+ * project's rules is a question asked once by somebody who opened a panel, and
+ * writing or removing one is something a person did once. None of them is
+ * standing interest -- nothing re-reads a policy on every reconnection, the way
+ * the layout is re-asked -- so none of them is a subscription. Queueing a write
+ * over a blink is right for the same reason it is right for an acknowledgement:
+ * "stop asking me about this" is still what the person meant a second later,
+ * and the hub refuses the rule if it has since become one it will not take.
+ *
  * `approval-decide` is a command for that reason too, and it is the one where
  * queueing looks riskiest and is not: a decision held over a blink can reach a
  * hub that has nothing left to apply it to. What makes it safe is that the hub
@@ -615,6 +624,9 @@ type CommandFrame = Extract<
       | 'session-acknowledge'
       | 'session-mute'
       | 'approval-decide'
+      | 'approval-policy-list'
+      | 'approval-policy-add'
+      | 'approval-policy-remove'
       | 'pane-layout-save'
       | 'directory-list'
       | 'project-create'
