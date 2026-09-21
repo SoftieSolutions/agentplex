@@ -514,7 +514,7 @@ export function CommandPalette({
             </Text>
           ) : null}
 
-          {hubHalf.problem === null ? null : (
+          {hubHalf.problem === null || results.length === 0 ? null : (
             <Text
               data-palette-problem
               fz={11.5}
@@ -530,13 +530,21 @@ export function CommandPalette({
             // the one thing a person who typed a miss cannot see. Not while the
             // hub is still answering, though: a miss is a claim, and half the
             // answer is outstanding until it has answered.
+            //
+            // And a miss that could not be checked is not a miss, which is why
+            // this says exactly what the announcement says rather than the
+            // sentence above it: a refused half leaves the typed word unlooked
+            // for, and "Nothing matches that" sends a person to retype it. The
+            // refusal line is not drawn over an empty list for the same
+            // reason -- it is worded for rows that are still listed, and with
+            // none it would be this sentence said twice.
             <Text
               data-palette-empty
               fz={12.5}
               c={colorForRole('textMuted', scheme)}
               style={{ padding: '2px 14px 14px' }}
             >
-              {NO_MATCH_WORDS}
+              {hubHalf.problem === null ? NO_MATCH_WORDS : unansweredWords(hubHalf.problem)}
             </Text>
           ) : null}
 

@@ -696,6 +696,31 @@ describe('the command palette', () => {
     expect(headings()).toEqual(['Sessions']);
   });
 
+  it('says a miss it could not check as one, rather than as a miss', async () => {
+    draw();
+    await open();
+    await type('nothing-matches-this');
+    await answer({
+      results: [],
+      searching: false,
+      problem: 'the connection is down: a catalogue page is a read of now',
+    });
+
+    // Nothing is drawn and half the question was never asked: "Nothing matches
+    // that" over that is a claim this does not have, and it is the claim a
+    // person acts on by retyping a word that was never looked up.
+    const empty = words('data-palette-empty');
+    expect(empty).not.toContain('Nothing matches that');
+    expect(empty).toContain('the hub could not be asked');
+    expect(empty).toContain('the connection is down');
+    // Said once: with no rows over it the refusal line would be the same
+    // sentence a second time, and its own wording is about rows that are still
+    // listed, of which there are none.
+    expect(openedDialog().querySelector('[data-palette-problem]')).toBeNull();
+    // What is seen and what is announced are the one answer.
+    expect(announced()).toBe(empty);
+  });
+
   it('says the hub had more matches than the rows account for', async () => {
     draw();
     await open();
