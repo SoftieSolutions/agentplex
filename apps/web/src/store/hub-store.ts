@@ -429,11 +429,42 @@ export interface DocSavedView {
   readonly updatedAt: number;
 }
 
+/**
+ * The hub's yes to a subscribe or an unsubscribe, kept so the control that
+ * asked can stop waiting.
+ *
+ * One view for two frames, like `AttentionView`: both answers carry nothing
+ * but the id of the frame they answer, and two views would be two things to
+ * hold in step for a difference nothing renders. `subscribed` is which of the
+ * two it was, because a control that says "notifications are on" has to know
+ * which way the last answer went.
+ *
+ * It is a receipt and never the state of a subscription. What a browser is
+ * actually subscribed to lives in the browser -- `pushManager.getSubscription`
+ * is the only honest answer -- and a store field that claimed otherwise would
+ * go on claiming it after somebody revoked the permission in their settings.
+ */
+export interface PushView {
+  readonly replyTo: FrameId;
+  readonly subscribed: boolean;
+}
+
 export interface HubSnapshot {
   readonly phase: ConnectionPhase;
   /** What is degraded, in words, or `null` while nothing is. */
   readonly problem: string | null;
   readonly hubId: HubId | null;
+  /**
+   * The VAPID key this hub's browsers subscribe against, or `null` when it has
+   * none -- which is also the answer before the first welcome.
+   *
+   * Read off the welcome rather than asked for, because a client has to hold
+   * it before it can mint a subscription at all. The two nulls are deliberately
+   * one state: nothing can offer to turn push on until a hub has said it can
+   * push, and "no welcome yet" is as good a reason not to offer as "no key
+   * pair". A finer distinction would be one with no button behind it.
+   */
+  readonly pushPublicKey: string | null;
   /**
    * The latest whole state the hub sent, or `null` before the first one.
    * Kept, unchanged, across a disconnection: `phase` is what labels it stale.
@@ -503,6 +534,8 @@ export interface HubSnapshot {
   readonly lastDocSaved: DocSavedView | null;
   /** The most recent document the hub answered with, kept until the next one. */
   readonly lastDocContent: DocContentView | null;
+  /** The hub's most recent yes to a subscribe or an unsubscribe. */
+  readonly lastPush: PushView | null;
 }
 
 /**
@@ -527,7 +560,12 @@ export interface HubSnapshot {
  * prompt, and the hub stamps the moment when it reads the frame rather than
  * when the user clicked — so what a queued acknowledgement ends up worth is
  * decided by whether the session spoke in the meantime, which is the rule an
- * acknowledgement already lives by.
+ * acknowledgement already lives by. `push-subscribe` and `push-unsubscribe`
+ * are commands for the same reason, and the queue is right for them in a way
+ * it is not for a pairing: neither carries a credential -- a push endpoint is
+ * a capability for reaching that browser, minted by its own push service, and
+ * it is what the hub stores rather than a secret the user typed -- and turning
+ * notifications on while the connection blinks is still turning them on.
  *
  * `approval-decide` is a command for that reason too, and it is the one where
  * queueing looks riskiest and is not: a decision held over a blink can reach a
@@ -557,7 +595,9 @@ type CommandFrame = Extract<
       | 'node-forget-removal'
       | 'doc-create'
       | 'doc-save'
-      | 'doc-open';
+      | 'doc-open'
+      | 'push-subscribe'
+      | 'push-unsubscribe';
   }
 >;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -866,6 +906,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastDocCreated: null,
     lastDocSaved: null,
     lastDocContent: null,
+    lastPush: null,
+    pushPublicKey: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -1285,6 +1327,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({
           phase: 'connected',
           hubId: frame.hubId,
+          // Taken from every welcome and not only the first. A hub that was
+          // restarted with push wired in is a hub whose next welcome says so,
+          // and a client holding the answer from the connection before would
+          // be refusing to offer something that now works.
+          pushPublicKey: frame.pushPublicKey,
           problem: null,
           // A fresh connection is a live terminal again; the discard notice
           // described a spell that has ended.
@@ -1379,6 +1426,18 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({
           lastRefusal: null,
           lastApproval: { replyTo: frame.replyTo, outcome: frame.outcome },
+        });
+        return;
+      }
+      case 'push-subscribed':
+      case 'push-unsubscribed': {
+        pending.delete(frame.replyTo);
+        // The refusal is cleared for the reason a start clears it: the last
+        // thing the hub said is now a yes, and a control showing both would be
+        // showing a sentence about a question that has since been answered.
+        update({
+          lastRefusal: null,
+          lastPush: { replyTo: frame.replyTo, subscribed: frame.type === 'push-subscribed' },
         });
         return;
       }

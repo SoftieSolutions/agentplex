@@ -49,6 +49,8 @@ function snapshot(over: Partial<HubSnapshot> = {}): HubSnapshot {
     lastDocCreated: null,
     lastDocSaved: null,
     lastDocContent: null,
+    lastPush: null,
+    pushPublicKey: null,
     ...over,
   };
 }

@@ -112,6 +112,22 @@ import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machi
 const CLIENT_TOKEN = 'the-client-token-typed-on-the-device';
 const HOST = '127.0.0.1';
 
+/**
+ * A VAPID pair and one browser's subscription, for the push captures.
+ *
+ * Fixed values rather than a real mint and a real browser, because what these
+ * fixtures are for is the shape of the frames a client reads back: a key that
+ * changed on every capture would make the web store's assertions a tautology
+ * about whatever the last run produced.
+ */
+const VAPID_PUBLIC_KEY =
+  'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM';
+const VAPID_PRIVATE_KEY = 'UUxI4O8-FbRouAevSmBQ6o18hgE4nSG3qwvJTfKc-ls';
+const PUSH_ENDPOINT = 'https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bHxN0-example';
+const PUSH_P256DH =
+  'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM';
+const PUSH_AUTH = 'tBHItJI5svbpez7KI4CCXg';
+
 const migrationFileSystem: MigrationFileSystem = {
   readDirectory: async () => ['0001_hub_identity.sql'],
   readFile: async () => 'CREATE TABLE hub_identity ()',
@@ -264,6 +280,8 @@ function labelFor(text: string): string {
     ['doc-saved', 'docSaved'],
     ['doc-content', 'docContent'],
     ['approval-decided', 'approvalDecided'],
+    ['push-subscribed', 'pushSubscribed'],
+    ['push-unsubscribed', 'pushUnsubscribed'],
     ['session-unsubscribed', 'sessionUnsubscribed'],
     ['session-subscription-ended', 'sessionSubscriptionEnded'],
     ['protocol-error', 'protocolError'],
@@ -2542,6 +2560,81 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     await fourth.framesReceived(3);
     await stored.stop();
 
+    // A hub that can push, for the welcome that names a key and for the two
+    // answers a browser turning notifications on is given. The key pair is
+    // scripted rather than minted, for the reason the pane layout above is:
+    // the fake database records writes without keeping them, so the row stands
+    // in for a hub that minted its pair on an earlier boot. The sender throws,
+    // because nothing here produces a needs-you edge and a capture that
+    // reached a push service would be a capture with somebody else's network
+    // in it.
+    const pushing = await startHub({
+      ...dependencies,
+      push: {
+        generateKeys: () => {
+          throw new Error('this hub already has a pair');
+        },
+        send: () => {
+          throw new Error('no fixture is a push');
+        },
+      },
+      database: createFakeDatabase({
+        respondWith: [
+          { match: /SELECT hub_id FROM hub_identity/, rows: [{ hub_id: 'hub-1' }] },
+          {
+            match: /SELECT public_key, private_key FROM push_vapid_keys/,
+            rows: [{ public_key: VAPID_PUBLIC_KEY, private_key: VAPID_PRIVATE_KEY }],
+          },
+        ],
+      }),
+      timers: createFakeTimers(),
+    });
+    const fifth = await openClient(pushing);
+    fifth.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await fifth.framesReceived(2);
+    fifth.send({
+      type: 'push-subscribe',
+      id: 2,
+      subscription: {
+        endpoint: PUSH_ENDPOINT,
+        keys: { p256dh: PUSH_P256DH, auth: PUSH_AUTH },
+      },
+    });
+    await fifth.framesReceived(3);
+    fifth.send({ type: 'push-unsubscribe', id: 3, endpoint: PUSH_ENDPOINT });
+    await fifth.framesReceived(4);
+    await pushing.stop();
+
+    const welcomeWithPush = firstFrame(fifth, 'welcome');
+    const pushSubscribed = firstFrame(fifth, 'pushSubscribed');
+    const pushUnsubscribed = firstFrame(fifth, 'pushUnsubscribed');
+
+    // The refusal a hub with no push answers a subscribe with, captured from
+    // the hub that has none rather than written by hand: the words a settings
+    // control renders are the hub's own.
+    const unpushing = await startHub({
+      ...dependencies,
+      database: createFakeDatabase({
+        respondWith: [{ match: /SELECT hub_id FROM hub_identity/, rows: [{ hub_id: 'hub-1' }] }],
+      }),
+      timers: createFakeTimers(),
+    });
+    const sixth = await openClient(unpushing);
+    sixth.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await sixth.framesReceived(2);
+    sixth.send({
+      type: 'push-subscribe',
+      id: 2,
+      subscription: {
+        endpoint: PUSH_ENDPOINT,
+        keys: { p256dh: PUSH_P256DH, auth: PUSH_AUTH },
+      },
+    });
+    await sixth.framesReceived(3);
+    await unpushing.stop();
+
+    const refusalNoPush = firstFrame(sixth, 'refusal');
+
     const captured = new Map<string, string>();
     for (const text of [
       ...first.received,
@@ -2607,6 +2700,10 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('terminalOutputNamed', terminalOutputNamed);
     captured.set('machineStateApproval', machineStateApproval);
     captured.set('approvalDecided', approvalDecided);
+    captured.set('welcomeWithPush', welcomeWithPush);
+    captured.set('pushSubscribed', pushSubscribed);
+    captured.set('pushUnsubscribed', pushUnsubscribed);
+    captured.set('refusalNoPush', refusalNoPush);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)
