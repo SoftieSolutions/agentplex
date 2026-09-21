@@ -65,10 +65,13 @@ function named(items: readonly SessionListItem[], name: string): SessionListItem
 describe('the notification list', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
+  /** How many times a row said it was being followed, recorded rather than acted on. */
+  let followed: number;
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     installMatchMedia();
+    followed = 0;
     container = document.createElement('div');
     document.body.append(container);
   });
@@ -88,7 +91,13 @@ describe('the notification list', () => {
         cssVariablesResolver={cssVariablesResolver}
         defaultColorScheme="dark"
       >
-        <NotificationListView list={list} scheme="dark" />
+        <NotificationListView
+          list={list}
+          scheme="dark"
+          onNavigate={() => {
+            followed += 1;
+          }}
+        />
       </MantineProvider>
     );
     act(() => {
@@ -138,6 +147,40 @@ describe('the notification list', () => {
 
     expect(rows()[0]?.getAttribute('href')).toBe(sessionHash(named(items, 'migrate-db-v9').ref));
     expect(rows()).toHaveLength(2);
+  });
+
+  it('says a row was followed, so whatever opened the list can close it', () => {
+    // The panel is a popover on a desk and a full-screen sheet on a phone, and
+    // neither closes on a click inside it. Routing is the hash, so the page
+    // does not remount: without this the session a row named would open behind
+    // an overlay that is still trapping focus.
+    draw(notificationList(listSessions(populated), NOW));
+    const row = rows()[0];
+    if (row === undefined) throw new Error('nothing drew a row');
+
+    act(() => {
+      row.click();
+    });
+
+    expect(followed).toBe(1);
+  });
+
+  it('leaves a modified click to the browser, and closes nothing', () => {
+    // A new tab is somebody working through the list, not leaving it: the page
+    // stays where it is, so the panel has no reason to shut. And nothing is
+    // ever prevented -- the href is what navigates, which is the whole reason
+    // a row is an anchor.
+    draw(notificationList(listSessions(populated), NOW));
+    const row = rows()[0];
+    if (row === undefined) throw new Error('nothing drew a row');
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true });
+
+    act(() => {
+      row.dispatchEvent(click);
+    });
+
+    expect(click.defaultPrevented).toBe(false);
+    expect(followed).toBe(0);
   });
 
   it('says one line and draws no headings when neither section holds anything', () => {

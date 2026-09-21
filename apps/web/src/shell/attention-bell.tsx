@@ -44,7 +44,14 @@ import type { ShellForm } from './shell-form.js';
  * `shell-form.ts` exists to prevent.
  *
  * No effects. Whether the panel is open is state this component owns, because
- * nothing outside it can open it and nothing outside it needs to know.
+ * nothing outside it can open it and nothing outside it needs to know -- which
+ * is also why closing it on a row is this file's job. Routing is the hash, so
+ * following a row moves the address without remounting anything above it, and
+ * neither container closes on a click inside itself; left alone, the panel
+ * would stand over the session it had just opened, on a phone with the sheet's
+ * overlay, focus trap and scroll lock still on. Every other overlay in the app
+ * closes on the item that was chosen, and this is that rule for a list whose
+ * items are links.
  */
 
 /** The bell's box: the mockup's square control, and a fingertip's floor. */
@@ -176,7 +183,12 @@ export function AttentionBell({ list, store, form, scheme }: AttentionBellProps)
               border: `1px solid ${colorForRole('borderStrong', scheme)}`,
             }}
           >
-            <NotificationPanel list={list} store={store} scheme={scheme} />
+            <NotificationPanel
+              list={list}
+              store={store}
+              onNavigate={() => setOpened(false)}
+              scheme={scheme}
+            />
           </Popover.Dropdown>
         </Popover>
       )}
@@ -239,7 +251,11 @@ function NotificationSheet({
         aria-label={name}
         style={{ background: colorForRole('surface', scheme), overflow: 'hidden' }}
       >
-        <NotificationPanel list={list} store={store} scheme={scheme} />
+        {/* A row taking the page somewhere is the sheet's own `onClose`: what
+            the shell does about a dismissed sheet and about a followed row is
+            the same thing, and a second callback down to here would be two
+            names for one. */}
+        <NotificationPanel list={list} store={store} onNavigate={onClose} scheme={scheme} />
       </Drawer.Content>
     </Drawer.Root>
   );
@@ -248,6 +264,8 @@ function NotificationSheet({
 interface NotificationPanelProps {
   readonly list: NotificationList;
   readonly store: HubStore;
+  /** Passed through to the rows: see `NotificationListViewProps`. */
+  readonly onNavigate: () => void;
   readonly scheme: Scheme;
 }
 
@@ -259,7 +277,12 @@ interface NotificationPanelProps {
  * panels sharing a model, and the first control the header gains would have to
  * be built twice and then kept in step by hand.
  */
-function NotificationPanel({ list, store, scheme }: NotificationPanelProps): JSX.Element {
+function NotificationPanel({
+  list,
+  store,
+  onNavigate,
+  scheme,
+}: NotificationPanelProps): JSX.Element {
   return (
     <Box>
       {/* The header is handed the needs-you section and not the whole list:
@@ -267,7 +290,7 @@ function NotificationPanel({ list, store, scheme }: NotificationPanelProps): JSX
           holding both sections would be a header that could act on the
           receipt. */}
       <PanelHeader rows={list.needsYou} store={store} scheme={scheme} />
-      <NotificationListView list={list} scheme={scheme} />
+      <NotificationListView list={list} onNavigate={onNavigate} scheme={scheme} />
     </Box>
   );
 }

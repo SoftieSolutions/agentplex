@@ -1,4 +1,4 @@
-import { useId, type JSX } from 'react';
+import { useId, type JSX, type MouseEvent } from 'react';
 import { Box, Text } from '../ui/components.js';
 import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
@@ -27,7 +27,40 @@ import type { NotificationList, NotificationRow } from './notification-model.js'
 export interface NotificationListViewProps {
   /** The two sections, from `notificationList`. */
   readonly list: NotificationList;
+  /**
+   * That a row is taking the page somewhere, so whatever this is drawn inside
+   * can get out of the way.
+   *
+   * Required, and not a courtesy. Routing here is the hash, so following a row
+   * changes the address without remounting anything: neither container closes
+   * on a click inside itself, so without this the session a row named opens
+   * under a dropdown that is still over the content -- or, on a phone, under a
+   * sheet that still holds the overlay, the focus trap and the scroll lock.
+   * The precedent is every other overlay in the app closing on the item that
+   * was chosen (`machines/machine-selector.tsx`, `tree/node-menu.tsx`).
+   *
+   * It is not called for a click that opens the session elsewhere: see
+   * `opensElsewhere`.
+   */
+  readonly onNavigate: () => void;
   readonly scheme: Scheme;
+}
+
+/**
+ * Whether this click is asking for the session somewhere other than here: a
+ * new tab, a new window, a download, or a button that is not the first.
+ *
+ * The browser handles all of those and this page stays where it is, so the
+ * panel stays open with it -- shutting it would take the list away from
+ * somebody opening it a background tab at a time.
+ *
+ * Nothing is prevented in either branch. The `href` is what navigates, which
+ * is the whole reason a row is an anchor, and a handler that called
+ * `preventDefault` would be taking back the middle click the row exists to
+ * keep.
+ */
+function opensElsewhere(event: MouseEvent<HTMLAnchorElement>): boolean {
+  return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 }
 
 /**
@@ -35,10 +68,17 @@ export interface NotificationListViewProps {
  * model's shape, and a component sharing that name would make every file that
  * holds both rename one of them.
  */
-export function NotificationListView({ list, scheme }: NotificationListViewProps): JSX.Element {
-  // `useId` and not a constant: both presentations may be mounted at once --
-  // a breakpoint hides a container, it does not unmount it -- and two sections
-  // sharing a heading id would point half the labels at the wrong words.
+export function NotificationListView({
+  list,
+  onNavigate,
+  scheme,
+}: NotificationListViewProps): JSX.Element {
+  // `useId` and not a constant: an id has to be unique in a document, and a
+  // constant would be a collision waiting for the second list anybody draws --
+  // a test mounting two, or a second surface opening the same panel. Only one
+  // container is ever mounted (`attention-bell.tsx` chooses with a ternary),
+  // so nothing today collides; this is what keeps that from being a rule a
+  // later caller has to know.
   const needsYouHeading = useId();
   const earlierHeading = useId();
 
@@ -69,7 +109,7 @@ export function NotificationListView({ list, scheme }: NotificationListViewProps
             scheme={scheme}
           />
           {list.needsYou.map((row) => (
-            <Row key={row.key} row={row} scheme={scheme} unseen />
+            <Row key={row.key} row={row} scheme={scheme} onNavigate={onNavigate} unseen />
           ))}
         </Box>
       )}
@@ -85,7 +125,7 @@ export function NotificationListView({ list, scheme }: NotificationListViewProps
             scheme={scheme}
           />
           {list.earlier.map((row) => (
-            <Row key={row.key} row={row} scheme={scheme} unseen={false} />
+            <Row key={row.key} row={row} scheme={scheme} onNavigate={onNavigate} unseen={false} />
           ))}
         </Box>
       )}
@@ -133,6 +173,8 @@ function SectionHeading({ id, words, color, scheme }: SectionHeadingProps): JSX.
 interface RowProps {
   readonly row: NotificationRow;
   readonly scheme: Scheme;
+  /** Passed straight down: see `NotificationListViewProps`. */
+  readonly onNavigate: () => void;
   /**
    * Whether this row is still asking. It is the section it sits in rather than
    * a fact re-derived from the item: the model already decided which section a
@@ -142,13 +184,16 @@ interface RowProps {
 }
 
 /** One row: the session's tone dot, what it is doing, and where it is doing it. */
-function Row({ row, scheme, unseen }: RowProps): JSX.Element {
+function Row({ row, scheme, onNavigate, unseen }: RowProps): JSX.Element {
   const muted = colorForRole('textMuted', scheme);
   return (
     <Box
       component="a"
       data-notification-row
       href={row.href}
+      onClick={(event: MouseEvent<HTMLAnchorElement>) => {
+        if (!opensElsewhere(event)) onNavigate();
+      }}
       style={{
         display: 'flex',
         gap: 10,

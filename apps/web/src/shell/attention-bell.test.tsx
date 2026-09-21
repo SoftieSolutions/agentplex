@@ -16,6 +16,7 @@ import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
+import { sessionHash } from '../terminal/session-route.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { AttentionBell, PANEL_WIDTH } from './attention-bell.js';
@@ -137,6 +138,8 @@ describe('the attention bell', () => {
     interest?.();
     interest = null;
     container.remove();
+    // A row is a real anchor and jsdom follows it, so the address moved.
+    window.location.hash = '';
   });
 
   function draw(list: NotificationList, form: ShellForm = 'wide', which: HubStore = store): void {
@@ -169,6 +172,18 @@ describe('the attention bell', () => {
     await act(settle);
     await act(frame);
     await act(settle);
+  }
+
+  /**
+   * Waits for a container that has been dismissed to actually leave the
+   * document. Both of them fade out over a duration rather than unmounting in
+   * the flush that asked, so this polls up to a second instead of sleeping for
+   * whichever of the two durations is longer.
+   */
+  async function untilClosed(): Promise<void> {
+    for (let attempt = 0; attempt < 40 && openedPanel() !== null; attempt += 1) {
+      await act(() => new Promise((resolve) => setTimeout(resolve, 25)));
+    }
   }
 
   /** Presses it the way a person does, and waits for what that opens. */
@@ -353,6 +368,47 @@ describe('the attention bell', () => {
 
     expect(rows()).toEqual([]);
     expect(panel().textContent).toContain('Nothing is waiting on you.');
+  });
+
+  it('closes the popover when a row is followed, and still goes where it says', async () => {
+    const asking = twoWaiting.needsYou[0];
+    if (asking === undefined) throw new Error('the fixture has nothing asking');
+    draw(twoWaiting, 'wide');
+    await press();
+    const row = rows()[0];
+    if (row === undefined) throw new Error('the panel drew no rows');
+
+    await act(() => {
+      row.click();
+    });
+    await untilClosed();
+
+    // The address is the hash, so the page does not remount and nothing else
+    // would ever take this panel down: a session opened under a dropdown that
+    // is still covering the content is the reading of it nobody asked for.
+    expect(openedPanel()).toBeNull();
+    expect(bell().getAttribute('aria-expanded')).toBe('false');
+    // And it is still a link to the same session, through the helper the card
+    // uses: closing the panel is something the row does on the way, not
+    // instead of going.
+    expect(row.getAttribute('href')).toBe(sessionHash(asking.item.ref));
+  });
+
+  it('closes the sheet the same way, where it is the whole screen', async () => {
+    // Worse on a phone than on a desk: the sheet holds the focus trap and the
+    // scroll lock, so a row that left it standing would hand somebody a
+    // terminal they can neither reach nor scroll.
+    draw(twoWaiting, 'phone');
+    await press();
+    const row = rows()[0];
+    if (row === undefined) throw new Error('the sheet drew no rows');
+
+    await act(() => {
+      row.click();
+    });
+    await untilClosed();
+
+    expect(openedPanel()).toBeNull();
   });
 
   it('marks the listed sessions read: one acknowledgement each, and no mute', async () => {
