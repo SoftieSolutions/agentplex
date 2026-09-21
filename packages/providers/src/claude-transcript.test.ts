@@ -57,8 +57,85 @@ describe('parseClaudeTranscript', () => {
         title: 'Docker compose without hub',
         signal: 'awaiting-input',
         usage: COMPLETED_TURN_USAGE,
+        model: 'claude-opus-5',
       },
     });
+  });
+
+  it('names the model the captured session was actually running', () => {
+    // Captured, not chosen: every `assistant` line in this fixture carries
+    // `message.model`, and this is the string Claude Code wrote there. Nothing
+    // here maps it, shortens it or checks it against a list of models this
+    // repository knows -- a model that ships tomorrow has to arrive the same
+    // way this one does.
+    const parsed = parseClaudeTranscript(COMPLETED_TURN);
+
+    expect(parsed.ok && parsed.transcript.model).toBe('claude-opus-5');
+  });
+
+  it('keeps the model of the last assistant turn when a user turn follows it', () => {
+    // The model is not read off the transcript's last turn, because the last
+    // turn is routinely a user turn -- a prompt sent to a session that has not
+    // answered yet -- and a user turn names no model. Reading it there would
+    // blank the model of exactly the sessions that are busy.
+    const user = JSON.stringify({
+      ...(JSON.parse(lastLineOf(COMPLETED_TURN, 'user')) as Record<string, unknown>),
+      timestamp: '2026-09-03T09:00:00.000Z',
+    });
+    const parsed = parseClaudeTranscript(`${COMPLETED_TURN}${user}\n`);
+
+    expect(parsed.ok && parsed.transcript.model).toBe('claude-opus-5');
+  });
+
+  it('reports the model of the newest turn, not of the first', () => {
+    // `/model` mid-session is ordinary, and the question this answers is what
+    // the session is running now rather than what it started on. Last wins,
+    // which is how the cwd is already read.
+    const captured = JSON.parse(lastLineOf(COMPLETED_TURN, 'assistant')) as {
+      message: Record<string, unknown>;
+    };
+    const switched = JSON.stringify({
+      ...captured,
+      timestamp: '2026-09-03T09:00:00.000Z',
+      message: { ...captured.message, id: 'msg_switched', model: 'claude-haiku-4-5' },
+    });
+    const parsed = parseClaudeTranscript(`${COMPLETED_TURN}${switched}\n`);
+
+    expect(parsed.ok && parsed.transcript.model).toBe('claude-haiku-4-5');
+  });
+
+  it('does not take the session’s model off a subagent sidechain', () => {
+    // A `Task` subagent runs whatever model it was configured with, which is
+    // routinely not the session's -- a cheap model doing a search inside a
+    // session running an expensive one. Its tokens are this session's bill,
+    // but its model is not this session's model.
+    const captured = JSON.parse(lastLineOf(COMPLETED_TURN, 'assistant')) as {
+      message: Record<string, unknown>;
+    };
+    const sidechain = JSON.stringify({
+      ...captured,
+      isSidechain: true,
+      timestamp: '2026-09-03T09:00:00.000Z',
+      message: { ...captured.message, id: 'msg_subagent', model: 'claude-haiku-4-5' },
+    });
+    const parsed = parseClaudeTranscript(`${COMPLETED_TURN}${sidechain}\n`);
+
+    expect(parsed.ok && parsed.transcript.model).toBe('claude-opus-5');
+  });
+
+  it('reports no model rather than a likely one when no turn names one', () => {
+    // A transcript from a Claude Code that did not record the model, and one
+    // whose turns predate the field, must leave the model absent instead of
+    // reaching for the provider's usual one. "Probably opus" beside a session
+    // is a guess wearing a reading's clothes, and it is not an error either:
+    // the transcript is otherwise perfectly readable.
+    const stripped = COMPLETED_TURN.split('\n')
+      .map((line) => line.replaceAll('"model":"claude-opus-5",', ''))
+      .join('\n');
+    const parsed = parseClaudeTranscript(stripped);
+
+    expect(parsed.ok && parsed.transcript.turns).toBeGreaterThan(0);
+    expect(parsed.ok && parsed.transcript.model).toBeNull();
   });
 
   it('dates a session by its last turn, never by its last line', () => {

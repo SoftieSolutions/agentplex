@@ -74,8 +74,30 @@ describe('createClaudeAdapter.discover', () => {
           cacheWriteTokens: 18_872,
           outputTokens: 1347,
         },
+        // What this captured session was actually running, as Claude Code
+        // wrote it on every assistant line of the fixture. It leaves the
+        // adapter as the string it arrived as: nothing maps it and nothing
+        // checks it against a set of models this repository knows.
+        model: 'claude-opus-5',
       },
     ]);
+  });
+
+  it('reports no model for a transcript that names none, and calls it no problem', async () => {
+    // The other half of the rule. A transcript this adapter can read
+    // perfectly well but which never says which model answered -- an older
+    // Claude Code, or one that stops writing the field -- is a session with
+    // no model to show, not a session to guess a model for and not a store
+    // with a fault in it.
+    const stripped = COMPLETED_TURN.split('\n')
+      .map((line) => line.replaceAll('"model":"claude-opus-5",', ''))
+      .join('\n');
+    const adapter = adapterOver({ files: { [`${PROJECT}/${SESSION_ID}.jsonl`]: stripped } });
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.sessions.map((session) => session.model)).toEqual([null]);
+    expect(discovered.problems).toEqual([]);
   });
 
   it('takes the session id from the file name, not from inside the file', async () => {

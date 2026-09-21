@@ -206,12 +206,35 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
   /** What the provider calls this session, if it names its sessions at all. */
   title: z.string().min(1).nullable(),
   /**
+   * The model this session is running, as the provider's own record names it.
+   *
+   * A string, and not a union this repository maintains. The set of models
+   * belongs to the providers and changes on their release schedule rather than
+   * ours: a model that shipped this morning has to reach a client without a
+   * release here, and a closed set would turn every such model into a parse
+   * failure for a session that is running perfectly well. So nothing here
+   * enumerates the value and nothing downstream switches on it -- it is carried
+   * and it is shown.
+   *
+   * Optional for the reason `usage` is. An adapter that read the record and
+   * found no model named, and a report from something that does not name models
+   * at all, are the same fact to every surface: there is no model to show.
+   * Neither is an error, and neither may become the provider's usual model --
+   * "probably opus" printed beside a session is a guess wearing a reading's
+   * clothes, and absence has to degrade to a missing segment instead.
+   *
+   * It arrives by the route the token counts do: each adapter reads it out of
+   * the session record it already opened for `usage`. As with those counts, the
+   * strings are each provider's own and are not comparable across providers.
+   */
+  model: z.string().min(1).optional(),
+  /**
    * What this session has spent, or nothing at all.
    *
-   * Optional, and alone among this descriptor's fields in that -- `cwd` and
-   * `title` are nullable because "the provider was asked and does not record
-   * one" is a different fact from "nobody filled this in", and for a working
-   * directory it is a difference a reader acts on. Here it is not. A session
+   * Optional, as `model` is, where `cwd` and `title` are nullable because "the
+   * provider was asked and does not record one" is a different fact from
+   * "nobody filled this in", and for a working directory it is a difference a
+   * reader acts on. Here it is not. A session
    * whose transcript carries no usage and a report from something that does not
    * count tokens are the same fact to everything downstream: there is no number
    * to show, and the surface has to render that as absence.

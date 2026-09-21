@@ -82,6 +82,19 @@ const turnSchema = z.object({
        * object, so this is what makes it countable exactly once.
        */
       id: z.string().min(1).optional(),
+      /**
+       * The model that produced this response, as Claude Code names it --
+       * `claude-opus-5` in the captured fixtures.
+       *
+       * Declared here rather than reached for through the `.loose()` below on
+       * purpose: a field this parser reads is a field this parser parses, and
+       * the alternative is casting an `unknown` off a loose object at the one
+       * place this file exists to avoid casting. A line that states a `model`
+       * of the wrong type costs itself, exactly as a line with a malformed
+       * `usage` already does. Only assistant lines carry it at all, which is
+       * why absence is ordinary here and not a fault.
+       */
+      model: z.string().min(1).optional(),
       usage: usageSchema.optional(),
       stop_reason: z.string().nullish(),
       content: z
@@ -119,6 +132,16 @@ export interface ClaudeTranscript {
    * surfaces above render the first as absence and the second as a number.
    */
   readonly usage: SessionUsage | null;
+  /**
+   * The model the newest turn of the conversation ran on, or `null` when no
+   * turn names one.
+   *
+   * `null` is the honest answer for a transcript that never said, and it is
+   * the only alternative to naming the model this provider usually runs --
+   * which would be a guess printed on the one line whose job is to say what
+   * is actually running. Nothing here interprets the string.
+   */
+  readonly model: string | null;
 }
 
 /**
@@ -142,6 +165,7 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
   let updatedAt = 0;
   let cwd: string | null = null;
   let title: string | null = null;
+  let model: string | null = null;
   let last: z.infer<typeof turnSchema> | null = null;
   let usage: SessionUsage | null = null;
   const pendingToolUse = new Set<string>();
@@ -186,6 +210,15 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
     last = turn.data;
     updatedAt = Math.max(updatedAt, Date.parse(turn.data.timestamp));
     if (turn.data.cwd !== undefined) cwd = turn.data.cwd;
+    // Last wins, like the cwd above it, and for the same reason: `/model`
+    // mid-session is ordinary and the question is what this session is running
+    // now, not what it started on. Below the sidechain filter deliberately --
+    // a `Task` subagent runs whatever model it was configured with, routinely
+    // a cheaper one than its parent, and its model is not this session's.
+    // Read off every turn rather than off the last one, because the last turn
+    // of a busy session is a user turn, which names no model and would blank
+    // the field on exactly the sessions somebody is watching.
+    if (turn.data.message?.model !== undefined) model = turn.data.message.model;
     trackToolUse(turn.data, pendingToolUse);
   }
 
@@ -197,7 +230,15 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
 
   return {
     ok: true,
-    transcript: { turns, updatedAt, cwd, title, signal: signalOf(last, pendingToolUse), usage },
+    transcript: {
+      turns,
+      updatedAt,
+      cwd,
+      title,
+      signal: signalOf(last, pendingToolUse),
+      usage,
+      model,
+    },
   };
 }
 

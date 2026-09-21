@@ -67,8 +67,36 @@ describe('createCodexAdapter.discover', () => {
         // codex's own running thread total, with the cached part taken back
         // out of the input figure it is folded into. See `codex-rollout.ts`.
         usage: { inputTokens: 3380, cacheReadTokens: 9984, cacheWriteTokens: 0, outputTokens: 6 },
+        // What this captured session was actually running, as the
+        // `turn_context` codex wrote for its one turn states it. It leaves the
+        // adapter as the string it arrived as: nothing maps it and nothing
+        // checks it against a set of models this repository knows.
+        model: 'gpt-5.6-terra',
       },
     ]);
+  });
+
+  it('reports no model for a rollout whose turns name none, and calls it no problem', async () => {
+    // The other half of the rule. A rollout this adapter reads perfectly well
+    // whose turn contexts state no model -- an older codex, or one that stops
+    // writing the field -- is a session with no model to show, not a session
+    // to guess a model for and not a store with a fault in it. The captured
+    // `session_meta` here does mention a model, in the provenance of the
+    // instructions codex shipped, and that is not this session's model; the
+    // two `event_msg` lines are what make the file a session, which the
+    // fixture as captured is not.
+    const path = `${SESSIONS}/2026/09/11/rollout-2026-09-11T23-42-24-unnamed.jsonl`;
+    const turn = [
+      '{"timestamp":"2026-09-12T02:42:30.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t-1"}}',
+      '{"timestamp":"2026-09-12T02:42:31.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t-1"}}',
+    ].join('\n');
+
+    const discovered = await adapterOver({ files: { [path]: `${NO_TURNS}${turn}\n` } }).discover(
+      STORE,
+    );
+
+    expect(discovered.sessions.map((session) => session.model)).toEqual([null]);
+    expect(discovered.problems).toEqual([]);
   });
 
   it('reports no usage for a rollout that recorded none, rather than zero', async () => {

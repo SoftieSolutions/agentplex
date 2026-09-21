@@ -167,6 +167,23 @@ export interface DiscoveredSession {
    * differently on purpose.
    */
   readonly usage: SessionUsage | null;
+  /**
+   * The model this session is running, named as the provider's own record
+   * names it, or `null` when that record does not name one.
+   *
+   * A string, never a value this package enumerates: the set of models is the
+   * providers' and moves on their release schedule, so a model released this
+   * morning has to reach a screen without a release here. Nothing downstream
+   * switches on it.
+   *
+   * Required and nullable for the reason `usage` above is. An adapter is the
+   * only thing that can read a provider's own record, so it is the one place
+   * that has to answer out loud, and `null` is a real answer: it means the
+   * adapter looked and the record named no model. What it must never mean is
+   * the model this provider usually runs -- a guess is worse than a missing
+   * segment on the one line that claims to say what is running.
+   */
+  readonly model: string | null;
 }
 
 export interface DiscoveryProblem {

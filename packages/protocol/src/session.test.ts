@@ -91,6 +91,38 @@ describe('sessionDescriptorSchema', () => {
     ).toBe(false);
   });
 
+  it('takes a session with no model on it, and does not invent one', () => {
+    // Optional for the reason `usage` is: an adapter that looked and found no
+    // model, and a report from something that does not name models, are the
+    // same fact downstream -- there is nothing to show. What is never allowed
+    // is a default, because the provider's usual model is a guess dressed as a
+    // reading, and the segment that names it would then be confidently wrong.
+    const parsed = sessionDescriptorSchema.safeParse(descriptor);
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.model).toBeUndefined();
+  });
+
+  it('carries the model the provider stated, as the string it stated', () => {
+    // A string and not a union. The set of models is the providers' to change
+    // and not this repository's to enumerate: a model that shipped this morning
+    // has to arrive at the client without a release here, so nothing parses
+    // this into a closed set and nothing downstream switches on the value.
+    expect(sessionDescriptorSchema.parse({ ...descriptor, model: 'opus-4.1' }).model).toBe(
+      'opus-4.1',
+    );
+  });
+
+  it('refuses a model that is not a string, or is an empty one', () => {
+    // The parser is where a claim off another program's record is checked. A
+    // number means the adapter read the wrong field, and an empty string is a
+    // present-but-blank value that would render as a stray separator with
+    // nothing between it -- both are absence stated wrongly, and absence has
+    // its own spelling here.
+    expect(sessionDescriptorSchema.safeParse({ ...descriptor, model: 5 }).success).toBe(false);
+    expect(sessionDescriptorSchema.safeParse({ ...descriptor, model: '' }).success).toBe(false);
+  });
+
   it('refuses an empty cwd, branch or title, so a blank cannot pass for a value', () => {
     expect(sessionDescriptorSchema.safeParse({ ...descriptor, cwd: '' }).success).toBe(false);
     expect(sessionDescriptorSchema.safeParse({ ...descriptor, branch: '' }).success).toBe(false);

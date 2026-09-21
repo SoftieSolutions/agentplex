@@ -48,8 +48,61 @@ describe('parseCodexRollout', () => {
         cwd: '/Users/dev/Code/agentplex',
         signal: 'awaiting-input',
         usage: { inputTokens: 3380, cacheReadTokens: 9984, cacheWriteTokens: 0, outputTokens: 6 },
+        model: 'gpt-5.6-terra',
       },
     });
+  });
+
+  it('names the model the captured session was actually running', () => {
+    // Captured, not chosen: the `turn_context` codex wrote for this turn says
+    // `model: "gpt-5.6-terra"`, and that is the string that comes out. Nothing
+    // here maps it, shortens it or checks it against a list of models this
+    // repository knows -- a model that ships tomorrow has to arrive the way
+    // this one does.
+    const parsed = parseCodexRollout(COMPLETED_TURN);
+
+    expect(parsed.ok && parsed.rollout.model).toBe('gpt-5.6-terra');
+  });
+
+  it('prefers the model of the newest turn context it saw', () => {
+    // Last wins, exactly as the cwd above it does, and for the same reason:
+    // `/model` mid-session is ordinary and the question is what the session is
+    // running now rather than what it opened on.
+    const switched = [
+      '{"timestamp":"2026-09-12T03:00:00.000Z","type":"session_meta","payload":{"session_id":"s-1"}}',
+      '{"timestamp":"2026-09-12T03:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t-1"}}',
+      '{"timestamp":"2026-09-12T03:00:02.000Z","type":"turn_context","payload":{"turn_id":"t-1","model":"gpt-5.6-terra"}}',
+      '{"timestamp":"2026-09-12T03:00:03.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t-1"}}',
+      '{"timestamp":"2026-09-12T03:00:04.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t-2"}}',
+      '{"timestamp":"2026-09-12T03:00:05.000Z","type":"turn_context","payload":{"turn_id":"t-2","model":"gpt-5.6-terra-mini"}}',
+      '{"timestamp":"2026-09-12T03:00:06.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t-2"}}',
+    ].join('\n');
+
+    expect(parseCodexRollout(switched)).toMatchObject({
+      ok: true,
+      rollout: { model: 'gpt-5.6-terra-mini' },
+    });
+  });
+
+  it('reads the model off a turn context only, never off what a session_meta mentions', () => {
+    // The captured `session_meta` below is the whole of `codex-no-turns.jsonl`
+    // and it holds two strings that look like an answer and are not: a
+    // `model_provider` of `openai`, and a `base_instructions.provenance.model`
+    // of `gpt-5.6-terra`, which says which model wrote the instruction text
+    // codex shipped rather than which model is answering here. A parser that
+    // searched for a `model` key would report the provenance of a file as the
+    // session's model and be right by accident for as long as the two happened
+    // to agree. Two `event_msg` lines are appended because the fixture as
+    // captured holds no turn at all -- see the refusal below -- and a rollout
+    // has to be a session before it can have a model.
+    const started = [
+      '{"timestamp":"2026-09-12T02:42:30.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t-1"}}',
+      '{"timestamp":"2026-09-12T02:42:31.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t-1"}}',
+    ].join('\n');
+    const parsed = parseCodexRollout(`${NO_TURNS}${started}\n`);
+
+    expect(parsed.ok && parsed.rollout.turns).toBe(1);
+    expect(parsed.ok && parsed.rollout.model).toBeNull();
   });
 
   it('takes the session id out of the rollout rather than off the file name', () => {
@@ -170,6 +223,11 @@ describe('parseCodexRollout', () => {
     // codex creates the file when the session opens and writes `session_meta`
     // into it before the first turn exists. A file caught in that moment is
     // not a session and is not a fault.
+    //
+    // It is also the honest outcome for this fixture's model: no turn means no
+    // `turn_context`, so there is nothing that states one, and the answer is
+    // no session at all rather than a session carrying a model scraped off the
+    // instruction provenance in its `session_meta`.
     const parsed = parseCodexRollout(NO_TURNS);
 
     expect(parsed).toEqual({ ok: false, reason: 'no-turns' });

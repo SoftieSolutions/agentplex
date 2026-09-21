@@ -149,6 +149,54 @@ describe('discoverStoreSessions', () => {
     expect(session !== undefined && 'usage' in session).toBe(false);
   });
 
+  it("carries the adapter's model through to the descriptor untouched", async () => {
+    // The same route the token counts take, for the same reason: only the
+    // thing that knows a provider's format can read the model out of it, and
+    // nothing between here and a screen is allowed to interpret the string --
+    // no mapping to a display name, no checking it against models this
+    // repository has heard of.
+    const files = createFakeProviderFiles({
+      files: {
+        [`${transcriptsAt('claude')}/session-a.json`]: JSON.stringify({
+          signal: 'quiet',
+          updatedAt: NOW - 1_000,
+          model: 'a-model-nothing-here-enumerates',
+        }),
+      },
+    });
+    const registry = createProviderRegistry([createFakeProviderAdapter({ files })]);
+
+    const discovered = await discoverStoreSessions(STORE, {
+      registry,
+      clock,
+      liveness: nothingRunning,
+    });
+
+    expect(discovered.sessions[0]?.model).toBe('a-model-nothing-here-enumerates');
+  });
+
+  it('leaves the model off a session the adapter found none for, rather than nulling it', async () => {
+    // `null` is the adapter's way of saying it looked and the record named
+    // none; the wire field is optional because absent and null say the same
+    // thing to every reader -- there is no model to show. So the null stops
+    // here instead of crossing, exactly as an absent usage does, and a client
+    // has one shape to render as a missing segment rather than two.
+    const files = createFakeProviderFiles({
+      files: { [`${transcriptsAt('claude')}/session-a.json`]: transcript('quiet') },
+    });
+    const registry = createProviderRegistry([createFakeProviderAdapter({ files })]);
+
+    const discovered = await discoverStoreSessions(STORE, {
+      registry,
+      clock,
+      liveness: nothingRunning,
+    });
+
+    const [session] = discovered.sessions;
+    expect(session).toBeDefined();
+    expect(session !== undefined && 'model' in session).toBe(false);
+  });
+
   it('hands the adapter liveness and the clock, and takes the status it answers', async () => {
     // Only the adapter knows what its own transcript signal means; only the
     // server knows whether a process is alive and what time it is. Status is

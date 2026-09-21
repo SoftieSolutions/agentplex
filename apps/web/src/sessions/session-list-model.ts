@@ -93,6 +93,18 @@ export interface SessionListItem {
    * that already has its own column for the activity wants this one.
    */
   readonly cwd: string | null;
+  /**
+   * The model the provider's own record named, or `null` when it named none.
+   *
+   * A string carried and never read into: nothing here parses it, groups by
+   * it or colours by it, because the set of models is the providers' to change
+   * and a client that branched on the value would have to ship a release every
+   * time one of them shipped a model. The one thing this file does to it is
+   * turn the wire's absent key into a `null`, so that a reader gets the same
+   * shape of absence it already handles for `cwd` and `project` rather than an
+   * `undefined` that reads as a field somebody forgot to set.
+   */
+  readonly model: string | null;
   /** The one-line body: the working directory, or the status in words. */
   readonly summary: string;
   readonly updatedAt: number;
@@ -277,6 +289,7 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         machine: serverLabel(state, machineId),
         server: row.source,
         cwd: descriptor.cwd,
+        model: descriptor.model ?? null,
         summary: descriptor.cwd ?? statusWords(descriptor.status),
         updatedAt: descriptor.updatedAt,
         storeId: descriptor.storeId,

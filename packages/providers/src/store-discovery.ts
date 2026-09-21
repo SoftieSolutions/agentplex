@@ -113,6 +113,13 @@ async function discoverWithAdapter(
       // frame that carried the distinction would be inviting somebody to act
       // on a difference that does not exist.
       ...(session.usage === null ? {} : { usage: session.usage }),
+      // The same treatment, for the same argument. An adapter answers `null`
+      // to mean it read the provider's record and found no model named; the
+      // wire field is optional because that and a report with no model at all
+      // are one fact to every reader of it -- there is no model to show -- and
+      // carrying both shapes would invite a client to tell them apart. What
+      // neither may become on the way is the model the provider usually runs.
+      ...(session.model === null ? {} : { model: session.model }),
       // Neither is read here, and `null` rather than absent. Discovery reads a
       // provider's own files; a branch or a diffstat means starting git, and
       // this package has no process runner and should not grow one to get
