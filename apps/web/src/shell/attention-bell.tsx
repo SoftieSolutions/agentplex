@@ -171,7 +171,21 @@ export function AttentionBell({ list, store, form, scheme }: AttentionBellProps)
         // Controlled, so the popover adds no click handler of its own and the
         // button's is the only one; `onChange` is how a click outside and the
         // escape key get to say the same thing the button does.
-        <Popover opened={opened} onChange={setOpened} position="bottom-end" shadow="md">
+        // The focus follows the panel, in and out. Mantine's default leaves it
+        // on the bell, so a keyboard user who opened the panel and pressed Tab
+        // arrived at the next control in the chrome while a panel they could
+        // not reach stood open over the page; `returnFocus` is the other half
+        // of that, and puts it back on the bell the panel closed under. The
+        // sheet below traps its own focus already, which is what a modal
+        // container does.
+        <Popover
+          opened={opened}
+          onChange={setOpened}
+          trapFocus
+          returnFocus
+          position="bottom-end"
+          shadow="md"
+        >
           <Popover.Target>{button}</Popover.Target>
           <Popover.Dropdown
             style={{

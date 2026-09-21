@@ -128,9 +128,10 @@ describe('the phone chrome', () => {
     readonly current?: 'sessions' | 'projects' | 'more' | null;
     readonly status?: JSX.Element;
     readonly actions?: JSX.Element;
+    readonly search?: JSX.Element;
   }
 
-  function draw({ current = 'sessions', status, actions }: Options = {}): void {
+  function draw({ current = 'sessions', status, actions, search }: Options = {}): void {
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
@@ -147,6 +148,7 @@ describe('the phone chrome', () => {
           }}
           status={status}
           actions={actions}
+          search={search}
           scheme="dark"
         >
           <Text>the content region</Text>
@@ -178,14 +180,29 @@ describe('the phone chrome', () => {
     return container.querySelector<HTMLElement>('[data-needs-you]');
   }
 
-  it('draws a compact header holding the machine selector, and no search entry', () => {
+  it('draws a compact header holding the machine selector', () => {
     draw();
 
     const header = container.querySelector('header');
     expect(header?.textContent).toContain('All machines');
-    // The palette is not built (AGX-139), so nothing is drawn that looks like
-    // a place to type into.
-    expect(header?.querySelectorAll('input')).toHaveLength(0);
+  });
+
+  it('puts the chrome’s search slot on its own row under that header', () => {
+    draw({ search: <button data-search>Search sessions</button> });
+
+    const header = container.querySelector('header');
+    const control = header?.querySelector('[data-search]');
+    // In the header block and not in the row the selector is on: mockup 6c
+    // gives it the full width, which is the only way it clears a fingertip.
+    expect(control).not.toBeNull();
+    expect(control?.closest('header')).toBe(header);
+    expect(header?.firstElementChild?.contains(control ?? null)).toBe(false);
+  });
+
+  it('draws no search row at all when the shell hands it none', () => {
+    draw();
+
+    expect(container.querySelector('header [data-search]')).toBeNull();
   });
 
   it('carries the chrome’s status slot in the header, beside the selector', () => {

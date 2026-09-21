@@ -104,6 +104,13 @@ describe('the New menu', () => {
         theme={theme}
         cssVariablesResolver={cssVariablesResolver}
         defaultColorScheme="dark"
+        // Mantine hides a dropdown whose target it measures as detached, and in
+        // a DOM with no layout every target measures that way: the dropdown
+        // would be `display: none` here, which is what its own focus trap reads
+        // to decide there is nothing in it worth focusing. `env="test"` is
+        // Mantine's switch for exactly that, and it is why the trap below can
+        // be asserted on at all.
+        env="test"
       >
         <NewMenuButton
           menu={menu}
@@ -190,6 +197,18 @@ describe('the New menu', () => {
 
     expect(trigger().getAttribute('aria-expanded')).toBe('true');
     expect(dropdown()).not.toBeNull();
+  });
+
+  it('takes the focus into the dropdown, so the next Tab is a row and not the chrome', async () => {
+    draw(everything);
+    await press();
+
+    // jsdom has no tab order to walk, so what is asserted is the move that
+    // decides where a Tab goes: the trap puts the focus on the first row, and
+    // Mantine's own handler keeps it inside the dropdown from there. Without
+    // it the focus stays on the button and Tab lands on whatever the chrome
+    // draws next, with an open menu standing over the page behind it.
+    expect(document.activeElement).toBe(row('session'));
   });
 
   it('draws a row per live entry, in the table order, with the words the mockup gives it', async () => {

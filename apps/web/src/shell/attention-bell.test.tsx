@@ -148,6 +148,13 @@ describe('the attention bell', () => {
         theme={theme}
         cssVariablesResolver={cssVariablesResolver}
         defaultColorScheme="dark"
+        // Mantine hides a popover whose target it measures as detached, and in
+        // a DOM with no layout every target measures that way: the dropdown
+        // would be `display: none` here, which is what its own focus trap reads
+        // to decide there is nothing in it worth focusing. `env="test"` is
+        // Mantine's switch for exactly that, and it is why the trap below can
+        // be asserted on at all.
+        env="test"
       >
         <AttentionBell list={list} store={which} form={form} scheme="dark" />
       </MantineProvider>
@@ -326,6 +333,19 @@ describe('the attention bell', () => {
 
     expect(panel().style.width).toBe(`${PANEL_WIDTH}px`);
     expect(rows()).toHaveLength(2);
+  });
+
+  it('takes the focus into the popover, so the next Tab is the panel and not the chrome', async () => {
+    draw(twoWaiting, 'wide');
+
+    await press();
+
+    // jsdom has no tab order to walk, so what is asserted is the move that
+    // decides where a Tab goes: the trap puts the focus on the panel's first
+    // control, and Mantine's own handler keeps it inside from there. Without
+    // it the focus stays on the bell and Tab lands on whatever the chrome
+    // draws next, with an open panel standing over the page behind it.
+    expect(document.activeElement).toBe(markAllRead());
   });
 
   it('opens the same list as a sheet on a phone, headed with the count', async () => {

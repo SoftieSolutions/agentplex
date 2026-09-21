@@ -1,8 +1,9 @@
 import { Fragment, useState, type CSSProperties, type JSX, type MouseEvent } from 'react';
 import { opensElsewhere } from '../sessions/notification-list.js';
 import { Box, Popover, Text, UnstyledButton } from '../ui/components.js';
+import { ShortcutHint } from '../ui/shortcut-hint.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
-import type { NewMenu, NewMenuEntry, NewMenuHint, NewNodeKind } from './new-menu-model.js';
+import type { NewMenu, NewMenuEntry, NewNodeKind } from './new-menu-model.js';
 
 /**
  * The New button in the chrome, and the popover mockup 7a draws under it.
@@ -30,14 +31,10 @@ import type { NewMenu, NewMenuEntry, NewMenuHint, NewNodeKind } from './new-menu
  * named kind, so the day a second address joins the list there is still one
  * rule in the popover.
  *
- * The chords are drawn and not claimed. `NewMenuHint.bound` is `false` for
- * every one of them -- nothing in the app listens for ⌘N, and AGX-260 is where
- * the chrome-level registry and the real chords are decided -- so the hint is
- * hidden from the accessibility tree and carries `bound` as an attribute.
- * Announcing a shortcut that answers nothing is the over-claim this app's
- * degrade rule is about, and an `aria-keyshortcuts` here would be exactly
- * that; the visual hint costs a sighted person nothing when it turns out to be
- * decoration, because the row beside it is what works.
+ * The chords are drawn and not claimed: `NewMenuHint.bound` is `false` for
+ * every one of them, and `ui/shortcut-hint.tsx` is what that means on screen
+ * and in the accessibility tree. The palette's trigger draws its own ⌘K through
+ * the same component, because what a hint claims is one decision.
  *
  * Choosing an entry closes the popover, the way every other overlay in the app
  * closes on the item that was chosen (`attention-bell.tsx`, `tree/node-menu.tsx`,
@@ -130,6 +127,13 @@ export function NewMenuButton({ menu, onPick, scheme }: NewMenuButtonProps): JSX
       // button's is the only one; `onChange` is how a click outside and the
       // escape key get to say the same thing the button does.
       onChange={setOpened}
+      // The focus follows the dropdown, in and out. Mantine's default leaves it
+      // on the button, so a keyboard user who opened the menu and pressed Tab
+      // arrived at the next control in the chrome while a dropdown they could
+      // not reach stood open over the page; `returnFocus` is the other half of
+      // that, and puts it back on the button the dropdown closed under.
+      trapFocus
+      returnFocus
       position="bottom-end"
       shadow="md"
     >
@@ -259,7 +263,9 @@ function EntryRow({ entry, onPick, onClose, scheme }: EntryRowProps): JSX.Elemen
           {entry.description}
         </Text>
       </Box>
-      {entry.hint === undefined ? null : <Hint hint={entry.hint} scheme={scheme} />}
+      {entry.hint === undefined ? null : (
+        <ShortcutHint text={entry.hint.text} bound={entry.hint.bound} scheme={scheme} />
+      )}
     </>
   );
 
@@ -290,37 +296,6 @@ function EntryRow({ entry, onPick, onClose, scheme }: EntryRowProps): JSX.Elemen
     >
       {body}
     </UnstyledButton>
-  );
-}
-
-interface HintProps {
-  readonly hint: NewMenuHint;
-  readonly scheme: Scheme;
-}
-
-/**
- * The chord on the row's right, as text and nothing more.
- *
- * `aria-hidden` and not `aria-keyshortcuts`: nothing is listening, so the one
- * attribute that would make a screen reader offer it as a way to work the app
- * is the one attribute this must not have. `data-bound` carries the model's
- * own field rather than a hard-coded "false", so the day a chord is really
- * bound this hint has to be looked at again.
- */
-function Hint({ hint, scheme }: HintProps): JSX.Element {
-  return (
-    <Text
-      component="span"
-      aria-hidden
-      data-shortcut-hint
-      data-bound={String(hint.bound)}
-      ff="monospace"
-      fz={10}
-      fw={500}
-      c={colorForRole('textMuted', scheme)}
-    >
-      {hint.text}
-    </Text>
   );
 }
 

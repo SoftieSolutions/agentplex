@@ -174,6 +174,12 @@ describe('the shell', () => {
         theme={theme}
         cssVariablesResolver={cssVariablesResolver}
         defaultColorScheme="dark"
+        // Mantine hides a dropdown whose target it measures as detached, and in
+        // a DOM with no layout every target measures that way. The chrome's
+        // popovers trap their focus, and a dropdown Mantine has hidden is one
+        // its own trap reads as holding nothing worth focusing; `env="test"` is
+        // Mantine's switch for exactly that.
+        env="test"
       >
         {element}
       </MantineProvider>
@@ -405,6 +411,40 @@ describe('the shell', () => {
     await openBell();
 
     expect(panelRowWords()[0]).toContain('store-agentplex · mbp-robert · 3m');
+  });
+
+  it('hangs the palette between the mark and the chrome’s own controls', async () => {
+    await mount();
+
+    // Mockup 7a's order: the mark, the thing you search with, then how things
+    // are and what the chrome offers at every address.
+    const bar = [
+      ...container.querySelectorAll<HTMLElement>(
+        'header a[aria-label="agentplex"], header [data-palette-trigger], header [data-attention-bell]',
+      ),
+    ];
+    expect(bar).toHaveLength(3);
+    expect(bar[1]?.hasAttribute('data-palette-trigger')).toBe(true);
+  });
+
+  it('opens the palette on the whole fleet, from the chrome and not from a screen', async () => {
+    await mount();
+    const control = container.querySelector<HTMLButtonElement>('header [data-palette-trigger]');
+    if (control === null) throw new Error('the chrome drew no palette trigger');
+
+    await act(() => {
+      control.click();
+    });
+    await act(settle);
+    await act(frame);
+    await act(settle);
+
+    // Every session the hub reported, and not the narrowing the screen behind
+    // it happens to be under: the palette is handed the fleet on purpose, and
+    // `palette-model.ts` is where that argument lives.
+    expect(
+      document.body.querySelectorAll('[data-palette-dialog] a[data-palette-result]'),
+    ).toHaveLength(6);
   });
 
   it('hangs the New menu in the top bar, after the bell as the mockup draws it', async () => {
@@ -759,6 +799,17 @@ describe('the shell on a phone', () => {
     const panel = document.body.querySelector('[role="dialog"]');
     expect(panel?.querySelectorAll('a[data-notification-row]')).toHaveLength(2);
     expect(container.querySelectorAll('main')).toHaveLength(1);
+  });
+
+  it('draws the palette on its own row under the phone header, not squeezed into it', async () => {
+    await mount();
+
+    // Mockup 6c. The same control the top bar draws, in the place a phone has
+    // room for it: the header row is the selector and the two slots already.
+    const header = container.querySelector('header');
+    const control = header?.querySelector('[data-palette-trigger]');
+    expect(control).not.toBeNull();
+    expect(header?.firstElementChild?.contains(control ?? null)).toBe(false);
   });
 
   it('draws no New menu, because the action button is what starts a session here', async () => {

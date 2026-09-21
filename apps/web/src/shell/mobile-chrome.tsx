@@ -26,11 +26,11 @@ import { StartSessionButton } from './start-session-button.js';
  * chrome is drawn, because a socket that has dropped has dropped at every
  * width and the count of what is waiting is the same count on a phone -- a
  * second wording or a second number here would be the app disagreeing with
- * itself. The mockup also puts a search entry in this header, which is the
- * command palette (AGX-139) and is not built; a box that looks like a search
- * field and answers no keystroke is worse than the space it would fill, which
- * is the same call the top bar made, and the New popover (AGX-124) is absent
- * for the same reason.
+ * itself. The palette's trigger is the shell's node too, and it is drawn on its
+ * own row under the header rather than in it, as mockup 6c draws it: the header
+ * row is already the selector and two slots, and a search bar squeezed in
+ * beside them would be a control nobody can hit. The New popover (AGX-124) is
+ * absent because the action button is what starts a session here.
  *
  * No effects: every fact here arrives as a prop, and the one thing this file
  * measures -- which form to be in -- was measured by `useShellForm` before this
@@ -70,6 +70,12 @@ export interface MobileChromeProps {
    * one thing on a phone and another on a desk.
    */
   readonly actions?: ReactNode;
+  /**
+   * The palette's trigger, on its own row under the header (mockup 6c). The
+   * same node the top bar is handed, for the reason the two slots above are:
+   * one palette over one fleet, in whichever form the shell is drawn.
+   */
+  readonly search?: ReactNode;
   readonly scheme: Scheme;
   /** The content region: whatever the address resolved to. */
   readonly children: ReactNode;
@@ -83,6 +89,7 @@ export function MobileChrome({
   onStartSession,
   status,
   actions,
+  search,
   scheme,
   children,
 }: MobileChromeProps): JSX.Element {
@@ -98,11 +105,8 @@ export function MobileChrome({
         background: colorForRole('background', scheme),
       }}
     >
-      <Group
+      <Box
         component="header"
-        gap={10}
-        align="center"
-        wrap="nowrap"
         style={{
           borderBottom: `1px solid ${colorForRole('border', scheme)}`,
           flexShrink: 0,
@@ -115,12 +119,16 @@ export function MobileChrome({
           paddingRight: withSafeArea(12, 'right'),
         }}
       >
-        <MachineSelector state={state} chosen={machine} onPick={onPickMachine} scheme={scheme} />
-        <Group gap={8} align="center" wrap="nowrap" style={{ marginLeft: 'auto', minWidth: 0 }}>
-          {status}
-          {actions}
+        <Group gap={10} align="center" wrap="nowrap">
+          <MachineSelector state={state} chosen={machine} onPick={onPickMachine} scheme={scheme} />
+          <Group gap={8} align="center" wrap="nowrap" style={{ marginLeft: 'auto', minWidth: 0 }}>
+            {status}
+            {actions}
+          </Group>
         </Group>
-      </Group>
+        {/* Its own row, under the one the header already had: mockup 6c. */}
+        {search === undefined ? null : <Box style={{ paddingTop: 10 }}>{search}</Box>}
+      </Box>
 
       <Box component="main" style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
         {children}
