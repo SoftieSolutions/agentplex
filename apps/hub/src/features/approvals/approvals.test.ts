@@ -542,6 +542,38 @@ describe('a request the standing policy already answered', () => {
     expect(await person).toEqual({ ok: true, outcome: 'denied', answeredBy: null });
   });
 
+  it('is never matched against a rule when its proposal was cut', async () => {
+    // The hole this closes: a proposal bounded at the provider's edge no
+    // longer identifies the tool input it came from, because every input
+    // sharing that prefix renders as the same bytes. A rule matched against
+    // one of them would stand for all of them, so the policy is not consulted
+    // at all and a person is asked -- which is what an unmatched request gets.
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST, true));
+    await settle();
+
+    expect(consulted).toEqual([]);
+    expect(dispatched).toEqual([]);
+    expect(lastChange(MIGRATING)).toHaveLength(1);
+    expect(lastChange(MIGRATING)?.[0]?.answeredBy).toBe(null);
+  });
+
+  it('still asks about a cut request whose text a rule would match', async () => {
+    // Two requests one hook apart, sharing every byte a person could read and
+    // differing in what would run. The first is whole and a rule answers it;
+    // the second was cut, and the identical text buys it nothing.
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+    approvals.requested(LAPTOP, requested(FIXING, SECOND, true));
+    await settle();
+
+    expect(dispatched).toEqual([{ registrationId: LAPTOP, approvalId: FIRST, decision: 'grant' }]);
+    expect(lastChange(FIXING)?.[0]?.answeredBy).toBe(null);
+  });
+
   it('grants nothing for a request the agent took back while the policy was read', async () => {
     let release = (): void => undefined;
     policyAnswer = () =>

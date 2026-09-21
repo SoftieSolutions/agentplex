@@ -579,10 +579,28 @@ export function createApprovals({
    * Everything that is not an unambiguous match falls through to a person --
    * the policy answering `null`, the request having ended while the policy was
    * read, a person having tapped first, and the seam rejecting at all.
+   *
+   * A request whose proposal was cut is never put to the policy at all, and
+   * that is the first thing here rather than a check buried inside matching. A
+   * bounded proposal does not identify the tool input it came from: every input
+   * agreeing for its first few thousand rendered characters renders as the same
+   * bytes, so a rule matched against one of them would stand for all of them --
+   * including whatever the agent wrote past the cut, which nobody has read. No
+   * reading of the text can tell those apart, so there is nothing to be clever
+   * about: a cut request is a question, and it reaches a person exactly as one
+   * no rule covers does.
    */
   async function consult(ref: SessionRef, approvalId: ApprovalId): Promise<void> {
     const pending = lookup(ref, approvalId);
     if (pending === undefined) return;
+    if (pending.pending.truncated) {
+      logger.info('a request too long to be shown whole is never matched, so somebody is asked', {
+        ...ref,
+        approvalId,
+        tool: pending.pending.tool,
+      });
+      return;
+    }
 
     let grant: ApprovalPolicyGrant | null;
     try {
