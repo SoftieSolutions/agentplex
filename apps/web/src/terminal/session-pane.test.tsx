@@ -992,6 +992,85 @@ describe('copy and paste in a pane', () => {
 });
 
 /**
+ * The frame the context panel mounts into (mockups 7c and 7d): the pane's body
+ * is a row, the terminal is the flexible half of it, and the panel is the fixed
+ * column on the right.
+ *
+ * Two things are worth holding here rather than in `context-panel.test.tsx`,
+ * because they are the pane's and not the panel's. That no panel is drawn while
+ * no block has been built -- this ticket ships the frame and nothing to put in
+ * it, so on today's data the screen is unchanged. And that the terminal still
+ * gets a box of its own to fit against: the fit addon measures the element
+ * `TerminalView` renders and subtracts the terminal element's padding and
+ * nothing else (AGX-248), so a wrapper that padded the way in, or a column that
+ * could not shrink, would be a grid drawn to a width the pane does not have.
+ */
+describe('the body of a session pane', () => {
+  function contextPanel(): HTMLElement | null {
+    return container.querySelector<HTMLElement>('[aria-label="session context"]');
+  }
+
+  /**
+   * The box the emulator is built into, found by the one declaration only that
+   * box carries.
+   *
+   * There is no test id on it and there should not be: `touch-action: none` is
+   * load-bearing on that element for the reasons `terminal-view.tsx` argues, it
+   * is the only element in a pane that has it, and a locator that stops finding
+   * it is a locator pointing at a pane whose terminal box has been rearranged --
+   * which is exactly when these assertions need to be read again.
+   */
+  function terminalBox(): HTMLElement {
+    const found = [...container.querySelectorAll<HTMLElement>('div')].filter(
+      (element) => getComputedStyle(element).touchAction === 'none',
+    );
+    const box = found[0];
+    if (box === undefined || found.length !== 1) {
+      throw new Error(`expected one terminal box in the pane, found ${found.length}`);
+    }
+    return box;
+  }
+
+  /** What an element's own padding costs it, on the two sides that differ. */
+  function padding(element: HTMLElement): number[] {
+    const style = getComputedStyle(element);
+    return [Number.parseFloat(style.paddingTop), Number.parseFloat(style.paddingLeft)];
+  }
+
+  it('draws no context panel while no block has been built for it', async () => {
+    await mountPane();
+
+    // The frame ships empty: AGX-129, AGX-138 and the TASK step append blocks
+    // to a list, and until one does there is nothing for a 300px column to
+    // hold, so the terminal has the whole pane exactly as it did before.
+    expect(contextPanel()).toBeNull();
+  });
+
+  it('leaves the terminal a column that can shrink and no padding to be fitted around', async () => {
+    await mountPane();
+    const box = terminalBox();
+
+    // The column the terminal is in: `min-width: 0` is what lets a fixed 300px
+    // column beside it actually take those pixels, rather than overflow the
+    // pane while the terminal keeps fitting to a width it no longer has.
+    const column = box.parentElement;
+    if (column === null) throw new Error('the terminal box has no column around it');
+    expect(getComputedStyle(column).minWidth).toBe('0px');
+
+    // And the box the addon measures, plus everything between it and the pane
+    // root, is padding-free. The pane's inset is on the terminal element
+    // inside, which is the only one the addon subtracts.
+    for (
+      let element: HTMLElement | null = box;
+      element !== null && element !== container;
+      element = element.parentElement
+    ) {
+      expect(padding(element)).toEqual([0, 0]);
+    }
+  });
+});
+
+/**
  * The strip across the top of the pane, and the word beside it.
  *
  * Two claims worth holding to a real socket rather than to a prop. The strip
