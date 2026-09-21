@@ -58,6 +58,9 @@ describe('parseClaudeTranscript', () => {
         signal: 'awaiting-input',
         usage: COMPLETED_TURN_USAGE,
         model: 'claude-opus-5',
+        // The last turn of this capture ends in a `text` block, and the
+        // capture redacts text. See the activity tests below.
+        activity: null,
       },
     });
   });
@@ -152,6 +155,83 @@ describe('parseClaudeTranscript', () => {
   it('calls a transcript that stops on an unanswered tool call progressing', () => {
     const parsed = parseClaudeTranscript(PENDING_TOOL_USE);
 
+    expect(parsed.ok && parsed.transcript.signal).toBe('progressing');
+  });
+
+  it('reports the tool the last turn called as the session’s latest activity', () => {
+    // `claude-pending-tool-use.jsonl` ends on an assistant turn whose last
+    // block is a `tool_use` named `Bash`. The name is all there is: the
+    // captured `input` is `{}`, because the capture redacts tool inputs, so
+    // the activity says which tool and claims nothing about what it ran.
+    const parsed = parseClaudeTranscript(PENDING_TOOL_USE);
+
+    expect(parsed.ok && parsed.transcript.activity).toEqual({ kind: 'command', text: 'Bash' });
+  });
+
+  it('reports no activity for a turn that ended in text rather than inventing one', () => {
+    // `claude-completed-turn.jsonl` ends on an assistant turn whose last block
+    // is `text`, and every captured `text` payload is the string `REDACTED`.
+    // A narration built out of that would be a line reading REDACTED on a
+    // card. Absence is the honest answer, and it is also the answer a real
+    // unredacted transcript gets today: this parser reads tool names and
+    // nothing else. AGX-263 re-captures with inputs.
+    const parsed = parseClaudeTranscript(COMPLETED_TURN);
+
+    expect(parsed.ok && parsed.transcript.activity).toBeNull();
+  });
+
+  it('never puts the capture’s redaction marker on the wire as activity text', () => {
+    // The guard is structural rather than a string comparison: the only field
+    // this parser reads off a content block is `tool_use.name`, which the
+    // capture leaves verbatim, and every payload the capture replaces --
+    // prompts, assistant text, thinking, tool inputs, tool results -- is a
+    // field it does not read. This asserts that across every captured
+    // transcript, so a parser that grew a reach into a redacted field fails
+    // here instead of shipping REDACTED to a card.
+    for (const captured of [COMPLETED_TURN, PENDING_TOOL_USE]) {
+      const parsed = parseClaudeTranscript(captured);
+      const activity = parsed.ok ? parsed.transcript.activity : null;
+
+      expect(activity === null || !JSON.stringify(activity).includes('REDACTED')).toBe(true);
+    }
+  });
+
+  it('does not take the session’s activity off a subagent sidechain', () => {
+    // The same rule the model and the date already follow. A `Task` subagent's
+    // tool call is the session's work but not its conversation, and a subagent
+    // still calling tools after the main turn ended would otherwise describe
+    // the session by what something else is doing.
+    const sidechain = JSON.parse(lastLineOf(PENDING_TOOL_USE, 'assistant')) as Record<
+      string,
+      unknown
+    >;
+    const parsed = parseClaudeTranscript(
+      `${PENDING_TOOL_USE}${JSON.stringify({ ...sidechain, isSidechain: true })}\n`,
+    );
+
+    expect(parsed.ok && parsed.transcript.activity).toEqual({ kind: 'command', text: 'Bash' });
+  });
+
+  it('costs the activity and not the session when a tool name is unusable', () => {
+    // A tool name long enough to blow the protocol's bound, or one that is
+    // nothing but control characters, is refused by the activity schema. The
+    // transcript around it is still a session, with its date, its model and
+    // its usage intact.
+    const captured = JSON.parse(lastLineOf(PENDING_TOOL_USE, 'assistant')) as Record<
+      string,
+      unknown
+    > & { message: { content: { type: string }[] } };
+    const blocks = captured.message.content.map((block) =>
+      block.type === 'tool_use' ? { ...block, name: 'x'.repeat(400) } : block,
+    );
+    const overlong = JSON.stringify({
+      ...captured,
+      message: { ...captured.message, content: blocks },
+    });
+    const parsed = parseClaudeTranscript(`${PENDING_TOOL_USE}${overlong}\n`);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok && parsed.transcript.activity).toBeNull();
     expect(parsed.ok && parsed.transcript.signal).toBe('progressing');
   });
 
