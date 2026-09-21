@@ -431,6 +431,76 @@ export function providerOptions(items: readonly SessionListItem[]): readonly Pro
   return providers.length < 2 ? [] : providers;
 }
 
+/** A machine the popover can narrow to: the id it narrows by, and its name. */
+export interface MachineOption {
+  readonly id: ServerRegistrationId;
+  readonly label: string;
+}
+
+/**
+ * The machines the popover offers, which are the machines whose readings are
+ * in the list -- `server`, the field the narrowing is defined over, and not
+ * the holder the card's label prefers.
+ *
+ * Off the sessions rather than off `state.servers`, on the same rule
+ * `chipCounts` follows: a paired machine reporting nothing offers a choice
+ * that narrows to an empty list, which is a control that can only disappoint.
+ * Named through `serverLabel`, so the option reads as the word the card reads.
+ *
+ * Sorted by name, where `storeOptions` keeps the order the hub sent. The hub
+ * sends its stores in a settled order; this list is built by walking sessions,
+ * and its order would change every time an agent wrote a line -- a dropdown
+ * that reshuffles under the cursor.
+ */
+export function machineOptions(
+  state: MachineState,
+  items: readonly SessionListItem[],
+): readonly MachineOption[] {
+  const ids = [...new Set(items.map((item) => item.server))];
+  if (ids.length < 2) return [];
+  return ids
+    .map((id) => ({ id, label: serverLabel(state, id) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/**
+ * The projects the popover offers: the names the hub's tree placed sessions
+ * in, sorted, and never a placeholder for the sessions it placed in none.
+ *
+ * A session in no project is not a session in a project called nothing, so
+ * there is no "(none)" option here: the honest way to see those rows is to
+ * take the narrowing off.
+ */
+export function projectOptions(items: readonly SessionListItem[]): readonly string[] {
+  const names = [...new Set(items.map((item) => item.project))].filter(
+    (name): name is string => name !== null,
+  );
+  return names.length < 2 ? [] : [...names].sort((a, b) => a.localeCompare(b));
+}
+
+/** How far back the age narrowing looks. `null` is the popover's Any button. */
+export type UpdatedWithin = '1h' | '24h' | '7d';
+
+/** Drawing order for the age buttons, shortest window first, as the mockup has it. */
+export const UPDATED_WITHIN_ORDER: readonly UpdatedWithin[] = ['1h', '24h', '7d'];
+
+const UPDATED_WITHIN_MS: Record<UpdatedWithin, number> = {
+  '1h': 3_600_000,
+  '24h': 86_400_000,
+  '7d': 604_800_000,
+};
+
+/**
+ * Whether a session was written inside the window.
+ *
+ * The edge is inside it: a window somebody picked to see the last hour that
+ * drops the session written exactly on the hour reads as broken from the row
+ * it just removed, and no reading of "within an hour" excludes it.
+ */
+function matchesUpdatedWithin(item: SessionListItem, within: UpdatedWithin, now: number): boolean {
+  return now - item.updatedAt <= UPDATED_WITHIN_MS[within];
+}
+
 export interface SessionListFilters {
   readonly search: string;
   /** `null` is the All chip. */
@@ -439,9 +509,25 @@ export interface SessionListFilters {
   readonly storeId: string | null;
   readonly provider: string | null;
   /**
+   * The popover's Machine section, or `null` for every machine in the list.
+   *
+   * A second narrowing over the same field as `server` below, and deliberately
+   * so: the two are different questions asked by different controls. The
+   * selector in the shell chooses which server the app is looking at, which
+   * narrows the catalogue beside this list as well; this one narrows this
+   * list and nothing else, and it follows every other narrowing's rule --
+   * `Clear` resets it, the badge counts it, a machine that leaves the fleet
+   * takes it with it.
+   */
+  readonly machine: string | null;
+  /** The popover's Project section, by the name the tree gave it. */
+  readonly project: string | null;
+  /** The popover's Last updated buttons, read against a clock the caller holds. */
+  readonly updatedWithin: UpdatedWithin | null;
+  /**
    * The machine selector's selection, or `null` for the whole fleet.
    *
-   * Unlike the two above, a selection naming a machine the state no longer
+   * Unlike the others, a selection naming a machine the state no longer
    * lists is *not* quietly dropped here. It is what the catalogue query is
    * narrowed by at the same moment, and a card list that widened while the
    * panel beside it stayed narrow would be two answers to one question.
@@ -454,27 +540,189 @@ export const NO_FILTERS: SessionListFilters = {
   chip: null,
   storeId: null,
   provider: null,
+  machine: null,
+  project: null,
+  updatedWithin: null,
   server: null,
 };
+
+/**
+ * Every narrowing but the status chip and the typed search.
+ *
+ * The set the chips are counted over, which is what makes each chip's number a
+ * promise about how many rows pressing it yields. The chip itself is left out
+ * because a facet cannot narrow its own counts away, and the search is left
+ * out because a chip row that came and went between keystrokes would read as
+ * the control breaking rather than as the fleet being narrow.
+ */
+function narrowedByOthers(
+  state: MachineState,
+  filters: SessionListFilters,
+  now: number,
+): readonly SessionListItem[] {
+  return listSessions(state).filter(
+    (item) =>
+      (filters.storeId === null || item.storeId === filters.storeId) &&
+      (filters.provider === null || item.provider === filters.provider) &&
+      (filters.machine === null || item.server === filters.machine) &&
+      (filters.project === null || item.project === filters.project) &&
+      (filters.server === null || item.server === filters.server) &&
+      (filters.updatedWithin === null || matchesUpdatedWithin(item, filters.updatedWithin, now)),
+  );
+}
+
+/**
+ * The status pills to draw, counted under whatever else is narrowing.
+ *
+ * `chipCounts` over the sessions the other narrowings leave, so that the
+ * number on a pill is the number of rows pressing it gives. It falls to `[]`
+ * on the same one-option rule, which is the instruction to draw no pill row.
+ */
+export function chipOptions(
+  state: MachineState,
+  filters: SessionListFilters,
+  now: number = Date.now(),
+): readonly ChipCount[] {
+  return chipCounts(narrowedByOthers(state, filters, now));
+}
+
+/** Keeps a choice only while the current state still offers it. */
+function stillOffered(choice: string | null, options: readonly string[]): string | null {
+  return choice !== null && options.includes(choice) ? choice : null;
+}
+
+/**
+ * The filters as they actually narrow: a choice whose option has vanished from
+ * the state narrows nothing.
+ *
+ * The rule the session list screen applied to its two selects, moved here now
+ * that there are five controls to apply it to and two surfaces drawing them.
+ * The stored choice is not erased -- the popover may get its option back when
+ * a machine reconnects -- so this is a reading of the filters and not an edit
+ * of them, and every caller narrows and counts through the reading.
+ *
+ * `server` is the exception, for the reason its field argues: it is the
+ * catalogue's narrowing too, and it keeps narrowing to nothing. `search`
+ * cannot vanish, and `updatedWithin` offers four fixed buttons that no state
+ * takes away.
+ *
+ * `now` is the clock the age narrowing is read against, and it reaches here
+ * because the pills are counted under that narrowing: an hour that leaves one
+ * status standing leaves no pill row, and a pressed pill in a row that is not
+ * drawn is a narrowing nobody can see or undo.
+ */
+export function effectiveFilters(
+  state: MachineState,
+  filters: SessionListFilters,
+  now: number = Date.now(),
+): SessionListFilters {
+  const items = listSessions(state);
+  const effective = {
+    ...filters,
+    storeId: stillOffered(filters.storeId, storeOptions(state)),
+    provider: stillOffered(filters.provider, providerOptions(items)),
+    machine: stillOffered(
+      filters.machine,
+      machineOptions(state, items).map((option) => option.id),
+    ),
+    project: stillOffered(filters.project, projectOptions(items)),
+  };
+  const chips = chipOptions(state, effective, now);
+  return {
+    ...effective,
+    chip:
+      effective.chip !== null && chips.some((entry) => entry.chip === effective.chip)
+        ? effective.chip
+        : null,
+  };
+}
 
 /**
  * The whole pipeline: narrowings, then the chip, then search, then activity
  * order, then the partition. The partition runs last so that whatever survives
  * filtering still shows needs-you first.
+ *
+ * `now` is the clock the age narrowing is read against, and it defaults to the
+ * wall clock rather than being required: most callers here draw the whole
+ * fleet with `NO_FILTERS` and hold no clock, and for them the argument is
+ * never read. A caller that offers the age buttons passes its own -- the
+ * screen already holds one for the age labels on the cards -- so that a test
+ * can hold a captured state against a fixed moment.
  */
 export function visibleSessions(
   state: MachineState,
   filters: SessionListFilters,
+  now: number = Date.now(),
 ): readonly SessionListItem[] {
-  const narrowed = listSessions(state).filter(
+  const narrowed = narrowedByOthers(state, filters, now).filter(
     (item) =>
-      (filters.storeId === null || item.storeId === filters.storeId) &&
-      (filters.provider === null || item.provider === filters.provider) &&
-      (filters.server === null || item.server === filters.server) &&
       (filters.chip === null || chipForStatus(item.status) === filters.chip) &&
       matchesSearch(item, filters.search),
   );
   return partitionNeedsYou(orderByActivity(narrowed));
+}
+
+/**
+ * How many narrowings the popover is holding: the number on the badge.
+ *
+ * Each control counts once, whatever it narrowed to. Two things a person can
+ * see for themselves are left out. The search says what it is doing in the box
+ * it is typed into; and the machine selector's `server` is the shell's own
+ * control with its own label, so counting it would send somebody into the
+ * popover hunting for a narrowing that is not drawn in it.
+ *
+ * Read off `effectiveFilters`, or a choice whose option has gone will be
+ * counted on a badge beside a popover that no longer draws it.
+ */
+export function activeFilterCount(filters: SessionListFilters): number {
+  return [
+    filters.chip,
+    filters.storeId,
+    filters.provider,
+    filters.machine,
+    filters.project,
+    filters.updatedWithin,
+  ].filter((choice) => choice !== null).length;
+}
+
+/**
+ * How many sessions the narrowings are keeping out of sight: the second half
+ * of the "3 filters - 5 hidden" line.
+ *
+ * Counted against the list the machine selector defines rather than against
+ * every session the hub knows, for the reason `activeFilterCount` leaves that
+ * selection out: the sessions on the machines somebody is not looking at are
+ * not rows this row is hiding, and "0 filters - 3 hidden" under an untouched
+ * popover is the screen blaming itself for the selector's choice.
+ *
+ * The typed search counts as hiding, though it does not count as a filter: it
+ * is a narrowing whose rows are gone, and a line that named only the popover's
+ * share would come out lower than the rows a person can see are missing.
+ */
+export function hiddenCount(
+  state: MachineState,
+  filters: SessionListFilters,
+  now: number = Date.now(),
+): number {
+  const fleet = listSessions(state).filter(
+    (item) => filters.server === null || item.server === filters.server,
+  );
+  return fleet.length - visibleSessions(state, filters, now).length;
+}
+
+/**
+ * What Clear leaves behind: every narrowing off, the search box empty, and the
+ * machine selector's choice untouched.
+ *
+ * One function for both Clear links, the popover's footer and the line under
+ * the row, because two of them are one promise: a person who presses either
+ * expects to be looking at the list they would see having narrowed nothing.
+ * The fleet survives because nobody pressing Clear in a session filter means
+ * to move the app to another machine, and the catalogue beside the list is
+ * narrowed by that same choice.
+ */
+export function clearedFilters(filters: SessionListFilters): SessionListFilters {
+  return { ...NO_FILTERS, server: filters.server };
 }
 
 /** An empty list, worded for the reason it is empty. */

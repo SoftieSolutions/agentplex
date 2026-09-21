@@ -1,13 +1,11 @@
-import { useState, type JSX } from 'react';
+import { useState, useSyncExternalStore, type JSX } from 'react';
 import type { ServerRegistrationId } from '@agentplex/protocol';
 import {
   Button,
   Group,
-  Select,
   SimpleGrid,
   Stack,
   Text,
-  TextInput,
   Title,
   UnstyledButton,
   useComputedColorScheme,
@@ -17,18 +15,19 @@ import type { ShellForm } from '../shell/shell-form.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import { NextActionLink } from '../shell/next-action.js';
+import { SidebarFilter } from '../shell/sidebar-filter.js';
 import {
-  chipCounts,
+  chipOptions,
   connectionNotice,
+  effectiveFilters,
   emptyListing,
   listSessions,
-  providerOptions,
-  storeOptions,
   visibleSessions,
   type ChipCount,
   type EmptyListing as EmptyListingView,
   type StatusChip,
 } from './session-list-model.js';
+import { appSessionFiltersStore } from './session-filters-store.js';
 import { appLayoutStore } from '../layout/app-layout.js';
 import { ProjectDocuments } from '../docs/project-docs.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
@@ -40,11 +39,31 @@ import { stoppedNotice } from './stop-model.js';
 
 /**
  * The session list: flat, activity-ordered, needs-you first as a stable
- * partition. Store and provider narrowings sit before the table and exist
- * only when the data offers a choice; the chips exist only for states that
- * exist; the table's one filter is search. Layout is the approved mockup's
- * card grid (turn 7, 7a/7b), which collapses to the mobile card feed (7e) by
- * dropping to one column rather than by being a second view.
+ * partition. The chips exist only for states that exist. Layout is the
+ * approved mockup's card grid (turn 7, 7a/7b), which collapses to the mobile
+ * card feed (7e) by dropping to one column rather than by being a second view.
+ *
+ * The store and provider selects that used to stand above the cards are gone:
+ * they are sections of the sidebar's filter popover now (mockup 6b), which is
+ * where the machine, project and last-updated narrowings arrive beside them.
+ * The narrowings themselves live in `session-filters-store.ts` because two
+ * surfaces write them, and that file argues why one holder rather than two
+ * copies. What the screen does with them is read them -- through
+ * `effectiveFilters`, so that a choice whose option has left the fleet narrows
+ * nothing, and through `visibleSessions` and `chipOptions` against the clock
+ * it was handed.
+ *
+ * The filter row is drawn in the two places the two forms have room for it:
+ * the sidebar has it in the wide form, and in the phone form, which has no
+ * sidebar at all, this screen draws it (mockup 6c). It is the same component
+ * either way (`shell/sidebar-filter.tsx`), which is why it takes what it
+ * narrows as props rather than reading a tab: a bare box here would have moved
+ * Store and Provider off the phone when it moved them into the popover, and
+ * left five narrowings reachable only at a width the phone does not have. The
+ * chips stay on the screen at both widths, where mockup 7a keeps them, and the
+ * row here is the phone form's only -- at the wider one it would be the second
+ * of two boxes typing into one field, under the second of two badges counting
+ * one set of choices.
  *
  * The mockup's floating action button used to be drawn here, fixed to the
  * corner at narrow widths. It belongs to the phone chrome (AGX-125): it floats
@@ -63,9 +82,10 @@ import { stoppedNotice } from './stop-model.js';
  * catalogue by, and `machine-selector-model.ts` argues why that is one fact
  * with one writer.
  *
- * All UI state here is what the user did to this screen; everything derived
- * from the machine state comes from session-list-model.ts, and the snapshot
- * arrives through `useSyncExternalStore` -- no effects anywhere.
+ * What `useState` is left holding is what the user did to this screen alone --
+ * which form is open. The narrowings are the page's and the fleet is the hub's,
+ * and both arrive through `useSyncExternalStore`; everything derived from the
+ * machine state comes from session-list-model.ts. No effects anywhere.
  */
 export interface SessionListScreenProps {
   readonly store: HubStore;
@@ -99,10 +119,10 @@ export function SessionListScreen({
   // what the menus on this screen edit, so this screen is what is looking at it.
   const layout = useHubLayout(store);
   const scheme = useComputedColorScheme('dark');
-  const [search, setSearch] = useState('');
-  const [chip, setChip] = useState<StatusChip | null>(null);
-  const [storeId, setStoreId] = useState<string | null>(null);
-  const [provider, setProvider] = useState<string | null>(null);
+  // The page's narrowings, which the sidebar's popover writes as well. Through
+  // `useSyncExternalStore` and not an effect, like everything else here.
+  const filtersStore = appSessionFiltersStore(store);
+  const held = useSyncExternalStore(filtersStore.subscribe, filtersStore.getSnapshot);
   const [creating, setCreating] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
 
@@ -121,33 +141,18 @@ export function SessionListScreen({
   }
 
   const everySession = listSessions(state);
-  const stores = storeOptions(state);
-  const providers = providerOptions(everySession);
-
-  // A narrowing whose option vanished from the state narrows nothing: the
-  // stored choice is kept in case the option returns, but the pipeline only
-  // ever sees choices the current state actually offers.
-  const activeStore = storeId !== null && stores.some((id) => id === storeId) ? storeId : null;
-  const activeProvider =
-    provider !== null && providers.some((name) => name === provider) ? provider : null;
-
-  const narrowed = everySession.filter(
-    (item) =>
-      (activeStore === null || item.storeId === activeStore) &&
-      (activeProvider === null || item.provider === activeProvider) &&
-      (machine === null || item.server === machine),
-  );
-  const chips = chipCounts(narrowed);
-  const activeChip = chip !== null && chips.some((entry) => entry.chip === chip) ? chip : null;
-
-  const visible = visibleSessions(state, {
-    search,
-    chip: activeChip,
-    storeId: activeStore,
-    provider: activeProvider,
-    server: machine,
-  });
   const moment = now();
+  // The selector's machine is composed in rather than read out of the store:
+  // the chrome owns that fact and `onPickMachine` is its one writer, and the
+  // cards narrow by the same fact the catalogue beside them narrows by. The
+  // popover's own Machine section is a different field on these filters, and
+  // `SessionListFilters` argues why the two are not one.
+  const filters = effectiveFilters(state, { ...held, server: machine }, moment);
+  const chips = chipOptions(state, filters, moment);
+  // The All chip's number: the sessions the chips are counted over, which is
+  // the sum of what they carry -- every session falls under exactly one chip.
+  const total = chips.reduce((count, entry) => count + entry.count, 0);
+  const visible = visibleSessions(state, filters, moment);
   // What the last stop landed on, from the reply's own payload. Kept brief and
   // kept at all because the answer reaches the client that asked: without it a
   // session stopped in another tab is a row that quietly stops being held.
@@ -215,51 +220,39 @@ export function SessionListScreen({
 
       <ProjectDocuments store={store} scheme={scheme} />
 
-      {stores.length === 0 && providers.length === 0 ? null : (
-        <Group gap={8}>
-          {stores.length === 0 ? null : (
-            <Select
-              size="xs"
-              aria-label="Store"
-              placeholder="All stores"
-              data={[...stores]}
-              value={activeStore}
-              onChange={setStoreId}
-              clearable
-            />
-          )}
-          {providers.length === 0 ? null : (
-            <Select
-              size="xs"
-              aria-label="Provider"
-              placeholder="All providers"
-              data={[...providers]}
-              value={activeProvider}
-              onChange={setProvider}
-              clearable
-            />
-          )}
-        </Group>
-      )}
+      {/* The wide form's row is in the sidebar, above whichever tab is
+          showing, so this one is the phone form's. Not a media query, for the
+          reason the New session button above it is not one: the shell's form
+          is one rule in one place, and a second spelling of it disagrees at
+          any font size but the default.
+
+          The moment is the one the cards are drawn against rather than a
+          second reading of the clock, so the age window cannot mean one thing
+          in the popover and another in the list under it. */}
+      {form === 'phone' ? (
+        <SidebarFilter
+          state={state}
+          filters={filtersStore}
+          machine={machine}
+          label="Filter sessions"
+          text={filters.search}
+          onText={(text) => filtersStore.set({ search: text })}
+          popover
+          scheme={scheme}
+          now={() => moment}
+        />
+      ) : null}
 
       <Group gap={10}>
         {chips.length === 0 ? null : (
           <StatusChips
             chips={chips}
-            total={narrowed.length}
-            active={activeChip}
-            onPick={setChip}
+            total={total}
+            active={filters.chip}
+            onPick={(chip) => filtersStore.set({ chip })}
             scheme={scheme}
           />
         )}
-        <TextInput
-          size="xs"
-          aria-label="Search sessions"
-          placeholder="Search sessions"
-          value={search}
-          onChange={(event) => setSearch(event.currentTarget.value)}
-          style={{ flex: 1, maxWidth: 380 }}
-        />
       </Group>
 
       {visible.length === 0 ? (

@@ -83,6 +83,17 @@ export interface CataloguePanelProps {
   /** Injected by tests and by a screen that already holds one. */
   readonly catalogue?: CatalogueStore;
   readonly layoutStore?: LayoutStore;
+  /**
+   * The letters to narrow by, when a row above this panel holds them.
+   *
+   * The sidebar's filter row is drawn over whichever tab is showing and is the
+   * box for both of them (AGX-255), so on the Projects tab the letters are the
+   * row's and this panel draws no box of its own: two boxes over one tree are
+   * two answers to the question of what is typed. Absent is the other
+   * mounting, the phone's Projects destination, where nothing above the panel
+   * draws a row and the panel holds the letters itself.
+   */
+  readonly filter?: string;
 }
 
 const VIEWS: readonly { readonly value: CatalogueView; readonly label: string }[] = [
@@ -129,6 +140,7 @@ export function CataloguePanel({
   scheme,
   catalogue,
   layoutStore,
+  filter,
 }: CataloguePanelProps): JSX.Element {
   const [held] = useState<HeldStores>(() => buildHeldStores(store, catalogue, layoutStore));
   const snapshot = useSyncExternalStore(held.catalogue.subscribe, held.catalogue.getSnapshot);
@@ -137,17 +149,25 @@ export function CataloguePanel({
     held.arrangement.getSnapshot,
   );
 
-  // What the tree filter box holds. A screen's fact and not the query's: it
-  // narrows what is drawn out of the page already held rather than asking the
-  // hub a narrower question, which is what lets the footer say how many nodes
-  // it took away. `filterTree` argues the division.
-  const [treeFilter, setTreeFilter] = useState('');
+  // What the tree filter box holds when this panel is the one drawing it. A
+  // screen's fact and not the query's: it narrows what is drawn out of the
+  // page already held rather than asking the hub a narrower question, which is
+  // what lets the footer say how many nodes it took away. `filterTree` argues
+  // the division. Held either way, and read only where `filter` is absent, so
+  // that whose letters these are is one condition rather than two hooks.
+  const [ownFilter, setOwnFilter] = useState('');
+  const letters = filter ?? ownFilter;
 
   const { shape, pages } = snapshot;
-  // The tree only: the list view has no containment to keep a hit inside, and
-  // the search box above is the one that narrows a list.
-  const filtering = shape.view === 'tree' && treeFilter.trim() !== '';
-  const filtered = filterTree(pages.items, filtering ? treeFilter : '');
+  // Both views, not the tree alone. The rule the tree view's exclusivity was
+  // built on -- that a list has no containment for the filter to keep a hit
+  // inside -- is a rule about what `filterTree` does with the ancestors, and
+  // the hub flattens containers out of the list view entirely, so there are
+  // none to keep and the same call is a plain match on the name drawn on the
+  // row. The box above this panel is drawn over whichever view is showing,
+  // and a control that sits there doing nothing is worse than no control.
+  const filtering = letters.trim() !== '';
+  const filtered = filterTree(pages.items, letters);
   // What a filter does to the collapsed folders and to the disclosures is
   // `rowsFor`'s rule and is argued on `RowOptions.filtering`: it lives there
   // rather than here so that a test can reach it without a DOM.
@@ -273,27 +293,30 @@ export function CataloguePanel({
         </Text>
       )}
 
-      {/* The tree's own filter, directly over the rows it narrows, and a
+      {/* The catalogue's own filter, directly over the rows it narrows, and a
           separate control from the search box above on purpose. The search
           asks the hub a narrower question -- over the whole catalogue, and
           over working directories, session ids and machine names as well as
           names -- and answers with a page. This narrows the page already on
           screen, by the name drawn on the row, at the speed of a keystroke,
-          and it is the one that can say what it took away. */}
-      {shape.view === 'tree' ? (
+          and it is the one that can say what it took away.
+
+          Drawn only where nobody above the panel is drawing one: see
+          `filter`. */}
+      {filter === undefined ? (
         <TextInput
           size="xs"
           aria-label="Filter tree"
           placeholder="Filter tree"
-          value={treeFilter}
-          onChange={(event) => setTreeFilter(event.currentTarget.value)}
+          value={ownFilter}
+          onChange={(event) => setOwnFilter(event.currentTarget.value)}
           rightSectionPointerEvents="auto"
           rightSection={
-            treeFilter === '' ? null : (
+            ownFilter === '' ? null : (
               <CloseButton
                 size="sm"
                 aria-label="Clear the tree filter"
-                onClick={() => setTreeFilter('')}
+                onClick={() => setOwnFilter('')}
               />
             )
           }

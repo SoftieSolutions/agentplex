@@ -1,10 +1,13 @@
-import type { JSX } from 'react';
+import { useSyncExternalStore, type JSX } from 'react';
 import type { MachineState, ServerRegistrationId } from '@agentplex/protocol';
+import type { SessionFiltersStore } from '../sessions/session-filters-store.js';
 import {
+  activeFilterCount,
   ageLabel,
-  NO_FILTERS,
+  effectiveFilters,
   placeLabel,
   visibleSessions,
+  type SessionListFilters,
   type SessionListItem,
 } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
@@ -23,12 +26,18 @@ import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
  * cannot disagree about which sessions exist, which project one is in or which
  * machine one is on.
  *
- * The mockup's filter button and its applied-filter summary are deliberately
- * absent: the narrowings that exist live on the list screen, and a second set
- * of controls over the same query is a second answer to the same question.
+ * The mockup's filter row and its applied-filter summary are drawn above this
+ * list rather than in it (`sidebar-filter.tsx`), and these rows answer them.
+ * There is one set of narrowings for the fleet, held in one place, read here
+ * and by the cards on the list screen at the same moment: a badge counting
+ * three filters over an index still listing what they took away would be
+ * counting rows a person can see. So this file has no controls of its own
+ * still -- it is an index, and what narrows it is the row above it.
  */
 export interface SidebarSessionsProps {
   readonly state: MachineState;
+  /** The page's narrowings, the same ones the filter row above writes. */
+  readonly filters: SessionFiltersStore;
   /** The machine the chrome is narrowed to, or `null` for all of them. */
   readonly machine: ServerRegistrationId | null;
   readonly scheme: Scheme;
@@ -38,16 +47,24 @@ export interface SidebarSessionsProps {
 
 export function SidebarSessions({
   state,
+  filters,
   machine,
   scheme,
   now = Date.now,
 }: SidebarSessionsProps): JSX.Element {
-  const rows = visibleSessions(state, { ...NO_FILTERS, server: machine });
+  const held = useSyncExternalStore(filters.subscribe, filters.getSnapshot);
   const moment = now();
+  // The selector's machine composed in rather than read out, as the list
+  // screen composes it: the chrome owns that fact and the popover's own
+  // Machine section is a different field. Through `effectiveFilters` for the
+  // reason the row above reads it that way -- a choice whose option has left
+  // the fleet narrows nothing, so it cannot empty this index invisibly.
+  const narrowings = effectiveFilters(state, { ...held, server: machine }, moment);
+  const rows = visibleSessions(state, narrowings, moment);
   if (rows.length === 0) {
     return (
       <Text fz={12} c={colorForRole('textMuted', scheme)}>
-        {machine === null ? 'no sessions in any store yet' : 'no sessions on this machine'}
+        {emptyWords(narrowings, machine)}
       </Text>
     );
   }
@@ -58,6 +75,28 @@ export function SidebarSessions({
       ))}
     </Stack>
   );
+}
+
+/**
+ * Why the index is empty, which is never "there are no sessions" while a
+ * narrowing is on.
+ *
+ * The row above is already counting what the narrowings hid, and a sentence
+ * under it saying no store holds a session would have the sidebar telling
+ * somebody their fleet is gone when it is one Clear away. The list screen's
+ * `emptyListing` answers the same question at length and with somewhere to go;
+ * this is a 240px column whose undo is the line directly above it, so it says
+ * the one thing that column can act on.
+ *
+ * The typed search counts here although `activeFilterCount` leaves it out: the
+ * count is for the badge, where a person can see the box for themselves, and
+ * this is a sentence about why there is nothing under it.
+ */
+function emptyWords(filters: SessionListFilters, machine: ServerRegistrationId | null): string {
+  if (activeFilterCount(filters) > 0 || filters.search.trim() !== '') {
+    return 'no session here matches the narrowing';
+  }
+  return machine === null ? 'no sessions in any store yet' : 'no sessions on this machine';
 }
 
 interface SidebarSessionRowProps {
