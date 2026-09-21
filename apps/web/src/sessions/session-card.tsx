@@ -3,6 +3,7 @@ import { Box, Group, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import type { HubStore } from '../store/hub-store.js';
 import { sessionHash } from '../terminal/session-route.js';
+import { ApprovalControls } from './approval-controls.js';
 import { AttentionControls } from './attention-controls.js';
 import { placeLabel, unseenPrompt, type SessionListItem } from './session-list-model.js';
 import { SessionMetaLine } from './session-meta-line.js';
@@ -20,9 +21,17 @@ import { StopButton } from './stop-button.js';
  *
  * A needs-you card carries the accent border -- the
  * partition is also visible per card -- and its age reads as waiting time.
- * The Allow/Deny affordances the mockup shows belong to the approvals
- * milestone and are deliberately absent: an approval that cannot be granted
- * yet must not be drawn as if it could.
+ *
+ * A session holding an open request carries Allow and Deny as well, full
+ * width above that last line, and then the waiting clock counts from the
+ * moment the hub heard the request rather than from the session's last
+ * activity: those are the two readings a person is choosing between, and the
+ * one they are waiting on is the request. It is also the honest comparison --
+ * the hub's clock against this render's -- where `updatedAt` is the provider's
+ * clock on a third machine. A session asking for nothing draws neither, which
+ * is every codex session, and a card can be in the needs-you half with no
+ * request on it: the status and the request arrive by different routes and
+ * this one does not wait for that one.
  *
  * Attention rides on the same card. A muted session is dimmed and keeps
  * everything else -- its tone dot, its accent border, its status, its place in
@@ -114,6 +123,7 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
         {actions}
       </Group>
       <SessionSummaryLine text={item.summary} scheme={scheme} />
+      <ApprovalControls item={item} store={store} scheme={scheme} />
       <Group gap={8} wrap="nowrap" justify="space-between" align="center">
         {/* The provider, the age and the qualifications on it, drawn by the
             component the list's row draws too: the judgements in that sentence

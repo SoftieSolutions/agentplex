@@ -110,6 +110,78 @@ describe('parsing a Claude Code permission request', () => {
     expect(parse.request.proposal).toBe('command: clear[2J && ls');
   });
 
+  /**
+   * Every character Unicode gives for changing the direction text is read in:
+   * the two marks, the four embeddings and overrides, the pop, and the four
+   * isolates. Listed rather than described, because the point of the strip is
+   * that none of them survives and a range written from memory is how one of
+   * them does.
+   */
+  const BIDI_CONTROLS = [
+    '\u061c',
+    '\u200e',
+    '\u200f',
+    '\u202a',
+    '\u202b',
+    '\u202c',
+    '\u202d',
+    '\u202e',
+    '\u2066',
+    '\u2067',
+    '\u2068',
+    '\u2069',
+  ];
+
+  it('keeps no direction control in text meant to be displayed', () => {
+    const marked = BIDI_CONTROLS.join('');
+    const parse = parseClaudePermissionRequest(
+      captured({ tool_name: `Ba${marked}sh`, tool_input: { command: `rm -rf /${marked} .` } }),
+    );
+    expect(parse.ok).toBe(true);
+    if (!parse.ok) return;
+    expect(parse.request.tool).toBe('Bash');
+    expect(parse.request.proposal).toBe('command: rm -rf / .');
+  });
+
+  it('keeps none of them in a rule either, which is text from the same turn', () => {
+    const parse = parseClaudePermissionRequest(
+      captured({
+        permission_suggestions: [
+          {
+            type: 'addRules',
+            behavior: 'allow',
+            destination: 'localSettings',
+            rules: [{ toolName: 'Ba\u200fsh', ruleContent: 'prisma \u202emigrate\u202c *' }],
+          },
+        ],
+      }),
+    );
+    expect(parse.ok).toBe(true);
+    if (!parse.ok) return;
+    expect(parse.request.suggestions).toStrictEqual([
+      {
+        behavior: 'allow',
+        destination: 'localSettings',
+        rules: [{ tool: 'Bash', content: 'prisma migrate *' }],
+      },
+    ]);
+  });
+
+  it('reads an override for what it does, which is reorder what a person sees', () => {
+    // The attack in one line: what runs is `rm -rf /tmp/x`, and a terminal or a
+    // browser honouring the override draws the comment first and the command
+    // last, so the line above Allow is not the line that executes.
+    const parse = parseClaudePermissionRequest(
+      captured({ tool_input: { command: 'rm -rf /tmp/x \u202e# sl eman elif a si siht' } }),
+    );
+    expect(parse.ok).toBe(true);
+    if (!parse.ok) return;
+    expect(parse.request.proposal).toBe('command: rm -rf /tmp/x # sl eman elif a si siht');
+    for (const control of BIDI_CONTROLS) {
+      expect(parse.request.proposal).not.toContain(control);
+    }
+  });
+
   it('accepts a tool that proposes nothing', () => {
     const parse = parseClaudePermissionRequest(captured({ tool_input: {} }));
     expect(parse.ok).toBe(true);

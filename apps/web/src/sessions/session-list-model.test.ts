@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import {
+  parseHubFrame,
+  parseTextFrame,
+  type MachineState,
+  type PendingApproval,
+} from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { destinationHash } from '../shell/destinations.js';
 import {
@@ -18,6 +23,7 @@ import {
   matchesSearch,
   needsYouCount,
   NO_FILTERS,
+  oldestApproval,
   orderByActivity,
   partitionNeedsYou,
   placeLabel,
@@ -57,6 +63,19 @@ const single = stateFrom(hubFrames.machineStateSingle);
 const attended = stateFrom(hubFrames.machineStateAttended);
 const empty = stateFrom(hubFrames.machineState);
 const pairedOnly = stateFrom(hubFrames.machineStateWithServer);
+/**
+ * A fleet with a blocked agent in it: one session, `migrate-db`, holding a
+ * request a real `PermissionRequest` hook made, captured off the hub that was
+ * told about it.
+ */
+const asked = stateFrom(hubFrames.machineStateApproval);
+
+/** The captured request itself, for the rules that are about a list of them. */
+const capturedApproval: PendingApproval = (() => {
+  const [first] = asked.stores.flatMap((store) => store.sessions).flatMap((row) => row.approvals);
+  if (first === undefined) throw new Error('the captured state has no pending approval');
+  return first;
+})();
 
 /** One named item out of a state, or a failure that says which one was missing. */
 function item(state: MachineState, name: string): SessionListItem {
@@ -131,6 +150,73 @@ describe('the place line', () => {
 
   it('keeps the store it named before when the session is in no project', () => {
     expect(placeLabel(item(populated, 'fix-auth-refresh'))).toBe('store-agentplex · mbp-robert');
+  });
+});
+
+describe('the request on a card', () => {
+  it('carries the open request as the four things a card draws, and nothing else', () => {
+    // The proposal is the agent's claim about what it wants to run, as text.
+    // `suggestions` is deliberately not here: what the card offers is Allow
+    // and Deny, and a remembered rule is a different decision on a different
+    // screen -- an exact match is what keeps it from arriving by accident.
+    expect(item(asked, 'migrate-db').approval).toEqual({
+      approvalId: 'approval-1',
+      tool: 'Bash',
+      proposal:
+        'command: prisma migrate deploy --schema ./db\ndescription: Apply pending Prisma migrations',
+      requestedAt: 1_756_000_000_000,
+    });
+  });
+
+  it('is null on every session of a fleet with nothing open', () => {
+    // Present and empty on the wire, so this is the ordinary case and not a
+    // gap: six sessions, two of them waiting on a human, none of them asking.
+    const items = listSessions(populated);
+    expect(items).toHaveLength(6);
+    expect(items.map((entry) => entry.approval)).toEqual(items.map(() => null));
+  });
+
+  it('is null for a codex session, which has no hook to ask through', () => {
+    const codex = listSessions(populated).filter((entry) => entry.provider === 'codex');
+    expect(codex.length).toBeGreaterThan(0);
+    expect(codex.every((entry) => entry.approval === null)).toBe(true);
+  });
+
+  it('is not a second source of status: the words and the partition are untouched', () => {
+    // `awaiting-permission` is read off the provider's own record of the
+    // session. A list that also decided a status could disagree with the
+    // transcript the moment a hook and a scan land in the wrong order.
+    const blocked = item(asked, 'migrate-db');
+    expect(blocked.status).toBe('awaiting-permission');
+    expect(blocked.summary).toBe('/Users/robert/code/agentplex');
+    expect(blocked.needsYou).toBe(true);
+  });
+});
+
+describe('choosing among open requests', () => {
+  it('has nothing to choose from an empty list', () => {
+    expect(oldestApproval([])).toBeNull();
+  });
+
+  it('takes the oldest by requestedAt, not the order the row happens to list', () => {
+    // The oldest is the one whose hook has been blocking longest and is
+    // nearest its own timeout, so it is the one worth a person's tap first.
+    const newer: PendingApproval = {
+      ...capturedApproval,
+      requestedAt: capturedApproval.requestedAt + 60_000,
+    };
+    expect(oldestApproval([newer, capturedApproval])?.requestedAt).toBe(
+      capturedApproval.requestedAt,
+    );
+    expect(oldestApproval([capturedApproval, newer])?.requestedAt).toBe(
+      capturedApproval.requestedAt,
+    );
+  });
+
+  it('keeps the hub order when two were heard in the same millisecond', () => {
+    const second: PendingApproval = { ...capturedApproval, tool: 'Edit' };
+    expect(oldestApproval([capturedApproval, second])?.tool).toBe(capturedApproval.tool);
+    expect(oldestApproval([second, capturedApproval])?.tool).toBe('Edit');
   });
 });
 
