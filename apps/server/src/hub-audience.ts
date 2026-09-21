@@ -1,4 +1,4 @@
-import type { ServerToHubFrame, SessionStartTag, StoreId } from '@agentplex/protocol';
+import type { FrameId, ServerToHubFrame, SessionStartTag, StoreId } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
 import type { GrantId } from '@agentplex/providers';
 import type { SessionController } from './session-control.js';
@@ -57,6 +57,15 @@ import type { SessionController } from './session-control.js';
  */
 type StoreReport = Omit<Extract<ServerToHubFrame, { type: 'store-report' }>, 'starts'>;
 
+/**
+ * Every frame on this direction that is not an answer to something.
+ *
+ * Derived from the union rather than listed, so that a frame added to the
+ * protocol is in or out of this set by its own shape: anything carrying a
+ * `replyTo` belongs to one connection's question and cannot be broadcast.
+ */
+export type UnpromptedServerFrame = Exclude<ServerToHubFrame, { readonly replyTo: FrameId }>;
+
 /** One connected hub, as this server can reach it. */
 export interface HubMember {
   /**
@@ -99,6 +108,20 @@ export interface HubAudience {
    * here know both and are not sent it again.
    */
   reportTo(member: HubMember, storeId: StoreId): Promise<void>;
+  /**
+   * One frame nobody asked for, to every connected hub.
+   *
+   * What an approval travels on. A store report is a scan and has its own path
+   * above; this is for the facts that arrive from somewhere else entirely -- an
+   * agent blocking on a tool call, and what became of the question -- which
+   * nobody can poll for and which every hub watching that session is owed.
+   *
+   * The type is what keeps it honest: a frame carrying `replyTo` is an answer
+   * to one connection's question, and sending one to every hub would be telling
+   * three of them the answer to a frame they never sent. Those are excluded
+   * here, so the mistake does not compile.
+   */
+  tellAll(frame: UnpromptedServerFrame): void;
   /** Closes every connection holding this grant, and says how many there were. */
   disconnect(grantId: GrantId, reason: string): number;
   /**
@@ -190,6 +213,13 @@ export function createHubAudience({
       const frame = await scan(storeId);
       if (frame === null || !members.has(member)) return;
       deliver(member, frame);
+    },
+
+    tellAll(frame: UnpromptedServerFrame): void {
+      // A copy of the set, like every fan-out here: a send that ends a
+      // connection must not disturb the iteration that is still delivering to
+      // the others.
+      for (const member of [...members]) member.send(frame);
     },
 
     disconnect(grantId: GrantId, reason: string): number {

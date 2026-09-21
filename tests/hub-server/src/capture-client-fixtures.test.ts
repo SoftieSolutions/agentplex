@@ -524,6 +524,9 @@ function buildLiveMachine(): LiveMachine {
       // resumes a session that names its own directory, and nothing captured
       // here starts in a project.
       browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
+      // No hook socket in these suites: what a launch is handed before it
+      // starts has its own tests on the server side.
+      approvals: null,
       clock,
       logger,
     }),

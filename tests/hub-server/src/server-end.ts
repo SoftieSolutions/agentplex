@@ -35,14 +35,19 @@ import {
  *
  * The default browser has no roots, which is the default a server actually
  * ships with and the one that refuses every browse with that as the reason. A
- * suite whose subject *is* browsing passes its own.
+ * suite whose subject *is* browsing passes its own. Approvals default to
+ * `null` for the same reason: the connection holds none unless the suite is
+ * about them.
  */
 export type ServerEndDependencies = Omit<
   HubConnectionDependencies,
-  'connectionId' | 'grants' | 'audience' | 'docs' | 'browse'
+  'connectionId' | 'grants' | 'audience' | 'docs' | 'browse' | 'approvals'
 > &
   Partial<
-    Pick<HubConnectionDependencies, 'connectionId' | 'grants' | 'audience' | 'docs' | 'browse'>
+    Pick<
+      HubConnectionDependencies,
+      'connectionId' | 'grants' | 'audience' | 'docs' | 'browse' | 'approvals'
+    >
   >;
 
 let connections = 0;
@@ -64,6 +69,10 @@ export function serveServerEnd(
       logger,
     }),
     browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
+    // No approvals by default, which is a server that could not open the
+    // socket hooks connect to: it refuses a decision rather than appearing to
+    // apply one. A suite whose subject is approvals passes its own gate.
+    approvals: null,
     ...dependencies,
   });
 }

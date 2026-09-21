@@ -13,8 +13,11 @@ export type {
   InstallRequest,
   InstalledProvider,
   Launch,
+  LaunchApproval,
   LaunchPlan,
   LoginRequest,
+  PermissionHook,
+  PermissionHookCommand,
   OneShotPlan,
   OneShotRead,
   ProviderAdapter,
@@ -33,10 +36,12 @@ export type { ProviderPreflight, ProviderPreflightDependencies } from './preflig
 export { CLAUDE_PROJECTS_DIRECTORY, createClaudeAdapter } from './claude-adapter.js';
 export type { ClaudeAdapterDependencies } from './claude-adapter.js';
 export {
+  claudePermissionHook,
   CLAUDE_COMMAND,
   CLAUDE_CONFIG_DIR,
   CLAUDE_DEFAULT_STORE_DIRECTORY,
   CLAUDE_SCRUB_PREFIXES,
+  CLAUDE_SETTINGS_FILE_NAME,
   planClaudeLaunch,
 } from './claude-launch.js';
 export {

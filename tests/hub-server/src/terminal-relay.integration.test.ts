@@ -213,6 +213,9 @@ function serveMachine(machine: Machine): DialResult {
       // file starts in a project, so no instruction carries a directory to be
       // bounded against.
       browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
+      // No hook socket in these suites: what a launch is handed before it
+      // starts has its own tests on the server side.
+      approvals: null,
       clock,
       logger,
     }),

@@ -17,6 +17,12 @@ import {
   type TokenMinter,
   createWebSocketListener,
 } from '@agentplex/node-shared';
+import { createApprovalGate, type ApprovalGate } from './approval-gate.js';
+import {
+  createLaunchApprovals,
+  type ApprovalHooks,
+  type LaunchApprovals,
+} from './approval-launch.js';
 import { createDirectoryBrowser, type DirectoryReader } from './directory-browse.js';
 import { createDrain, drainingSessions } from './drain.js';
 import { serveHubConnection, type HubConnection } from './hub-connection.js';
@@ -234,6 +240,17 @@ export interface SessionServerDependencies {
    * and grants nothing.
    */
   readonly announce: BeaconNetwork | null;
+  /**
+   * The socket blocked hooks connect to, and what a launch is pointed at, or
+   * `null` for a server that holds no approvals.
+   *
+   * Opened in `main` for the reason the beacon's socket and the pty are: the
+   * process owns the one place a socket is bound, and a test starts the whole
+   * runtime without one. `null` is not a special case to be handled everywhere
+   * below -- it produces a server whose launches carry no hook, which is the
+   * launch this repository made until this ticket.
+   */
+  readonly approvals: ApprovalHooks | null;
 }
 
 export interface SessionServer {
@@ -312,6 +329,7 @@ export async function startSessionServer(
     projectFiles,
     timers,
     announce,
+    approvals,
   } = dependencies;
   const logger = dependencies.logger.child({ role: 'server' });
 
@@ -436,6 +454,19 @@ export async function startSessionServer(
   // can ask the rule without being able to list anything.
   const browse = createDirectoryBrowser({ roots: browseRoots, reader: directoryReader });
 
+  /**
+   * One launch's way of asking, once there is a gate to admit it.
+   *
+   * Three things here know each other in a circle: a launch is admitted by the
+   * gate, the gate states what it is holding to every connected hub, and what a
+   * hub is told about a store is a scan by the session controller that plans
+   * the launches. Exactly one of those edges is joined after construction
+   * rather than at it, and this is that edge -- chosen because it is the only
+   * one that is never taken at boot: nothing opens a launch until a hub asks
+   * for a session, which is long after every line below has run.
+   */
+  let launches: LaunchApprovals | null = null;
+
   // The one thing here that turns a store id and a provider name into a running
   // agent. It is built once and outlives every hub connection: a socket comes
   // and goes, and the sessions this server started go on running across both.
@@ -447,9 +478,64 @@ export async function startSessionServer(
     // The same guard a browse passes, so that "this machine will open that
     // directory" has one answer whether it is being listed or spawned in.
     browse,
+    // A server with no socket for hooks prepares nothing, and its launches are
+    // the launches that shipped before approvals existed.
+    approvals:
+      approvals === null
+        ? null
+        : { open: (store, hook) => launches?.open(store, hook) ?? Promise.resolve(null) },
     clock,
     logger,
   });
+
+  // Every hub connected at once, which is what makes a stop by one of them
+  // something the others are told about. It outlives each connection: a socket
+  // comes and goes and the set is the server's.
+  const audience = createHubAudience({
+    sessions,
+    logger,
+    // A socket that closed is a watcher that is gone, and it is not there to
+    // call the detach it was handed. Without this a terminal nobody can see
+    // stays pinned against eviction for the life of the process.
+    onLeave: (member) => terminals.release(member.connectionId),
+  });
+
+  /**
+   * The blocked tool calls this machine is holding, or `null` when nothing was
+   * opened for them to arrive on.
+   *
+   * Its events go to every connected hub and to nothing else. An approval is a
+   * claim about now -- a process is waiting, and it will not be waiting for
+   * long -- so it is stated as it happens rather than stored: there is no table
+   * for it and no scan that would find one, and a hub that reconnects reads
+   * what is still open off the session rows it is sent.
+   */
+  const gate: ApprovalGate | null =
+    approvals === null
+      ? null
+      : createApprovalGate({
+          listener: approvals.listener,
+          clock,
+          ids,
+          timers,
+          tokens,
+          logger,
+          onEvent: (event) => void audience.tellAll(event),
+        });
+
+  if (approvals !== null && gate !== null) {
+    launches = createLaunchApprovals({
+      gate,
+      files: approvals.files,
+      directory: approvals.directory,
+      socketPath: approvals.socketPath,
+      hookCommand: approvals.hookCommand,
+      hookArgs: approvals.hookArgs,
+      ids,
+      logger,
+    });
+    logger.info('approvals ready', { socket: approvals.socketPath });
+  }
 
   // One pass over every mounted store, so that a misconfigured store path is
   // discovered at boot rather than the first time somebody opens the client.
@@ -492,18 +578,6 @@ export async function startSessionServer(
   // `project-docs.ts` says why it is not an operation.
   const docs = createProjectDocs({ dataRoot, files: projectFiles, logger });
 
-  // Every hub connected at once, which is what makes a stop by one of them
-  // something the others are told about. It outlives each connection: a socket
-  // comes and goes and the set is the server's.
-  const audience = createHubAudience({
-    sessions,
-    logger,
-    // A socket that closed is a watcher that is gone, and it is not there to
-    // call the detach it was handed. Without this a terminal nobody can see
-    // stays pinned against eviction for the life of the process.
-    onLeave: (member) => terminals.release(member.connectionId),
-  });
-
   // The one thing a hub can do with this server before it has proved itself:
   // open a socket. Everything past that is the handshake's to allow.
   const hubs = createWebSocketListener({
@@ -534,6 +608,9 @@ export async function startSessionServer(
           // and two hubs asking are two questions about the same cpus.
           machineLoad,
           docs,
+          // The blocked hooks are the machine's, so every paired hub may answer
+          // one, for the reason any of them may stop a session.
+          approvals: gate,
           logger,
         }),
       );
@@ -759,6 +836,12 @@ export async function startSessionServer(
       // into the store with nothing left to watch it, and on a laptop it would
       // outlive the terminal that started it.
       terminals.closeAll();
+      // And the hooks, before the sockets go: every request still open is
+      // withdrawn and said out loud, so a hub that is still connected stops
+      // showing approvals nobody can answer any more. A hook whose connection
+      // closes with nothing written falls through to its own terminal, which is
+      // where a question belongs once this process is gone.
+      gate?.stop();
       // Then the hub sockets: an upgraded connection is not an HTTP request,
       // so closing the listener does not reach it, and a live websocket would
       // hold the process open after everything it could ask about had stopped.

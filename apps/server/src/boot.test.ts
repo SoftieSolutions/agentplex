@@ -82,6 +82,10 @@ function dependencies(
       },
       localAddresses: () => [],
     },
+    // No socket for permission hooks, which is what a server that could not
+    // open one looks like: its launches carry no hook and its agents ask at
+    // their own terminals.
+    approvals: null,
     clock: { now: () => 1_756_000_000_000 },
   };
 }

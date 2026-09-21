@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import {
   childEnvironment,
   childSearchPath,
@@ -10,6 +11,7 @@ import {
   systemClock,
   systemTimers,
   wantsHelp,
+  type Logger,
 } from '@agentplex/node-shared';
 import {
   createNodeProcessRunner,
@@ -21,7 +23,9 @@ import {
   nodeStoreFileSystem,
 } from '@agentplex/providers';
 import { checkNodePty, createPtySupervisor, nodePtyFactory } from '@agentplex/pty';
+import type { ApprovalHooks } from './approval-launch.js';
 import { startRuntime } from './boot.js';
+import { nodeApprovalFiles, openApprovalListener } from './node-approval-listener.js';
 import { loadServerConfig, serverUsage } from './config.js';
 import { createNodeBeaconNetwork } from './node-beacon-transport.js';
 import { nodeDataRoot } from './node-data-root.js';
@@ -54,6 +58,33 @@ import { createTerminalManager } from './terminal-manager.js';
 const EXIT_BAD_CONFIGURATION = 2;
 /** Startup failed for a reason that may pass. */
 const EXIT_STARTUP_FAILED = 1;
+
+/**
+ * The socket a blocked permission hook connects to, and the program it runs.
+ *
+ * The hook is a file beside this one in the same built output, so it is found
+ * by resolving a sibling of this module rather than by a configured path: the
+ * two ship together, and a setting would be a way for them to disagree. The
+ * node that runs it is this process's own `execPath`, so a server installed
+ * under a version manager points its hooks at the node it is itself running --
+ * a bare `node` would resolve against whatever the agent's own PATH happens to
+ * say, which is the operator's shell and not this unit's.
+ */
+async function openApprovals(dataPath: string, logger: Logger): Promise<ApprovalHooks | null> {
+  const opened = await openApprovalListener(dataPath);
+  if (!opened.ok) {
+    logger.warn('this server will hold no approvals', { problem: opened.problem });
+    return null;
+  }
+  return {
+    listener: opened.listener,
+    socketPath: opened.socketPath,
+    directory: opened.directory,
+    files: nodeApprovalFiles,
+    hookCommand: process.execPath,
+    hookArgs: [fileURLToPath(new URL('./approval-hook.js', import.meta.url))],
+  };
+}
 
 async function main(): Promise<void> {
   const write = (line: string): void => void process.stdout.write(`${line}\n`);
@@ -137,6 +168,17 @@ async function main(): Promise<void> {
   // the two can never disagree about whether a binary is there.
   const preflight = createProviderPreflight({ programs, probes: processRunner, logger });
 
+  // The one place a unix socket is bound, and the one place this process
+  // resolves a path inside its own installed output.
+  //
+  // Opened before the runtime rather than inside it, for the reason the pty
+  // factory and the beacon are composed here: everything below this line takes
+  // its capabilities as arguments, and a test starts the whole server without
+  // a socket on the machine. A failure costs approvals and nothing else -- the
+  // sessions still run, and their agents ask at their own terminals -- so it is
+  // a warning and a `null`, never a refusal to start.
+  const approvals = await openApprovals(config.dataPath, logger);
+
   let runtime;
   try {
     runtime = await startRuntime(config, {
@@ -203,6 +245,7 @@ async function main(): Promise<void> {
       // "can this process broadcast" stays a visible line in the entrypoint
       // rather than a decision taken somewhere below it.
       beacon: createNodeBeaconNetwork(logger),
+      approvals,
       timers: systemTimers,
       clock: systemClock,
     });

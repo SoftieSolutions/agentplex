@@ -250,7 +250,12 @@ describe('createCodexAdapter.spawn', () => {
   it('starts codex in the store it was asked about, with the prompt as one argument', () => {
     const adapter = adapterOver({ files: {} });
 
-    const launch = adapter.spawn({ store: STORE, cwd: CWD, prompt: 'look at the failing test' });
+    const launch = adapter.spawn({
+      store: STORE,
+      cwd: CWD,
+      prompt: 'look at the failing test',
+      approval: null,
+    });
 
     expect(launch).toEqual({
       ok: true,
@@ -267,13 +272,23 @@ describe('createCodexAdapter.spawn', () => {
   });
 
   it('leaves codex at its own prompt when there is nothing to open with', () => {
-    const launch = adapterOver({ files: {} }).spawn({ store: STORE, cwd: CWD, prompt: null });
+    const launch = adapterOver({ files: {} }).spawn({
+      store: STORE,
+      cwd: CWD,
+      prompt: null,
+      approval: null,
+    });
 
     expect(launch).toMatchObject({ ok: true, plan: { args: [] } });
   });
 
   it('names no session id, because codex mints its own', () => {
-    const launch = adapterOver({ files: {} }).spawn({ store: STORE, cwd: CWD, prompt: null });
+    const launch = adapterOver({ files: {} }).spawn({
+      store: STORE,
+      cwd: CWD,
+      prompt: null,
+      approval: null,
+    });
 
     expect(launch.ok && launch.plan.args).toEqual([]);
   });
@@ -283,6 +298,7 @@ describe('createCodexAdapter.spawn', () => {
       store: STORE,
       cwd: `${STORE.path}/sessions`,
       prompt: null,
+      approval: null,
     });
 
     expect(launch).toMatchObject({ ok: false });
@@ -299,6 +315,7 @@ describe('createCodexAdapter.resume', () => {
       store: STORE,
       session: sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: COMPLETED_ID }),
       cwd: CWD,
+      approval: null,
     });
 
     expect(launch).toEqual({
@@ -318,6 +335,7 @@ describe('createCodexAdapter.resume', () => {
       store: STORE,
       session: sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: COMPLETED_ID }),
       cwd: null,
+      approval: null,
     });
 
     expect(launch).toMatchObject({ ok: false });

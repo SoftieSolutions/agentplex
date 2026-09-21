@@ -14,14 +14,13 @@ import {
 } from '@agentplex/protocol';
 import { encodeClaudePermissionAnswer } from '@agentplex/providers';
 import { readProviderFixture } from '@agentplex/providers/testing';
+import { createFakeApprovalListener, createFakeHookConnection } from './fake-approval-hooks.js';
 import {
   APPROVAL_DENIAL_MESSAGE,
   APPROVAL_HOOK_TIMEOUT_SECONDS,
   APPROVAL_TIMEOUT_MS,
   createApprovalGate,
   type ApprovalEvent,
-  type ApprovalHookConnection,
-  type ApprovalHookListener,
 } from './approval-gate.js';
 
 /**
@@ -50,73 +49,13 @@ function captured(overrides: Record<string, unknown>): string {
   return JSON.stringify({ ...(JSON.parse(CAPTURED) as Record<string, unknown>), ...overrides });
 }
 
-interface FakeHookConnection {
-  readonly connection: ApprovalHookConnection;
-  readonly writes: readonly string[];
-  readonly closed: boolean;
-  /** The hook's process went away before anything answered it. */
-  disconnect(): void;
-}
-
-function hookConnection(line: string, onWrite?: () => void): FakeHookConnection {
-  const writes: string[] = [];
-  const closers: (() => void)[] = [];
-  let closed = false;
-  return {
-    connection: {
-      sent: line,
-      write(answer: string): void {
-        onWrite?.();
-        writes.push(answer);
-      },
-      close(): void {
-        closed = true;
-      },
-      onClose(handler: () => void): void {
-        closers.push(handler);
-      },
-    },
-    writes,
-    get closed(): boolean {
-      return closed;
-    },
-    disconnect(): void {
-      closed = true;
-      for (const handler of closers) handler();
-    },
-  };
-}
-
-function hookListener(): ApprovalHookListener & {
-  present(connection: ApprovalHookConnection): void;
-  readonly closed: boolean;
-} {
-  let accept: ((connection: ApprovalHookConnection) => void) | null = null;
-  let closed = false;
-  return {
-    onConnection(handler): void {
-      accept = handler;
-    },
-    close(): void {
-      closed = true;
-    },
-    present(connection): void {
-      if (accept === null) throw new Error('the gate never asked for connections');
-      accept(connection);
-    },
-    get closed(): boolean {
-      return closed;
-    },
-  };
-}
-
 function counting(prefix: string): { newId(): string } {
   let next = 0;
   return { newId: () => `${prefix}-${(next += 1)}` };
 }
 
 function gate(now = 1_000) {
-  const listener = hookListener();
+  const listener = createFakeApprovalListener();
   const timers: FakeTimers = createFakeTimers();
   const events: ApprovalEvent[] = [];
   const records: LogRecord[] = [];
@@ -148,7 +87,7 @@ function gate(now = 1_000) {
 /** The whole ordinary opening: one launch admitted, one hook blocked on it. */
 function blocked(harness: ReturnType<typeof gate>, onWrite?: () => void) {
   const admission = harness.gate.admit(STORE);
-  const hook = hookConnection(sent(admission.secret), onWrite);
+  const hook = createFakeHookConnection(sent(admission.secret), onWrite);
   harness.listener.present(hook.connection);
   const requested = harness.events[0];
   if (requested?.type !== 'approval-requested') {
@@ -161,7 +100,7 @@ describe('createApprovalGate', () => {
   it('mints an id for a hook presenting the secret its launch was given, and reports the request', () => {
     const harness = gate();
     const admission = harness.gate.admit(STORE);
-    const hook = hookConnection(sent(admission.secret));
+    const hook = createFakeHookConnection(sent(admission.secret));
 
     harness.listener.present(hook.connection);
 
@@ -207,7 +146,7 @@ describe('createApprovalGate', () => {
     harness.gate.admit(STORE);
     const second = harness.gate.admit(OTHER_STORE);
 
-    harness.listener.present(hookConnection(sent(second.secret)).connection);
+    harness.listener.present(createFakeHookConnection(sent(second.secret)).connection);
 
     expect(harness.events[0]).toMatchObject({ type: 'approval-requested', storeId: OTHER_STORE });
   });
@@ -215,7 +154,7 @@ describe('createApprovalGate', () => {
   it('refuses a hook presenting a secret this server never minted, and creates nothing', () => {
     const harness = gate();
     harness.gate.admit(STORE);
-    const hook = hookConnection(sent('secret-nobody-minted'));
+    const hook = createFakeHookConnection(sent('secret-nobody-minted'));
 
     harness.listener.present(hook.connection);
 
@@ -229,7 +168,7 @@ describe('createApprovalGate', () => {
   it('refuses a hook that presents no secret at all', () => {
     const harness = gate();
     harness.gate.admit(STORE);
-    const hook = hookConnection(JSON.stringify({ payload: CAPTURED }));
+    const hook = createFakeHookConnection(JSON.stringify({ payload: CAPTURED }));
 
     harness.listener.present(hook.connection);
 
@@ -241,7 +180,7 @@ describe('createApprovalGate', () => {
   it('refuses a hook whose line is not readable at all', () => {
     const harness = gate();
     harness.gate.admit(STORE);
-    const hook = hookConnection('not json');
+    const hook = createFakeHookConnection('not json');
 
     harness.listener.present(hook.connection);
 
@@ -252,7 +191,7 @@ describe('createApprovalGate', () => {
   it('refuses a payload the provider parser does not accept, and creates nothing', () => {
     const harness = gate();
     const admission = harness.gate.admit(STORE);
-    const hook = hookConnection(
+    const hook = createFakeHookConnection(
       sent(admission.secret, captured({ hook_event_name: 'PreToolUse' })),
     );
 
@@ -417,7 +356,7 @@ describe('createApprovalGate', () => {
     expect(hook.writes).toEqual([]);
     expect(hook.closed).toBe(true);
 
-    const second = hookConnection(sent(admission.secret));
+    const second = createFakeHookConnection(sent(admission.secret));
     harness.listener.present(second.connection);
     expect(second.closed).toBe(true);
     expect(harness.events.filter((event) => event.type === 'approval-requested')).toHaveLength(1);

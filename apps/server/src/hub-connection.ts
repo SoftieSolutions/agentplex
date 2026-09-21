@@ -4,6 +4,8 @@ import {
   parseHubToServerFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type ApprovalDecision,
+  type ApprovalId,
   type FrameId,
   type HubToServerFrame,
   type Provider,
@@ -23,6 +25,7 @@ import {
   type Logger,
 } from '@agentplex/node-shared';
 import type { GrantAuthority, GrantId, ServerIdentity } from '@agentplex/providers';
+import type { ApprovalGate } from './approval-gate.js';
 import type { DirectoryBrowser } from './directory-browse.js';
 import type { HubAudience, HubMember } from './hub-audience.js';
 import type { MachineLoadReader } from './machine-load.js';
@@ -204,6 +207,18 @@ export interface HubConnectionDependencies {
    * why a document write is not an operation.
    */
   readonly docs: ProjectDocs;
+  /**
+   * The blocked tool calls this machine is holding, or `null` on a server that
+   * could not open the socket they arrive on.
+   *
+   * The server's and not the connection's, for the reason the terminals are:
+   * the agents are the machine's, two hubs may be watching the same one, and an
+   * approval belongs to the process that is blocked rather than to whichever
+   * socket happens to answer it. `null` is a server whose sessions ask at their
+   * own terminals, and it refuses a decision rather than pretending to apply
+   * one.
+   */
+  readonly approvals: ApprovalGate | null;
   readonly logger: Logger;
 }
 
@@ -284,6 +299,7 @@ export function serveHubConnection(
     browse,
     machineLoad,
     docs,
+    approvals,
     logger,
   }: HubConnectionDependencies,
 ): HubConnection {
@@ -623,18 +639,7 @@ export function serveHubConnection(
           handshakeFirst();
           return;
         }
-        // Answered with a no until the hook listener holding the blocked tool
-        // call exists, which is AGX-127 step 3. `session-refused` is this
-        // direction's "the server said no, and to which frame", and a refusal
-        // is the only honest answer while this machine holds no approval:
-        // silence would leave a hub believing a decision had landed.
-        send({
-          type: 'session-refused',
-          replyTo: frame.id,
-          code: 'bad-request',
-          message: 'this server does not hold approvals yet',
-          hold: null,
-        });
+        decide(frame.id, frame.approvalId, frame.decision);
         return;
       }
 
@@ -647,6 +652,51 @@ export function serveHubConnection(
         return;
       }
     }
+  }
+
+  /**
+   * Answers a blocked hook, and answers the hub about it at once.
+   *
+   * **It does not wait for the tool.** Handing the decision to the hook is the
+   * whole of what this instruction asks for: a granted command may run for ten
+   * minutes, and a hub that held this round trip open for it would time out on
+   * every long tool call -- its instruction channel gives up after thirty
+   * seconds -- and report a working decision as a failure. What actually
+   * happened at the hook travels separately, as `approval-settled`, which the
+   * gate emits to every connected hub the moment the answer is written.
+   *
+   * So there is nothing to send on the way it worked: the settlement has
+   * already gone out to this hub and the others, unsolicited, before this
+   * returns. A refusal is a frame, because a refusal is only this hub's
+   * business -- it named an approval this machine is not holding -- and the
+   * word it carries is the one thing the client that tapped is owed: the
+   * request was already granted, withdrawn or expired, or this machine has
+   * never heard of it.
+   */
+  function decide(replyTo: FrameId, approvalId: ApprovalId, decision: ApprovalDecision): void {
+    if (approvals === null) {
+      send({
+        type: 'session-refused',
+        replyTo,
+        code: 'refused',
+        message: 'this server is not holding approvals',
+        hold: null,
+      });
+      return;
+    }
+
+    const answered = approvals.decide(approvalId, decision);
+    if (answered.ok) return;
+    send({
+      type: 'session-refused',
+      replyTo,
+      code: 'refused',
+      // The gate's own word, which is the protocol's own word. A client that
+      // answered a moment too late is told what became of the request rather
+      // than that its answer was wrong.
+      message: `that approval is ${answered.reason}`,
+      hold: null,
+    });
   }
 
   /**

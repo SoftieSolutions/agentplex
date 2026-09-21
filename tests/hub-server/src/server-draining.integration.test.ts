@@ -188,6 +188,9 @@ function serveMachine(machine: Machine): DialResult {
       // No roots, which is the default a server ships with: this suite is about
       // draining, and a start here names no project to be bounded against.
       browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
+      // No hook socket in these suites: what a launch is handed before it
+      // starts has its own tests on the server side.
+      approvals: null,
       clock,
       logger,
     }),

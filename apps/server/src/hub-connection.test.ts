@@ -3,20 +3,34 @@ import {
   parseServerToHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type ApprovalId,
   type ProviderReadiness,
   type ServerToHubFrame,
   sessionRefSchema,
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { createFakeMessageSocket, PEER_GONE } from '@agentplex/node-shared/testing';
+import {
+  createFakeMessageSocket,
+  createFakeTimers,
+  PEER_GONE,
+} from '@agentplex/node-shared/testing';
 import { createLogger, CLOSE_NORMAL, CLOSE_POLICY, type LogRecord } from '@agentplex/node-shared';
+import { APPROVAL_DENIAL_MESSAGE, createApprovalGate } from './approval-gate.js';
 import { createDirectoryBrowser } from './directory-browse.js';
+import {
+  createFakeApprovalListener,
+  createFakeHookConnection,
+  hookLine,
+  type FakeApprovalListener,
+} from './fake-approval-hooks.js';
 import { createFakeDirectoryReader } from './fake-directory-reader.js';
 import { serveHubConnection } from './hub-connection.js';
 import type { ServerIdentity } from '@agentplex/providers';
 import { createFakeSessionController } from './fake-session-controller.js';
 import { createFakeTerminals } from './fake-terminals.js';
+import { encodeClaudePermissionAnswer } from '@agentplex/providers';
+import { readProviderFixture } from '@agentplex/providers/testing';
 import {
   createFakeGrantAuthority,
   missingProvider,
@@ -95,6 +109,7 @@ function deps(
       }),
     }),
     machineLoad: createFakeMachineLoadReader(),
+    approvals: null,
     docs: createProjectDocs({ dataRoot: DATA_ROOT, files: createFakeProjectFiles(), logger }),
     logger,
     ...overrides,
@@ -1056,5 +1071,180 @@ describe('two hubs on one server', () => {
     await settle();
 
     expect(sessions.scans.length - before).toBe(1);
+  });
+});
+
+/**
+ * The whole path on this side of the wire: a hook blocks, a hub is told, a hub
+ * answers, and the answer reaches the hook.
+ *
+ * The gate here is the real one and so is the audience -- only the socket under
+ * the hook is a fake, because a unix socket is the one thing a unit test cannot
+ * open and `node-approval-listener.integration.test.ts` is where it is proved.
+ * What this file adds is the wiring: that a gate event leaves as a frame on
+ * every connected hub's socket, and that a decision off a frame reaches a
+ * blocked process rather than a log line.
+ */
+const CAPTURED = await readProviderFixture('claude-permission-request.json');
+
+describe('an approval, from a blocked hook to a hub and back', () => {
+  function machine(options: { holding?: boolean } = {}) {
+    const sessions = createFakeSessionController();
+    const audience = createHubAudience({ sessions, logger });
+    const listener = createFakeApprovalListener();
+    let next = 0;
+    const gate = createApprovalGate({
+      listener,
+      clock: { now: () => 1_700_000_000_000 },
+      ids: { newId: () => `approval-${(next += 1)}` },
+      timers: createFakeTimers(),
+      tokens: { newToken: () => 'the-launch-secret' },
+      logger,
+      // The same one line `server.ts` writes: what the gate says goes to every
+      // hub that is connected, and to nothing else.
+      onEvent: (event) => void audience.tellAll(event),
+    });
+    const socket = createFakeMessageSocket();
+    serveHubConnection(
+      socket,
+      deps({ sessions, audience, approvals: options.holding === false ? null : gate }),
+    );
+    return { socket, listener, gate, sessions };
+  }
+
+  /** A hook that has connected and sent its line, waiting on an answer. */
+  function blocked(gate: ReturnType<typeof machine>['gate'], listener: FakeApprovalListener) {
+    const admission = gate.admit('store-a' as StoreId);
+    const hook = createFakeHookConnection(hookLine(admission.secret, CAPTURED));
+    listener.present(hook.connection);
+    return hook;
+  }
+
+  it('surfaces a blocked hook as an unsolicited frame on every hub', async () => {
+    const { socket, listener, gate } = machine();
+    socket.receive(handshake());
+    await settle();
+
+    blocked(gate, listener);
+    await settle();
+
+    const requested = replies(socket.sent).find((frame) => frame.type === 'approval-requested');
+    expect(requested).toMatchObject({
+      storeId: 'store-a',
+      approval: { approvalId: 'approval-1', tool: 'Bash' },
+    });
+    // Nobody asked for it, so it carries no `replyTo`: a hub that has been
+    // connected for an hour learns about a question asked a moment ago.
+    expect(requested).not.toHaveProperty('replyTo');
+  });
+
+  it('writes a decision to the hook and says what became of it', async () => {
+    const { socket, listener, gate } = machine();
+    socket.receive(handshake());
+    await settle();
+    const hook = blocked(gate, listener);
+    await settle();
+
+    socket.receive(
+      JSON.stringify({
+        type: 'approval-decide',
+        id: 2,
+        approvalId: 'approval-1',
+        decision: 'grant',
+      }),
+    );
+    await settle();
+
+    // The blocked process, answered in the provider's own spelling.
+    expect(hook.writes).toEqual([encodeClaudePermissionAnswer({ behavior: 'allow' })]);
+    expect(replies(socket.sent)).toContainEqual({
+      type: 'approval-settled',
+      storeId: 'store-a',
+      sessionId: expect.any(String) as unknown as string,
+      approvalId: 'approval-1',
+      outcome: 'granted',
+    });
+    // And no refusal: the instruction is answered by the settlement going out,
+    // which happens before this returns and long before the tool it released
+    // has finished running.
+    expect(replies(socket.sent).some((frame) => frame.type === 'session-refused')).toBe(false);
+  });
+
+  it('denies in the words this machine composes, not the hub’s', async () => {
+    const { socket, listener, gate } = machine();
+    socket.receive(handshake());
+    await settle();
+    const hook = blocked(gate, listener);
+    await settle();
+
+    socket.receive(
+      JSON.stringify({
+        type: 'approval-decide',
+        id: 2,
+        approvalId: 'approval-1',
+        decision: 'deny',
+      }),
+    );
+    await settle();
+
+    expect(hook.writes).toEqual([
+      encodeClaudePermissionAnswer({ behavior: 'deny', message: APPROVAL_DENIAL_MESSAGE }),
+    ]);
+  });
+
+  it('tells a hub what happened when its answer was too late', async () => {
+    const { socket, listener, gate } = machine();
+    socket.receive(handshake());
+    await settle();
+    const hook = blocked(gate, listener);
+    await settle();
+    // Somebody else answered first. The second answer is not applied on top of
+    // it, and the hub that sent it is owed the word for what did happen.
+    gate.decide('approval-1' as ApprovalId, 'grant');
+
+    socket.receive(
+      JSON.stringify({
+        type: 'approval-decide',
+        id: 2,
+        approvalId: 'approval-1',
+        decision: 'deny',
+      }),
+    );
+    await settle();
+
+    expect(hook.writes).toHaveLength(1);
+    expect(replies(socket.sent)).toContainEqual({
+      type: 'session-refused',
+      replyTo: 2,
+      code: 'refused',
+      message: 'that approval is granted',
+      hold: null,
+    });
+  });
+
+  it('refuses a decision on a server that holds no approvals', async () => {
+    // A machine that could not open the socket. Silence would leave a hub
+    // believing a decision had landed somewhere.
+    const { socket } = machine({ holding: false });
+    socket.receive(handshake());
+    await settle();
+
+    socket.receive(
+      JSON.stringify({
+        type: 'approval-decide',
+        id: 2,
+        approvalId: 'approval-9',
+        decision: 'grant',
+      }),
+    );
+    await settle();
+
+    expect(replies(socket.sent)).toContainEqual({
+      type: 'session-refused',
+      replyTo: 2,
+      code: 'refused',
+      message: 'this server is not holding approvals',
+      hold: null,
+    });
   });
 });

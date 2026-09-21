@@ -205,6 +205,9 @@ async function start(
               directories: { [BROWSE_ROOT]: [], [PROJECT_DIRECTORY]: [], [OUTSIDE]: [] },
             }),
           }),
+          // No hook socket in these suites: what a launch is handed before
+          // it starts has its own tests on the server side.
+          approvals: null,
           clock,
           logger,
         }),

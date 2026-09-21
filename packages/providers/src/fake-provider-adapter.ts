@@ -141,6 +141,10 @@ export function createFakeProviderAdapter(
 
     provisioning: fakeProvisioning(provider),
 
+    // A made-up provider with no hook, which is the case the seam has to carry
+    // and the one a caller must handle without asking which provider it has.
+    permissionHook: null,
+
     get observations() {
       return observations;
     },
