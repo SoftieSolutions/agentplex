@@ -10,8 +10,10 @@ import type { TokenStore } from '../auth/token.js';
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogue-store.js';
 import { useDocRoute } from '../docs/doc-route.js';
+import { appLayoutStore } from '../layout/app-layout.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
+import { NewProjectForm } from '../projects/new-project-form.js';
 import { NewSessionForm } from '../sessions/new-session-form.js';
 import { notificationList } from '../sessions/notification-model.js';
 import { listSessions } from '../sessions/session-list-model.js';
@@ -28,6 +30,8 @@ import { ConnectionStatus } from './connection-status.js';
 import { resolveDestination, useDestination, type Destination } from './destinations.js';
 import { MobileChrome } from './mobile-chrome.js';
 import { MoreScreen } from './more-screen.js';
+import { newMenu, type NewNodeKind } from './new-menu-model.js';
+import { NewMenuButton } from './new-menu.js';
 import { withSafeArea } from './safe-area.js';
 import { useShellForm, type ShellForm } from './shell-form.js';
 import { Sidebar } from './sidebar.js';
@@ -61,9 +65,15 @@ import { TopBar } from './top-bar.js';
  *     survive a screen being swapped. Leaving the Projects tab does drop the
  *     interest and returning asks again -- the store is what the answer is
  *     kept in, not what stops it being re-asked.
- *   * whether the start form is open. On a phone it is opened by the action
- *     button in the chrome, which is on screen over every destination, so the
- *     form belongs to the chrome rather than to the list underneath it.
+ *   * whether either start form is open. Both are opened from here: on a
+ *     phone by the action button, which is on screen over every destination,
+ *     and in the wide form by the New menu in the top bar (AGX-124). The forms
+ *     follow the controls that open them, so they belong to the chrome rather
+ *     than to whatever screen happens to be underneath. There is one start
+ *     form in the page for a harder reason than tidiness: the screen used to
+ *     own a second copy, and the two were wired differently -- the list's
+ *     opened a pane on the start and the chrome's did not -- so which control
+ *     a person found decided what their session did.
  *
  * No effects: the routes are external stores read through
  * `useSyncExternalStore`, and so are the hub and the window's own width.
@@ -83,6 +93,13 @@ export interface AppShellProps {
   readonly now?: () => number;
 }
 
+/**
+ * What the New button offers, asked once: the table behind it is a constant,
+ * so the answer is one too, and a call in the body would build a new list on
+ * every snapshot the hub delivers.
+ */
+const NEW_MENU = newMenu();
+
 export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const snapshot = useHubSnapshot(hub);
@@ -99,6 +116,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
   // store dials nothing, and the panel's first subscriber is what asks.
   const [catalogue] = useState<CatalogueStore>(() => createCatalogueStore({ hub }));
   const [starting, setStarting] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
 
   /**
    * The one place the selection moves from. Two things read it -- the cards
@@ -111,6 +129,21 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
   function pickMachine(next: ServerRegistrationId | null): void {
     setMachine(next);
     catalogue.reshape(narrowedToMachine(catalogue.getSnapshot().shape, next));
+  }
+
+  /**
+   * What the New menu was asked for, answered with the form that makes it.
+   *
+   * Only the kinds `new-menu-model.ts` marks as built can arrive here, and the
+   * one that is an address never does -- its row is an anchor and the menu
+   * calls nothing for it. So the live kinds are the arms, and the epic that
+   * builds a form for one of the others flips the flag beside its wording and
+   * adds the arm here in the same breath. In the body because it writes this
+   * component's state, which is the only thing it does.
+   */
+  function startKind(kind: NewNodeKind): void {
+    if (kind === 'session') setStarting(true);
+    if (kind === 'project') setCreatingProject(true);
   }
 
   const state = snapshot.machineState;
@@ -165,7 +198,47 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
    * an age is a reading a test has to be able to pin.
    */
   const notifications = notificationList(state === null ? [] : listSessions(state), now());
-  const actions = <AttentionBell list={notifications} store={hub} form={form} scheme={scheme} />;
+  const bell = <AttentionBell list={notifications} store={hub} form={form} scheme={scheme} />;
+  /**
+   * The chrome's actions, which is the bell at every width and the New menu at
+   * one of them.
+   *
+   * The menu is the wide form's because the phone already has a control that
+   * starts a session -- the action button floating over every destination --
+   * and two of those on one screen is what this step took off the session
+   * list. The bell goes first, as mockup 7a draws the pair.
+   *
+   * Composed here rather than in `top-bar.tsx` for the reason the bell is: the
+   * chrome draws what the shell hands it, so which controls exist is one
+   * decision in one place rather than one per frame.
+   */
+  const actions =
+    form === 'phone' ? (
+      bell
+    ) : (
+      <>
+        {bell}
+        <NewMenuButton menu={NEW_MENU} onPick={startKind} scheme={scheme} />
+      </>
+    );
+  /**
+   * The page's one start form, built here and drawn in whichever frame is on.
+   *
+   * `onPending` is what makes a started session open a pane, on the handle the
+   * start frame already carries. It is wired once, so no control can start a
+   * session that quietly opens nothing. The page's one layout store, for the
+   * reason `app-layout.ts` gives: a second would adopt a stored arrangement
+   * that predates what the first one saved.
+   */
+  const startForm = (
+    <NewSessionForm
+      store={hub}
+      opened={starting}
+      onClose={() => setStarting(false)}
+      scheme={scheme}
+      onPending={(startId) => appLayoutStore(hub).showPendingSession(startId)}
+    />
+  );
   const region = content({
     hub,
     tokens,
@@ -195,15 +268,10 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
         scheme={scheme}
       >
         {region}
-        {/* The chrome's own copy of the start form, because the button that
-            opens it is the chrome's: the list screen's New session button is
-            not drawn at this width. */}
-        <NewSessionForm
-          store={hub}
-          opened={starting}
-          onClose={() => setStarting(false)}
-          scheme={scheme}
-        />
+        {/* Opened by the action button in the chrome above it. No project
+            form here: nothing in this chrome starts a project, so the one a
+            phone uses is the session list's own. */}
+        {startForm}
       </MobileChrome>
     );
   }
@@ -255,6 +323,16 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
           {region}
         </Box>
       </Box>
+      {/* Both forms the New menu opens. They are the chrome's here and the
+          menu is the only thing that opens them, so the screen underneath
+          draws neither control and holds neither copy. */}
+      {startForm}
+      <NewProjectForm
+        store={hub}
+        opened={creatingProject}
+        onClose={() => setCreatingProject(false)}
+        scheme={scheme}
+      />
     </Box>
   );
 }

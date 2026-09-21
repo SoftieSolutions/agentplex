@@ -29,12 +29,10 @@ import {
   type StatusChip,
 } from './session-list-model.js';
 import { appSessionFiltersStore, type SessionListView } from './session-filters-store.js';
-import { appLayoutStore } from '../layout/app-layout.js';
 import { ProjectDocuments } from '../docs/project-docs.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
 import { NodeMenu } from '../tree/node-menu.js';
 import { nodeForSession } from '../tree/tree-model.js';
-import { NewSessionForm } from './new-session-form.js';
 import { SessionCard } from './session-card.js';
 import { SessionRow } from './session-row.js';
 import { stoppedNotice } from './stop-model.js';
@@ -81,9 +79,16 @@ import { stoppedNotice } from './stop-model.js';
  * The mockup's floating action button used to be drawn here, fixed to the
  * corner at narrow widths. It belongs to the phone chrome (AGX-125): it floats
  * over every destination and its badge counts the whole narrowed fleet, so a
- * copy owned by this screen would be one of two. New project stays, at every
- * width: it is this screen's own, the chrome starts sessions and not projects,
- * and a phone that could start neither would be a phone that can only watch.
+ * copy owned by this screen would be one of two.
+ *
+ * The two New buttons that stood above the cards have gone the same way in the
+ * wide form (AGX-124): the chrome's New menu makes both kinds there, and it is
+ * offered at every address rather than only over this list. What is left here
+ * is New project in the phone form, where there is no menu and the chrome's
+ * one button starts sessions -- a phone that could start neither kind would be
+ * a phone that can only watch. The start form is not here at all any more: the
+ * chrome owns the one in the page, because two copies wired differently is how
+ * a session started from one control opened a pane and from the other did not.
  *
  * The catalogue tree and the machine selector used to stand beside the cards
  * here, because until AGX-122 this screen was the only place with room for
@@ -139,7 +144,6 @@ export function SessionListScreen({
   // The view, off the same subscription and its own string snapshot, so that
   // typing in the search box does not re-render through this reader as well.
   const chosen = useSyncExternalStore(filtersStore.subscribe, filtersStore.getView);
-  const [creating, setCreating] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
 
   const state = snapshot.machineState;
@@ -197,47 +201,28 @@ export function SessionListScreen({
             </Text>
           )}
         </Group>
-        {/* The mockup's New popover lists five node kinds; Session is the one
-            live in this milestone, and a menu with one live option is not
-            drawn, so New is a direct button. */}
-        {/* Two buttons and not a menu, for the reason the one beside it is a
-            button: a popover over two options is a click in front of every
-            click. A project is where sessions get started from, so it sits
-            beside the thing that starts them. */}
-        <Group gap={8}>
-          <Button size="xs" variant="default" onClick={() => setCreatingProject(true)}>
-            New project
-          </Button>
-          {/* In the phone form the chrome's action button is what starts a
-              session -- floating over every destination rather than only over
-              this one -- so this would be the second of two. Not a media query:
-              the shell's form is one rule in one place, and a `visibleFrom`
-              here would be a second spelling of it that disagrees at any font
-              size but the default. */}
-          {form === 'wide' ? (
-            <Button size="xs" onClick={() => setCreating(true)}>
-              New session
+        {/* The phone's own New project, and its form with it. At this width
+            the chrome draws no New menu -- its action button starts sessions
+            and nothing else -- so without this one a phone could start no
+            project at all. Not a media query: the shell's form is one rule in
+            one place, and a `visibleFrom` here would be a second spelling of
+            it that disagrees at any font size but the default. */}
+        {form === 'phone' ? (
+          <Group gap={8}>
+            <Button size="xs" variant="default" onClick={() => setCreatingProject(true)}>
+              New project
             </Button>
-          ) : null}
-        </Group>
+          </Group>
+        ) : null}
       </Group>
-      <NewSessionForm
-        store={store}
-        opened={creating}
-        onClose={() => setCreating(false)}
-        scheme={scheme}
-        // The start opens a pane in the layout the moment it goes out, on the
-        // handle the start frame already has. The page's one layout store, for
-        // the reason `app-layout.ts` gives -- a second one would adopt a
-        // stored arrangement that predates what the first one saved.
-        onPending={(startId) => appLayoutStore(store).showPendingSession(startId)}
-      />
-      <NewProjectForm
-        store={store}
-        opened={creatingProject}
-        onClose={() => setCreatingProject(false)}
-        scheme={scheme}
-      />
+      {form === 'phone' ? (
+        <NewProjectForm
+          store={store}
+          opened={creatingProject}
+          onClose={() => setCreatingProject(false)}
+          scheme={scheme}
+        />
+      ) : null}
 
       <ProjectDocuments store={store} scheme={scheme} />
 

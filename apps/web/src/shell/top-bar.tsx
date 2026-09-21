@@ -11,9 +11,10 @@ import { withSafeArea } from './safe-area.js';
  * The mockups put a search field beside the mark. It is the command palette
  * (AGX-139) and it is not built, so nothing is drawn for it: a box that looks
  * like a search field and answers no keystroke is worse than the space it
- * would fill. The New popover (AGX-124) is absent for the same reason. The
- * bell is not: it goes in the actions slot, and it is drawn because it has
- * something true to say at every count and a panel to open that says the rest.
+ * would fill. The bell and the New menu are built, and both arrive in the
+ * actions slot: the bell has something true to say at every count and a panel
+ * that says the rest, and New offers only the kinds that exist rather than a
+ * row per kind the mockup drew (AGX-124).
  *
  * The avatar the mockups draw beside it is not built and is not waiting on a
  * ticket. There is one person on a hub they paired themselves, so a portrait
@@ -42,12 +43,17 @@ export interface TopBarProps {
   readonly status?: ReactNode;
   /**
    * The far end of that slot: the controls the chrome offers wherever the app
-   * is, which today is the attention bell.
+   * is, which here are the attention bell and the New menu beside it.
    *
-   * A node for the reason `status` is one -- the phone header draws the same
-   * one -- and after the status line rather than before it, so the bar reads
-   * as a sentence that ends in the thing a person clicks and the corner holds
-   * a control rather than prose.
+   * A node for the reason `status` is one, and built by the shell for the same
+   * reason: the phone header is handed its own, holding the bell without the
+   * menu, because a phone has an action button that starts a session and two
+   * controls doing one thing is what this ticket took away. Which controls a
+   * form offers is one decision in the shell rather than one per frame here.
+   *
+   * After the status line rather than before it, so the bar reads as a
+   * sentence that ends in the thing a person clicks and the corner holds a
+   * control rather than prose.
    */
   readonly actions?: ReactNode;
 }
