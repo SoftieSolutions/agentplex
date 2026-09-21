@@ -98,6 +98,9 @@ const SESSION = sessionRefSchema.parse({
   sessionId: 'session-migrate-db',
 });
 
+/** The moment the fixture was reported, so a pinned clock gives the real ages. */
+const NOW = 1_756_000_000_000;
+
 describe('the shell', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
@@ -147,13 +150,20 @@ describe('the shell', () => {
     );
   }
 
-  /** Mounts the shell at the current address and walks it through to a fleet. */
-  async function mount(): Promise<FakeSocket> {
+  /**
+   * Mounts the shell at the current address and walks it through to a fleet.
+   *
+   * The clock is the shell's own default unless a test pins one, because only
+   * the tests about what an age says need it fixed. Handed over explicitly
+   * rather than left off: `exactOptionalPropertyTypes` makes an absent prop
+   * and an undefined one two different things.
+   */
+  async function mount(now: () => number = Date.now): Promise<FakeSocket> {
     await act(async () => {
       root = createRoot(container);
       // No StrictMode: its simulated remount would subscribe, hang up and
       // dial again, and one dial is part of what the page test asserts.
-      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+      root.render(withProvider(<AppShell hub={store} tokens={tokens} now={now} />));
     });
     await act(settle);
     const socket = sockets.sockets[0];
@@ -234,6 +244,15 @@ describe('the shell', () => {
     ].map((row) => row.getAttribute('href') ?? '');
   }
 
+  /** Everything the open panel's rows say, in the order it drew them. */
+  function panelRowWords(): string[] {
+    return [
+      ...document.body.querySelectorAll<HTMLAnchorElement>(
+        '[role="dialog"] a[data-notification-row]',
+      ),
+    ].map((row) => row.textContent ?? '');
+  }
+
   /** The Projects/Sessions pair, by the name the sidebar gives that control. */
   function sidebarTabs(): HTMLInputElement[] {
     return [
@@ -309,6 +328,19 @@ describe('the shell', () => {
       '#/session/store-agentplex/session-migrate-db',
       '#/session/store-universe/session-docs-sweep',
     ]);
+  });
+
+  it('ages the panel’s rows by the clock it was handed', async () => {
+    // The shell is where the fleet is turned into notifications, so the moment
+    // those ages are measured from is read here. It is injected for the reason
+    // the session list injects its own: a clock is something a test cannot
+    // supply otherwise, and against the real one the fixture's rows read
+    // however long ago it was captured -- a line nobody can assert on.
+    await mount(() => NOW);
+
+    await openBell();
+
+    expect(panelRowWords()[0]).toContain('store-agentplex · mbp-robert · 3m');
   });
 
   it('names the missing token in the chrome, and links to where one is typed', async () => {
