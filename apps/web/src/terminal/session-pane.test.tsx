@@ -246,7 +246,17 @@ function control(label: string): HTMLElement {
  * document order.
  */
 function summary(): string {
-  return [...container.querySelectorAll('[role="status"]')].at(-1)?.textContent ?? '';
+  // The last live region the terminal column holds, which is the find bar's
+  // count. The context panel beside it has one of its own -- the APPROVALS
+  // block mounts a status region before it has words -- and a query over the
+  // whole pane would have started reading the panel's the moment that block
+  // landed.
+  const panel = container.querySelector('[aria-label="session context"]');
+  return (
+    [...container.querySelectorAll('[role="status"]')]
+      .filter((region) => panel === null || !panel.contains(region))
+      .at(-1)?.textContent ?? ''
+  );
 }
 
 /** The word in the header's attachment chip, which is the first live region. */
@@ -1039,13 +1049,18 @@ describe('the body of a session pane', () => {
     return [Number.parseFloat(style.paddingTop), Number.parseFloat(style.paddingLeft)];
   }
 
-  it('draws no context panel while no block has been built for it', async () => {
+  it('draws the panel for the one block every session has', async () => {
     await mountPane();
 
-    // The frame ships empty: AGX-129, AGX-138 and the TASK step append blocks
-    // to a list, and until one does there is nothing for a 300px column to
-    // hold, so the terminal has the whole pane exactly as it did before.
-    expect(contextPanel()).toBeNull();
+    // The panel is no longer conditional on a session having been started with
+    // a prompt: the standing policy is a fact about every session, including
+    // the answer "this session is in no project, so every request reaches you",
+    // and that is the answer somebody opening the panel came for.
+    const panel = contextPanel();
+    expect(panel).not.toBeNull();
+    expect(
+      [...container.querySelectorAll('section')].map((node) => node.getAttribute('aria-label')),
+    ).toEqual(['Approvals']);
   });
 
   it('leaves the terminal a column that can shrink and no padding to be fitted around', async () => {
@@ -1098,9 +1113,10 @@ describe('the session tab strip', () => {
     expect(tabLabels()).toEqual(['Terminal']);
     // Not a disabled Transcript, not a greyed Diff: a tab nobody can open is
     // a promise the screen cannot keep, and the strip is a list rather than a
-    // fixed set of four.
+    // fixed set of four. Asked of the strip rather than of the pane, because
+    // the panel beside it now has an APPROVALS heading of its own and that is
+    // a block about the standing policy, not a tab.
     expect(container.textContent).not.toContain('Transcript');
-    expect(container.textContent).not.toContain('Approvals');
     expect(container.querySelector('[role="tab"]')?.getAttribute('aria-selected')).toBe('true');
   });
 
@@ -1401,22 +1417,23 @@ describe('the task beside a session', () => {
     expect(block?.textContent).toContain(PROMPT);
   });
 
-  it('draws no panel at all for a session the hub holds no task for', async () => {
+  it('draws no task block at all for a session the hub holds no task for', async () => {
     // An adopted session: the hub found it on a machine rather than starting
-    // it, so there is no prompt anybody typed and nothing else in the panel is
-    // built yet. Not an empty column with a heading over it -- a TASK heading
-    // with nothing under it is a promise this screen cannot keep, and the
-    // first thing a reader would do is look for the sentence that is missing.
+    // it, so there is no prompt anybody typed. Not an empty block -- a TASK
+    // heading with nothing under it is a promise this screen cannot keep, and
+    // the first thing a reader would do is look for the sentence that is
+    // missing. The panel itself stays, because the block below it is about the
+    // policy and every session has one of those.
     await mountPaneOn(TASKED, hubFrames.machineStatePopulated);
 
     expect(taskBlock()).toBeNull();
-    expect(panel()).toBeNull();
+    expect(panel()).not.toBeNull();
   });
 
-  it('draws no panel for a session the state does not describe at all', async () => {
+  it('says nothing about a task for a session the state does not describe at all', async () => {
     await mountPaneOn('session-that-is-not-there', hubFrames.machineStatePopulated);
 
-    expect(panel()).toBeNull();
+    expect(taskBlock()).toBeNull();
   });
 
   it('draws no panel in the phone form, task or no task', async () => {
@@ -1547,8 +1564,10 @@ describe('the Approvals tab in a session pane', () => {
     // every quiet claude one.
     await mountAsking(hubFrames.machineStatePopulated);
 
+    // The strip, not the pane: the context panel's APPROVALS block is drawn
+    // whatever a session is asking, because it is about the standing policy
+    // rather than about a request.
     expect(tabLabels()).toEqual(['Terminal']);
-    expect(container.textContent).not.toContain('Approvals');
   });
 
   it('offers it with the count on it while requests are open', async () => {

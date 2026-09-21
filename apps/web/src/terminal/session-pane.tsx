@@ -33,6 +33,7 @@ import {
   NOTHING_SELECTED,
   type Clipboard,
 } from './clipboard.js';
+import { ApprovalsBlock } from './approvals-block.js';
 import { ApprovalsTab } from './approvals-tab.js';
 import { ContextPanel, type ContextBlock } from './context-panel.js';
 import type { EmulatorFactory, TerminalEmulator } from './emulator.js';
@@ -51,6 +52,7 @@ import {
   toneForStatus,
   type CrumbRole,
 } from './presentation.js';
+import { projectForSession, type SessionProject } from '../sessions/approval-policy-model.js';
 import { approvalsOldestFirst } from '../sessions/session-list-model.js';
 import { StopButton } from '../sessions/stop-button.js';
 import { ToneDot } from '../ui/tone-dot.js';
@@ -141,29 +143,47 @@ const CRUMB_ROLES: Record<
 };
 
 /**
- * The blocks in the context panel, built from the row the hub published.
+ * The blocks in the context panel, built from the row the hub published and
+ * from where the tree has this session filed.
  *
  * It stopped being a module constant the moment the first block landed, which
  * is what the frame was built to allow: a block is `{ key, title, body }` and a
  * ticket that adds one appends to this list and writes the component its body
- * renders. APPROVALS (AGX-104), COST (AGX-107) and the machine and diff blocks
- * each arrive as another entry here, and none of them touches `ContextPanel`.
+ * renders. COST (AGX-107) and the machine and diff blocks each arrive as
+ * another entry here, and none of them touches `ContextPanel`.
  *
- * TASK is here on one condition, and it is the ticket's whole decision: the
- * task is `row.task`, the prompt the session was started with, and a session
- * the hub has no task for -- every session it adopted off a machine rather
- * than started -- gets no block. Not an empty one: a TASK heading with nothing
- * under it reads as a fact that failed to load. And with no other block built
- * yet, no task means no panel at all, which the frame already decides for
- * itself.
+ * TASK is here on one condition, and it is AGX-130's whole decision: the task
+ * is `row.task`, the prompt the session was started with, and a session the hub
+ * has no task for -- every session it adopted off a machine rather than started
+ * -- gets no block. Not an empty one: a TASK heading with nothing under it
+ * reads as a fact that failed to load.
+ *
+ * APPROVALS is here on no condition at all, and that is the difference between
+ * the two. The policy is a standing fact about what this session will and will
+ * not be asked about, and the answer for a session filed under no project is
+ * not "nothing to say" -- it is that there is nowhere for a rule to live, which
+ * is exactly what somebody looking for the policy needs to be told. So the
+ * block draws for every session, and the panel is now drawn for every session
+ * that has a pane, which is the first time that has been true.
  *
  * Outside the component body because it needs nothing from it.
  */
-const NO_CONTEXT_BLOCKS: readonly ContextBlock[] = [];
-
-function contextBlocks(task: string | null, scheme: Scheme): readonly ContextBlock[] {
-  if (task === null) return NO_CONTEXT_BLOCKS;
-  return [{ key: 'task', title: 'Task', body: <TaskBlock task={task} scheme={scheme} /> }];
+function contextBlocks(
+  task: string | null,
+  project: SessionProject,
+  store: HubStore,
+  scheme: Scheme,
+): readonly ContextBlock[] {
+  const blocks: ContextBlock[] = [];
+  if (task !== null) {
+    blocks.push({ key: 'task', title: 'Task', body: <TaskBlock task={task} scheme={scheme} /> });
+  }
+  blocks.push({
+    key: 'approvals',
+    title: 'Approvals',
+    body: <ApprovalsBlock project={project} store={store} scheme={scheme} />,
+  });
+  return blocks;
 }
 
 /**
@@ -246,6 +266,24 @@ export function SessionPane({
   );
   useTerminalWatch(hub, target);
   const terminal: TerminalWatchView | null = snapshot.terminals.get(terminalKey(target)) ?? null;
+  /**
+   * The tree, for the one question the panel asks of it: which project this
+   * session is filed under, and therefore whose standing policy decides what it
+   * is asked about.
+   *
+   * Read out of the snapshot rather than subscribed to here. The tree is
+   * page-wide standing interest -- the shell declares it for every screen it
+   * mounts, once, and the store re-asks for it on every reconnection -- so a
+   * pane taking a second watch would be declaring interest in something that is
+   * already being kept current for it. What makes reading safe is that the
+   * answer has a third value: a pane handed no tree says it does not know where
+   * this session is filed, which is a different sentence from "no project" and
+   * the only one it is entitled to.
+   */
+  const project = useMemo(
+    () => projectForSession(snapshot.layout, sessionRef),
+    [snapshot.layout, sessionRef],
+  );
 
   // Pane-lifetime collaborators, not render data: the registry holds the
   // chord bindings. One per mounted pane; the route keys the pane so another
@@ -505,13 +543,16 @@ export function SessionPane({
   /**
    * What the panel has to say about this session.
    *
-   * Memoized on the task text and the scheme rather than on the row: a row is
-   * a fresh object on every state frame the hub sends, and this pane re-renders
-   * on every keystroke that changes anything else about it, so a list rebuilt
-   * each time would hand the panel a new array and a new block element for a
-   * task that has not changed since the session started.
+   * Memoized on the task text, the project and the scheme rather than on the
+   * row: a row is a fresh object on every state frame the hub sends, and this
+   * pane re-renders on every keystroke that changes anything else about it, so
+   * a list rebuilt each time would hand the panel a new array and a new block
+   * element for facts that have not changed since the session started.
    */
-  const blocks = useMemo(() => contextBlocks(row?.task ?? null, scheme), [row?.task, scheme]);
+  const blocks = useMemo(
+    () => contextBlocks(row?.task ?? null, project, hub, scheme),
+    [row?.task, project, hub, scheme],
+  );
   // Attachment is a claim about a socket and the subscription on it, which is
   // why it is read off the store and never off the route: an address says
   // where a user pointed, not what a hub answered.

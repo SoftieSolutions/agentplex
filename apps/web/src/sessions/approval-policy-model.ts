@@ -2,10 +2,13 @@ import {
   parseApprovalPolicyRule,
   type ApprovalPolicyRecord,
   type ApprovalPolicyRuleId,
+  type FrameId,
+  type Layout,
   type NodeId,
-  type PendingApproval,
+  type SessionRef,
 } from '@agentplex/protocol';
-import type { ApprovalPolicyView, HubCommand } from '../store/hub-store.js';
+import { PROJECT_KIND } from '../projects/project-kind.js';
+import type { ApprovalPolicyView, HubCommand, RefusalView } from '../store/hub-store.js';
 
 /**
  * The standing policy as a screen reads it: the three commands, and the rows
@@ -43,7 +46,16 @@ export function listPolicyCommand(project: NodeId): HubCommand {
  * proposal it will be matched against is itself derived from a tool input and
  * is not that input.
  */
-export function allowAlwaysCommand(project: NodeId, request: PendingApproval): HubCommand {
+export function allowAlwaysCommand(
+  project: NodeId,
+  /**
+   * The two fields a person read, and not the request object, for the reason
+   * the hub's own policy seam takes the same pair: nothing a rule is ever made
+   * from can then include an id, a suggestion or a decision, and the control
+   * that offers this can be handed the narrowed request a card already draws.
+   */
+  request: { readonly tool: string; readonly proposal: string },
+): HubCommand {
   return {
     type: 'approval-policy-add',
     projectId: project,
@@ -75,20 +87,43 @@ export type PolicyRow =
       readonly proposal: string;
     }
   | { readonly kind: 'asks'; readonly words: string }
-  | { readonly kind: 'unfiled'; readonly words: string };
+  | { readonly kind: 'unfiled'; readonly words: string }
+  | { readonly kind: 'unread'; readonly words: string };
 
-const ASKS = 'everything else asks';
-const UNFILED = 'this session is in no project, so every request reaches you';
+const ASKS = 'Everything else asks you first.';
+const UNFILED = 'No policy: this session is in no project, so every request reaches you.';
+const UNREAD = "This project's policy has not arrived yet.";
+const UNPLACED = 'Where this session is filed has not arrived yet.';
+
+/**
+ * What exact means, in the one sentence the block owes a reader.
+ *
+ * It is here rather than in the component because it is a claim about how the
+ * hub matches, not a caption: the rule text is compared whole and byte for
+ * byte, so the nearest miss a person can imagine -- the same command with one
+ * more flag, or one more space -- is a question they will still be asked. A
+ * reader who assumes otherwise has assumed a policy broader than the one they
+ * have, which is the only direction this screen must never be wrong in.
+ */
+export const EXACT_MATCH_WORDS =
+  'A rule matches the whole text, exactly: a request that differs by one character asks you.';
 
 /**
  * The rows for one session's project, from what the store holds.
  *
- * `project` is `null` for a session filed nowhere, and the one row that comes
- * back says so. `policy` is `null` before the hub has answered, and the block
- * is then empty rather than claiming an empty policy -- "nothing has been
- * decided" is a claim, and a screen making it while the answer is in flight
- * would tell somebody every request reaches them a moment before showing them
- * three rules saying otherwise.
+ * Three absences, three sentences, which is the whole of why `project` is a
+ * union rather than a nullable id. A tree that has not arrived is not a session
+ * filed nowhere, and saying "this session is in no project" while the tree is
+ * in flight is this block's one chance to be wrong in the direction that costs
+ * something: a person told there is no policy stops looking for one. `policy`
+ * is `null` before the hub has answered, and the row for that says the answer
+ * has not arrived rather than claiming an empty policy -- "nothing has been
+ * decided" is a claim, and a screen making it a moment before three rules
+ * arrive has made the same mistake.
+ *
+ * Each of them is a row rather than no rows, because the block is drawn under a
+ * heading: an empty body is the promise `context-panel.tsx` argues no block may
+ * make, and "not read yet" is the honest thing to put there.
  *
  * Each rule is put back through `parseApprovalPolicyRule` on the way in. The
  * hub parsed it, and the wire schema bounds it, and this parses it again for
@@ -98,11 +133,12 @@ const UNFILED = 'this session is in no project, so every request reaches you';
  * looser grammar cannot blank a policy somebody is relying on.
  */
 export function policyRows(
-  project: NodeId | null,
+  project: SessionProject,
   policy: ApprovalPolicyView | null,
 ): readonly PolicyRow[] {
-  if (project === null) return [{ kind: 'unfiled', words: UNFILED }];
-  if (policy === null) return [];
+  if (project.kind === 'unplaced') return [{ kind: 'unread', words: UNPLACED }];
+  if (project.kind === 'unfiled') return [{ kind: 'unfiled', words: UNFILED }];
+  if (policy === null) return [{ kind: 'unread', words: UNREAD }];
 
   const rows: PolicyRow[] = [];
   for (const record of policy.rules) {
@@ -134,7 +170,7 @@ export function policyRows(
  */
 export function coveredByPolicy(
   policy: ApprovalPolicyView | null,
-  request: PendingApproval,
+  request: { readonly tool: string; readonly proposal: string },
 ): ApprovalPolicyRecord | null {
   if (policy === null) return null;
   for (const record of policy.rules) {
@@ -145,4 +181,95 @@ export function coveredByPolicy(
     }
   }
   return null;
+}
+
+/**
+ * The project whose policy covers one session, and what the tree calls it.
+ *
+ * The same walk the hub makes (`Catalogue.projectOf`): from the node that
+ * anchors this session, upward, to the nearest project above it. Written again
+ * here rather than asked for, because the tree is a frame this client already
+ * holds -- and it is written to walk the same way, because two answers to
+ * "which project" is how a screen comes to offer a rule to a policy the hub
+ * would never consult for this session. A project below the session, or beside
+ * it, is not this session's: containment runs one way.
+ *
+ * `unfiled` is a session this client can place and that is in no project --
+ * filed at the root, or filed only under folders -- and there is nowhere for a
+ * rule about it to live. `unplaced` is the tree not having arrived, or not
+ * holding this session: two absences that look the same from here and that are
+ * both "this client cannot say yet", which is a different sentence from "there
+ * is no project" and must stay one.
+ *
+ * The label falls back to the node's id for a project the hub named nothing,
+ * the way the pane's header falls back to the session id. A project a person
+ * made always has a name; showing the id is at least showing something true,
+ * where a minted "Untitled project" would be a name they could not tell from
+ * one they chose.
+ */
+export type SessionProject =
+  | { readonly kind: 'project'; readonly id: NodeId; readonly label: string }
+  | { readonly kind: 'unfiled' }
+  | { readonly kind: 'unplaced' };
+
+const UNPLACED_PROJECT: SessionProject = { kind: 'unplaced' };
+const UNFILED_PROJECT: SessionProject = { kind: 'unfiled' };
+
+export function projectForSession(layout: Layout | null, ref: SessionRef): SessionProject {
+  if (layout === null) return UNPLACED_PROJECT;
+  const node = layout.find(
+    (candidate) =>
+      candidate.anchor !== null &&
+      candidate.anchor.storeId === ref.storeId &&
+      candidate.anchor.sessionId === ref.sessionId,
+  );
+  if (node === undefined) return UNPLACED_PROJECT;
+
+  const byId = new Map(layout.map((candidate) => [candidate.id, candidate]));
+  const seen = new Set<NodeId>([node.id]);
+  let above = node.parentId === null ? undefined : byId.get(node.parentId);
+  while (above !== undefined) {
+    if (above.kind === PROJECT_KIND) {
+      return { kind: 'project', id: above.id, label: above.name ?? above.id };
+    }
+    // A tree the hub writes cannot contain a cycle -- `moveNode` refuses one --
+    // and this is what stops the walk rather than spinning if one arrives
+    // anyway. An unplaceable session costs itself and not the pane.
+    if (seen.has(above.id)) return UNFILED_PROJECT;
+    seen.add(above.id);
+    above = above.parentId === null ? undefined : byId.get(above.parentId);
+  }
+  return UNFILED_PROJECT;
+}
+
+/**
+ * Where a rule this client wrote or took out has got to.
+ *
+ * `done` and not `written`, because one function serves the add and the remove:
+ * both end in the hub answering with the project's policy as it now stands, and
+ * both are refused the same way. What they end in is the same receipt, so
+ * telling them apart here would be a distinction the hub does not draw.
+ *
+ * Correlated by `replyTo` for the reason `approvalFollowUp` is: one snapshot
+ * holds one refusal and one policy per project, and a control reading the
+ * newest of either would report the answer to somebody else's frame as its own
+ * -- two remove buttons in one block are exactly that case.
+ */
+export type PolicyFollowUp =
+  | { readonly kind: 'idle' }
+  | { readonly kind: 'waiting' }
+  | { readonly kind: 'done' }
+  | { readonly kind: 'refused'; readonly words: string };
+
+export function policyFollowUp(
+  pending: FrameId | null,
+  policy: ApprovalPolicyView | null,
+  lastRefusal: RefusalView | null,
+): PolicyFollowUp {
+  if (pending === null) return { kind: 'idle' };
+  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
+    return { kind: 'refused', words: lastRefusal.message };
+  }
+  if (policy !== null && policy.replyTo === pending) return { kind: 'done' };
+  return { kind: 'waiting' };
 }
