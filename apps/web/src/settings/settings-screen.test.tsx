@@ -12,6 +12,7 @@ import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { createFakePairingOperations } from './fake-pairing-operations.js';
+import { createFakePushOperations } from './fake-push-operations.js';
 import { SettingsRoute } from './settings-route.js';
 import { SettingsScreen } from './settings-screen.js';
 
@@ -110,6 +111,13 @@ describe('the settings screen', () => {
       );
     });
 
+    // And says nothing at all about notifications, because the route builds
+    // the real operations over this browser and jsdom has no service worker
+    // registration and no `PushManager`. Degrading silently is the ticket's
+    // own rule, and this is the assertion that the wiring honours it rather
+    // than drawing a section nothing can act on.
+    expect(container.textContent).not.toContain('Notifications');
+
     const group = container.querySelector('[aria-label="Appearance"]');
     expect(group).not.toBeNull();
     expect([...(group?.querySelectorAll('input') ?? [])].map((input) => input.value)).toEqual([
@@ -140,8 +148,8 @@ describe('the settings screen with nothing paired', () => {
     container.remove();
   });
 
-  /** A real store's snapshot, after the hub has answered with one state. */
-  async function snapshotOn(state: string): Promise<HubSnapshot> {
+  /** A real store, and its snapshot, after the hub has answered with one state. */
+  async function storeOn(state: string): Promise<{ store: HubStore; snapshot: HubSnapshot }> {
     const sockets = createFakeSocketFactory();
     const store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
@@ -158,11 +166,11 @@ describe('the settings screen with nothing paired', () => {
     socket.deliver(state);
     const snapshot = store.getSnapshot();
     detach();
-    return snapshot;
+    return { store, snapshot };
   }
 
   async function draw(state: string): Promise<void> {
-    const snapshot = await snapshotOn(state);
+    const { store, snapshot } = await storeOn(state);
     const storage = fakeStorage();
     const element: JSX.Element = (
       <MantineProvider
@@ -172,8 +180,10 @@ describe('the settings screen with nothing paired', () => {
       >
         <SettingsScreen
           snapshot={snapshot}
+          store={store}
           tokens={createTokenStore(() => storage)}
           pairing={NO_PAIRING}
+          push={createFakePushOperations()}
           candidates={[]}
         />
       </MantineProvider>
@@ -215,6 +225,7 @@ describe('the settings screen with nothing paired', () => {
 
   it('says nothing about pairing before the hub has answered at all', async () => {
     const storage = fakeStorage();
+    const { store, snapshot } = await storeOn(hubFrames.pong);
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
@@ -222,9 +233,11 @@ describe('the settings screen with nothing paired', () => {
         defaultColorScheme="dark"
       >
         <SettingsScreen
-          snapshot={await snapshotOn(hubFrames.pong)}
+          snapshot={snapshot}
+          store={store}
           tokens={createTokenStore(() => storage)}
           pairing={NO_PAIRING}
+          push={createFakePushOperations()}
           candidates={[]}
         />
       </MantineProvider>
@@ -238,6 +251,16 @@ describe('the settings screen with nothing paired', () => {
     // and only the first one has a next action.
     expect(container.textContent).toContain('the hub');
     expect(container.textContent).not.toContain('install.sh');
+  });
+
+  it('carries the notifications control, where this browser has push', async () => {
+    await draw(hubFrames.machineState);
+
+    // The screen is the home of the control; its own suite mounts it alone,
+    // so without this the section could be deleted from the screen and every
+    // other test would stay green.
+    expect(container.textContent).toContain('Notifications');
+    expect(container.textContent).toContain('one shared hub token');
   });
 
   it('drops the guidance the moment a server is paired', async () => {
