@@ -634,6 +634,28 @@ export interface HubStore {
    */
   queryCatalogue(query: CatalogueQuery): Promise<CataloguePageView>;
   /**
+   * The same question, asked off the channel the screen is drawing.
+   *
+   * There is one catalogue channel here -- one remembered question, one page on
+   * the snapshot, one re-issue when `catalogue-changed` arrives -- because one
+   * screen draws the catalogue and a second copy of a page nobody is looking at
+   * is a second answer to disagree with. A caller that wants a page *for
+   * itself* does not fit that: the command palette asks its own question on
+   * every keystroke and keeps the answer inside the dialog, and asking through
+   * `queryCatalogue` would make the panel's rows change under a person typing
+   * in a dialog over them, and make the next `catalogue-changed` re-ask what
+   * was typed rather than what is on screen.
+   *
+   * So this sends the same frame and is answered by the same correlation, and
+   * differs in the two things that make the channel a channel: the question is
+   * not remembered, and the page does not land on the snapshot. Everything
+   * else is `queryCatalogue`'s contract, sentence for sentence -- it is never
+   * queued, it rejects while the connection is down, it rejects with the hub's
+   * own words when the hub refuses, and it is told when the socket drops under
+   * it.
+   */
+  queryCatalogueDetached(query: CatalogueQuery): Promise<CataloguePageView>;
+  /**
    * Standing interest in the catalogue, so a change re-issues the last query.
    *
    * The counterpart of `subscribeLayout`, and it does the same thing for the
@@ -869,7 +891,19 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
    */
   const pendingQueries = new Map<
     FrameId,
-    { resolve(page: CataloguePageView): void; reject(error: Error): void }
+    {
+      resolve(page: CataloguePageView): void;
+      reject(error: Error): void;
+      /**
+       * Whether this one was asked off the channel, for the caller alone.
+       *
+       * Kept per question rather than read back off the query, because two
+       * askers can send the identical question for different reasons -- the
+       * panel drawing the catalogue and the palette searching it -- and what
+       * tells them apart is who asked rather than what was asked.
+       */
+      readonly detached: boolean;
+    }
   >();
 
   /** Tells every blocked caller the answer is not coming. */
@@ -1401,8 +1435,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         };
         // The snapshot carries it as well as the caller, because a re-issue on
         // `catalogue-changed` has no caller: nobody asked for it, and the page
-        // has to land somewhere a screen is looking.
-        update({ catalogue: page });
+        // has to land somewhere a screen is looking. A detached page is the one
+        // exception and the reason that flag exists: it answers a caller who
+        // asked for itself, and putting it here would replace the rows of a
+        // screen that asked a different question.
+        if (waiting?.detached !== true) update({ catalogue: page });
         waiting?.resolve(page);
         return;
       }
@@ -1615,10 +1652,17 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
    *
    * The query is remembered before the send rather than after, so that a change
    * arriving while this one is in flight re-issues the question that was asked
-   * rather than the one before it.
+   * rather than the one before it -- unless it is `'detached'`, which is a
+   * caller's own question and not the channel's: remembering it would have the
+   * next `catalogue-changed` re-ask what somebody typed into a dialog instead
+   * of what a screen is drawing.
    */
-  function issueQuery(query: CatalogueQuery): Promise<CataloguePageView> {
-    lastQuery = query;
+  function issueQuery(
+    query: CatalogueQuery,
+    asked: 'channel' | 'detached' = 'channel',
+  ): Promise<CataloguePageView> {
+    const detached = asked === 'detached';
+    if (!detached) lastQuery = query;
     const wire = socket;
     if (!established || wire === null) {
       return Promise.reject(
@@ -1630,7 +1674,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     }
     const id = frameIds.next();
     return new Promise<CataloguePageView>((resolve, reject) => {
-      pendingQueries.set(id, { resolve, reject });
+      pendingQueries.set(id, { resolve, reject, detached });
       wire.send(encodeClientFrame({ ...query, type: 'catalogue-query', id }));
     });
   }
@@ -1926,6 +1970,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
 
     queryCatalogue(query: CatalogueQuery): Promise<CataloguePageView> {
       return issueQuery(query);
+    },
+
+    queryCatalogueDetached(query: CatalogueQuery): Promise<CataloguePageView> {
+      return issueQuery(query, 'detached');
     },
 
     subscribeCatalogue(): () => void {

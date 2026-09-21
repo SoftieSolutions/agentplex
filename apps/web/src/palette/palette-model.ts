@@ -48,11 +48,14 @@ import { sessionHash } from '../terminal/session-route.js';
  */
 
 /**
- * What a result points at. One member today, and a union rather than a string
- * so the day AGX-140 adds `doc` the dialog's switch over kinds fails to
- * compile until it says what a doc row looks like.
+ * What a result points at: the two kinds this build can send a person to.
+ *
+ * A union rather than a string, so a kind added here cannot be drawn until
+ * every switch over it says what its row looks like. `project` is deliberately
+ * absent rather than pending: the hub answers a flat search with leaves only,
+ * which `palette-search.ts` records and AGX-261 is filed to change.
  */
-export type PaletteResultKind = 'session';
+export type PaletteResultKind = 'session' | 'doc';
 
 /** One row of the palette, as the dialog draws and follows it. */
 export interface PaletteResult {
