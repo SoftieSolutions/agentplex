@@ -713,6 +713,9 @@ async function startFleetHub(
     host: HOST,
     port: 0,
     localServer: null,
+    // No push: this suite is not about it, and the two seams it needs are a
+    // cryptographic mint and a POST to somebody else's service.
+    push: null,
     files: createFakeStoreFiles(),
   });
   return {
@@ -764,6 +767,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       host: HOST,
       port: 0,
       localServer: null,
+      // No push: this suite is not about it, and the two seams it needs are a
+      // cryptographic mint and a POST to somebody else's service.
+      push: null,
       files: createFakeStoreFiles(),
     };
     const hub = await startHub({
@@ -860,6 +866,9 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       host: HOST,
       port: 0,
       localServer: null,
+      // No push: this suite is not about it, and the two seams it needs are a
+      // cryptographic mint and a POST to somebody else's service.
+      push: null,
       files: createFakeStoreFiles(),
     });
     const third = await openClient(pairedHub);

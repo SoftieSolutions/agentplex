@@ -1,6 +1,9 @@
 export { PROTOCOL_VERSION, checkProtocolVersion } from './version.js';
 export type { ProtocolVersionMismatch } from './version.js';
 
+export { acknowledgementHolds, wantsAttention, wantsHuman } from './attention.js';
+export type { AttentionSubject } from './attention.js';
+
 export { frameParser, parseTextFrame } from './parse.js';
 export { assertNever } from './exhaustive.js';
 export type { ParseFailure, ParseResult } from './parse.js';

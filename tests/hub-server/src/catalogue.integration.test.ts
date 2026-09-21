@@ -220,6 +220,9 @@ async function startFleetHub(machines: readonly Machine[]): Promise<Fleet> {
     host: HOST,
     port: 0,
     localServer: null,
+    // No push: this suite is not about it, and the two seams it needs are a
+    // cryptographic mint and a POST to somebody else's service.
+    push: null,
     files: createFakeStoreFiles(),
   });
 

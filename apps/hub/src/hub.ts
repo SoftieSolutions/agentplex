@@ -30,6 +30,8 @@ import { createFleetState, type FleetState } from './features/fleet-state/fleet-
 import { createMcp } from './features/mcp/mcp.js';
 import { createPairing, type LocalServerEntry } from './features/pairing/pairing.js';
 import { createPaneLayout } from './features/pane-layout/pane-layout.js';
+import { createPush, type PushSender, type VapidKeyGenerator } from './features/push/push.js';
+import { createAttentionEdge } from './features/push/attention-edge.js';
 import { createDocs } from './features/docs/docs.js';
 import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
@@ -140,6 +142,31 @@ export interface HubDependencies {
    * one more: a test pairs a local server from a file it wrote down.
    */
   readonly files: StoreFileSystem;
+  /**
+   * The two calls into `web-push` this hub would make, or `null` for a hub
+   * that cannot push at all.
+   *
+   * Nullable rather than absent, for the reason `localServer` is: every caller
+   * says what it is doing about push, and a hub with none is a state somebody
+   * chose rather than a field they forgot. `null` is a hub that mints no key
+   * pair, tells no browser it can subscribe and watches no edges -- which is
+   * exactly the state a hub served over plaintext is in anyway, because the
+   * Push API is a secure-context feature and no browser there will offer it.
+   *
+   * Both seams together rather than one at a time, because neither is any use
+   * without the other: a key pair nothing sends with is an unused row, and a
+   * sender with no pair cannot sign. Injected rather than imported for the
+   * reason every other seam here is -- these are the two places this process
+   * calls into a cryptographic library and out to somebody else's service, and
+   * no test in this repository should do either by accident.
+   */
+  readonly push: HubPushSeams | null;
+}
+
+/** What a hub that can push was given to do it with. */
+export interface HubPushSeams {
+  readonly generateKeys: VapidKeyGenerator;
+  readonly send: PushSender;
 }
 
 export interface Hub {
@@ -184,6 +211,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     port,
     localServer,
     files,
+    push: pushSeams,
   } = dependencies;
   const logger = dependencies.logger.child({ role: 'hub' });
 
@@ -496,6 +524,36 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // is one read of one small table on this machine's own disk, and a client
   // that arrived first would be shown a screen missing every mute.
   await attention.load();
+
+  // Web push: the one thing this hub says to somebody who is not looking at
+  // it. `null` when the composition root gave it no way to push, and then
+  // there is no feature, no key pair minted and nothing subscribed to the
+  // reducer -- a hub that cannot push does not half-run the machinery for it.
+  //
+  // Loaded here, before the first client is served and before the first server
+  // is dialled, for the reason the attention rows are: the key pair is what a
+  // client is told it may subscribe against, and a browser that asked before
+  // the pair was read would be told this hub has no push when it has one.
+  const push = pushSeams === null ? null : createPush({ database, clock, logger, ...pushSeams });
+  await push?.load();
+
+  if (push !== null) {
+    // The edge detector is an ordinary subscriber, which is the whole design:
+    // the fleet state knows nothing of push, and what turns a merged snapshot
+    // into a notification is a listener it cannot see. See
+    // `push/attention-edge.ts` for why it seeds itself from the first snapshot
+    // of each store rather than reading a hub restart as a dozen new prompts.
+    //
+    // Subscribed before `servers.sync()` below, so that the first reports are
+    // the seeding rather than something that happened before anybody watched.
+    // The send is not awaited and nothing on this path may await it: a
+    // listener runs inside the reducer's publish, and a push service having a
+    // slow minute must not hold up the broadcast every client is waiting on.
+    // `notify` swallows its own failures by contract, which is what makes the
+    // floating promise safe here.
+    const edge = createAttentionEdge({ notify: (event) => void push.notify(event), logger });
+    state.subscribe((snapshot) => edge.observe(snapshot));
+  }
 
   // Documents: the index of files the hub does not hold, and the one path a
   // write to one takes. It reads projects for the directory a frame is

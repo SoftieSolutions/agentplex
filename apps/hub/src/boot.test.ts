@@ -63,6 +63,10 @@ function dependencies(database = fakeHubDatabase(), dialer = createUnreachableDi
     files: createFakeStoreFiles(),
     tokens: { newToken: () => 'token-under-test' },
     discovery: createFakeBeaconSource(),
+    // No push: this suite is about what comes up and what comes back down,
+    // and the two seams push needs are a cryptographic mint and a POST to
+    // somebody else's service.
+    push: null,
     clock: { now: () => 1_756_000_000_000 },
   };
 }

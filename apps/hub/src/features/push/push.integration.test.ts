@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-schema.js';
+import { sessionIdSchema, storeIdSchema } from '@agentplex/protocol';
 import {
   createPush,
   pushEndpointSchema,
   type Push,
+  type PushDelivery,
+  type PushEvent,
+  type PushOutcome,
+  type PushSender,
   type PushSubscription,
   type VapidKeyGenerator,
 } from './push.js';
@@ -54,13 +59,36 @@ const countingKeys: VapidKeyGenerator = () => {
   };
 };
 
-function feature(generateKeys: VapidKeyGenerator = countingKeys): Push {
-  return createPush({ database: db(), clock: { now: () => now }, logger, generateKeys });
+/** Every delivery the feature handed to the sender, in the order it did. */
+let delivered: PushDelivery[] = [];
+/** What the sender answers, by endpoint. Anything unnamed is delivered. */
+let answers = new Map<string, PushOutcome | Error>();
+
+const recordingSender: PushSender = (delivery) => {
+  delivered.push(delivery);
+  const answer = answers.get(delivery.subscription.endpoint);
+  if (answer instanceof Error) return Promise.reject(answer);
+  return Promise.resolve(answer ?? { kind: 'delivered' });
+};
+
+function feature(
+  generateKeys: VapidKeyGenerator = countingKeys,
+  send: PushSender = recordingSender,
+): Push {
+  return createPush({ database: db(), clock: { now: () => now }, logger, generateKeys, send });
 }
 
 function subscription(endpoint: string): PushSubscription {
   return { endpoint: pushEndpointSchema.parse(endpoint), keys: { p256dh: P256DH, auth: AUTH } };
 }
+
+/** One needs-you edge, in the four fields the detector is allowed to pass on. */
+const EDGE: PushEvent = {
+  storeId: storeIdSchema.parse('store-work'),
+  sessionId: sessionIdSchema.parse('session-a'),
+  provider: 'claude',
+  status: 'awaiting-permission',
+};
 
 describe('the push feature', () => {
   beforeEach(async () => {
@@ -68,6 +96,8 @@ describe('the push feature', () => {
     logged = [];
     minted = 0;
     now = START;
+    delivered = [];
+    answers = new Map();
   });
 
   afterEach(async () => {
@@ -120,6 +150,7 @@ describe('the push feature', () => {
     // that has to be rotated, and rotating it silences every browser at once.
     expect(Object.keys(push).sort()).toEqual([
       'load',
+      'notify',
       'publicKey',
       'subscribe',
       'subscriptions',
@@ -216,6 +247,144 @@ describe('the push feature', () => {
     );
 
     expect(await push.subscriptions()).toEqual([subscription(ENDPOINT_A)]);
+  });
+});
+
+describe('the fan-out', () => {
+  beforeEach(async () => {
+    migrated = await openMigratedSchema('push-fan-out');
+    logged = [];
+    minted = 0;
+    now = START;
+    delivered = [];
+    answers = new Map();
+  });
+
+  afterEach(async () => {
+    await migrated?.close();
+    migrated = null;
+  });
+
+  /** A loaded feature with both browsers subscribed, which is the usual case. */
+  async function loadedWithTwoBrowsers(): Promise<Push> {
+    const push = feature();
+    await push.load();
+    await push.subscribe(subscription(ENDPOINT_A));
+    await push.subscribe(subscription(ENDPOINT_B));
+    logged = [];
+    return push;
+  }
+
+  it('sends one push to every subscription the hub holds', async () => {
+    const push = await loadedWithTwoBrowsers();
+
+    await push.notify(EDGE);
+
+    expect(delivered.map((one) => one.subscription.endpoint)).toEqual([ENDPOINT_A, ENDPOINT_B]);
+  });
+
+  it('signs as this hub, with the pair the feature keeps to itself', async () => {
+    const push = await loadedWithTwoBrowsers();
+
+    await push.notify(EDGE);
+
+    // The public half is the one every subscription was made against, and the
+    // private half reaches the sender and nothing else: it is still on no
+    // interface and in no log line.
+    expect(delivered[0]?.vapid).toEqual({
+      publicKey: 'public-key-1'.padEnd(87, 'x'),
+      privateKey: 'private-key-1'.padEnd(43, 'x'),
+    });
+    expect(JSON.stringify(logged)).not.toContain('private-key-1');
+  });
+
+  it('says the provider and the status words, and carries the two ids to tap on', async () => {
+    const push = await loadedWithTwoBrowsers();
+
+    await push.notify(EDGE);
+
+    expect(JSON.parse(delivered[0]?.payload ?? 'null')).toEqual({
+      title: 'claude',
+      body: 'awaiting permission',
+      data: { storeId: 'store-work', sessionId: 'session-a' },
+    });
+  });
+
+  it('puts nothing on a lock screen that was not asked for', async () => {
+    const push = await loadedWithTwoBrowsers();
+
+    await push.notify(EDGE);
+
+    // The three fields a descriptor carries and a notification may not. They
+    // cannot reach a payload because they never reach a `PushEvent`, and this
+    // is the assertion that says so out loud rather than leaving it to
+    // whoever next adds a field to the template.
+    const payload = delivered[0]?.payload ?? '';
+    expect(Object.keys(JSON.parse(payload) as object).sort()).toEqual(['body', 'data', 'title']);
+    for (const forbidden of ['title', 'cwd', 'branch'] as const) {
+      expect(Object.keys(EDGE)).not.toContain(forbidden);
+    }
+  });
+
+  it('forgets a subscription the push service says has gone', async () => {
+    const push = await loadedWithTwoBrowsers();
+    // What a 404 or a 410 means: this browser is never coming back. A cleared
+    // site, an uninstalled app, a registration the service expired.
+    answers.set(ENDPOINT_A, { kind: 'gone' });
+
+    await push.notify(EDGE);
+
+    expect(await push.subscriptions()).toEqual([subscription(ENDPOINT_B)]);
+  });
+
+  it('lets a failed send cost that subscription and no other', async () => {
+    const push = await loadedWithTwoBrowsers();
+    answers.set(ENDPOINT_A, { kind: 'failed', problem: 'too many requests' });
+
+    await push.notify(EDGE);
+
+    // Both were tried, and both are still here: somebody else's rate limit is
+    // not a reason to stop pushing to a browser that is perfectly reachable.
+    expect(delivered).toHaveLength(2);
+    expect(await push.subscriptions()).toHaveLength(2);
+    expect(JSON.stringify(logged)).toContain('too many requests');
+  });
+
+  it('survives a sender that throws rather than answering', async () => {
+    const push = await loadedWithTwoBrowsers();
+    answers.set(ENDPOINT_A, new Error('socket hang up'));
+
+    await expect(push.notify(EDGE)).resolves.toBeUndefined();
+
+    expect(delivered.map((one) => one.subscription.endpoint)).toEqual([ENDPOINT_A, ENDPOINT_B]);
+    expect(await push.subscriptions()).toHaveLength(2);
+  });
+
+  it('does nothing and says nothing when this hub has no key pair', async () => {
+    const push = feature(() => {
+      throw new Error('no entropy on this box');
+    });
+    await push.load();
+    await push.subscribe(subscription(ENDPOINT_A));
+    logged = [];
+
+    await push.notify(EDGE);
+
+    // Not a warning per change, which on a busy fleet is a log nobody can
+    // read. A hub with no key pair has already said so once, at load.
+    expect(delivered).toEqual([]);
+    expect(logged).toEqual([]);
+  });
+
+  it('does nothing and says nothing when nobody has subscribed', async () => {
+    const push = feature();
+    await push.load();
+    logged = [];
+
+    await push.notify(EDGE);
+
+    expect(delivered).toEqual([]);
+    expect(logged).toEqual([]);
   });
 });
 

@@ -11,7 +11,7 @@ import type { HubConfig } from './config.js';
 import type { Database } from './db/database.js';
 import type { MigrationFileSystem } from './db/migration-files.js';
 import type { BeaconSource } from './features/discovery/discovery.js';
-import { startHub, type Hub } from './hub.js';
+import { startHub, type Hub, type HubPushSeams } from './hub.js';
 import type { WebAssetFileSystem } from './features/web/web.js';
 
 /**
@@ -63,6 +63,16 @@ export interface HubRuntimeDependencies {
   readonly discovery: BeaconSource;
   readonly timers: Timers;
   readonly clock: Clock;
+  /**
+   * What this hub pushes with, or `null` for one that does not push.
+   *
+   * Threaded through rather than decided here, because both halves are calls
+   * into `web-push` and `main` is the only place that names a real
+   * implementation of anything. A test that started a runtime would otherwise
+   * have a cryptographic mint and a POST to somebody else's service wired in
+   * by default, which is the sort of thing a suite discovers by being slow.
+   */
+  readonly push: HubPushSeams | null;
 }
 
 export interface HubRuntime {
@@ -87,6 +97,7 @@ export async function startHubRuntime(
     discovery,
     timers,
     clock,
+    push,
   } = dependencies;
 
   const database = openDatabase(config.databaseFile);
@@ -114,6 +125,7 @@ export async function startHubRuntime(
       // The one pairing nobody types, and it arrives as configuration: a hub
       // whose settings name no local server registers nothing.
       localServer: config.localServer,
+      push,
     });
   } catch (error) {
     await database.close().catch((closing: unknown) => {

@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  assertNever,
+  type Provider,
+  type SessionId,
+  type SessionStatus,
+  type StoreId,
+} from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
 import type { Database } from '../../db/database.js';
 
@@ -11,10 +18,16 @@ import type { Database } from '../../db/database.js';
  * page. This is the one thing that reaches one who is not, which is why it is
  * its own feature and why the bar for what it may say is set where it is.
  *
- * This file is storage and identity only. Nothing here sends anything: the
- * trigger, the frames, the service worker and the control that turns it on are
- * the steps after this one. What it establishes first is the two durable facts
- * a send needs -- which hub is speaking, and to whom.
+ * This file is storage, identity and the fan-out: the two durable facts a send
+ * needs -- which hub is speaking, and to whom -- and the one loop that uses
+ * them. What is still ahead of it is the frames, the service worker and the
+ * control that turns it on.
+ *
+ * What is deliberately not here is *when*. That is `attention-edge.ts`, which
+ * watches the fleet state and decides that a session has newly started wanting
+ * a human. The split is the useful one: a rule about edges is testable against
+ * a reducer with no database under it, and a rule about fan-out is testable
+ * against a database with no reducer.
  *
  * ## Why the key pair lives here and not beside the hub
  *
@@ -27,11 +40,12 @@ import type { Database } from '../../db/database.js';
  * the whole of that argument.
  *
  * The private half never leaves this closure. It is on no interface, in no log
- * line and in no frame, and that is the reason the sending in the next step
- * belongs inside this feature rather than beside it: a getter for it would be a
- * getter somebody uses, and a private key that has been read out is one that
- * has to be rotated -- which, as above, cannot be done without silencing every
- * browser at once.
+ * line and in no frame, and that is the reason the sending lives inside this
+ * feature rather than beside it: a getter for it would be a getter somebody
+ * uses, and a private key that has been read out is one that has to be rotated
+ * -- which, as above, cannot be done without silencing every browser at once.
+ * The injected sender is handed the pair as an argument at the moment it
+ * signs, which is a narrower thing than a key anybody may ask for.
  *
  * ## Why nothing here throws
  *
@@ -177,11 +191,84 @@ interface VapidKeyPair {
  */
 export type VapidKeyGenerator = () => { readonly publicKey: string; readonly privateKey: string };
 
+/**
+ * One thing worth waking somebody up for.
+ *
+ * Four fields, and the absence of the rest is the design. A descriptor carries
+ * a title, a working directory and a branch; a notification arrives on a lock
+ * screen, in a hotel lobby, over somebody's shoulder. So what a session is
+ * called, where it is and what it is on never reach this type, and cannot then
+ * reach a payload by somebody adding a line to a template. The ids are here
+ * because the service worker needs somewhere to send the tap, and they say
+ * nothing to anybody who does not already have this hub's token.
+ *
+ * `status` rather than a rendered sentence, because the words belong beside
+ * the vocabulary they come from, and because a status is what a client would
+ * have to re-derive if this ever needed to say anything else about it.
+ */
+export interface PushEvent {
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  readonly provider: Provider;
+  readonly status: SessionStatus;
+}
+
+/** The pair, as the one thing allowed to hold it briefly: a sender, mid-send. */
+export interface VapidCredentials {
+  readonly publicKey: string;
+  readonly privateKey: string;
+}
+
+/** Everything one POST to one push service needs. */
+export interface PushDelivery {
+  readonly subscription: PushSubscription;
+  /** The notification, already JSON and already bounded by what may be in it. */
+  readonly payload: string;
+  /**
+   * Who the hub is signing as.
+   *
+   * Handed to the sender per send rather than read off this feature, which is
+   * the distinction the whole no-getter rule turns on: the private half is on
+   * no interface and in no log line, and the one function that has to sign
+   * with it receives it as an argument at the moment it signs. A `privateKey()`
+   * on `Push` would be a key somebody eventually reads for a second purpose.
+   */
+  readonly vapid: VapidCredentials;
+}
+
+/**
+ * What became of one push.
+ *
+ * Three answers and not a thrown error, because two of the three are ordinary
+ * and the caller acts differently on each. `gone` is the push service saying
+ * this browser is never coming back -- a cleared site, an uninstalled app, an
+ * expired registration -- and it is the only outcome that changes what the hub
+ * stores. `failed` is everything else: a service being rate-limited, a network
+ * that was not there, a payload refused. Those are somebody else's weather and
+ * the subscription survives them.
+ */
+export type PushOutcome =
+  | { readonly kind: 'delivered' }
+  | { readonly kind: 'gone' }
+  | { readonly kind: 'failed'; readonly problem: string };
+
+/**
+ * The one call out of this process to a push service.
+ *
+ * Injected for the reason the key generator is: it is a network call into
+ * another program's protocol, and the rules this feature exists to keep --
+ * one push per subscription, a dead subscription forgotten, a live one never
+ * dropped for somebody else's failure -- are only testable if the send is a
+ * seam. The real one wraps `web-push` and is wired in at the composition root.
+ */
+export type PushSender = (delivery: PushDelivery) => Promise<PushOutcome>;
+
 export interface PushDependencies {
   readonly database: Database;
   readonly clock: Clock;
   readonly logger: Logger;
   readonly generateKeys: VapidKeyGenerator;
+  readonly send: PushSender;
 }
 
 export interface Push {
@@ -211,6 +298,49 @@ export interface Push {
   unsubscribe(endpoint: PushEndpoint): Promise<void>;
   /** Every subscription this hub holds, each row parsed off disk. */
   subscriptions(): Promise<readonly PushSubscription[]>;
+  /**
+   * Tells every subscribed browser about one thing wanting a human.
+   *
+   * Never throws and never rejects, for the reason nothing else here does:
+   * this is called from a listener on the fleet state, and a rejection on that
+   * path would be push taking the state pipeline down with it.
+   *
+   * Deciding *when* is `attention-edge.ts`. This is only the fan-out, and it
+   * is in this file rather than beside it because a send needs the private
+   * half of the key pair and a delete needs the subscription table -- the two
+   * things this feature exists to be the only holder of.
+   */
+  notify(event: PushEvent): Promise<void>;
+}
+
+/**
+ * A status in the words a notification says it in.
+ *
+ * The original is `apps/web/src/sessions/session-list-model.ts`, which draws
+ * the same words on a card. They are restated rather than imported because a
+ * hub may not import an app, and they are deliberately the same words: a
+ * notification that said one thing and the row behind it another would be two
+ * readings of one session.
+ *
+ * Every status has words even though only two of them can reach a
+ * notification, because an exhaustive switch is what makes a status added to
+ * the protocol fail here rather than arrive on somebody's phone as `undefined`.
+ */
+function statusWords(status: SessionStatus): string {
+  switch (status) {
+    case 'working':
+      return 'working';
+    case 'awaiting-permission':
+      return 'awaiting permission';
+    case 'awaiting-input':
+      return 'awaiting input';
+    case 'idle':
+      return 'idle';
+    case 'unknown':
+      return 'status unknown';
+    default:
+      return assertNever(status, 'session status');
+  }
 }
 
 export function createPush({
@@ -218,6 +348,7 @@ export function createPush({
   clock,
   logger: parent,
   generateKeys,
+  send,
 }: PushDependencies): Push {
   const logger = parent.child({ part: 'push' });
 
@@ -248,6 +379,48 @@ export function createPush({
       return null;
     }
     return { publicKey: parsed.data.public_key, privateKey: parsed.data.private_key };
+  };
+
+  /**
+   * Every subscription on disk, each row parsed.
+   *
+   * A local rather than a call through the returned object, because the
+   * fan-out reads it too and a feature reaching back through its own interface
+   * is a feature that can be given a different one.
+   */
+  const readSubscriptions = async (): Promise<readonly PushSubscription[]> => {
+    const result = await database.query(
+      'SELECT endpoint, p256dh, auth FROM push_subscriptions ORDER BY created_at, endpoint',
+    );
+    const held: PushSubscription[] = [];
+    for (const row of result.rows) {
+      const stored = storedSubscriptionSchema.safeParse(row);
+      if (!stored.success) {
+        logger.warn('a push subscription row could not be read', {
+          problem: stored.error.message,
+        });
+        continue;
+      }
+      // An unreadable row costs itself and not the listing. One bad endpoint
+      // must not leave a fan-out with nobody to send to, which would be this
+      // feature failing in the one direction nobody would notice: silently.
+      const parsed = pushSubscriptionSchema.safeParse({
+        endpoint: stored.data.endpoint,
+        keys: { p256dh: stored.data.p256dh, auth: stored.data.auth },
+      });
+      if (!parsed.success) {
+        logger.warn('a push subscription row is not something this hub may push to', {
+          problem: parsed.error.message,
+        });
+        continue;
+      }
+      held.push(parsed.data);
+    }
+    return held;
+  };
+
+  const forget = async (endpoint: PushEndpoint): Promise<void> => {
+    await database.query('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
   };
 
   return {
@@ -322,39 +495,74 @@ export function createPush({
     },
 
     async unsubscribe(endpoint: PushEndpoint): Promise<void> {
-      await database.query('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+      await forget(endpoint);
       logger.info('a push subscription was removed');
     },
 
-    async subscriptions(): Promise<readonly PushSubscription[]> {
-      const result = await database.query(
-        'SELECT endpoint, p256dh, auth FROM push_subscriptions ORDER BY created_at, endpoint',
-      );
-      const held: PushSubscription[] = [];
-      for (const row of result.rows) {
-        const stored = storedSubscriptionSchema.safeParse(row);
-        if (!stored.success) {
-          logger.warn('a push subscription row could not be read', {
-            problem: stored.error.message,
+    subscriptions: readSubscriptions,
+
+    async notify(event: PushEvent): Promise<void> {
+      // Held in a local first: this is the one place the private half is read,
+      // and reading it once means the checks below and the sends after them
+      // are about one pair rather than about whatever `load` has since done.
+      const vapid = keys;
+      // Both of these are ordinary states rather than problems, and neither
+      // logs. A hub with no key pair said so once at load; a hub nobody has
+      // subscribed to is every hub before the first browser asks. A line per
+      // change on either would be a log that scrolls a busy fleet's real
+      // events off the screen, for a fact that never varies between restarts.
+      if (vapid === null) return;
+      const held = await readSubscriptions();
+      if (held.length === 0) return;
+
+      // Built once for the fan-out, because it is the same notification to
+      // everybody: there is one client token and no user identity, so every
+      // browser that subscribed gets every edge.
+      const payload = JSON.stringify({
+        title: event.provider,
+        body: statusWords(event.status),
+        // The ids and nothing else, so the service worker has somewhere to
+        // send the tap. They name a session to whoever already holds this
+        // hub's token and nothing to anybody else.
+        data: { storeId: event.storeId, sessionId: event.sessionId },
+      });
+
+      for (const subscription of held) {
+        let outcome: PushOutcome;
+        try {
+          outcome = await send({ subscription, payload, vapid });
+        } catch (error) {
+          // A sender is somebody else's network. It is contracted to answer
+          // rather than throw, and this is here because a contract is not a
+          // guarantee: one that throws costs its own subscription and the rest
+          // of the fan-out carries on.
+          logger.warn('a push sender threw instead of answering', {
+            problem: error instanceof Error ? error.message : String(error),
           });
           continue;
         }
-        // An unreadable row costs itself and not the listing. One bad endpoint
-        // must not leave a fan-out with nobody to send to, which would be this
-        // feature failing in the one direction nobody would notice: silently.
-        const parsed = pushSubscriptionSchema.safeParse({
-          endpoint: stored.data.endpoint,
-          keys: { p256dh: stored.data.p256dh, auth: stored.data.auth },
-        });
-        if (!parsed.success) {
-          logger.warn('a push subscription row is not something this hub may push to', {
-            problem: parsed.error.message,
-          });
-          continue;
+
+        switch (outcome.kind) {
+          case 'delivered':
+            break;
+          case 'gone':
+            // The push service says this browser is never coming back. Keeping
+            // the row would be a hub that pushes to nothing for ever and a
+            // subscription list nobody can read as a count of who is listening.
+            await forget(subscription.endpoint);
+            logger.info('a push subscription has gone and was forgotten');
+            break;
+          case 'failed':
+            // Everything else is weather: a rate limit, a service that was
+            // down, a request refused. The subscription survives it, because
+            // dropping a live browser over somebody else's bad minute is the
+            // failure that cannot be noticed from here.
+            logger.warn('a push could not be delivered', { problem: outcome.problem });
+            break;
+          default:
+            assertNever(outcome, 'push outcome');
         }
-        held.push(parsed.data);
       }
-      return held;
     },
   };
 }
