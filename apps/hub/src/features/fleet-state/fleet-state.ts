@@ -1,6 +1,7 @@
 import type {
   MachineState,
   NodeId,
+  PendingApproval,
   ServerRegistrationId,
   SessionDescriptor,
   SessionHold,
@@ -9,10 +10,17 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
+import { NOTHING_PENDING } from '../approvals/approvals.js';
 import { UNATTENDED, type SessionAttention } from '../attention/attention.js';
 import { countsTowardAttention, type ServerConnectionReport } from '../servers/servers.js';
 import type { DiscoveredServer } from '../discovery/discovery.js';
-import { sameCandidates, sameConnection, sameHolds, sameSessions } from './equality.js';
+import {
+  sameApprovals,
+  sameCandidates,
+  sameConnection,
+  sameHolds,
+  sameSessions,
+} from './equality.js';
 import { toMachineState } from './machine-state.js';
 import { chooseReportedSession, type ReportedSession } from './session-selection.js';
 
@@ -169,6 +177,23 @@ export interface SessionRow {
    * name a project fall back to what they said before it existed.
    */
   readonly project: SessionProject | null;
+  /**
+   * What an agent in this session is presently blocked on, oldest first, and
+   * usually nothing.
+   *
+   * The third thing on this row that no scan rebuilds, and it is not persisted
+   * for a stronger reason than attention is: on the other side of each of these
+   * there is a process parked with a timeout running, so a list read back off
+   * disk would offer a person questions nobody is waiting on any more. The
+   * approvals feature holds them; what is here is the current reading, applied
+   * through `applyApprovals` the way a connection report is.
+   *
+   * It is not a second source of status. `awaiting-permission` is what the
+   * provider's own record of the session says, and a row with an empty list
+   * beside that status is a provider that asks at its own terminal rather than
+   * a contradiction.
+   */
+  readonly approvals: readonly PendingApproval[];
 }
 
 /** One store, however many servers have it mounted. */
@@ -302,6 +327,21 @@ export interface FleetState {
    * session row draws.
    */
   applyProjects(placements: ReadonlyMap<string, SessionProject>): void;
+  /**
+   * Takes everything one session presently has open, as a whole list.
+   *
+   * The seam the approvals feature's `onChanged` is wired to, and a whole list
+   * rather than an arrival or an ending for the reason nothing here is a delta:
+   * that feature knows what is open, and a reducer applying "one ended" would
+   * be keeping a second copy of the answer, free to drift from the one the
+   * decision is actually made against.
+   *
+   * Filed under `{ storeId, sessionId }` and not under a store the hub has
+   * heard of, exactly as an acknowledgement is: a machine can report a blocked
+   * agent before its first store report lands, and dropping it would leave a
+   * person unable to answer a question the hub had already been told about.
+   */
+  applyApprovals(ref: SessionRef, approvals: readonly PendingApproval[]): void;
   /** The whole state. The same object until something changes. */
   snapshot(): HubStateSnapshot;
   /**
@@ -418,6 +458,15 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
    * another session.
    */
   const attention = new Map<string, SessionAttention>();
+  /**
+   * What each session has open, by session, and only while it has any.
+   *
+   * Keyed as JSON for the reason the attention map is. A session whose last
+   * request ended leaves the map rather than keeping an empty list: nothing
+   * open is the same fact as never having had anything open, and two
+   * representations of it would be two ways for a row to say the same thing.
+   */
+  const approvals = new Map<string, readonly PendingApproval[]>();
   const listeners = new Set<(snapshot: HubStateSnapshot) => void>();
 
   /**
@@ -440,7 +489,7 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
   let candidates: readonly DiscoveredServer[] = [];
 
   const build = (): HubStateSnapshot => {
-    const stores = buildStoreViews(connections, reports, attention, projects);
+    const stores = buildStoreViews(connections, reports, attention, projects, approvals);
     return {
       version,
       stores,
@@ -587,6 +636,19 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
       changed();
     },
 
+    applyApprovals(ref: SessionRef, next: readonly PendingApproval[]): void {
+      const key = sessionKey(ref);
+      const previous = approvals.get(key) ?? NOTHING_PENDING;
+      // The same rule the reports follow: a list that says what the last one
+      // said is a version bump that would mean "a machine spoke" rather than
+      // "something changed", and every bump is a whole state frame to every
+      // attached client.
+      if (sameApprovals(previous, next)) return;
+      if (next.length === 0) approvals.delete(key);
+      else approvals.set(key, next);
+      changed();
+    },
+
     snapshot,
 
     storeSessions(storeId: StoreId): readonly SessionDescriptor[] | null {
@@ -678,6 +740,7 @@ function buildStoreViews(
   reports: ReadonlyMap<ServerRegistrationId, ReadonlyMap<StoreId, StoredReport>>,
   attention: ReadonlyMap<string, SessionAttention>,
   projects: ReadonlyMap<string, SessionProject>,
+  approvals: ReadonlyMap<string, readonly PendingApproval[]>,
 ): readonly StoreView[] {
   const attached = new Map<StoreId, ServerConnectionReport[]>();
   for (const connection of connections.values()) {
@@ -700,7 +763,7 @@ function buildStoreViews(
       lastReachableAt: lastOf(
         servers.map((server) => server.connectedSince ?? server.lastConnectedAt),
       ),
-      sessions: buildSessionRows(storeId, servers, reports, attention, projects),
+      sessions: buildSessionRows(storeId, servers, reports, attention, projects, approvals),
     });
   }
 
@@ -726,6 +789,7 @@ function buildSessionRows(
   reports: ReadonlyMap<ServerRegistrationId, ReadonlyMap<StoreId, StoredReport>>,
   attention: ReadonlyMap<string, SessionAttention>,
   projects: ReadonlyMap<string, SessionProject>,
+  approvals: ReadonlyMap<string, readonly PendingApproval[]>,
 ): readonly SessionRow[] {
   const readings = new Map<string, ReportedSession[]>();
   const holders = new Map<string, SessionHolder>();
@@ -784,6 +848,10 @@ function buildSessionRows(
       // A session the tree does not place is a session in no project, which is
       // an answer rather than a reading that has not happened yet.
       project: projects.get(sessionKey(ref)) ?? null,
+      // Empty rather than absent, for the reason the wire's own field is:
+      // "nothing is waiting" and "this hub cannot tell you" must not be one
+      // value, and every codex row will say the first of them forever.
+      approvals: approvals.get(sessionKey(ref)) ?? NOTHING_PENDING,
     });
   }
 

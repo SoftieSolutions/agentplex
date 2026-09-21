@@ -1,4 +1,5 @@
 import type {
+  PendingApproval,
   ProviderReadiness,
   ServerDraining,
   SessionDescriptor,
@@ -147,6 +148,36 @@ export function sameHolds(left: readonly SessionHold[], right: readonly SessionH
       other !== undefined &&
       hold.sessionId === other.sessionId &&
       hold.stoppable === other.stoppable
+    );
+  });
+}
+
+/**
+ * Whether a session has exactly the requests open that it had a moment ago.
+ *
+ * The id and the moment, and not the proposal or the tool beside them: a
+ * request is minted once, by the machine holding the blocked hook, and nothing
+ * about it changes while it is open. Two different ids in one position is the
+ * case worth catching -- one request settling and another arriving between
+ * announcements leaves a list of the same length, and a comparison that only
+ * counted would leave every client offering to answer a question that had
+ * already ended.
+ *
+ * `requestedAt` is compared because it is drawn: it is the hub's own stamp, a
+ * client renders the wait from it, and the same id re-announced with a fresh
+ * one is a wait that silently restarted.
+ */
+export function sameApprovals(
+  left: readonly PendingApproval[],
+  right: readonly PendingApproval[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((approval, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      approval.approvalId === other.approvalId &&
+      approval.requestedAt === other.requestedAt
     );
   });
 }

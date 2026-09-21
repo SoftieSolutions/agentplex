@@ -162,9 +162,11 @@ function toSessionRow(row: ReducedSessionRow): SessionRow {
     // to copy defensively here: both fields are values, and a row is rebuilt
     // rather than mutated whenever the tree says something new.
     project: row.project,
-    // Present and empty until the approvals feature fills it, in AGX-127 step
-    // 4. Empty is the true value now rather than a placeholder: this hub holds
-    // no request open yet, so nothing on any row is waiting on a person.
-    approvals: [],
+    // Copied rather than passed through, so that nothing a client is sent
+    // shares an array with the reducer's own. Empty is the true value and not
+    // a placeholder: a provider with no hook to ask through publishes this on
+    // every row, which is what keeps "nothing is waiting" and "this build
+    // cannot tell you" two different answers.
+    approvals: [...row.approvals],
   };
 }

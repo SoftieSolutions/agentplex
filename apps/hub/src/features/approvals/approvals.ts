@@ -1,0 +1,485 @@
+import type {
+  ApprovalDecision,
+  ApprovalId,
+  ApprovalOutcome,
+  PendingApproval,
+  RefusalCode,
+  ServerRegistrationId,
+  ServerToHubFrame,
+  SessionRef,
+} from '@agentplex/protocol';
+import type { Clock, Logger } from '@agentplex/node-shared';
+
+/**
+ * The requests this hub is holding open on somebody's behalf.
+ *
+ * An agent blocks on a tool call, the machine it is on says so, and every
+ * attached client can answer. This is the one place that says which requests
+ * are open, which machine each belongs to, and what became of the ones that are
+ * not open any more.
+ *
+ * ## No database, deliberately
+ *
+ * A pending approval is a claim about *now* -- the same argument `fleet-state`
+ * makes about sessions, and here it is sharper. On the other side of every row
+ * in this file there is a process parked on a socket with a timeout running.
+ * A table read back after a restart would present questions whose hooks stopped
+ * waiting minutes ago as answerable, and the answer a person then gave would
+ * reach nobody: the tool call has already fallen through as though no hook had
+ * run. What is lost by holding this in memory is the truth, and what is lost by
+ * writing it down is a person's trust that tapping Allow allowed something.
+ *
+ * Boot therefore starts empty, and that is correct rather than merely cheap:
+ * the hub redials, the servers' gates still hold whatever is open, and a
+ * request that is still blocked is still blocked on the machine that minted it.
+ *
+ * ## Deciding once
+ *
+ * The ticket is the races, and all of them meet at `decide`. Two clients tap at
+ * one moment; a client taps a request the agent already took back; a client
+ * that reconnected taps one it never saw end. The rule is one claim per
+ * `{ storeId, sessionId, approvalId }`, taken before anything is sent and
+ * released only when nothing was applied. Every other answer is told what
+ * actually happened, which is not the same as being told it was wrong.
+ *
+ * The far machine is the authority on what happened, and this file never
+ * guesses in its place. A `grant` that reached a hook which had already stopped
+ * waiting is `expired`, not `granted`, and only the machine holding the blocked
+ * process can tell those apart -- so an answer here resolves on the
+ * `approval-settled` that machine sends, never on the instruction being
+ * accepted.
+ *
+ * ## Why a decision is not an instruction round trip
+ *
+ * `servers.ask` gives up after thirty seconds, and a granted command may run
+ * for ten minutes. So the decide frame is dispatched and its *refusal* is the
+ * only thing awaited on that path: silence from the server means the decision
+ * was handed to the hook, and what the hook then did arrives unsolicited. A
+ * caller waiting here waits for the settlement, the withdrawal, or its own
+ * machine going away -- all three of which are bounded by the connection rather
+ * than by a timer this feature would have to invent.
+ */
+
+/**
+ * How many endings are remembered once the request itself is gone.
+ *
+ * The mirror of the server gate's own memory, and for the same reason: a late
+ * answer is the ordinary race in this ticket, and it is owed the word for what
+ * happened rather than "no such approval". Bounded because a hub runs for weeks
+ * and every question ever asked of it is a leak; what falls out of the end is
+ * old enough that nobody is still holding a screen showing it.
+ */
+const ENDINGS_REMEMBERED = 256;
+
+/** Nothing open for a session, which is what most sessions have. */
+export const NOTHING_PENDING: readonly PendingApproval[] = [];
+
+/**
+ * What one server says about an approval, typed by the frames themselves.
+ *
+ * Extracted from the protocol union rather than restated, so that a field added
+ * to a frame is a type error here rather than a field silently dropped on the
+ * way to a client. Three entry points rather than one taking the union, because
+ * the caller is the frame router's own exhaustive switch: re-reading `type`
+ * here would be the second hand-written check on a frame that this codebase
+ * says there is exactly one of.
+ */
+export type ApprovalRequestedFrame = Extract<ServerToHubFrame, { type: 'approval-requested' }>;
+export type ApprovalWithdrawnFrame = Extract<ServerToHubFrame, { type: 'approval-withdrawn' }>;
+export type ApprovalSettledFrame = Extract<ServerToHubFrame, { type: 'approval-settled' }>;
+
+/**
+ * One decision on its way to one machine.
+ *
+ * Not the frame: a frame id is unique within a connection and only the
+ * connection can mint one, which is the rule `ServerInstruction` states. What
+ * this adds to the frame's own fields is the machine, because a decision goes
+ * to the machine that reported the request and this feature is the only thing
+ * that remembers which one that was.
+ */
+export interface ApprovalInstruction {
+  readonly registrationId: ServerRegistrationId;
+  readonly approvalId: ApprovalId;
+  readonly decision: ApprovalDecision;
+}
+
+/**
+ * What came back about a decision that was put to a machine.
+ *
+ * `ok` is silence, which is what a server that accepted one says: the
+ * settlement travels separately and is not this answer. A refusal is the only
+ * thing that comes back on this path, and it means nothing was applied.
+ */
+export type ApprovalDispatch =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly code: RefusalCode; readonly problem: string };
+
+/** What a client asked for: this session's request, answered this way. */
+export interface DecideRequest {
+  readonly ref: SessionRef;
+  readonly approvalId: ApprovalId;
+  readonly decision: ApprovalDecision;
+}
+
+/**
+ * What became of an answer, in the terms a client is answered in.
+ *
+ * `ok` is this answer having been the one applied. Everything else is
+ * `ok: false`, and the `outcome` beside it is the difference between the two
+ * refusals a person can meet: a word means the request ended and here is how --
+ * somebody else's answer, the agent taking it back, or the hook giving up --
+ * and `null` means there is no such request to have ended, which is the only
+ * case where this hub has nothing to report.
+ *
+ * A settlement of `expired` is `ok: false` even for the client whose decision
+ * was the one sent, because it is: the answer reached a hook that had stopped
+ * waiting, and the tool call fell through as though nobody had answered.
+ */
+export type ApprovalAnswer =
+  | { readonly ok: true; readonly outcome: ApprovalOutcome }
+  | {
+      readonly ok: false;
+      readonly outcome: ApprovalOutcome | null;
+      readonly code: RefusalCode;
+      readonly problem: string;
+    };
+
+export interface ApprovalsDependencies {
+  readonly clock: Clock;
+  readonly logger: Logger;
+  /**
+   * Called with every change to what one session has open, as the whole list.
+   *
+   * A callback rather than the reducer itself, exactly as the attention
+   * feature's is: the composition root wires this to
+   * `FleetState.applyApprovals`, and nothing in this file imports the thing it
+   * notifies. A whole list rather than an arrival or a departure, because that
+   * is what a session row carries and a reducer applying "one ended" would be
+   * keeping a second copy of an answer this file already has.
+   *
+   * It is also what moves the state's version: a request that appeared without
+   * moving it would sit in a broadcast cache and reach nobody.
+   */
+  readonly onChanged: (ref: SessionRef, approvals: readonly PendingApproval[]) => void;
+  /**
+   * Puts one decision to one machine, and answers with the refusal or with
+   * silence.
+   *
+   * A function rather than the connection registry, so that the rules above are
+   * a unit test rather than something only a socket can demonstrate -- and so
+   * that nothing here can reach a machine for any other purpose.
+   */
+  readonly dispatch: (instruction: ApprovalInstruction) => Promise<ApprovalDispatch>;
+}
+
+export interface Approvals {
+  /** A machine says one of its agents is blocked. Stamped and held. */
+  requested(source: ServerRegistrationId, frame: ApprovalRequestedFrame): void;
+  /** The agent is not asking any more, and nothing was decided. */
+  withdrawn(source: ServerRegistrationId, frame: ApprovalWithdrawnFrame): void;
+  /** What actually happened at the hook, which only that machine can say. */
+  settled(source: ServerRegistrationId, frame: ApprovalSettledFrame): void;
+  /**
+   * A machine is no longer connected, so nothing it was holding can be
+   * answered.
+   *
+   * Every request it reported is withdrawn: the question may well still be open
+   * over there, but no answer given here can reach it, and a row offering a
+   * button that cannot work is the over-claim this whole path is shaped
+   * against. It surfaces again if the machine comes back and its gate says so.
+   */
+  serverGone(registrationId: ServerRegistrationId): void;
+  /**
+   * Answers one open request, once, and resolves when the machine holding it
+   * says what happened.
+   *
+   * Never on the instruction being accepted: see the note at the top on why
+   * thirty seconds is the wrong deadline for a ten-minute tool call.
+   */
+  decide(request: DecideRequest): Promise<ApprovalAnswer>;
+}
+
+/**
+ * The key a session's open requests are filed under.
+ *
+ * JSON rather than a joined string, for the reason the attention table's key is
+ * JSON: a store id and a session id are opaque, either may contain whatever
+ * separator was chosen, and two sessions colliding on one key would put one
+ * session's pending approval on another.
+ */
+function keyOf(ref: SessionRef): string {
+  return JSON.stringify([ref.storeId, ref.sessionId]);
+}
+
+/** The key one ended request is remembered under, session and all. */
+function endingKey(ref: SessionRef, approvalId: ApprovalId): string {
+  return JSON.stringify([ref.storeId, ref.sessionId, approvalId]);
+}
+
+/** One open request, with the two things only this hub knows about it. */
+interface OpenApproval {
+  readonly ref: SessionRef;
+  readonly pending: PendingApproval;
+  /** The machine that reported it, which is the only one that can answer it. */
+  readonly source: ServerRegistrationId;
+  /**
+   * Whether a decision has been sent for it, and everybody waiting on what
+   * became of it.
+   *
+   * The claim is the whole of deciding once: it is taken before the instruction
+   * is dispatched, so a second client arriving while the first frame is in the
+   * socket finds it taken. It is released only when nothing was applied -- a
+   * machine that refused the decision -- because a request nobody could answer
+   * must not be left holding a claim no second tap can ever get past.
+   */
+  claimed: boolean;
+  readonly waiting: ((answer: ApprovalAnswer) => void)[];
+}
+
+export function createApprovals({
+  clock,
+  logger: parent,
+  onChanged,
+  dispatch,
+}: ApprovalsDependencies): Approvals {
+  const logger = parent.child({ part: 'approvals' });
+
+  /** Open requests, by session and then by id. A session usually has none. */
+  const open = new Map<string, Map<ApprovalId, OpenApproval>>();
+  /** What became of the requests that are not open any more. Bounded. */
+  const endings = new Map<string, ApprovalOutcome>();
+
+  const announce = (ref: SessionRef): void => {
+    const held = open.get(keyOf(ref));
+    onChanged(
+      ref,
+      held === undefined ? NOTHING_PENDING : [...held.values()].map((entry) => entry.pending),
+    );
+  };
+
+  const remember = (ref: SessionRef, approvalId: ApprovalId, outcome: ApprovalOutcome): void => {
+    endings.set(endingKey(ref, approvalId), outcome);
+    while (endings.size > ENDINGS_REMEMBERED) {
+      const oldest = endings.keys().next();
+      if (oldest.done === true) break;
+      endings.delete(oldest.value);
+    }
+  };
+
+  /**
+   * Ends one request: it leaves the row, its ending is remembered, and everyone
+   * waiting on it is told.
+   *
+   * One function for all four endings, because the difference between them is a
+   * word and the bookkeeping is not. Everything waiting is answered here rather
+   * than where each ending arrives, which is what makes "answered once, told
+   * once" a property of this file and not of its callers.
+   */
+  const end = (entry: OpenApproval, outcome: ApprovalOutcome): void => {
+    const key = keyOf(entry.ref);
+    const held = open.get(key);
+    held?.delete(entry.pending.approvalId);
+    if (held !== undefined && held.size === 0) open.delete(key);
+    remember(entry.ref, entry.pending.approvalId, outcome);
+
+    const waiting = entry.waiting.splice(0);
+    for (const [index, answer] of waiting.entries()) {
+      // The first waiter is the one whose decision was sent. It is told `ok`
+      // only when something was actually applied: a grant that met a hook which
+      // had given up changed nothing, and calling that a success is the
+      // over-claim this feature exists to avoid.
+      const applied = index === 0 && (outcome === 'granted' || outcome === 'denied');
+      answer(
+        applied
+          ? { ok: true, outcome }
+          : {
+              ok: false,
+              outcome,
+              code: 'refused',
+              problem:
+                index === 0
+                  ? `that approval is ${outcome}`
+                  : `that approval was already answered, and is ${outcome}`,
+            },
+      );
+    }
+
+    announce(entry.ref);
+  };
+
+  const lookup = (ref: SessionRef, approvalId: ApprovalId): OpenApproval | undefined =>
+    open.get(keyOf(ref))?.get(approvalId);
+
+  /**
+   * The request a server frame names, when that server is the one holding it.
+   *
+   * A machine may only speak about its own: two servers can have one volume
+   * mounted and therefore see one session, but a blocked process belongs to the
+   * box it is running on, and taking one machine's word for what became of
+   * another's request would clear a row while an agent was still waiting.
+   */
+  const heldBy = (
+    source: ServerRegistrationId,
+    ref: SessionRef,
+    approvalId: ApprovalId,
+    what: string,
+  ): OpenApproval | undefined => {
+    const entry = lookup(ref, approvalId);
+    if (entry === undefined) {
+      // Not a warning: a withdrawal chasing a settlement across the wire is
+      // ordinary, and so is either arriving for a request a redial already
+      // cleared.
+      logger.debug('a server spoke about an approval this hub is not holding', {
+        ...ref,
+        approvalId,
+        what,
+      });
+      return undefined;
+    }
+    if (entry.source !== source) {
+      logger.warn('a server spoke about an approval another machine is holding', {
+        ...ref,
+        approvalId,
+        what,
+        source,
+        holder: entry.source,
+      });
+      return undefined;
+    }
+    return entry;
+  };
+
+  return {
+    requested(source: ServerRegistrationId, frame: ApprovalRequestedFrame): void {
+      const ref: SessionRef = { storeId: frame.storeId, sessionId: frame.sessionId };
+      const key = keyOf(ref);
+      const held = open.get(key) ?? new Map<ApprovalId, OpenApproval>();
+      open.set(key, held);
+
+      if (held.has(frame.approval.approvalId)) {
+        // The id is minted per blocked hook on one machine, so a repeat is a
+        // machine restating something already on the row. Stamping it again
+        // would move the wait it is about to be drawn with.
+        logger.debug('an approval was reported twice', {
+          ...ref,
+          approvalId: frame.approval.approvalId,
+        });
+        return;
+      }
+
+      held.set(frame.approval.approvalId, {
+        ref,
+        // The hub's own clock, because the frame carries no date: two machines'
+        // clocks disagree, and a client rendering "waiting four minutes" is
+        // comparing this with its own notion of now.
+        pending: { ...frame.approval, requestedAt: clock.now() },
+        source,
+        claimed: false,
+        waiting: [],
+      });
+      logger.info('approval requested', {
+        ...ref,
+        approvalId: frame.approval.approvalId,
+        tool: frame.approval.tool,
+        source,
+      });
+      announce(ref);
+    },
+
+    withdrawn(source: ServerRegistrationId, frame: ApprovalWithdrawnFrame): void {
+      const ref: SessionRef = { storeId: frame.storeId, sessionId: frame.sessionId };
+      const entry = heldBy(source, ref, frame.approvalId, 'withdrawn');
+      if (entry === undefined) return;
+      logger.info('approval withdrawn', { ...ref, approvalId: frame.approvalId });
+      end(entry, 'withdrawn');
+    },
+
+    settled(source: ServerRegistrationId, frame: ApprovalSettledFrame): void {
+      const ref: SessionRef = { storeId: frame.storeId, sessionId: frame.sessionId };
+      const entry = heldBy(source, ref, frame.approvalId, 'settled');
+      if (entry === undefined) return;
+      logger.info('approval settled', {
+        ...ref,
+        approvalId: frame.approvalId,
+        outcome: frame.outcome,
+      });
+      end(entry, frame.outcome);
+    },
+
+    serverGone(registrationId: ServerRegistrationId): void {
+      for (const held of [...open.values()]) {
+        for (const entry of [...held.values()]) {
+          if (entry.source !== registrationId) continue;
+          logger.info('approval withdrawn: its machine is gone', {
+            ...entry.ref,
+            approvalId: entry.pending.approvalId,
+            source: registrationId,
+          });
+          end(entry, 'withdrawn');
+        }
+      }
+    },
+
+    async decide(request: DecideRequest): Promise<ApprovalAnswer> {
+      const entry = lookup(request.ref, request.approvalId);
+      if (entry === undefined) {
+        const remembered = endings.get(endingKey(request.ref, request.approvalId));
+        if (remembered === undefined) {
+          logger.info('approval decision refused', {
+            ...request.ref,
+            approvalId: request.approvalId,
+            problem: 'no such approval',
+          });
+          return {
+            ok: false,
+            outcome: null,
+            code: 'refused',
+            problem: 'this hub is holding no approval by that id for that session',
+          };
+        }
+        return {
+          ok: false,
+          outcome: remembered,
+          code: 'refused',
+          problem: `that approval is ${remembered}`,
+        };
+      }
+
+      const answered = new Promise<ApprovalAnswer>((resolve) => entry.waiting.push(resolve));
+
+      // Claimed before anything is sent, so that a second client arriving while
+      // this frame is in the socket finds it taken. Deciding once is this line.
+      if (entry.claimed) return answered;
+      entry.claimed = true;
+
+      const put = await dispatch({
+        registrationId: entry.source,
+        approvalId: request.approvalId,
+        decision: request.decision,
+      });
+      if (put.ok) return answered;
+
+      // The machine would not take it, so nothing was applied and nothing was
+      // decided. The request stays open with its claim released: the far side
+      // may still be holding a blocked hook, and a row nobody can tap again
+      // would be worse than one that can be tapped twice.
+      if (lookup(request.ref, request.approvalId) === entry) entry.claimed = false;
+      logger.info('a server refused a decision', {
+        ...request.ref,
+        approvalId: request.approvalId,
+        problem: put.problem,
+      });
+      const refusal: ApprovalAnswer = {
+        ok: false,
+        outcome: null,
+        code: put.code,
+        problem: put.problem,
+      };
+      // Everyone waiting, not only this caller: nothing was applied, so nobody
+      // is owed an outcome and nobody may be left holding a promise that only
+      // an answer which never happened could settle.
+      for (const resolve of entry.waiting.splice(0)) resolve(refusal);
+      return answered;
+    },
+  };
+}
