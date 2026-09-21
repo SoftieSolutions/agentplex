@@ -122,6 +122,15 @@ interface Machine {
   readonly gate: ApprovalGate;
   /** A hook connects, sends the captured payload, and blocks on an answer. */
   block(): FakeHookConnection;
+  /**
+   * The same, with one field of the captured payload changed.
+   *
+   * Still the real shape, because everything but the one value under test is
+   * the fixture: what a rule matched and what a rule missed by a character have
+   * to be two readings of one payload, or the difference being asserted would
+   * be the difference between two hand-written objects.
+   */
+  blockProposing(command: string): FakeHookConnection;
   /** The hub's end of the last connection this machine accepted. */
   socket(): MessageSocket | null;
 }
@@ -164,6 +173,14 @@ function startMachine(): Machine {
     block(): FakeHookConnection {
       const admission = gate.admit(WORK);
       const hook = createFakeHookConnection(hookLine(admission.secret, CAPTURED));
+      listener.present(hook.connection);
+      return hook;
+    },
+    blockProposing(command: string): FakeHookConnection {
+      const payload = JSON.parse(CAPTURED) as { tool_input: Record<string, unknown> };
+      payload.tool_input = { ...payload.tool_input, command };
+      const admission = gate.admit(WORK);
+      const hook = createFakeHookConnection(hookLine(admission.secret, JSON.stringify(payload)));
       listener.present(hook.connection);
       return hook;
     },
@@ -543,5 +560,181 @@ describe('an approval, over a hub and a server', () => {
       decision: 'grant',
     });
     expect(granted).toMatchObject({ type: 'approval-decided', outcome: 'granted' });
+  });
+});
+
+/**
+ * The standing policy, end to end: a rule a client wrote, and a request it
+ * answers without anybody being asked.
+ *
+ * This is the half of the feature that cannot be shown on either side alone.
+ * A rule is a row in the hub's database, keyed by a project in the hub's node
+ * tree; the request it answers is a process parked on a socket on another
+ * machine; and what a person sees is whichever of those the machine state
+ * happens to carry at the moment they look. So the suite drives the real hub
+ * against the real server end, files the blocked session under a project the
+ * way a user would, and asserts on the hook's own bytes as well as on the
+ * frames -- because a policy that looked right on a screen and released
+ * nothing, or released something and told nobody, would pass a narrower test.
+ *
+ * Every assertion about matching is made on the payload a real `claude` sent,
+ * varied in one field. What a rule missed by one character has to be the same
+ * payload as what it matched, or the difference under test would be the
+ * difference between two objects somebody wrote by hand.
+ */
+describe('a standing policy, over a hub and a server', () => {
+  afterEach(async () => {
+    await fleet?.cleanup();
+    fleet = null;
+    machine = null;
+    dialAnswers = () => ({ ok: false, problem: 'no machine' });
+  });
+
+  /** The project a client made, with the blocked session filed under it. */
+  async function fileUnderProject(client: Client): Promise<string> {
+    const created = await client.ask({
+      type: 'project-create',
+      name: 'agentplex',
+      directory: '/Users/robert/code/agentplex',
+    });
+    if (created.type !== 'project-created') {
+      throw new Error(`the project was refused: ${JSON.stringify(created)}`);
+    }
+
+    // The session's node is discovered at the root and moved by the user, so
+    // this is the move a user makes rather than a row written behind the tree.
+    const tree = await client.ask({ type: 'layout-request' });
+    if (tree.type !== 'layout') throw new Error('the tree was refused');
+    const node = tree.nodes.find((entry) => entry.anchor?.sessionId === BLOCKED);
+    if (node === undefined) throw new Error('the blocked session has no node');
+
+    const moved = await client.ask({
+      type: 'node-move',
+      nodeId: node.id,
+      parentId: created.nodeId,
+      position: 0,
+    });
+    if (moved.type !== 'node-moved') {
+      throw new Error(`the move was refused: ${JSON.stringify(moved)}`);
+    }
+    return created.nodeId;
+  }
+
+  /** The exact proposal one request carried, read off the row a client holds. */
+  async function proposalOf(client: Client, hook: FakeHookConnection): Promise<string> {
+    const [pending] = await seen(client, 'the request to reach the client');
+    if (pending === undefined) throw new Error('nothing is pending');
+    const proposal = pending.proposal;
+    await client.ask({
+      type: 'approval-decide',
+      storeId: WORK,
+      sessionId: BLOCKED,
+      approvalId: pending.approvalId,
+      decision: 'deny',
+    });
+    expect(hook.writes).toHaveLength(1);
+    await until(() => pendingOn(client).length === 0, 'the first request to end');
+    return proposal;
+  }
+
+  it('grants a matching request, releases the hook, and tells every client it ended', async () => {
+    const { hub, client } = await start();
+    const second = openClient(hub);
+    await until(() => rowOf(second) !== null, 'the session to reach the second client');
+    const projectId = await fileUnderProject(client);
+
+    // The rule is the exact text a person read above Allow, taken from the
+    // request they answered. That is the whole of what step four's "always
+    // allow this" control will do, and it is why exact match is usable at all.
+    const proposal = await proposalOf(client, machine?.block() as FakeHookConnection);
+    const policy = await client.ask({
+      type: 'approval-policy-add',
+      projectId,
+      rule: { tool: 'Bash', proposal },
+    });
+    expect(policy).toMatchObject({ type: 'approval-policy', projectId });
+
+    const hook = machine?.block();
+
+    // The hook is released with nobody asked, which is the half no frame can
+    // show and the half that would be worth nothing if it were wrong.
+    await until(() => (hook?.writes.length ?? 0) > 0, 'the hook to be released');
+    expect(hook?.writes).toEqual([encodeClaudePermissionAnswer({ behavior: 'allow' })]);
+
+    // Every client is told the request ended, where every change reaches it.
+    await until(() => pendingOn(second).length === 0, 'the second client to be told it ended');
+    expect(pendingOn(client)).toEqual([]);
+
+    // Nothing was asked of anybody: the only frames these two clients sent are
+    // the ones this test sent, and neither was a decision on this request.
+    expect(pendingOn(second)).toEqual([]);
+  });
+
+  it('asks about a request that differs from the rule by one character', async () => {
+    const { client } = await start();
+    const projectId = await fileUnderProject(client);
+    const proposal = await proposalOf(client, machine?.block() as FakeHookConnection);
+    await client.ask({
+      type: 'approval-policy-add',
+      projectId,
+      rule: { tool: 'Bash', proposal },
+    });
+
+    // One flag more than the text somebody approved. Under a prefix this was
+    // granted; the agent writes what follows the rule, so it is a question.
+    const hook = machine?.blockProposing(`${PROPOSED_COMMAND} --force`);
+    const [pending] = await seen(client, 'the second request to reach the client');
+    expect(pending?.answeredBy).toBe(null);
+    expect(hook?.writes).toEqual([]);
+  });
+
+  it('asks again the moment the rule is removed', async () => {
+    const { client } = await start();
+    const projectId = await fileUnderProject(client);
+    const proposal = await proposalOf(client, machine?.block() as FakeHookConnection);
+    const added = await client.ask({
+      type: 'approval-policy-add',
+      projectId,
+      rule: { tool: 'Bash', proposal },
+    });
+    if (added.type !== 'approval-policy') throw new Error('the rule was refused');
+    const [written] = added.rules;
+
+    const emptied = await client.ask({
+      type: 'approval-policy-remove',
+      projectId,
+      ruleId: written?.ruleId,
+    });
+    expect(emptied).toMatchObject({ type: 'approval-policy', rules: [] });
+
+    const hook = machine?.block();
+    const [pending] = await seen(client, 'the request to reach the client again');
+    expect(pending?.answeredBy).toBe(null);
+    expect(hook?.writes).toEqual([]);
+  });
+
+  it('asks about a session filed under no project at all', async () => {
+    // The session's node sits at the root, so nobody has said anything about
+    // the work it is part of. That is the answer rather than a gap.
+    const { client } = await start();
+    const created = await client.ask({
+      type: 'project-create',
+      name: 'agentplex',
+      directory: '/Users/robert/code/agentplex',
+    });
+    if (created.type !== 'project-created') throw new Error('the project was refused');
+
+    const first = machine?.block();
+    const proposal = await proposalOf(client, first as FakeHookConnection);
+    await client.ask({
+      type: 'approval-policy-add',
+      projectId: created.nodeId,
+      rule: { tool: 'Bash', proposal },
+    });
+
+    const hook = machine?.block();
+    const [pending] = await seen(client, 'the request to reach the client');
+    expect(pending?.answeredBy).toBe(null);
+    expect(hook?.writes).toEqual([]);
   });
 });
