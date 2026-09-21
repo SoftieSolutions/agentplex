@@ -636,6 +636,10 @@ describe('client and hub round trips', () => {
                     requestedAt: 1_100,
                   },
                 ],
+                // What this session was started to do, as somebody typed it
+                // into the start form. A session the hub did not start carries
+                // `null` here rather than a guess made from a transcript.
+                task: 'fix the auth refresh loop and open a PR against main',
               },
             ],
           },

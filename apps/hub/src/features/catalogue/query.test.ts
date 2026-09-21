@@ -166,6 +166,9 @@ function fleet(readings: readonly Reading[]): MachineState {
           mutedAt: null,
           project: null,
           approvals: [],
+          // Placement is what this file asks about, and a session lands in the
+          // tree the same way whoever started it.
+          task: null,
         })),
       },
     ],

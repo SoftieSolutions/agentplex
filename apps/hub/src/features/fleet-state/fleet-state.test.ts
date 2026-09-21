@@ -1054,3 +1054,73 @@ describe('what an agent is waiting on', () => {
     expect(reducer.snapshot().version).toBe(settled);
   });
 });
+
+describe('what a session was started to do', () => {
+  /** A reducer with one connected server and one session in one store. */
+  function reducerWithSession(): FleetState {
+    const reducer = reduce();
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+    reducer.applySessions({
+      holding: [],
+      registrationId: 'registration-laptop' as ServerRegistrationId,
+      storeId: store('store-work'),
+      sessions: [session('session-1')],
+      reportedAt: START,
+    });
+    return reducer;
+  }
+
+  const ref = { storeId: store('store-work'), sessionId: sessionIdSchema.parse('session-1') };
+  const TASK = 'fix the auth refresh loop and open a PR against main';
+
+  it('says a session this hub did not start has no task, rather than guessing one', () => {
+    // The row of a session the hub merely found in a store. There is no
+    // reading of a transcript that would be this fact, and `null` is the
+    // honest answer rather than a gap.
+    expect(only(reducerWithSession().snapshot().stores).sessions[0]?.task).toBeNull();
+  });
+
+  it('merges the task onto the row the servers reported', () => {
+    const reducer = reducerWithSession();
+    reducer.applyTask(ref, TASK);
+    expect(only(reducer.snapshot().stores).sessions[0]?.task).toBe(TASK);
+  });
+
+  it('bumps the version, so the broadcast does not keep serving the row as it was', () => {
+    const reducer = reducerWithSession();
+    const before = reducer.snapshot().version;
+    reducer.applyTask(ref, TASK);
+    expect(reducer.snapshot().version).toBeGreaterThan(before);
+  });
+
+  it('changes nothing when told the same task twice', () => {
+    const reducer = reducerWithSession();
+    reducer.applyTask(ref, TASK);
+    const settled = reducer.snapshot().version;
+    // What a restart's read-back looks like from here, and what a second start
+    // on one session looks like. Waking every screen for it would make the
+    // version mean "somebody started something" rather than "something
+    // changed".
+    reducer.applyTask(ref, TASK);
+    expect(reducer.snapshot().version).toBe(settled);
+  });
+
+  it('holds a task for a session no server has reported yet, and surfaces it when one does', () => {
+    const reducer = reduce();
+    // The order a spawn actually produces: the hub records what it started a
+    // session to do at the moment the provider names it, which is the same
+    // report the session first appears in -- and, at boot, before any report
+    // has arrived at all.
+    reducer.applyTask(ref, TASK);
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+    reducer.applySessions({
+      holding: [],
+      registrationId: 'registration-laptop' as ServerRegistrationId,
+      storeId: store('store-work'),
+      sessions: [session('session-1')],
+      reportedAt: START,
+    });
+
+    expect(only(reducer.snapshot().stores).sessions[0]?.task).toBe(TASK);
+  });
+});

@@ -65,6 +65,26 @@ describe('migrate', () => {
     expect(outcome.applied.map((each) => each.name)).toEqual(['second']);
   });
 
+  it('applies a migration that arrives after a higher-numbered one has run', async () => {
+    // What makes a reserved number safe to leave a gap for. Two branches in
+    // flight take 10 and 16; the second lands first, and a hub that has run 16
+    // then meets 10. Pending is "not applied" and nothing else -- the gap is
+    // not read as history, and the lower number is not skipped for having been
+    // overtaken. Editing 16 to renumber it is the alternative, and that is the
+    // one thing an applied migration may never be.
+    const database = createFakeDatabase({ applied: new Map([[16, 'later_branch']]) });
+    const { logger } = silentLogger();
+
+    const outcome = await migrate(
+      database,
+      [migration(10, 'earlier_branch'), migration(16, 'later_branch')],
+      logger,
+      clock,
+    );
+
+    expect(outcome.applied.map((each) => each.version)).toEqual([10]);
+  });
+
   it('throws rather than opening a database ahead of this build', async () => {
     const database = createFakeDatabase({
       applied: new Map([

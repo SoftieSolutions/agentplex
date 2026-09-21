@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SESSION_TASK_MAX_CHARS,
   machineLoadSchema,
   machineStateSchema,
   serverCandidateSchema,
@@ -66,6 +67,7 @@ const A_SESSION_ROW = {
   mutedAt: null,
   project: null,
   approvals: [],
+  task: null,
 };
 
 const A_PENDING_APPROVAL = {
@@ -361,6 +363,43 @@ describe('sessionRowSchema', () => {
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
     expect(parsed.data.approvals[0]).not.toHaveProperty('status');
+  });
+
+  it('carries the task this session was started with', () => {
+    const parsed = sessionRowSchema.safeParse({
+      ...A_SESSION_ROW,
+      task: 'fix the auth refresh loop and open a PR against main',
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.task).toBe('fix the auth refresh loop and open a PR against main');
+  });
+
+  it('rejects a row with no task field: a session nobody started here says null', () => {
+    // A session the hub did not start -- adopted from a store it merely reads
+    // -- has no task, and says so. An absent field would make "started with no
+    // prompt", "adopted" and "this build cannot tell you" one value.
+    const { task, ...without } = A_SESSION_ROW;
+    expect(task).toBeNull();
+    expect(sessionRowSchema.safeParse(without).success).toBe(false);
+  });
+
+  it('refuses an empty task, which would be a label saying nothing', () => {
+    // There is one way to say there is no task, and it is `null`. An empty
+    // string reaching a client would draw a TASK block with nothing in it.
+    expect(sessionRowSchema.safeParse({ ...A_SESSION_ROW, task: '' }).success).toBe(false);
+  });
+
+  it('refuses a task longer than the wire carries', () => {
+    // The bound is here and not at the hub's table for the reason the approval
+    // proposal's is: a bound owned by the edge is a number the wire has to
+    // trust. This is display text in every client's copy of the machine state.
+    const tooLong = 'a'.repeat(SESSION_TASK_MAX_CHARS + 1);
+    expect(sessionRowSchema.safeParse({ ...A_SESSION_ROW, task: tooLong }).success).toBe(false);
+    expect(
+      sessionRowSchema.safeParse({ ...A_SESSION_ROW, task: 'a'.repeat(SESSION_TASK_MAX_CHARS) })
+        .success,
+    ).toBe(true);
   });
 });
 

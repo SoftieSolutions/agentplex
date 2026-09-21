@@ -28,6 +28,7 @@ import {
   NOTHING_SELECTED,
   type Clipboard,
 } from './clipboard.js';
+import { ContextPanel, type ContextBlock } from './context-panel.js';
 import type { EmulatorFactory, TerminalEmulator } from './emulator.js';
 import { FindBar } from './find-bar.js';
 import {
@@ -46,9 +47,11 @@ import {
 } from './presentation.js';
 import { StopButton } from '../sessions/stop-button.js';
 import { ToneDot } from '../ui/tone-dot.js';
+import { useShellForm } from '../shell/shell-form.js';
 import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
 import { TabStrip } from './tab-strip.js';
 import { activeTab, type SessionTab } from './tab-strip-model.js';
+import { TaskBlock } from './task-block.js';
 import { chunkTerminalInput } from './terminal-input.js';
 import { TerminalView } from './terminal-view.js';
 import { useTerminalWatch } from './use-terminal-watch.js';
@@ -63,7 +66,14 @@ import { useTerminalWatch } from './use-terminal-watch.js';
  * (AGX-105) and Approvals (AGX-104) each append a tab to a list rather than
  * introduce a control, and until they do, nothing disabled and nothing
  * placeholder stands in for them. What the mockup shows and this still does
- * not draw: the context panel and the Pause / Hand off / Replay buttons.
+ * not draw: the Pause / Hand off / Replay buttons.
+ *
+ * The context panel is the second mount point, and it works the same way. The
+ * pane's body is a row -- the terminal and everything said about it on the
+ * left, the panel on the right -- and the panel takes a list of blocks the way
+ * the strip takes a list of tabs. One block is built: TASK, drawn for a session
+ * the hub knows a task for and for no other, so a pane on an adopted session is
+ * still the screen it was.
  *
  * The terminal itself is fed by the store: the pane declares standing
  * interest in a target, and the bytes that come back go to the feed the store
@@ -104,6 +114,32 @@ const CRUMB_ROLES: Record<
   muted: { c: 'dimmed' },
   emphatic: { fw: 700, fz: 15 },
 };
+
+/**
+ * The blocks in the context panel, built from the row the hub published.
+ *
+ * It stopped being a module constant the moment the first block landed, which
+ * is what the frame was built to allow: a block is `{ key, title, body }` and a
+ * ticket that adds one appends to this list and writes the component its body
+ * renders. APPROVALS (AGX-104), COST (AGX-107) and the machine and diff blocks
+ * each arrive as another entry here, and none of them touches `ContextPanel`.
+ *
+ * TASK is here on one condition, and it is the ticket's whole decision: the
+ * task is `row.task`, the prompt the session was started with, and a session
+ * the hub has no task for -- every session it adopted off a machine rather
+ * than started -- gets no block. Not an empty one: a TASK heading with nothing
+ * under it reads as a fact that failed to load. And with no other block built
+ * yet, no task means no panel at all, which the frame already decides for
+ * itself.
+ *
+ * Outside the component body because it needs nothing from it.
+ */
+const NO_CONTEXT_BLOCKS: readonly ContextBlock[] = [];
+
+function contextBlocks(task: string | null, scheme: Scheme): readonly ContextBlock[] {
+  if (task === null) return NO_CONTEXT_BLOCKS;
+  return [{ key: 'task', title: 'Task', body: <TaskBlock task={task} scheme={scheme} /> }];
+}
 
 /**
  * Whether this device's main pointer is a finger, which is the whole of what
@@ -162,6 +198,18 @@ export function SessionPane({
   clipboard = browserClipboard,
 }: SessionPaneProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
+  /**
+   * The shape the shell is in, which decides whether this pane has a context
+   * panel at all.
+   *
+   * Read from the shell's own breakpoint rather than from a media query here.
+   * `shell-form.ts` argues it: a query string and a JS pixel width are two
+   * spellings of one rule, and a reader whose default font size is not 16px
+   * opens a band where they disagree. It is an external store read through
+   * `useSyncExternalStore`, so a resize that crosses the breakpoint re-renders
+   * this pane once and a resize that does not re-renders nothing.
+   */
+  const form = useShellForm();
   const snapshot = useHubSnapshot(hub);
   // A pane addresses a session; the start handle the target union also allows
   // belongs to a spawn the provider has not named, which no address can name
@@ -413,6 +461,16 @@ export function SessionPane({
   // that rather than telling somebody to wait for a dial that will be refused.
   const feed = terminalFeedNotice(terminal, machineFor(state, row));
   const shownTab = activeTab(SESSION_TABS, requestedTab);
+  /**
+   * What the panel has to say about this session.
+   *
+   * Memoized on the task text and the scheme rather than on the row: a row is
+   * a fresh object on every state frame the hub sends, and this pane re-renders
+   * on every keystroke that changes anything else about it, so a list rebuilt
+   * each time would hand the panel a new array and a new block element for a
+   * task that has not changed since the session started.
+   */
+  const blocks = useMemo(() => contextBlocks(row?.task ?? null, scheme), [row?.task, scheme]);
   // Attachment is a claim about a socket and the subscription on it, which is
   // why it is read off the store and never off the route: an address says
   // where a user pointed, not what a hub answered.
@@ -568,101 +626,135 @@ export function SessionPane({
         label="session views"
       />
 
-      {clipboardNotice !== null && (
-        // Under the header rather than inside it, and its own row rather than
-        // a word beside the button: this is a whole sentence, the header is a
-        // no-wrap row whose metadata is already ellipsized, and a truncated
-        // explanation of why a paste did not happen is worse than none. It is
-        // also where the chord's failures have to appear, since on a keyboard
-        // there is no button for them to appear beside.
-        <Text
-          fz={11}
-          px={18}
-          py={6}
-          role="alert"
-          style={{ color: colorForTone('blocked', scheme), borderBottom: border }}
-        >
-          {clipboardNotice}
-        </Text>
-      )}
+      {/**
+       * The body: the session on the left, what is known about it on the
+       * right.
+       *
+       * The row starts below the strip rather than below the header, which is
+       * the mockup's own arrangement turned into the one this pane can keep.
+       * 7c puts its aside beside a whole main column because there the header
+       * is the window's; here the header and the strip are this pane's, there
+       * can be two panes side by side, and a name and an attachment chip
+       * squeezed into whatever is left of a split pane after 300 fixed pixels
+       * is the first thing that stops being readable.
+       *
+       * `minHeight: 0` is what makes the row the flexible child of the pane
+       * rather than one sized by its contents: without it a long task
+       * description in the panel would grow the row and push the steer bar off
+       * the bottom of a pane that has a fixed height. `minWidth: 0` on the left
+       * column is the same rule the other way round, and it is the one the
+       * terminal depends on -- it is what lets the panel's fixed column
+       * actually take its pixels from the terminal instead of overflowing the
+       * pane while the terminal goes on fitting to a width it no longer has.
+       *
+       * Nothing here is padded, and that is a decision rather than an
+       * omission. The fit addon measures the element `TerminalView` renders
+       * and subtracts the terminal element's own padding and no ancestor's
+       * (AGX-248, `padTerminalElement`), so padding anywhere on the way in
+       * would be grid drawn past the pane's edge and clipped. The insets in
+       * this body are on the rows and the blocks themselves.
+       */}
+      <Group gap={0} align="stretch" wrap="nowrap" style={{ flex: 1, minHeight: 0 }}>
+        <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
+          {clipboardNotice !== null && (
+            // Under the header rather than inside it, and its own row rather
+            // than a word beside the button: this is a whole sentence, the
+            // header is a no-wrap row whose metadata is already ellipsized, and
+            // a truncated explanation of why a paste did not happen is worse
+            // than none. It is also where the chord's failures have to appear,
+            // since on a keyboard there is no button for them to appear beside.
+            <Text
+              fz={11}
+              px={18}
+              py={6}
+              role="alert"
+              style={{ color: colorForTone('blocked', scheme), borderBottom: border }}
+            >
+              {clipboardNotice}
+            </Text>
+          )}
 
-      {finding && (
-        <FindBar
-          search={paneSearch}
-          truncated={() => terminalIsPartial(terminal)}
-          scheme={scheme}
-          onClose={closeFind}
-          inputRef={findRef}
-        />
-      )}
+          {finding && (
+            <FindBar
+              search={paneSearch}
+              truncated={() => terminalIsPartial(terminal)}
+              scheme={scheme}
+              onClose={closeFind}
+              inputRef={findRef}
+            />
+          )}
 
-      {/* What is under the Terminal tab, drawn unconditionally because it is
-          the only tab there is: a switch on `shownTab` today would be a branch
-          with one arm, and the ticket that adds the second tab adds it with
-          the panel it is a tab for. The strip carries no `aria-controls` for
-          the same reason -- the element a tab would point at is the emulator's
-          own box, which belongs to `terminal-view.tsx`, and the ids arrive
-          with the real panels. */}
-      {terminal === null ? (
-        // The watch is declared in a subscription, which React runs after the
-        // first commit, so there is one frame in which this pane has no feed
-        // to hand an emulator. The same well, painted, rather than an
-        // emulator built against a buffer that is about to be replaced.
-        <Box style={{ flex: 1, background: colorForRole('terminalBackground', scheme) }} />
-      ) : (
-        <TerminalView
-          feed={terminal.feed}
-          scheme={scheme}
-          onData={sendInput}
-          onResize={sendResize}
-          emulatorReady={emulatorReady}
-          emulators={emulators}
-        />
-      )}
+          {/* What is under the Terminal tab, drawn unconditionally because it
+              is the only tab there is: a switch on `shownTab` today would be a
+              branch with one arm, and the ticket that adds the second tab adds
+              it with the panel it is a tab for. The strip carries no
+              `aria-controls` for the same reason -- the element a tab would
+              point at is the emulator's own box, which belongs to
+              `terminal-view.tsx`, and the ids arrive with the real panels. */}
+          {terminal === null ? (
+            // The watch is declared in a subscription, which React runs after
+            // the first commit, so there is one frame in which this pane has no
+            // feed to hand an emulator. The same well, painted, rather than an
+            // emulator built against a buffer that is about to be replaced.
+            <Box style={{ flex: 1, background: colorForRole('terminalBackground', scheme) }} />
+          ) : (
+            <TerminalView
+              feed={terminal.feed}
+              scheme={scheme}
+              onData={sendInput}
+              onResize={sendResize}
+              emulatorReady={emulatorReady}
+              emulators={emulators}
+            />
+          )}
 
-      {feed !== null && (
-        <Text
-          fz={11}
-          px={18}
-          py={6}
-          style={{ color: colorForTone('blocked', scheme), borderTop: border }}
-        >
-          {feed}
-        </Text>
-      )}
+          {feed !== null && (
+            <Text
+              fz={11}
+              px={18}
+              py={6}
+              style={{ color: colorForTone('blocked', scheme), borderTop: border }}
+            >
+              {feed}
+            </Text>
+          )}
 
-      {scope !== null && (
-        <Text
-          fz={11}
-          px={18}
-          py={6}
-          style={{ color: colorForRole('textFaint', scheme), borderTop: border }}
-        >
-          {scope}
-        </Text>
-      )}
+          {scope !== null && (
+            <Text
+              fz={11}
+              px={18}
+              py={6}
+              style={{ color: colorForRole('textFaint', scheme), borderTop: border }}
+            >
+              {scope}
+            </Text>
+          )}
 
-      {notice !== null && (
-        <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>
-          {notice}
-        </Text>
-      )}
+          {notice !== null && (
+            <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>
+              {notice}
+            </Text>
+          )}
 
-      <Group gap={8} px={18} py={10} style={{ borderTop: border }} wrap="nowrap">
-        <Text fz={11} fw={500} style={{ ...MONO_META, color: colorForRole('accent', scheme) }}>
-          steer
-        </Text>
-        <TextInput
-          ref={steerRef}
-          style={{ flex: 1 }}
-          placeholder="Tell the agent something, or Tab to type raw keystrokes"
-          onKeyDown={steerKeyDown}
-          aria-label="steer the agent"
-        />
-        <Text c="dimmed" fz={10} fw={500} style={{ ...MONO_META, whiteSpace: 'nowrap' }}>
-          sent as typed input
-        </Text>
-        <Button onClick={sendSteer}>Send</Button>
+          <Group gap={8} px={18} py={10} style={{ borderTop: border }} wrap="nowrap">
+            <Text fz={11} fw={500} style={{ ...MONO_META, color: colorForRole('accent', scheme) }}>
+              steer
+            </Text>
+            <TextInput
+              ref={steerRef}
+              style={{ flex: 1 }}
+              placeholder="Tell the agent something, or Tab to type raw keystrokes"
+              onKeyDown={steerKeyDown}
+              aria-label="steer the agent"
+            />
+            <Text c="dimmed" fz={10} fw={500} style={{ ...MONO_META, whiteSpace: 'nowrap' }}>
+              sent as typed input
+            </Text>
+            <Button onClick={sendSteer}>Send</Button>
+          </Group>
+        </Stack>
+
+        <ContextPanel blocks={blocks} form={form} scheme={scheme} />
       </Group>
     </Stack>
   );

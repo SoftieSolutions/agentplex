@@ -168,5 +168,10 @@ function toSessionRow(row: ReducedSessionRow): SessionRow {
     // every row, which is what keeps "nothing is waiting" and "this build
     // cannot tell you" two different answers.
     approvals: [...row.approvals],
+    // Carried as the reducer holds it, `null` and all. This is the one field
+    // on the row that came from a person rather than from a machine, and the
+    // projection's job is to pass it on: filling a `null` in from the
+    // descriptor would invent the fact the field exists to state honestly.
+    task: row.task,
   };
 }

@@ -301,6 +301,36 @@ describe('toMachineState', () => {
     expect(machineStateSchema.safeParse(sent).success).toBe(true);
   });
 
+  it('publishes the task a session was started with', () => {
+    const state = createFleetState({ logger });
+    state.applyConnection(connection('workshop', 'connected', ['store-work']));
+    state.applySessions({
+      holding: [],
+      registrationId: registration('workshop'),
+      storeId: store('store-work'),
+      sessions: [session('session-1')],
+      reportedAt: START,
+    });
+    state.applyTask(
+      { storeId: store('store-work'), sessionId: sessionIdSchema.parse('session-1') },
+      'fix the auth refresh loop and open a PR against main',
+    );
+
+    const sent = toMachineState(state.snapshot());
+    expect(sent.stores[0]?.sessions[0]?.task).toBe(
+      'fix the auth refresh loop and open a PR against main',
+    );
+    // Through the wire's own parser: a label the client refuses would cost it
+    // the whole state frame rather than one panel.
+    expect(machineStateSchema.safeParse(sent).success).toBe(true);
+  });
+
+  it('publishes null for a session this hub did not start', () => {
+    // The common answer, and the one any guess from a transcript would replace
+    // with something that reads as a sentence a person wrote.
+    expect(published().stores[0]?.sessions[0]?.task).toBeNull();
+  });
+
   it('publishes an empty list for a session with nothing open', () => {
     // Empty is the true value and not a placeholder. A codex session has no
     // hook to ask through and will always publish this, so "nothing is

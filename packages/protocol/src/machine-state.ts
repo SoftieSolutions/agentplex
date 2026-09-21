@@ -32,6 +32,19 @@ import { sessionDescriptorSchema } from './session.js';
 const momentSchema = z.int().nonnegative().nullable();
 
 /**
+ * How much of a session's task crosses the wire.
+ *
+ * Decided here rather than at the hub's table, for the reason the approval
+ * proposal's bound is decided at the wire: a bound owned by one edge is a
+ * number every other reader has to trust, and a wire bound below the edge's
+ * would refuse exactly the text that edge worked to fit. The size is the point
+ * -- a prompt can be an essay, and this string sits in every attached client's
+ * copy of the whole machine state, so what is carried is as much of it as a
+ * person reads in a panel and not the whole of what was typed.
+ */
+export const SESSION_TASK_MAX_CHARS = 2_000;
+
+/**
  * Where a connection is, as one word.
  *
  * `stopped` is here because the phase is one union and a wire enum missing a
@@ -449,6 +462,28 @@ export const sessionRowSchema = z.object({
    * transcript the moment a hook and a scan land in the wrong order.
    */
   approvals: z.array(pendingApprovalSchema),
+  /**
+   * The task this session was started to do, or `null` for a session that was
+   * not started here.
+   *
+   * It is the prompt somebody typed into the start form, recorded by the hub
+   * when it started the session and shown back as prose. It is emphatically not
+   * "the first thing anyone typed" into a terminal: a transcript's opening
+   * lines are whatever a person happened to send first, and a label derived
+   * from them would be wrong often enough to mislead on the screen people scan
+   * to find the session they meant.
+   *
+   * `null` is therefore a real answer and the common one. A session the hub
+   * merely discovered in a store -- adopted, started by hand, started before
+   * this hub existed -- has no task, and a row that guessed one would be the
+   * over-claim this field exists to avoid. Non-empty when it is present, so
+   * that there is exactly one way to say there is none.
+   *
+   * Display text and nothing else. Nothing acts on it, nothing spawns from it,
+   * and it reaches no argv: the prompt's path to the agent is the start
+   * instruction, which this does not touch.
+   */
+  task: z.string().min(1).max(SESSION_TASK_MAX_CHARS).nullable(),
 });
 export type SessionRow = z.infer<typeof sessionRowSchema>;
 

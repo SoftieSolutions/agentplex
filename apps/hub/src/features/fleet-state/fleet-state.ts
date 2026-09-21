@@ -194,6 +194,22 @@ export interface SessionRow {
    * a contradiction.
    */
   readonly approvals: readonly PendingApproval[];
+  /**
+   * What this session was started to do, or `null` for one this hub did not
+   * start.
+   *
+   * The third thing on this row that no scan rebuilds, and the one of the three
+   * that is durable: a prompt is typed once, by a person, and nothing on any
+   * machine writes down why a session was started. Its rows live in the tasks
+   * feature, which owns the table; what is here is the current reading of them,
+   * applied through `applyTask` the way a connection report is.
+   *
+   * `null` is the common answer and an honest one. It is deliberately not
+   * derived from the transcript: the first thing in one is whatever anybody
+   * happened to send first, and a panel headed TASK drawing that would state a
+   * purpose nobody stated.
+   */
+  readonly task: string | null;
 }
 
 /** One store, however many servers have it mounted. */
@@ -342,6 +358,21 @@ export interface FleetState {
    * person unable to answer a question the hub had already been told about.
    */
   applyApprovals(ref: SessionRef, approvals: readonly PendingApproval[]): void;
+  /**
+   * Takes what one session was started to do.
+   *
+   * The seam the tasks feature's `onChanged` is wired to, and the one path by
+   * which a task reaches the published state -- whether the session was just
+   * started or the row was read back off disk at boot.
+   *
+   * Filed under `{ storeId, sessionId }` and not under a store the hub has
+   * heard of, exactly as an acknowledgement is, and here the order makes it
+   * necessary rather than merely tidy: a spawn is named by the same report its
+   * session first appears in, and at boot every task arrives before any server
+   * has spoken. Dropping those would lose the label until something else
+   * changed.
+   */
+  applyTask(ref: SessionRef, task: string | null): void;
   /** The whole state. The same object until something changes. */
   snapshot(): HubStateSnapshot;
   /**
@@ -467,6 +498,16 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
    * representations of it would be two ways for a row to say the same thing.
    */
   const approvals = new Map<string, readonly PendingApproval[]>();
+  /**
+   * What each session was started to do, by session, and only for the sessions
+   * this hub started.
+   *
+   * Keyed as JSON for the reason the two maps above are. A session with no
+   * entry has no task, which is the same fact as never having been started from
+   * here -- there is no third state, and offering one would make every reader
+   * handle it.
+   */
+  const tasks = new Map<string, string>();
   const listeners = new Set<(snapshot: HubStateSnapshot) => void>();
 
   /**
@@ -489,7 +530,7 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
   let candidates: readonly DiscoveredServer[] = [];
 
   const build = (): HubStateSnapshot => {
-    const stores = buildStoreViews(connections, reports, attention, projects, approvals);
+    const stores = buildStoreViews(connections, reports, attention, projects, approvals, tasks);
     return {
       version,
       stores,
@@ -649,6 +690,18 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
       changed();
     },
 
+    applyTask(ref: SessionRef, next: string | null): void {
+      const key = sessionKey(ref);
+      // The same rule the reports and the lists above follow. This one is told
+      // the same thing twice for real: the tasks feature announces every row it
+      // reads back at boot, and a second start on a session announces the task
+      // it already had.
+      if ((tasks.get(key) ?? null) === next) return;
+      if (next === null) tasks.delete(key);
+      else tasks.set(key, next);
+      changed();
+    },
+
     snapshot,
 
     storeSessions(storeId: StoreId): readonly SessionDescriptor[] | null {
@@ -741,6 +794,7 @@ function buildStoreViews(
   attention: ReadonlyMap<string, SessionAttention>,
   projects: ReadonlyMap<string, SessionProject>,
   approvals: ReadonlyMap<string, readonly PendingApproval[]>,
+  tasks: ReadonlyMap<string, string>,
 ): readonly StoreView[] {
   const attached = new Map<StoreId, ServerConnectionReport[]>();
   for (const connection of connections.values()) {
@@ -763,7 +817,7 @@ function buildStoreViews(
       lastReachableAt: lastOf(
         servers.map((server) => server.connectedSince ?? server.lastConnectedAt),
       ),
-      sessions: buildSessionRows(storeId, servers, reports, attention, projects, approvals),
+      sessions: buildSessionRows(storeId, servers, reports, attention, projects, approvals, tasks),
     });
   }
 
@@ -790,6 +844,7 @@ function buildSessionRows(
   attention: ReadonlyMap<string, SessionAttention>,
   projects: ReadonlyMap<string, SessionProject>,
   approvals: ReadonlyMap<string, readonly PendingApproval[]>,
+  tasks: ReadonlyMap<string, string>,
 ): readonly SessionRow[] {
   const readings = new Map<string, ReportedSession[]>();
   const holders = new Map<string, SessionHolder>();
@@ -852,6 +907,10 @@ function buildSessionRows(
       // "nothing is waiting" and "this hub cannot tell you" must not be one
       // value, and every codex row will say the first of them forever.
       approvals: approvals.get(sessionKey(ref)) ?? NOTHING_PENDING,
+      // `null` rather than a reading of the transcript, for a session nobody
+      // started from here. There is no substitute for this fact and the row
+      // says so rather than offering the nearest thing to it.
+      task: tasks.get(sessionKey(ref)) ?? null,
     });
   }
 

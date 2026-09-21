@@ -263,6 +263,9 @@ async function start(): Promise<Harness> {
       connections,
       ids: { newId: () => `start-${(minted += 1)}` },
       logger,
+      // A drain is what this suite is about, and what a start was for is the
+      // tasks feature's own subject.
+      onStarted: async () => undefined,
     }),
     connections,
     machine,
