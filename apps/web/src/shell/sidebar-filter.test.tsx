@@ -55,53 +55,9 @@ function installResizeObserver(): void {
   };
 }
 
-/**
- * A box for every element and a viewport to put it in.
- *
- * jsdom lays nothing out: every rect is zero-sized and the document element
- * reports a 0x0 viewport, so floating-ui's hide middleware finds the popover's
- * target clipped out of view and Mantine draws the dropdown `display: none`.
- * A focus trap cannot see into that, and a suite that skipped this would call
- * the trap broken over the absence of layout rather than over the code. The
- * numbers are arbitrary -- nothing here asserts on a measurement, only on
- * there being one.
- */
-function installLayout(): void {
-  for (const [name, size] of [
-    ['clientWidth', 1024],
-    ['clientHeight', 768],
-  ] as const) {
-    Object.defineProperty(document.documentElement, name, { value: size, configurable: true });
-  }
-  Element.prototype.getBoundingClientRect = function box(): DOMRect {
-    return {
-      x: 0,
-      y: 0,
-      width: 120,
-      height: 30,
-      top: 0,
-      left: 0,
-      right: 120,
-      bottom: 30,
-      toJSON: () => ({}),
-    };
-  };
-}
-
 /** Lets a promise the click started settle. */
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-/**
- * One animation frame. Mantine places a popover with a floating-ui measurement
- * and opens it through a transition, so the dropdown reaches the document a
- * frame after the click that asked for it rather than in the same flush.
- */
-function frame(): Promise<void> {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
 }
 
 /**
@@ -142,7 +98,6 @@ describe('the sidebar filter row', () => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     installMatchMedia();
     installResizeObserver();
-    installLayout();
     container = document.createElement('div');
     document.body.append(container);
     filters = createSessionFiltersStore();
@@ -157,6 +112,22 @@ describe('the sidebar filter row', () => {
     container.remove();
   });
 
+  /**
+   * `env="test"` is Mantine's own answer to jsdom, and it is what lets this
+   * suite say anything about the popover at all.
+   *
+   * jsdom measures nothing, so floating-ui's hide middleware reads the target
+   * as clipped and Mantine draws the dropdown `display: none` -- which the
+   * focus trap cannot see into. In this mode `Popover` skips that hiding
+   * (`hideDetached && env !== 'test'`), `Transition` renders on `mounted`
+   * rather than through two animation frames and a 150ms timer, and
+   * `OptionalPortal` renders in place.
+   *
+   * The alternative -- overriding `Element.prototype.getBoundingClientRect`
+   * for every element -- bought the same visibility and left the transition
+   * running, so every assertion about the popover waited on animation frames
+   * whose length is the machine's rather than the code's.
+   */
   function draw(state: MachineState = populated, text = '', popover = true): void {
     act(() => {
       root = createRoot(container);
@@ -165,6 +136,7 @@ describe('the sidebar filter row', () => {
           theme={theme}
           cssVariablesResolver={cssVariablesResolver}
           defaultColorScheme="dark"
+          env="test"
         >
           <SidebarFilter
             state={state}
@@ -205,8 +177,6 @@ describe('the sidebar filter row', () => {
   async function open(): Promise<void> {
     trigger().focus();
     await click(trigger());
-    await act(settle);
-    await act(frame);
     await act(settle);
   }
 
@@ -251,11 +221,17 @@ describe('the sidebar filter row', () => {
     return found?.textContent ?? null;
   }
 
-  /** Lets the document catch up with something that finishes on a timer. */
+  /**
+   * Lets the document catch up with something that finishes on a timer.
+   *
+   * Only the focus return is still one of those: `env="test"` takes the
+   * transition out, so what the popover draws is settled in the flush that
+   * closed it. Each attempt is a macrotask and never a frame, so the budget
+   * is the suite's own and not the machine's.
+   */
   async function until(done: () => boolean): Promise<void> {
     for (let attempt = 0; attempt < 50 && !done(); attempt += 1) {
       await act(settle);
-      await act(frame);
     }
   }
 
@@ -371,9 +347,6 @@ describe('the sidebar filter row', () => {
     await click(buttonSaying('Show 6'));
 
     expect(trigger().getAttribute('aria-expanded')).toBe('false');
-    // The dropdown leaves through a transition, so it is waited for rather
-    // than assumed gone in the flush that closed it.
-    await until(() => sections().length === 0);
     expect(sections()).toEqual([]);
     expect(filters.getSnapshot()).toBe(before);
   });
@@ -382,9 +355,9 @@ describe('the sidebar filter row', () => {
     draw();
     await open();
 
-    // The dropdown is portalled to the end of the body, so a focus left on the
-    // trigger is a Tab out of the popover and past every control in it. These
-    // five narrowings have no other surface at this width.
+    // In the app the dropdown is portalled to the end of the body, so a focus
+    // left on the trigger is a Tab out of the popover and past every control
+    // in it. These five narrowings have no other surface at this width.
     expect(dropdown().contains(document.activeElement)).toBe(true);
   });
 
