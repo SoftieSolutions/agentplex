@@ -10,7 +10,11 @@ import { tabForKey, type SessionTab } from './tab-strip-model.js';
  *
  * It takes a list and draws it. Nothing here knows which tabs exist, how many
  * there are meant to be, or what is behind any of them -- the pane owns the
- * list and the panel, and this owns the row and the keyboard. That is what
+ * list and the panels, and this owns the row and the keyboard. Each tab
+ * carries the id of the element it shows, which is the one thing the strip
+ * needs from a panel it never sees: `aria-controls` is what joins a tab to
+ * what is under it, and without it the two are unrelated controls to anything
+ * that is not looking at pixels. That is what
  * lets the strip ship with one tab: a later ticket appends to an array rather
  * than editing a control.
  *
@@ -107,7 +111,12 @@ export function TabStrip({
           <UnstyledButton
             key={tab.id}
             role="tab"
+            id={`${tab.panelId}-tab`}
             data-tab-id={tab.id}
+            // The panel this tab shows, so a screen reader moving off the
+            // strip lands in what the strip is about. The pane mints the id,
+            // because two panes on one session cannot share one.
+            aria-controls={tab.panelId}
             aria-selected={active}
             tabIndex={active ? 0 : -1}
             onClick={() => onSelect(tab.id)}

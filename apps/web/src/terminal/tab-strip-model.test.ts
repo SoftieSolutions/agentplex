@@ -10,7 +10,9 @@ import { activeTab, tabAfter, tabForKey, type SessionTab } from './tab-strip-mod
  */
 
 function tab(id: string, label: string, badge: string | null = null): SessionTab {
-  return { id, label, badge };
+  // The panel id is the pane's to mint, and nothing in this file is about it:
+  // these functions answer which tab is showing, not what it shows.
+  return { id, label, badge, panelId: `pane-${id}` };
 }
 
 const ONE: readonly SessionTab[] = [tab('terminal', 'Terminal')];

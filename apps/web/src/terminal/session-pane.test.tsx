@@ -1105,19 +1105,38 @@ describe('the session tab strip', () => {
     return [...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent ?? '');
   }
 
-  it('draws the one tab that is built, selected, and nothing for the rest', async () => {
+  it('draws the tabs that are built, with Terminal first and selected', async () => {
     const hub = buildStore();
     await mountOn(hub);
     await connect(hub);
 
-    expect(tabLabels()).toEqual(['Terminal']);
-    // Not a disabled Transcript, not a greyed Diff: a tab nobody can open is
-    // a promise the screen cannot keep, and the strip is a list rather than a
+    expect(tabLabels()).toEqual(['Terminal', 'Transcript']);
+    // Not a disabled Diff, not a greyed Approvals: a tab nobody can open is a
+    // promise the screen cannot keep, and the strip is a list rather than a
     // fixed set of four. Asked of the strip rather than of the pane, because
     // the panel beside it now has an APPROVALS heading of its own and that is
     // a block about the standing policy, not a tab.
-    expect(container.textContent).not.toContain('Transcript');
+    expect(tabLabels()).not.toContain('Diff');
+    expect(tabLabels()).not.toContain('Approvals');
+    // Terminal is the default because it is first -- `activeTab` falls back to
+    // `tabs[0]` -- so the ordering is the rule rather than a flag somewhere.
     expect(container.querySelector('[role="tab"]')?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('points each tab at the panel it shows, with ids no second pane can share', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    await connect(hub);
+
+    const [terminalTab, transcriptTab] = [...container.querySelectorAll('[role="tab"]')];
+    const controls = terminalTab?.getAttribute('aria-controls') ?? '';
+    expect(controls.length).toBeGreaterThan(0);
+    expect(transcriptTab?.getAttribute('aria-controls')).not.toBe(controls);
+    // The panel the selected tab names is the one that is mounted, and it
+    // names the tab back.
+    const panel = container.querySelector(`#${CSS.escape(controls)}`);
+    expect(panel?.getAttribute('role')).toBe('tabpanel');
+    expect(panel?.getAttribute('aria-labelledby')).toBe(terminalTab?.getAttribute('id'));
   });
 
   it('claims attachment only once the hub has answered the watch', async () => {
@@ -1567,7 +1586,7 @@ describe('the Approvals tab in a session pane', () => {
     // The strip, not the pane: the context panel's APPROVALS block is drawn
     // whatever a session is asking, because it is about the standing policy
     // rather than about a request.
-    expect(tabLabels()).toEqual(['Terminal']);
+    expect(tabLabels()).toEqual(['Terminal', 'Transcript']);
   });
 
   it('offers it with the count on it while requests are open', async () => {
@@ -1575,7 +1594,7 @@ describe('the Approvals tab in a session pane', () => {
 
     // The badge is the mockup's `3`: the strip places a tab's own words, and
     // this is the first tab that has any.
-    expect(tabLabels()).toEqual(['Terminal', 'Approvals3']);
+    expect(tabLabels()).toEqual(['Terminal', 'Transcript', 'Approvals3']);
   });
 
   it('opens on the Terminal all the same', async () => {
@@ -1607,7 +1626,7 @@ describe('the Approvals tab in a session pane', () => {
     // Not an empty Approvals tab, which would be a heading over the absence of
     // the thing it names. The strip answers a request for a tab it no longer
     // holds with the first one it does, which is the Terminal.
-    expect(tabLabels()).toEqual(['Terminal']);
+    expect(tabLabels()).toEqual(['Terminal', 'Transcript']);
     expect(selectedTab()).toBe('Terminal');
     expect(proposals()).toEqual([]);
     expect(terminalDrawn()).toBe(true);
@@ -1632,5 +1651,151 @@ describe('the Approvals tab in a session pane', () => {
     expect(terminalDrawn()).toBe(true);
     expect(proposals()).toEqual([]);
     expect(emulators.created).toHaveLength(2);
+  });
+});
+
+/**
+ * The Transcript tab, as a person meets it: press the tab, the pane asks, the
+ * answer is drawn in the same widgets a card uses collapsed.
+ *
+ * The frames are the captured ones, so what the tab draws is what a real hub
+ * actually sent rather than a shape written here.
+ */
+describe('the transcript tab', () => {
+  async function mountOn(hub: StoreHarness): Promise<void> {
+    await mount(<SessionPane sessionRef={SESSION} store={hub.store} emulators={emulators} />);
+  }
+
+  function tab(label: string): HTMLElement {
+    const found = [...container.querySelectorAll('[role="tab"]')].find(
+      (element) => element.textContent === label,
+    );
+    if (found === undefined) throw new Error(`no ${label} tab is drawn`);
+    return found as HTMLElement;
+  }
+
+  async function press(element: HTMLElement): Promise<void> {
+    await act(async () => {
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(settle);
+  }
+
+  function status(): string {
+    return container.querySelector('[data-transcript-status]')?.textContent ?? '';
+  }
+
+  function widgetKinds(): string[] {
+    return [...container.querySelectorAll('[data-activity]')].map(
+      (element) => element.getAttribute('data-activity') ?? '',
+    );
+  }
+
+  it('asks for the transcript when the tab is first shown, and says it is reading', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+
+    await press(tab('Transcript'));
+
+    const asked = sentFrames(socket).filter((frame) => frame.type === 'session-transcript');
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
+      storeId: SESSION.storeId,
+      sessionId: SESSION.sessionId,
+      count: 200,
+    });
+    expect(status()).toContain('Reading this session');
+  });
+
+  it('draws each activity the hub answered with, in the full widget form', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(tab('Transcript'));
+
+    // The captured answer: four activities across four kinds, oldest first,
+    // and a hub that said there are more behind them.
+    await deliver(socket, hubFrames.sessionTranscript);
+
+    expect(widgetKinds()).toEqual(['narration', 'edit', 'tests', 'command']);
+    expect(container.textContent).toContain('src/auth/refresh.ts');
+    expect(status()).toContain('Showing the last 4');
+  });
+
+  it('unmounts the terminal rather than hiding it, and replays it on the way back', async () => {
+    // A hidden terminal measures zero and would send a zero-width resize
+    // across two machines. The feed is the store's, so coming back is a
+    // replay rather than a blank pane.
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await deliver(socket, hubFrames.sessionSubscribed);
+    const before = emulators.created.length;
+    expect(before).toBeGreaterThan(0);
+
+    await press(tab('Transcript'));
+    expect(container.querySelector('[data-testid="terminal"]')).toBeNull();
+    expect(emulator().disposed).toBe(true);
+
+    await press(tab('Terminal'));
+
+    // A second emulator, fed from the same feed the store kept: the bytes
+    // that arrived while the tab was away are not this pane's to have lost.
+    expect(emulators.created.length).toBe(before + 1);
+  });
+
+  it('asks again when Refresh is pressed, and keeps the old answer until the new one lands', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(tab('Transcript'));
+    await deliver(socket, hubFrames.sessionTranscript);
+
+    const refresh = container.querySelector('button[aria-label^="read this session"]');
+    await press(refresh as HTMLElement);
+
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-transcript')).toHaveLength(
+      2,
+    );
+    // The first read's answer is not the second read's answer, so the tab says
+    // it is reading rather than showing a history as of before the press.
+    expect(status()).toContain('Reading this session');
+    expect(widgetKinds()).toEqual([]);
+  });
+
+  it('shows the hub’s own words when the read was refused', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(tab('Transcript'));
+    const asked = sentFrames(socket).find((frame) => frame.type === 'session-transcript');
+    if (asked === undefined) throw new Error('the pane asked for no transcript');
+
+    await deliver(
+      socket,
+      JSON.stringify({
+        type: 'refusal',
+        replyTo: asked.id,
+        code: 'refused',
+        message: 'no server with that store mounted is connected right now',
+        holder: null,
+      }),
+    );
+
+    expect(status()).toBe('no server with that store mounted is connected right now');
+  });
+
+  it('mounts the status region before it has anything to say', async () => {
+    // A `role="status"` that appears with its words is a region nothing was
+    // watching when they arrived.
+    const hub = buildStore();
+    await mountOn(hub);
+    await connect(hub);
+    await press(tab('Transcript'));
+
+    expect(container.querySelector('[data-transcript-status]')?.getAttribute('role')).toBe(
+      'status',
+    );
   });
 });
