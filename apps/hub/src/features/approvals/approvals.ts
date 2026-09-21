@@ -604,7 +604,7 @@ export function createApprovals({
       tool: entry.pending.tool,
       project: grant.project,
       ruleId: grant.ruleId,
-      rule: `${grant.rule.tool} ${grant.rule.prefix}`,
+      rule: `${grant.rule.tool} ${grant.rule.proposal}`,
     });
     void decide({ ref, approvalId, decision: 'grant' });
   }

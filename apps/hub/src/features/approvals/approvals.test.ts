@@ -64,7 +64,7 @@ const A_PROJECT = nodeIdSchema.parse('node-project-work');
 const A_GRANT: ApprovalPolicyGrant = {
   project: A_PROJECT,
   ruleId: 'rule-1',
-  rule: { tool: 'Bash', prefix: 'command: prisma migrate deploy' },
+  rule: { tool: 'Bash', proposal: 'command: prisma migrate deploy' },
 };
 
 function feature(): Approvals {

@@ -27,13 +27,19 @@
 -- nobody could find to revoke: removing the project removes what it had
 -- decided, and the sessions that were under it go back to asking.
 --
--- `tool` and `prefix` are the protocol's `approvalPolicyRule`, and the CHECKs
+-- `tool` and `proposal` are the protocol's `approvalPolicyRule`, and the CHECKs
 -- here are the bounds that parser states restated where the bytes live. They
--- are not the parser: what makes a rule safe -- no empty tool, no prefix
--- stopping at a field name, no control or bidirectional characters -- is a
--- sentence a person is shown, and SQL cannot produce a sentence. Every row is
--- put back through `parseApprovalPolicyRule` when it is read, and a row that
--- does not survive that costs itself and never the project's other rules.
+-- are not the parser: what makes a rule safe -- no empty tool, no empty
+-- proposal, no control or bidirectional characters -- is a sentence a person is
+-- shown, and SQL cannot produce a sentence. Every row is put back through
+-- `parseApprovalPolicyRule` when it is read, and a row that does not survive
+-- that costs itself and never the project's other rules.
+--
+-- `proposal` holds a whole proposal and is compared for equality, never as a
+-- beginning. A prefix column would have granted every continuation of itself --
+-- `command: pnpm test` covering `command: pnpm test && curl ... | sh` -- and
+-- the continuation is written by the agent being asked about. So the column is
+-- named for what it holds: the exact text somebody read above Allow.
 --
 -- There is no `behavior` column. This table holds grants and nothing else: a
 -- rule in it means "do not ask about this", and the absence of a matching rule
@@ -51,7 +57,7 @@ CREATE TABLE approval_policy_rules (
   node_id    text    NOT NULL REFERENCES projects (node_id) ON DELETE CASCADE,
 
   tool       text    NOT NULL CHECK (length(tool) > 0 AND length(tool) <= 200),
-  prefix     text    NOT NULL CHECK (length(prefix) > 0 AND length(prefix) <= 4000),
+  proposal   text    NOT NULL CHECK (length(proposal) > 0 AND length(proposal) <= 4000),
 
   created_at integer NOT NULL
 ) WITHOUT ROWID;
@@ -60,9 +66,9 @@ CREATE TABLE approval_policy_rules (
 -- on the path of every approval request that reaches the hub.
 CREATE INDEX approval_policy_rules_project ON approval_policy_rules (node_id);
 
--- One rule per project per (tool, prefix), as a schema fact rather than a habit
+-- One rule per project per (tool, proposal), as a schema fact rather than a habit
 -- of the code that happens to write it. Two identical rules are not two grants:
 -- they are one grant a person would have to revoke twice, and the second
 -- revocation would be a rule they had no memory of writing.
 CREATE UNIQUE INDEX approval_policy_rules_unique
-  ON approval_policy_rules (node_id, tool, prefix);
+  ON approval_policy_rules (node_id, tool, proposal);

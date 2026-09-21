@@ -160,7 +160,7 @@ const storedRowSchema = z.object({
   id: z.string().min(1),
   node_id: z.string().min(1),
   tool: z.string().min(1),
-  prefix: z.string().min(1).max(APPROVAL_PROPOSAL_MAX_CHARS),
+  proposal: z.string().min(1).max(APPROVAL_PROPOSAL_MAX_CHARS),
   created_at: z.coerce.number().int().nonnegative(),
 });
 
@@ -175,7 +175,7 @@ export function createApprovalPolicy({
 
   const read = async (project: NodeId): Promise<readonly ApprovalPolicyRuleRecord[]> => {
     const result = await database.query(
-      `SELECT id, node_id, tool, prefix, created_at FROM approval_policy_rules
+      `SELECT id, node_id, tool, proposal, created_at FROM approval_policy_rules
        WHERE node_id = ? ORDER BY created_at, id`,
       [project],
     );
@@ -195,7 +195,10 @@ export function createApprovalPolicy({
       // must not grant anything -- and an unreadable rule costs itself and not
       // the project's other rules, which is what keeps one bad row from
       // silently disarming a policy somebody is relying on.
-      const rule = parseApprovalPolicyRule({ tool: stored.data.tool, prefix: stored.data.prefix });
+      const rule = parseApprovalPolicyRule({
+        tool: stored.data.tool,
+        proposal: stored.data.proposal,
+      });
       if (!rule.ok) {
         logger.warn('a stored policy rule is not one, and grants nothing', {
           project,
@@ -229,14 +232,14 @@ export function createApprovalPolicy({
       const ruleId = ids.newId();
       try {
         // `DO NOTHING` states where the write happens the same rule the
-        // interface states: one rule per project per tool and prefix. The read
+        // interface states: one rule per project per tool and proposal. The read
         // after it is what returns the id of the row that is actually there,
         // which is the earlier one when this insert did nothing.
         await database.query(
-          `INSERT INTO approval_policy_rules (id, node_id, tool, prefix, created_at)
+          `INSERT INTO approval_policy_rules (id, node_id, tool, proposal, created_at)
            VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT (node_id, tool, prefix) DO NOTHING`,
-          [ruleId, project, parsed.rule.tool, parsed.rule.prefix, clock.now()],
+           ON CONFLICT (node_id, tool, proposal) DO NOTHING`,
+          [ruleId, project, parsed.rule.tool, parsed.rule.proposal, clock.now()],
         );
       } catch (error) {
         // The foreign key is what refuses a rule for a node that is not a
@@ -255,7 +258,7 @@ export function createApprovalPolicy({
 
       const held = (await read(project)).find(
         (record) =>
-          record.rule.tool === parsed.rule.tool && record.rule.prefix === parsed.rule.prefix,
+          record.rule.tool === parsed.rule.tool && record.rule.proposal === parsed.rule.proposal,
       );
       if (held === undefined) {
         logger.warn('a policy rule was written and could not be read back', { project, ruleId });
