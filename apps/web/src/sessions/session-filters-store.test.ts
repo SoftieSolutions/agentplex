@@ -5,7 +5,7 @@ import { createFrameIdCounter } from '../store/frame-ids.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { appSessionFiltersStore, createSessionFiltersStore } from './session-filters-store.js';
-import { NO_FILTERS } from './session-list-model.js';
+import { activeFilterCount, NO_FILTERS } from './session-list-model.js';
 
 const MACHINE = serverRegistrationIdSchema.parse('reg-1');
 
@@ -113,6 +113,58 @@ describe('the narrowings store', () => {
     filters.clear();
 
     expect(filters.getSnapshot()).toBe(cleared);
+  });
+
+  it('starts in the grid, which is the form every mockup draws selected', () => {
+    expect(createSessionFiltersStore().getView()).toBe('grid');
+  });
+
+  it('publishes a view change to the same subscribers the narrowings publish to', () => {
+    const filters = createSessionFiltersStore();
+    let published = 0;
+    filters.subscribe(() => {
+      published += 1;
+    });
+
+    filters.setView('list');
+
+    expect(filters.getView()).toBe('list');
+    expect(published).toBe(1);
+  });
+
+  it('publishes nothing when the view written is the view already held', () => {
+    const filters = createSessionFiltersStore();
+    filters.setView('list');
+    let published = 0;
+    filters.subscribe(() => {
+      published += 1;
+    });
+
+    filters.setView('list');
+
+    expect(published).toBe(0);
+  });
+
+  it('keeps the view through Clear, which undoes narrowings and not readings', () => {
+    const filters = createSessionFiltersStore();
+    filters.set({ chip: 'running', project: 'agentplex' });
+    filters.setView('list');
+
+    filters.clear();
+
+    expect(filters.getView()).toBe('list');
+    expect(filters.getSnapshot()).toEqual(NO_FILTERS);
+  });
+
+  it('is no narrowing, so it is not on the badge and not in the narrowings', () => {
+    const filters = createSessionFiltersStore();
+
+    filters.setView('list');
+
+    // Both halves of one fact: the view is not a member of the narrowings the
+    // badge is counted over, so there is no way for it to be counted.
+    expect(filters.getSnapshot()).toEqual(NO_FILTERS);
+    expect(activeFilterCount(filters.getSnapshot())).toBe(0);
   });
 
   it('is one store per page, so the popover and the list read one source', () => {
