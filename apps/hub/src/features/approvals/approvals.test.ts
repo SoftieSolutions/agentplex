@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   approvalIdSchema,
+  approvalPolicyRuleIdSchema,
   sessionRefSchema,
   type ApprovalId,
   type ApprovalRequest,
@@ -63,7 +64,7 @@ let consulted: { tool: string; proposal: string }[] = [];
 const A_PROJECT = nodeIdSchema.parse('node-project-work');
 const A_GRANT: ApprovalPolicyGrant = {
   project: A_PROJECT,
-  ruleId: 'rule-1',
+  ruleId: approvalPolicyRuleIdSchema.parse('rule-1'),
   rule: { tool: 'Bash', proposal: 'command: prisma migrate deploy' },
 };
 
@@ -175,7 +176,9 @@ describe('the approvals the hub is holding', () => {
     // The hub's own reading, because the frame carries no date: two machines'
     // clocks disagree, and how long somebody has been waiting is a fact the
     // receiver can state honestly and the sender cannot.
-    expect(lastChange(MIGRATING)).toEqual([{ ...request(FIRST), requestedAt: START + 4_000 }]);
+    expect(lastChange(MIGRATING)).toEqual([
+      { ...request(FIRST), requestedAt: START + 4_000, answeredBy: null },
+    ]);
   });
 
   it('holds two open requests for one session, oldest first', () => {
@@ -215,7 +218,7 @@ describe('the approvals the hub is holding', () => {
 
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
     await settle();
-    expect(held.answer).toEqual({ ok: true, outcome: 'granted' });
+    expect(held.answer).toEqual({ ok: true, outcome: 'granted', answeredBy: null });
     // And the request is no longer open on the row.
     expect(lastChange(MIGRATING)).toEqual([]);
   });
@@ -252,7 +255,7 @@ describe('the approvals the hub is holding', () => {
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
     await settle();
 
-    expect(winner.answer).toEqual({ ok: true, outcome: 'granted' });
+    expect(winner.answer).toEqual({ ok: true, outcome: 'granted', answeredBy: null });
     expect(loser.answer?.ok).toBe(false);
     // The refusal carries the outcome: the person who tapped second is owed
     // what became of the request, not merely that they were late.
@@ -317,6 +320,7 @@ describe('the approvals the hub is holding', () => {
     expect(answer).toEqual({
       ok: false,
       outcome: null,
+      answeredBy: null,
       code: 'refused',
       problem: expect.stringContaining('no approval'),
     });
@@ -399,6 +403,7 @@ describe('the approvals the hub is holding', () => {
     expect(first).toEqual({
       ok: false,
       outcome: null,
+      answeredBy: null,
       code: 'refused',
       problem: 'that approval is unknown',
     });
@@ -455,6 +460,42 @@ describe('a request the standing policy already answered', () => {
     expect(lastChange(MIGRATING)).toEqual([]);
   });
 
+  it('says on the row that a rule answered it, before the machine confirms', async () => {
+    // How every client learns a grant was automatic. The request is still open
+    // -- the machine holding the hook is the authority on what happened -- and
+    // for that window the row says who answered it and with which rule.
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+
+    // Announced the moment it arrives, before the policy has been read: a read
+    // of this hub's disk must not sit between a blocked agent and the screen.
+    expect(lastChange(MIGRATING)?.[0]?.answeredBy).toBe(null);
+    await settle();
+    expect(lastChange(MIGRATING)?.[0]?.answeredBy).toEqual(A_GRANT);
+  });
+
+  it('names the rule on the receipt, to the client that tapped and lost', async () => {
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    // A person who tapped Allow a moment after a rule did would read a bare
+    // `granted` as their own tap having done something. The rule is what tells
+    // them otherwise, and it travels on the same receipt as the word.
+    const late = approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' });
+    approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
+
+    expect(await late).toEqual({
+      ok: false,
+      outcome: 'granted',
+      answeredBy: A_GRANT,
+      code: 'refused',
+      problem: 'that approval was already answered, and is granted',
+    });
+  });
+
   it('is put to a person when no rule covers it', async () => {
     const approvals = feature();
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
@@ -496,7 +537,7 @@ describe('a request the standing policy already answered', () => {
 
     expect(dispatched).toEqual([{ registrationId: LAPTOP, approvalId: FIRST, decision: 'deny' }]);
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'denied'));
-    expect(await person).toEqual({ ok: true, outcome: 'denied' });
+    expect(await person).toEqual({ ok: true, outcome: 'denied', answeredBy: null });
   });
 
   it('grants nothing for a request the agent took back while the policy was read', async () => {

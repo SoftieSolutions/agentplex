@@ -147,6 +147,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastStopped: null,
     lastAttention: null,
     lastApproval: null,
+    approvalPolicies: new Map(),
     lastListing: null,
     lastTreeChange: null,
     catalogue: null,

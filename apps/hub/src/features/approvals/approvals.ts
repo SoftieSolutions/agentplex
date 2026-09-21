@@ -137,10 +137,15 @@ export interface DecideRequest {
  * waiting, and the tool call fell through as though nobody had answered.
  */
 export type ApprovalAnswer =
-  | { readonly ok: true; readonly outcome: ApprovalOutcome }
+  | {
+      readonly ok: true;
+      readonly outcome: ApprovalOutcome;
+      readonly answeredBy: ApprovalPolicyGrant | null;
+    }
   | {
       readonly ok: false;
       readonly outcome: ApprovalOutcome | null;
+      readonly answeredBy: ApprovalPolicyGrant | null;
       readonly code: RefusalCode;
       readonly problem: string;
     };
@@ -241,7 +246,12 @@ function endingKey(ref: SessionRef, approvalId: ApprovalId): string {
 /** One open request, with the two things only this hub knows about it. */
 interface OpenApproval {
   readonly ref: SessionRef;
-  readonly pending: PendingApproval;
+  /**
+   * The row as every client reads it, replaced rather than mutated when a rule
+   * answers: the list handed to `onChanged` is what a client is sent, so the
+   * mark saying nobody was asked has to be on the object that travels.
+   */
+  pending: PendingApproval;
   /** The machine that reported it, which is the only one that can answer it. */
   readonly source: ServerRegistrationId;
   /**
@@ -323,10 +333,14 @@ export function createApprovals({
       const applied = index === 0 && (outcome === 'granted' || outcome === 'denied');
       answer(
         applied
-          ? { ok: true, outcome }
+          ? { ok: true, outcome, answeredBy: entry.grantedByPolicy }
           : {
               ok: false,
               outcome,
+              // Told to the losers of the race as well as to the winner: a
+              // person who tapped Allow a moment after a rule did is owed the
+              // rule, rather than a bare `granted` they would read as theirs.
+              answeredBy: entry.grantedByPolicy,
               code: 'refused',
               problem:
                 index === 0
@@ -404,7 +418,7 @@ export function createApprovals({
         // The hub's own clock, because the frame carries no date: two machines'
         // clocks disagree, and a client rendering "waiting four minutes" is
         // comparing this with its own notion of now.
-        pending: { ...frame.approval, requestedAt: clock.now() },
+        pending: { ...frame.approval, requestedAt: clock.now(), answeredBy: null },
         source,
         claimed: false,
         waiting: [],
@@ -500,6 +514,7 @@ export function createApprovals({
         return Promise.resolve({
           ok: false,
           outcome: null,
+          answeredBy: null,
           code: 'refused',
           problem: 'this hub is holding no approval by that id for that session',
         });
@@ -507,6 +522,10 @@ export function createApprovals({
       return Promise.resolve({
         ok: false,
         outcome: remembered,
+        // The request is gone and so is the rule that answered it. What is
+        // remembered is the word, bounded; a rule kept alongside would be this
+        // hub holding a copy of a policy that may since have been revoked.
+        answeredBy: null,
         code: 'refused',
         problem: `that approval is ${remembered}`,
       });
@@ -598,6 +617,14 @@ export function createApprovals({
     // Set and claimed in one tick -- `decide` takes the claim synchronously --
     // so this can never end up describing a decision somebody else made.
     entry.grantedByPolicy = grant;
+    // Put on the row and announced before the decision leaves this hub, which
+    // is how every client learns a grant was automatic. The request is drawn as
+    // answered-by-a-rule for as long as the machine holding the hook takes to
+    // confirm, and then leaves the row like any other. The alternative -- a
+    // frame of its own, broadcast -- would be a second channel saying something
+    // about a request the row is already carrying.
+    entry.pending = { ...entry.pending, answeredBy: grant };
+    announce(ref);
     logger.info('approval granted by a standing rule, with nobody asked', {
       ...ref,
       approvalId,
@@ -632,7 +659,13 @@ export function createApprovals({
       approvalId: request.approvalId,
       problem,
     });
-    const refusal: ApprovalAnswer = { ok: false, outcome: null, code, problem };
+    const refusal: ApprovalAnswer = {
+      ok: false,
+      outcome: null,
+      answeredBy: null,
+      code,
+      problem,
+    };
     for (const resolve of entry.waiting.splice(0)) resolve(refusal);
   }
 }

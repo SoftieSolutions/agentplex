@@ -37,6 +37,7 @@ import {
 } from '../../../apps/server/src/terminal-manager.js';
 import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
 import { createFakeApprovals } from '../../../apps/hub/src/features/approvals/fake-approvals.js';
+import { createFakeApprovalPolicy } from '../../../apps/hub/src/features/approval-policy/fake-approval-policy.js';
 import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
 import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
@@ -256,6 +257,7 @@ async function start(): Promise<Harness> {
     // Nothing in this file answers an approval; a broadcast built without the
     // seam would be a different broadcast from the one the hub runs.
     approvals: createFakeApprovals(),
+    approvalPolicy: createFakeApprovalPolicy(),
     pairing,
     syncServers: () => connections.sync(),
     projects: createFakeProjects(),

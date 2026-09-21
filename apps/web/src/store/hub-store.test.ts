@@ -465,7 +465,11 @@ describe('commands', () => {
     // answers, and the outcome is about the request -- the answer that took
     // effect may have been another client's.
     socket.deliver(hubFrames.approvalDecided);
-    expect(h.store.getSnapshot().lastApproval).toEqual({ replyTo: 2, outcome: 'granted' });
+    expect(h.store.getSnapshot().lastApproval).toEqual({
+      replyTo: 2,
+      outcome: 'granted',
+      answeredBy: null,
+    });
   });
 
   it('an approval-decided reply clears the refusal that preceded it', async () => {

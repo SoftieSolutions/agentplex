@@ -962,6 +962,7 @@ describe('what an agent is waiting on', () => {
       proposal: 'prisma migrate deploy --schema ./db',
       suggestions: [],
       requestedAt,
+      answeredBy: null,
     };
   }
 

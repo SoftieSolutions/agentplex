@@ -288,6 +288,7 @@ describe('toMachineState', () => {
       proposal: 'prisma migrate deploy --schema ./db',
       suggestions: [],
       requestedAt: START + 500,
+      answeredBy: null,
     };
     state.applyApprovals(
       { storeId: store('store-work'), sessionId: sessionIdSchema.parse('session-1') },

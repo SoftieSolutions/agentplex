@@ -1,10 +1,14 @@
 import { z } from 'zod';
 import {
+  APPROVAL_POLICY_RULES_MAX,
   APPROVAL_PROPOSAL_MAX_CHARS,
+  approvalPolicyRuleIdSchema,
   approvalPolicyRuleMatches,
   nodeIdSchema,
   parseApprovalPolicyRule,
-  type ApprovalPolicyRule,
+  type ApprovalAnsweredBy,
+  type ApprovalPolicyRecord,
+  type ApprovalPolicyRuleId,
   type NodeId,
   type RefusalCode,
   type SessionRef,
@@ -65,16 +69,16 @@ import type { Database } from '../../db/database.js';
  * could be wrong.
  */
 
-/** This hub's name for one stored rule. Unique within this hub's database. */
-export type ApprovalPolicyRuleId = string;
-
-/** One rule as it sits on disk, read back and parsed. */
-export interface ApprovalPolicyRuleRecord {
-  readonly ruleId: ApprovalPolicyRuleId;
+/**
+ * One rule as it sits on disk, read back and parsed.
+ *
+ * The protocol's own record plus the project it belongs to. The record is the
+ * protocol's rather than this file's because it is what a client is answered
+ * with, and a second shape here would be a mapping step whose only job would be
+ * to fall out of step with the wire.
+ */
+export interface ApprovalPolicyRuleRecord extends ApprovalPolicyRecord {
   readonly project: NodeId;
-  readonly rule: ApprovalPolicyRule;
-  /** When it was written, by this hub's clock. */
-  readonly createdAt: number;
 }
 
 /**
@@ -82,14 +86,15 @@ export interface ApprovalPolicyRuleRecord {
  *
  * It carries the rule and not merely the fact of a grant, because a decision
  * nobody was asked about has to be attributable afterwards. Whoever reads the
- * log, and whoever reads the screen once steps three and four land, is owed
- * the sentence a person wrote, in the project they wrote it in.
+ * log, and whoever reads the screen, is owed the sentence a person wrote, in
+ * the project they wrote it in.
+ *
+ * It is the protocol's `ApprovalAnsweredBy` and not a shape of this hub's,
+ * because it travels: it is what the session row and the decision receipt
+ * carry, so the thing the policy hands back and the thing a client reads are
+ * one object rather than two that have to be kept in step.
  */
-export interface ApprovalPolicyGrant {
-  readonly project: NodeId;
-  readonly ruleId: ApprovalPolicyRuleId;
-  readonly rule: ApprovalPolicyRule;
-}
+export type ApprovalPolicyGrant = ApprovalAnsweredBy;
 
 /** A rule written, or the sentence saying why it was not. */
 export type ApprovalPolicyOutcome =
@@ -128,8 +133,20 @@ export interface ApprovalPolicy {
     readonly project: NodeId;
     readonly rule: unknown;
   }): Promise<ApprovalPolicyOutcome>;
-  /** Removes one rule. `false` when there was no such rule to remove. */
-  remove(ruleId: ApprovalPolicyRuleId): Promise<boolean>;
+  /**
+   * Removes one rule from one project. `false` when that project held no such
+   * rule.
+   *
+   * Scoped to the project and not only to the id, because the id comes off a
+   * client's screen: a client holding one it read from a policy it is no longer
+   * looking at must not be able to reach into a policy it never asked for. The
+   * project is also what the removal is answered with, so nothing here would
+   * work without it anyway.
+   */
+  remove(request: {
+    readonly project: NodeId;
+    readonly ruleId: ApprovalPolicyRuleId;
+  }): Promise<boolean>;
   /**
    * The standing decision covering this request, or `null`: ask somebody.
    *
@@ -157,7 +174,7 @@ export interface ApprovalPolicy {
  * match everything.
  */
 const storedRowSchema = z.object({
-  id: z.string().min(1),
+  id: approvalPolicyRuleIdSchema,
   node_id: z.string().min(1),
   tool: z.string().min(1),
   proposal: z.string().min(1).max(APPROVAL_PROPOSAL_MAX_CHARS),
@@ -229,6 +246,22 @@ export function createApprovalPolicy({
       const parsed = parseApprovalPolicyRule(rule);
       if (!parsed.ok) return { ok: false, code: 'refused', problem: parsed.problem };
 
+      // A policy is answered whole or not at all, so the bound on the frame is
+      // a bound on the table: refusing the rule that would make the policy too
+      // big to send is the only way the alternative -- answering a prefix of a
+      // policy and calling it one -- never happens.
+      const held = await read(project);
+      if (
+        held.length >= APPROVAL_POLICY_RULES_MAX &&
+        !held.some((record) => approvalPolicyRuleMatches(record.rule, parsed.rule))
+      ) {
+        return {
+          ok: false,
+          code: 'refused',
+          problem: `that project already holds ${String(APPROVAL_POLICY_RULES_MAX)} rules, which is as many as one policy may have`,
+        };
+      }
+
       const ruleId = ids.newId();
       try {
         // `DO NOTHING` states where the write happens the same rule the
@@ -256,29 +289,32 @@ export function createApprovalPolicy({
         };
       }
 
-      const held = (await read(project)).find(
-        (record) =>
-          record.rule.tool === parsed.rule.tool && record.rule.proposal === parsed.rule.proposal,
+      const written = (await read(project)).find((record) =>
+        approvalPolicyRuleMatches(record.rule, parsed.rule),
       );
-      if (held === undefined) {
+      if (written === undefined) {
         logger.warn('a policy rule was written and could not be read back', { project, ruleId });
         return { ok: false, code: 'internal', problem: 'that rule could not be read back' };
       }
       logger.info('a policy rule was written', {
         project,
-        ruleId: held.ruleId,
-        tool: held.rule.tool,
+        ruleId: written.ruleId,
+        tool: written.rule.tool,
       });
-      return { ok: true, ruleId: held.ruleId };
+      return { ok: true, ruleId: written.ruleId };
     },
 
-    async remove(ruleId: ApprovalPolicyRuleId): Promise<boolean> {
-      const before = await database.query('SELECT id FROM approval_policy_rules WHERE id = ?', [
-        ruleId,
-      ]);
+    async remove({ project, ruleId }): Promise<boolean> {
+      const before = await database.query(
+        'SELECT id FROM approval_policy_rules WHERE id = ? AND node_id = ?',
+        [ruleId, project],
+      );
       if (before.rows.length === 0) return false;
-      await database.query('DELETE FROM approval_policy_rules WHERE id = ?', [ruleId]);
-      logger.info('a policy rule was removed', { ruleId });
+      await database.query('DELETE FROM approval_policy_rules WHERE id = ? AND node_id = ?', [
+        ruleId,
+        project,
+      ]);
+      logger.info('a policy rule was removed', { project, ruleId });
       return true;
     },
 

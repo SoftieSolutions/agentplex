@@ -158,7 +158,7 @@ describe('the standing policy', () => {
     expect(
       await policy.grantFor(FIXING, { tool: 'Bash', proposal: 'command: pnpm test' }),
     ).not.toBe(null);
-    expect(await policy.remove(added.ruleId)).toBe(true);
+    expect(await policy.remove({ project: WORK, ruleId: added.ruleId })).toBe(true);
     expect(await policy.grantFor(FIXING, { tool: 'Bash', proposal: 'command: pnpm test' })).toBe(
       null,
     );

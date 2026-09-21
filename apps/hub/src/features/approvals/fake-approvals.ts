@@ -75,7 +75,7 @@ export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApp
       const held = open.get(keyOf(ref)) ?? [];
       // A fixed stamp, because a fake that read a clock would be a second
       // opinion about the one number the real feature is the source of.
-      held.push({ ...frame.approval, requestedAt: 0 });
+      held.push({ ...frame.approval, requestedAt: 0, answeredBy: null });
       open.set(keyOf(ref), held);
       announce(ref);
     },

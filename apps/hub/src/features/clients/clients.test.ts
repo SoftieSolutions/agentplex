@@ -30,6 +30,10 @@ import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/s
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
 import { createClients, type Clients } from './clients.js';
 import { createFakeApprovals, type FakeApprovals } from '../approvals/fake-approvals.js';
+import {
+  createFakeApprovalPolicy,
+  type FakeApprovalPolicy,
+} from '../approval-policy/fake-approval-policy.js';
 import { createFakeAttention, type FakeAttention } from '../attention/fake-attention.js';
 import { createFakePairing, type FakePairing } from '../pairing/fake-pairing.js';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
@@ -131,6 +135,7 @@ interface Harness {
   readonly approvals: FakeApprovals;
   /** The subscriptions this broadcast writes through, or `null` for no push. */
   readonly push: FakePush | null;
+  readonly approvalPolicy: FakeApprovalPolicy;
 }
 
 /**
@@ -154,6 +159,7 @@ function harness(
   attention: FakeAttention = createFakeAttention(),
   approvals: FakeApprovals = createFakeApprovals(),
   push: FakePush | null = createFakePush(),
+  approvalPolicy: FakeApprovalPolicy = createFakeApprovalPolicy(),
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
@@ -170,6 +176,7 @@ function harness(
     sessions,
     attention,
     approvals,
+    approvalPolicy,
     pairing,
     syncServers: async () => {
       syncs += 1;
@@ -187,6 +194,7 @@ function harness(
     sessions,
     attention,
     approvals,
+    approvalPolicy,
     pairing,
     syncs: () => syncs,
     projects,
@@ -1892,13 +1900,14 @@ describe('a client answering an approval', () => {
     ]);
     expect(client.received.some((frame) => frame.type === 'approval-decided')).toBe(false);
 
-    approvals.answer({ ok: true, outcome: 'granted' });
+    approvals.answer({ ok: true, outcome: 'granted', answeredBy: null });
     await Promise.resolve();
 
     expect(client.received.at(-1)).toEqual({
       type: 'approval-decided',
       replyTo: 2,
       outcome: 'granted',
+      answeredBy: null,
     });
   });
 
@@ -1914,6 +1923,7 @@ describe('a client answering an approval', () => {
     approvals.answer({
       ok: false,
       outcome: 'granted',
+      answeredBy: null,
       code: 'refused',
       problem: 'that approval was already answered, and is granted',
     });
@@ -1923,6 +1933,7 @@ describe('a client answering an approval', () => {
       type: 'approval-decided',
       replyTo: 2,
       outcome: 'granted',
+      answeredBy: null,
     });
   });
 
@@ -1935,6 +1946,7 @@ describe('a client answering an approval', () => {
     approvals.answer({
       ok: false,
       outcome: null,
+      answeredBy: null,
       code: 'refused',
       problem: 'this hub is holding no approval by that id for that session',
     });
@@ -2115,5 +2127,149 @@ describe('a client that wants to be told when nobody is looking', () => {
 
     expect(asking.received.at(-1)).toEqual({ type: 'push-subscribed', replyTo: 2 });
     expect(watching.socket.sent.length).toBe(seenByWatcher);
+  });
+});
+
+/**
+ * A client reading and editing a project's standing policy.
+ *
+ * Three frames and one answer, which is the shape being asserted here: every
+ * one of them ends in the policy as it now stands, because a client that
+ * applied its own add would be drawing a policy nobody vouched for.
+ *
+ * The refusals are the other half, and they are the half that matters. A rule
+ * the parser will not have is a sentence for the person who typed it; a rule
+ * that was not there is not a quiet success; and a policy the hub could not
+ * read is never answered as an empty one, because an empty policy is a claim
+ * that every request will reach somebody.
+ */
+describe('a client reading and editing a standing policy', () => {
+  const PROJECT = nodeIdSchema.parse('node-project-work');
+  const RULE = { tool: 'Bash', proposal: 'command: pnpm test' };
+
+  it('answers a list with every rule the project holds', async () => {
+    const { broadcast, approvalPolicy } = harness();
+    await approvalPolicy.add({ project: PROJECT, rule: RULE });
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'approval-policy-list', id: 2, projectId: PROJECT });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'approval-policy',
+      replyTo: 2,
+      projectId: PROJECT,
+      rules: [{ ruleId: 'rule-1', rule: RULE, createdAt: 1 }],
+    });
+  });
+
+  it('answers an empty policy for a project that has decided nothing', async () => {
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'approval-policy-list', id: 2, projectId: PROJECT });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'approval-policy', rules: [] });
+  });
+
+  it('answers an add with the policy the rule is now part of', async () => {
+    const { broadcast, approvalPolicy } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'approval-policy-add', id: 2, projectId: PROJECT, rule: RULE });
+    await Promise.resolve();
+
+    expect(client.received.find((frame) => frame.type === 'approval-policy')).toMatchObject({
+      type: 'approval-policy',
+      replyTo: 2,
+      rules: [{ rule: RULE }],
+    });
+    expect(approvalPolicy.held.get(PROJECT)).toHaveLength(1);
+  });
+
+  it('refuses a rule with the sentence the rule parser gave, not one of its own', async () => {
+    const { broadcast, approvalPolicy } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    // Shaped enough for the frame to parse, and not a rule. The bound is the
+    // protocol's; the reason is `parseApprovalPolicyRule`'s, and it is what the
+    // person who typed it has to read.
+    await client.say({
+      type: 'approval-policy-add',
+      id: 2,
+      projectId: PROJECT,
+      rule: { tool: 'Bash', proposal: '   ' },
+    });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 2, code: 'refused' });
+    expect(approvalPolicy.held.get(PROJECT) ?? []).toHaveLength(0);
+  });
+
+  it('answers a removal with what is left', async () => {
+    const { broadcast, approvalPolicy } = harness();
+    const added = await approvalPolicy.add({ project: PROJECT, rule: RULE });
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'approval-policy-remove',
+      id: 2,
+      projectId: PROJECT,
+      ruleId: added.ruleId,
+    });
+    await Promise.resolve();
+
+    expect(client.received.find((frame) => frame.type === 'approval-policy')).toEqual({
+      type: 'approval-policy',
+      replyTo: 2,
+      projectId: PROJECT,
+      rules: [],
+    });
+  });
+
+  it('refuses a removal of a rule that project does not hold', async () => {
+    // Not a silent success. "It is gone" and "the screen you are looking at is
+    // not the policy this hub holds" are two different things to be told.
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'approval-policy-remove',
+      id: 2,
+      projectId: PROJECT,
+      ruleId: 'rule-nobody-wrote',
+    });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 2, code: 'refused' });
+  });
+
+  it('refuses rather than answering an empty policy when the read fails', async () => {
+    // The one degradation this feature may not make. An empty list would be
+    // drawn as "every request here reaches you", which is the opposite of what
+    // an unreadable policy means.
+    const { broadcast, approvalPolicy } = harness();
+    approvalPolicy.fails('disk gone');
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'approval-policy-list', id: 2, projectId: PROJECT });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 2, code: 'internal' });
+  });
+
+  it('needs a hello first, like every other frame on the socket', async () => {
+    const { broadcast, approvalPolicy } = harness();
+    const client = attach(broadcast);
+
+    await client.say({ type: 'approval-policy-list', id: 2, projectId: PROJECT });
+
+    expect(approvalPolicy.held.size).toBe(0);
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
   });
 });

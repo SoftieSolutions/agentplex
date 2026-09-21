@@ -40,11 +40,15 @@ export type {
 } from './catalogue.js';
 
 export {
+  APPROVAL_POLICY_RULES_MAX,
   APPROVAL_PROPOSAL_MAX_CHARS,
   APPROVAL_SUGGESTIONS_MAX,
+  approvalAnsweredBySchema,
   approvalDecisionSchema,
   approvalIdSchema,
   approvalOutcomeSchema,
+  approvalPolicyRecordSchema,
+  approvalPolicyRuleIdSchema,
   approvalPolicyRuleMatches,
   approvalPolicyRuleSchema,
   approvalRequestSchema,
@@ -56,10 +60,13 @@ export {
   pendingApprovalSchema,
 } from './approval.js';
 export type {
+  ApprovalAnsweredBy,
   ApprovalDecision,
   ApprovalId,
   ApprovalOutcome,
+  ApprovalPolicyRecord,
   ApprovalPolicyRule,
+  ApprovalPolicyRuleId,
   ApprovalPolicyRuleParse,
   ApprovalRequest,
   ApprovalRule,

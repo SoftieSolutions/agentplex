@@ -611,6 +611,10 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     sessions,
     attention,
     approvals,
+    // The rules a client may read and edit, and the same object `approvals`
+    // consults on every request. One instance, so a rule a client has just
+    // written is a rule the next request is put to.
+    approvalPolicy,
     pairing,
     // The other half of a pairing frame: the row is the pairing feature's to
     // write, and dialling what the row now says is the supervisor's to do. A

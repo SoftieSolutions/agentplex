@@ -1,5 +1,14 @@
 import { z } from 'zod';
-import { approvalDecisionSchema, approvalIdSchema, approvalOutcomeSchema } from './approval.js';
+import {
+  APPROVAL_POLICY_RULES_MAX,
+  approvalAnsweredBySchema,
+  approvalDecisionSchema,
+  approvalIdSchema,
+  approvalOutcomeSchema,
+  approvalPolicyRecordSchema,
+  approvalPolicyRuleIdSchema,
+  approvalPolicyRuleSchema,
+} from './approval.js';
 import {
   catalogueCursorSchema,
   catalogueFilterSchema,
@@ -633,6 +642,63 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     id: frameIdSchema,
     endpoint: pushEndpointSchema,
   }),
+  /**
+   * Asks for a project's standing policy: every rule it holds, whole.
+   *
+   * A project and never a session, which is the decision the policy exists to
+   * carry -- a rule is a statement about a body of work, and a per-session one
+   * would have to be written again every afternoon, while somebody stared at a
+   * blocked agent and wanted it to continue. The project is named by its node
+   * id for the reason a start names one: the client names a row, and the hub
+   * turns it into whatever it is on disk.
+   *
+   * It carries no cursor and no filter. A policy is answered whole or not at
+   * all -- see `APPROVAL_POLICY_RULES_MAX` -- because a screen showing half a
+   * policy is a screen saying a request will be asked about when it will not.
+   */
+  z.object({
+    type: z.literal('approval-policy-list'),
+    id: frameIdSchema,
+    projectId: nodeIdSchema,
+  }),
+  /**
+   * Writes one rule into a project's policy: stop asking about exactly this.
+   *
+   * The rule crosses as the protocol's own `approvalPolicyRule`, which bounds
+   * it, and the hub then puts it through `parseApprovalPolicyRule`, which is
+   * what can refuse it with a sentence. Both, and in that order: the schema is
+   * what makes the frame parse at all, and the parser is what tells the person
+   * who typed it why a rule with no tool is not one. A refusal here is the
+   * ordinary `refusal` frame, correlated by `replyTo`, because the sentence is
+   * for the client that asked and for nobody else.
+   *
+   * The rule is display text compared for equality. It is never executed, never
+   * spliced into a command line, and never reaches a spawn -- what it matches
+   * is a proposal, which is itself text derived from a tool input and not that
+   * input. So this frame does not carry an operation name or an argv element,
+   * although a person reading it will recognise one: what it carries is the
+   * string that appeared above the button they would otherwise tap.
+   */
+  z.object({
+    type: z.literal('approval-policy-add'),
+    id: frameIdSchema,
+    projectId: nodeIdSchema,
+    rule: approvalPolicyRuleSchema,
+  }),
+  /**
+   * Takes one rule out of a project's policy: ask me about this again.
+   *
+   * It names the rule by the id the hub minted and the project the rule is in.
+   * The project is not redundant: it is what makes the removal answerable with
+   * that project's remaining rules, and it is what scopes the delete, so a
+   * client holding a stale id cannot reach into a policy it was not looking at.
+   */
+  z.object({
+    type: z.literal('approval-policy-remove'),
+    id: frameIdSchema,
+    projectId: nodeIdSchema,
+    ruleId: approvalPolicyRuleIdSchema,
+  }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
 ]);
@@ -1050,11 +1116,47 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
    * It carries no approval id. The client named it, the id is spent the moment
    * the request ends, and restating it would be a second copy of what was
    * asked -- `replyTo` already says which question this answers.
+   *
+   * `answeredBy` is the one thing it adds to the word: the standing rule whose
+   * grant took effect, or `null` for a request a person answered. It is on this
+   * frame rather than on a second one because this frame is already what says
+   * what became of the request, and an outcome that arrived separately from the
+   * reason for it would be two things a client had to join. A person who tapped
+   * Allow a moment after a rule did is told `granted` here either way; without
+   * the rule beside it they would have no way to tell their own tap from one
+   * that never counted.
    */
   z.object({
     type: z.literal('approval-decided'),
     replyTo: frameIdSchema,
     outcome: approvalOutcomeSchema,
+    answeredBy: approvalAnsweredBySchema.nullable(),
+  }),
+  /**
+   * One project's standing policy, whole, answered to the client that asked.
+   *
+   * The same frame answers all three questions -- list it, add to it, take one
+   * out -- because all three end with the same fact, and a client that had to
+   * apply an add to its own copy would be a client holding a policy nobody
+   * vouched for. It is the rule this codebase follows for the machine state,
+   * applied to something small enough that applying it costs nothing.
+   *
+   * A reply and never a broadcast. A policy is a fact about the fleet, not a
+   * private arrangement like a layout, but the client that is looking at one
+   * asked for it, and pushing every project's policy at every tab would be
+   * sending most of them something nothing on their screen reads. The hub
+   * answers the change to whoever made it; a client looking at the same policy
+   * elsewhere re-asks, exactly as it does after `catalogue-changed`.
+   *
+   * `projectId` is carried although `replyTo` identifies the request, because a
+   * client holding several policies files the answer by project and should not
+   * have to remember which of its own frames asked about which.
+   */
+  z.object({
+    type: z.literal('approval-policy'),
+    replyTo: frameIdSchema,
+    projectId: nodeIdSchema,
+    rules: z.array(approvalPolicyRecordSchema).max(APPROVAL_POLICY_RULES_MAX),
   }),
   /**
    * The browser is subscribed, and will be told the next time something wants

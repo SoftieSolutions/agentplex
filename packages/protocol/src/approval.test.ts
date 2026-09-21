@@ -114,12 +114,47 @@ describe('approvalSuggestionSchema', () => {
 describe('pendingApprovalSchema', () => {
   it('dates the request with the moment it arrived', () => {
     expect(
-      pendingApprovalSchema.safeParse({ ...A_REQUEST, requestedAt: 1_756_000_000_000 }).success,
+      pendingApprovalSchema.safeParse({
+        ...A_REQUEST,
+        requestedAt: 1_756_000_000_000,
+        answeredBy: null,
+      }).success,
     ).toBe(true);
   });
 
   it('refuses an undated one, because a wait with no start is not a wait', () => {
-    expect(pendingApprovalSchema.safeParse(A_REQUEST).success).toBe(false);
+    expect(pendingApprovalSchema.safeParse({ ...A_REQUEST, answeredBy: null }).success).toBe(false);
+  });
+
+  it('says whether a standing rule answered it, on every one', () => {
+    // Present and null rather than absent: "nobody has answered" and "this
+    // build cannot tell you" would otherwise be one value.
+    const dated = { ...A_REQUEST, requestedAt: 1_756_000_000_000 };
+    expect(pendingApprovalSchema.safeParse(dated).success).toBe(false);
+    expect(
+      pendingApprovalSchema.safeParse({
+        ...dated,
+        answeredBy: {
+          project: 'node-project-work',
+          ruleId: 'rule-1',
+          rule: { tool: 'Bash', proposal: 'command: pnpm test' },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('refuses a mark carrying a rule the rule schema refuses', () => {
+    expect(
+      pendingApprovalSchema.safeParse({
+        ...A_REQUEST,
+        requestedAt: 1_756_000_000_000,
+        answeredBy: {
+          project: 'node-project-work',
+          ruleId: 'rule-1',
+          rule: { tool: 'Bash', proposal: '' },
+        },
+      }).success,
+    ).toBe(false);
   });
 });
 

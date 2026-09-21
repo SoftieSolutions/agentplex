@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nodeIdSchema } from './identity.js';
 
 /**
  * An approval: an agent asking a person for something, and what became of it.
@@ -205,27 +206,6 @@ export const approvalRequestSchema = z.object({
 export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
 
 /**
- * A request the hub is holding open, as a client reads it off a session row.
- *
- * The request plus the one thing the hub is entitled to add: when it heard.
- * That is the hub's own clock, deliberately -- a client showing "waiting four
- * minutes" is comparing it with the client's notion of now, and both sides of
- * that comparison are then clocks nobody has to reconcile with a provider's.
- *
- * It rides the session row rather than a broadcast of its own, and the cost is
- * real: every pending approval's proposal is in every client's copy of the
- * machine state, resent whole on every change. What it buys is that a client
- * which has just reconnected, or has never connected before, sees exactly the
- * approvals that are open -- with no second channel to have missed a frame on,
- * and no fetch to be half way through while the state says something else.
- */
-export const pendingApprovalSchema = approvalRequestSchema.extend({
-  /** When the hub was told, by the hub's clock. */
-  requestedAt: z.int().nonnegative(),
-});
-export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
-
-/**
  * One rule of a project's standing policy: a tool, and one whole proposal.
  *
  * ## Exactly which text a rule is matched against
@@ -354,3 +334,109 @@ export function approvalPolicyRuleMatches(
 ): boolean {
   return rule.tool === request.tool && rule.proposal === request.proposal;
 }
+
+/**
+ * The hub's name for one stored rule.
+ *
+ * Minted by the hub that holds the row and meaningless anywhere else, which is
+ * why it is branded like the ids in `identity.ts` rather than left a string: the
+ * frames that name one also name a project, and two opaque strings side by side
+ * are two strings a refactor can swap without anything objecting.
+ *
+ * It is what removal names, and it is the only handle a client ever has on a
+ * rule. Removing by tool and text instead would mean a client restating the
+ * rule it wanted gone, and a client that restated it slightly differently would
+ * delete nothing while appearing to succeed.
+ */
+export const approvalPolicyRuleIdSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .brand<'ApprovalPolicyRuleId'>();
+export type ApprovalPolicyRuleId = z.infer<typeof approvalPolicyRuleIdSchema>;
+
+/**
+ * How many rules one project's policy may hold.
+ *
+ * A bound because the whole policy crosses in one frame: there is no paging
+ * here, on purpose -- a screen showing half a policy is a screen saying a
+ * request will be asked about when it will not. So the list is whole or it is
+ * nothing, and the hub refuses the rule that would make it too big to send
+ * rather than sending a prefix of a policy and calling it one.
+ *
+ * Five hundred is far past what anybody curates by hand and far short of what
+ * would trouble a socket.
+ */
+export const APPROVAL_POLICY_RULES_MAX = 500;
+
+/** One stored rule, with the two things only the hub that holds it knows. */
+export const approvalPolicyRecordSchema = z.object({
+  ruleId: approvalPolicyRuleIdSchema,
+  rule: approvalPolicyRuleSchema,
+  /** When it was written, by the hub's clock. */
+  createdAt: z.int().nonnegative(),
+});
+export type ApprovalPolicyRecord = z.infer<typeof approvalPolicyRecordSchema>;
+
+/**
+ * That a standing rule answered a request, and which rule it was.
+ *
+ * One shape, carried in the two places an approval is reported: on the pending
+ * request in the session row, the moment the rule claims it, and on the receipt
+ * a deciding client is sent. A grant nobody was asked about is the one thing in
+ * this feature that could be silent, so it is named wherever the request is
+ * named, rather than only in a log an operator has to go and read.
+ *
+ * It carries the rule and not merely a flag, because "nobody was asked" is only
+ * answerable if the sentence that did the answering comes with it. A person
+ * looking at a tool call that ran is owed the rule they wrote and the project
+ * they wrote it in -- that is what makes it revocable.
+ */
+export const approvalAnsweredBySchema = z.object({
+  /** The project whose policy answered. A rule belongs to one and only one. */
+  project: nodeIdSchema,
+  ruleId: approvalPolicyRuleIdSchema,
+  /** The rule as it stood when it matched, so a later edit cannot rewrite it. */
+  rule: approvalPolicyRuleSchema,
+});
+export type ApprovalAnsweredBy = z.infer<typeof approvalAnsweredBySchema>;
+
+/**
+ * A request the hub is holding open, as a client reads it off a session row.
+ *
+ * The request plus the one thing the hub is entitled to add: when it heard.
+ * That is the hub's own clock, deliberately -- a client showing "waiting four
+ * minutes" is comparing it with the client's notion of now, and both sides of
+ * that comparison are then clocks nobody has to reconcile with a provider's.
+ *
+ * It rides the session row rather than a broadcast of its own, and the cost is
+ * real: every pending approval's proposal is in every client's copy of the
+ * machine state, resent whole on every change. What it buys is that a client
+ * which has just reconnected, or has never connected before, sees exactly the
+ * approvals that are open -- with no second channel to have missed a frame on,
+ * and no fetch to be half way through while the state says something else.
+ */
+export const pendingApprovalSchema = approvalRequestSchema.extend({
+  /** When the hub was told, by the hub's clock. */
+  requestedAt: z.int().nonnegative(),
+  /**
+   * The standing rule that has already answered this, or `null` for one still
+   * waiting on a person.
+   *
+   * Present and null on every pending approval rather than absent, for the
+   * reason the `approvals` list itself is present and empty: an absent field
+   * would make "nobody has answered" and "this build cannot tell you" one value
+   * no client could tell apart.
+   *
+   * This is how every client learns that a grant was automatic, and it is here
+   * rather than on a broadcast of its own because the row is already where each
+   * of them reads what is open. A policy grant is set the moment the rule takes
+   * the claim and before the decision leaves this hub, so the request is drawn
+   * as answered-by-a-rule for as long as the machine holding the hook takes to
+   * confirm, and then leaves the row like any other. The client that asked is
+   * also told on its own receipt -- see `approval-decided` -- because a person
+   * who tapped and lost to a rule is owed the rule rather than a bare word.
+   */
+  answeredBy: approvalAnsweredBySchema.nullable(),
+});
+export type PendingApproval = z.infer<typeof pendingApprovalSchema>;

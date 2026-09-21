@@ -76,6 +76,7 @@ const A_PENDING_APPROVAL = {
   proposal: 'command: prisma migrate deploy --schema ./db',
   suggestions: [],
   requestedAt: 1_100,
+  answeredBy: null,
 };
 
 describe('serverViewSchema', () => {
