@@ -140,6 +140,11 @@ function shapeOf(query: CatalogueQuery): string {
     query.filter.status ?? null,
     query.filter.project ?? null,
     query.filter.search ?? null,
+    // Sorted, because the selection is a set and the order it was written in
+    // is not part of the question. A client that listed the same kinds in
+    // another order has not moved a row, and refusing its cursor would be
+    // refusing something that is still exactly true.
+    query.filter.kinds === undefined ? null : [...query.filter.kinds].sort(),
   ]);
 }
 
@@ -437,6 +442,10 @@ export function sessionProjectsIn(nodes: readonly TreeNode[]): ReadonlyMap<strin
  */
 function passes(item: Resolved, query: CatalogueQuery): boolean {
   const { filter } = query;
+  // Compared against the node's kind as the row spells it, never against a set
+  // of kinds this build knows: a kind nothing has seeded matches nothing, which
+  // is what lets a client ask for one before the migration that creates it.
+  if (filter.kinds !== undefined && !filter.kinds.includes(item.node.kind)) return false;
   if (filter.server !== undefined && item.server !== filter.server) return false;
   if (filter.provider !== undefined && item.session?.descriptor.provider !== filter.provider) {
     return false;
@@ -481,18 +490,29 @@ function matchOf(item: Resolved, search: string): CatalogueMatchField | null {
 /**
  * The list view: session and doc rows, flat, sorted, and gathered into groups.
  *
- * Containers do not appear as rows here. That is what "flat" means: a folder is
- * an arrangement, and the list view is for the question the arrangement is not
- * the answer to. Where the grouping calls for a heading, the heading is
- * described on every item under it rather than sent as a row -- see
- * `catalogueGroupSchema` for why a header row would be a shape a page boundary
- * could split.
+ * Containers do not appear as rows here, unless the query named their kinds.
+ * That is what "flat" means: a folder is an arrangement, and the list view is
+ * for the question the arrangement is not the answer to. But it is also what
+ * made a project unfindable -- `node_kinds` marks `folder` and `project`
+ * containers alike -- so `filter.kinds` lifts the rule for exactly the kinds it
+ * names and leaves it standing for everything else, which is what keeps a
+ * client that sends no selection answered as it always was. The selection
+ * itself is applied by `passes`, with the rest of the filter.
+ *
+ * Nothing else changes for a container that appears here: it has no session
+ * row, so it sorts by name and by nothing else, and `matchOf` can only hit its
+ * name. Where the grouping calls for a heading, the heading is described on
+ * every item under it rather than sent as a row -- see `catalogueGroupSchema`
+ * for why a header row would be a shape a page boundary could split.
  */
 function listOrder(
   resolved: ReadonlyMap<NodeId, Resolved>,
   query: CatalogueQuery,
 ): readonly Resolved[] {
-  const leaves = [...resolved.values()].filter((item) => !item.container && passes(item, query));
+  const namesKinds = query.filter.kinds !== undefined;
+  const leaves = [...resolved.values()].filter(
+    (item) => (namesKinds || !item.container) && passes(item, query),
+  );
   const compare = comparatorFor(query.sort);
   if (query.groupBy === 'none') return [...leaves].sort(compare);
 
