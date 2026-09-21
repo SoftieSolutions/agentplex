@@ -6,7 +6,7 @@ import {
   type SessionUsage,
 } from '@agentplex/protocol';
 import { z } from 'zod';
-import type { TranscriptSignal } from './provider-adapter.js';
+import type { SessionTranscript, TranscriptSignal } from './provider-adapter.js';
 
 /**
  * The parser for one codex rollout.
@@ -362,6 +362,65 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
       activity,
     },
   };
+}
+
+/**
+ * The same rollout, read as every command it records rather than as the last
+ * one.
+ *
+ * A second pass over the file rather than a field on `CodexRollout`, for the
+ * reason `claudeTranscriptActivities` is one: discovery runs the parser above
+ * over every session in a store every couple of seconds and wants one line out
+ * of each, while this runs once for one session because somebody opened it --
+ * and it is handed the *tail* of the file, so a parse that also read the
+ * `session_meta` or totalled the tokens would be reading a suffix and
+ * reporting it as the whole.
+ *
+ * The derivation is `commandActivity` below, applied to every completed item
+ * instead of only to the latest. The same five variants it cannot reach today
+ * are unreachable here and for the same reasons, which that function lists.
+ *
+ * Unlike `parseCodexRollout` this never refuses. A file with no turn in it
+ * yields no activities, and a reader of a session's activities would act no
+ * differently on "this file is damaged" than on "it has done nothing yet".
+ */
+export function codexRolloutActivities(contents: string, limit: number): SessionTranscript {
+  const activities: Activity[] = [];
+  let dropped = false;
+
+  for (const raw of contents.split('\n')) {
+    if (raw.trim() === '') continue;
+
+    let entry: unknown;
+    try {
+      entry = JSON.parse(raw);
+    } catch {
+      // The first line of a tail read is routinely half a line, and the last
+      // line of a live rollout is routinely a partial write. Both cost
+      // themselves, as they do in the parser above.
+      continue;
+    }
+
+    const line = lineSchema.safeParse(entry);
+    if (!line.success || line.data.type !== 'event_msg') continue;
+
+    const completed = itemCompletedSchema.safeParse(line.data.payload);
+    if (!completed.success) continue;
+
+    const activity = commandActivity(completed.data.item);
+    if (activity === null) continue;
+
+    activities.push(activity);
+    // Bounded as it goes rather than sliced at the end, so a session of ten
+    // thousand commands is never ten thousand objects in memory on the machine
+    // that has the file.
+    if (activities.length > limit) {
+      activities.shift();
+      dropped = true;
+    }
+  }
+
+  return { activities, olderExist: dropped };
 }
 
 /**

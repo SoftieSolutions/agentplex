@@ -397,3 +397,71 @@ describe('createCodexAdapter', () => {
     expect(adapterOver({ files: {} }).defaultStoreDirectory).toBe('.codex');
   });
 });
+
+describe('createCodexAdapter.transcript', () => {
+  const session = sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: PENDING_ID });
+
+  it('reads one session’s rollout out of the date partition that holds it', async () => {
+    const adapter = adapterOver({
+      files: { [COMPLETED_PATH]: COMPLETED_TURN, [PENDING_PATH]: PENDING_TOOL_CALL },
+    });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+    expect(read).toEqual({
+      ok: true,
+      transcript: {
+        activities: [{ kind: 'command', text: "printf 'hello' > probe.txt", exitStatus: 1 }],
+        olderExist: false,
+      },
+    });
+  });
+
+  it('refuses, in words, a session no partition holds', async () => {
+    const adapter = adapterOver({ files: { [COMPLETED_PATH]: COMPLETED_TURN } });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+    expect(read).toEqual({
+      ok: false,
+      problem: 'this store holds no codex transcript for that session',
+    });
+  });
+
+  it('refuses, in words, a rollout that is there and will not be read', async () => {
+    const adapter = adapterOver({
+      files: { [PENDING_PATH]: PENDING_TOOL_CALL },
+      unreadable: [PENDING_PATH],
+    });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+    expect(read.ok).toBe(false);
+    expect(!read.ok && read.problem).toContain('cannot read rollout');
+  });
+
+  it('answers only what was asked for, and says there is more behind it', async () => {
+    const adapter = adapterOver({ files: { [PENDING_PATH]: PENDING_TOOL_CALL } });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 0 });
+
+    expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: true } });
+  });
+
+  it('does not answer with a rollout whose name merely contains the id', async () => {
+    // The match is on the whole trailing `-<uuid>.jsonl`, which is exact even
+    // though splitting the name into a timestamp and an id is not: the
+    // ambiguity codex's naming creates is in the timestamp half, and a file
+    // that ends in some other session's id is some other session.
+    const adapter = adapterOver({
+      files: {
+        [`${SESSIONS}/2026/09/11/rollout-2026-09-11T23-37-24-${PENDING_ID}-old.jsonl`]:
+          PENDING_TOOL_CALL,
+      },
+    });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+    expect(read.ok).toBe(false);
+  });
+});

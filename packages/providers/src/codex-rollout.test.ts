@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ACTIVITY_TEXT_MAX_CHARS } from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
-import { parseCodexRollout } from './codex-rollout.js';
+import { codexRolloutActivities, parseCodexRollout } from './codex-rollout.js';
 
 /**
  * The fixtures are captured codex output, not shapes written from memory.
@@ -443,6 +443,91 @@ describe('parseCodexRollout', () => {
       ok: true,
       rollout: { turns: 2, signal: 'progressing' },
     });
+  });
+});
+
+describe('codexRolloutActivities', () => {
+  it('reads every command the captured rollout records, oldest first', () => {
+    // One `CommandExecution` in `codex-pending-tool-call.jsonl`, with codex's
+    // own reading of the argv and the status it ended on. The argv itself is
+    // redacted and is never read; `parsed_cmd` is not content and the capture
+    // leaves it verbatim.
+    const read = codexRolloutActivities(PENDING_TOOL_CALL, 10);
+
+    expect(read).toEqual({
+      activities: [{ kind: 'command', text: "printf 'hello' > probe.txt", exitStatus: 1 }],
+      olderExist: false,
+    });
+  });
+
+  it('keeps the newest when there are more commands than the caller asked for', () => {
+    // The request carries the bound, and a reader wants the end of the
+    // session. Dropping from the front is what makes the answer the tail.
+    const captured = JSON.parse(lineOf(PENDING_TOOL_CALL, 'CommandExecution')) as {
+      payload: { item: { parsed_cmd: { cmd: string }[] } };
+    };
+    const ran = (cmd: string): string =>
+      JSON.stringify({
+        ...captured,
+        payload: {
+          ...captured.payload,
+          item: { ...captured.payload.item, parsed_cmd: [{ type: 'unknown', cmd }] },
+        },
+      });
+    const rollout = `${PENDING_TOOL_CALL}${ran('pnpm lint')}\n${ran('pnpm test')}\n`;
+
+    const read = codexRolloutActivities(rollout, 2);
+
+    expect(read).toEqual({
+      activities: [
+        { kind: 'command', text: 'pnpm lint', exitStatus: 1 },
+        { kind: 'command', text: 'pnpm test', exitStatus: 1 },
+      ],
+      olderExist: true,
+    });
+  });
+
+  it('answers nothing for a rollout whose session ran no command', () => {
+    // `codex-completed-turn.jsonl` is a question answered in words. Its only
+    // completed items are a `UserMessage` and an `AgentMessage`, both redacted,
+    // so there is nothing this parser can honestly report.
+    const read = codexRolloutActivities(COMPLETED_TURN, 10);
+
+    expect(read).toEqual({ activities: [], olderExist: false });
+  });
+
+  it('costs one unusable command itself and keeps the rest of the rollout', () => {
+    // An unreadable item in a listing costs itself, not the listing. A command
+    // that is nothing but characters a screen cannot draw is refused by the
+    // activity schema; the command before it is still what the session ran.
+    const captured = JSON.parse(lineOf(PENDING_TOOL_CALL, 'CommandExecution')) as {
+      payload: { item: Record<string, unknown> };
+    };
+    const undrawable = JSON.stringify({
+      ...captured,
+      payload: {
+        ...captured.payload,
+        item: { ...captured.payload.item, parsed_cmd: [{ type: 'unknown', cmd: '\u0007\u0007' }] },
+      },
+    });
+
+    const read = codexRolloutActivities(`${PENDING_TOOL_CALL}${undrawable}\n`, 10);
+
+    expect(read).toEqual({
+      activities: [{ kind: 'command', text: "printf 'hello' > probe.txt", exitStatus: 1 }],
+      olderExist: false,
+    });
+  });
+
+  it('never puts the capture’s redaction marker into a transcript', () => {
+    // Structural rather than a string comparison: the only field read off an
+    // item is `parsed_cmd[].cmd`, which the capture leaves verbatim, and every
+    // payload it replaces is a field this parser does not read.
+    for (const captured of [COMPLETED_TURN, PENDING_TOOL_CALL, ABORTED_TURN, NO_TURNS]) {
+      const read = codexRolloutActivities(captured, 200);
+
+      expect(JSON.stringify(read.activities).includes('REDACTED')).toBe(false);
+    }
   });
 });
 

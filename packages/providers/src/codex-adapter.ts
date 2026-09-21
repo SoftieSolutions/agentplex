@@ -2,17 +2,20 @@ import { join } from 'node:path';
 import { sessionIdSchema, type SessionStatus, type StoreDescriptor } from '@agentplex/protocol';
 import { CODEX_DEFAULT_STORE_DIRECTORY, planCodexLaunch } from './codex-launch.js';
 import { createCodexProvisioning } from './codex-provisioning.js';
-import { parseCodexRollout } from './codex-rollout.js';
+import { codexRolloutActivities, parseCodexRollout } from './codex-rollout.js';
 import { CODEX_SESSION_INDEX_FILE, parseCodexSessionIndex } from './codex-session-index.js';
-import type {
-  DiscoveredSession,
-  DiscoveryProblem,
-  Launch,
-  ProviderAdapter,
-  ProviderDiscovery,
-  ResumeRequest,
-  SpawnRequest,
-  StatusObservation,
+import {
+  TRANSCRIPT_TAIL_MAX_BYTES,
+  type DiscoveredSession,
+  type DiscoveryProblem,
+  type Launch,
+  type ProviderAdapter,
+  type ProviderDiscovery,
+  type ResumeRequest,
+  type SpawnRequest,
+  type StatusObservation,
+  type TranscriptRead,
+  type TranscriptRequest,
 } from './provider-adapter.js';
 import type { ProviderFiles } from './provider-files.js';
 
@@ -116,6 +119,15 @@ export function createCodexAdapter({ files }: CodexAdapterDependencies): Provide
 
     status(observation: StatusObservation): SessionStatus {
       return codexStatus(observation);
+    },
+
+    async transcript(request: TranscriptRequest): Promise<TranscriptRead> {
+      return await readSessionRollout(
+        join(request.store.path, CODEX_SESSIONS_DIRECTORY),
+        request.session.sessionId,
+        request.limit,
+        files,
+      );
     },
 
     // Provisioning holds no store and no filesystem, so it is built once here
@@ -256,6 +268,94 @@ async function readRollout(
     // their fields the capture redacts.
     activity: parsed.rollout.activity,
   });
+}
+
+/**
+ * One session's rollout, found and read as the commands it records.
+ *
+ * Finding it walks the same date partitions discovery walks, and matches on the
+ * file name -- which is the one place this file says something the note at the
+ * top of it appears to contradict, so it is worth being precise. The name
+ * cannot be *split* into a timestamp and an id, because codex spells the
+ * timestamp with the same `-` the uuid uses and there is no separator to count
+ * on. It can be *matched*: a name that ends in `-<uuid>.jsonl` ends in that
+ * uuid, whatever the rest of it is, and a uuid belongs to one session. So
+ * discovery still reads the id out of `session_meta`, where codex states it,
+ * and this asks a narrower question the name can answer.
+ *
+ * That matters because of the second half. The read is `readFileTail`, bounded
+ * to `TRANSCRIPT_TAIL_MAX_BYTES` off the end of the file, since a rollout of a
+ * long session is several megabytes and this seam's `readFile` has no cap --
+ * and `session_meta` is the *first* line of a rollout, so a tail read of a
+ * large file does not contain it. Confirming the id out of the file is
+ * therefore not available here at all, and a search that depended on it would
+ * have to read whole files to find one.
+ *
+ * Two refusals, the same two the Claude adapter makes and for the same reason:
+ * a session no partition holds is deleted or never here, and a rollout that
+ * will not be read is a permission to go and fix.
+ */
+async function readSessionRollout(
+  sessions: string,
+  sessionId: string,
+  limit: number,
+  files: ProviderFiles,
+): Promise<TranscriptRead> {
+  const found = await findRollout(
+    sessions,
+    CODEX_PARTITION_DEPTH,
+    `-${sessionId}${ROLLOUT_SUFFIX}`,
+    files,
+  );
+  if (found === null) {
+    return { ok: false, problem: 'this store holds no codex transcript for that session' };
+  }
+
+  const read = await files.readFileTail(found, TRANSCRIPT_TAIL_MAX_BYTES);
+  if (read.kind === 'failed') return { ok: false, problem: `cannot read rollout: ${read.reason}` };
+  // Deleted between the listing and the read. The session is gone, which is
+  // the same answer as never having been here.
+  if (read.kind === 'missing') {
+    return { ok: false, problem: 'this store holds no codex transcript for that session' };
+  }
+
+  const parsed = codexRolloutActivities(read.contents, limit);
+  return {
+    ok: true,
+    // Either bound can be the reason there is more behind this -- the count
+    // asked for, or the window the file was read through -- and a reader acts
+    // the same way on both.
+    transcript: { ...parsed, olderExist: parsed.olderExist || read.truncated },
+  };
+}
+
+/** The first rollout under this directory whose name ends as asked, or `null`. */
+async function findRollout(
+  directory: string,
+  depth: number,
+  suffix: string,
+  files: ProviderFiles,
+): Promise<string | null> {
+  const listing = await files.listDirectory(directory);
+  // Absent and unreadable are both "not here" for one session's sake. A
+  // partition that will not be listed costs the search that partition, and the
+  // rollout may well sit in the next one.
+  if (listing.kind !== 'read') return null;
+
+  for (const entry of listing.entries) {
+    const path = join(directory, entry.name);
+
+    if (entry.kind === 'directory') {
+      if (depth <= 0) continue;
+      const deeper = await findRollout(path, depth - 1, suffix, files);
+      if (deeper !== null) return deeper;
+      continue;
+    }
+
+    if (entry.kind === 'file' && entry.name.endsWith(suffix)) return path;
+  }
+
+  return null;
 }
 
 /**

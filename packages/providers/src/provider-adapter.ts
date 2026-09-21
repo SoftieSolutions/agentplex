@@ -93,6 +93,36 @@ export interface ProviderAdapter {
   status(observation: StatusObservation): SessionStatus;
 
   /**
+   * One session's transcript, read as the activities it records.
+   *
+   * Required and explicit for every adapter, like `usage`, `model` and
+   * `activity` on a discovered session, and for the same reason: only the
+   * adapter can read a provider's own record of its work, so it is the one
+   * place that has to answer out loud. An adapter that inherited a default
+   * would be a provider silently reporting that its sessions do nothing, which
+   * is indistinguishable from a quiet session.
+   *
+   * It reads *one* session and not a store, which is the whole difference
+   * between this and `discover`. Discovery walks every transcript in a store
+   * every couple of seconds and reduces each to one line; this is asked for by
+   * somebody looking at one session, and it answers with the tail of what that
+   * session did.
+   *
+   * Two bounds, and both are the adapter's to apply. The count is on the
+   * request and is capped by the protocol's own `TRANSCRIPT_ACTIVITIES_MAX`,
+   * so the answer fits the socket by construction. The bytes are bounded by
+   * `readFileTail` on the `ProviderFiles` seam: a real transcript is routinely
+   * several megabytes, and reading one whole to show the last twenty lines of
+   * it would put the file in memory on the machine that can least afford it.
+   * An adapter that reads a whole file here is a bug, not a style.
+   *
+   * Never throws for a transcript it cannot read: an unreadable session is a
+   * refusal in words, and a single activity that will not parse costs itself
+   * rather than the listing around it.
+   */
+  transcript(request: TranscriptRequest): Promise<TranscriptRead>;
+
+  /**
    * How this provider gets onto a machine, and how to tell what is already on
    * one.
    *
@@ -223,6 +253,88 @@ export interface DiscoveredSession {
    * to.
    */
   readonly activity: Activity | null;
+}
+
+/**
+ * How much of a transcript file an adapter reads to answer a transcript
+ * request.
+ *
+ * Two megabytes, read off the end. It is a bound on memory rather than on
+ * meaning: the answer is bounded by the count on the request, and this is what
+ * stops a multi-megabyte file becoming a multi-megabyte string on the machine
+ * that has it. A transcript line is a JSON object of a turn or an event, a few
+ * hundred bytes to a few kilobytes, so this window holds hundreds to thousands
+ * of them -- comfortably more than `TRANSCRIPT_ACTIVITIES_MAX` activities'
+ * worth in any session anyone has captured.
+ *
+ * A window that falls short is not a lie: `SessionTranscript.olderExist` is
+ * true whenever the read was cut, so a screen says there is more behind it
+ * rather than presenting a tail as the whole. That is why this is a tail read
+ * and not a refusal above a size, which was the other way to bound it: a
+ * refusal would go off on exactly the long-running sessions somebody opens the
+ * transcript of.
+ */
+export const TRANSCRIPT_TAIL_MAX_BYTES = 2 * 1024 * 1024;
+
+export interface TranscriptRequest {
+  readonly store: StoreDescriptor;
+  /**
+   * Which session, in the pair everything above the adapter deals in. The
+   * store half is carried on `store` above; this is the provider's own id, and
+   * the adapter is what knows where a file with that name sits in its own
+   * layout.
+   */
+  readonly session: SessionRef;
+  /**
+   * How many activities to answer with, at most, counting from the newest.
+   *
+   * On the request rather than a constant of the adapter, because the party
+   * that has to fit the answer in a frame is the one that asked. The adapter
+   * does not police it against the protocol's ceiling -- that is done where
+   * the number comes off the wire, by the schema that parses it -- but it does
+   * honour it exactly: an adapter that answered with more than it was asked
+   * for would be an adapter that can overrun a frame nobody else sized.
+   */
+  readonly limit: number;
+}
+
+/**
+ * The tail of one session's work, or the reason there is none.
+ *
+ * A refusal instead of a throw, for the reason `Launch` is one: "this
+ * transcript cannot be read" is an answer somebody has to be shown, in words,
+ * next to the session it is about.
+ */
+export type TranscriptRead =
+  | { readonly ok: true; readonly transcript: SessionTranscript }
+  | { readonly ok: false; readonly problem: string };
+
+export interface SessionTranscript {
+  /**
+   * What the session did, oldest first, at most `limit` of them.
+   *
+   * Oldest first because that is the order it happened in and the order a
+   * screen draws it in, and reversing at the edge would put the one place the
+   * order is decided furthest from the one place it is known.
+   *
+   * Already parsed by the protocol's own schema by the time it is here, which
+   * is what keeps the vocabulary read in exactly one place. An activity the
+   * schema refused is dropped: it costs itself, and the session keeps the rest
+   * of its transcript.
+   */
+  readonly activities: readonly Activity[];
+  /**
+   * Whether the session did more than this before the oldest of these.
+   *
+   * Reported rather than left to be inferred from a full page, because the two
+   * bounds that can produce it are different and neither is visible to the
+   * caller: the count it asked for, and the bytes the adapter was willing to
+   * read off the end of the file. A screen that said "showing the last 200"
+   * when the file held exactly 200 would be claiming something it cannot know,
+   * and one that said nothing when it had cut a transcript in half would be
+   * presenting a tail as the whole.
+   */
+  readonly olderExist: boolean;
 }
 
 export interface DiscoveryProblem {

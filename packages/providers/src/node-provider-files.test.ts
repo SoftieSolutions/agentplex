@@ -94,6 +94,58 @@ describe('nodeProviderFiles.readFile', () => {
   });
 });
 
+describe('nodeProviderFiles.readFileTail', () => {
+  it('reads a file that fits the cap whole, and says nothing was left behind', async () => {
+    await writeFile(join(root, 'session.jsonl'), '{"a":1}\n{"b":2}\n');
+
+    const read = await nodeProviderFiles.readFileTail(join(root, 'session.jsonl'), 1024);
+
+    expect(read).toEqual({ kind: 'read', contents: '{"a":1}\n{"b":2}\n', truncated: false });
+  });
+
+  it('reads only the end of a file past the cap, and drops the line it landed inside', async () => {
+    // The claim the whole method exists for: a transcript is megabytes, the
+    // tail is what a reader wants, and the first line of a byte-offset read is
+    // half a line that no parser should be handed.
+    const lines = Array.from({ length: 200 }, (_, index) => `{"line":${index}}`);
+    await writeFile(join(root, 'big.jsonl'), `${lines.join('\n')}\n`);
+
+    const read = await nodeProviderFiles.readFileTail(join(root, 'big.jsonl'), 64);
+
+    expect(read.kind).toBe('read');
+    if (read.kind !== 'read') return;
+    expect(read.truncated).toBe(true);
+    expect(read.contents.startsWith('{')).toBe(true);
+    expect(read.contents.endsWith('{"line":199}\n')).toBe(true);
+    expect(Buffer.byteLength(read.contents, 'utf8')).toBeLessThanOrEqual(64);
+  });
+
+  it('reports a file whose tail holds no line break as truncated and empty', async () => {
+    // One enormous line and a cap inside it. There is no whole line in the
+    // window, and half a line is not a line: the honest answer is that nothing
+    // could be read and that there is more behind it.
+    await writeFile(join(root, 'one-line.jsonl'), `{"padding":"${'x'.repeat(500)}"}`);
+
+    const read = await nodeProviderFiles.readFileTail(join(root, 'one-line.jsonl'), 64);
+
+    expect(read).toEqual({ kind: 'read', contents: '', truncated: true });
+  });
+
+  it('calls a file that is gone missing rather than failing over it', async () => {
+    const read = await nodeProviderFiles.readFileTail(join(root, 'gone.jsonl'), 1024);
+
+    expect(read).toEqual({ kind: 'missing' });
+  });
+
+  it('fails, rather than reporting nothing, when the path is a directory', async () => {
+    await mkdir(join(root, 'session'));
+
+    const read = await nodeProviderFiles.readFileTail(join(root, 'session'), 1024);
+
+    expect(read.kind).toBe('failed');
+  });
+});
+
 function byName(a: { name: string }, b: { name: string }): number {
   return a.name.localeCompare(b.name);
 }

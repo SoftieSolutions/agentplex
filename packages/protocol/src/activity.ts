@@ -57,6 +57,33 @@ export const ACTIVITY_TEXT_MAX_CHARS = 200;
 export const ACTIVITY_PATH_MAX_CHARS = 200;
 
 /**
+ * How many activities one answer about one session's transcript may carry.
+ *
+ * The bound exists so the answer fits the socket by construction rather than
+ * by hope. The message socket drops a connection over a frame past 1,000,000
+ * bytes, and a transcript on disk is routinely several megabytes, so the
+ * request carries a count and this is its ceiling.
+ *
+ * The arithmetic, stated so it can be checked rather than trusted. The largest
+ * variant of the union below is a `command`, and the widest thing in it is one
+ * display string of `ACTIVITY_TEXT_MAX_CHARS` code units. A code unit costs at
+ * most six bytes inside a JSON string -- the `\uXXXX` escape, which is the
+ * worst case for anything, and three bytes for the worst of the Basic
+ * Multilingual Plane encoded outright. So a string is at most 1,200 bytes, and
+ * the keys, the braces, the quotes, the comma and an `exitStatus` of three
+ * digits come to well under another hundred: call one activity 1,300 bytes.
+ * Two hundred of them is 260,000 bytes, and the envelope around them -- a type,
+ * a reply id, a boolean -- is a hundred more. A maximal answer is therefore
+ * around a quarter of the socket's limit, which leaves room for the count to be
+ * argued upwards later without anyone having to redo this sum in a hurry.
+ *
+ * Two hundred is also about what a person scrolls through: the session screen
+ * shows the tail of a conversation, says out loud when there is more behind it,
+ * and does not pretend to be the transcript file.
+ */
+export const TRANSCRIPT_ACTIVITIES_MAX = 200;
+
+/**
  * Whitespace a transcript records inside one logical line: the tab, and the
  * line and page breaks. These become a single space rather than vanishing, so
  * `editing\tsrc/a.ts` does not collapse into one word.

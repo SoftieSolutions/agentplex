@@ -13,16 +13,19 @@ import {
   resolveWithRegistry,
   type ClaudeRegistry,
 } from './claude-registry.js';
-import { parseClaudeTranscript } from './claude-transcript.js';
-import type {
-  DiscoveredSession,
-  DiscoveryProblem,
-  Launch,
-  ProviderAdapter,
-  ProviderDiscovery,
-  ResumeRequest,
-  SpawnRequest,
-  StatusObservation,
+import { claudeTranscriptActivities, parseClaudeTranscript } from './claude-transcript.js';
+import {
+  TRANSCRIPT_TAIL_MAX_BYTES,
+  type DiscoveredSession,
+  type DiscoveryProblem,
+  type Launch,
+  type ProviderAdapter,
+  type ProviderDiscovery,
+  type ResumeRequest,
+  type SpawnRequest,
+  type StatusObservation,
+  type TranscriptRead,
+  type TranscriptRequest,
 } from './provider-adapter.js';
 import type { ProviderFiles } from './provider-files.js';
 
@@ -119,6 +122,15 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
 
     status(observation: StatusObservation): SessionStatus {
       return claudeStatus(observation);
+    },
+
+    async transcript(request: TranscriptRequest): Promise<TranscriptRead> {
+      return await readSessionTranscript(
+        join(request.store.path, CLAUDE_PROJECTS_DIRECTORY),
+        request.session.sessionId,
+        request.limit,
+        files,
+      );
     },
 
     // Provisioning holds no store and no filesystem, so it is built once here
@@ -226,6 +238,77 @@ async function readProject(
     // every session that was opened and abandoned, and a store that has been
     // used for a while has plenty.
   }
+}
+
+/**
+ * One session's transcript, found and read as the activities it records.
+ *
+ * Finding it is a listing of `projects/` and a listing of each project
+ * directory, looking for a file named after the session. That is the same walk
+ * discovery does, minus the reads: Claude Code's per-project directory name is
+ * a lossy encoding of a cwd -- `/`, `.` and `_` all become `-` -- so there is
+ * no directory to compute from a session id and the only way to the file is to
+ * look for it. Files only, and no recursion, exactly as discovery does it: a
+ * session that ran subagents has a *directory* named after it holding their
+ * transcripts, and a subagent is part of a session rather than another one.
+ *
+ * Reading it is bounded, and that is the part worth stating. A real transcript
+ * is routinely several megabytes -- one JSON object per content block, appended
+ * for the life of the session -- and `readFile` on this seam has no cap at all.
+ * So the read is `readFileTail`, whole lines off the end of the file, and the
+ * answer says out loud when the window cut something off.
+ *
+ * Two refusals, and they are different things for a person to do. A session no
+ * project directory holds is one that was deleted, or one this store never had;
+ * a transcript that is there and will not be read is a permission or a mount to
+ * go and fix.
+ */
+async function readSessionTranscript(
+  projects: string,
+  sessionId: string,
+  limit: number,
+  files: ProviderFiles,
+): Promise<TranscriptRead> {
+  const listing = await files.listDirectory(projects);
+  if (listing.kind === 'failed') {
+    return { ok: false, problem: `cannot read this store's transcripts: ${listing.reason}` };
+  }
+  // A store no Claude Code has touched has no `projects/`, which is the same
+  // answer as a session it does not hold: there is no transcript here.
+  const projectDirectories = listing.kind === 'missing' ? [] : listing.entries;
+
+  const wanted = `${sessionId}${TRANSCRIPT_SUFFIX}`;
+  for (const entry of projectDirectories) {
+    if (entry.kind !== 'directory') continue;
+
+    const project = join(projects, entry.name);
+    const inside = await files.listDirectory(project);
+    // Gone, or unreadable, between listing the parent and reading it. Neither
+    // costs the search: the session may well be in the next directory, and a
+    // problem here would refuse a transcript that is perfectly readable.
+    if (inside.kind !== 'read') continue;
+    if (!inside.entries.some((file) => file.kind === 'file' && file.name === wanted)) continue;
+
+    const path = join(project, wanted);
+    const read = await files.readFileTail(path, TRANSCRIPT_TAIL_MAX_BYTES);
+    if (read.kind === 'failed') {
+      return { ok: false, problem: `cannot read transcript: ${read.reason}` };
+    }
+    // Deleted in the moment between the listing and the read. The session is
+    // gone, which is the same answer as never having been here.
+    if (read.kind === 'missing') break;
+
+    const parsed = claudeTranscriptActivities(read.contents, limit);
+    return {
+      ok: true,
+      // Either bound can be the reason there is more behind this: the count the
+      // caller asked for, or the window the file was read through. A reader acts
+      // the same way on both, so they are one boolean.
+      transcript: { ...parsed, olderExist: parsed.olderExist || read.truncated },
+    };
+  }
+
+  return { ok: false, problem: 'this store holds no claude transcript for that session' };
 }
 
 /**
