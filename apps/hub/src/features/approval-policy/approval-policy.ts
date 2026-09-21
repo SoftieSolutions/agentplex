@@ -45,6 +45,20 @@ import type { Database } from '../../db/database.js';
  * that work, and inventing something would be the over-claim this whole feature
  * has to avoid.
  *
+ * ## Who may edit a policy
+ *
+ * This hub has one shared client token and no notion of a user, so any client
+ * holding it can read and edit any project's policy, and a rule is scoped to
+ * the project it is written in rather than to whoever wrote it. The records
+ * carry no author because there is none to carry.
+ *
+ * It is stated here because this is the one table in the hub whose rows answer
+ * on a person's behalf: a second device on the same token can write a standing
+ * grant, and nothing afterwards can tell that grant from one the person reading
+ * the screen made. Giving a rule an owner would need identities the hub does
+ * not have, and an author column nobody could verify would put a name on a
+ * decision this hub cannot attribute.
+ *
  * ## Everything that is not a match is a question
  *
  * `grantFor` returns a grant or `null`, and `null` is the answer to all of: no
