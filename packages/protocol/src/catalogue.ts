@@ -98,6 +98,16 @@ export type CatalogueSort = z.infer<typeof catalogueSortSchema>;
 export const CATALOGUE_SEARCH_MAX_CHARS = 200;
 
 /**
+ * How many kinds one query may name.
+ *
+ * A bound for the reason the search has one: a list of ids on a frame is
+ * something a bug can fill. Sixteen is more kinds than `node_kinds` has ever
+ * held and more than any client draws headings for, so a query that runs into
+ * it is a query that went wrong rather than one somebody wrote.
+ */
+export const CATALOGUE_FILTER_MAX_KINDS = 16;
+
+/**
  * What to leave out, as a set of constraints.
  *
  * Every field is optional, and this is the one schema here where optional is
@@ -124,6 +134,35 @@ export const catalogueFilterSchema = z.object({
   project: nodeIdSchema.optional(),
   /** Case-insensitive, over the fields `CatalogueItem.matched` names. */
   search: z.string().max(CATALOGUE_SEARCH_MAX_CHARS).optional(),
+  /**
+   * Only nodes of these kinds -- and, in the list view, the one thing that lets
+   * a container be a row at all.
+   *
+   * The list view drops containers: flat is what it means, and a folder is an
+   * arrangement rather than a thing somebody is looking for. That rule is also
+   * why a project could never be a search result, because `node_kinds` marks
+   * `folder` and `project` containers alike. Absent, that rule stands unchanged
+   * and a client that sends no selection gets the leaves it got before this
+   * field existed. Present, the flat answer is exactly the kinds named, whether
+   * or not they contain: a palette that draws a heading per kind asks for the
+   * kinds it draws.
+   *
+   * A selection of kinds rather than a boolean `includeContainers`, and the
+   * argument is `nodeKindSchema`: a kind is a row in `node_kinds` and its id is
+   * opaque, so a `graph` kind a later migration seeds is askable here with no
+   * protocol change and no client release -- and a kind nothing has seeded
+   * simply matches nothing, which is what lets a client ask for it early. The
+   * boolean would have handed a palette every folder on the way to a hit for it
+   * to drop client-side, spending page slots and making `total` a count of rows
+   * the user cannot see.
+   *
+   * It constrains an item on its own account, like every other field here, so
+   * in the tree view the ancestor rule keeps containers on the way to a hit
+   * exactly as it does for `search`. An empty list is refused rather than read
+   * as either "everything" or "nothing": filtering by nothing is sending no
+   * field, so an empty one is a client that computed its selection wrong.
+   */
+  kinds: z.array(nodeKindSchema).min(1).max(CATALOGUE_FILTER_MAX_KINDS).optional(),
 });
 export type CatalogueFilter = z.infer<typeof catalogueFilterSchema>;
 

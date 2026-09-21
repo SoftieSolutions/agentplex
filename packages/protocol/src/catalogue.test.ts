@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CATALOGUE_FILTER_MAX_KINDS,
   CATALOGUE_SEARCH_MAX_CHARS,
   catalogueFilterSchema,
   catalogueItemSchema,
@@ -107,6 +108,45 @@ describe('a catalogue query', () => {
     expect(
       catalogueFilterSchema.safeParse({ search: 'x'.repeat(CATALOGUE_SEARCH_MAX_CHARS + 1) })
         .success,
+    ).toBe(false);
+  });
+
+  /**
+   * The kind selection is the one filter field that is not a closed set, and
+   * that is deliberate rather than an exception to the rule above: a kind is a
+   * row in `node_kinds`, `nodeKindSchema` is the opaque id of one, and a kind a
+   * later migration seeds is askable here without a protocol change. What is
+   * closed is the shape -- each entry is a kind id, and the list is bounded --
+   * because an unbounded list of ids is a surface a bug can fill just as a
+   * search box is.
+   */
+  it('takes a set of node kinds, each parsed as a kind id', () => {
+    expect(catalogueFilterSchema.parse({ kinds: ['project', 'session'] })).toEqual({
+      kinds: ['project', 'session'],
+    });
+    // A kind no migration has seeded parses. What it matches is the hub's
+    // answer, and that answer is no rows rather than a refusal.
+    expect(catalogueFilterSchema.safeParse({ kinds: ['graph'] }).success).toBe(true);
+  });
+
+  it('refuses a kind selection that is malformed, empty or unbounded', () => {
+    expect(catalogueFilterSchema.safeParse({ kinds: 'project' }).success).toBe(false);
+    expect(catalogueFilterSchema.safeParse({ kinds: [''] }).success).toBe(false);
+    expect(catalogueFilterSchema.safeParse({ kinds: [7] }).success).toBe(false);
+    // Empty is refused rather than read as one thing or the other. A client
+    // that filters by nothing sends no field at all; an empty list is a client
+    // that meant a selection and computed the wrong one, and guessing which of
+    // "everything" and "nothing" it meant would be the over-claim.
+    expect(catalogueFilterSchema.safeParse({ kinds: [] }).success).toBe(false);
+    expect(
+      catalogueFilterSchema.safeParse({
+        kinds: Array.from({ length: CATALOGUE_FILTER_MAX_KINDS }, () => 'session'),
+      }).success,
+    ).toBe(true);
+    expect(
+      catalogueFilterSchema.safeParse({
+        kinds: Array.from({ length: CATALOGUE_FILTER_MAX_KINDS + 1 }, () => 'session'),
+      }).success,
     ).toBe(false);
   });
 });

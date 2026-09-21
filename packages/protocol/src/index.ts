@@ -6,6 +6,7 @@ export { assertNever } from './exhaustive.js';
 export type { ParseFailure, ParseResult } from './parse.js';
 
 export {
+  CATALOGUE_FILTER_MAX_KINDS,
   CATALOGUE_PAGE_MAX_LIMIT,
   CATALOGUE_SEARCH_MAX_CHARS,
   catalogueCursorSchema,
