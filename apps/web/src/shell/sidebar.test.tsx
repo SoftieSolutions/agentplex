@@ -96,6 +96,9 @@ function heldPages(text: string): CataloguePages {
 
 const populated = stateFrom(hubFrames.machineStatePopulated);
 
+/** The moment every age in this column is measured against. */
+const NOW = 1_756_000_000_000;
+
 describe('the sidebar filter row, mounted', () => {
   let column: HTMLDivElement;
   let main: HTMLDivElement;
@@ -164,6 +167,7 @@ describe('the sidebar filter row, mounted', () => {
             onPickMachine={() => {}}
             destination="sessions"
             scheme="dark"
+            now={() => NOW}
           />,
         ),
       );
@@ -303,6 +307,22 @@ describe('the sidebar filter row, mounted', () => {
     // screen, and the only place both readings are on screen at once.
     expect(rowNames()).toEqual(['bench-tokenizer']);
     expect(cardNames()).toEqual(['bench-tokenizer']);
+  });
+
+  it('measures both readings against the one clock it was handed', async () => {
+    await mount();
+    await showSessions();
+    await act(() => {
+      appSessionFiltersStore(store).set({ updatedWithin: '1h' });
+    });
+
+    // The captured fleet against the fixed moment: one session was written two
+    // hours ago and is the one the window takes away. Without a clock to
+    // inject, this row and the list under it would each read `Date.now` and
+    // the fixture would age out of every window the day it was captured.
+    expect(rowNames()).not.toContain('spike-wasm');
+    expect(rowNames()).toHaveLength(5);
+    expect(summary()).toBe('1 filter · 1 hidden');
   });
 
   it('draws no row at all before the hub has answered with a fleet', async () => {

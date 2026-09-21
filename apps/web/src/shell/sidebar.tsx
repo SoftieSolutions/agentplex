@@ -69,6 +69,13 @@ export interface SidebarProps {
   /** Where the content region is, so the nav can say which row is current. */
   readonly destination: Destination;
   readonly scheme: Scheme;
+  /**
+   * The clock the column is read against, injected so a test can pin an age.
+   * Read once per render and handed to both of the things below that measure
+   * one -- the row's age window and the rows' ages -- because two readings of
+   * `Date.now` in one render are two answers to how old a session is.
+   */
+  readonly now?: () => number;
 }
 
 export function Sidebar({
@@ -80,6 +87,7 @@ export function Sidebar({
   onPickMachine,
   destination,
   scheme,
+  now = Date.now,
 }: SidebarProps): JSX.Element {
   const [tab, setTab] = useState<SidebarTab>('projects');
   // The tree's letters, held by the sidebar rather than by the panel because
@@ -88,6 +96,7 @@ export function Sidebar({
   const filters = appSessionFiltersStore(store);
   const held = useSyncExternalStore(filters.subscribe, filters.getSnapshot);
   const projects = tab === 'projects';
+  const moment = now();
   return (
     <Stack gap={10} p={10} style={{ height: '100%', minHeight: 0 }}>
       <MachineSelector state={state} chosen={machine} onPick={onPickMachine} scheme={scheme} />
@@ -117,6 +126,7 @@ export function Sidebar({
           }}
           popover={!projects}
           scheme={scheme}
+          now={() => moment}
         />
       )}
 
@@ -135,7 +145,13 @@ export function Sidebar({
             filter={treeFilter}
           />
         ) : (
-          <SidebarSessions state={state} filters={filters} machine={machine} scheme={scheme} />
+          <SidebarSessions
+            state={state}
+            filters={filters}
+            machine={machine}
+            scheme={scheme}
+            now={() => moment}
+          />
         )}
       </Box>
 
