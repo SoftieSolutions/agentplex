@@ -155,16 +155,18 @@ describe('the place line', () => {
 });
 
 describe('the request on a card', () => {
-  it('carries the open request as the four things a card draws, and nothing else', () => {
-    // The proposal is the agent's claim about what it wants to run, as text.
-    // `suggestions` is deliberately not here: what the card offers is Allow
-    // and Deny, and a remembered rule is a different decision on a different
-    // screen -- an exact match is what keeps it from arriving by accident.
+  it('carries the open request as the five things a card draws, and nothing else', () => {
+    // The proposal is the agent's claim about what it wants to run, as text,
+    // with the provider's word on whether it is all of it. `suggestions` is
+    // deliberately not here: what the card offers is Allow and Deny, and a
+    // remembered rule is a different decision on a different screen -- an
+    // exact match is what keeps it from arriving by accident.
     expect(item(asked, 'migrate-db').approval).toEqual({
       approvalId: 'approval-1',
       tool: 'Bash',
       proposal:
         'command: prisma migrate deploy --schema ./db\ndescription: Apply pending Prisma migrations',
+      truncated: false,
       requestedAt: 1_756_000_000_000,
     });
   });
@@ -261,9 +263,20 @@ describe('listing every open request', () => {
         approvalId: capturedApproval.approvalId,
         tool: capturedApproval.tool,
         proposal: capturedApproval.proposal,
+        truncated: capturedApproval.truncated,
         requestedAt: capturedApproval.requestedAt,
       },
     ]);
+  });
+
+  it('keeps whether the proposal was cut, because a surface decides on it', () => {
+    // A cut proposal is not a description of one tool call, so the control
+    // that would remember it is withheld. The narrowing is the only thing
+    // between the row and that decision, so the fact has to survive it.
+    const cut: PendingApproval = { ...capturedApproval, truncated: true };
+    expect(approvalsOldestFirst([cut])[0]?.truncated).toBe(true);
+    expect(oldestApproval([cut])?.truncated).toBe(true);
+    expect(oldestApproval([capturedApproval])?.truncated).toBe(false);
   });
 
   it('heads the list with the request the card shows', () => {

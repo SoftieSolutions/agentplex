@@ -18,7 +18,7 @@ import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { ApprovalControls } from './approval-controls.js';
-import type { SessionProject } from './approval-policy-model.js';
+import { TOO_LONG_TO_REMEMBER_WORDS, type SessionProject } from './approval-policy-model.js';
 import { listSessions, type SessionListItem } from './session-list-model.js';
 
 /**
@@ -614,6 +614,17 @@ describe('always allowing the request in front of you', () => {
     return [...container.querySelectorAll('[role="status"]')].map((node) => node.textContent ?? '');
   }
 
+  /**
+   * Every sentence this component drew, status or not.
+   *
+   * Paragraphs rather than the container's own text, for the reason the first
+   * suite avoids a text comparison on it: Mantine writes its stylesheet in
+   * there, and that is not this component's doing.
+   */
+  function sentences(): string {
+    return [...container.querySelectorAll('p')].map((node) => node.textContent ?? '').join(' ');
+  }
+
   function sentFrames(socket: FakeSocket): ClientFrame[] {
     return socket.sent.map((text) => {
       const parsed = parseTextFrame(parseClientFrame, text);
@@ -648,6 +659,30 @@ describe('always allowing the request in front of you', () => {
     const label = always().getAttribute('aria-label') ?? '';
     expect(label).toContain('exact');
     expect(label).toContain('agentplex');
+  });
+
+  it('offers nothing for a request too long to have been shown whole', async () => {
+    await fleet();
+    const item = asking();
+    const { approval } = item;
+    if (approval === null) throw new Error('the captured state holds no open request');
+
+    await mount({ ...item, approval: { ...approval, truncated: true } }, PROJECT);
+
+    // Allow and Deny, and no third control. The proposal was cut to fit, so it
+    // is the text of every request that starts the same way -- a rule made of
+    // it would answer commands nobody read, and the hub refuses to write one.
+    // A button that could only be refused is worse than a sentence.
+    expect(container.querySelectorAll('button')).toHaveLength(2);
+    expect(sentences()).toContain(TOO_LONG_TO_REMEMBER_WORDS);
+  });
+
+  it('says nothing about remembering a request it can show whole', async () => {
+    await fleet();
+
+    await mount(asking(), PROJECT);
+
+    expect(sentences()).not.toContain(TOO_LONG_TO_REMEMBER_WORDS);
   });
 
   it('offers nothing to a session with nowhere to keep a rule', async () => {

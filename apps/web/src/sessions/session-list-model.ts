@@ -43,6 +43,15 @@ export interface SessionApproval {
   /** The tool's name as the provider spells it: `Bash`, `Edit`, `WebFetch`. */
   readonly tool: string;
   readonly proposal: string;
+  /**
+   * Whether the proposal above is all of what was proposed.
+   *
+   * Narrowed through with the text rather than left on the row, because a
+   * surface decides on it: a cut proposal stands for every request that starts
+   * the same way, so the control offering to remember it is withheld. A screen
+   * that had the text and not this fact would offer a rule the hub refuses.
+   */
+  readonly truncated: boolean;
   /** When the hub heard, by the hub's clock, which is what the age counts from. */
   readonly requestedAt: number;
 }
@@ -89,6 +98,7 @@ export function approvalsOldestFirst(
       approvalId: approval.approvalId,
       tool: approval.tool,
       proposal: approval.proposal,
+      truncated: approval.truncated,
       requestedAt: approval.requestedAt,
     }));
 }

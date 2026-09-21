@@ -14,6 +14,7 @@ import { approvalFollowUp, decideCommand } from './approval-model.js';
 import {
   allowAlwaysCommand,
   policyFollowUp,
+  TOO_LONG_TO_REMEMBER_WORDS,
   type SessionProject,
 } from './approval-policy-model.js';
 import type { SessionApproval } from './session-list-model.js';
@@ -193,6 +194,18 @@ export function ApprovalControls({
   const spent = followUp.kind === 'waiting' || followUp.kind === 'decided';
 
   /**
+   * Whether there is a rule to be made of this request at all.
+   *
+   * A project to keep one in, and a proposal that is the whole of what was
+   * proposed. A cut proposal is the text of every request that starts the same
+   * way, so the hub will not match a rule against one and refuses to store one
+   * -- and offering a control whose only outcome is that refusal would be this
+   * screen promising something it cannot do. The sentence underneath says what
+   * happens instead, which is the part a person can act on.
+   */
+  const rememberable = project.kind === 'project' && !approval.truncated;
+
+  /**
    * The rule half of "always allow", kept apart from the request half all the
    * way to the screen.
    *
@@ -244,7 +257,10 @@ export function ApprovalControls({
    * outcome of.
    */
   function alwaysAllow(event: MouseEvent<HTMLButtonElement>): void {
-    if (project.kind !== 'project') return;
+    // The same pair of facts the control is drawn on, restated where the send
+    // happens: a handler that trusted its button not to exist would be one
+    // line from writing a rule for a request nobody could read whole.
+    if (project.kind !== 'project' || approval === null || approval.truncated) return;
     if (!decide(event, 'grant')) {
       setRule({
         approvalId,
@@ -352,7 +368,7 @@ export function ApprovalControls({
        * it is pressed. It is drawn only where a project can be named, so the
        * words on it always say which policy is being written to.
        */}
-      {project.kind === 'project' && (
+      {rememberable && project.kind === 'project' && (
         <Button
           size={size}
           variant="default"
@@ -362,6 +378,20 @@ export function ApprovalControls({
         >
           Always allow this exact request in {project.label}
         </Button>
+      )}
+      {/**
+       * What stands there instead when the proposal above was cut to fit.
+       *
+       * A sentence and not a disabled button: a control nobody can use invites
+       * a second press and says nothing about why. This says what will happen
+       * -- this request reaches a person every time -- which is the thing a
+       * reader can act on, and it is drawn only where the control would have
+       * been, so a session with nowhere to keep a rule is not told twice.
+       */}
+      {project.kind === 'project' && approval.truncated && (
+        <Text fz={11} c={colorForRole('textMuted', scheme)}>
+          {TOO_LONG_TO_REMEMBER_WORDS}
+        </Text>
       )}
       {/* Mounted before it has anything to say, and empty until it does: an
           outcome is then an update to a region a screen reader is already on,
@@ -383,8 +413,13 @@ export function ApprovalControls({
        * The rule's own region, mounted for the same reason and kept separate
        * for a stronger one: it reports a second frame, and a person who tapped
        * once is owed both answers rather than whichever arrived last.
+       *
+       * Mounted where a rule could be written, which is not quite where a
+       * project exists: there is no second frame to report for a request whose
+       * control was withheld, so an empty region beside the sentence saying
+       * why would be a place an answer might still appear.
        */}
-      {project.kind === 'project' && (
+      {rememberable && (
         <Text
           role="status"
           fz={11}

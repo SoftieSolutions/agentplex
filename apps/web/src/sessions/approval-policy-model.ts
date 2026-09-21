@@ -105,6 +105,23 @@ const UNPLACED = 'Where this session is filed has not arrived yet.';
  * reader who assumes otherwise has assumed a policy broader than the one they
  * have, which is the only direction this screen must never be wrong in.
  */
+/**
+ * Why there is no "always allow" beside a request whose proposal was cut.
+ *
+ * One sentence, and it says what will happen rather than what was withheld: a
+ * person who reads "you cannot make a rule for this" learns nothing they can
+ * act on, and a person who reads that this request will always ask them knows
+ * where they stand. The reason is real -- a bounded proposal is the text of
+ * every request that starts the same way, so the hub will not match one and
+ * refuses a rule made of one.
+ *
+ * It lives beside the rule vocabulary rather than in the component for the
+ * reason `EXACT_MATCH_WORDS` does: it is a claim about how the hub behaves,
+ * and a test can hold this file to it.
+ */
+export const TOO_LONG_TO_REMEMBER_WORDS =
+  'This request is too long to be matched exactly, so it will always ask you.';
+
 export const EXACT_MATCH_WORDS =
   'A rule matches the whole text, exactly: a request that differs by one character asks you.';
 
