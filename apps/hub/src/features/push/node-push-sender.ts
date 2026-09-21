@@ -1,6 +1,6 @@
 import webPush from 'web-push';
 import { z } from 'zod';
-import type { PushOutcome, PushSender } from './push.js';
+import type { PushOutcome, PushSender, VapidCredentials } from './push.js';
 
 /**
  * The real push sender: a wrapper over `web-push`, and nothing else.
@@ -29,6 +29,48 @@ import type { PushOutcome, PushSender } from './push.js';
  * real-looking address would be worse than this one: it would be a claim.
  */
 const VAPID_SUBJECT = 'mailto:hub@agentplex.invalid';
+
+/**
+ * How long one POST may go without the socket saying anything.
+ *
+ * There is no default to fall back on: `web-push` passes no timeout and
+ * `https.request` has none either, so without this a push service that accepts
+ * the request and then never answers holds that send open for the life of the
+ * process -- and the fan-out behind it holds a slot for just as long.
+ *
+ * Ten seconds, which is two orders of magnitude more than a push service
+ * ordinarily takes and still short enough that a fan-out cannot sit on a dead
+ * socket for minutes. It is deliberately generous: the cost of cutting a slow
+ * but working service off is a notification that never arrives, and this whole
+ * feature exists to be the thing that tells somebody.
+ *
+ * It is a socket timeout, which is the only kind the layers underneath offer:
+ * it fires on inactivity rather than on total elapsed time, so a service that
+ * answered slowly but kept talking is not cut off. What bounds the rest is not
+ * here -- `push.ts` caps how many sends one fan-out has open and how many
+ * fan-outs may be in flight, so a service being slow costs slots rather than
+ * growing a pile.
+ */
+export const PUSH_SEND_TIMEOUT_MS = 10_000;
+
+/**
+ * Everything one send is bounded and signed by.
+ *
+ * Its own function so that the deadline is a thing a test can read. The send
+ * itself is a POST to somebody else's service and is not testable here, which
+ * would otherwise make "every send has a timeout" a claim resting on one
+ * argument nobody checks.
+ */
+export function pushRequestOptions(vapid: VapidCredentials): webPush.RequestOptions {
+  return {
+    timeout: PUSH_SEND_TIMEOUT_MS,
+    vapidDetails: {
+      subject: VAPID_SUBJECT,
+      publicKey: vapid.publicKey,
+      privateKey: vapid.privateKey,
+    },
+  };
+}
 
 /**
  * The one field this code reads off a rejection, treated as the claim it is.
@@ -66,13 +108,7 @@ export function outcomeForSendFailure(error: unknown): PushOutcome {
 
 export const nodePushSender: PushSender = async ({ subscription, payload, vapid }) => {
   try {
-    await webPush.sendNotification({ ...subscription }, payload, {
-      vapidDetails: {
-        subject: VAPID_SUBJECT,
-        publicKey: vapid.publicKey,
-        privateKey: vapid.privateKey,
-      },
-    });
+    await webPush.sendNotification({ ...subscription }, payload, pushRequestOptions(vapid));
     return { kind: 'delivered' };
   } catch (error) {
     return outcomeForSendFailure(error);

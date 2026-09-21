@@ -14,6 +14,7 @@ import { readyProvider } from '@agentplex/providers/testing';
 import { createFleetState } from '../fleet-state/fleet-state.js';
 import { createAttentionEdge } from './attention-edge.js';
 import {
+  PUSH_FAN_OUTS_IN_FLIGHT_MAX,
   createPush,
   type Push,
   type PushDelivery,
@@ -574,6 +575,55 @@ describe('the fan-out', () => {
     // rejection would have been on nobody's promise.
     const rows = await db().query('SELECT count(*) AS n FROM push_subscriptions');
     expect(rows.rows[0]).toEqual({ n: 2 });
+  });
+
+  it('lets a browser whose service has stopped answering hold up nobody else', async () => {
+    const push = await loadedWithTwoBrowsers();
+    // A push service that accepted the POST and never answered. Written as a
+    // promise nobody resolves rather than as a wait, so this costs a turn of
+    // the loop instead of the sender's whole timeout.
+    const quiet = hanging();
+    answers.set(ENDPOINT_A, quiet.promise);
+
+    const fanOut = push.notify(EDGE);
+    await settle();
+
+    // Sequentially, the second browser was not tried until the first one's
+    // timeout had run out -- which is a notification nobody got because
+    // somebody else's push service was having a bad minute.
+    expect(delivered.map((one) => one.subscription.endpoint)).toEqual([ENDPOINT_A, ENDPOINT_B]);
+
+    quiet.finish({ kind: 'delivered' });
+    await expect(fanOut).resolves.toBeUndefined();
+  });
+
+  it('drops edges rather than piling up fan-outs a stuck service is holding', async () => {
+    const push = await loadedWithTwoBrowsers();
+    const quiet = hanging();
+    answers.set(ENDPOINT_A, quiet.promise);
+    answers.set(ENDPOINT_B, quiet.promise);
+
+    // One edge more than the hub will hold at once. Nothing upstream bounds
+    // these: a fleet coming back produces them as fast as servers report.
+    const started: Promise<void>[] = [];
+    for (let edge = 0; edge <= PUSH_FAN_OUTS_IN_FLIGHT_MAX; edge += 1) {
+      started.push(push.notify(EDGE));
+    }
+    await settle();
+
+    // Every fan-out inside the cap is sending; the one past it was dropped
+    // rather than queued behind a service that is not answering.
+    expect(delivered).toHaveLength(PUSH_FAN_OUTS_IN_FLIGHT_MAX * 2);
+    expect(logged.filter((record) => record.message.includes('in flight'))).toHaveLength(1);
+
+    quiet.finish({ kind: 'delivered' });
+    await Promise.all(started);
+
+    // What the pile-up cost, once, when it drains -- rather than a line per
+    // dropped edge, which would be longest when somebody is trying to read it.
+    expect(logged.filter((record) => record.message.includes('drained'))).toEqual([
+      expect.objectContaining({ fields: expect.objectContaining({ dropped: 1 }) }),
+    ]);
   });
 
   it('starts no new fan-out once the hub has stopped', async () => {

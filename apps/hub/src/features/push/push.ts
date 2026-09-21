@@ -185,6 +185,62 @@ export type PushOutcome =
  */
 export type PushSender = (delivery: PushDelivery) => Promise<PushOutcome>;
 
+/**
+ * How many browsers one fan-out talks to at once.
+ *
+ * The sends used to be sequential, which meant the slowest push service in the
+ * list decided when the rest were tried: one browser on a service having a bad
+ * minute delayed everybody behind it by that browser's whole timeout. Four at
+ * a time, because this list is the browsers a few people subscribed from and
+ * not a mailing list, and because a cap is what keeps a hub from opening a
+ * socket per subscription on a machine that is also running somebody's
+ * sessions.
+ */
+export const PUSH_FAN_OUT_CONCURRENCY = 4;
+
+/**
+ * How many fan-outs may be in flight at once.
+ *
+ * Each edge starts one and nothing upstream limits edges: a fleet coming back
+ * produces them as fast as servers report. With a push service that has
+ * stopped answering and no cap here, the pile grows for as long as the trouble
+ * lasts -- which is the failure that takes a hub down rather than making it
+ * late.
+ *
+ * Past the cap an edge is dropped rather than queued, and that is the decision
+ * worth arguing: a notification is about something happening *now*, so one
+ * delivered ten minutes late is worth less than what holding it cost, and the
+ * in-page floor still shows every one of them to somebody who looks. It is
+ * said once per pile-up rather than once per drop -- a line per dropped edge
+ * would make the log longest exactly when somebody is trying to read it -- and
+ * the count comes with the line that says it drained.
+ */
+export const PUSH_FAN_OUTS_IN_FLIGHT_MAX = 8;
+
+/**
+ * Runs `each` over `items`, no more than `limit` of them at a time.
+ *
+ * Outside the feature because it is about promises rather than about push, and
+ * a worker pool rather than chunks of `limit`: a chunk waits for its slowest
+ * member before the next one starts, which would put back most of what
+ * bounding the concurrency is here to remove.
+ */
+async function inParallel<T>(
+  items: readonly T[],
+  limit: number,
+  each: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let index = next++; index < items.length; index = next++) {
+      const item = items[index];
+      if (item === undefined) return;
+      await each(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 export interface PushDependencies {
   readonly database: Database;
   readonly clock: Clock;
@@ -303,6 +359,11 @@ export function createPush({
    * to touch a database that is about to be closed.
    */
   let stopped = false;
+
+  /** How many fan-outs are running right now, and what the pile-up has cost. */
+  let inFlight = 0;
+  let piledUp = false;
+  let dropped = 0;
 
   /**
    * The stored pair, or `null` when there is none or it cannot be read.
@@ -446,7 +507,10 @@ export function createPush({
       data: { storeId: event.storeId, sessionId: event.sessionId },
     });
 
-    for (const subscription of held) {
+    // Bounded, and in parallel within that bound: one browser whose push
+    // service has stopped answering holds a slot for its timeout and nothing
+    // else. Sequentially, it held everybody after it for the same time.
+    await inParallel(held, PUSH_FAN_OUT_CONCURRENCY, async (subscription) => {
       if (stopped) return;
       let outcome: PushOutcome;
       try {
@@ -459,7 +523,7 @@ export function createPush({
         logger.warn('a push sender threw instead of answering', {
           problem: error instanceof Error ? error.message : String(error),
         });
-        continue;
+        return;
       }
 
       switch (outcome.kind) {
@@ -496,7 +560,7 @@ export function createPush({
         default:
           assertNever(outcome, 'push outcome');
       }
-    }
+    });
   };
 
   return {
@@ -557,6 +621,20 @@ export function createPush({
       // database may already have been closed under it.
       if (stopped) return;
 
+      // Counted here, before the first await, so the count is what is actually
+      // running and not what was running a turn ago.
+      if (inFlight >= PUSH_FAN_OUTS_IN_FLIGHT_MAX) {
+        dropped += 1;
+        if (!piledUp) {
+          piledUp = true;
+          logger.warn('too many push fan-outs are in flight; edges are being dropped', {
+            inFlight,
+          });
+        }
+        return;
+      }
+
+      inFlight += 1;
       try {
         await fanOut(event, vapid);
       } catch (error) {
@@ -567,6 +645,16 @@ export function createPush({
         logger.warn('a push fan-out did not finish', {
           problem: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        inFlight -= 1;
+        // The other half of the one line per pile-up: what it cost. Said when
+        // the last one drains rather than as they go, so a busy hub gets one
+        // number instead of a countdown.
+        if (piledUp && inFlight === 0) {
+          logger.info('push fan-outs have drained', { dropped });
+          piledUp = false;
+          dropped = 0;
+        }
       }
     },
 
