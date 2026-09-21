@@ -79,6 +79,7 @@ const HUB_FEATURES = [
   'pairing',
   'pane-layout',
   'projects',
+  'push',
   'servers',
   'sessions',
   'terminal',
