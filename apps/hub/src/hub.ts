@@ -22,6 +22,7 @@ import {
   requestPath,
   NOT_AUTHORIZED,
 } from './features/client-auth/client-auth.js';
+import { createApprovals } from './features/approvals/approvals.js';
 import { createCatalogue } from './features/catalogue/catalogue.js';
 import { createClients, type Clients } from './features/clients/clients.js';
 import { createDiscovery, type BeaconSource } from './features/discovery/discovery.js';
@@ -317,6 +318,12 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     logger,
     onChange: (report) => {
       state.applyConnection(report);
+      // A machine that is not connected is a machine whose blocked processes
+      // nobody here can reach, whatever is still waiting over there. Every
+      // request it reported is withdrawn, because a row offering a button that
+      // cannot work is worse than a row that stopped offering one: it surfaces
+      // again if the machine comes back and its gate says so.
+      if (report.phase !== 'connected') approvals.serverGone(report.registrationId);
       // The relay hears about connectivity too, and for a reason the state
       // cannot cover: a subscription is held on a connection, so a machine
       // going away leaves panes being fed by nothing and a machine coming back
@@ -361,6 +368,14 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       terminal.noteStarts(report.registrationId, report.storeId, report.starts);
     },
     onStream: (registrationId, output) => terminal.deliver(registrationId, output),
+    // What a machine says about its own approvals, already told apart by the
+    // one parser for this direction. Three methods rather than one, so that
+    // nothing downstream reads a frame's `type` a second time.
+    onApprovals: {
+      requested: (registrationId, frame) => approvals.requested(registrationId, frame),
+      withdrawn: (registrationId, frame) => approvals.withdrawn(registrationId, frame),
+      settled: (registrationId, frame) => approvals.settled(registrationId, frame),
+    },
   });
 
   // Named in the closures above before it is built, which is the shape of the
@@ -369,6 +384,39 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // Neither closure can run before both exist -- a server says nothing until
   // `sync` below dials one.
   const terminal = createTerminal({ state, servers, logger });
+
+  // The requests this hub is holding open, on the same knot as the relay and
+  // for the same reason: a decision goes out over a connection, and what a
+  // machine says about its approvals comes back on one.
+  //
+  // Nothing durable. A pending approval is a claim about now -- on the other
+  // side of every one of them is a process parked on a socket with a timeout
+  // running -- so boot starts empty and the servers' own gates still hold
+  // whatever is really blocked. See `approvals.ts`.
+  const approvals = createApprovals({
+    clock,
+    logger,
+    // The same wire attention's rows take: the list moves the state's version,
+    // which is what puts it in front of every attached client rather than in a
+    // broadcast cache.
+    onChanged: (ref, pending) => state.applyApprovals(ref, pending),
+    // One decision to one machine, and no round trip held open for it. The
+    // server acknowledges nothing when it works -- a granted command may run
+    // for ten minutes -- so only a refusal comes back here, and what the hook
+    // actually did arrives unsolicited as a settlement.
+    dispatch: (instruction) =>
+      new Promise((resolve) => {
+        servers.decide(
+          instruction.registrationId,
+          {
+            type: 'approval-decide',
+            approvalId: instruction.approvalId,
+            decision: instruction.decision,
+          },
+          (refusal) => resolve({ ok: false, code: refusal.code, problem: refusal.problem }),
+        );
+      }),
+  });
 
   // Projects: the rows a user makes, and the browse a directory is picked with.
   // The rule about which directories may be browsed is not this hub's -- it is
@@ -451,6 +499,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     writePaneLayout: (layout) => paneLayout.write(layout),
     sessions,
     attention,
+    approvals,
     pairing,
     // The other half of a pairing frame: the row is the pairing feature's to
     // write, and dialling what the row now says is the supervisor's to do. A

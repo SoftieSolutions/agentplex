@@ -4,6 +4,7 @@ import {
   parseClientFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type ApprovalOutcome,
   type ClientFrame,
   type DocName,
   type FrameId,
@@ -25,6 +26,7 @@ import {
   type MessageSocket,
   type SocketClosure,
 } from '@agentplex/node-shared';
+import type { Approvals, DecideRequest } from '../approvals/approvals.js';
 import type { Attention, AttentionOutcome } from '../attention/attention.js';
 import type { CatalogueQueries, TreeChanged, TreeMutations } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
@@ -158,6 +160,17 @@ export interface ClientConnectionDependencies {
    */
   readonly attention: Attention;
   /**
+   * The requests the hub is holding open, as the one thing that may answer one.
+   *
+   * A seam beside the attention one and not a method on it, because the two
+   * are opposite in the way that matters here: an acknowledgement is this
+   * hub's own row and reaches no machine, and a decision travels to the box
+   * holding a blocked process and is applied exactly once for every client
+   * watching. What this connection may not do is decide anything itself -- it
+   * hands the request over and says what came back.
+   */
+  readonly approvals: Approvals;
+  /**
    * Which servers this hub may dial, as the feature that owns those rows.
    *
    * The whole seam rather than two functions, because what a pairing frame
@@ -239,6 +252,7 @@ export function serveClientConnection(
     writePaneLayout,
     sessions,
     attention,
+    approvals,
     pairing,
     syncServers,
     projects,
@@ -681,13 +695,15 @@ export function serveClientConnection(
           helloFirst(frame.id);
           return;
         }
-        // Refused rather than ignored, until the approvals feature answers it
-        // in AGX-127 step 4. `bad-request` is exactly its own definition --
-        // "the frame parsed but named something the peer does not implement"
-        // -- and a client that is told no stops waiting, where a client whose
-        // frame fell out of a switch waits forever on a hub that will never
-        // speak. Nothing can send this yet; a build mismatch can.
-        refuse(frame.id, 'bad-request', 'this hub does not answer approvals yet');
+        // Not awaited, for the reason no other handler here awaits: the answer
+        // arrives when the machine holding the blocked process says what
+        // happened, which may be a minute from now, and a socket that stalled
+        // its next frame behind that would stop being a screen.
+        void answerApproval(frame.id, {
+          ref: { storeId: frame.storeId, sessionId: frame.sessionId },
+          approvalId: frame.approvalId,
+          decision: frame.decision,
+        });
         return;
       }
 
@@ -1209,6 +1225,48 @@ export function serveClientConnection(
       logger.error('could not record attention', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not record that');
+    }
+  }
+
+  /**
+   * Answers one approval and tells the client that asked what became of it.
+   *
+   * The rule is the whole of what this frame pair means: an outcome is an
+   * `approval-decided`, and no outcome is a refusal. Those are two different
+   * things for a person to be shown. A request that ended -- granted by
+   * somebody else's tap, taken back by the agent, or expired at a hook that
+   * stopped waiting -- is a receipt about the request, and it is a receipt even
+   * when this client's own answer was not the one applied: `ok` is about whose
+   * tap it was, and the client is owed the ending rather than a verdict on its
+   * timing. Only when there is no ending to report -- this hub is holding no
+   * such request and remembers none -- is there nothing to put in a receipt,
+   * and then it is a refusal, which is what a client draws as an error rather
+   * than as an answer.
+   *
+   * The state check is repeated after the await for the reason every other
+   * answer here repeats it: the socket can close while the machine is being
+   * waited on, and the decision still stands -- what is dropped is the receipt.
+   */
+  async function answerApproval(replyTo: FrameId, request: DecideRequest): Promise<void> {
+    const decided = (outcome: ApprovalOutcome): void =>
+      send({ type: 'approval-decided', replyTo, outcome });
+
+    try {
+      const answer = await approvals.decide(request);
+      if (state !== 'established') return;
+      if (answer.ok) {
+        decided(answer.outcome);
+        return;
+      }
+      if (answer.outcome !== null) {
+        decided(answer.outcome);
+        return;
+      }
+      refuse(replyTo, answer.code, answer.problem);
+    } catch (error) {
+      logger.error('could not answer an approval', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not answer that approval');
     }
   }
 

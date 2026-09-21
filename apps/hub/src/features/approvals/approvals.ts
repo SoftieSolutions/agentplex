@@ -420,7 +420,7 @@ export function createApprovals({
       }
     },
 
-    async decide(request: DecideRequest): Promise<ApprovalAnswer> {
+    decide(request: DecideRequest): Promise<ApprovalAnswer> {
       const entry = lookup(request.ref, request.approvalId);
       if (entry === undefined) {
         const remembered = endings.get(endingKey(request.ref, request.approvalId));
@@ -430,19 +430,19 @@ export function createApprovals({
             approvalId: request.approvalId,
             problem: 'no such approval',
           });
-          return {
+          return Promise.resolve({
             ok: false,
             outcome: null,
             code: 'refused',
             problem: 'this hub is holding no approval by that id for that session',
-          };
+          });
         }
-        return {
+        return Promise.resolve({
           ok: false,
           outcome: remembered,
           code: 'refused',
           problem: `that approval is ${remembered}`,
-        };
+        });
       }
 
       const answered = new Promise<ApprovalAnswer>((resolve) => entry.waiting.push(resolve));
@@ -452,34 +452,61 @@ export function createApprovals({
       if (entry.claimed) return answered;
       entry.claimed = true;
 
-      const put = await dispatch({
+      // Watched rather than awaited, and that is what this function returning
+      // here rather than below buys. The seam answers with a refusal or with
+      // silence, and silence is only known to be silence once a deadline has
+      // passed at the connection; an answer that waited for that would hold
+      // every *working* decision open for it, although the settlement it is
+      // really waiting for may already have arrived on the same socket.
+      void dispatch({
         registrationId: entry.source,
         approvalId: request.approvalId,
         decision: request.decision,
-      });
-      if (put.ok) return answered;
-
-      // The machine would not take it, so nothing was applied and nothing was
-      // decided. The request stays open with its claim released: the far side
-      // may still be holding a blocked hook, and a row nobody can tap again
-      // would be worse than one that can be tapped twice.
-      if (lookup(request.ref, request.approvalId) === entry) entry.claimed = false;
-      logger.info('a server refused a decision', {
-        ...request.ref,
-        approvalId: request.approvalId,
-        problem: put.problem,
-      });
-      const refusal: ApprovalAnswer = {
-        ok: false,
-        outcome: null,
-        code: put.code,
-        problem: put.problem,
-      };
-      // Everyone waiting, not only this caller: nothing was applied, so nobody
-      // is owed an outcome and nobody may be left holding a promise that only
-      // an answer which never happened could settle.
-      for (const resolve of entry.waiting.splice(0)) resolve(refusal);
+      }).then(
+        (put) => {
+          if (put.ok) return;
+          refuseDispatch(entry, request, put.code, put.problem);
+        },
+        (error: unknown) => {
+          // The hub's own side failed on the way to the socket. Nothing was
+          // applied, which is exactly what a refusal states, so it is said the
+          // same way rather than thrown at whoever tapped.
+          refuseDispatch(
+            entry,
+            request,
+            'internal',
+            `the hub could not put that decision to the server: ${String(error)}`,
+          );
+        },
+      );
       return answered;
     },
   };
+
+  /**
+   * Nothing was applied: the request goes back to being answerable and
+   * everybody waiting on it is told.
+   *
+   * The claim is released because the far side may still be holding a blocked
+   * hook, and a row nobody can tap again would be worse than one that can be
+   * tapped twice. Everyone waiting is answered and not only the caller whose
+   * frame it was: nothing happened, so nobody is owed an outcome and nobody
+   * may be left holding a promise that only an answer which never happened
+   * could settle.
+   */
+  function refuseDispatch(
+    entry: OpenApproval,
+    request: DecideRequest,
+    code: RefusalCode,
+    problem: string,
+  ): void {
+    if (lookup(request.ref, request.approvalId) === entry) entry.claimed = false;
+    logger.info('a server refused a decision', {
+      ...request.ref,
+      approvalId: request.approvalId,
+      problem,
+    });
+    const refusal: ApprovalAnswer = { ok: false, outcome: null, code, problem };
+    for (const resolve of entry.waiting.splice(0)) resolve(refusal);
+  }
 }

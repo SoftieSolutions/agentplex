@@ -10,6 +10,7 @@ import type { Pairing } from '../pairing/pairing.js';
 import type { ClientCatalogue } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
 import type { Projects } from '../projects/projects.js';
+import type { Approvals } from '../approvals/approvals.js';
 import type { Attention } from '../attention/attention.js';
 import type { Sessions } from '../sessions/sessions.js';
 import type { FleetState } from '../fleet-state/fleet-state.js';
@@ -82,6 +83,14 @@ export interface ClientsDependencies {
    * moves the state's version, and both tabs are sent the row.
    */
   readonly attention: Attention;
+  /**
+   * The requests the hub is holding open, handed to every client this serves.
+   *
+   * One instance for the whole broadcast, and here that is not a preference:
+   * an approval is applied once however many sockets are watching it, and a
+   * per-socket copy of that record would be one blocked agent released twice.
+   */
+  readonly approvals: Approvals;
   /**
    * Pairing and unpairing servers, handed to every client this serves.
    *
@@ -187,6 +196,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
     writePaneLayout,
     sessions,
     attention,
+    approvals,
     pairing,
     syncServers,
     projects,
@@ -285,6 +295,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         writePaneLayout,
         sessions,
         attention,
+        approvals,
         pairing,
         syncServers,
         projects,

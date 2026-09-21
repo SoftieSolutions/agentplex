@@ -7,9 +7,10 @@ import type { InstructionOutcome, StreamAnswer, TerminalOutputFrame } from './se
  * One parser for the direction, and the discriminated union it returns is
  * switched on rather than re-checked: an answer goes to whoever asked, a
  * report goes to the reducer, a drain notice goes to the loop that decides
- * when to dial, a terminal frame goes to the relay, and the handshake frames
- * belong to a handshake that is already over. `pong` is the heartbeat's, which
- * reads the socket itself.
+ * when to dial, a terminal frame goes to the relay, an approval frame goes to
+ * the feature holding what this hub may still be asked about, and the handshake
+ * frames belong to a handshake that is already over. `pong` is the heartbeat's,
+ * which reads the socket itself.
  *
  * A document reply is an answer like any other: the three of them address the
  * frame that asked, so they go to whoever asked and this file says nothing
@@ -36,6 +37,15 @@ export type StoreReport = Extract<ServerToHubFrame, { type: 'store-report' }>;
 
 /** A server saying it is going down, and how long it will wait first. */
 export type DrainingNotice = Extract<ServerToHubFrame, { type: 'server-draining' }>;
+
+/** An agent on that machine is blocked on a tool call and is asking. */
+export type ApprovalRequested = Extract<ServerToHubFrame, { type: 'approval-requested' }>;
+
+/** The agent stopped asking, and nothing was decided. */
+export type ApprovalWithdrawn = Extract<ServerToHubFrame, { type: 'approval-withdrawn' }>;
+
+/** What actually happened at the hook, which only that machine can say. */
+export type ApprovalSettled = Extract<ServerToHubFrame, { type: 'approval-settled' }>;
 
 export interface ServerFrameHandlers {
   /** The reply to an instruction, addressed by the frame id it answers. */
@@ -69,6 +79,18 @@ export interface ServerFrameHandlers {
    * and nobody asked for any particular chunk of it.
    */
   onOutput(output: TerminalOutputFrame): void;
+  /**
+   * The three things a machine says about an approval, as three handlers.
+   *
+   * One per frame rather than one taking the union, and that is the whole
+   * reason this switch exists: the union is discriminated exactly once, here,
+   * and what arrives at the approvals feature is already the frame it is. A
+   * single `onApproval` would put a second hand-written check on `type`
+   * somewhere downstream, which is the thing one parser per direction is for.
+   */
+  onApprovalRequested(frame: ApprovalRequested): void;
+  onApprovalWithdrawn(frame: ApprovalWithdrawn): void;
+  onApprovalSettled(frame: ApprovalSettled): void;
 }
 
 export function routeServerFrame(frame: ServerToHubFrame, handlers: ServerFrameHandlers): void {
@@ -115,13 +137,13 @@ export function routeServerFrame(frame: ServerToHubFrame, handlers: ServerFrameH
       handlers.onOutput(frame);
       return;
     case 'approval-requested':
+      handlers.onApprovalRequested(frame);
+      return;
     case 'approval-withdrawn':
+      handlers.onApprovalWithdrawn(frame);
+      return;
     case 'approval-settled':
-      // Parsed and not yet routed: the approvals feature that holds them is
-      // AGX-127 step 4, and this arm is what lets the protocol carry them in
-      // the meantime. Named rather than left to the `default`, which is the
-      // whole point of the switch ending in `assertNever` -- a frame nobody
-      // handles is a decision somebody wrote down, not a silence.
+      handlers.onApprovalSettled(frame);
       return;
     case 'handshake-accepted':
     case 'handshake-rejected':

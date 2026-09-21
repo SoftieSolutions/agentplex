@@ -1,16 +1,24 @@
 import type { FrameId, HubToServerFrame } from '@agentplex/protocol';
 import type { Logger, Timers } from '@agentplex/node-shared';
-import type { StreamInstruction, StreamOutcome } from './servers.js';
+import type { DecideInstruction, StreamInstruction, StreamOutcome } from './servers.js';
 
 /**
- * The terminal frames one connection is waiting on answers to.
+ * The frames one connection is waiting on answers to that may never come.
  *
  * The instruction channel beside this one does the same job for a start and a
  * stop, and the two are separate for a reason that is not tidiness: an
  * instruction has exactly one reply and the caller awaits it, while two of the
- * four frames here are answered only when they fail. A channel that promised
- * every caller an answer would have to invent one for a keystroke that worked,
- * and a channel that promised none could not carry a subscription's reply.
+ * four terminal frames here are answered only when they fail. A channel that
+ * promised every caller an answer would have to invent one for a keystroke that
+ * worked, and a channel that promised none could not carry a subscription's
+ * reply.
+ *
+ * An approval decision is carried here for exactly that property rather than
+ * because it is a terminal frame: a server that hands a decision to a blocked
+ * hook says nothing, and only a refusal comes back. Putting it on the
+ * instruction channel would give a ten-minute tool call a thirty-second
+ * deadline; putting it anywhere that had to invent an answer would report a
+ * refusal that never arrived.
  *
  * ## Why the answer is a callback and not a promise
  *
@@ -25,14 +33,15 @@ import type { StreamInstruction, StreamOutcome } from './servers.js';
  */
 
 /**
- * How long a terminal frame may go unanswered before this stops listening.
+ * How long a frame may go unanswered before this stops listening.
  *
  * Shorter than an instruction's deadline, because none of these asks a server
- * to do anything slow: a subscribe reads a scrollback it is already holding,
- * and a write hands bytes to a pty. The deadline is not a timeout a user waits
- * out -- it is how long a silent success stays distinguishable from a refusal
- * that is still in flight, after which the entry is dropped so that typing into
- * a terminal cannot accumulate correlations without bound.
+ * to do anything slow: a subscribe reads a scrollback it is already holding, a
+ * write hands bytes to a pty, and a decision is handed to a hook that is
+ * already connected. The deadline is not a timeout a user waits out -- it is
+ * how long a silent success stays distinguishable from a refusal that is still
+ * in flight, after which the entry is dropped so that typing into a terminal
+ * cannot accumulate correlations without bound.
  */
 export const DEFAULT_STREAM_TIMEOUT_MS = 10_000;
 
@@ -42,13 +51,13 @@ export interface StreamChannelDependencies {
   /** The connection's frame id counter, continued. See `instruction-channel.ts`. */
   readonly nextFrameId: () => number;
   readonly streamTimeoutMs?: number;
-  /** The one place a terminal frame becomes characters. */
+  /** The one place such a frame becomes characters. */
   readonly send: (frame: HubToServerFrame) => void;
 }
 
 export interface StreamChannel {
   /** Puts one frame to the server and calls back with whatever answers it. */
-  put(frame: StreamInstruction, answer: (outcome: StreamOutcome) => void): void;
+  put(frame: StreamInstruction | DecideInstruction, answer: (outcome: StreamOutcome) => void): void;
   /**
    * Settles the frame a reply names, and says whether anything was waiting.
    *
@@ -75,7 +84,10 @@ export function createStreamChannel(dependencies: StreamChannelDependencies): St
   };
 
   return {
-    put(frame: StreamInstruction, answer: (outcome: StreamOutcome) => void): void {
+    put(
+      frame: StreamInstruction | DecideInstruction,
+      answer: (outcome: StreamOutcome) => void,
+    ): void {
       const id = nextFrameId();
       let cancelDeadline: () => void = () => {};
 
@@ -87,12 +99,12 @@ export function createStreamChannel(dependencies: StreamChannelDependencies): St
       cancelDeadline = timers.schedule(streamTimeoutMs, () => {
         const settle = take(id);
         if (settle === undefined) return;
-        // Silence is the answer for an input and a resize, and the absence of
-        // one for a subscribe. Both are `ok` with nothing said, because this
-        // cannot tell a server that had nothing to say from one that is slow,
-        // and the connection's own heartbeat is what decides whether the
-        // machine is still there.
-        logger.debug('the server said nothing about a terminal frame', {
+        // Silence is the answer for an input, a resize and a decision, and the
+        // absence of one for a subscribe. All are `ok` with nothing said,
+        // because this cannot tell a server that had nothing to say from one
+        // that is slow, and the connection's own heartbeat is what decides
+        // whether the machine is still there.
+        logger.debug('the server said nothing about a frame it answers only to refuse', {
           frame: frame.type,
           afterMs: streamTimeoutMs,
         });

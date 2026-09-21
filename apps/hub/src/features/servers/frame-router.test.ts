@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  approvalIdSchema,
   encodeTerminalChunk,
   sessionIdSchema,
   storeIdSchema,
@@ -26,6 +27,7 @@ import type { InstructionOutcome, StreamAnswer, TerminalOutputFrame } from './se
  */
 
 const STORE = storeIdSchema.parse('store-work');
+const APPROVAL = approvalIdSchema.parse('approval-1');
 const SESSION = sessionIdSchema.parse('session-1');
 
 interface Routed {
@@ -34,6 +36,7 @@ interface Routed {
   readonly drains: readonly DrainingNotice[];
   readonly streamAnswers: readonly { replyTo: number; answer: StreamAnswer }[];
   readonly output: readonly TerminalOutputFrame[];
+  readonly approvals: readonly ServerToHubFrame[];
 }
 
 function route(frame: ServerToHubFrame): Routed {
@@ -42,6 +45,7 @@ function route(frame: ServerToHubFrame): Routed {
   const drains: DrainingNotice[] = [];
   const streamAnswers: { replyTo: number; answer: StreamAnswer }[] = [];
   const output: TerminalOutputFrame[] = [];
+  const approvals: ServerToHubFrame[] = [];
 
   routeServerFrame(frame, {
     onAnswer: (replyTo, outcome) => answers.push({ replyTo, outcome }),
@@ -49,9 +53,12 @@ function route(frame: ServerToHubFrame): Routed {
     onDraining: (notice) => drains.push(notice),
     onStreamAnswer: (replyTo, answer) => streamAnswers.push({ replyTo, answer }),
     onOutput: (chunk) => output.push(chunk),
+    onApprovalRequested: (requested) => approvals.push(requested),
+    onApprovalWithdrawn: (withdrawn) => approvals.push(withdrawn),
+    onApprovalSettled: (settled) => approvals.push(settled),
   });
 
-  return { answers, reports, drains, streamAnswers, output };
+  return { answers, reports, drains, streamAnswers, output, approvals };
 }
 
 describe('an answer to an instruction', () => {
@@ -218,6 +225,46 @@ describe('a frame that belongs to something other than this switch', () => {
     // switch's, and passing over one is not the same as losing it.
     const routed = route(frame);
 
+    expect(routed.answers).toEqual([]);
+    expect(routed.reports).toEqual([]);
+  });
+});
+
+describe('what a machine says about an approval', () => {
+  const said: readonly ServerToHubFrame[] = [
+    {
+      type: 'approval-requested',
+      storeId: STORE,
+      sessionId: SESSION,
+      approval: {
+        approvalId: APPROVAL,
+        tool: 'Bash',
+        proposal: 'prisma migrate deploy --schema ./db',
+        suggestions: [],
+      },
+    },
+    {
+      type: 'approval-withdrawn',
+      storeId: STORE,
+      sessionId: SESSION,
+      approvalId: APPROVAL,
+    },
+    {
+      type: 'approval-settled',
+      storeId: STORE,
+      sessionId: SESSION,
+      approvalId: APPROVAL,
+      outcome: 'granted',
+    },
+  ];
+
+  it.each(said)('routes $type to the feature holding it, and to no answer', (frame) => {
+    // Unsolicited, every one of them: nobody asked, and there is no frame id
+    // here to address. They used to fall out of this switch by name, which was
+    // the protocol carrying an approval to a hub that did nothing with it.
+    const routed = route(frame);
+
+    expect(routed.approvals).toEqual([frame]);
     expect(routed.answers).toEqual([]);
     expect(routed.reports).toEqual([]);
   });
