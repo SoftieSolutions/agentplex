@@ -1,10 +1,15 @@
 import { useState, type CSSProperties, type JSX } from 'react';
 import { needsYouWords } from '../sessions/attention-floor.js';
 import { NotificationListView } from '../sessions/notification-list.js';
-import type { NotificationList } from '../sessions/notification-model.js';
+import {
+  markAllRead,
+  type NotificationList,
+  type NotificationRow,
+} from '../sessions/notification-model.js';
+import type { HubStore } from '../store/hub-store.js';
 import { Box, Drawer, Group, Popover, Text, UnstyledButton } from '../ui/components.js';
 import { ToneDot } from '../ui/tone-dot.js';
-import { colorForRole, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import type { ShellForm } from './shell-form.js';
 
 /**
@@ -96,12 +101,18 @@ export interface AttentionBellProps {
    * that disappears when it is quiet is one nobody learns the position of.
    */
   readonly list: NotificationList;
+  /**
+   * Where the header's bulk acknowledgement goes. The panel holds the one
+   * control that speaks for every listed session at once, so the store has to
+   * reach it; nothing else in here sends anything.
+   */
+  readonly store: HubStore;
   /** Which container the panel opens in: the shell's form, never measured here. */
   readonly form: ShellForm;
   readonly scheme: Scheme;
 }
 
-export function AttentionBell({ list, form, scheme }: AttentionBellProps): JSX.Element {
+export function AttentionBell({ list, store, form, scheme }: AttentionBellProps): JSX.Element {
   const [opened, setOpened] = useState(false);
   const count = list.needsYou.length;
 
@@ -142,6 +153,7 @@ export function AttentionBell({ list, form, scheme }: AttentionBellProps): JSX.E
           {button}
           <NotificationSheet
             list={list}
+            store={store}
             name={needsYouWords(count)}
             opened={opened}
             onClose={() => setOpened(false)}
@@ -164,7 +176,7 @@ export function AttentionBell({ list, form, scheme }: AttentionBellProps): JSX.E
               border: `1px solid ${colorForRole('borderStrong', scheme)}`,
             }}
           >
-            <NotificationPanel list={list} scheme={scheme} />
+            <NotificationPanel list={list} store={store} scheme={scheme} />
           </Popover.Dropdown>
         </Popover>
       )}
@@ -179,6 +191,7 @@ export function AttentionBell({ list, form, scheme }: AttentionBellProps): JSX.E
 
 interface NotificationSheetProps {
   readonly list: NotificationList;
+  readonly store: HubStore;
   /**
    * What the sheet is called to a screen reader. The popover gets this for
    * free -- it is labelled by the bell it hangs from -- and the sheet is a
@@ -204,6 +217,7 @@ interface NotificationSheetProps {
  */
 function NotificationSheet({
   list,
+  store,
   name,
   opened,
   onClose,
@@ -225,7 +239,7 @@ function NotificationSheet({
         aria-label={name}
         style={{ background: colorForRole('surface', scheme), overflow: 'hidden' }}
       >
-        <NotificationPanel list={list} scheme={scheme} />
+        <NotificationPanel list={list} store={store} scheme={scheme} />
       </Drawer.Content>
     </Drawer.Root>
   );
@@ -233,6 +247,7 @@ function NotificationSheet({
 
 interface NotificationPanelProps {
   readonly list: NotificationList;
+  readonly store: HubStore;
   readonly scheme: Scheme;
 }
 
@@ -244,17 +259,38 @@ interface NotificationPanelProps {
  * panels sharing a model, and the first control the header gains would have to
  * be built twice and then kept in step by hand.
  */
-function NotificationPanel({ list, scheme }: NotificationPanelProps): JSX.Element {
+function NotificationPanel({ list, store, scheme }: NotificationPanelProps): JSX.Element {
   return (
     <Box>
-      <PanelHeader scheme={scheme} />
+      {/* The header is handed the needs-you section and not the whole list:
+          the only thing it can act on is what is still asking, and a header
+          holding both sections would be a header that could act on the
+          receipt. */}
+      <PanelHeader rows={list.needsYou} store={store} scheme={scheme} />
       <NotificationListView list={list} scheme={scheme} />
     </Box>
   );
 }
 
 interface PanelHeaderProps {
+  /** The needs-you rows, which are the ones Mark all read speaks for. */
+  readonly rows: readonly NotificationRow[];
+  readonly store: HubStore;
   readonly scheme: Scheme;
+}
+
+/**
+ * What the header says when the store would not take the rest of them.
+ *
+ * It counts what did not go rather than what did, and carries the store's own
+ * sentence for why rather than restating it: the queue knows what it refused
+ * and this does not. The direction that does not over-claim -- a control that
+ * reported success it was never given would leave somebody certain they had
+ * cleared a list that is still asking.
+ */
+function refusalWords(unsent: number, reason: string): string {
+  const what = unsent === 1 ? '1 session was' : `${String(unsent)} sessions were`;
+  return `${what} not marked read: ${reason}`;
 }
 
 /**
@@ -269,19 +305,80 @@ interface PanelHeaderProps {
  * and a header border against it is a two-pixel line; where there is no section
  * -- the empty panel -- there is one sentence, which needs no rule above it.
  */
-function PanelHeader({ scheme }: PanelHeaderProps): JSX.Element {
+function PanelHeader({ rows, store, scheme }: PanelHeaderProps): JSX.Element {
+  /** The store's own "no", from the attempt that ran into it. */
+  const [refused, setRefused] = useState<string | null>(null);
+
+  /**
+   * One acknowledgement per listed session, worked out by the model. The
+   * control is dead when this is empty, which is the same fact as the section
+   * being empty rather than a second test of it.
+   */
+  const commands = markAllRead(rows);
+
+  /**
+   * Sends them, and stops at the first refusal.
+   *
+   * Stopping is the honest move: the one thing that refuses a command here is
+   * a queue that is already full, and the ones behind it would each be refused
+   * the same way. What is reported is how many did not go, counted from where
+   * it stopped, so the sentence stays true of the list on screen.
+   */
+  function send(): void {
+    let sent = 0;
+    for (const command of commands) {
+      const outcome = store.sendCommand(command);
+      if (!outcome.accepted) {
+        setRefused(refusalWords(commands.length - sent, outcome.reason));
+        return;
+      }
+      sent += 1;
+    }
+    setRefused(null);
+  }
+
   return (
-    <Group component="header" gap={8} align="center" wrap="nowrap" style={{ padding: '10px 14px' }}>
-      <Text
-        component="h2"
-        fz={12.5}
-        fw={700}
-        c={colorForRole('text', scheme)}
-        style={{ margin: 0 }}
-      >
-        {PANEL_NAME}
-      </Text>
-    </Group>
+    <Box component="header">
+      <Group gap={8} align="center" wrap="nowrap" style={{ padding: '10px 14px' }}>
+        <Text
+          component="h2"
+          fz={12.5}
+          fw={700}
+          c={colorForRole('text', scheme)}
+          style={{ margin: 0 }}
+        >
+          {PANEL_NAME}
+        </Text>
+        {/* Drawn at every count and disabled at zero, for the reason the bell
+            is drawn at every count: a control that is only there sometimes is
+            one nobody learns the position of. */}
+        <UnstyledButton
+          data-mark-all-read
+          disabled={commands.length === 0}
+          onClick={send}
+          style={{
+            marginLeft: 'auto',
+            fontSize: 11,
+            color: colorForRole(commands.length === 0 ? 'textMuted' : 'textSecondary', scheme),
+            cursor: commands.length === 0 ? 'default' : 'pointer',
+          }}
+        >
+          Mark all read
+        </UnstyledButton>
+      </Group>
+      {refused === null ? null : (
+        // Under the row rather than in place of the control: nothing changed,
+        // and this is why this attempt was not what changed it.
+        <Text
+          data-mark-all-read-refusal
+          role="status"
+          fz={11}
+          style={{ color: colorForTone('blocked', scheme), padding: '0 14px 8px' }}
+        >
+          {refused}
+        </Text>
+      )}
+    </Box>
   );
 }
 

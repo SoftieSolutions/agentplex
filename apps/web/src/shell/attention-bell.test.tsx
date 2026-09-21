@@ -2,10 +2,20 @@
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import {
+  parseClientFrame,
+  parseHubFrame,
+  parseTextFrame,
+  type ClientFrame,
+  type MachineState,
+} from '@agentplex/protocol';
 import { notificationList, type NotificationList } from '../sessions/notification-model.js';
 import { listSessions } from '../sessions/session-list-model.js';
+import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
+import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { createHubStore, type HubStore } from '../store/hub-store.js';
+import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { AttentionBell, PANEL_WIDTH } from './attention-bell.js';
@@ -99,6 +109,10 @@ const nothingWaiting = notificationList(listSessions(empty), NOW);
 describe('the attention bell', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
+  let store: HubStore;
+  let sockets: ReturnType<typeof createFakeSocketFactory>;
+  /** A standing interest, so the store dials the way a mounted shell makes it. */
+  let interest: (() => void) | null = null;
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -106,6 +120,13 @@ describe('the attention bell', () => {
     installResizeObserver();
     container = document.createElement('div');
     document.body.append(container);
+    sockets = createFakeSocketFactory();
+    store = createHubStore({
+      fetchTicket: () => Promise.resolve('ticket-1'),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+    });
   });
 
   afterEach(async () => {
@@ -113,17 +134,19 @@ describe('the attention bell', () => {
       root?.unmount();
     });
     root = null;
+    interest?.();
+    interest = null;
     container.remove();
   });
 
-  function draw(list: NotificationList, form: ShellForm = 'wide'): void {
+  function draw(list: NotificationList, form: ShellForm = 'wide', which: HubStore = store): void {
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
         cssVariablesResolver={cssVariablesResolver}
         defaultColorScheme="dark"
       >
-        <AttentionBell list={list} form={form} scheme="dark" />
+        <AttentionBell list={list} store={which} form={form} scheme="dark" />
       </MantineProvider>
     );
     act(() => {
@@ -182,6 +205,43 @@ describe('the attention bell', () => {
 
   function announcement(): HTMLElement | null {
     return container.querySelector<HTMLElement>('[data-attention-bell] + [role="status"]');
+  }
+
+  /** The header's bulk control, wherever the open container put it. */
+  function markAllRead(): HTMLButtonElement {
+    const found = panel().querySelector<HTMLButtonElement>('button[data-mark-all-read]');
+    if (found === null) throw new Error('the panel offered no bulk control');
+    return found;
+  }
+
+  /** What the header said about an attempt that did not go through, if anything. */
+  function refusal(): string | null {
+    return panel().querySelector<HTMLElement>('[data-mark-all-read-refusal]')?.textContent ?? null;
+  }
+
+  /**
+   * Opens the store's connection, so what the control sends goes out as frames
+   * rather than into the queue a down socket fills.
+   */
+  async function connect(): Promise<FakeSocket> {
+    interest = store.subscribe(() => {});
+    await act(settle);
+    const socket = sockets.sockets[0];
+    if (socket === undefined) throw new Error('the store dialled nothing');
+    await act(() => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+    });
+    return socket;
+  }
+
+  /** What the store sent, read back through the hub's own parser. */
+  function sentFrames(socket: FakeSocket): ClientFrame[] {
+    return socket.sent.map((text) => {
+      const parsed = parseTextFrame(parseClientFrame, text);
+      if (!parsed.ok) throw new Error(`the store sent something unreadable: ${parsed.reason}`);
+      return parsed.value;
+    });
   }
 
   it('is a control and not an address, and says whether it is open', async () => {
@@ -293,5 +353,97 @@ describe('the attention bell', () => {
 
     expect(rows()).toEqual([]);
     expect(panel().textContent).toContain('Nothing is waiting on you.');
+  });
+
+  it('marks the listed sessions read: one acknowledgement each, and no mute', async () => {
+    const socket = await connect();
+    draw(twoWaiting, 'wide');
+    await press();
+
+    await act(() => {
+      markAllRead().click();
+    });
+
+    // Exactly the sessions the section listed, in the order it listed them.
+    // A bulk control that reached past what it drew would be acknowledging
+    // prompts nobody was shown.
+    expect(
+      sentFrames(socket)
+        .filter((frame) => frame.type === 'session-acknowledge')
+        .map((frame) => `${frame.storeId}/${frame.sessionId}`),
+    ).toEqual(
+      twoWaiting.needsYou.map((row) => `${row.item.ref.storeId}/${row.item.ref.sessionId}`),
+    );
+    // Muting is a per-session decision, and marking read is not a way to make
+    // one: a muted session is not in this list at all.
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-mute')).toEqual([]);
+    expect(refusal()).toBeNull();
+  });
+
+  it('leaves a muted session’s mute alone, because it never listed it', async () => {
+    const socket = await connect();
+    // The attended fixture is the same fleet with a mute standing on it.
+    const attended = notificationList(listSessions(stateFrom(hubFrames.machineStateAttended)), NOW);
+    draw(attended, 'wide');
+    await press();
+
+    await act(() => {
+      markAllRead().click();
+    });
+
+    const muted = listSessions(stateFrom(hubFrames.machineStateAttended)).filter(
+      (item) => item.muted,
+    );
+    expect(muted.length).toBeGreaterThan(0);
+    const reached = sentFrames(socket).map((frame) =>
+      frame.type === 'session-acknowledge' ? `${frame.storeId}/${frame.sessionId}` : '',
+    );
+    for (const item of muted) {
+      expect(reached).not.toContain(`${item.ref.storeId}/${item.ref.sessionId}`);
+    }
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-mute')).toEqual([]);
+  });
+
+  it('says so in words when the store refuses, rather than assuming it went', async () => {
+    // A queue of one, and nothing dialled: the first acknowledgement is taken
+    // and the second overflows. The refusal is the whole point -- a control
+    // that reported success it had not been given would leave a person sure
+    // they had cleared a list that is still asking.
+    const refusing = createHubStore({
+      fetchTicket: () => Promise.resolve('ticket-1'),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+      maxQueuedCommands: 1,
+    });
+    draw(twoWaiting, 'wide', refusing);
+    await press();
+
+    await act(() => {
+      markAllRead().click();
+    });
+
+    // The header's own count of what did not go, and the store's words for
+    // why, passed through rather than restated.
+    expect(refusal()).toContain('1 session was not marked read');
+    expect(refusal()).toContain('this one was not accepted');
+  });
+
+  it('offers nothing to mark when nothing is asking', async () => {
+    draw(nothingWaiting, 'wide');
+
+    await press();
+
+    // Drawn and dead rather than gone: the header keeps its shape, the way the
+    // bell itself stays on screen at a count of zero.
+    expect(markAllRead().disabled).toBe(true);
+  });
+
+  it('carries the same control into the sheet, because there is one header', async () => {
+    draw(twoWaiting, 'phone');
+
+    await press();
+
+    expect(markAllRead().disabled).toBe(false);
   });
 });

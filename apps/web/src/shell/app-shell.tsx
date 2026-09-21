@@ -155,7 +155,7 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
    * moves an age on screen is the next snapshot, which is this render again.
    */
   const notifications = notificationList(state === null ? [] : listSessions(state), Date.now());
-  const actions = <AttentionBell list={notifications} form={form} scheme={scheme} />;
+  const actions = <AttentionBell list={notifications} store={hub} form={form} scheme={scheme} />;
   const region = content({
     hub,
     tokens,

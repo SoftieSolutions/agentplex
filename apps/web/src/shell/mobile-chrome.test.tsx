@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { notificationList } from '../sessions/notification-model.js';
 import { listSessions } from '../sessions/session-list-model.js';
+import { createFakeSocketFactory } from '../store/fake-socket.js';
+import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { createHubStore } from '../store/hub-store.js';
+import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider, Text } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { AttentionBell } from './attention-bell.js';
@@ -71,6 +75,18 @@ const NOW = 1_756_000_000_000;
 /** What the shell hands the bell: two sessions asking, and none. */
 const twoWaiting = notificationList(listSessions(populated), NOW);
 const nothingWaiting = notificationList(listSessions(quiet), NOW);
+
+/**
+ * A store for the bell to carry, and nothing more. What its panel sends is
+ * `attention-bell.test.tsx`; what is asked here is where the chrome puts the
+ * bell, so this one is never subscribed to and therefore never dials.
+ */
+const store = createHubStore({
+  fetchTicket: () => Promise.resolve('ticket-1'),
+  createSocket: (ticket) => createFakeSocketFactory().create(ticket),
+  timers: createFakeTimers(),
+  frameIds: createFrameIdCounter(),
+});
 
 const DOWN = connectionView({
   phase: 'reconnecting',
@@ -253,7 +269,7 @@ describe('the phone chrome', () => {
   });
 
   it('carries the chrome’s actions slot in the header, so the bell is on a phone too', () => {
-    draw({ actions: <AttentionBell list={twoWaiting} form="phone" scheme="dark" /> });
+    draw({ actions: <AttentionBell list={twoWaiting} store={store} form="phone" scheme="dark" /> });
 
     const header = container.querySelector('header');
     expect(header?.querySelector('[data-attention-bell]')?.getAttribute('aria-label')).toBe(
@@ -262,7 +278,7 @@ describe('the phone chrome', () => {
   });
 
   it('leaves the count to the bell: the action button is a way to start and nothing else', () => {
-    draw({ actions: <AttentionBell list={twoWaiting} form="phone" scheme="dark" /> });
+    draw({ actions: <AttentionBell list={twoWaiting} store={store} form="phone" scheme="dark" /> });
 
     // One screen, one attention number. The button used to wear a badge of
     // its own, narrowed by the machine the header had picked, so a phone
@@ -274,7 +290,9 @@ describe('the phone chrome', () => {
   });
 
   it('draws no mark anywhere when nothing is waiting on anyone', () => {
-    draw({ actions: <AttentionBell list={nothingWaiting} form="phone" scheme="dark" /> });
+    draw({
+      actions: <AttentionBell list={nothingWaiting} store={store} form="phone" scheme="dark" />,
+    });
 
     expect(attentionMark()).toBeNull();
     // And the button is still there: it is how a session is started, which
