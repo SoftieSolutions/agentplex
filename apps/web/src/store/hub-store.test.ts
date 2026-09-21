@@ -2068,3 +2068,75 @@ describe('web push', () => {
     });
   });
 });
+
+describe('one session’s transcript', () => {
+  const ASK: HubCommand = {
+    type: 'session-transcript',
+    storeId: storeIdSchema.parse('store-work'),
+    sessionId: sessionIdSchema.parse('session-build'),
+    count: 4,
+  };
+
+  it('sends the ask as a command, so a blink queues it rather than dropping it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const outcome = h.store.sendCommand(ASK);
+
+    expect(outcome).toEqual({ accepted: true, id: 2, delivery: 'sent' });
+    expect(sentFrames(socket).at(-1)).toEqual({ ...ASK, id: 2 });
+  });
+
+  it('keeps the answer under the id the pane asked with', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.sendCommand(ASK);
+
+    socket.deliver(hubFrames.sessionTranscript);
+
+    // Exactly what a real hub sent: four activities oldest first, and the
+    // word that there is more behind them. Nothing here re-reads a kind or
+    // re-orders a list -- the frame is the answer.
+    expect(h.store.getSnapshot().lastTranscript).toEqual({
+      replyTo: 3,
+      activities: [
+        { kind: 'narration', text: 'reading the failing test before changing anything' },
+        { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+        { kind: 'tests', passed: 118, failed: 1 },
+        { kind: 'command', text: 'pnpm test' },
+      ],
+      olderExist: true,
+    });
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('replaces the held answer whole rather than merging two reads', async () => {
+    // A transcript is one read of a file at one moment. Two answers stitched
+    // together would be a history that never existed on any disk.
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.deliver(hubFrames.sessionTranscript);
+
+    socket.deliver(
+      JSON.stringify({
+        type: 'session-transcript-read',
+        replyTo: 9,
+        activities: [{ kind: 'command', text: 'pnpm lint', exitStatus: 0 }],
+        olderExist: false,
+      }),
+    );
+
+    expect(h.store.getSnapshot().lastTranscript).toEqual({
+      replyTo: 9,
+      activities: [{ kind: 'command', text: 'pnpm lint', exitStatus: 0 }],
+      olderExist: false,
+    });
+  });
+
+  it('holds nothing before a pane has asked', async () => {
+    const h = harness();
+    await establish(h);
+
+    expect(h.store.getSnapshot().lastTranscript).toBeNull();
+  });
+});

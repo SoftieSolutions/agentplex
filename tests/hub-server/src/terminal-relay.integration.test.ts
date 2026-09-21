@@ -191,6 +191,8 @@ function serveMachine(machine: Machine): DialResult {
     readFile: (path) => createFakeProviderFiles({ files: machine.sessionFiles }).readFile(path),
     listDirectory: (path) =>
       createFakeProviderFiles({ files: machine.sessionFiles }).listDirectory(path),
+    readFileTail: (path, maxBytes) =>
+      createFakeProviderFiles({ files: machine.sessionFiles }).readFileTail(path, maxBytes),
   };
   const adapter = createFakeProviderAdapter({ provider: 'claude', files });
   const stores = [storeOn('/volumes/work')];

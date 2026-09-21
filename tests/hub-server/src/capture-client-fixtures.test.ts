@@ -284,6 +284,7 @@ function labelFor(text: string): string {
     ['push-subscribed', 'pushSubscribed'],
     ['push-unsubscribed', 'pushUnsubscribed'],
     ['approval-policy', 'approvalPolicy'],
+    ['session-transcript-read', 'sessionTranscript'],
     ['session-unsubscribed', 'sessionUnsubscribed'],
     ['session-subscription-ended', 'sessionSubscriptionEnded'],
     ['protocol-error', 'protocolError'],
@@ -630,11 +631,24 @@ function buildLiveMachine(): LiveMachine {
       signal: 'awaiting-input',
       updatedAt: START,
       cwd: LIVE_STORE.path,
+      // What this session has done, for the transcript capture below. Four
+      // kinds rather than four commands, because the fixture is what the web's
+      // widget switch is drawn against and a capture of one kind would leave
+      // the other five untested against a real frame.
+      activities: [
+        { kind: 'command', text: 'pnpm install', exitStatus: 0 },
+        { kind: 'narration', text: 'reading the failing test before changing anything' },
+        { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+        { kind: 'tests', passed: 118, failed: 1 },
+        { kind: 'command', text: 'pnpm test' },
+      ],
     }),
   };
   const files: ProviderFiles = {
     readFile: (path) => createFakeProviderFiles({ files: sessionFiles }).readFile(path),
     listDirectory: (path) => createFakeProviderFiles({ files: sessionFiles }).listDirectory(path),
+    readFileTail: (path, maxBytes) =>
+      createFakeProviderFiles({ files: sessionFiles }).readFileTail(path, maxBytes),
   };
   const stores = [LIVE_STORE];
   return {
@@ -2500,7 +2514,25 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     live.ptys.last?.emit('done\r\n');
     await quiet(watcher);
 
-    watcher.send({ type: 'session-unsubscribe', id: 3, target: watched });
+    // The transcript, asked for on the socket that is already watching this
+    // session: a Transcript tab is a second view of the pane a terminal is in,
+    // so the frame is captured from the client that has one open. The count is
+    // deliberately smaller than the session's history, so the captured answer
+    // carries `olderExist: true` -- the case the tab has to say something
+    // about, and the one an unbounded capture would never produce.
+    watcher.send({
+      type: 'session-transcript',
+      id: 3,
+      storeId: LIVE_STORE.storeId,
+      sessionId: LIVE_SESSION,
+      count: 4,
+    });
+    await until(
+      () => watcher.received.some((text) => labelFor(text) === 'sessionTranscript'),
+      'the transcript read to be answered',
+    );
+
+    watcher.send({ type: 'session-unsubscribe', id: 4, target: watched });
     await until(
       () => watcher.received.some((text) => labelFor(text) === 'sessionUnsubscribed'),
       'the detach to be answered',
@@ -2622,6 +2654,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the subscription to a sleeping machine to be refused',
     );
 
+    const sessionTranscript = firstFrame(watcher, 'sessionTranscript');
     const sessionSubscribed = firstFrame(watcher, 'sessionSubscribed');
     const terminalOutput = firstFrame(watcher, 'terminalOutput');
     const terminalOutputDropped = lastFrame(watcher, 'terminalOutputDropped');
@@ -2786,6 +2819,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('serverPaired', serverPaired);
     captured.set('serverUnpaired', serverUnpaired);
     captured.set('machineStateJustPaired', machineStateJustPaired);
+    captured.set('sessionTranscript', sessionTranscript);
     captured.set('sessionSubscribed', sessionSubscribed);
     captured.set('sessionSubscribedTruncated', sessionSubscribedTruncated);
     captured.set('terminalOutput', terminalOutput);
