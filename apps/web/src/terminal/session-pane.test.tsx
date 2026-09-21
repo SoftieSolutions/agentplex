@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {
   parseClientFrame,
+  parseHubFrame,
   parseTextFrame,
   sessionRefSchema,
   TERMINAL_INPUT_MAX_CHARS,
@@ -1327,5 +1328,110 @@ describe('the header above a session', () => {
     expect(container.textContent).not.toContain('Hand off');
     expect(container.textContent).not.toContain('Replay');
     expect(container.textContent).not.toContain('tmux');
+  });
+});
+
+/**
+ * The context panel beside the terminal, and the one block built for it.
+ *
+ * The state is the captured one, with a task stated on the row this pane is
+ * pointed at. Every row in the fixture carries `task: null` and honestly so --
+ * the capture's one prompted start is a spawn whose id the fake provider never
+ * writes, and a fixture is captured output or it is nothing -- so the task is
+ * stated here, on a copy, the way this file states any other fact it needs.
+ * What comes back still goes through the store's own parser, so a state that
+ * stopped being a machine-state frame fails here rather than arriving as
+ * nothing.
+ */
+describe('the task beside a session', () => {
+  const TASKED = 'session-fix-auth';
+
+  function statingTask(frame: string, sessionId: string, task: string): string {
+    const parsed = parseTextFrame(parseHubFrame, frame);
+    if (!parsed.ok) throw new Error(`the fixture is unreadable: ${parsed.reason}`);
+    if (parsed.value.type !== 'machine-state') throw new Error('that fixture is not a state frame');
+    const state = parsed.value.state;
+    return JSON.stringify({
+      type: 'machine-state',
+      state: {
+        ...state,
+        stores: state.stores.map((store) => ({
+          ...store,
+          sessions: store.sessions.map((row) =>
+            row.descriptor.sessionId === sessionId ? { ...row, task } : row,
+          ),
+        })),
+      },
+    });
+  }
+
+  async function mountPaneOn(sessionId: string, state: string): Promise<void> {
+    const hub = buildStore();
+    await mount(
+      <SessionPane
+        sessionRef={sessionRefSchema.parse({ storeId: 'store-agentplex', sessionId })}
+        store={hub.store}
+        emulators={emulators}
+      />,
+    );
+    const socket = hub.socket();
+    await act(async () => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(state);
+    });
+  }
+
+  function panel(): HTMLElement | null {
+    return container.querySelector<HTMLElement>('[aria-label="session context"]');
+  }
+
+  function taskBlock(): HTMLElement | null {
+    return container.querySelector<HTMLElement>('section[aria-label="Task"]');
+  }
+
+  const PROMPT = 'Fix the auth refresh race when two tabs refresh at once, then PR against main.';
+
+  it('shows what the session was started to do, beside the terminal', async () => {
+    await mountPaneOn(TASKED, statingTask(hubFrames.machineStatePopulated, TASKED, PROMPT));
+
+    const block = taskBlock();
+    expect(block?.querySelector('h2')?.textContent).toBe('Task');
+    expect(block?.textContent).toContain(PROMPT);
+  });
+
+  it('draws no panel at all for a session the hub holds no task for', async () => {
+    // An adopted session: the hub found it on a machine rather than starting
+    // it, so there is no prompt anybody typed and nothing else in the panel is
+    // built yet. Not an empty column with a heading over it -- a TASK heading
+    // with nothing under it is a promise this screen cannot keep, and the
+    // first thing a reader would do is look for the sentence that is missing.
+    await mountPaneOn(TASKED, hubFrames.machineStatePopulated);
+
+    expect(taskBlock()).toBeNull();
+    expect(panel()).toBeNull();
+  });
+
+  it('draws no panel for a session the state does not describe at all', async () => {
+    await mountPaneOn('session-that-is-not-there', hubFrames.machineStatePopulated);
+
+    expect(panel()).toBeNull();
+  });
+
+  it('draws no panel in the phone form, task or no task', async () => {
+    // 7e draws no phone form for this panel and a 300px column on a 390px
+    // screen is not one. The pane reads the shell's single breakpoint, so this
+    // is the same rule the chrome around it is already obeying.
+    window.innerWidth = 390;
+    try {
+      await mountPaneOn(TASKED, statingTask(hubFrames.machineStatePopulated, TASKED, PROMPT));
+
+      expect(panel()).toBeNull();
+      // Not hidden with a style: the prompt is not in the page at all, so it
+      // is not in a page search or in what a screen reader walks.
+      expect(container.textContent).not.toContain('Fix the auth refresh race');
+    } finally {
+      window.innerWidth = 1024;
+    }
   });
 });

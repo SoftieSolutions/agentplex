@@ -51,6 +51,7 @@ import { useShellForm } from '../shell/shell-form.js';
 import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
 import { TabStrip } from './tab-strip.js';
 import { activeTab, type SessionTab } from './tab-strip-model.js';
+import { TaskBlock } from './task-block.js';
 import { chunkTerminalInput } from './terminal-input.js';
 import { TerminalView } from './terminal-view.js';
 import { useTerminalWatch } from './use-terminal-watch.js';
@@ -70,8 +71,9 @@ import { useTerminalWatch } from './use-terminal-watch.js';
  * The context panel is the second mount point, and it works the same way. The
  * pane's body is a row -- the terminal and everything said about it on the
  * left, the panel on the right -- and the panel takes a list of blocks the way
- * the strip takes a list of tabs. It ships with none, so today the row has one
- * column in it and the screen is what it was.
+ * the strip takes a list of tabs. One block is built: TASK, drawn for a session
+ * the hub knows a task for and for no other, so a pane on an adopted session is
+ * still the screen it was.
  *
  * The terminal itself is fed by the store: the pane declares standing
  * interest in a target, and the bytes that come back go to the feed the store
@@ -114,19 +116,30 @@ const CRUMB_ROLES: Record<
 };
 
 /**
- * The blocks in the context panel. None, today.
+ * The blocks in the context panel, built from the row the hub published.
  *
- * A module constant for the reason `SESSION_TABS` is one, and empty for the
- * reason the strip ships with a single tab: this ticket builds the frame, and
- * the blocks the mockup draws in it belong to tickets in three epics -- TASK
- * next, APPROVALS from AGX-104, COST from AGX-107, the machine and diff blocks
- * after them. Each of those appends an entry here and writes the component its
- * `body` renders; none of them touches the panel. Until the first one lands the
- * list is empty, `ContextPanel` draws nothing at all, and the terminal has the
- * whole pane -- which is how a frame ships without a placeholder standing in
- * for work that has not been done.
+ * It stopped being a module constant the moment the first block landed, which
+ * is what the frame was built to allow: a block is `{ key, title, body }` and a
+ * ticket that adds one appends to this list and writes the component its body
+ * renders. APPROVALS (AGX-104), COST (AGX-107) and the machine and diff blocks
+ * each arrive as another entry here, and none of them touches `ContextPanel`.
+ *
+ * TASK is here on one condition, and it is the ticket's whole decision: the
+ * task is `row.task`, the prompt the session was started with, and a session
+ * the hub has no task for -- every session it adopted off a machine rather
+ * than started -- gets no block. Not an empty one: a TASK heading with nothing
+ * under it reads as a fact that failed to load. And with no other block built
+ * yet, no task means no panel at all, which the frame already decides for
+ * itself.
+ *
+ * Outside the component body because it needs nothing from it.
  */
-const SESSION_CONTEXT_BLOCKS: readonly ContextBlock[] = [];
+const NO_CONTEXT_BLOCKS: readonly ContextBlock[] = [];
+
+function contextBlocks(task: string | null, scheme: Scheme): readonly ContextBlock[] {
+  if (task === null) return NO_CONTEXT_BLOCKS;
+  return [{ key: 'task', title: 'Task', body: <TaskBlock task={task} scheme={scheme} /> }];
+}
 
 /**
  * Whether this device's main pointer is a finger, which is the whole of what
@@ -448,6 +461,16 @@ export function SessionPane({
   // that rather than telling somebody to wait for a dial that will be refused.
   const feed = terminalFeedNotice(terminal, machineFor(state, row));
   const shownTab = activeTab(SESSION_TABS, requestedTab);
+  /**
+   * What the panel has to say about this session.
+   *
+   * Memoized on the task text and the scheme rather than on the row: a row is
+   * a fresh object on every state frame the hub sends, and this pane re-renders
+   * on every keystroke that changes anything else about it, so a list rebuilt
+   * each time would hand the panel a new array and a new block element for a
+   * task that has not changed since the session started.
+   */
+  const blocks = useMemo(() => contextBlocks(row?.task ?? null, scheme), [row?.task, scheme]);
   // Attachment is a claim about a socket and the subscription on it, which is
   // why it is read off the store and never off the route: an address says
   // where a user pointed, not what a hub answered.
@@ -731,7 +754,7 @@ export function SessionPane({
           </Group>
         </Stack>
 
-        <ContextPanel blocks={SESSION_CONTEXT_BLOCKS} form={form} scheme={scheme} />
+        <ContextPanel blocks={blocks} form={form} scheme={scheme} />
       </Group>
     </Stack>
   );
