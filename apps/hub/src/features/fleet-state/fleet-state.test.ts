@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROTOCOL_VERSION,
+  nodeIdSchema,
   serverAddressSchema,
   serverIdSchema,
   sessionIdSchema,
@@ -13,7 +14,13 @@ import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { DiscoveredServer } from '../discovery/discovery.js';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
-import { createFleetState, type FleetState, type StoreView } from './fleet-state.js';
+import {
+  createFleetState,
+  sessionKey,
+  type FleetState,
+  type SessionProject,
+  type StoreView,
+} from './fleet-state.js';
 
 /**
  * The merge, driven by hand.
@@ -861,5 +868,70 @@ describe('what the user said', () => {
     // Which is the point: this is exactly the session somebody reaches for the
     // mute on, and a refusal here would be a badge that cannot be quieted.
     expect(only(reducer.snapshot().stores).sessions[0]?.reachable).toBe(false);
+  });
+});
+
+describe('what project a session is in', () => {
+  /** A reducer with one connected server and two sessions in one store. */
+  function reducerWithSessions(): FleetState {
+    const reducer = reduce();
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+    reducer.applySessions({
+      holding: [],
+      registrationId: 'registration-laptop' as ServerRegistrationId,
+      storeId: store('store-work'),
+      sessions: [session('session-1'), session('session-2')],
+      reportedAt: START,
+    });
+    return reducer;
+  }
+
+  const placed = { storeId: store('store-work'), sessionId: sessionIdSchema.parse('session-1') };
+  const universe: SessionProject = {
+    nodeId: nodeIdSchema.parse('node-universe'),
+    name: 'universe',
+  };
+
+  /** The whole placement reading, with `session-1` in one project and nothing else in any. */
+  function placements(project: SessionProject): ReadonlyMap<string, SessionProject> {
+    return new Map([[sessionKey(placed), project]]);
+  }
+
+  function rowFor(reducer: FleetState, sessionId: string) {
+    return only(reducer.snapshot().stores).sessions.find(
+      (row) => row.descriptor.sessionId === sessionId,
+    );
+  }
+
+  it('merges the project onto the row the servers reported', () => {
+    const reducer = reducerWithSessions();
+    reducer.applyProjects(placements(universe));
+    expect(rowFor(reducer, 'session-1')?.project).toEqual(universe);
+    // The machine's own reading is untouched: a project is a label the hub
+    // holds, and it may not edit what a transcript says.
+    expect(rowFor(reducer, 'session-1')?.descriptor.cwd).toBe('/srv/work');
+  });
+
+  it('leaves a session the reading does not place in no project at all', () => {
+    const reducer = reducerWithSessions();
+    reducer.applyProjects(placements(universe));
+    // Absent from the map is the answer, not a gap: a session in no project
+    // says so, and the screens fall back to what they said before.
+    expect(rowFor(reducer, 'session-2')?.project).toBeNull();
+  });
+
+  it('bumps the version for a rename, and not for the same reading twice', () => {
+    const reducer = reducerWithSessions();
+    reducer.applyProjects(placements(universe));
+    const settled = reducer.snapshot().version;
+    // The tree is read again on every catalogue change, and most of them move
+    // nothing a session row shows. Waking every client for one would make the
+    // version mean "the catalogue spoke" rather than "something changed".
+    reducer.applyProjects(placements(universe));
+    expect(reducer.snapshot().version).toBe(settled);
+
+    reducer.applyProjects(placements({ ...universe, name: 'universe-renamed' }));
+    expect(reducer.snapshot().version).toBeGreaterThan(settled);
+    expect(rowFor(reducer, 'session-1')?.project?.name).toBe('universe-renamed');
   });
 });

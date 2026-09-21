@@ -608,6 +608,7 @@ describe('client and hub round trips', () => {
                 },
                 acknowledgedThrough: 900,
                 mutedAt: null,
+                project: { nodeId: nodeIdSchema.parse('node-1'), name: 'universe' },
               },
             ],
           },

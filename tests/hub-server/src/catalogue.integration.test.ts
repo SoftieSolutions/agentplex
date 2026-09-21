@@ -12,7 +12,9 @@ import {
   PROTOCOL_VERSION,
   type HubFrame,
   type Layout,
+  type MachineState,
   type SessionDescriptor,
+  type SessionRow,
   type StoreId,
 } from '@agentplex/protocol';
 import {
@@ -21,7 +23,11 @@ import {
   type MessageSocket,
   type SocketDialer,
 } from '@agentplex/node-shared';
-import { createSocketPair, createFakeTimers } from '@agentplex/node-shared/testing';
+import {
+  createSocketPair,
+  createFakeTimers,
+  type FakeTimers,
+} from '@agentplex/node-shared/testing';
 import { createFakeStoreFiles, readyProvider } from '@agentplex/providers/testing';
 import {
   createFakeSessionController,
@@ -157,6 +163,15 @@ function fleetDialer(machines: readonly Machine[]): SocketDialer {
 
 interface Fleet {
   readonly hub: Hub;
+  /**
+   * The deadline the broadcast coalesces on, held so a test can fire it.
+   *
+   * A state is not sent the instant one changes -- see `clients.ts` -- so a
+   * suite that waited for a frame without firing this would be waiting for a
+   * timer nobody wound. Firing it is what standing in for the passage of a few
+   * milliseconds looks like here.
+   */
+  readonly timers: FakeTimers;
   readonly cleanup: () => Promise<void>;
 }
 
@@ -188,6 +203,7 @@ async function startFleetHub(machines: readonly Machine[]): Promise<Fleet> {
   // Counted, so a node id names the order it was minted in. The hub's own
   // identity takes the first; every one after it is a node.
   let minted = 0;
+  const timers = createFakeTimers();
   const hub = await startHub({
     database,
     logger,
@@ -197,7 +213,7 @@ async function startFleetHub(machines: readonly Machine[]): Promise<Fleet> {
     tokens: { newToken: () => 'unused' },
     dialer: fleetDialer(machines),
     discovery: createFakeBeaconSource(),
-    timers: createFakeTimers(),
+    timers,
     migrationsDirectory,
     migrationFileSystem: nodeMigrationFileSystem,
     webAssets: createFakeWebAssets(),
@@ -209,6 +225,7 @@ async function startFleetHub(machines: readonly Machine[]): Promise<Fleet> {
 
   return {
     hub,
+    timers,
     cleanup: async () => {
       await hub.stop();
       await database.close();
@@ -228,6 +245,15 @@ interface Client {
   layout(): Promise<Layout>;
   /** Sends one frame and waits for the hub's answer to it, whatever it is. */
   ask(frame: Record<string, unknown>): Promise<HubFrame>;
+  /**
+   * The first state this client was sent that holds this, or `null` so far.
+   *
+   * A predicate and not "the latest", because a state is broadcast whenever
+   * anything in the fleet moves and what a test about the tree waits for is a
+   * particular one of them. Nothing is asked for: this is the unsolicited half
+   * of the protocol, which is how a client learns that a row changed.
+   */
+  stateWith(holds: (state: MachineState) => boolean): MachineState | null;
 }
 
 async function openClient(hub: Hub): Promise<Client> {
@@ -277,6 +303,16 @@ async function openClient(hub: Hub): Promise<Client> {
       const id = (nextId += 1);
       serverEnd.send(JSON.stringify({ type: 'layout-request', id }));
       return frameFor(id);
+    },
+
+    stateWith(holds: (state: MachineState) => boolean): MachineState | null {
+      for (const text of received) {
+        const parsed = parseTextFrame(parseHubFrame, text);
+        if (!parsed.ok) throw new Error(`the hub sent something unreadable: ${parsed.reason}`);
+        if (parsed.value.type !== 'machine-state') continue;
+        if (holds(parsed.value.state)) return parsed.value.state;
+      }
+      return null;
     },
 
     async ask(frame: Record<string, unknown>): Promise<HubFrame> {
@@ -651,3 +687,106 @@ describe('paging the catalogue of a reporting fleet', () => {
     expect(again.total).toBe(2);
   });
 });
+
+/**
+ * The tree's answer to which project a session is in, on the row a client is
+ * sent.
+ *
+ * Both halves of that sentence are why this is an integration test. The
+ * association is the tree's and lives in this feature; the row is the fleet
+ * state's and cannot import it. What joins them is a reading the hub takes
+ * after every change and hands to the reducer, unawaited on both of its call
+ * sites -- so the thing worth driving end to end is that a client is actually
+ * told, over the real protocol, without anybody asking for it.
+ */
+describe('the project a session row carries', () => {
+  it('names the project once the session is filed under one, and nothing for one that is not', async () => {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+      descriptor(AGENTPLEX, 'session-spike-wasm', 'spike-wasm'),
+    ]);
+    fleet = await startFleetHub([laptop]);
+    const client = await openClient(fleet.hub);
+    const layout = await settles(client, [
+      'store-agentplex/session-fix-auth',
+      'store-agentplex/session-spike-wasm',
+    ]);
+    const node = layout.find((candidate) => candidate.anchor?.sessionId === 'session-fix-auth');
+    if (node === undefined) throw new Error('the session was not placed');
+
+    // Nothing is filed yet: discovery placed both at the root, and a row in no
+    // project says so rather than saying nothing.
+    const before = await broadcast(
+      client,
+      (state) => rowIn(state, 'session-fix-auth') !== undefined,
+      'a state holding the sessions that were reported',
+    );
+    expect(rowIn(before, 'session-fix-auth')?.project).toBeNull();
+
+    const created = await client.ask({
+      type: 'project-create',
+      name: 'universe',
+      directory: '/mnt/volumes/universe',
+    });
+    if (created.type !== 'project-created') {
+      throw new Error(`the project create was answered ${created.type}`);
+    }
+    expect(
+      await client.ask({
+        type: 'node-move',
+        nodeId: node.id,
+        parentId: created.nodeId,
+        position: 0,
+      }),
+    ).toMatchObject({ type: 'node-moved' });
+
+    // Unasked for: the move changed the tree, the hub read where the tree now
+    // puts each session, and the reducer published a state carrying it.
+    const after = await broadcast(
+      client,
+      (state) => (rowIn(state, 'session-fix-auth')?.project ?? null) !== null,
+      'a state carrying the project the session was moved into',
+    );
+    expect(rowIn(after, 'session-fix-auth')?.project).toEqual({
+      nodeId: created.nodeId,
+      name: 'universe',
+    });
+    // The other session was in that same reading and is in no project, which
+    // is what the screens fall back to a store id for.
+    expect(rowIn(after, 'session-spike-wasm')?.project).toBeNull();
+  });
+});
+
+/**
+ * The first state broadcast to this client that holds what the test is after.
+ *
+ * The deadline is fired on every attempt because the hub coalesces broadcasts
+ * on it, and the reading this suite waits for is taken behind two promises
+ * nobody awaits -- so what is being waited for is a frame rather than a call
+ * returning, and it arrives a turn or two after the frame that provoked it.
+ */
+async function broadcast(
+  client: Client,
+  holds: (state: MachineState) => boolean,
+  what: string,
+): Promise<MachineState> {
+  let found: MachineState | null = null;
+  await until(
+    async () => {
+      fleet?.timers.fireAll();
+      await new Promise((resolve) => setImmediate(resolve));
+      found = client.stateWith(holds);
+      return found !== null;
+    },
+    () => what,
+  );
+  if (found === null) throw new Error(`no state was sent holding ${what}`);
+  return found;
+}
+
+/** One session's row in a state a client was sent, or `undefined`. */
+function rowIn(state: MachineState, sessionId: string): SessionRow | undefined {
+  return state.stores
+    .flatMap((store) => store.sessions)
+    .find((row) => row.descriptor.sessionId === sessionId);
+}

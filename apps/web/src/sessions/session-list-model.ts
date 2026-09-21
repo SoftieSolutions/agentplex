@@ -1,5 +1,6 @@
 import type {
   MachineState,
+  NodeId,
   Provider,
   ServerRegistrationId,
   SessionHolder,
@@ -96,6 +97,27 @@ export interface SessionListItem {
   readonly summary: string;
   readonly updatedAt: number;
   readonly storeId: StoreId;
+  /**
+   * The name of the project the hub's tree places this session in, or `null`
+   * when it places it in none.
+   *
+   * Flattened to the name rather than carried as the wire's `{ nodeId, name }`
+   * because every surface here draws the word and none of them would be right
+   * to invent one: a row in no project is a `null` a caller has to answer for,
+   * and `project?.name` would let one quietly read as the other.
+   */
+  readonly project: string | null;
+  /**
+   * The project's node, or `null` on the same rule as the name above.
+   *
+   * Beside the name and not in place of it: a label with no destination is a
+   * dead end, and a destination with no label is not something a person can
+   * read. Nothing on this screen navigates by it yet -- the breadcrumb that
+   * will is its own task -- and it is carried anyway, because the alternative
+   * when it lands is the component joining a name here to an id looked up
+   * somewhere else, at a different moment, off a different frame.
+   */
+  readonly projectId: NodeId | null;
   /**
    * The server running this session right now, or `null` when nobody is.
    *
@@ -205,6 +227,34 @@ export function serverLabel(state: MachineState, registrationId: ServerRegistrat
   return server?.label ?? registrationId;
 }
 
+/**
+ * The middle dot the place line is joined by, spelled once.
+ *
+ * The components that draw it already agreed on this character; the reason it
+ * is a constant here rather than typed into each of them is that they no
+ * longer agree on what goes to the left of it, and a rule about the left-hand
+ * side split across two files is a rule that only half of a screen follows.
+ */
+const PLACE_SEPARATOR = '·';
+
+/**
+ * Where a session is, in one line: the project and the machine, or the store
+ * and the machine when the tree places it in no project.
+ *
+ * The fallback is the whole of this function, and it falls back to what the
+ * line said before this field existed rather than to an empty word: a session
+ * in no project is not a session in a project called nothing, and a separator
+ * with a blank in front of it is the screen claiming an association the hub
+ * did not report. A store id is coarser than a project name and it is true.
+ *
+ * One helper because two surfaces draw this line -- the sidebar's rows and the
+ * card's meta line -- and two copies of a fallback are two chances for one of
+ * them to forget it and draw a bare dot.
+ */
+export function placeLabel(item: SessionListItem): string {
+  return `${item.project ?? item.storeId} ${PLACE_SEPARATOR} ${item.machine}`;
+}
+
 /** Flattens every store's sessions into list items, in the order the hub sent. */
 export function listSessions(state: MachineState): readonly SessionListItem[] {
   const items: SessionListItem[] = [];
@@ -230,6 +280,8 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         summary: descriptor.cwd ?? statusWords(descriptor.status),
         updatedAt: descriptor.updatedAt,
         storeId: descriptor.storeId,
+        project: row.project?.name ?? null,
+        projectId: row.project?.nodeId ?? null,
         holder: row.holder,
       });
     }
@@ -251,7 +303,13 @@ export function partitionNeedsYou(items: readonly SessionListItem[]): readonly S
   return [...items.filter((item) => item.needsYou), ...items.filter((item) => !item.needsYou)];
 }
 
-/** The table's one filter. Case-insensitive, over everything a card shows. */
+/**
+ * The table's one filter. Case-insensitive, over everything a card shows.
+ *
+ * The project is in the list for exactly that reason: it is now drawn on the
+ * row, and a word somebody can read off a card and not type into the box above
+ * it reads as a broken search rather than as a narrow one.
+ */
 export function matchesSearch(item: SessionListItem, search: string): boolean {
   const query = search.trim().toLowerCase();
   if (query === '') return true;
@@ -262,7 +320,8 @@ export function matchesSearch(item: SessionListItem, search: string): boolean {
     item.machine,
     item.storeId,
     item.summary,
-  ].some((field) => field.toLowerCase().includes(query));
+    item.project,
+  ].some((field) => field !== null && field.toLowerCase().includes(query));
 }
 
 /**

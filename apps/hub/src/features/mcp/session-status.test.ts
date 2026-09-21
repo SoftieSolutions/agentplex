@@ -63,6 +63,7 @@ function fleetWith(
         holder,
         acknowledgedThrough: null,
         mutedAt: null,
+        project: null,
       },
     ],
   };

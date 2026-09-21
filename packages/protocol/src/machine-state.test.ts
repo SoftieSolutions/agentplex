@@ -64,6 +64,7 @@ const A_SESSION_ROW = {
   holder: null,
   acknowledgedThrough: null,
   mutedAt: null,
+  project: null,
 };
 
 describe('serverViewSchema', () => {
@@ -269,6 +270,45 @@ describe('sessionRowSchema', () => {
 
   it('rejects a mute stamped before the epoch, which is not a moment', () => {
     expect(sessionRowSchema.safeParse({ ...A_SESSION_ROW, mutedAt: -1 }).success).toBe(false);
+  });
+
+  it('accepts the project a session sits in, as a key to navigate by and a word to draw', () => {
+    const parsed = sessionRowSchema.safeParse({
+      ...A_SESSION_ROW,
+      project: { nodeId: 'node-1', name: 'universe' },
+    });
+    expect(parsed.success ? parsed.data.project : parsed.error.issues).toEqual({
+      nodeId: 'node-1',
+      name: 'universe',
+    });
+  });
+
+  it('accepts a null project, which is a session in none', () => {
+    const parsed = sessionRowSchema.safeParse({ ...A_SESSION_ROW, project: null });
+    expect(parsed.success ? parsed.data.project : parsed.error.issues).toBeNull();
+  });
+
+  it('rejects a project given as a bare id, which is the shape with no word to draw', () => {
+    // A number is the id a tree that keyed its nodes by rowid would send. The
+    // row carries a name as well as a key precisely so that no screen has to
+    // go and ask a second feature what this one is called.
+    expect(sessionRowSchema.safeParse({ ...A_SESSION_ROW, project: 7 }).success).toBe(false);
+  });
+
+  it('rejects a project with an empty name, rather than passing a blank label along', () => {
+    // An empty name draws as `· machine`: a separator with nothing before it.
+    // Refusing here is the parse-never-cast rule doing the work the two
+    // components would otherwise each have to do.
+    expect(
+      sessionRowSchema.safeParse({ ...A_SESSION_ROW, project: { nodeId: 'node-1', name: '' } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects a row with no project field: absent is not the same as in no project', () => {
+    const { project, ...without } = A_SESSION_ROW;
+    expect(project).toBeNull();
+    expect(sessionRowSchema.safeParse(without).success).toBe(false);
   });
 });
 

@@ -1,5 +1,6 @@
 import type {
   MachineState,
+  NodeId,
   ServerRegistrationId,
   SessionDescriptor,
   SessionHold,
@@ -91,6 +92,27 @@ export interface ServerSessionReport {
   readonly reportedAt: number;
 }
 
+/**
+ * The project a session sits in, as the hub currently reads its tree.
+ *
+ * Declared here rather than imported from the feature that owns projects, and
+ * that is the decision: the catalogue imports this feature, so an import the
+ * other way would be a cycle. What a session row needs of a project is a key to
+ * navigate by and a word to draw, and both are copied onto the row at the
+ * moment the reading is applied. A row is then readable without asking a second
+ * feature anything, which is what keeps a screen from joining two answers taken
+ * at two different instants.
+ *
+ * The name is a copy and not a reference for the same reason every other field
+ * here is: this state is a claim about *now*, republished whole whenever it
+ * changes, and a rename arrives as a new reading rather than as a mutation
+ * nothing would have bumped the version for.
+ */
+export interface SessionProject {
+  readonly nodeId: NodeId;
+  readonly name: string;
+}
+
 /** One session, as the hub shows it: some server's row, whole, plus who saw it. */
 export interface SessionRow {
   readonly ref: SessionRef;
@@ -131,6 +153,22 @@ export interface SessionRow {
    * screen has to join.
    */
   readonly attention: SessionAttention;
+  /**
+   * The project this session is in, or `null` when it is in none.
+   *
+   * The second thing on this row no server reported: a server watches a store
+   * on disk and has never heard of a project, so asking it would be asking it
+   * to invent an answer. The association is the hub's, derived from the same
+   * tree the catalogue reads, and merged on here through `applyProjects` for
+   * the reason attention is -- a fact published on a session row that could
+   * change without moving the version would leave the broadcast's encode cache
+   * handing out the row as it was.
+   *
+   * `null` is a session in no project and not a reading that has not happened
+   * yet. Nothing downstream may treat it as a gap to fill in: the screens that
+   * name a project fall back to what they said before it existed.
+   */
+  readonly project: SessionProject | null;
 }
 
 /** One store, however many servers have it mounted. */
@@ -244,6 +282,26 @@ export interface FleetState {
    * surfaces when the session does.
    */
   applyAttention(ref: SessionRef, attention: SessionAttention): void;
+  /**
+   * Takes the whole of what the hub's tree says about where sessions sit,
+   * keyed by `sessionKey`.
+   *
+   * A whole reading rather than one placement at a time, for the reason a
+   * session report is a whole list: a session leaves a project by being absent
+   * from the next reading, and a reducer applying "this one moved out" would
+   * be keeping a second copy of an answer the tree already holds. One node
+   * renamed high in the tree also moves every session under it at once, and
+   * that is one reading, not a fan-out of edits.
+   *
+   * Filed under `{ storeId, sessionId }` and not under a store the hub has
+   * heard of, like attention: a placement may be read before any server has
+   * scanned the store, and it surfaces when the session does.
+   *
+   * A reading that says what the last one said changes nothing. The tree is
+   * re-read on every catalogue change, and most of those move nothing a
+   * session row draws.
+   */
+  applyProjects(placements: ReadonlyMap<string, SessionProject>): void;
   /** The whole state. The same object until something changes. */
   snapshot(): HubStateSnapshot;
   /**
@@ -362,6 +420,14 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
   const attention = new Map<string, SessionAttention>();
   const listeners = new Set<(snapshot: HubStateSnapshot) => void>();
 
+  /**
+   * Where the tree says each session sits, as of the last whole reading.
+   *
+   * Replaced whole rather than edited, which is what makes a session absent
+   * from a reading a session in no project: the previous map is gone, so there
+   * is no path by which a placement outlives the tree that produced it.
+   */
+  let projects: ReadonlyMap<string, SessionProject> = new Map();
   let version = 0;
   let built: HubStateSnapshot | null = null;
   /**
@@ -374,7 +440,7 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
   let candidates: readonly DiscoveredServer[] = [];
 
   const build = (): HubStateSnapshot => {
-    const stores = buildStoreViews(connections, reports, attention);
+    const stores = buildStoreViews(connections, reports, attention, projects);
     return {
       version,
       stores,
@@ -496,7 +562,7 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
     },
 
     applyAttention(ref: SessionRef, next: SessionAttention): void {
-      const key = attentionKey(ref);
+      const key = sessionKey(ref);
       const previous = attention.get(key) ?? UNATTENDED;
       // A repeat says nothing new, and waking every client for it would make
       // the version mean "somebody clicked" rather than "something changed".
@@ -509,6 +575,15 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
         return;
       }
       attention.set(key, next);
+      changed();
+    },
+
+    applyProjects(placements: ReadonlyMap<string, SessionProject>): void {
+      if (sameProjects(projects, placements)) return;
+      // Copied rather than held, because the caller built this map out of a
+      // tree it goes on reading: a reference kept here would let the next read
+      // change what the hub has already published without moving the version.
+      projects = new Map(placements);
       changed();
     },
 
@@ -545,9 +620,45 @@ function findRow(state: HubStateSnapshot, ref: SessionRef): SessionRow | undefin
   return view?.sessions.find((session) => session.ref.sessionId === ref.sessionId);
 }
 
-/** One session's key in the attention map. See the map's own note on JSON. */
-function attentionKey(ref: SessionRef): string {
+/**
+ * One session's key in the maps keyed by session rather than by store.
+ *
+ * JSON rather than a joined string, because a store id and a session id are
+ * opaque and either may contain whatever separator was chosen -- two sessions
+ * colliding on one key would put one person's mute, or one project's name, on
+ * another session.
+ *
+ * Exported because `applyProjects` takes a whole map: its caller reads the
+ * tree and has to build the same keys this file reads, and a caller spelling
+ * the key itself would be a second definition of it waiting to drift.
+ */
+export function sessionKey(ref: SessionRef): string {
   return JSON.stringify([ref.storeId, ref.sessionId]);
+}
+
+/**
+ * Whether the tree is saying exactly what it was saying last time.
+ *
+ * Here rather than in `equality.ts` because `SessionProject` is declared in
+ * this file, and that module importing this one would close a cycle: this file
+ * imports it.
+ *
+ * Both fields are compared. The id moves when a session is moved between
+ * projects, and the name moves on a rename -- a client draws the name, so a
+ * rename that did not bump the version would leave every screen saying the old
+ * word about a project that had just been renamed.
+ */
+function sameProjects(
+  left: ReadonlyMap<string, SessionProject>,
+  right: ReadonlyMap<string, SessionProject>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [key, project] of left) {
+    const other = right.get(key);
+    if (other === undefined) return false;
+    if (project.nodeId !== other.nodeId || project.name !== other.name) return false;
+  }
+  return true;
 }
 
 function byLabel(left: ServerConnectionReport, right: ServerConnectionReport): number {
@@ -566,6 +677,7 @@ function buildStoreViews(
   connections: ReadonlyMap<ServerRegistrationId, ServerConnectionReport>,
   reports: ReadonlyMap<ServerRegistrationId, ReadonlyMap<StoreId, StoredReport>>,
   attention: ReadonlyMap<string, SessionAttention>,
+  projects: ReadonlyMap<string, SessionProject>,
 ): readonly StoreView[] {
   const attached = new Map<StoreId, ServerConnectionReport[]>();
   for (const connection of connections.values()) {
@@ -588,7 +700,7 @@ function buildStoreViews(
       lastReachableAt: lastOf(
         servers.map((server) => server.connectedSince ?? server.lastConnectedAt),
       ),
-      sessions: buildSessionRows(storeId, servers, reports, attention),
+      sessions: buildSessionRows(storeId, servers, reports, attention, projects),
     });
   }
 
@@ -613,6 +725,7 @@ function buildSessionRows(
   servers: readonly ServerConnectionReport[],
   reports: ReadonlyMap<ServerRegistrationId, ReadonlyMap<StoreId, StoredReport>>,
   attention: ReadonlyMap<string, SessionAttention>,
+  projects: ReadonlyMap<string, SessionProject>,
 ): readonly SessionRow[] {
   const readings = new Map<string, ReportedSession[]>();
   const holders = new Map<string, SessionHolder>();
@@ -667,7 +780,10 @@ function buildSessionRows(
       // A session nobody has said anything about reads as unattended rather
       // than as a gap: there is no third state between "not acknowledged" and
       // "no row", and offering one would make every reader handle it.
-      attention: attention.get(attentionKey(ref)) ?? UNATTENDED,
+      attention: attention.get(sessionKey(ref)) ?? UNATTENDED,
+      // A session the tree does not place is a session in no project, which is
+      // an answer rather than a reading that has not happened yet.
+      project: projects.get(sessionKey(ref)) ?? null,
     });
   }
 

@@ -153,5 +153,14 @@ function toSessionRow(row: ReducedSessionRow): SessionRow {
     // of it for the common case of a session nobody has said anything about.
     acknowledgedThrough: row.attention.acknowledgedThrough,
     mutedAt: row.attention.mutedAt,
+    // Passed through, not flattened and not re-derived. Unlike attention, whose
+    // two fields are read beside `updatedAt` on this same row, a project is one
+    // thing a screen either names or does not, so the object survives the trip
+    // and `null` keeps saying "in no project" in one place rather than two.
+    //
+    // The reducer holds exactly the pair the wire carries, so there is nothing
+    // to copy defensively here: both fields are values, and a row is rebuilt
+    // rather than mutated whenever the tree says something new.
+    project: row.project,
   };
 }

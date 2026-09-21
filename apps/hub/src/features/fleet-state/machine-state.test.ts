@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PROTOCOL_VERSION,
   machineStateSchema,
+  nodeIdSchema,
   serverIdSchema,
   serverAddressSchema,
   sessionIdSchema,
@@ -14,7 +15,7 @@ import {
 import { readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
-import { createFleetState } from '../fleet-state/fleet-state.js';
+import { createFleetState, sessionKey, type SessionProject } from '../fleet-state/fleet-state.js';
 import { toMachineState } from './machine-state.js';
 
 /**
@@ -96,6 +97,28 @@ function published(attention?: { acknowledgedThrough: number | null; mutedAt: nu
   return toMachineState(state.snapshot());
 }
 
+/** The same fleet, with the hub's tree having placed its one session somewhere. */
+function publishedInProject(project: SessionProject) {
+  const state = createFleetState({ logger });
+  state.applyConnection(connection('workshop', 'connected', ['store-work']));
+  state.applySessions({
+    holding: [],
+    registrationId: registration('workshop'),
+    storeId: store('store-work'),
+    sessions: [session('session-1')],
+    reportedAt: START,
+  });
+  state.applyProjects(
+    new Map([
+      [
+        sessionKey({ storeId: store('store-work'), sessionId: sessionIdSchema.parse('session-1') }),
+        project,
+      ],
+    ]),
+  );
+  return toMachineState(state.snapshot());
+}
+
 describe('toMachineState', () => {
   it('produces something the wire parser accepts', () => {
     const parsed = machineStateSchema.safeParse(published());
@@ -152,6 +175,24 @@ describe('toMachineState', () => {
   it('publishes nulls for a session nobody has spoken about, rather than leaving the fields out', () => {
     const [row] = published().stores[0]?.sessions ?? [];
     expect(row).toMatchObject({ acknowledgedThrough: null, mutedAt: null });
+  });
+
+  it('carries the project the tree placed a session in, both fields, untouched', () => {
+    const project = { nodeId: nodeIdSchema.parse('node-universe'), name: 'universe' };
+    const [row] = publishedInProject(project).stores[0]?.sessions ?? [];
+
+    // Whole and not reduced to an id: the name is what the sidebar row and the
+    // session card draw, and a client that got only a key would have to join
+    // this row against the catalogue at a second instant to find the word.
+    expect(row?.project).toEqual(project);
+  });
+
+  it('publishes null for a session the tree places in no project', () => {
+    const [row] = published().stores[0]?.sessions ?? [];
+    // Not an absent field and not an empty object: `null` is a session in no
+    // project, which is the case the screens fall back to a storeId for.
+    expect(row?.project).toBeNull();
+    expect(machineStateSchema.safeParse(published()).success).toBe(true);
   });
 
   it('carries the session descriptor whole, with who saw it beside it', () => {

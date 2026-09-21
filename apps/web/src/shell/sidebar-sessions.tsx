@@ -3,6 +3,7 @@ import type { MachineState, ServerRegistrationId } from '@agentplex/protocol';
 import {
   ageLabel,
   NO_FILTERS,
+  placeLabel,
   visibleSessions,
   type SessionListItem,
 } from '../sessions/session-list-model.js';
@@ -16,10 +17,11 @@ import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
  *
  * It is a way to get somewhere, not a screen: the cards in the content region
  * are where a session is read, and this is the standing index beside them, so
- * a row carries a name, a tone, an age and the machine, and no controls at
- * all. Everything it decides comes from `session-list-model.ts`, including the
- * order and the narrowing, so the two readings cannot disagree about which
- * sessions exist or which machine one is on.
+ * a row carries a name, a tone, an age and where the session is, and no
+ * controls at all. Everything it decides comes from `session-list-model.ts`,
+ * including the order, the narrowing and the second line, so the two readings
+ * cannot disagree about which sessions exist, which project one is in or which
+ * machine one is on.
  *
  * The mockup's filter button and its applied-filter summary are deliberately
  * absent: the narrowings that exist live on the list screen, and a second set
@@ -111,7 +113,7 @@ function SidebarSessionRow({ item, moment, scheme }: SidebarSessionRowProps): JS
         c={colorForRole('textMuted', scheme)}
         style={{ display: 'block', paddingLeft: 14 }}
       >
-        {`${item.storeId} · ${item.machine}`}
+        {placeLabel(item)}
       </Text>
     </UnstyledButton>
   );
