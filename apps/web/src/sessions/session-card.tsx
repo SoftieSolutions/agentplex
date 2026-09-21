@@ -4,11 +4,20 @@ import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import type { HubStore } from '../store/hub-store.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { ApprovalControls } from './approval-controls.js';
+import type { SessionProject } from './approval-policy-model.js';
 import { AttentionControls } from './attention-controls.js';
 import { placeLabel, unseenPrompt, type SessionListItem } from './session-list-model.js';
 import { SessionMetaLine } from './session-meta-line.js';
 import { SessionSummaryLine } from './session-summary-line.js';
 import { StopButton } from './stop-button.js';
+
+/**
+ * What a card knows about where a session is filed: nothing.
+ *
+ * One object rather than one per render, so a list of forty cards hands the
+ * same value down every time it re-renders.
+ */
+const UNPLACED: SessionProject = { kind: 'unplaced' };
 
 /**
  * One compact session card, from the approved mockup (turn 7, screens 7a/7e):
@@ -133,6 +142,11 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
         name={item.name}
         store={store}
         scheme={scheme}
+        // A card in a list is handed no tree, so it cannot name the project a
+        // rule would be written into and does not offer to write one.
+        // Answering the request in front of you is what a card is for; the
+        // standing policy is the session screen's panel.
+        project={UNPLACED}
       />
       <Group gap={8} wrap="nowrap" justify="space-between" align="center">
         {/* The provider, the age and the qualifications on it, drawn by the

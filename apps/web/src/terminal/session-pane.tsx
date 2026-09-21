@@ -785,6 +785,7 @@ export function SessionPane({
             <ApprovalsTab
               sessionRef={sessionRef}
               approvals={approvals}
+              project={project}
               store={hub}
               scheme={scheme}
             />

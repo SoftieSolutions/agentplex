@@ -11,6 +11,11 @@ import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import { approvalFollowUp, decideCommand } from './approval-model.js';
+import {
+  allowAlwaysCommand,
+  policyFollowUp,
+  type SessionProject,
+} from './approval-policy-model.js';
 import type { SessionApproval } from './session-list-model.js';
 
 /**
@@ -72,6 +77,18 @@ export interface ApprovalControlsProps {
   readonly store: HubStore;
   readonly scheme: Scheme;
   /**
+   * Where the tree has this session filed, which decides whether there is a
+   * third control at all.
+   *
+   * A rule lives in one project's policy, so a surface that cannot name a
+   * project has nothing to offer: `unfiled` is a session with nowhere to keep
+   * one and `unplaced` is a surface that does not know -- the card in a list,
+   * which is handed no tree -- and both draw Allow and Deny and nothing else. A
+   * button that could only fail, or that named the wrong project, is worse than
+   * no button.
+   */
+  readonly project: SessionProject;
+  /**
    * Mantine's size scale. The default is one step above the card's other
    * buttons on purpose: this pair is drawn full width at both breakpoints, and
    * the phone form (mockup 7e) is where a decision gets made one-handed.
@@ -87,10 +104,17 @@ export interface ApprovalControlsProps {
  * effect and may not be this person's -- deciding once is what the id is for.
  * The other two are the request ending with nothing decided, and they say so.
  */
-function outcomeWords(outcome: ApprovalOutcome): string {
+function outcomeWords(outcome: ApprovalOutcome, answeredBy: unknown): string {
   switch (outcome) {
     case 'granted':
-      return 'granted';
+      // The hub's receipt, and the one place a client reliably learns that an
+      // automatic grant happened: a rule that matches settles the request
+      // inside one broadcast flush, so the marker on the row usually reaches
+      // nobody. Saying "granted" here for a grant a standing rule made would
+      // credit a tap for something the policy had already decided.
+      return answeredBy === null
+        ? 'granted'
+        : "granted by this project's standing policy, not by this tap";
     case 'denied':
       return 'denied';
     case 'withdrawn':
@@ -135,15 +159,22 @@ export function ApprovalControls({
   name,
   store,
   scheme,
+  project,
   size = 'sm',
 }: ApprovalControlsProps): JSX.Element | null {
   const snapshot = useHubSnapshot(store);
   const [answer, setAnswer] = useState<ApprovalAnswer | null>(null);
+  const [rule, setRule] = useState<ApprovalAnswer | null>(null);
 
   if (approval === null) return null;
   // Read out here rather than inside the handler: a function declaration is
   // hoisted above the guard, so the narrowing does not reach it.
   const { approvalId } = approval;
+  // The two fields a rule is made of, read out here for the same reason: a
+  // function declaration is hoisted above the guard, so the narrowing does not
+  // reach it. Copied rather than passed whole, so that nothing a rule is made
+  // from can be an id or a suggestion.
+  const request = { tool: approval.tool, proposal: approval.proposal };
 
   // An answer to some other request is not this one's business. Not cleared
   // either: there is nothing to clear it from, and a stale object that matches
@@ -161,7 +192,27 @@ export function ApprovalControls({
   // is the hub saying it did not read the frame -- the request is still open.
   const spent = followUp.kind === 'waiting' || followUp.kind === 'decided';
 
-  function decide(event: MouseEvent<HTMLButtonElement>, decision: ApprovalDecision): void {
+  /**
+   * The rule half of "always allow", kept apart from the request half all the
+   * way to the screen.
+   *
+   * Two sends, two frames, two answers, two sentences. Folding them into one
+   * would mean saying something about a half nobody has answered: a refused
+   * rule over a granted request must not read as a request that went nowhere,
+   * and a granted request must not imply a rule was saved.
+   */
+  const written = rule !== null && rule.approvalId === approvalId ? rule : null;
+  const rulePolicy =
+    project.kind === 'project' ? (snapshot.approvalPolicies.get(project.id) ?? null) : null;
+  const ruleFollowUp = policyFollowUp(written?.frameId ?? null, rulePolicy, snapshot.lastRefusal);
+  const ruleWords =
+    ruleFollowUp.kind === 'refused'
+      ? `the rule was not added: ${ruleFollowUp.words}`
+      : ruleFollowUp.kind === 'done' && project.kind === 'project'
+        ? `saved in ${project.label}: this exact request will not be asked again`
+        : (written?.refusal ?? '');
+
+  function decide(event: MouseEvent<HTMLButtonElement>, decision: ApprovalDecision): boolean {
     // The card around these buttons is a link to the session. Answering is not
     // a navigation, and a person aiming at Allow meant Allow.
     event.preventDefault();
@@ -171,6 +222,42 @@ export function ApprovalControls({
       outcome.accepted
         ? { approvalId, frameId: outcome.id, refusal: null }
         : { approvalId, frameId: null, refusal: outcome.reason },
+    );
+    return outcome.accepted;
+  }
+
+  /**
+   * Both halves of "always allow this exact request", in the order that costs
+   * least when one of them fails.
+   *
+   * The grant goes first because it is what the blocked agent is waiting for
+   * and because a rule cannot answer it: the hub matches its rows at the moment
+   * a request arrives, so a rule written now applies to the next request like
+   * this one and never to this one. Writing the rule first would therefore buy
+   * nothing and would leave the person who tapped with a standing grant and a
+   * still-blocked agent if the second send failed.
+   *
+   * The rule is not sent at all when the store would not take the grant. That
+   * is the one case where the two are not independent: the store refuses on a
+   * dead connection or a full queue, and a rule written for a request nobody
+   * answered is a standing grant made in a moment the person could not see the
+   * outcome of.
+   */
+  function alwaysAllow(event: MouseEvent<HTMLButtonElement>): void {
+    if (project.kind !== 'project') return;
+    if (!decide(event, 'grant')) {
+      setRule({
+        approvalId,
+        frameId: null,
+        refusal: 'no rule was added: this request was not answered',
+      });
+      return;
+    }
+    const outcome = store.sendCommand(allowAlwaysCommand(project.id, request));
+    setRule(
+      outcome.accepted
+        ? { approvalId, frameId: outcome.id, refusal: null }
+        : { approvalId, frameId: null, refusal: `the rule was not added: ${outcome.reason}` },
     );
   }
 
@@ -255,6 +342,27 @@ export function ApprovalControls({
           Deny
         </Button>
       </Group>
+      {/**
+       * The third answer: this one, and every request whose text is exactly
+       * this one, in one named project.
+       *
+       * Under the pair rather than beside it, and full width, because it is
+       * the longest-lived of the three -- Allow answers a question and this
+       * answers every question like it -- and because it must be read before
+       * it is pressed. It is drawn only where a project can be named, so the
+       * words on it always say which policy is being written to.
+       */}
+      {project.kind === 'project' && (
+        <Button
+          size={size}
+          variant="default"
+          disabled={spent}
+          onClick={alwaysAllow}
+          aria-label={`always allow this exact request in ${project.label}: ${name}`}
+        >
+          Always allow this exact request in {project.label}
+        </Button>
+      )}
       {/* Mounted before it has anything to say, and empty until it does: an
           outcome is then an update to a region a screen reader is already on,
           rather than a sentence appearing somewhere it was not looking. */}
@@ -266,8 +374,29 @@ export function ApprovalControls({
             refused === null ? colorForRole('textMuted', scheme) : colorForTone('blocked', scheme),
         }}
       >
-        {refused ?? (followUp.kind === 'decided' ? outcomeWords(followUp.outcome) : '')}
+        {refused ??
+          (followUp.kind === 'decided'
+            ? outcomeWords(followUp.outcome, snapshot.lastApproval?.answeredBy ?? null)
+            : '')}
       </Text>
+      {/**
+       * The rule's own region, mounted for the same reason and kept separate
+       * for a stronger one: it reports a second frame, and a person who tapped
+       * once is owed both answers rather than whichever arrived last.
+       */}
+      {project.kind === 'project' && (
+        <Text
+          role="status"
+          fz={11}
+          style={{
+            color: ruleWords.startsWith('the rule was not added')
+              ? colorForTone('blocked', scheme)
+              : colorForRole('textMuted', scheme),
+          }}
+        >
+          {ruleWords}
+        </Text>
+      )}
     </Box>
   );
 }

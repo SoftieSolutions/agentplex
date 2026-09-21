@@ -2,6 +2,7 @@ import type { JSX } from 'react';
 import type { SessionRef } from '@agentplex/protocol';
 
 import { ApprovalControls } from '../sessions/approval-controls.js';
+import type { SessionProject } from '../sessions/approval-policy-model.js';
 import type { SessionApproval } from '../sessions/session-list-model.js';
 import { Box, Stack } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
@@ -28,10 +29,16 @@ import type { HubStore } from '../store/hub-store.js';
  * one screen three independent answers.
  *
  * What it does not draw is the policy the provider suggested alongside each
- * request. `SessionApproval` does not carry it: these buttons answer one
- * command, a rule answers every command like it, and the one surface where a
- * rule is agreed to is the panel's APPROVALS block, deliberately not here where
- * a person is tapping through a queue.
+ * request. `SessionApproval` does not carry it, and that is the line this tab
+ * holds: a suggestion is the provider's idea of a pattern (`prisma migrate *`),
+ * and agreeing to one while tapping through a queue is how a person grants a
+ * shape they never read.
+ *
+ * The control it does carry is the other kind. "Always allow this exact
+ * request in <project>" is made from the tool and the proposal in front of the
+ * person, whole, with nothing to widen -- so it is offered wherever Allow and
+ * Deny are, including here, and the panel's APPROVALS block is where the rules
+ * it writes are read back and taken out again.
  *
  * The list is never empty. The pane offers this tab only while the session is
  * holding a request and falls back to the Terminal the moment the last one
@@ -44,6 +51,12 @@ export interface ApprovalsTabProps {
   readonly sessionRef: SessionRef;
   /** Oldest first, as `approvalsOldestFirst` orders them. Never empty. */
   readonly approvals: readonly SessionApproval[];
+  /**
+   * Where the tree has this session filed, passed straight through to the
+   * controls: it is what decides whether "always allow this exact request in
+   * <project>" is offered beside each Allow and Deny.
+   */
+  readonly project: SessionProject;
   readonly store: HubStore;
   readonly scheme: Scheme;
 }
@@ -51,6 +64,7 @@ export interface ApprovalsTabProps {
 export function ApprovalsTab({
   sessionRef,
   approvals,
+  project,
   store,
   scheme,
 }: ApprovalsTabProps): JSX.Element {
@@ -95,6 +109,7 @@ export function ApprovalsTab({
             // one session, so the session's name would label all of them the
             // same and name nothing.
             name={approval.tool}
+            project={project}
             store={store}
             scheme={scheme}
           />

@@ -170,7 +170,17 @@ describe('the Approvals tab', () => {
       root ??= createRoot(container);
       root.render(
         withProvider(
-          <ApprovalsTab sessionRef={SESSION} approvals={approvals} store={store} scheme="dark" />,
+          <ApprovalsTab
+            sessionRef={SESSION}
+            approvals={approvals}
+            // The tab under test is the queue, not the policy: these cases are
+            // about three requests being three independent answers, so the
+            // session is drawn as one the tree cannot place and the tab offers
+            // the pair and nothing else.
+            project={{ kind: 'unplaced' }}
+            store={store}
+            scheme="dark"
+          />,
         ),
       );
     });
