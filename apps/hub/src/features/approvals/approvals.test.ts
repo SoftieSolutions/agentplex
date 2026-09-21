@@ -574,6 +574,47 @@ describe('a request the standing policy already answered', () => {
     expect(lastChange(FIXING)?.[0]?.answeredBy).toBe(null);
   });
 
+  it('takes the rule off the row when the machine refuses the grant it sent', async () => {
+    // Nothing was applied, so the request is open again and a person will
+    // answer it. A row still saying a standing rule answered it would be a
+    // screen reporting a grant that never happened -- and the person who then
+    // taps Allow would be told their tap did nothing, for a grant that was
+    // theirs.
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    dispatchAnswer = { ok: false, code: 'refused', problem: 'that machine is draining' };
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    expect(lastChange(MIGRATING)?.[0]?.answeredBy).toBe(null);
+
+    // And the person's own answer is theirs: the receipt carries no rule.
+    dispatchAnswer = { ok: true };
+    const person = approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' });
+    await settle();
+    approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
+
+    expect(dispatched).toHaveLength(2);
+    expect(await person).toEqual({ ok: true, outcome: 'granted', answeredBy: null });
+  });
+
+  it('tells the waiting clients a refused grant is open again, not answered by a rule', async () => {
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    dispatchAnswer = { ok: false, code: 'refused', problem: 'that machine is draining' };
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    // The row was published as answered by the rule while the decision was in
+    // flight -- that is what the claim buys -- so the retraction has to be
+    // published too, or every client keeps the marker until something else
+    // moves the state.
+    const marks = changes
+      .filter((change) => change.ref.sessionId === MIGRATING.sessionId)
+      .map((change) => change.approvals[0]?.answeredBy ?? null);
+    expect(marks).toEqual([null, A_GRANT, null]);
+  });
+
   it('grants nothing for a request the agent took back while the policy was read', async () => {
     let release = (): void => undefined;
     policyAnswer = () =>

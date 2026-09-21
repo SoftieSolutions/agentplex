@@ -270,9 +270,11 @@ interface OpenApproval {
    * The standing rule that answered this, when nobody was asked.
    *
    * Set in the one tick that also takes the claim, so it can never describe a
-   * decision a person got to first. It is what makes an auto-grant
-   * attributable: the log line for the settlement names the project and the
-   * rule, rather than reporting a grant with nobody's name on it.
+   * decision a person got to first, and cleared again if the machine refuses
+   * the decision it produced -- a rule that answered nothing did not answer
+   * this. It is what makes an auto-grant attributable: the log line for the
+   * settlement names the project and the rule, rather than reporting a grant
+   * with nobody's name on it.
    */
   grantedByPolicy: ApprovalPolicyGrant | null;
 }
@@ -664,6 +666,14 @@ export function createApprovals({
    * frame it was: nothing happened, so nobody is owed an outcome and nobody
    * may be left holding a promise that only an answer which never happened
    * could settle.
+   *
+   * A grant a standing rule made is taken back off the row here for the same
+   * reason the claim is released. The mark is published the moment the rule
+   * takes the claim, before the decision leaves this hub, so a refusal leaves
+   * every client drawing a request as answered by a rule while it is still
+   * open -- and the person who then taps Allow would be told their tap lost to
+   * a policy, about a grant that was theirs. Nothing was applied, so nothing
+   * answered it, and the row has to say so.
    */
   function refuseDispatch(
     entry: OpenApproval,
@@ -671,7 +681,17 @@ export function createApprovals({
     code: RefusalCode,
     problem: string,
   ): void {
-    if (lookup(request.ref, request.approvalId) === entry) entry.claimed = false;
+    const stillOpen = lookup(request.ref, request.approvalId) === entry;
+    if (stillOpen) entry.claimed = false;
+    if (entry.grantedByPolicy !== null) {
+      entry.grantedByPolicy = null;
+      entry.pending = { ...entry.pending, answeredBy: null };
+      // Announced, not merely corrected in memory: the mark reached every
+      // client on its own broadcast, so the retraction needs one too. Only
+      // while the request is still this hub's to talk about -- one that ended
+      // in the meantime has already been announced without it.
+      if (stillOpen) announce(entry.ref);
+    }
     logger.info('a server refused a decision', {
       ...request.ref,
       approvalId: request.approvalId,
