@@ -154,6 +154,8 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastDocCreated: null,
     lastDocSaved: null,
     lastDocContent: null,
+    lastPush: null,
+    pushPublicKey: null,
     ...overrides,
   };
 }

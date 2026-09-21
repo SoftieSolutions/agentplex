@@ -19,6 +19,7 @@ import {
   encodeHubFrame,
   serveClientConnection,
   type ClientConnection,
+  type ClientPush,
   type EncodedMachineState,
 } from './client-connection.js';
 
@@ -144,6 +145,18 @@ export interface ClientsDependencies {
    */
   readonly terminal: Terminal;
   /**
+   * Web push, or `null` for a hub that has none.
+   *
+   * One instance for the whole broadcast, like every seam above it: which
+   * browsers have asked to be told is one set of rows, and the key pair is one
+   * fact about this hub. A per-socket copy of either would be two answers to
+   * the question of what a client may subscribe against.
+   *
+   * Narrower than the push feature itself -- see `ClientPush`. A socket may say
+   * whether it wants to be told; it may not tell anybody.
+   */
+  readonly push: ClientPush | null;
+  /**
    * The deadline seam the flush is scheduled on.
    *
    * Injected rather than `setTimeout` because coalescing is exactly the
@@ -203,6 +216,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
     catalogue,
     docs,
     terminal,
+    push,
   } = dependencies;
   const logger = dependencies.logger.child({ part: 'broadcast' });
   const coalesceMs = dependencies.coalesceMs ?? DEFAULT_COALESCE_MS;
@@ -302,6 +316,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         catalogue,
         docs,
         terminal,
+        push,
         onClosed: () => {
           if (connection !== null) connections.delete(connection);
         },

@@ -246,6 +246,9 @@ async function start(): Promise<Harness> {
     // Nothing here subscribes to a terminal; the relay is here because a
     // broadcast without one is not the broadcast the hub builds.
     terminal: createFakeTerminal(),
+    // No push: none of these suites is about it, and a broadcast whose push
+    // seam is absent is not the broadcast the hub builds.
+    push: null,
   });
 
   await connections.sync();

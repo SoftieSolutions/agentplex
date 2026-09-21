@@ -27,6 +27,7 @@ import {
   SERVER_TOKEN_MAX_CHARS,
 } from './pairing.js';
 import { frameParser } from './parse.js';
+import { pushEndpointSchema, pushKeySchema, pushSubscriptionSchema } from './push.js';
 import { clientTerminalFrames, subscriptionEndedFrameSchema } from './terminal.js';
 
 /**
@@ -584,6 +585,54 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     approvalId: approvalIdSchema,
     decision: approvalDecisionSchema,
   }),
+  /**
+   * Asks to be told about a needs-you edge when nobody is looking at the page.
+   *
+   * It carries the browser's own subscription and nothing else, parsed by
+   * `push.ts` -- the same schema the hub parses its rows off disk with, so a
+   * subscription is one shape from the browser to the table and there is no
+   * second spelling of it to drift apart from the first.
+   *
+   * What it cannot say is the point of it, and it is the point `session-start`
+   * makes in the other direction. A subscriber does not choose what a
+   * notification says: there is no title here, no directory, no branch and no
+   * text, because a payload is built from an edge the hub saw rather than from
+   * anything a client asked for. The endpoint is an address this hub will
+   * later POST to, which is why the schema is strict about it -- https only, a
+   * host, no credentials, bounded -- and why it is branded, so that nothing
+   * can be stored or sent to without having come through the parser.
+   *
+   * The answer is `push-subscribed`, or the ordinary refusal when this hub has
+   * no key pair to be subscribed against.
+   *
+   * The endpoint is parsed here rather than merely bounded, which is the
+   * opposite of what `server-pair` does above, and the difference is who typed
+   * it. A pairing address is typed by a person, so a strict schema would turn
+   * a typo into a `protocol-error` and a closed socket instead of a sentence
+   * they can read. A subscription is produced by `PushManager.subscribe` and
+   * never by a human, so one that is not a subscription is a broken client and
+   * not a mistake somebody made -- and the parser is the right place to stop
+   * it, before anything can be stored that nothing could ever be sent to.
+   */
+  z.object({
+    type: z.literal('push-subscribe'),
+    id: frameIdSchema,
+    subscription: pushSubscriptionSchema,
+  }),
+  /**
+   * Stops the pushes to one browser, naming the endpoint.
+   *
+   * The endpoint and not a handle the hub minted, because the endpoint *is*
+   * the subscription: it is what the browser holds, what it can produce again
+   * after a reload, and the row's own key. A hub-minted id would be a second
+   * name for one thing, kept in the one place that has usually lost it by the
+   * time somebody wants to be left alone.
+   */
+  z.object({
+    type: z.literal('push-unsubscribe'),
+    id: frameIdSchema,
+    endpoint: pushEndpointSchema,
+  }),
   /** A client reads hub frames too, and can meet one it cannot parse. */
   protocolErrorFrameSchema,
 ]);
@@ -595,6 +644,28 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     replyTo: frameIdSchema,
     protocolVersion: z.int(),
     hubId: hubIdSchema,
+    /**
+     * The VAPID public key a browser must subscribe against, or `null` when
+     * this hub has none.
+     *
+     * On the welcome because it is a fact about the hub that a client needs
+     * before it can ask for anything: a subscription is minted in the browser
+     * *with* this key, so a control that offered to turn push on before
+     * knowing it would be a control that cannot work. It costs one field on a
+     * frame every connection already sends, where a route for it would be a
+     * second authenticated surface answering one string.
+     *
+     * `null` and never the empty string, because "this hub cannot push" is a
+     * real state -- no key pair could be minted, or the composition root gave
+     * it no way to send -- and a plain reading of the field must not be able
+     * to miss it. A client that reads `null` stays on the in-page attention
+     * floor, which is what everybody relies on anyway.
+     *
+     * The public half only. The private half is on no interface, in no log
+     * line and in no frame; see the hub's push feature for why a getter for it
+     * would be a key somebody eventually reads for a second purpose.
+     */
+    pushPublicKey: pushKeySchema.nullable(),
   }),
   z.object({
     type: z.literal('pong'),
@@ -984,6 +1055,36 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('approval-decided'),
     replyTo: frameIdSchema,
     outcome: approvalOutcomeSchema,
+  }),
+  /**
+   * The browser is subscribed, and will be told the next time something wants
+   * a human while nobody is looking.
+   *
+   * Nothing to carry. The client sent the subscription and already has it, and
+   * the endpoint is its own key on both ends -- an answer that echoed it back
+   * would be a second copy of what the request said. It is a receipt, like
+   * `session-attention`: the control that asked stops waiting.
+   *
+   * There is no frame here for what the hub later sends. A push does not
+   * travel on this socket -- that is the whole point of it -- and a client
+   * that was on the socket to read one would be a client that did not need the
+   * push.
+   */
+  z.object({
+    type: z.literal('push-subscribed'),
+    replyTo: frameIdSchema,
+  }),
+  /**
+   * That endpoint is forgotten, whether or not there was a row for it.
+   *
+   * The same yes for both, deliberately: "there was nothing stored" and "there
+   * was, and now there is not" leave the browser in one state, and a client
+   * that had to tell them apart would be reading a difference it cannot act
+   * on.
+   */
+  z.object({
+    type: z.literal('push-unsubscribed'),
+    replyTo: frameIdSchema,
   }),
   protocolErrorFrameSchema,
 ]);

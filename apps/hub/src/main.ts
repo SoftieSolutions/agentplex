@@ -17,6 +17,8 @@ import { hubUsage, loadHubConfig } from './config.js';
 import { nodeMigrationFileSystem } from './db/node-migration-files.js';
 import { createSqliteDatabase } from './db/sqlite.js';
 import { createNodeBeaconSource } from './features/discovery/node-beacon-listener.js';
+import { nodePushSender } from './features/push/node-push-sender.js';
+import { nodeVapidKeyGenerator } from './features/push/node-vapid-keys.js';
 import { createNodeWebAssets } from './features/web/node-web-assets.js';
 import { missingWebPackage, resolveWebRoot } from './features/web/web-package.js';
 
@@ -123,6 +125,14 @@ async function main(): Promise<void> {
       // port whenever it runs, because hearing a machine announce itself costs
       // nothing and grants nothing.
       discovery: createNodeBeaconSource(logger),
+      // The two places this process calls into `web-push`: once to mint the
+      // VAPID pair a browser subscribes against, and once per notification to
+      // POST it. Named here rather than reached for inside the feature, so
+      // that the whole of what a test would otherwise do by accident -- key
+      // generation and a request to somebody else's service -- is one entry in
+      // this list. A build that dropped both would be a hub with no push, not
+      // a hub that fails to start.
+      push: { generateKeys: nodeVapidKeyGenerator, send: nodePushSender },
       timers: systemTimers,
       clock: systemClock,
     });

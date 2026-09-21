@@ -367,6 +367,9 @@ async function start(
     catalogue: createFakeCatalogue(),
     docs: createFakeDocs(),
     terminal,
+    // No push: none of these suites is about it, and a broadcast whose push
+    // seam is absent is not the broadcast the hub builds.
+    push: null,
   });
 
   await connections.sync();

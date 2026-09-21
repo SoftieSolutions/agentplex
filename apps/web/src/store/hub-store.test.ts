@@ -6,6 +6,7 @@ import {
   parseClientFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  pushSubscriptionSchema,
   serverRegistrationIdSchema,
   sessionIdSchema,
   sessionRefSchema,
@@ -1875,5 +1876,156 @@ describe('documents', () => {
     socket.deliver(hubFrames.refusal);
 
     expect(h.store.getSnapshot().lastRefusal).toMatchObject({ code: 'refused', holder: null });
+  });
+});
+
+/**
+ * Web push, from the key on the welcome to the answer a control waits for.
+ *
+ * Every frame here is captured from a real hub -- one wired with a key pair
+ * and one without -- because the two states this store has to keep apart are
+ * exactly the two a hand-written fixture would blur: a hub that can push, and
+ * a hub whose welcome says it cannot.
+ */
+describe('web push', () => {
+  /**
+   * What a browser hands over, through the protocol's parser.
+   *
+   * Parsed rather than typed out as a literal, because the endpoint on a
+   * command is branded: the store takes an endpoint that came through the
+   * schema and nothing else, so a test that could assemble one by hand would
+   * be a test proving something no caller can do.
+   */
+  const SUBSCRIPTION = pushSubscriptionSchema.parse({
+    endpoint: 'https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bHxN0-example',
+    keys: {
+      p256dh:
+        'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM',
+      auth: 'tBHItJI5svbpez7KI4CCXg',
+    },
+  });
+
+  /** Establishes against a hub that can push, rather than the default that cannot. */
+  async function establishWithPush(h: Harness): Promise<FakeSocket> {
+    h.store.subscribe(() => {});
+    await settle();
+    const socket = h.sockets.sockets[0];
+    if (socket === undefined) throw new Error('no socket was dialled');
+    socket.open();
+    socket.deliver(hubFrames.welcomeWithPush);
+    return socket;
+  }
+
+  it('carries the key the hub said to subscribe against', async () => {
+    const h = harness();
+    await establishWithPush(h);
+
+    expect(h.store.getSnapshot().pushPublicKey).toBe(
+      'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM',
+    );
+  });
+
+  it('says null for a hub that cannot push, which is what the welcome said', async () => {
+    const h = harness();
+    await establish(h);
+
+    expect(h.store.getSnapshot().pushPublicKey).toBeNull();
+  });
+
+  it('says null before any welcome, so nothing offers a control that cannot work', () => {
+    const h = harness();
+
+    expect(h.store.getSnapshot().pushPublicKey).toBeNull();
+  });
+
+  it('takes the key from every welcome, not only the first', async () => {
+    // A hub restarted with push wired in says so on the next welcome, and a
+    // client still holding the previous answer would refuse to offer
+    // something that now works.
+    const h = harness();
+    const { socket } = await establish(h);
+    expect(h.store.getSnapshot().pushPublicKey).toBeNull();
+
+    socket.drop();
+    await settle();
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcomeWithPush);
+
+    expect(h.store.getSnapshot().pushPublicKey).not.toBeNull();
+  });
+
+  it('sends a subscribe carrying what the browser produced', async () => {
+    const h = harness();
+    const socket = await establishWithPush(h);
+
+    const outcome = h.store.sendCommand({ type: 'push-subscribe', subscription: SUBSCRIPTION });
+
+    expect(outcome).toMatchObject({ accepted: true, delivery: 'sent' });
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'push-subscribe',
+      id: 2,
+      subscription: SUBSCRIPTION,
+    });
+  });
+
+  it('keeps the yes, correlated by the frame it answers', async () => {
+    const h = harness();
+    const socket = await establishWithPush(h);
+
+    socket.deliver(hubFrames.pushSubscribed);
+
+    expect(h.store.getSnapshot().lastPush).toEqual({ replyTo: 2, subscribed: true });
+  });
+
+  it('keeps the yes to an unsubscribe under the same view, the other way round', async () => {
+    const h = harness();
+    const socket = await establishWithPush(h);
+
+    socket.deliver(hubFrames.pushUnsubscribed);
+
+    expect(h.store.getSnapshot().lastPush).toEqual({ replyTo: 3, subscribed: false });
+  });
+
+  it('renders the hub refusing a subscribe in the hub words', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.refusalNoPush);
+
+    expect(h.store.getSnapshot().lastRefusal).toMatchObject({ replyTo: 2, code: 'refused' });
+    expect(h.store.getSnapshot().lastRefusal?.message).toContain('attention floor');
+  });
+
+  it('queues a subscribe made while the connection is down, and sends it on the next one', async () => {
+    // Turning notifications on while the connection blinks is still turning
+    // them on. Nothing here carries a credential, so unlike a pairing there is
+    // no reason the queue may not hold it.
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.drop();
+    await settle();
+
+    const outcome = h.store.sendCommand({ type: 'push-subscribe', subscription: SUBSCRIPTION });
+    expect(outcome).toMatchObject({ accepted: true, delivery: 'queued' });
+
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcomeWithPush);
+
+    expect(sentFrames(next).at(-1)).toMatchObject({ type: 'push-subscribe' });
+  });
+
+  it('sends an unsubscribe naming the endpoint, which is the subscription', async () => {
+    const h = harness();
+    const socket = await establishWithPush(h);
+
+    h.store.sendCommand({ type: 'push-unsubscribe', endpoint: SUBSCRIPTION.endpoint });
+
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'push-unsubscribe',
+      id: 2,
+      endpoint: SUBSCRIPTION.endpoint,
+    });
   });
 });

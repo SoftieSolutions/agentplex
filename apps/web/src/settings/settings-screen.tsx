@@ -1,6 +1,6 @@
-import { useState, type JSX, type ReactNode } from 'react';
+import { useState, type JSX } from 'react';
 import type { ServerRegistrationId } from '@agentplex/protocol';
-import type { HubSnapshot } from '../store/hub-store.js';
+import type { HubSnapshot, HubStore } from '../store/hub-store.js';
 import type { TokenStore } from '../auth/token.js';
 // The chrome's connection line owns this mapping now (AGX-119). Imported
 // rather than kept here as a second copy: this screen and the top bar draw
@@ -22,10 +22,13 @@ import { ProviderLine } from '../ui/provider-line.js';
 import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import { ColorSchemeControl } from './color-scheme-control.js';
+import { Section } from './settings-section.js';
 import type { DiscoveredCandidate } from './pairing-form.js';
 import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import { PairingPanel } from './pairing-panel.js';
 import type { PairingOperations } from './pairing-operations.js';
+import { PushControl } from './push-control.js';
+import type { PushOperations } from './push-operations.js';
 import { serverRows, type ServerRowView } from './server-rows.js';
 
 /**
@@ -46,8 +49,21 @@ import { serverRows, type ServerRowView } from './server-rows.js';
 
 export interface SettingsScreenProps {
   readonly snapshot: HubSnapshot;
+  /**
+   * The live store, for the one control that sends and then waits.
+   *
+   * Everything else here draws the snapshot above, which is why a test can
+   * render this screen without a connection. Notifications cannot: turning
+   * them on is a command answered by a frame that names the frame it answers,
+   * so the control subscribes to the store itself and correlates the answer.
+   * A snapshot passed down a render tree would be one that had already
+   * arrived, and the answer it is waiting for has not.
+   */
+  readonly store: HubStore;
   readonly tokens: TokenStore;
   readonly pairing: PairingOperations;
+  /** This browser's side of push, injected exactly as pairing is. */
+  readonly push: PushOperations;
   readonly candidates: readonly DiscoveredCandidate[];
 }
 
@@ -66,35 +82,14 @@ function phaseWords(snapshot: HubSnapshot): string {
   }
 }
 
-/** One bordered surface, the way every t7 panel sits on the background. */
-function Section({
-  scheme,
-  children,
-}: {
-  readonly scheme: Scheme;
-  readonly children: ReactNode;
-}): JSX.Element {
-  return (
-    <Paper
-      withBorder
-      radius="lg"
-      p="md"
-      style={{
-        background: colorForRole('surface', scheme),
-        borderColor: colorForRole('border', scheme),
-      }}
-    >
-      {children}
-    </Paper>
-  );
-}
-
 const MONO_INPUT = { input: { fontFamily: 'var(--mantine-font-family-monospace)' } };
 
 export function SettingsScreen({
   snapshot,
+  store,
   tokens,
   pairing,
+  push,
   candidates,
 }: SettingsScreenProps): JSX.Element {
   const scheme = useComputedColorScheme('dark');
@@ -110,6 +105,10 @@ export function SettingsScreen({
       <Section scheme={scheme}>
         <PairedServersSection snapshot={snapshot} pairing={pairing} scheme={scheme} />
       </Section>
+      {/* Unwrapped, unlike every other section: the control carries its own
+          surface because it answers `null` in a browser without push, and a
+          panel wrapped around nothing is an empty box on a settings screen. */}
+      <PushControl store={store} push={push} />
       <Section scheme={scheme}>
         <ColorSchemeControl />
       </Section>

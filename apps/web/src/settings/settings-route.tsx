@@ -4,6 +4,7 @@ import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { discoveredCandidates } from './pairing-form.js';
 import { createBrowserPairingOperations, type PairingOperations } from './pairing-operations.js';
+import { createBrowserPushOperations, type PushOperations } from './push-operations.js';
 import { SettingsScreen } from './settings-screen.js';
 
 /**
@@ -40,6 +41,23 @@ export function pairingFor(store: HubStore): PairingOperations {
   return built;
 }
 
+/**
+ * This browser's side of push, built once.
+ *
+ * Not keyed by the store, because it is not about the hub: it is the one
+ * browser this page is running in, and the control keys its read of it by
+ * identity. Built on first use rather than at import, so that importing this
+ * route touches no global -- `navigator.serviceWorker.ready` is a getter, and
+ * a module that reads it on load reads it in every test that imports the
+ * route for something else.
+ */
+let browserPush: PushOperations | null = null;
+
+export function pushFor(): PushOperations {
+  browserPush ??= createBrowserPushOperations(globalThis);
+  return browserPush;
+}
+
 export interface SettingsRouteProps {
   readonly store: HubStore;
   readonly tokens: TokenStore;
@@ -51,7 +69,9 @@ export function SettingsRoute({ store, tokens }: SettingsRouteProps): JSX.Elemen
     <SettingsScreen
       snapshot={snapshot}
       tokens={tokens}
+      store={store}
       pairing={pairingFor(store)}
+      push={pushFor()}
       candidates={discoveredCandidates(snapshot.machineState)}
     />
   );

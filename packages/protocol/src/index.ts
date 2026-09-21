@@ -1,6 +1,9 @@
 export { PROTOCOL_VERSION, checkProtocolVersion } from './version.js';
 export type { ProtocolVersionMismatch } from './version.js';
 
+export { acknowledgementHolds, wantsAttention, wantsHuman } from './attention.js';
+export type { AttentionSubject } from './attention.js';
+
 export { frameParser, parseTextFrame } from './parse.js';
 export { assertNever } from './exhaustive.js';
 export type { ParseFailure, ParseResult } from './parse.js';
@@ -169,6 +172,15 @@ export type {
   StaleReason,
   StoreView,
 } from './machine-state.js';
+
+export {
+  PUSH_ENDPOINT_MAX_CHARS,
+  PUSH_KEY_MAX_CHARS,
+  pushEndpointSchema,
+  pushKeySchema,
+  pushSubscriptionSchema,
+} from './push.js';
+export type { PushEndpoint, PushSubscription } from './push.js';
 
 export {
   providerReadinessSchema,

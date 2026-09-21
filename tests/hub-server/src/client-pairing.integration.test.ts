@@ -117,6 +117,9 @@ async function startFleet(): Promise<Fleet> {
     // The pairing nobody types is not this file's subject: what is under test
     // is the one somebody does.
     localServer: null,
+    // No push: this suite is not about it, and the two seams it needs are a
+    // cryptographic mint and a POST to somebody else's service.
+    push: null,
     files: createFakeStoreFiles(),
   });
 

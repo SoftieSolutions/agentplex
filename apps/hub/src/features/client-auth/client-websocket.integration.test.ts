@@ -84,6 +84,9 @@ async function startTestHub(clock = movableClock()): Promise<Hub> {
     host: HOST,
     port: 0,
     localServer: null,
+    // No push: this suite is not about it, and the two seams it needs are a
+    // cryptographic mint and a POST to somebody else's service.
+    push: null,
     files: createFakeStoreFiles(),
   });
   return hub;
@@ -183,6 +186,9 @@ describe('the client websocket', () => {
       replyTo: 1,
       protocolVersion: PROTOCOL_VERSION,
       hubId: 'hub-1',
+      // This hub was given no way to push, and says so rather than leaving the
+      // field out: a client has to be able to tell that from a hub that can.
+      pushPublicKey: null,
     });
     expect(state).toMatchObject({ type: 'machine-state', state: { stores: [], servers: [] } });
     expect(started.clients.attached).toBe(1);
