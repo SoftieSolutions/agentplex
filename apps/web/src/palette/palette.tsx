@@ -70,8 +70,17 @@ import type { PaletteSearch, PaletteSearchSnapshot } from './palette-search.js';
  * on mount and a line in the handler that closes.
  */
 
-/** What the control is for, said once: on the trigger and over the field. */
-const SEARCH_WORDS = 'Search sessions and documents';
+/**
+ * What the control is for, said once: on the trigger and over the field.
+ *
+ * Three kinds, because three kinds can answer. The mockup's field reads
+ * "Search sessions, projects, graphs…" and this is the honest form of it: a
+ * project is findable now that a flat search can carry a container (AGX-261),
+ * and a graph is a kind no migration has seeded, so naming one would be a
+ * promise the hub cannot keep. The list this sentence describes is
+ * `PALETTE_KINDS`, and the day a graph joins it this sentence joins it too.
+ */
+const SEARCH_WORDS = 'Search sessions, documents and projects';
 
 /**
  * What the field looks in, which is both matchers spelled out.
@@ -85,10 +94,9 @@ const SEARCH_WORDS = 'Search sessions and documents';
  * fewer fields than are matched would have them stop typing the one that would
  * have worked.
  *
- * The mockup's placeholder is "Search sessions, projects, graphs…" and this is
- * still deliberately not that. A project cannot come back from a flat search
- * until AGX-261, and a graph does not exist yet; the words say sessions and
- * documents because those are the two kinds a query can answer with.
+ * Which kinds can answer is `SEARCH_WORDS` above and not this line: this one
+ * names the fields, and a person who typed a miss needs both -- what was
+ * searched, and what was searched in.
  */
 const FIELD_HINT = 'A name, an id, a directory, a store, a machine, a provider or a summary';
 
@@ -173,12 +181,41 @@ function problemWords(problem: string): string {
  * the one sentence that carries it. Nothing is announced while the hub is
  * still answering an empty-looking list: "nothing matches" said over a question
  * that has not been answered yet is a claim this does not have.
+ *
+ * A refusal is in this sentence for exactly that reason, and it is the whole
+ * of the sentence when no row is drawn. The rows, the count and the refusal
+ * line are three pieces of one answer on screen and a screen reader is handed
+ * one: the refusal line under the rows is text in a dialog rather than a live
+ * region, so an announcement that left it out would say "Nothing matches that"
+ * about a question half of which was never asked. With rows drawn the refusal
+ * rides beside the count, because the count is then a count of one half.
  */
-function announcementWords(listing: PaletteListing, searching: boolean): string {
+function announcementWords(
+  listing: PaletteListing,
+  searching: boolean,
+  problem: string | null,
+): string {
   const drawn = listing.results.length;
-  if (drawn === 0) return searching ? '' : NO_MATCH_WORDS;
-  if (listing.total > drawn) return `${String(drawn)} of ${String(listing.total)} matches`;
-  return drawn === 1 ? '1 match' : `${String(drawn)} matches`;
+  if (drawn === 0 && searching) return '';
+  if (drawn === 0) return problem === null ? NO_MATCH_WORDS : unansweredWords(problem);
+  const counted =
+    listing.total > drawn
+      ? `${String(drawn)} of ${String(listing.total)} matches`
+      : drawn === 1
+        ? '1 match'
+        : `${String(drawn)} matches`;
+  return problem === null ? counted : `${counted}. ${problemWords(problem)}`;
+}
+
+/**
+ * The miss that is not a miss: nothing here matched and the hub never said.
+ *
+ * Said as what was and was not asked, rather than as an error, because that is
+ * the difference a person acts on: retyping finds nothing more while the hub
+ * is unreachable, and the sessions this browser holds are still searched.
+ */
+function unansweredWords(problem: string): string {
+  return `Nothing this browser holds matches that, and the hub could not be asked: ${problem}`;
 }
 
 /**
@@ -473,7 +510,7 @@ export function CommandPalette({
               c={colorForRole('textMuted', scheme)}
               style={{ padding: '2px 14px 12px' }}
             >
-              Searching the hub for documents…
+              Searching the hub for documents and projects…
             </Text>
           ) : null}
 
@@ -522,7 +559,7 @@ export function CommandPalette({
       {/* Mounted at every state and empty when the dialog is shut: see
           OFF_SCREEN for why the region cannot arrive with its words. */}
       <Box data-palette-announcement role="status" style={OFF_SCREEN}>
-        {opened ? announcementWords(listing, hubHalf.searching) : ''}
+        {opened ? announcementWords(listing, hubHalf.searching, hubHalf.problem) : ''}
       </Box>
     </>
   );
