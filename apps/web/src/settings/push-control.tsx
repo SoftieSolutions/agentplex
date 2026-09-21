@@ -165,6 +165,14 @@ export function PushControl({ store, push }: PushControlProps): JSX.Element | nu
   });
   if (view.kind === 'silent') return null;
 
+  /**
+   * In the body, and genuinely: it is the click handler, so it both asks the
+   * browser for the permission and writes down what came back. The two setters
+   * and the `push` and `store` props are what it is, and hoisting it would mean
+   * passing all four back in -- a function of the same closure with the closure
+   * spelled out. The permission is requested here rather than in an effect
+   * because a browser only grants one inside a gesture.
+   */
   function turnOn(hubKey: string): void {
     setTrouble(null);
     void (async () => {
@@ -209,6 +217,7 @@ export function PushControl({ store, push }: PushControlProps): JSX.Element | nu
     })();
   }
 
+  /** In the body for the same reason `turnOn` is: it writes both setters. */
   function turnOff(): void {
     setTrouble(null);
     void (async () => {
