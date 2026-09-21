@@ -1,4 +1,10 @@
-import type { SessionUsage } from '@agentplex/protocol';
+import {
+  ACTIVITY_TEXT_MAX_CHARS,
+  activitySchema,
+  displayableActivityText,
+  type Activity,
+  type SessionUsage,
+} from '@agentplex/protocol';
 import { z } from 'zod';
 import type { TranscriptSignal } from './provider-adapter.js';
 
@@ -138,6 +144,57 @@ const turnEventSchema = z.object({
   turn_id: z.string().min(1),
 });
 
+/**
+ * The event codex writes when one item of a turn is finished, whatever kind of
+ * item it was.
+ *
+ * `item` is left `unknown` here for the reason `payload` is on the envelope:
+ * this parser recognises exactly one item type and has nothing to say about
+ * the rest, and declaring a union of every shape codex can complete would be a
+ * list to maintain against a CLI that adds to it.
+ */
+const itemCompletedSchema = z.object({ type: z.literal('item_completed'), item: z.unknown() });
+
+/**
+ * A command codex ran, and the one item in a captured rollout this parser can
+ * turn into an activity.
+ *
+ * `parsed_cmd` and not `command`, and the distinction is the whole of why this
+ * schema is shaped the way it is. `command` is the argv, redacted element by
+ * element in every captured fixture and never read here -- and a field named
+ * `command` is also the one name the integration suite fails the build over,
+ * so it stays on codex's side of this parser. `parsed_cmd` is codex's own
+ * reading of what the argv means, one entry per command it recognised in a
+ * pipeline or a chain, and the capture leaves it verbatim because it is not
+ * content.
+ *
+ * Only `cmd` is declared on an entry. The `type` beside it is codex's
+ * classification -- `unknown` is the only value any captured fixture carries
+ * -- and nothing here switches on it.
+ */
+const commandExecutionSchema = z
+  .object({
+    type: z.literal('CommandExecution'),
+    parsed_cmd: z.array(z.object({ cmd: z.string() }).loose()),
+    status: z.string().min(1).optional(),
+    exit_code: z.int().optional(),
+  })
+  .loose();
+
+/**
+ * The statuses that mean the command is over.
+ *
+ * `failed` is the captured one: `codex-pending-tool-call.jsonl` is a
+ * `printf > probe.txt` refused by a read-only sandbox, and codex wrote
+ * `status: "failed"` with `exit_code: 1`. `completed` is its counterpart and
+ * is not captured anywhere yet, which is why this is a named set rather than a
+ * "not in progress" test: a status this parser does not recognise costs the
+ * exit status and nothing else, and the activity still shows the command. That
+ * degrades toward "still running", which is what an absent `exitStatus`
+ * already means, rather than toward inventing an ending.
+ */
+const FINISHED_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed']);
+
 export interface CodexRollout {
   /**
    * codex's own id for this session, or `null` when no line in the file states
@@ -172,6 +229,14 @@ export interface CodexRollout {
    * running. Nothing here interprets the string.
    */
   readonly model: string | null;
+  /**
+   * What this session was last seen doing, or `null` when the rollout says
+   * nothing this parser can report honestly.
+   *
+   * See `commandActivity` for what a captured rollout actually yields, and for
+   * the variants it cannot yield yet.
+   */
+  readonly activity: Activity | null;
 }
 
 /**
@@ -196,6 +261,7 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
   let sessionId: string | null = null;
   let cwd: string | null = null;
   let model: string | null = null;
+  let activity: Activity | null = null;
   const open = new Set<string>();
   let lastClose: 'task_complete' | 'turn_aborted' | null = null;
   let usage: SessionUsage | null = null;
@@ -252,6 +318,18 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
 
     if (line.data.type !== 'event_msg') continue;
 
+    const completed = itemCompletedSchema.safeParse(line.data.payload);
+    if (completed.success) {
+      // Latest wins, like the model and the cwd above. An item this parser
+      // cannot turn into an activity -- a `UserMessage`, an `AgentMessage`, a
+      // `Reasoning` -- leaves the last one it could standing rather than
+      // clearing it: what the session is doing did not stop being true because
+      // codex finished writing something else down.
+      const found = commandActivity(completed.data.item);
+      if (found !== null) activity = found;
+      continue;
+    }
+
     const event = turnEventSchema.safeParse(line.data.payload);
     if (!event.success) continue;
 
@@ -281,8 +359,86 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
       signal: signalOf(open, lastClose),
       usage,
       model,
+      activity,
     },
   };
+}
+
+/**
+ * One completed item, turned into the activity it describes -- or `null`,
+ * which is what every item but a `CommandExecution` comes to today.
+ *
+ * The text is `parsed_cmd`, joined in the order codex wrote it. That list is
+ * codex's own reading of the argv, so a pipeline or a `&&` chain arrives as
+ * the two or three commands codex recognised in it and all of them are what
+ * ran. The argv itself, `command`, is deliberately unread: it is redacted in
+ * every captured fixture, and it is argv, which is the one thing this
+ * codebase's frames may not carry. What crosses is a display string.
+ *
+ * What it can never emit today, and why:
+ *
+ * - `edit` would need a file-change item. No captured rollout holds one, and
+ *   whether codex 0.154.0 writes a `FileChange` item at all is unsettled --
+ *   the sessions captured here never edited a file. Deriving one from a
+ *   `CommandExecution` that happens to look like an edit would be reading a
+ *   command line for intent.
+ * - `tests` would need counts, which live in the command's output. `stdout`,
+ *   `stderr` and `aggregated_output` are all redacted in the captures, and
+ *   they are also output rather than state -- parsing a test summary out of
+ *   them is a different job from reading a session's record.
+ * - `narration` would be the `AgentMessage` item's text. Redacted in every
+ *   capture to the literal string `REDACTED`, so there is nothing to test
+ *   against and nothing worth showing; a card reading REDACTED is worse than
+ *   a card reading nothing.
+ * - `approval` is not in a rollout at all. See `signalOf`: codex writes no
+ *   approval event, and there is no registry beside the file that would say.
+ * - `plain` is the escape hatch for a line of text whose kind is unknown, and
+ *   the only text in a capture is the redacted message above.
+ *
+ * AGX-263 re-captures the fixtures with tool inputs and outputs, and those
+ * variants become derivable there rather than guessed at here.
+ */
+function commandActivity(item: unknown): Activity | null {
+  const execution = commandExecutionSchema.safeParse(item);
+  if (!execution.success) return null;
+
+  // Truncated rather than refused, and only here. A command line has no length
+  // limit and this rides every session in every store report, so the choice is
+  // between a prefix of the truth on the card and no activity at all for the
+  // one session somebody is watching. `displayableActivityText` runs first so
+  // the bound is counted in characters that will actually be drawn, and it is
+  // idempotent, so the schema re-running it below changes nothing.
+  const joined = displayableActivityText(execution.data.parsed_cmd.map((one) => one.cmd).join(' '));
+  const text = [...joined].slice(0, ACTIVITY_TEXT_MAX_CHARS).join('');
+
+  // Spread away rather than sent as a null: the protocol's field is optional
+  // because absent is how a command that has not ended reads, and a command
+  // whose ending codex did not state is in exactly that position.
+  const exitStatus = exitStatusOf(execution.data);
+  const activity = activitySchema.safeParse({
+    kind: 'command',
+    text,
+    ...(exitStatus === null ? {} : { exitStatus }),
+  });
+  // A command that survived neither the strip nor the bound -- one that was
+  // nothing but control characters -- costs this activity and nothing else.
+  // The session keeps its date, its model and its usage.
+  return activity.success ? activity.data : null;
+}
+
+/**
+ * The status the command ended on, or `null` while it has not ended.
+ *
+ * Two conditions, and both are needed. A status codex has not declared
+ * finished means the `exit_code` beside it describes nothing yet, and an
+ * `exit_code` outside a byte did not come from a process ending -- a wait
+ * status holds one byte, and codex spells a signal death as a negative number
+ * or leaves the field out.
+ */
+function exitStatusOf(execution: z.infer<typeof commandExecutionSchema>): number | null {
+  if (execution.status === undefined || !FINISHED_STATUSES.has(execution.status)) return null;
+  if (execution.exit_code === undefined) return null;
+  return execution.exit_code >= 0 && execution.exit_code <= 255 ? execution.exit_code : null;
 }
 
 /**

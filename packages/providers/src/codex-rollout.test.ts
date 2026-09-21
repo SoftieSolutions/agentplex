@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ACTIVITY_TEXT_MAX_CHARS } from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
 import { parseCodexRollout } from './codex-rollout.js';
 
@@ -49,6 +50,10 @@ describe('parseCodexRollout', () => {
         signal: 'awaiting-input',
         usage: { inputTokens: 3380, cacheReadTokens: 9984, cacheWriteTokens: 0, outputTokens: 6 },
         model: 'gpt-5.6-terra',
+        // This capture is a question answered and no tool run. Its only
+        // completed items are a `UserMessage` and an `AgentMessage`, whose
+        // text the capture redacts, so there is nothing to report.
+        activity: null,
       },
     });
   });
@@ -132,6 +137,132 @@ describe('parseCodexRollout', () => {
     const parsed = parseCodexRollout(ABORTED_TURN);
 
     expect(parsed.ok && parsed.rollout.signal).toBe('quiet');
+  });
+
+  it('reports the command a session ran, as codex itself parsed it', () => {
+    // `codex-pending-tool-call.jsonl` holds one `CommandExecution` item, and
+    // the text comes out of its `parsed_cmd` -- codex's own reading of the
+    // command line, which the capture leaves verbatim. The `command` array
+    // beside it is the argv, and the capture redacts every element of it;
+    // nothing here reads that field, on this fixture or on any other.
+    //
+    // The exit status is codex's `exit_code`, carried because the item's
+    // status says the command finished. This one failed: it is a
+    // `printf > probe.txt` under a read-only sandbox.
+    //
+    // The capture completes a `Reasoning` item after that command, which is
+    // the assertion that an item holding no activity leaves the last one
+    // standing rather than clearing it.
+    const parsed = parseCodexRollout(PENDING_TOOL_CALL);
+
+    expect(parsed.ok && parsed.rollout.activity).toEqual({
+      kind: 'command',
+      text: "printf 'hello' > probe.txt",
+      exitStatus: 1,
+    });
+  });
+
+  it('reports no activity for a turn the user interrupted before any tool ran', () => {
+    // `codex-aborted-turn.jsonl` completes one item, a `UserMessage`. No
+    // command ran, so there is no activity and that is not a fault: the
+    // session still has its date, its usage and its signal.
+    const parsed = parseCodexRollout(ABORTED_TURN);
+
+    expect(parsed.ok && parsed.rollout.activity).toBeNull();
+    expect(parsed.ok && parsed.rollout.signal).toBe('quiet');
+  });
+
+  it('never puts the capture’s redaction marker on the wire as activity text', () => {
+    // The guard is structural rather than a string comparison. The fields the
+    // capture replaces -- the argv in `command`, stdout, stderr, the agent's
+    // own message text -- are fields this parser does not read, and
+    // `parsed_cmd[].cmd` is one it leaves alone. A parser that grew a reach
+    // into a redacted field fails here rather than shipping REDACTED to a
+    // card.
+    for (const captured of [COMPLETED_TURN, PENDING_TOOL_CALL, ABORTED_TURN]) {
+      const parsed = parseCodexRollout(captured);
+      const activity = parsed.ok ? parsed.rollout.activity : null;
+
+      expect(activity === null || !JSON.stringify(activity).includes('REDACTED')).toBe(true);
+    }
+  });
+
+  it('leaves the exit status off a command codex has not finished running', () => {
+    // A `CommandExecution` whose status is still `in_progress` has no ending
+    // to report, and an absent `exitStatus` is what the protocol already
+    // means by "still running". Reporting the field anyway would turn a
+    // running command into a finished one on every card showing it.
+    const running = PENDING_TOOL_CALL.replaceAll('"status":"failed"', '"status":"in_progress"');
+    const parsed = parseCodexRollout(running);
+
+    expect(parsed.ok && parsed.rollout.activity).toEqual({
+      kind: 'command',
+      text: "printf 'hello' > probe.txt",
+    });
+  });
+
+  it('keeps the newest command a rollout records, not the first', () => {
+    // Latest wins, like the model and the cwd beside it. A card says what the
+    // session is doing now.
+    const later = lineOf(PENDING_TOOL_CALL, 'CommandExecution').replaceAll(
+      "printf 'hello' > probe.txt",
+      'ls -la',
+    );
+    const parsed = parseCodexRollout(`${PENDING_TOOL_CALL}${later}\n`);
+
+    expect(parsed.ok && parsed.rollout.activity).toEqual({
+      kind: 'command',
+      text: 'ls -la',
+      exitStatus: 1,
+    });
+  });
+
+  it('joins a command codex parsed into several parts, in the order it wrote them', () => {
+    // `parsed_cmd` is a list because codex splits a pipeline or a `&&` chain
+    // into the commands it recognises. All of them are what ran, so all of
+    // them are shown, in order.
+    const chained = lineOf(PENDING_TOOL_CALL, 'CommandExecution').replaceAll(
+      '[{"type":"unknown","cmd":"printf \'hello\' > probe.txt"}]',
+      '[{"type":"unknown","cmd":"cd /tmp"},{"type":"unknown","cmd":"ls"}]',
+    );
+    const parsed = parseCodexRollout(`${PENDING_TOOL_CALL}${chained}\n`);
+
+    expect(parsed.ok && parsed.rollout.activity).toEqual({
+      kind: 'command',
+      text: 'cd /tmp ls',
+      exitStatus: 1,
+    });
+  });
+
+  it('truncates a command past the protocol’s bound rather than losing it', () => {
+    // A command line has no length limit and this field rides every session in
+    // every store report. Truncating keeps a prefix of the truth on the card;
+    // refusing would drop the activity of the one session somebody is looking
+    // at, and the schema would refuse the string whole.
+    const long = 'x'.repeat(500);
+    const overlong = lineOf(PENDING_TOOL_CALL, 'CommandExecution').replaceAll(
+      "printf 'hello' > probe.txt",
+      long,
+    );
+    const parsed = parseCodexRollout(`${PENDING_TOOL_CALL}${overlong}\n`);
+
+    expect(parsed.ok && parsed.rollout.activity).toEqual({
+      kind: 'command',
+      text: 'x'.repeat(ACTIVITY_TEXT_MAX_CHARS),
+      exitStatus: 1,
+    });
+  });
+
+  it('costs the activity and not the session when a command is unusable', () => {
+    // A `parsed_cmd` whose only entry is characters no screen can draw leaves
+    // nothing to show, and the protocol's schema refuses it. The rollout
+    // around it is still a session, with its date, its model and its usage.
+    const blank = PENDING_TOOL_CALL.replaceAll("printf 'hello' > probe.txt", '\\u0007\\u0007');
+    const parsed = parseCodexRollout(blank);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok && parsed.rollout.activity).toBeNull();
+    expect(parsed.ok && parsed.rollout.model).toBe('gpt-5.6-terra');
   });
 
   it('dates a session by the newest line codex wrote, not by the newest turn', () => {
@@ -314,3 +445,16 @@ describe('parseCodexRollout', () => {
     });
   });
 });
+
+/**
+ * Reads back a captured line so a test bends real output instead of inventing
+ * one, named by the item type its payload carries.
+ */
+function lineOf(rollout: string, item: string): string {
+  const found = rollout
+    .split('\n')
+    .filter((line) => line.includes(`"type":"${item}"`))
+    .at(-1);
+  if (found === undefined) throw new Error(`the fixture holds no ${item} line`);
+  return found;
+}
