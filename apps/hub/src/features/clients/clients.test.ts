@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  APPROVAL_PROPOSAL_MAX_CHARS,
   parseHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
@@ -2205,6 +2206,28 @@ describe('a client reading and editing a standing policy', () => {
     });
 
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 2, code: 'refused' });
+    expect(approvalPolicy.held.get(PROJECT) ?? []).toHaveLength(0);
+  });
+
+  it('refuses a rule made of a request too long to have been shown whole', async () => {
+    const { broadcast, approvalPolicy } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    // What a person gets by tapping "always allow" on a proposal the provider
+    // had to cut. The frame parses -- the text is within the wire's bound --
+    // and the rule is refused in words, because a rule made of cut text would
+    // stand for every request that starts the same way.
+    await client.say({
+      type: 'approval-policy-add',
+      id: 2,
+      projectId: PROJECT,
+      rule: { tool: 'Bash', proposal: 'x'.repeat(APPROVAL_PROPOSAL_MAX_CHARS) },
+    });
+
+    const refusal = client.received.at(-1);
+    expect(refusal).toMatchObject({ type: 'refusal', replyTo: 2, code: 'refused' });
+    expect(refusal?.type === 'refusal' ? refusal.message : '').toContain('too long');
     expect(approvalPolicy.held.get(PROJECT) ?? []).toHaveLength(0);
   });
 

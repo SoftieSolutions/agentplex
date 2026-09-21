@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { nodeIdSchema, sessionRefSchema, type NodeId, type SessionRef } from '@agentplex/protocol';
+import {
+  APPROVAL_PROPOSAL_MAX_CHARS,
+  nodeIdSchema,
+  sessionRefSchema,
+  type NodeId,
+  type SessionRef,
+} from '@agentplex/protocol';
 import { createLogger } from '@agentplex/node-shared';
 import type { Database } from '../../db/database.js';
 import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-schema.js';
@@ -208,6 +214,23 @@ describe('the standing policy', () => {
     expect(refused.ok).toBe(false);
     if (refused.ok) return;
     expect(refused.problem).toContain('tool');
+    expect(await policy.rulesFor(WORK)).toEqual([]);
+  });
+
+  it('refuses a rule made of a proposal that was cut, and stores nothing', async () => {
+    // A request too long to be shown whole is asked about every time, so the
+    // rule a person tried to make of it cannot be written -- and the reason
+    // reaches them, because they tapped a button and are owed one. The hub
+    // does not restate the grammar here: the sentence is the parser's.
+    const policy = feature();
+    const refused = await policy.add({
+      project: WORK,
+      rule: { tool: 'Bash', proposal: 'x'.repeat(APPROVAL_PROPOSAL_MAX_CHARS) },
+    });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.code).toBe('refused');
+    expect(refused.problem).toContain('too long');
     expect(await policy.rulesFor(WORK)).toEqual([]);
   });
 
