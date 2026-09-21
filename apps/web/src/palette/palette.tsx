@@ -1,6 +1,7 @@
 import {
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type JSX,
   type KeyboardEvent,
@@ -15,14 +16,17 @@ import { colorForRole, type Scheme } from '../ui/tokens.js';
 import {
   firstResult,
   lastResult,
+  mergeResults,
   nextResult,
   paletteListing,
   PALETTE_RESULT_LIMIT,
   previousResult,
   sessionResults,
+  type PaletteGroup,
   type PaletteListing,
   type PaletteResult,
 } from './palette-model.js';
+import type { PaletteSearch, PaletteSearchSnapshot } from './palette-search.js';
 
 /**
  * The search-shaped control in the chrome, and the dialog it opens.
@@ -67,17 +71,26 @@ import {
  */
 
 /** What the control is for, said once: on the trigger and over the field. */
-const SEARCH_WORDS = 'Search sessions';
+const SEARCH_WORDS = 'Search sessions and documents';
 
 /**
- * What the field looks in, which is `matchesSearch` spelled out.
+ * What the field looks in, which is both matchers spelled out.
+ *
+ * Both, because one field asks two questions: `matchesSearch` over the
+ * sessions this browser holds -- a name, a session id, a provider, a machine, a
+ * store, a summary -- and the hub's own `matchOf` over everything else, which
+ * is a name, a session id, a working directory and a server label. The sentence
+ * is the union of those, and it is the sentence the empty state repeats: a
+ * person who typed a miss cannot see what was looked in, so a hint that named
+ * fewer fields than are matched would have them stop typing the one that would
+ * have worked.
  *
  * The mockup's placeholder is "Search sessions, projects, graphs…" and this is
- * deliberately not that: only sessions are searched today. AGX-140 adds the
- * kinds the hub answers, and the mockup's words become true in the same change
- * that makes them true.
+ * still deliberately not that. A project cannot come back from a flat search
+ * until AGX-261, and a graph does not exist yet; the words say sessions and
+ * documents because those are the two kinds a query can answer with.
  */
-const FIELD_HINT = 'A name, a store, a machine or a provider';
+const FIELD_HINT = 'A name, an id, a directory, a store, a machine, a provider or a summary';
 
 /** The chord the mockup draws on the trigger, bound to nothing. See the header. */
 const CHORD = '⌘K';
@@ -93,6 +106,14 @@ const LIST_ID = 'palette-results';
 function rowId(index: number): string {
   return `palette-result-${String(index)}`;
 }
+
+/** The heading a group is named by, pointed at rather than repeated. */
+function headingId(index: number): string {
+  return `palette-group-${String(index)}`;
+}
+
+/** The sentence the empty state and the announcement both say. */
+const NO_MATCH_WORDS = `Nothing matches that. ${FIELD_HINT} is what this looks in.`;
 
 /**
  * The caret, put where a person who just opened a palette is already typing.
@@ -114,14 +135,72 @@ function assignHash(hash: string): void {
 /**
  * How many rows were left out, in words, or `null` when none were.
  *
- * The count of what matched is carried out of `paletteListing` rather than
- * inferred from the rows, because a shortened list that says nothing claims it
- * found two things when it found forty.
+ * Two ways to be short of the whole answer, and they are said in one line
+ * because they are one fact to a person reading it: the dialog drew fewer rows
+ * than matched, or the hub had a further page it was not asked for. The count
+ * of what matched is carried out of `paletteListing` rather than inferred from
+ * the rows, because a shortened list that says nothing claims it found two
+ * things when it found forty; the hub's half is a flag and not a count, for the
+ * reason `PaletteSearchSnapshot.more` gives.
  */
-function remainderWords(listing: PaletteListing): string | null {
-  if (listing.total <= listing.results.length) return null;
-  return `${String(listing.results.length)} of ${String(listing.total)} matches. Keep typing to narrow.`;
+function remainderWords(listing: PaletteListing, hubHadMore: boolean): string | null {
+  const shortened = listing.total > listing.results.length;
+  if (!shortened && !hubHadMore) return null;
+  const counted = shortened
+    ? `${String(listing.results.length)} of ${String(listing.total)} matches`
+    : `${String(listing.results.length)} matches`;
+  const andTheHub = hubHadMore ? ', and the hub had more' : '';
+  return `${counted}${andTheHub}. Keep typing to narrow.`;
 }
+
+/**
+ * A refusal, said as what it costs rather than as an error.
+ *
+ * The client-held sessions are computed in this browser and owe the hub
+ * nothing, so a hub that cannot answer takes its own half and leaves them
+ * drawn. Saying so is the whole point of the line: rows that are still there
+ * under a silent failure read as the complete answer to what was typed.
+ */
+function problemWords(problem: string): string {
+  return `Only the sessions this browser already holds are listed: ${problem}`;
+}
+
+/**
+ * What the off-screen region says, which is what is announced.
+ *
+ * The rows and the count are a visual answer -- the list grows and shrinks
+ * under the field -- and a person who cannot see it is told the same thing in
+ * the one sentence that carries it. Nothing is announced while the hub is
+ * still answering an empty-looking list: "nothing matches" said over a question
+ * that has not been answered yet is a claim this does not have.
+ */
+function announcementWords(listing: PaletteListing, searching: boolean): string {
+  const drawn = listing.results.length;
+  if (drawn === 0) return searching ? '' : NO_MATCH_WORDS;
+  if (listing.total > drawn) return `${String(drawn)} of ${String(listing.total)} matches`;
+  return drawn === 1 ? '1 match' : `${String(drawn)} matches`;
+}
+
+/**
+ * The off-screen box the announcement is read out of.
+ *
+ * `attention-bell.tsx`'s, deliberately the same: a live region has to be in the
+ * document before it has words, because what a screen reader announces is a
+ * change to one that was already there. Mounted beside the trigger rather than
+ * inside the dialog for exactly that reason -- a region that arrives with the
+ * dialog arrives with its text.
+ */
+const OFF_SCREEN: CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+};
 
 /** The trigger's box, per form: the mockup's bar, and a fingertip's floor. */
 function triggerStyle(form: ShellForm, scheme: Scheme): CSSProperties {
@@ -158,6 +237,15 @@ export interface CommandPaletteProps {
    * a shortened list says without a fixture long enough to trip the default.
    */
   readonly limit?: number;
+  /**
+   * The half of the answer the hub holds, as a store this subscribes to.
+   *
+   * Built by the shell and handed in, for the reason the fleet is: what asks
+   * the hub is a store with a debounce, a generation counter and a socket
+   * behind it, and none of that is a dialog's business. `palette-search.ts`
+   * argues the split; this file's job is to draw both halves as one list.
+   */
+  readonly search: PaletteSearch;
   readonly scheme: Scheme;
   /** How a followed row enters its address, injected so a test never touches location. */
   readonly navigate?: (hash: string) => void;
@@ -167,6 +255,7 @@ export function CommandPalette({
   items,
   form,
   limit = PALETTE_RESULT_LIMIT,
+  search,
   scheme,
   navigate = assignHash,
 }: CommandPaletteProps): JSX.Element {
@@ -183,7 +272,16 @@ export function CommandPalette({
   const [selected, setSelected] = useState<string | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
-  const listing = paletteListing(sessionResults(items, query), limit);
+  /**
+   * The hub's half, read the way every other external state in this app is
+   * read: no effect, and the dialog re-renders when the answer moves.
+   */
+  const hubHalf: PaletteSearchSnapshot = useSyncExternalStore(search.subscribe, search.getSnapshot);
+
+  const listing = paletteListing(
+    mergeResults(sessionResults(items, query), hubHalf.results),
+    limit,
+  );
   const results = listing.results;
   const active =
     selected !== null && results.some((result) => result.id === selected)
@@ -194,6 +292,15 @@ export function CommandPalette({
     setQuery('');
     setSelected(null);
     setOpened(true);
+    // Nothing was typed yet, so there is nothing to ask and nothing an older
+    // opening answered that is an answer to this one.
+    search.reset();
+  }
+
+  /** What was typed, to both halves: one field, one question, two answerers. */
+  function ask(text: string): void {
+    setQuery(text);
+    search.search(text);
   }
 
   /**
@@ -207,6 +314,10 @@ export function CommandPalette({
    */
   function close(): void {
     setOpened(false);
+    // The question goes with the dialog: a query in flight has nowhere to land
+    // and its answer would be waiting the next time this opened, against text
+    // the field no longer holds.
+    search.reset();
     trigger.current?.focus();
   }
 
@@ -226,8 +337,17 @@ export function CommandPalette({
    * Escape is not here. The dialog closes on it through Mantine's own handler,
    * which is the same path a click outside takes, and a second listener for one
    * key would be a second opinion about what closing means.
+   *
+   * Nothing at all happens mid-composition. An IME spends Enter on committing
+   * the candidate and the arrows on walking the candidate list, and the field
+   * sees those presses too: a palette that acted on them would navigate away
+   * halfway through a word and make the candidate list unusable. `isComposing`
+   * is the flag for it, and `keyCode` 229 is what a browser that has not set
+   * the flag yet sends instead -- both, because the ones that disagree are
+   * exactly the ones this has to work in.
    */
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       setSelected(nextResult(results, active ?? ''));
@@ -258,7 +378,7 @@ export function CommandPalette({
     }
   }
 
-  const remainder = remainderWords(listing);
+  const remainder = remainderWords(listing, hubHalf.more);
 
   return (
     <>
@@ -320,34 +440,66 @@ export function CommandPalette({
               variant="unstyled"
               placeholder={FIELD_HINT}
               value={query}
-              onChange={(event) => setQuery(event.currentTarget.value)}
+              onChange={(event) => ask(event.currentTarget.value)}
               onKeyDown={onKeyDown}
             />
           </Box>
 
           <Box id={LIST_ID} role="listbox" aria-label={SEARCH_WORDS} style={{ padding: 6 }}>
-            {results.map((result, index) => (
-              <ResultRow
-                key={result.id}
-                result={result}
-                id={rowId(index)}
-                active={result.id === active}
+            {listing.groups.map((group, groupIndex) => (
+              <ResultGroup
+                key={group.kind}
+                group={group}
+                index={groupIndex}
+                // Where this group's rows begin in the drawn list, so a row's
+                // element id is its place in the order the arrows move in and
+                // not its place inside its group.
+                offset={listing.groups
+                  .slice(0, groupIndex)
+                  .reduce((rows, earlier) => rows + earlier.results.length, 0)}
+                active={active}
                 onFollow={close}
                 scheme={scheme}
               />
             ))}
           </Box>
 
-          {results.length === 0 ? (
+          {hubHalf.searching ? (
+            // The client-held rows stay put under this: they are computed here
+            // and complete already, and what is still coming is the other half.
+            <Text
+              data-palette-searching
+              fz={11.5}
+              c={colorForRole('textMuted', scheme)}
+              style={{ padding: '2px 14px 12px' }}
+            >
+              Searching the hub for documents…
+            </Text>
+          ) : null}
+
+          {hubHalf.problem === null ? null : (
+            <Text
+              data-palette-problem
+              fz={11.5}
+              c={colorForRole('textMuted', scheme)}
+              style={{ padding: '2px 14px 12px' }}
+            >
+              {problemWords(hubHalf.problem)}
+            </Text>
+          )}
+
+          {results.length === 0 && !hubHalf.searching ? (
             // The empty state carries the next action: what this looks in is
-            // the one thing a person who typed a miss cannot see.
+            // the one thing a person who typed a miss cannot see. Not while the
+            // hub is still answering, though: a miss is a claim, and half the
+            // answer is outstanding until it has answered.
             <Text
               data-palette-empty
               fz={12.5}
               c={colorForRole('textMuted', scheme)}
               style={{ padding: '2px 14px 14px' }}
             >
-              Nothing matches that. {FIELD_HINT} is what this looks in.
+              {NO_MATCH_WORDS}
             </Text>
           ) : null}
 
@@ -366,7 +518,70 @@ export function CommandPalette({
           )}
         </Modal.Content>
       </Modal.Root>
+
+      {/* Mounted at every state and empty when the dialog is shut: see
+          OFF_SCREEN for why the region cannot arrive with its words. */}
+      <Box data-palette-announcement role="status" style={OFF_SCREEN}>
+        {opened ? announcementWords(listing, hubHalf.searching) : ''}
+      </Box>
     </>
+  );
+}
+
+interface ResultGroupProps {
+  readonly group: PaletteGroup;
+  /** Which group this is, for the id the rows under it are named by. */
+  readonly index: number;
+  /** Where this group's first row falls in the drawn order. */
+  readonly offset: number;
+  readonly active: string | null;
+  readonly onFollow: () => void;
+  readonly scheme: Scheme;
+}
+
+/**
+ * One kind's rows, under a heading that says which kind.
+ *
+ * The heading exists because a name is not unique across kinds: a session and a
+ * document can both be called `spike-wasm`, and two identical rows with
+ * different addresses is a coin toss. It is a heading and not an option -- a
+ * `group` inside the listbox, labelled by the heading's own text -- so the
+ * arrows walk rows only and a screen reader hears which group it entered
+ * instead of a row it cannot select.
+ */
+function ResultGroup({
+  group,
+  index,
+  offset,
+  active,
+  onFollow,
+  scheme,
+}: ResultGroupProps): JSX.Element {
+  return (
+    <Box role="group" aria-labelledby={headingId(index)}>
+      <Text
+        id={headingId(index)}
+        data-palette-heading={group.kind}
+        component="div"
+        fz={10.5}
+        fw={600}
+        tt="uppercase"
+        c={colorForRole('textMuted', scheme)}
+        style={{ padding: '8px 10px 4px', letterSpacing: 0.6 }}
+      >
+        {group.heading}
+      </Text>
+      {group.results.map((result, row) => (
+        <ResultRow
+          key={result.id}
+          result={result}
+          id={rowId(offset + row)}
+          active={result.id === active}
+          onFollow={onFollow}
+          scheme={scheme}
+        />
+      ))}
+    </Box>
   );
 }
 

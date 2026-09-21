@@ -220,7 +220,7 @@ describe('the phone chrome', () => {
     draw({ status: <ConnectionStatus view={DOWN} scheme="dark" /> });
 
     const words = container.querySelector<HTMLElement>(
-      'header [role="status"] span:nth-of-type(2)',
+      'header [data-connection-status] span:nth-of-type(2)',
     );
     expect(words?.style.textOverflow).toBe('ellipsis');
     // The whole sentence survives where it can be got at: on the title, and
