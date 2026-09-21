@@ -19,9 +19,16 @@ import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
-import { DEFAULT_SHAPE, NO_PAGES, pageAdopted, type CataloguePages } from './catalogue-model.js';
+import {
+  DEFAULT_SHAPE,
+  NO_PAGES,
+  pageAdopted,
+  withView,
+  type CataloguePages,
+  type CatalogueShape,
+} from './catalogue-model.js';
 import { CataloguePanel } from './catalogue-panel.js';
-import type { CatalogueSnapshot, CatalogueStore } from './catalogue-store.js';
+import { fakeCatalogueStore } from './fake-catalogue-store.js';
 
 /**
  * The filter box over the tree, and the line under the tree that says what it
@@ -33,6 +40,12 @@ import type { CatalogueSnapshot, CatalogueStore } from './catalogue-store.js';
  * door; what this pins is that the sentence reaches the screen, over a page
  * the hub really answered with -- a folder holding a project holding a
  * document, and one session outside all of it.
+ *
+ * Since AGX-255 it pins two more things, both about the box rather than the
+ * line. The sidebar draws one above this panel and holds the letters, so the
+ * panel draws its own only where nobody above is drawing one; and the
+ * narrowing is no longer the tree view's alone, because a box drawn over both
+ * views and working in one is a control that lies by sitting there.
  */
 
 declare global {
@@ -135,28 +148,8 @@ function recordingLayout(collapsed: readonly NodeId[]): RecordingLayout {
   };
 }
 
-/**
- * A catalogue store holding one answer and asking for nothing.
- *
- * Injected rather than faked at the socket: this suite is about what the panel
- * draws over a held answer, and a store that re-queried would put the paging
- * rules -- which have their own suite -- between the test and the sentence.
- */
-function fixedCatalogue(pages: CataloguePages): CatalogueStore {
-  const snapshot: CatalogueSnapshot = {
-    shape: DEFAULT_SHAPE,
-    pages,
-    loading: false,
-    notice: null,
-    problem: null,
-  };
-  return {
-    subscribe: () => () => {},
-    getSnapshot: () => snapshot,
-    reshape: () => {},
-    loadMore: () => {},
-  };
-}
+/** The list view as the hub answers it: one flat page, containers dropped. */
+const AS_LIST: CatalogueShape = withView(DEFAULT_SHAPE, 'list');
 
 /** No fleet answered yet, which is not the same as an empty one. */
 const NO_FLEET = { state: null, layout: null } as const;
@@ -208,7 +201,18 @@ describe('the catalogue panel', () => {
     readonly layout: Layout | null;
   }
 
-  async function mount(pages: CataloguePages, fleet: Fleet = NO_FLEET): Promise<void> {
+  /** What a mount may vary beyond the page: the view, and who owns the box. */
+  interface Drawn {
+    readonly shape?: CatalogueShape;
+    /** Letters a row above the panel is holding, as the sidebar hands them. */
+    readonly filter?: string;
+  }
+
+  async function mount(
+    pages: CataloguePages,
+    fleet: Fleet = NO_FLEET,
+    drawn: Drawn = {},
+  ): Promise<void> {
     await act(async () => {
       root = createRoot(container);
       root.render(
@@ -218,8 +222,11 @@ describe('the catalogue panel', () => {
             state={fleet.state}
             layout={fleet.layout}
             scheme="dark"
-            catalogue={fixedCatalogue(pages)}
+            catalogue={fakeCatalogueStore(pages, drawn.shape)}
             layoutStore={arrangement}
+            // Spread rather than passed: absent is what says the panel owns
+            // the box, and `exactOptionalPropertyTypes` keeps the two apart.
+            {...(drawn.filter === undefined ? {} : { filter: drawn.filter })}
           />,
         ),
       );
@@ -360,5 +367,54 @@ describe('the catalogue panel', () => {
 
     expect(words()).toContain('nothing in the tree matches this filter');
     expect(words()).not.toContain('Not in your tree');
+  });
+
+  it('narrows the list view by the same letters, and says what it took away', async () => {
+    // The hub flattens containers out of the list view, so the ancestor rule
+    // has nothing to keep here and the same call is a plain match on the name
+    // drawn on the row. A box the sidebar draws over both views has to do
+    // something in both, and this is the something.
+    await mount(heldPages(hubFrames.cataloguePage), NO_FLEET, { shape: AS_LIST });
+    expect(words()).toContain('spike-wasm');
+
+    await filterBy('plan');
+
+    expect(words()).toContain('plan.md');
+    expect(words()).not.toContain('spike-wasm');
+    expect(words()).toContain('1 hidden by filter');
+  });
+
+  it('puts away the absent sessions while the list view is filtered too', async () => {
+    await mount(
+      heldPages(hubFrames.cataloguePage),
+      { state: stateFrom(hubFrames.machineStatePopulated), layout: [] },
+      { shape: AS_LIST },
+    );
+    expect(words()).toContain('Not in your tree');
+
+    await filterBy('nothing here is called this');
+
+    expect(words()).toContain('nothing in the tree matches this filter');
+    expect(words()).not.toContain('Not in your tree');
+  });
+
+  it('draws no box of its own while a row above it holds the letters', async () => {
+    await mount(heldPages(hubFrames.catalogueTreePage), NO_FLEET, { filter: 'plan' });
+
+    // One box over the tree or two boxes disagreeing about what is typed in
+    // them: the sidebar draws the row, so this panel draws the rows only.
+    expect(container.querySelector('input[aria-label="Filter tree"]')).toBeNull();
+    expect(words()).toContain('plan.md');
+    expect(words()).not.toContain('spike-wasm');
+    expect(words()).toContain('1 hidden by filter');
+  });
+
+  it('draws its own box in the list view too, where nobody above draws one', async () => {
+    // It used to be the tree view's alone, on the grounds that a list has no
+    // containment for the filter to keep a hit inside. What a list has is rows
+    // with names on them, which is what the box matches.
+    await mount(heldPages(hubFrames.cataloguePage), NO_FLEET, { shape: AS_LIST });
+
+    expect(filterBox().value).toBe('');
   });
 });

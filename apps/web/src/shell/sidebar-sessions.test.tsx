@@ -3,6 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import {
+  createSessionFiltersStore,
+  type SessionFiltersStore,
+} from '../sessions/session-filters-store.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
@@ -18,6 +22,10 @@ import { SidebarSessions } from './sidebar-sessions.js';
  * what belongs here is that this row reads the place off the item instead of
  * assembling one, and that a session in no project still gets a line a person
  * can read rather than a dot with a blank in front of it.
+ *
+ * And, since AGX-255, that these rows answer the filter row now drawn above
+ * them. That row's badge counts what the narrowings hid, so an index under it
+ * still listing them would be a badge counting rows a person can see.
  */
 
 declare global {
@@ -55,12 +63,14 @@ const NOW = 1_756_000_000_000;
 describe('a sidebar session row', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
+  let filters: SessionFiltersStore;
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     installMatchMedia();
     container = document.createElement('div');
     document.body.append(container);
+    filters = createSessionFiltersStore();
   });
 
   afterEach(async () => {
@@ -80,10 +90,31 @@ describe('a sidebar session row', () => {
           cssVariablesResolver={cssVariablesResolver}
           defaultColorScheme="dark"
         >
-          <SidebarSessions state={populated} machine={null} scheme="dark" now={() => NOW} />
+          <SidebarSessions
+            state={populated}
+            filters={filters}
+            machine={null}
+            scheme="dark"
+            now={() => NOW}
+          />
         </MantineProvider>,
       );
     });
+  }
+
+  /** The narrowings the row above writes, written the way that row writes them. */
+  function narrow(changes: Parameters<SessionFiltersStore['set']>[0]): void {
+    act(() => {
+      filters.set(changes);
+    });
+  }
+
+  function names(): string[] {
+    return rows().map((row) => (row.getAttribute('aria-label') ?? '').replace('open ', ''));
+  }
+
+  function words(): string {
+    return container.textContent ?? '';
   }
 
   function rows(): HTMLAnchorElement[] {
@@ -119,5 +150,36 @@ describe('a sidebar session row', () => {
     for (const row of rows()) {
       expect(placeOf(row)).not.toMatch(/^\s*·/);
     }
+  });
+
+  it('narrows to what was typed into the row above it', () => {
+    draw();
+    expect(names()).toContain('docs-sweep');
+
+    narrow({ search: 'bench' });
+
+    expect(names()).toEqual(['bench-tokenizer']);
+  });
+
+  it('answers the popover as well as the box, because it is one set of choices', () => {
+    draw();
+    expect(names().length).toBeGreaterThan(1);
+
+    narrow({ chip: 'needs-you' });
+
+    // The two the fixture has waiting on somebody, and nothing else: a badge
+    // reading 1 over an index still listing all six would be counting rows
+    // that are on the screen under it.
+    expect(names()).toEqual(['migrate-db-v9', 'docs-sweep']);
+  });
+
+  it('says the narrowing emptied it rather than blaming the fleet', () => {
+    draw();
+
+    narrow({ search: 'nothing is called this' });
+
+    expect(names()).toEqual([]);
+    expect(words()).toContain('no session here matches the narrowing');
+    expect(words()).not.toContain('no sessions in any store yet');
   });
 });

@@ -1,12 +1,14 @@
-import { useState, type JSX } from 'react';
+import { useState, useSyncExternalStore, type JSX } from 'react';
 import type { Layout, MachineState, ServerRegistrationId } from '@agentplex/protocol';
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import type { CatalogueStore } from '../catalogue/catalogue-store.js';
 import { MachineSelector } from '../machines/machine-selector.js';
+import { appSessionFiltersStore } from '../sessions/session-filters-store.js';
 import type { HubStore } from '../store/hub-store.js';
 import { Box, SegmentedControl, Stack, Text, UnstyledButton } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import { destinationHash, NAV, type Destination } from './destinations.js';
+import { SidebarFilter } from './sidebar-filter.js';
 import { SidebarSessions } from './sidebar-sessions.js';
 
 /**
@@ -25,6 +27,21 @@ import { SidebarSessions } from './sidebar-sessions.js';
  * again; what the shell's store keeps across that is the question itself and
  * the rows already paged, which is why the tab is cheap to leave and why the
  * rows are there before the answer is.
+ *
+ * Under the tabs is the filter row both mockups draw (6a, 6b, 7a), and it is
+ * one row over two tabs rather than one per tab. What the box narrows is the
+ * tab's: the tree's letters are held here, because the panel under them is
+ * unmounted by a tab switch and a filter that emptied itself on the way back
+ * would be a box that forgets; the sessions' letters are the `search` field of
+ * the narrowings the popover writes and the cards in the content region read,
+ * which is the whole reason that store exists. The popover is the sessions'
+ * either way -- on the Projects tab it is narrowing the cards beside the tree
+ * rather than the tree, and those are on screen, so its badge is still
+ * counting something a person can see.
+ *
+ * Nothing above a fleet: with no `MachineState` there is no option to offer,
+ * no count to draw and nothing to narrow, so the row is not drawn at all
+ * rather than drawn inert over "waiting for the hub".
  *
  * The nav is whatever `destinations.ts` says can honestly be reached. Graphs
  * and Library are named in the mockups and built by nobody yet, so they are
@@ -60,6 +77,12 @@ export function Sidebar({
   scheme,
 }: SidebarProps): JSX.Element {
   const [tab, setTab] = useState<SidebarTab>('projects');
+  // The tree's letters, held by the sidebar rather than by the panel because
+  // the box is drawn out here and outlives the tab that mounts the panel.
+  const [treeFilter, setTreeFilter] = useState('');
+  const filters = appSessionFiltersStore(store);
+  const held = useSyncExternalStore(filters.subscribe, filters.getSnapshot);
+  const projects = tab === 'projects';
   return (
     <Stack gap={10} p={10} style={{ height: '100%', minHeight: 0 }}>
       <MachineSelector state={state} chosen={machine} onPick={onPickMachine} scheme={scheme} />
@@ -76,21 +99,37 @@ export function Sidebar({
         ]}
       />
 
+      {state === null ? null : (
+        <SidebarFilter
+          state={state}
+          filters={filters}
+          machine={machine}
+          label={projects ? 'Filter tree' : 'Filter sessions'}
+          text={projects ? treeFilter : held.search}
+          onText={(text) => {
+            if (projects) setTreeFilter(text);
+            else filters.set({ search: text });
+          }}
+          scheme={scheme}
+        />
+      )}
+
       <Box style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {state === null ? (
           <Text fz={12} c={colorForRole('textMuted', scheme)}>
             waiting for the hub
           </Text>
-        ) : tab === 'projects' ? (
+        ) : projects ? (
           <CataloguePanel
             store={store}
             state={state}
             layout={layout}
             scheme={scheme}
             catalogue={catalogue}
+            filter={treeFilter}
           />
         ) : (
-          <SidebarSessions state={state} machine={machine} scheme={scheme} />
+          <SidebarSessions state={state} filters={filters} machine={machine} scheme={scheme} />
         )}
       </Box>
 
