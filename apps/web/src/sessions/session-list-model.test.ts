@@ -96,6 +96,24 @@ describe('flattening', () => {
     expect(fixAuth.project).toBeNull();
     expect(fixAuth.projectId).toBeNull();
   });
+
+  /**
+   * Both providers, because the value arrives from two adapters that read two
+   * different records, and a field that only ever carried one of them would
+   * pass here while half the fleet showed nothing.
+   */
+  it("carries the model the provider's own record named", () => {
+    expect(item(populated, 'fix-auth-refresh').model).toBe('claude-opus-5');
+    expect(item(populated, 'migrate-db-v9').model).toBe('gpt-5.6-terra');
+  });
+
+  /**
+   * `null`, not `undefined`: the wire leaves the key off, and every other
+   * absent fact on this item is a `null` a reader has to answer for.
+   */
+  it('carries no model for a session whose record named none', () => {
+    expect(item(populated, 'spike-wasm').model).toBeNull();
+  });
 });
 
 describe('the place line', () => {
