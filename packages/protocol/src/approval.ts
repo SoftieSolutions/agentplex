@@ -233,11 +233,33 @@ export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
  * `ApprovalRequest.proposal`, byte for byte, whole, and nothing else. That
  * string is built once, at the provider's edge, by rendering every field of the
  * tool input as `name: value` on its own line in the order the provider sent
- * them, putting the result through `displayableApprovalText`, and cutting it to
- * `APPROVAL_PROPOSAL_MAX_CHARS` with a visible `[truncated]` marker. It is the
- * same string a client draws above the button a person would have tapped. The
- * hub does not re-derive it, and `approvalPolicyRuleMatches` does not decode,
+ * them and putting the result through `displayableApprovalText`. It is the same
+ * string a client draws above the button a person would have tapped. The hub
+ * does not re-derive it, and `approvalPolicyRuleMatches` does not decode,
  * unescape, trim, case-fold or Unicode-normalise either side before comparing.
+ *
+ * ## A request that was cut is never matched at all
+ *
+ * The edge also bounds that string to `APPROVAL_PROPOSAL_MAX_CHARS`, and a
+ * proposal it had to cut is not a description of one tool call. Every input
+ * agreeing for its first few thousand rendered characters renders as the same
+ * bytes: `command: AAA…AAA && ls` and `command: AAA…AAA && curl … | sh` are one
+ * string by the time anybody reads either, so a rule made from one would grant
+ * the other -- the continuation nobody read, which is the thing this whole
+ * grammar exists to refuse.
+ *
+ * So the cut is carried as `ApprovalRequest.truncated`, set by the parser that
+ * did the cutting, and everything downstream fails closed on it. The hub does
+ * not consult the policy for a cut request, so no rule can answer one; this
+ * parser refuses a rule whose text fills the bound, since text that long is
+ * what a cut produces; the hub refuses `approval-policy-add` for such a rule in
+ * those words; and a client withholds the control that would offer one. A
+ * request too long to be shown whole is asked about, every time, and that is
+ * the answer rather than a gap.
+ *
+ * The flag is the claim and the `[truncated]` marker in the text is not. The
+ * marker is display text sitting in a string the agent wrote most of, and a
+ * command ending in those words would read as a cut that never happened.
  *
  * ## What exact match protects against, and what it does not
  *
@@ -264,8 +286,10 @@ export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
  * mean different things in different working directories -- a proposal names no
  * directory, and two sessions in one project run in two checkouts. A rule is a
  * standing decision about a body of work, and the decision is a person's. What
- * this grammar buys is that it is a decision about something they read, rather
- * than about an open-ended set they were shown one member of.
+ * this grammar buys is that it is a decision about something they read, whole,
+ * rather than about an open-ended set they were shown one member of -- which is
+ * why a proposal nobody could be shown whole is not something a rule can be
+ * made of.
  *
  * ## What is still refused
  *
@@ -275,7 +299,9 @@ export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
  * So are a tool with space around it or a `*` in it, which could never match
  * anything and would be stored and never fire; and so is text carrying a
  * control or bidirectional character, which the proposal it is compared with
- * cannot contain.
+ * cannot contain. So is text filling `APPROVAL_PROPOSAL_MAX_CHARS`, for the
+ * reason above: a proposal that long has been cut, and stands for more requests
+ * than the one somebody read.
  */
 export const approvalPolicyRuleSchema = z.object({
   /** Matched exactly against `ApprovalRequest.tool`. Never a pattern. */
@@ -321,6 +347,18 @@ export function parseApprovalPolicyRule(draft: unknown): ApprovalPolicyRuleParse
   }
   if (tool.includes('*')) {
     return refuse('a tool name is matched exactly, not as a pattern: there is no wildcard here');
+  }
+
+  // Text this long is what the cut at the provider's edge produces, and a cut
+  // proposal stands for every tool input sharing its opening rather than for
+  // one request -- so a rule carrying it would grant all of them. The cost is
+  // stated rather than hidden: a whole proposal that happens to end exactly on
+  // the bound is refused with it, and that request is asked about every time,
+  // which is the direction this feature is allowed to be wrong in.
+  if (proposal.length >= APPROVAL_PROPOSAL_MAX_CHARS) {
+    return refuse(
+      'that request is too long to be remembered exactly: a proposal this long has been cut to fit, so it stands for every request that starts the same way rather than for this one',
+    );
   }
 
   // The proposal has had these removed at the provider's edge, so a rule

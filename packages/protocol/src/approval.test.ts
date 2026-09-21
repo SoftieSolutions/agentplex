@@ -280,6 +280,30 @@ describe('parseApprovalPolicyRule', () => {
     expect(parsed.ok).toBe(false);
   });
 
+  it('refuses text that fills the bound, because a cut proposal looks like that', () => {
+    // A proposal the provider cut is exactly this long, and it stands for
+    // every tool input sharing its first few thousand characters rather than
+    // for one request. A rule made of that text would grant all of them, so
+    // the grammar has no way to write one -- at the cost of refusing the rare
+    // whole proposal that happens to end on the bound, which is a rule the
+    // person is asked about instead of one that over-grants.
+    const parsed = parseApprovalPolicyRule({
+      tool: 'Bash',
+      proposal: 'x'.repeat(APPROVAL_PROPOSAL_MAX_CHARS),
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.problem).toContain('too long');
+  });
+
+  it('takes text one character under the bound, which no cut could have made', () => {
+    expect(
+      parseApprovalPolicyRule({
+        tool: 'Bash',
+        proposal: 'x'.repeat(APPROVAL_PROPOSAL_MAX_CHARS - 1),
+      }).ok,
+    ).toBe(true);
+  });
+
   it('keeps an asterisk in a proposal as an asterisk', () => {
     // There is no pattern language here, so `rm *.tmp` is a command carrying
     // those characters and nothing else.
