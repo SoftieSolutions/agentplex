@@ -23,6 +23,7 @@ export {
   Modal,
   Paper,
   PasswordInput,
+  Popover,
   SegmentedControl,
   Select,
   SimpleGrid,
