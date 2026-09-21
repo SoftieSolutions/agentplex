@@ -1,6 +1,5 @@
 import {
   parseApprovalPolicyRule,
-  type ApprovalPolicyRecord,
   type ApprovalPolicyRuleId,
   type FrameId,
   type Layout,
@@ -170,34 +169,6 @@ export function policyRows(
   }
   rows.push({ kind: 'asks', words: ASKS });
   return rows;
-}
-
-/**
- * Whether one project's policy already covers a request, as the screen knows
- * it.
- *
- * For one job: deciding whether to offer "always allow this" beside a pending
- * request, or to say it is already covered. It is emphatically not what grants
- * anything -- the hub matches, on its own rows, at the moment the request
- * arrives -- and a screen that treated this as the answer would be a second
- * matcher free to disagree with the one that decides.
- *
- * The comparison is the protocol's, through the same parser, so there is no
- * second opinion here about what equal means either.
- */
-export function coveredByPolicy(
-  policy: ApprovalPolicyView | null,
-  request: { readonly tool: string; readonly proposal: string },
-): ApprovalPolicyRecord | null {
-  if (policy === null) return null;
-  for (const record of policy.rules) {
-    const parsed = parseApprovalPolicyRule(record.rule);
-    if (!parsed.ok) continue;
-    if (parsed.rule.tool === request.tool && parsed.rule.proposal === request.proposal) {
-      return record;
-    }
-  }
-  return null;
 }
 
 /**

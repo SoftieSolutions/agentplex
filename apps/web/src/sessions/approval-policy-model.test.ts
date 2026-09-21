@@ -14,7 +14,6 @@ import { hubFrames } from '../store/hub-frames.fixture.js';
 import type { ApprovalPolicyView, RefusalView } from '../store/hub-store.js';
 import {
   allowAlwaysCommand,
-  coveredByPolicy,
   forgetRuleCommand,
   listPolicyCommand,
   policyFollowUp,
@@ -129,25 +128,6 @@ describe('the rows the APPROVALS block draws', () => {
       { kind: 'auto', ruleId: 'rule-1', tool: 'Bash', proposal: 'command: pnpm test' },
       { kind: 'asks', words: expect.any(String) },
     ]);
-  });
-});
-
-describe('whether a request is already covered', () => {
-  const held = policy(record('Bash', 'command: pnpm test'));
-
-  it('is covered by the rule it is exactly', () => {
-    expect(coveredByPolicy(held, pending('Bash', 'command: pnpm test'))).toMatchObject({
-      ruleId: 'rule-1',
-    });
-  });
-
-  it('is not covered by a rule it merely begins with', () => {
-    expect(coveredByPolicy(held, pending('Bash', 'command: pnpm test --force'))).toBe(null);
-    expect(coveredByPolicy(held, pending('BashOutput', 'command: pnpm test'))).toBe(null);
-  });
-
-  it('is not covered before the policy has been read', () => {
-    expect(coveredByPolicy(null, pending('Bash', 'command: pnpm test'))).toBe(null);
   });
 });
 
