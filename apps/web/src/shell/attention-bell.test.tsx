@@ -229,9 +229,14 @@ describe('the attention bell', () => {
     return found;
   }
 
-  /** What the header said about an attempt that did not go through, if anything. */
-  function refusal(): string | null {
-    return panel().querySelector<HTMLElement>('[data-mark-all-read-refusal]')?.textContent ?? null;
+  /** The header's status line, which is there whether or not it has anything to say. */
+  function refusalRegion(): HTMLElement | null {
+    return panel().querySelector<HTMLElement>('[data-mark-all-read-refusal]');
+  }
+
+  /** What it said about an attempt that did not go through, if anything. */
+  function refusal(): string {
+    return refusalRegion()?.textContent ?? '';
   }
 
   /**
@@ -433,7 +438,7 @@ describe('the attention bell', () => {
     // Muting is a per-session decision, and marking read is not a way to make
     // one: a muted session is not in this list at all.
     expect(sentFrames(socket).filter((frame) => frame.type === 'session-mute')).toEqual([]);
-    expect(refusal()).toBeNull();
+    expect(refusal()).toBe('');
   });
 
   it('leaves a muted session’s mute alone, because it never listed it', async () => {
@@ -458,6 +463,20 @@ describe('the attention bell', () => {
       expect(reached).not.toContain(`${item.ref.storeId}/${item.ref.sessionId}`);
     }
     expect(sentFrames(socket).filter((frame) => frame.type === 'session-mute')).toEqual([]);
+  });
+
+  it('has the header’s status line open before there is anything to put in it', async () => {
+    // The same argument the bell's own live region is mounted on, three lines
+    // above it in the file: a region inserted along with its first sentence is
+    // a region nothing was watching, so the one announcement worth making --
+    // that the button did not do what it looks like it did -- is the one that
+    // would be missed.
+    draw(twoWaiting, 'wide');
+
+    await press();
+
+    expect(refusalRegion()).not.toBeNull();
+    expect(refusal()).toBe('');
   });
 
   it('says so in words when the store refuses, rather than assuming it went', async () => {

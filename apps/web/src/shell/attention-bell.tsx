@@ -389,18 +389,26 @@ function PanelHeader({ rows, store, scheme }: PanelHeaderProps): JSX.Element {
           Mark all read
         </UnstyledButton>
       </Group>
-      {refused === null ? null : (
-        // Under the row rather than in place of the control: nothing changed,
-        // and this is why this attempt was not what changed it.
-        <Text
-          data-mark-all-read-refusal
-          role="status"
-          fz={11}
-          style={{ color: colorForTone('blocked', scheme), padding: '0 14px 8px' }}
-        >
-          {refused}
-        </Text>
-      )}
+      {/* Under the row rather than in place of the control: nothing changed,
+          and this is why this attempt was not what changed it.
+
+          Mounted at every outcome and empty when there is none, for the reason
+          the bell's own live region is: a status region inserted along with
+          its first sentence is a region nothing was watching, so the one
+          announcement worth making -- that the button did not do what it looks
+          like it did -- is the one that would be missed. Empty it takes no
+          padding, so an untouched header is the row and nothing under it. */}
+      <Text
+        data-mark-all-read-refusal
+        role="status"
+        fz={11}
+        style={{
+          color: colorForTone('blocked', scheme),
+          padding: refused === null ? 0 : '0 14px 8px',
+        }}
+      >
+        {refused ?? ''}
+      </Text>
     </Box>
   );
 }
