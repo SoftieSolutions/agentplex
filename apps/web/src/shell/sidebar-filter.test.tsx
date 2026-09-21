@@ -55,6 +55,39 @@ function installResizeObserver(): void {
   };
 }
 
+/**
+ * A box for every element and a viewport to put it in.
+ *
+ * jsdom lays nothing out: every rect is zero-sized and the document element
+ * reports a 0x0 viewport, so floating-ui's hide middleware finds the popover's
+ * target clipped out of view and Mantine draws the dropdown `display: none`.
+ * A focus trap cannot see into that, and a suite that skipped this would call
+ * the trap broken over the absence of layout rather than over the code. The
+ * numbers are arbitrary -- nothing here asserts on a measurement, only on
+ * there being one.
+ */
+function installLayout(): void {
+  for (const [name, size] of [
+    ['clientWidth', 1024],
+    ['clientHeight', 768],
+  ] as const) {
+    Object.defineProperty(document.documentElement, name, { value: size, configurable: true });
+  }
+  Element.prototype.getBoundingClientRect = function box(): DOMRect {
+    return {
+      x: 0,
+      y: 0,
+      width: 120,
+      height: 30,
+      top: 0,
+      left: 0,
+      right: 120,
+      bottom: 30,
+      toJSON: () => ({}),
+    };
+  };
+}
+
 /** Lets a promise the click started settle. */
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -109,6 +142,7 @@ describe('the sidebar filter row', () => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     installMatchMedia();
     installResizeObserver();
+    installLayout();
     container = document.createElement('div');
     document.body.append(container);
     filters = createSessionFiltersStore();
@@ -159,12 +193,32 @@ describe('the sidebar filter row', () => {
     return found;
   }
 
-  /** Opens the popover the way a person does, and waits for it to land. */
+  /**
+   * Opens the popover the way a person does, and waits for it to land.
+   *
+   * The trigger is focused before it is pressed because that is what pressing
+   * it means for a keyboard: `dispatchEvent` moves no focus by itself, and
+   * without the focus on the button there is nothing for the dropdown to hand
+   * back when it closes.
+   */
   async function open(): Promise<void> {
+    trigger().focus();
     await click(trigger());
     await act(settle);
     await act(frame);
     await act(settle);
+  }
+
+  async function press(target: Element, key: string): Promise<void> {
+    await act(() => {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    });
+  }
+
+  function dropdown(): HTMLElement {
+    const found = document.body.querySelector<HTMLElement>('[role="dialog"]');
+    if (found === null) throw new Error('the popover drew no dropdown');
+    return found;
   }
 
   /** Every section the popover drew, by the name it gave each one, in order. */
@@ -321,6 +375,31 @@ describe('the sidebar filter row', () => {
     await until(() => sections().length === 0);
     expect(sections()).toEqual([]);
     expect(filters.getSnapshot()).toBe(before);
+  });
+
+  it('puts the focus inside the dropdown, so its controls can be reached', async () => {
+    draw();
+    await open();
+
+    // The dropdown is portalled to the end of the body, so a focus left on the
+    // trigger is a Tab out of the popover and past every control in it. These
+    // five narrowings have no other surface at this width.
+    expect(dropdown().contains(document.activeElement)).toBe(true);
+  });
+
+  it('closes on Escape and gives the focus back to the trigger', async () => {
+    draw();
+    await open();
+    const focused = document.activeElement;
+    if (focused === null) throw new Error('nothing holds the focus');
+
+    await press(focused, 'Escape');
+
+    expect(trigger().getAttribute('aria-expanded')).toBe('false');
+    // Mantine hands the focus back on a timer, so it is waited for rather than
+    // asserted in the flush that closed the dropdown.
+    await until(() => document.activeElement === trigger());
+    expect(document.activeElement).toBe(trigger());
   });
 
   it('names the trigger in words and says whether the popover is open', async () => {

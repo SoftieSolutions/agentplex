@@ -119,11 +119,22 @@ export function SidebarFilter({
           onChange={(event) => onText(event.currentTarget.value)}
           style={{ flex: 1, minWidth: 0 }}
         />
+        {/* `trapFocus` and `returnFocus` are both off by default in Mantine
+            9.6.0, and with `withinPortal` the dropdown is drawn at the end of
+            the body: opening it would leave the focus on the trigger, so Tab
+            would walk out of the page rather than into the popover and Escape
+            would reach nothing -- the dismissal is a capture handler on the
+            dropdown. Since these five narrowings have no other surface at this
+            width, an unreachable popover is five controls a keyboard cannot
+            operate. Trapping the focus also puts Escape under it, and
+            returning it leaves somebody where they pressed. */}
         <Popover
           opened={opened}
           onChange={setOpened}
           position="bottom-end"
           withinPortal
+          trapFocus
+          returnFocus
           shadow="md"
           width={250}
         >
