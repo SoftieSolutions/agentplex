@@ -1,6 +1,8 @@
 import type {
+  ApprovalId,
   MachineState,
   NodeId,
+  PendingApproval,
   Provider,
   ServerRegistrationId,
   SessionHolder,
@@ -22,6 +24,57 @@ import type { Tone } from '../ui/tokens.js';
  * one filter on the table, a control with one option is not drawn -- lives
  * here, where a test can hold a captured state against it.
  */
+
+/**
+ * The open request a card draws, cut down to what it draws.
+ *
+ * A narrowing of the wire's `PendingApproval` and not an alias of it, because
+ * the row carries `suggestions` as well -- the rules a provider would remember
+ * an answer as -- and those are a different decision on a different surface.
+ * Handing the card the whole object would put a policy change one field access
+ * away from a pair of buttons that promise to answer once.
+ *
+ * `proposal` is the agent's claim about what it wants to run, as text for a
+ * person to read. Nothing downstream may take an argument back out of it, and
+ * nothing sends it anywhere: a decision names the request by its id.
+ */
+export interface SessionApproval {
+  readonly approvalId: ApprovalId;
+  /** The tool's name as the provider spells it: `Bash`, `Edit`, `WebFetch`. */
+  readonly tool: string;
+  readonly proposal: string;
+  /** When the hub heard, by the hub's clock, which is what the age counts from. */
+  readonly requestedAt: number;
+}
+
+/**
+ * The one request a card shows out of however many a session is holding: the
+ * oldest, or `null` when the list is empty.
+ *
+ * Oldest rather than newest, and that is the decision here. The card has room
+ * for one, and the request that has been waiting longest is the one whose hook
+ * is nearest its own timeout -- answering it is the tap that still changes
+ * something, where the newest is the one that can most afford to wait. It also
+ * makes the card stable while a person reads it: a second request arriving does
+ * not swap the command under the buttons.
+ *
+ * Ties keep the order the hub sent, which is arrival order on the machine that
+ * minted the ids, and is as good an answer as exists for two requests heard in
+ * the same millisecond.
+ */
+export function oldestApproval(approvals: readonly PendingApproval[]): SessionApproval | null {
+  let oldest: PendingApproval | undefined;
+  for (const approval of approvals) {
+    if (oldest === undefined || approval.requestedAt < oldest.requestedAt) oldest = approval;
+  }
+  if (oldest === undefined) return null;
+  return {
+    approvalId: oldest.approvalId,
+    tool: oldest.tool,
+    proposal: oldest.proposal,
+    requestedAt: oldest.requestedAt,
+  };
+}
 
 /** One session as the list renders it, flattened out of its store. */
 export interface SessionListItem {
@@ -139,6 +192,24 @@ export interface SessionListItem {
    * held, and `working` and held by nobody.
    */
   readonly holder: SessionHolder | null;
+  /**
+   * What this session is presently blocked asking for, or `null` when it is
+   * asking for nothing. The oldest of them when it is asking for more than one
+   * -- see `oldestApproval`.
+   *
+   * It is not a source of status, and the asymmetry is deliberate: a session
+   * can be `awaiting-permission` with this `null`, because the status is read
+   * off the provider's own record of the session and a hook and a transcript
+   * scan can land in either order. `needsYou`, `tone` and `summary` are
+   * therefore derived from the status alone, exactly as they were before this
+   * field existed, and a card with no request here draws no buttons rather
+   * than moving out of the needs-you half.
+   *
+   * Always `null` for a codex session, which has no permission hook to ask
+   * through. That is the same `null` as a claude session with nothing pending,
+   * and it is meant to be: what a card does about either is nothing.
+   */
+  readonly approval: SessionApproval | null;
 }
 
 /**
@@ -312,6 +383,7 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         project: row.project?.name ?? null,
         projectId: row.project?.nodeId ?? null,
         holder: row.holder,
+        approval: oldestApproval(row.approvals),
       });
     }
   }
