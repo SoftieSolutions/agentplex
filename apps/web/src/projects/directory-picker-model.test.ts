@@ -52,6 +52,7 @@ function snapshot(over: Partial<HubSnapshot> = {}): HubSnapshot {
     lastDocContent: null,
     lastPush: null,
     pushPublicKey: null,
+    transcripts: new Map(),
     ...over,
   };
 }

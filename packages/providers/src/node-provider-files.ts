@@ -1,7 +1,7 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { open, readdir, readFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import type { FileRead } from './store-identity.js';
-import type { DirectoryEntry, DirectoryRead, ProviderFiles } from './provider-files.js';
+import type { DirectoryEntry, DirectoryRead, ProviderFiles, TailRead } from './provider-files.js';
 
 /**
  * The real store volume as an adapter sees it: reads and listings, no writes.
@@ -37,7 +37,62 @@ export const nodeProviderFiles: ProviderFiles = {
       return missingOrFailed(error, 'ENOTDIR');
     }
   },
+
+  async readFileTail(path: string, maxBytes: number): Promise<TailRead> {
+    let handle;
+    try {
+      handle = await open(path, 'r');
+    } catch (error) {
+      return missingOrFailed(error);
+    }
+
+    try {
+      const { size } = await handle.stat();
+      if (size <= maxBytes) {
+        // Small enough to be the whole answer. Read as a string, so a file of
+        // exactly this size comes back identical to what `readFile` would have
+        // given -- there is no window to have landed inside.
+        const contents = await handle.readFile('utf8');
+        return { kind: 'read', contents, truncated: false };
+      }
+
+      // Past the cap, so only the window is read: the point of the method is
+      // that a multi-megabyte transcript never becomes a multi-megabyte string
+      // in this process.
+      const buffer = Buffer.alloc(maxBytes);
+      const { bytesRead } = await handle.read(buffer, 0, maxBytes, size - maxBytes);
+      return {
+        kind: 'read',
+        contents: fromFirstWholeLine(buffer.subarray(0, bytesRead)),
+        truncated: true,
+      };
+    } catch (error) {
+      return missingOrFailed(error);
+    } finally {
+      await handle.close();
+    }
+  },
 };
+
+/**
+ * The window from its first line break onwards, decoded.
+ *
+ * Sliced as bytes and only then decoded, which is the order that matters: the
+ * window begins at an arbitrary byte offset, so its first character may be the
+ * tail of a multi-byte sequence, and decoding first would turn that into a
+ * replacement character sitting in front of a line no parser should have been
+ * handed anyway. A line break is ASCII in UTF-8 and cannot appear inside a
+ * multi-byte sequence, so searching the bytes for one is exact.
+ *
+ * A window with no line break in it yields the empty string. That is a file
+ * whose last line alone is larger than the cap, and half a line is not a line:
+ * the caller is told nothing could be read and that there is more behind it,
+ * which is the direction that does not over-claim.
+ */
+function fromFirstWholeLine(window: Buffer): string {
+  const brk = window.indexOf(0x0a);
+  return brk === -1 ? '' : window.subarray(brk + 1).toString('utf8');
+}
 
 /**
  * The entry's kind, resolved without following it anywhere.

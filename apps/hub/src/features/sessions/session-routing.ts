@@ -254,6 +254,79 @@ export function routeStop(
   return { ok: true, server };
 }
 
+/**
+ * Which server to ask for a session's transcript, and what it is.
+ *
+ * Routed by session like a stop, and deliberately not *as* a stop. A stop needs
+ * the process, so only the holder will do and a session nobody is running
+ * cannot be stopped at all; a transcript is a file on the volume, so any
+ * reachable machine with that store mounted can read it -- and a session nobody
+ * is running is the ordinary case for somebody reading its history. Routing a
+ * transcript through `routeStop` would have refused every idle session, which
+ * is most of them.
+ *
+ * The holder is preferred when there is one. It has the file open, its answer
+ * is the freshest by however long a scan takes, and asking it costs nothing the
+ * other machines would not have cost.
+ *
+ * `provider` comes back with the server because it is a fact the hub already
+ * holds and the instruction needs: the descriptor on the row says which agent
+ * wrote the transcript, and a client naming it would be a client choosing which
+ * adapter reads a file.
+ *
+ * Three refusals, and each is a different thing for a person to do: a store
+ * nobody has mounted, a session the hub cannot see, and a store whose machines
+ * are all away. The last is why the row is still on screen -- an unreachable
+ * session is labelled rather than deleted -- so the sentence is about the
+ * fleet rather than about the session.
+ */
+export function routeSessionRead(
+  state: HubStateSnapshot,
+  session: { readonly storeId: StoreId; readonly sessionId: SessionId },
+): SessionReadRouting {
+  const store = state.stores.find((view) => view.storeId === session.storeId);
+  if (store === undefined) {
+    return {
+      ok: false,
+      code: 'refused',
+      problem: 'no server the hub is paired with has that store mounted',
+      holder: null,
+    };
+  }
+
+  const row = store.sessions.find((candidate) => candidate.ref.sessionId === session.sessionId);
+  if (row === undefined) {
+    return {
+      ok: false,
+      code: 'refused',
+      problem: 'the hub has no record of that session in that store',
+      holder: null,
+    };
+  }
+
+  const live = store.servers.filter(countsTowardAttention);
+  const held =
+    row.holder === null
+      ? undefined
+      : live.find((server) => server.registrationId === row.holder?.server);
+  const server = held ?? live[0];
+  if (server === undefined) {
+    return {
+      ok: false,
+      code: 'refused',
+      problem: 'no server with that store mounted is connected right now',
+      holder: null,
+    };
+  }
+
+  return { ok: true, server, provider: row.descriptor.provider };
+}
+
+/** Where a transcript read goes, which server it is, and which agent wrote the file. */
+export type SessionReadRouting =
+  | { readonly ok: true; readonly server: ServerConnectionReport; readonly provider: Provider }
+  | Extract<Routing, { ok: false }>;
+
 function holderOf(store: StoreView, sessionId: SessionId): SessionHolder | null {
   return store.sessions.find((row) => row.ref.sessionId === sessionId)?.holder ?? null;
 }

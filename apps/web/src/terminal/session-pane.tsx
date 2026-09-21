@@ -1,17 +1,19 @@
 import {
   Fragment,
   useCallback,
+  useId,
   useMemo,
   useRef,
   useState,
   type JSX,
   type KeyboardEvent,
 } from 'react';
-import type {
-  ClientTerminalTarget,
-  PendingApproval,
-  SessionRef,
-  TerminalSize,
+import {
+  assertNever,
+  type ClientTerminalTarget,
+  type PendingApproval,
+  type SessionRef,
+  type TerminalSize,
 } from '@agentplex/protocol';
 
 import { terminalKey, type HubStore, type TerminalWatchView } from '../store/hub-store.js';
@@ -61,6 +63,8 @@ import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
 import { TabStrip } from './tab-strip.js';
 import { activeTab, type SessionTab } from './tab-strip-model.js';
 import { TaskBlock } from './task-block.js';
+import { transcriptState, TRANSCRIPT_COUNT, type TranscriptAsks } from './transcript-model.js';
+import { TranscriptPanel } from './transcript-panel.js';
 import { chunkTerminalInput } from './terminal-input.js';
 import { TerminalView } from './terminal-view.js';
 import { useTerminalWatch } from './use-terminal-watch.js';
@@ -69,22 +73,31 @@ import { useTerminalWatch } from './use-terminal-watch.js';
  * The open-session screen (mockup 7c): header row, tab strip, terminal, steer
  * bar.
  *
- * The strip is drawn with the tabs that are built, which is now two: the
- * Terminal, and Approvals while this session is holding a request. That is the
- * arrangement the strip was given a list for -- Transcript (AGX-82) and Diff
- * (AGX-105) append a tab each when they land, and until they do, nothing
- * disabled and nothing placeholder stands in for them. Approvals goes further
- * than appending, because it is the first tab whose existence is a fact about
+ * The strip is drawn with the tabs that are built, which is now three:
+ * Terminal, Transcript beside it, and Approvals while this session is holding
+ * a request. That is the arrangement the strip was given a list for -- Diff
+ * (AGX-105) appends one more when it lands, and until it does, nothing
+ * disabled and nothing placeholder stands in for it. Approvals goes further
+ * than appending, because it is the one tab whose existence is a fact about
  * the session rather than about what has been built: it is offered while
  * something is asking and not otherwise. What the mockup shows and this still
  * does not draw: the Pause / Hand off / Replay buttons.
  *
+ * Choosing another tab *unmounts* the terminal rather than hiding it, which is
+ * the one thing about the switch below that is not a style. A hidden terminal
+ * measures zero rows and zero columns, and the emulator would report that
+ * across two machines as a resize -- so the program at the far end would
+ * redraw itself for a screen nobody is looking at, and would still be that
+ * shape when the tab came back. The bytes are not lost by unmounting: the feed
+ * belongs to the target and lives in the store, so returning to the tab
+ * replays what arrived while it was away.
+ *
  * The context panel is the second mount point, and it works the same way. The
- * pane's body is a row -- the terminal and everything said about it on the
- * left, the panel on the right -- and the panel takes a list of blocks the way
- * the strip takes a list of tabs. One block is built: TASK, drawn for a session
- * the hub knows a task for and for no other, so a pane on an adopted session is
- * still the screen it was.
+ * pane's body is a row -- the tab that is open and everything said about it on
+ * the left, the panel on the right -- and the panel takes a list of blocks the
+ * way the strip takes a list of tabs. One block is built: TASK, drawn for a
+ * session the hub knows a task for and for no other, so a pane on an adopted
+ * session is still the screen it was.
  *
  * The terminal itself is fed by the store: the pane declares standing
  * interest in a target, and the bytes that come back go to the feed the store
@@ -97,29 +110,61 @@ import { useTerminalWatch } from './use-terminal-watch.js';
 const MONO_META = { fontFamily: 'var(--mantine-font-family-monospace)' } as const;
 
 /**
- * The tabs this pane has: the Terminal, and Approvals while something is
- * asking.
+ * The tabs this pane has: Terminal, Transcript, and Approvals while something
+ * is asking.
  *
- * It stopped being a module constant when the second tab landed, which is what
- * the strip taking a list was for. Approvals is drawn only while the session is
- * holding a request, with the count as its badge -- the mockup's `3` -- and it
- * disappears when the last one settles. A tab that stayed with `0` on it would
- * be a control that opens an empty screen, and the strip's own rule is that
- * nothing disabled and nothing placeholder stands in for a screen.
+ * This is the one list, and it is a function of the pane for two separate
+ * reasons that arrived on two branches and want the same shape. A tab needs
+ * something only a mounted pane knows -- the id of the element it shows, for
+ * `aria-controls` -- because two panes can be open on one session and two
+ * elements cannot share an id, so the pane mints a prefix and each tab is
+ * handed the id of its own panel. And a tab can be a fact about the session
+ * rather than about what has been built: Approvals is drawn only while the
+ * session is holding a request, with the count as its badge -- the mockup's
+ * `3` -- and it disappears when the last one settles. A tab that stayed with
+ * `0` on it would be a control that opens an empty screen, and the strip's own
+ * rule is that nothing disabled and nothing placeholder stands in for a
+ * screen.
  *
- * The one-tab answer is a module constant rather than a fresh array so that a
- * pane on a session that never asks for anything -- every codex session -- hands
- * the strip the same list on every keystroke that re-renders the pane.
+ * Terminal stays first, which is what makes it the default: `activeTab` falls
+ * back to `tabs[0]`, so the ordering is the rule rather than a flag somewhere.
+ * Transcript is second and carries no badge -- there is no count of a
+ * transcript that means anything before it has been read -- and Approvals is
+ * last because it is the one that comes and goes, and a tab that inserted
+ * itself between two standing ones would move them under the pointer.
  *
- * Outside the component body because it needs nothing from it.
+ * Outside the component body because it needs nothing from it but the two
+ * facts it is handed.
  */
 const TERMINAL_TAB = 'terminal';
+const TRANSCRIPT_TAB = 'transcript';
 const APPROVALS_TAB = 'approvals';
-const TERMINAL_ONLY: readonly SessionTab[] = [{ id: TERMINAL_TAB, label: 'Terminal', badge: null }];
 
-function sessionTabs(pending: number): readonly SessionTab[] {
-  if (pending === 0) return TERMINAL_ONLY;
-  return [...TERMINAL_ONLY, { id: APPROVALS_TAB, label: 'Approvals', badge: String(pending) }];
+/**
+ * Which tab is being shown, as a closed set.
+ *
+ * A union and not the strip's `string`, so the body below ends in an
+ * `assertNever`: the day a fourth panel is added, a pane that has not grown a
+ * case fails to compile rather than drawing nothing under a tab somebody can
+ * press.
+ */
+type ShownTab = typeof TERMINAL_TAB | typeof TRANSCRIPT_TAB | typeof APPROVALS_TAB;
+
+function sessionTabs(paneId: string, pending: number): readonly SessionTab[] {
+  const standing: readonly SessionTab[] = [
+    { id: TERMINAL_TAB, label: 'Terminal', badge: null, panelId: `${paneId}-terminal` },
+    { id: TRANSCRIPT_TAB, label: 'Transcript', badge: null, panelId: `${paneId}-transcript` },
+  ];
+  if (pending === 0) return standing;
+  return [
+    ...standing,
+    {
+      id: APPROVALS_TAB,
+      label: 'Approvals',
+      badge: String(pending),
+      panelId: `${paneId}-approvals`,
+    },
+  ];
 }
 
 /** A session asking for nothing, as one array rather than a new one per render. */
@@ -302,6 +347,19 @@ export function SessionPane({
    * strip grows a tab at a time and a pane can outlive the one it was on.
    */
   const [requestedTab, setRequestedTab] = useState<string>(TERMINAL_TAB);
+  /**
+   * The reads this pane has made, or `null` before it has made one.
+   *
+   * The pane's and not the store's, because the store files every client's
+   * answers together and two panes can be open on one session. These ids are
+   * what say which of those answers are this pane's, and they are why a second
+   * pane opening its own tab cannot repaint this one.
+   *
+   * Two of them, because a refresh is a second question about the same session:
+   * `latest` is what the tab's sentence is about, and `answered` is the list it
+   * goes on drawing until the new answer lands.
+   */
+  const [transcriptAsks, setTranscriptAsks] = useState<TranscriptAsks | null>(null);
   /**
    * The last thing the clipboard would not do, or `null` while it has done
    * everything asked of it.
@@ -506,6 +564,57 @@ export function SessionPane({
     }
   }
 
+  /**
+   * Reads the transcript, and remembers the frame the read went out under.
+   *
+   * A command, which is how every other once-only intent leaves this app: a
+   * connection that blinks queues it rather than dropping it, and the id is
+   * minted at acceptance so the pane's record of what it asked matches the id
+   * the answer will carry. A read that was not accepted leaves the pane on
+   * whatever it asked before, which is what makes the Refresh button's failure
+   * mode "nothing changed" rather than "the history vanished".
+   *
+   * The id it keeps beside the new one is whichever of its own reads it has an
+   * answer to, decided here rather than watched for: the store is asked once,
+   * at the moment of asking again, which is the one moment the question has an
+   * answer that cannot change under it. That is what a `useEffect` on the
+   * snapshot would have been for, and there is nothing for one to do.
+   */
+  const readTranscript = useCallback((): void => {
+    const outcome = hub.sendCommand({
+      type: 'session-transcript',
+      storeId: sessionRef.storeId,
+      sessionId: sessionRef.sessionId,
+      count: TRANSCRIPT_COUNT,
+    });
+    if (!outcome.accepted) return;
+    const id = outcome.id;
+    setTranscriptAsks((asks) => {
+      if (asks === null) return { latest: id, answered: null };
+      const answers = hub.getSnapshot().transcripts;
+      const drawn = answers.has(asks.latest) ? asks.latest : asks.answered;
+      return { latest: id, answered: drawn };
+    });
+  }, [hub, sessionRef]);
+
+  /**
+   * The tab the user asked for, and the read that choosing Transcript implies.
+   *
+   * The ask is here rather than in an effect, which is the rule this app
+   * follows and also the simpler thing: choosing a tab is an event, a read is
+   * something that happens because somebody did that, and an effect would be
+   * the same call reached by watching a variable change. It fires on the first
+   * showing only -- a pane that has asked keeps its answer, and the Refresh
+   * button is how somebody asks again.
+   */
+  const selectTab = useCallback(
+    (id: string): void => {
+      setRequestedTab(id);
+      if (id === TRANSCRIPT_TAB && transcriptAsks === null) readTranscript();
+    },
+    [readTranscript, transcriptAsks],
+  );
+
   const state = snapshot.machineState;
   const row = findSessionRow(state, sessionRef);
   const tone = row === null ? 'idle' : toneForStatus(row.descriptor.status);
@@ -538,8 +647,20 @@ export function SessionPane({
    * shows the first one that is, which is the Terminal.
    */
   const approvals = useMemo(() => approvalsOldestFirst(row?.approvals ?? NO_APPROVALS), [row]);
-  const tabs = useMemo(() => sessionTabs(approvals.length), [approvals.length]);
+  // One prefix per mounted pane, so two panes on one session do not put two
+  // elements under one id -- which is what `aria-controls` would otherwise
+  // point a screen reader at.
+  const paneId = useId();
+  const tabs = useMemo(() => sessionTabs(paneId, approvals.length), [paneId, approvals.length]);
   const shownTab = activeTab(tabs, requestedTab);
+  // Narrowed to the closed set before the body switches on it. `activeTab`
+  // answers in the strip's vocabulary, which is a string, and the pane is the
+  // place that knows which strings it drew. The fallback is the Terminal
+  // rather than a throw for the same reason `activeTab` has one: a request can
+  // name a tab this session is not offering.
+  const shown: ShownTab =
+    shownTab === TRANSCRIPT_TAB || shownTab === APPROVALS_TAB ? shownTab : TERMINAL_TAB;
+  const transcript = transcriptState(transcriptAsks, snapshot.transcripts, snapshot.lastRefusal);
   /**
    * What the panel has to say about this session.
    *
@@ -568,6 +689,142 @@ export function SessionPane({
    * than a button and the header stays as it was.
    */
   const pasteControl = hasCoarsePointer();
+
+  /**
+   * The one panel that is mounted, chosen by an exhaustive switch.
+   *
+   * Inside the component body because every arm needs something from it -- the
+   * feed, the emulator seams, the transcript state, the requests this session
+   * is blocked on -- and marked as such rather than lifted out with a dozen
+   * arguments, which is the shape the rule about functions outside a component
+   * exists to avoid reaching for.
+   *
+   * The find bar and the sentences about how much of the session this pane is
+   * not showing are inside the terminal's arm, because that is what they are
+   * about: there is nothing to find in a transcript that was fetched whole and
+   * nothing partial about a list of requests. The header, the strip and the
+   * steer bar are the pane's and stay whichever tab is open -- steering goes
+   * down the same terminal-input path whether or not an emulator is mounted to
+   * echo it.
+   */
+  function paneBody(tab: ShownTab): JSX.Element {
+    switch (tab) {
+      case TERMINAL_TAB:
+        return (
+          <Box
+            id={`${paneId}-terminal`}
+            role="tabpanel"
+            aria-labelledby={`${paneId}-terminal-tab`}
+            // `minWidth: 0` for the reason the column outside it carries one:
+            // the panel is now between the terminal and that column, and a
+            // flex child that will not shrink puts the terminal's fitted width
+            // back past the pane's edge.
+            style={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            {finding && (
+              <FindBar
+                search={paneSearch}
+                truncated={() => terminalIsPartial(terminal)}
+                scheme={scheme}
+                onClose={closeFind}
+                inputRef={findRef}
+              />
+            )}
+
+            {terminal === null ? (
+              // The watch is declared in a subscription, which React runs
+              // after the first commit, so there is one frame in which this
+              // pane has no feed to hand an emulator. The same well, painted,
+              // rather than an emulator built against a buffer that is about
+              // to be replaced.
+              <Box style={{ flex: 1, background: colorForRole('terminalBackground', scheme) }} />
+            ) : (
+              <TerminalView
+                feed={terminal.feed}
+                scheme={scheme}
+                onData={sendInput}
+                onResize={sendResize}
+                emulatorReady={emulatorReady}
+                emulators={emulators}
+              />
+            )}
+
+            {feed !== null && (
+              <Text
+                fz={11}
+                px={18}
+                py={6}
+                style={{ color: colorForTone('blocked', scheme), borderTop: border }}
+              >
+                {feed}
+              </Text>
+            )}
+
+            {scope !== null && (
+              <Text
+                fz={11}
+                px={18}
+                py={6}
+                style={{ color: colorForRole('textFaint', scheme), borderTop: border }}
+              >
+                {scope}
+              </Text>
+            )}
+
+            {notice !== null && (
+              <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>
+                {notice}
+              </Text>
+            )}
+          </Box>
+        );
+      case TRANSCRIPT_TAB:
+        return (
+          <TranscriptPanel
+            state={transcript}
+            onRefresh={readTranscript}
+            scheme={scheme}
+            panelId={`${paneId}-transcript`}
+            labelledBy={`${paneId}-transcript-tab`}
+          />
+        );
+      case APPROVALS_TAB:
+        // Wrapped rather than given the two ids itself: the tab's panel is a
+        // region, and what `ApprovalsTab` draws is a list -- putting
+        // `role="tabpanel"` on the `ul` would cost a screen reader the count
+        // of what is waiting, which is the one thing that list is for.
+        return (
+          <Box
+            id={`${paneId}-approvals`}
+            role="tabpanel"
+            aria-labelledby={`${paneId}-approvals-tab`}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <ApprovalsTab
+              sessionRef={sessionRef}
+              approvals={approvals}
+              project={project}
+              store={hub}
+              scheme={scheme}
+            />
+          </Box>
+        );
+      default:
+        return assertNever(tab, 'session tab');
+    }
+  }
 
   return (
     <Stack
@@ -703,7 +960,7 @@ export function SessionPane({
       <TabStrip
         tabs={tabs}
         activeId={shownTab}
-        onSelect={setRequestedTab}
+        onSelect={selectTab}
         scheme={scheme}
         label="session views"
       />
@@ -756,98 +1013,12 @@ export function SessionPane({
             </Text>
           )}
 
-          {/**
-           * What is under the tab that is open.
-           *
-           * The Approvals tab replaces the terminal rather than sitting beside
-           * it, and the terminal is unmounted rather than hidden. Hiding it
-           * would leave the fit addon measuring a box with no size and telling
-           * a pty on another machine it is zero columns wide; unmounting is the
-           * lifetime `terminal-view.tsx` is built for -- the emulator goes with
-           * its element, and the feed does not go with either. The feed belongs
-           * to the watched target and is held by the store, so coming back
-           * builds an emulator and replays into it, the same path a second pane
-           * opened on one session already takes.
-           *
-           * The find bar and the sentences about how much of the session this
-           * pane is not showing go with the terminal, because that is what they
-           * are about. The header, the strip and the steer bar are the pane's
-           * and stay whichever tab is open: steering goes down the same
-           * terminal-input path whether or not an emulator is mounted to echo
-           * it.
-           *
-           * The strip still carries no `aria-controls`: the element a tab would
-           * point at here is the emulator's own box, which belongs to
-           * `terminal-view.tsx`, and naming one of the two panels and not the
-           * other would be worse than naming neither.
-           */}
-          {shownTab === APPROVALS_TAB ? (
-            <ApprovalsTab
-              sessionRef={sessionRef}
-              approvals={approvals}
-              project={project}
-              store={hub}
-              scheme={scheme}
-            />
-          ) : (
-            <>
-              {finding && (
-                <FindBar
-                  search={paneSearch}
-                  truncated={() => terminalIsPartial(terminal)}
-                  scheme={scheme}
-                  onClose={closeFind}
-                  inputRef={findRef}
-                />
-              )}
-
-              {terminal === null ? (
-                // The watch is declared in a subscription, which React runs
-                // after the first commit, so there is one frame in which this
-                // pane has no feed to hand an emulator. The same well, painted,
-                // rather than an emulator built against a buffer that is about
-                // to be replaced.
-                <Box style={{ flex: 1, background: colorForRole('terminalBackground', scheme) }} />
-              ) : (
-                <TerminalView
-                  feed={terminal.feed}
-                  scheme={scheme}
-                  onData={sendInput}
-                  onResize={sendResize}
-                  emulatorReady={emulatorReady}
-                  emulators={emulators}
-                />
-              )}
-
-              {feed !== null && (
-                <Text
-                  fz={11}
-                  px={18}
-                  py={6}
-                  style={{ color: colorForTone('blocked', scheme), borderTop: border }}
-                >
-                  {feed}
-                </Text>
-              )}
-
-              {scope !== null && (
-                <Text
-                  fz={11}
-                  px={18}
-                  py={6}
-                  style={{ color: colorForRole('textFaint', scheme), borderTop: border }}
-                >
-                  {scope}
-                </Text>
-              )}
-
-              {notice !== null && (
-                <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>
-                  {notice}
-                </Text>
-              )}
-            </>
-          )}
+          {/* What is under the tab that is showing, as one switch that ends
+              in `assertNever`. Exactly one panel is mounted at a time and the
+              others are gone rather than hidden -- see the note at the top of
+              this file for why a hidden terminal is not a free thing to leave
+              lying about. */}
+          {paneBody(shown)}
 
           <Group gap={8} px={18} py={10} style={{ borderTop: border }} wrap="nowrap">
             <Text fz={11} fw={500} style={{ ...MONO_META, color: colorForRole('accent', scheme) }}>

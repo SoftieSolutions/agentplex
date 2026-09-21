@@ -27,6 +27,7 @@ import { frameParser } from './parse.js';
 import { providerReadinessSchema } from './readiness.js';
 import { sessionDescriptorSchema, sessionHoldSchema, sessionStartTagSchema } from './session.js';
 import { serverTerminalFrames } from './terminal.js';
+import { transcriptActivitiesSchema, transcriptCountSchema } from './transcript.js';
 
 /**
  * The server-facing half of the protocol: hub to paired server.
@@ -136,6 +137,36 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
     id: frameIdSchema,
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
+  }),
+  /**
+   * Read one session's transcript out of the store it lives in, as activities.
+   *
+   * Addressed by `{ storeId, sessionId }` like a stop, and for the same reason:
+   * the server resolves the store out of its own configuration and the adapter
+   * resolves the file out of the store, so nothing here names a path and there
+   * is nowhere to put one. What comes back is the vocabulary of `activity.ts`,
+   * never transcript lines -- the provider's own format is read on the machine
+   * that has the file and goes no further.
+   *
+   * `provider` is the hub's answer and not the client's. A client addresses a
+   * session; the hub reads the provider off the row it already holds for that
+   * session and puts it here, exactly as it reads a project's directory out of
+   * its own database rather than taking one off a frame. It is a name that
+   * selects a registered adapter, which is what `session-start` above already
+   * uses it for, and it saves this server walking every provider's layout
+   * looking for a file.
+   *
+   * `count` is the bound, and it is on the request rather than being the
+   * server's to choose: the party that has to fit the answer into a frame is
+   * the one that asks. See `transcript.ts` for why there is no cursor.
+   */
+  z.object({
+    type: z.literal('session-transcript'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    provider: providerSchema,
+    count: transcriptCountSchema,
   }),
   /**
    * Watching a session, feeding it, and telling it how big the screen is.
@@ -466,6 +497,25 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('doc-listing'),
     replyTo: frameIdSchema,
     entries: z.array(docEntrySchema),
+  }),
+  /**
+   * What that session did, oldest first, at most as many as were asked for.
+   *
+   * `olderExist` is the half a reader cannot work out for itself. Two bounds
+   * can produce it -- the count on the request, and how far back the adapter
+   * was willing to read into a file that may be megabytes -- and neither is
+   * visible from the list. A screen that said "this is the session" when it
+   * held a tail would be over-claiming, and one that said nothing when the
+   * list happened to be full would be guessing.
+   *
+   * A refusal is `session-refused` with `hold: null`, like the document frames
+   * above: that frame's contract is "the server said no, and to which frame".
+   */
+  z.object({
+    type: z.literal('session-transcript-read'),
+    replyTo: frameIdSchema,
+    activities: transcriptActivitiesSchema,
+    olderExist: z.boolean(),
   }),
   /** What is in that directory. The same shape the hub answers a client with. */
   directoryListingFrameSchema,

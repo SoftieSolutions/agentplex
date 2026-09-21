@@ -2296,3 +2296,93 @@ describe('a client reading and editing a standing policy', () => {
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
   });
 });
+
+describe('reading one session’s transcript', () => {
+  const STORE = 'store-work';
+  const SESSION = 'session-1';
+
+  it('answers the client that asked, with what the machine holding the file said', async () => {
+    const sessions = createFakeSessions({
+      transcript: {
+        ok: true,
+        activities: [
+          { kind: 'command', text: 'pnpm install', exitStatus: 0 },
+          { kind: 'command', text: 'pnpm test' },
+        ],
+        olderExist: true,
+      },
+    });
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'session-transcript',
+      id: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      count: 50,
+    });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'session-transcript-read',
+      replyTo: 2,
+      activities: [
+        { kind: 'command', text: 'pnpm install', exitStatus: 0 },
+        { kind: 'command', text: 'pnpm test' },
+      ],
+      olderExist: true,
+    });
+    // The client named a session and a bound, and nothing else: no machine and
+    // no provider, because both are the hub's rows to read.
+    expect(sessions.transcripts).toEqual([{ storeId: STORE, sessionId: SESSION, count: 50 }]);
+  });
+
+  it('passes a refusal back as a sentence with no holder on it', async () => {
+    const sessions = createFakeSessions({
+      transcript: {
+        ok: false,
+        code: 'refused',
+        problem: 'no server with that store mounted is connected right now',
+      },
+    });
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'session-transcript',
+      id: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      count: 50,
+    });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+      message: 'no server with that store mounted is connected right now',
+      // A transcript has no live process to name: it is a file, and no agent
+      // running is why it could not be read.
+      holder: null,
+    });
+    expect(client.socket.closure).toBeNull();
+  });
+
+  it('reads no transcript for a client that has not said hello', async () => {
+    const sessions = createFakeSessions();
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+
+    await client.say({
+      type: 'session-transcript',
+      id: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      count: 50,
+    });
+
+    expect(sessions.transcripts).toEqual([]);
+  });
+});

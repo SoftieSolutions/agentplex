@@ -1,5 +1,6 @@
 import {
   startIdSchema,
+  type Activity,
   type NodeId,
   type Provider,
   type RefusalCode,
@@ -13,10 +14,11 @@ import type { IdGenerator, Logger } from '@agentplex/node-shared';
 import type { Projects } from '../projects/projects.js';
 import type { InstructionOutcome, ServerInstruction } from '../servers/servers.js';
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
-import { routeStart, routeStop } from './session-routing.js';
+import { routeSessionRead, routeStart, routeStop } from './session-routing.js';
 
 /**
- * Starting and stopping sessions, from the hub's side.
+ * Starting sessions, stopping them, and reading one's transcript, from the
+ * hub's side.
  *
  * Two steps and nothing else: decide, then instruct. The deciding is
  * `session-routing.ts`, which is pure and sees the whole fleet; this is the
@@ -126,6 +128,37 @@ export interface StopSessionRequest {
   readonly sessionId: SessionId;
 }
 
+export interface TranscriptRequest {
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  /**
+   * How many activities to ask for, as the client asked.
+   *
+   * Passed through rather than re-decided here: the protocol's own schema
+   * bounded it on the way in, at both ends of both legs, and a hub that also
+   * had an opinion would be a third place to keep one number in step.
+   */
+  readonly count: number;
+}
+
+/**
+ * One session's transcript as the hub relays it, or why it relayed none.
+ *
+ * Nothing is stored. The hub holds no copy of a transcript and no index of one:
+ * the file is on the machine that wrote it, the tail of it comes back or a
+ * refusal does, and a session on a machine that is not connected is that
+ * refusal with the situation named in it. The same cost a document read takes
+ * deliberately, for the same reason -- content only the machine that has it can
+ * answer for.
+ */
+export type TranscriptOutcome =
+  | {
+      readonly ok: true;
+      readonly activities: readonly Activity[];
+      readonly olderExist: boolean;
+    }
+  | { readonly ok: false; readonly code: RefusalCode; readonly problem: string };
+
 /**
  * Why nothing happened, in the terms a client is answered in.
  *
@@ -173,6 +206,17 @@ export type SessionOutcome = SessionRan | SessionRefused;
 export interface Sessions {
   start(request: StartSessionRequest): Promise<StartOutcome>;
   stop(request: StopSessionRequest): Promise<SessionOutcome>;
+  /**
+   * The tail of one session's work, read on the machine that has the file.
+   *
+   * Here rather than in a feature of its own because it is routed by session,
+   * and session routing is this feature's: a `features/transcripts` would have
+   * had to reach into `session-routing.ts`, which is not this feature's entry
+   * file, or have the routing exported through it -- either way the boundary
+   * moves to accommodate a method. What it shares with `stop` is the whole of
+   * its decision; what it shares with the document feature is its shape.
+   */
+  transcript(request: TranscriptRequest): Promise<TranscriptOutcome>;
 }
 
 export function createSessions(dependencies: SessionsDependencies): Sessions {
@@ -345,6 +389,66 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
         storeId: answered.answer.storeId,
         sessionId: answered.answer.sessionId,
         server: registrationId,
+      };
+    },
+
+    async transcript(request: TranscriptRequest): Promise<TranscriptOutcome> {
+      // Resolve, check reachable, ask, check the answer's type, return: the
+      // shape `docs.open` has, routed by session rather than by directory. The
+      // routing does the first two in one step, because for a session the
+      // question "which machine" and the question "is it reachable" have one
+      // answer.
+      const routed = routeSessionRead(state.snapshot(), request);
+      if (!routed.ok) {
+        logger.info('transcript refused', { ...request, problem: routed.problem });
+        return { ok: false, code: routed.code, problem: routed.problem };
+      }
+
+      const { registrationId } = routed.server;
+      const answered = await connections.ask(registrationId, {
+        type: 'session-transcript',
+        storeId: request.storeId,
+        sessionId: request.sessionId,
+        // The hub's own row, not the client's word. A client addresses a
+        // session; which agent wrote the file is a fact this hub already holds,
+        // and reading it here is what keeps a client from choosing which
+        // adapter opens a file on somebody's disk.
+        provider: routed.provider,
+        count: request.count,
+      });
+
+      if (!answered.ok) {
+        logger.info('the server refused a transcript', {
+          registrationId,
+          ...request,
+          problem: answered.problem,
+        });
+        return { ok: false, code: answered.code, problem: answered.problem };
+      }
+
+      // Narrowed on the frame that arrived rather than assumed from what was
+      // asked, like a start: a peer that answered a transcript with a stop is a
+      // peer that is out of step, and drawing its word as a transcript would
+      // put an empty history in front of somebody as though it were the truth.
+      if (answered.answer.type !== 'session-transcript-read') {
+        logger.error('the server answered a transcript with something else', {
+          registrationId,
+          answered: answered.answer.type,
+        });
+        return {
+          ok: false,
+          code: 'internal',
+          problem: 'the server answered a transcript read with something else',
+        };
+      }
+
+      // Relayed, not kept. There is no row written here and no cache: a
+      // transcript held by the hub would be a screen showing what a session was
+      // doing when somebody last looked.
+      return {
+        ok: true,
+        activities: answered.answer.activities,
+        olderExist: answered.answer.olderExist,
       };
     },
   };

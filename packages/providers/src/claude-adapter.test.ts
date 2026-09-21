@@ -519,3 +519,83 @@ describe('createClaudeAdapter argv invariants', () => {
     }
   });
 });
+
+describe('createClaudeAdapter.transcript', () => {
+  const session = sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: SESSION_ID });
+
+  it('reads one session’s transcript out of whichever project directory holds it', async () => {
+    const adapter = adapterOver({
+      files: {
+        [`${PROJECTS}/-Users-dev-Code-other/99999999-3fc6-4519-8bb4-1c3f7eef0bde.jsonl`]: NO_TURNS,
+        [`${PROJECT}/${SESSION_ID}.jsonl`]: PENDING_TOOL_USE,
+      },
+    });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+    expect(read).toEqual({
+      ok: true,
+      transcript: { activities: [{ kind: 'command', text: 'Bash' }], olderExist: false },
+    });
+  });
+
+  it('refuses, in words, a session no project directory holds', async () => {
+    // The hub's view of a store is a scan or two old, so asking for a session
+    // that has since been deleted is ordinary rather than exceptional. A
+    // sentence naming the session is what a screen shows.
+    const adapter = adapterOver({ files: { [`${PROJECT}/${SESSION_ID}.jsonl`]: COMPLETED_TURN } });
+
+    const read = await adapter.transcript({
+      store: STORE,
+      session: sessionRefSchema.parse({
+        storeId: STORE.storeId,
+        sessionId: '99999999-3fc6-4519-8bb4-1c3f7eef0bde',
+      }),
+      limit: 10,
+    });
+
+    expect(read).toEqual({
+      ok: false,
+      problem: 'this store holds no claude transcript for that session',
+    });
+  });
+
+  it('refuses, in words, a transcript that is there and will not be read', async () => {
+    const adapter = adapterOver({
+      files: { [`${PROJECT}/${SESSION_ID}.jsonl`]: COMPLETED_TURN },
+      unreadable: [`${PROJECT}/${SESSION_ID}.jsonl`],
+    });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+    expect(read.ok).toBe(false);
+    expect(!read.ok && read.problem).toContain('cannot read transcript');
+  });
+
+  it('never recurses into the directories a session with subagents leaves behind', async () => {
+    // A session that ran subagents gets `<sessionId>/subagents/*.jsonl` beside
+    // its own transcript, and those files would parse. Discovery already takes
+    // files and only files out of a project directory; this reads one named
+    // file, so a subagent's transcript is not reachable by asking for the
+    // session it belongs to.
+    const adapter = adapterOver({
+      files: {
+        [`${PROJECT}/${SESSION_ID}/subagents/${SESSION_ID}.jsonl`]: PENDING_TOOL_USE,
+      },
+    });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 10 });
+
+    expect(read.ok).toBe(false);
+  });
+
+  it('answers only what was asked for, and says there is more behind it', async () => {
+    const adapter = adapterOver({
+      files: { [`${PROJECT}/${SESSION_ID}.jsonl`]: PENDING_TOOL_USE },
+    });
+
+    const read = await adapter.transcript({ store: STORE, session, limit: 0 });
+
+    expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: true } });
+  });
+});

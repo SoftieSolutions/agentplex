@@ -35,6 +35,7 @@ import {
 } from '@agentplex/node-shared/testing';
 import { createLogger, type DialResult, type SocketDialer } from '@agentplex/node-shared';
 import { serveServerEnd } from './server-end.js';
+import { forbiddenKeysIn, keysOf } from './frame-keys.js';
 import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
@@ -303,6 +304,8 @@ function serveMachine(machine: Machine): DialResult {
     readFile: (path) => createFakeProviderFiles({ files: machine.transcripts }).readFile(path),
     listDirectory: (path) =>
       createFakeProviderFiles({ files: machine.transcripts }).listDirectory(path),
+    readFileTail: (path, maxBytes) =>
+      createFakeProviderFiles({ files: machine.transcripts }).readFileTail(path, maxBytes),
   };
   const adapter = createFakeProviderAdapter({ provider: 'claude', files });
   const stores = [storeOn('/volumes/work')];
@@ -1162,19 +1165,11 @@ describe('a client-initiated session start', () => {
 
     // A process handle is meaningless off the machine that owns it, and an
     // argv, an environment or an operation name off a wire is the `{ command }`
-    // frame the operation registry exists to prevent.
+    // frame the operation registry exists to prevent. The walk is shared with
+    // every other suite that produces frames, so a frame a later ticket adds is
+    // swept by the same rule rather than by a copy of it.
     for (const frame of [...clientToHub, ...hubToClient, ...hubToServer, ...serverToHub]) {
-      for (const forbidden of [
-        'args',
-        'argv',
-        'env',
-        'command',
-        'operation',
-        'pid',
-        'terminalId',
-      ]) {
-        expect(keysOf(frame), `${frame.type} carried ${forbidden}`).not.toContain(forbidden);
-      }
+      expect(forbiddenKeysIn(frame), `${frame.type} carried a forbidden key`).toEqual([]);
     }
 
     // `cwd` is the one word with two meanings, so it is checked by direction
@@ -1961,11 +1956,4 @@ function parsed<T>(parser: (raw: unknown) => { ok: boolean }, text: string): T &
     { ok: true; value: T & { type: string } } | { ok: false; reason: string };
   if (!result.ok) throw new Error(`an unparseable frame reached a peer: ${result.reason}`);
   return result.value;
-}
-
-/** Every key anywhere in a frame, however deeply nested. */
-function keysOf(value: unknown): readonly string[] {
-  if (Array.isArray(value)) return value.flatMap(keysOf);
-  if (value === null || typeof value !== 'object') return [];
-  return Object.entries(value).flatMap(([key, nested]) => [key, ...keysOf(nested)]);
 }

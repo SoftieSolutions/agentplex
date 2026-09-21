@@ -1,5 +1,5 @@
 import type { FileRead } from './store-identity.js';
-import type { DirectoryEntry, DirectoryRead, ProviderFiles } from './provider-files.js';
+import type { DirectoryEntry, DirectoryRead, ProviderFiles, TailRead } from './provider-files.js';
 
 /**
  * A store volume an adapter can be pointed at in a test.
@@ -32,6 +32,32 @@ export function createFakeProviderFiles(options: FakeProviderFilesOptions = {}):
       if (unreadable.has(path)) return { kind: 'failed', reason: `EACCES: ${path}` };
       const contents = files.get(path);
       return contents === undefined ? { kind: 'missing' } : { kind: 'read', contents };
+    },
+
+    /**
+     * The same bounded read the real seam does, over the same bytes.
+     *
+     * Implemented rather than stubbed to return the whole file, because the
+     * behaviour a caller has to get right is what happens when the cap bites:
+     * the first partial line is gone and `truncated` is true. A fake that
+     * always answered `truncated: false` would make every test above it a test
+     * of the happy path only.
+     */
+    async readFileTail(path: string, maxBytes: number): Promise<TailRead> {
+      if (unreadable.has(path)) return { kind: 'failed', reason: `EACCES: ${path}` };
+      const contents = files.get(path);
+      if (contents === undefined) return { kind: 'missing' };
+
+      const bytes = Buffer.from(contents, 'utf8');
+      if (bytes.byteLength <= maxBytes) return { kind: 'read', contents, truncated: false };
+
+      const window = bytes.subarray(bytes.byteLength - maxBytes);
+      const brk = window.indexOf(0x0a);
+      return {
+        kind: 'read',
+        contents: brk === -1 ? '' : window.subarray(brk + 1).toString('utf8'),
+        truncated: true,
+      };
     },
 
     async listDirectory(path: string): Promise<DirectoryRead> {

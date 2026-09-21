@@ -1,6 +1,6 @@
 import { activitySchema, type Activity, type SessionUsage } from '@agentplex/protocol';
 import { z } from 'zod';
-import type { TranscriptSignal } from './provider-adapter.js';
+import type { SessionTranscript, TranscriptSignal } from './provider-adapter.js';
 
 /**
  * The parser for one Claude Code transcript.
@@ -325,6 +325,96 @@ function activityOf(last: z.infer<typeof turnSchema>): Activity | null {
   // its usage, and the descriptor simply carries no activity.
   const activity = activitySchema.safeParse({ kind: 'command', text: block.name });
   return activity.success ? activity.data : null;
+}
+
+/**
+ * The same transcript, read as everything it records rather than as the last
+ * thing it records.
+ *
+ * A second pass over the file rather than a field on `ClaudeTranscript`,
+ * because the two are asked at different times by different callers and cost
+ * different amounts. Discovery runs `parseClaudeTranscript` over every session
+ * in a store every couple of seconds and wants one line out of each; this runs
+ * once, for one session, because somebody opened it — and it is handed the
+ * *tail* of the file rather than the whole of it, so a parse that also tried to
+ * total the tokens would be totalling a suffix and reporting it as a session's
+ * spend.
+ *
+ * The derivation is the one the card's line already makes, applied to every
+ * turn: a `tool_use` block becomes a `command` whose text is the tool's *name*.
+ * That is not a shorthand for a command line — there is no command line here,
+ * the tool's `input` is what holds one, and the captured fixtures redact it to
+ * `{}`. The same five variants the card cannot reach are unreachable here for
+ * the same reasons; `activityOf` below carries the list.
+ *
+ * Sidechains are skipped, exactly as they are for the date, the model and the
+ * signal: a `Task` subagent's tool calls are the session's work but not its
+ * conversation, and interleaving them would show one session doing two things
+ * at once.
+ *
+ * Unlike `parseClaudeTranscript` this never refuses. A file with no turn in it
+ * yields no activities, which is what a screen showing a transcript says out
+ * loud; there is no reading of "this file is damaged" that a reader of a
+ * *session's* activities would act on differently from "it did nothing yet".
+ */
+export function claudeTranscriptActivities(contents: string, limit: number): SessionTranscript {
+  const activities: Activity[] = [];
+  let dropped = false;
+
+  for (const line of contents.split('\n')) {
+    if (line.trim() === '') continue;
+
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      // The first line of a tail read is routinely half a line, and the last
+      // line of a live transcript is routinely a partial write. Both cost
+      // themselves, as they do in the parser above.
+      continue;
+    }
+
+    const turn = turnSchema.safeParse(entry);
+    if (!turn.success || turn.data.isSidechain === true) continue;
+
+    for (const activity of turnActivities(turn.data)) {
+      activities.push(activity);
+      // Bounded as it goes rather than sliced at the end, so a transcript of
+      // ten thousand tool calls is never ten thousand objects in memory on the
+      // machine that has the file.
+      if (activities.length > limit) {
+        activities.shift();
+        dropped = true;
+      }
+    }
+  }
+
+  return { activities, olderExist: dropped };
+}
+
+/**
+ * Every tool call one turn made, in the order Claude Code wrote them.
+ *
+ * Every block rather than the last one, which is the one place this differs
+ * from `activityOf`. The card's line answers "what is this session doing now",
+ * so it takes the latest block and stops; a transcript answers "what did this
+ * session do", and a turn that called three tools did three things.
+ *
+ * A block whose name the activity schema refuses — one past the protocol's
+ * bound, or one that is nothing but characters a screen cannot draw — is
+ * skipped. It costs itself and never the turn around it.
+ */
+function turnActivities(turn: z.infer<typeof turnSchema>): readonly Activity[] {
+  const content = turn.message?.content;
+  if (!Array.isArray(content)) return [];
+
+  const found: Activity[] = [];
+  for (const block of content) {
+    if (block.type !== 'tool_use' || typeof block.name !== 'string') continue;
+    const activity = activitySchema.safeParse({ kind: 'command', text: block.name });
+    if (activity.success) found.push(activity.data);
+  }
+  return found;
 }
 
 /**

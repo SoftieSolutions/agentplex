@@ -57,6 +57,52 @@ export const ACTIVITY_TEXT_MAX_CHARS = 200;
 export const ACTIVITY_PATH_MAX_CHARS = 200;
 
 /**
+ * The largest a line or test count on an activity may be.
+ *
+ * A bound rather than "any non-negative integer", because these numbers are
+ * what makes the arithmetic below a sum instead of a guess: an integer with no
+ * ceiling is a field of unknown width on the widest variant of the union, and a
+ * frame budget computed around one is a budget that cannot be checked.
+ *
+ * Seven digits, which is more lines than any file an agent edits has and more
+ * tests than any suite it runs -- and, unlike a rounder number, it is the exact
+ * width the sum below charges for. An adapter with a larger count than this
+ * read something that is not a diffstat.
+ */
+export const ACTIVITY_COUNT_MAX = 9_999_999;
+
+/**
+ * How many activities one answer about one session's transcript may carry.
+ *
+ * The bound exists so the answer fits the socket by construction rather than
+ * by hope. The message socket drops a connection over a frame past 1,000,000
+ * bytes, and a transcript on disk is routinely several megabytes, so the
+ * request carries a count and this is its ceiling.
+ *
+ * The arithmetic, stated so it can be checked rather than trusted. The largest
+ * variant of the union below is an `edit`: a path label of
+ * `ACTIVITY_PATH_MAX_CHARS` code units *and* two counts, where every other
+ * variant carries one display string and at most three more digits. A code unit
+ * costs at most six bytes inside a JSON string -- the `\uXXXX` escape, which is
+ * the worst case for anything, and three bytes for the worst of the Basic
+ * Multilingual Plane encoded outright. So the label is at most 1,200 bytes; the
+ * two counts are at most seven digits each by `ACTIVITY_COUNT_MAX`, which is
+ * why that bound exists; and the keys, the braces, the quotes and the commas
+ * come to sixty. Call one activity 1,300 bytes, which `activity.test.ts`
+ * measures rather than assumes.
+ *
+ * Two hundred of them is 260,000 bytes, and the envelope around them -- a type,
+ * a reply id, a boolean -- is a hundred more. A maximal answer is therefore
+ * around a quarter of the socket's limit, which leaves room for the count to be
+ * argued upwards later without anyone having to redo this sum in a hurry.
+ *
+ * Two hundred is also about what a person scrolls through: the session screen
+ * shows the tail of a conversation, says out loud when there is more behind it,
+ * and does not pretend to be the transcript file.
+ */
+export const TRANSCRIPT_ACTIVITIES_MAX = 200;
+
+/**
  * Whitespace a transcript records inside one logical line: the tab, and the
  * line and page breaks. These become a single space rather than vanishing, so
  * `editing\tsrc/a.ts` does not collapse into one word.
@@ -154,8 +200,13 @@ const activityPathSchema = z
  * Optional and never defaulted, for the reason `usage` is optional on a
  * descriptor: a zero here says the agent touched a file and moved no lines,
  * and "the transcript did not say" has to draw as a missing number instead.
+ *
+ * Bounded above as well as below, because the frame budget on
+ * `TRANSCRIPT_ACTIVITIES_MAX` is a sum over the widest variant and an
+ * unbounded integer has no width to add. A number past the bound did not come
+ * from a diffstat or a test run.
  */
-const activityCountSchema = z.int().nonnegative();
+const activityCountSchema = z.int().nonnegative().max(ACTIVITY_COUNT_MAX);
 
 /**
  * Every variant is a strict object, so an unknown key is a refusal rather than

@@ -38,6 +38,7 @@ import {
 import { frameParser } from './parse.js';
 import { pushEndpointSchema, pushKeySchema, pushSubscriptionSchema } from './push.js';
 import { clientTerminalFrames, subscriptionEndedFrameSchema } from './terminal.js';
+import { transcriptActivitiesSchema, transcriptCountSchema } from './transcript.js';
 
 /**
  * The client-facing half of the protocol: browser (or MCP caller) to hub.
@@ -209,6 +210,34 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     id: frameIdSchema,
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
+  }),
+  /**
+   * Asks the hub for the tail of one session's transcript, as activities.
+   *
+   * It addresses `{ storeId, sessionId }` and nothing else, like a stop: which
+   * machine holds the file and which provider wrote it are the hub's rows to
+   * read, and a client that could name either would be a client choosing where
+   * a read lands. What comes back is the vocabulary of `activity.ts` and never
+   * transcript lines -- the provider's format is parsed on the machine that has
+   * the file, so a browser never sees a prompt, a tool's output or anything
+   * else a transcript happens to contain.
+   *
+   * `count` is a bound the asker sets, capped by `transcript.ts`, because the
+   * hub holds no copy to page through: the whole answer comes back in one frame
+   * or a refusal does, and the frame has to fit the socket. The answer says
+   * whether there is more behind it rather than offering a cursor into a file
+   * another process is still appending to.
+   *
+   * Nothing is stored anywhere as a result of this. A transcript is a fact
+   * about a file on one machine, and the hub relays it without keeping a copy,
+   * which is the same rule a document read follows.
+   */
+  z.object({
+    type: z.literal('session-transcript'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    count: transcriptCountSchema,
   }),
   /**
    * Says the prompt this session is sitting on has been seen.
@@ -1187,6 +1216,32 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('push-unsubscribed'),
     replyTo: frameIdSchema,
+  }),
+  /**
+   * What that session did, oldest first, relayed from the machine that holds
+   * the transcript.
+   *
+   * The same name and the same two fields as the server leg's answer, because
+   * it is the same answer relayed: the hub parses the activities once, keeps
+   * none of them and rewrites nothing, so a second shape here would be a second
+   * thing to keep in step for no gain. `doc-content` on this direction makes
+   * the same argument.
+   *
+   * It carries no store and no session. `replyTo` is the whole of the
+   * correlation, as it is for every other reply on this direction, and a client
+   * that has two panes open holds the frame id each of them asked with. A frame
+   * that restated the address would invite a client to draw an answer against a
+   * session it did not ask about.
+   *
+   * A refusal travels as `refusal` with `holder: null`, like every other no
+   * here: an unreachable machine, a session the hub cannot see and a transcript
+   * that would not be read are all sentences a client shows beside the tab.
+   */
+  z.object({
+    type: z.literal('session-transcript-read'),
+    replyTo: frameIdSchema,
+    activities: transcriptActivitiesSchema,
+    olderExist: z.boolean(),
   }),
   protocolErrorFrameSchema,
 ]);

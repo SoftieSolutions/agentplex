@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseClaudeTranscript } from './claude-transcript.js';
+import { claudeTranscriptActivities, parseClaudeTranscript } from './claude-transcript.js';
 
 /**
  * The fixtures are captured Claude Code output, not shapes written from
@@ -381,6 +381,108 @@ describe('parseClaudeTranscript', () => {
     const parsed = parseClaudeTranscript('{"hello":"world"}\n{"type":"user"}\n');
 
     expect(parsed).toEqual({ ok: false, reason: 'no-turns' });
+  });
+});
+
+describe('claudeTranscriptActivities', () => {
+  it('reads every tool call the captured transcript records, oldest first', () => {
+    // One tool call in `claude-completed-turn.jsonl`, and its name is the
+    // whole of what the capture leaves readable: `input` is `{}`. The same
+    // derivation the card's one line already makes, over every turn instead of
+    // only the last one.
+    const read = claudeTranscriptActivities(COMPLETED_TURN, 10);
+
+    expect(read).toEqual({ activities: [{ kind: 'command', text: 'Bash' }], olderExist: false });
+  });
+
+  it('keeps the newest when there are more than the caller asked for', () => {
+    // The request carries the bound, and what a reader wants is the end of the
+    // conversation. Dropping from the front is what makes the answer the tail
+    // rather than the beginning of a file nobody is looking at.
+    const captured = JSON.parse(lastLineOf(PENDING_TOOL_USE, 'assistant')) as Record<
+      string,
+      unknown
+    > & { message: { content: { type: string }[] } };
+    const named = (name: string): string =>
+      JSON.stringify({
+        ...captured,
+        message: {
+          ...captured.message,
+          content: captured.message.content.map((block) =>
+            block.type === 'tool_use' ? { ...block, name } : block,
+          ),
+        },
+      });
+    const transcript = `${PENDING_TOOL_USE}${named('Edit')}\n${named('Read')}\n`;
+
+    const read = claudeTranscriptActivities(transcript, 2);
+
+    expect(read).toEqual({
+      activities: [
+        { kind: 'command', text: 'Edit' },
+        { kind: 'command', text: 'Read' },
+      ],
+      olderExist: true,
+    });
+  });
+
+  it('leaves a subagent’s tool calls out of the session’s transcript', () => {
+    // The same rule the card's line already follows. A `Task` subagent's work
+    // is the session's work and not its conversation, and a transcript view
+    // interleaving both would show a session doing two things at once.
+    const sidechain = JSON.parse(lastLineOf(PENDING_TOOL_USE, 'assistant')) as Record<
+      string,
+      unknown
+    >;
+    const read = claudeTranscriptActivities(
+      `${PENDING_TOOL_USE}${JSON.stringify({ ...sidechain, isSidechain: true })}\n`,
+      10,
+    );
+
+    expect(read.activities).toEqual([{ kind: 'command', text: 'Bash' }]);
+  });
+
+  it('costs one unusable tool name itself and keeps the rest of the transcript', () => {
+    // An unreadable item in a listing costs itself, not the listing. A name
+    // past the protocol's bound is refused by the activity schema, and the
+    // tool calls either side of it are still what the session did.
+    const captured = JSON.parse(lastLineOf(PENDING_TOOL_USE, 'assistant')) as Record<
+      string,
+      unknown
+    > & { message: { content: { type: string }[] } };
+    const overlong = JSON.stringify({
+      ...captured,
+      message: {
+        ...captured.message,
+        content: captured.message.content.map((block) =>
+          block.type === 'tool_use' ? { ...block, name: 'x'.repeat(400) } : block,
+        ),
+      },
+    });
+
+    const read = claudeTranscriptActivities(`${PENDING_TOOL_USE}${overlong}\n`, 10);
+
+    expect(read).toEqual({ activities: [{ kind: 'command', text: 'Bash' }], olderExist: false });
+  });
+
+  it('answers nothing for a transcript whose turns called no tool', () => {
+    // Not a failure and not an empty file: a session that has only talked has
+    // nothing this parser can honestly report, because every text payload the
+    // capture holds is redacted.
+    const read = claudeTranscriptActivities(NO_TURNS, 10);
+
+    expect(read).toEqual({ activities: [], olderExist: false });
+  });
+
+  it('never puts the capture’s redaction marker into a transcript', () => {
+    // The structural guard the card's line already has, applied to the whole
+    // list: the only field read off a content block is `tool_use.name`, and
+    // every payload the capture replaces is a field this parser does not read.
+    for (const captured of [COMPLETED_TURN, PENDING_TOOL_USE]) {
+      const read = claudeTranscriptActivities(captured, 200);
+
+      expect(JSON.stringify(read.activities).includes('REDACTED')).toBe(false);
+    }
   });
 });
 

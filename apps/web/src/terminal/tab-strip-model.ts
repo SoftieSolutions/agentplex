@@ -2,12 +2,12 @@
  * What a tab strip is, and the two questions it answers, as pure functions.
  *
  * The strip is drawn from a list and never from a count. Today that list holds
- * one tab -- Terminal, the only one built -- and the mockup's other three
- * arrive as their own epics land: Transcript (AGX-82), Diff (AGX-105),
- * Approvals (AGX-104). A strip that assumed four would spend that time drawing
- * three controls that do nothing, which is the same blank-screen lie the panes
- * around it exist to avoid; so nothing disabled and nothing placeholder is
- * ever in the list.
+ * Terminal and Transcript always, and Approvals while the session is holding a
+ * request -- so it is two tabs or three, and the mockup's last one arrives as
+ * its own epic lands: Diff (AGX-105). A strip that assumed four would spend
+ * that time drawing a control that does nothing, which is the same
+ * blank-screen lie the panes around it exist to avoid; so nothing disabled and
+ * nothing placeholder is ever in the list.
  *
  * Which makes the list a thing that changes shape under a mounted pane, and
  * that is the whole reason these are functions rather than a `useState` and an
@@ -20,6 +20,15 @@ export interface SessionTab {
   readonly id: string;
   /** The word on the tab. */
   readonly label: string;
+  /**
+   * The id of the element this tab shows, for `aria-controls`.
+   *
+   * Supplied by the pane rather than derived from `id` here, because two panes
+   * can be open on one session and two elements cannot share an id: the pane
+   * mints one prefix of its own and hands each tab the id of its own panel.
+   * The strip only places it.
+   */
+  readonly panelId: string;
   /**
    * The count or measure drawn after the label -- `+142 -38` on Diff, `3` on
    * Approvals -- or `null` for a tab with nothing to add. Already words: a tab

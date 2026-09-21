@@ -1,4 +1,5 @@
 import type {
+  Activity,
   Provider,
   RefusalCode,
   SessionDescriptor,
@@ -145,6 +146,45 @@ export type SessionOutcome =
       readonly hold: SessionHold | null;
     };
 
+export interface TranscriptSessionRequest {
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  /**
+   * Which adapter reads the file, named by the hub off the row it already
+   * holds for this session.
+   *
+   * A name and never an argument, exactly as a start's is: the registry is the
+   * only thing that turns one into an adapter, and a name nobody implements is
+   * a refusal rather than an `undefined` three calls later. It is on the
+   * instruction rather than being searched for here because the hub knows the
+   * answer and this server would otherwise walk every provider's layout to
+   * rediscover it.
+   */
+  readonly provider: Provider;
+  /** How many activities to answer with, bounded by the protocol on the way in. */
+  readonly count: number;
+}
+
+/**
+ * The tail of one session's work, or why this machine will not produce it.
+ *
+ * A `code` beside the problem, like a start's refusal and unlike the adapter's,
+ * because the two failures reach a person differently: `refused` is this
+ * machine understanding the request and declining it -- a store it does not
+ * have, a provider it cannot drive, a session that is not there -- and
+ * `internal` is this machine breaking on its own side, where retrying may work.
+ * There is no `hold`: a transcript is a file, and no live process is the reason
+ * one cannot be read.
+ */
+export type TranscriptOutcome =
+  | {
+      readonly ok: true;
+      readonly activities: readonly Activity[];
+      /** Whether the session did more before the oldest of these. */
+      readonly olderExist: boolean;
+    }
+  | { readonly ok: false; readonly code: RefusalCode; readonly problem: string };
+
 /** One server's whole view of one store, as it sends it. */
 export interface StoreReport {
   readonly storeId: StoreId;
@@ -166,6 +206,19 @@ export interface SessionController {
    * what decides whether a stop may be offered.
    */
   report(storeId: StoreId): Promise<StoreReport | null>;
+  /**
+   * One session's transcript, as the activities the provider's own file
+   * records.
+   *
+   * Beside `report` rather than folded into it, because they answer different
+   * questions at different rates: a report is every session in a store, sent
+   * unasked every couple of seconds, and reduces each session to one line; this
+   * is one session's history, read because somebody opened it, and never sent
+   * unasked. Nothing is cached between the two -- the file is the truth, and a
+   * transcript held from the last scan would be a screen showing what a session
+   * was doing a minute ago.
+   */
+  transcript(request: TranscriptSessionRequest): Promise<TranscriptOutcome>;
 }
 
 export function createSessionController(
@@ -382,6 +435,61 @@ export function createSessionController(
         storeId,
         sessions: await withWorkingTree(store, sessions),
         holding: holdsIn(storeId),
+      };
+    },
+
+    async transcript(request: TranscriptSessionRequest): Promise<TranscriptOutcome> {
+      const store = storeOf(request.storeId);
+      if (store === undefined) {
+        // The hub asked a machine that does not have the volume, which is its
+        // own view of the fleet being out of date rather than anything to
+        // retry. The same sentence a start gets, for the same reason.
+        return {
+          ok: false,
+          code: 'refused',
+          problem: 'this server does not have that store mounted',
+        };
+      }
+
+      // Parsed, never cast: a provider name off a frame is a claim, and the
+      // registry is the only thing that turns one into an adapter.
+      const found = providers.lookup(request.provider);
+      if (!found.ok) return { ok: false, code: 'refused', problem: found.problem };
+
+      let read;
+      try {
+        read = await found.adapter.transcript({
+          store,
+          session: { storeId: store.storeId, sessionId: request.sessionId },
+          limit: request.count,
+        });
+      } catch (error) {
+        // An adapter is somebody else's code once this is open source, and one
+        // that throws must cost its own answer rather than the connection. The
+        // same treatment `discoverStoreSessions` gives a broken adapter.
+        logger.error('a provider adapter failed to read a transcript', {
+          storeId: request.storeId,
+          sessionId: request.sessionId,
+          provider: request.provider,
+          problem: String(error),
+        });
+        return {
+          ok: false,
+          code: 'internal',
+          problem: 'this server could not read that transcript',
+        };
+      }
+
+      // The adapter's own words, not a sentence composed here. Only it knows
+      // where it looked and what it found there, and a session that has been
+      // deleted since the hub's last scan is the ordinary case rather than a
+      // fault of this machine.
+      if (!read.ok) return { ok: false, code: 'refused', problem: read.problem };
+
+      return {
+        ok: true,
+        activities: read.transcript.activities,
+        olderExist: read.transcript.olderExist,
       };
     },
   };

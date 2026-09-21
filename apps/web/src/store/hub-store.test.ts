@@ -20,6 +20,7 @@ import { createFakeSocketFactory, type FakeSocket } from './fake-socket.js';
 import { createFakeTimers } from './timers.js';
 import {
   createHubStore,
+  MAX_REMEMBERED_TRANSCRIPTS,
   terminalKey,
   type HubCommand,
   type HubStoreDependencies,
@@ -2066,5 +2067,151 @@ describe('web push', () => {
       id: 2,
       endpoint: SUBSCRIPTION.endpoint,
     });
+  });
+});
+
+describe('one session’s transcript', () => {
+  const ASK: HubCommand = {
+    type: 'session-transcript',
+    storeId: storeIdSchema.parse('store-work'),
+    sessionId: sessionIdSchema.parse('session-build'),
+    count: 4,
+  };
+
+  it('sends the ask as a command, so a blink queues it rather than dropping it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const outcome = h.store.sendCommand(ASK);
+
+    expect(outcome).toEqual({ accepted: true, id: 2, delivery: 'sent' });
+    expect(sentFrames(socket).at(-1)).toEqual({ ...ASK, id: 2 });
+  });
+
+  it('keeps the answer under the id the pane asked with', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.sendCommand(ASK);
+
+    socket.deliver(hubFrames.sessionTranscript);
+
+    // Exactly what a real hub sent: the tail of what the adapter derived out of
+    // a captured transcript, oldest first, and the word that there is more
+    // behind it. Four tool names and nothing about what they ran, because a
+    // captured Claude transcript's tool inputs are redacted -- the fixture says
+    // what the provider says. Nothing here re-reads a kind or re-orders a list:
+    // the frame is the answer.
+    expect(h.store.getSnapshot().transcripts.get(3 as FrameId)).toEqual({
+      replyTo: 3,
+      activities: [
+        { kind: 'command', text: 'Bash' },
+        { kind: 'command', text: 'Bash' },
+        { kind: 'command', text: 'Bash' },
+        { kind: 'command', text: 'Bash' },
+      ],
+      olderExist: true,
+    });
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('keeps one pane’s answer when another pane’s answer lands', async () => {
+    // The case two panes on one session make, and the reason this is a map at
+    // all: one slot would have the second answer erase the first, and the pane
+    // that asked first would go back to saying it was reading with no read of
+    // its own outstanding.
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.deliver(hubFrames.sessionTranscript);
+
+    socket.deliver(
+      JSON.stringify({
+        type: 'session-transcript-read',
+        replyTo: 9,
+        activities: [{ kind: 'command', text: 'pnpm lint', exitStatus: 0 }],
+        olderExist: false,
+      }),
+    );
+
+    const held = h.store.getSnapshot().transcripts;
+
+    expect(held.get(9 as FrameId)).toEqual({
+      replyTo: 9,
+      activities: [{ kind: 'command', text: 'pnpm lint', exitStatus: 0 }],
+      olderExist: false,
+    });
+    expect(held.get(3 as FrameId)?.activities).toHaveLength(4);
+  });
+
+  it('answers one read whole rather than merging it with an earlier one', async () => {
+    // A transcript is one read of a file at one moment. Two answers stitched
+    // together would be a history that never existed on any disk, so a second
+    // answer under one id replaces what was filed under it.
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.deliver(hubFrames.sessionTranscript);
+
+    socket.deliver(
+      JSON.stringify({
+        type: 'session-transcript-read',
+        replyTo: 3,
+        activities: [{ kind: 'command', text: 'pnpm lint', exitStatus: 0 }],
+        olderExist: false,
+      }),
+    );
+
+    expect(h.store.getSnapshot().transcripts.get(3 as FrameId)).toEqual({
+      replyTo: 3,
+      activities: [{ kind: 'command', text: 'pnpm lint', exitStatus: 0 }],
+      olderExist: false,
+    });
+  });
+
+  it('bounds what it remembers, dropping the oldest answer first', async () => {
+    // A tab left open all day refreshing a transcript would otherwise
+    // accumulate one answer per press, each of them up to a quarter of a
+    // megabyte. The cap is far above any arrangement of panes, so what goes is
+    // an answer an earlier read left behind rather than one a pane is drawing.
+    const h = harness();
+    const { socket } = await establish(h);
+
+    for (let id = 1; id <= MAX_REMEMBERED_TRANSCRIPTS + 3; id += 1) {
+      socket.deliver(
+        JSON.stringify({
+          type: 'session-transcript-read',
+          replyTo: id,
+          activities: [{ kind: 'command', text: `read ${String(id)}` }],
+          olderExist: false,
+        }),
+      );
+    }
+
+    const held = h.store.getSnapshot().transcripts;
+
+    expect(held.size).toBe(MAX_REMEMBERED_TRANSCRIPTS);
+    expect(held.has(1 as FrameId)).toBe(false);
+    expect(held.has(3 as FrameId)).toBe(false);
+    expect(held.has(4 as FrameId)).toBe(true);
+    expect(held.has((MAX_REMEMBERED_TRANSCRIPTS + 3) as FrameId)).toBe(true);
+  });
+
+  it('holds nothing before a pane has asked', async () => {
+    const h = harness();
+    await establish(h);
+
+    expect(h.store.getSnapshot().transcripts.size).toBe(0);
+  });
+
+  it('forgets every answer when the connection goes', async () => {
+    // The same argument a document makes: the file goes on being appended to
+    // on its own machine while nothing here is connected, so an answer kept
+    // across a disconnection is a history as of whenever somebody last looked.
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.sessionTranscript);
+    expect(h.store.getSnapshot().transcripts.size).toBe(1);
+
+    unsubscribe();
+
+    expect(h.store.getSnapshot().transcripts.size).toBe(0);
   });
 });

@@ -18,12 +18,17 @@ declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
 }
 
-const ONE: readonly SessionTab[] = [{ id: 'terminal', label: 'Terminal', badge: null }];
+/** The panel each tab shows, as the pane that mounted the strip named it. */
+function tab(id: string, label: string, badge: string | null = null): SessionTab {
+  return { id, label, badge, panelId: `pane-${id}` };
+}
+
+const ONE: readonly SessionTab[] = [tab('terminal', 'Terminal')];
 const FOUR: readonly SessionTab[] = [
-  { id: 'terminal', label: 'Terminal', badge: null },
-  { id: 'transcript', label: 'Transcript', badge: null },
-  { id: 'diff', label: 'Diff', badge: '+142 -38' },
-  { id: 'approvals', label: 'Approvals', badge: '3' },
+  tab('terminal', 'Terminal'),
+  tab('transcript', 'Transcript'),
+  tab('diff', 'Diff', '+142 -38'),
+  tab('approvals', 'Approvals', '3'),
 ];
 
 /** Mantine reads the colour-scheme media query on mount; jsdom has none. */

@@ -23,6 +23,8 @@ import type {
   ResumeRequest,
   SpawnRequest,
   StatusObservation,
+  TranscriptRead,
+  TranscriptRequest,
   VersionProbe,
 } from './provider-adapter.js';
 import type { ProviderFiles } from './provider-files.js';
@@ -75,6 +77,16 @@ const fakeTranscriptSchema = z.object({
    * invented its own vocabulary would be exercising a seam nothing crosses.
    */
   activity: activitySchema.nullish(),
+  /**
+   * Everything this made-up provider says the session has done, oldest first,
+   * when it says anything. Absent is a session whose record holds nothing --
+   * the ordinary case, and the one a caller has to handle.
+   *
+   * The protocol's own schema again rather than a shape of this fake's: an
+   * adapter is the last place an activity is parsed, and a fake with its own
+   * vocabulary would exercise a seam nothing crosses.
+   */
+  activities: z.array(activitySchema).optional(),
 });
 
 export interface FakeProviderAdapterOptions {
@@ -82,6 +94,11 @@ export interface FakeProviderAdapterOptions {
   readonly files?: ProviderFiles;
   /** Makes `discover` throw, to prove a broken adapter costs only its provider. */
   readonly throwsOnDiscover?: string;
+  /**
+   * Makes `transcript` throw, to prove that a server asking a third party's
+   * adapter for one answers a refusal rather than an unhandled rejection.
+   */
+  readonly throwsOnTranscript?: string;
   readonly status?: (observation: StatusObservation) => SessionStatus;
 }
 
@@ -145,6 +162,15 @@ export function createFakeProviderAdapter(
     status(observation: StatusObservation): SessionStatus {
       observations.push(observation);
       return options.status?.(observation) ?? fakeStatus(observation);
+    },
+
+    async transcript(request: TranscriptRequest): Promise<TranscriptRead> {
+      if (options.throwsOnTranscript !== undefined) throw new Error(options.throwsOnTranscript);
+      return await readSessionTranscript(
+        `${sessionsDirectory(request.store, provider)}/${request.session.sessionId}.json`,
+        request.limit,
+        files,
+      );
     },
 
     provisioning: fakeProvisioning(provider),
@@ -329,6 +355,51 @@ async function readSessions(directory: string, files: ProviderFiles): Promise<Pr
   }
 
   return { sessions, problems };
+}
+
+/**
+ * One made-up session's record, read as the activities it holds.
+ *
+ * `readFile` and not `readFileTail`, and the exception is the point rather than
+ * an oversight. The bounded read exists because the real providers append JSONL
+ * forever; this provider writes one small JSON object per session, and there is
+ * no tail of a JSON object that parses. What the seam requires is that an
+ * adapter bounds its read, not that every adapter bounds it the same way, and
+ * an object small enough to be read whole is bounded by being one object.
+ */
+async function readSessionTranscript(
+  path: string,
+  limit: number,
+  files: ProviderFiles,
+): Promise<TranscriptRead> {
+  const read = await files.readFile(path);
+  if (read.kind === 'missing') {
+    return { ok: false, problem: 'this store holds no transcript for that session' };
+  }
+  if (read.kind === 'failed') {
+    return { ok: false, problem: `cannot read transcript: ${read.reason}` };
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(read.contents);
+  } catch (error) {
+    return { ok: false, problem: `transcript is not JSON: ${String(error)}` };
+  }
+
+  const parsed = fakeTranscriptSchema.safeParse(json);
+  if (!parsed.success) return { ok: false, problem: 'transcript is not a transcript' };
+
+  const all = parsed.data.activities ?? [];
+  return {
+    ok: true,
+    // Spelled out rather than `slice(-limit)`, which answers with the whole
+    // array for a limit of zero: a caller that asked for none must get none.
+    transcript: {
+      activities: limit <= 0 ? [] : all.slice(-limit),
+      olderExist: all.length > limit,
+    },
+  };
 }
 
 function parseTranscript(name: string, contents: string) {
