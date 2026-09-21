@@ -9,6 +9,7 @@ import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCatalogueStore } from '../catalogue/catalogue-store.js';
+import type { ShellForm } from '../shell/shell-form.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
@@ -17,6 +18,8 @@ import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { parseSessionHash } from '../terminal/session-route.js';
+import { appSessionFiltersStore } from './session-filters-store.js';
+import type { SessionListFilters } from './session-list-model.js';
 import { SessionListScreen } from './session-list-screen.js';
 
 /**
@@ -123,7 +126,11 @@ describe('the session list', () => {
   }
 
   /** Mounts the screen and walks its store's connection through to a state. */
-  async function mountWith(state: string, machine?: string): Promise<FakeSocket> {
+  async function mountWith(
+    state: string,
+    machine?: string,
+    form: ShellForm = 'wide',
+  ): Promise<FakeSocket> {
     await act(async () => {
       root = createRoot(container);
       root.render(
@@ -131,6 +138,7 @@ describe('the session list', () => {
           <SessionListScreen
             store={store}
             machine={machine === undefined ? null : serverRegistrationIdSchema.parse(machine)}
+            form={form}
             now={() => NOW}
           />,
         ),
@@ -171,6 +179,18 @@ describe('the session list', () => {
       throw new Error(`expected one stop button, found ${String(buttons.length)}`);
     }
     return only;
+  }
+
+  /**
+   * React tracks an input's value itself, so assigning `input.value` and firing
+   * an event is a change React has already decided did not happen. The setter
+   * off the prototype is the one the tracker does not intercept.
+   */
+  function typeInto(input: HTMLInputElement, text: string): void {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    if (setter === undefined) throw new Error('no value setter on HTMLInputElement');
+    setter.call(input, text);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
   async function click(target: Element): Promise<void> {
@@ -453,5 +473,139 @@ describe('the session list', () => {
     });
     expect(buttonsLabelled('acknowledge')[0]?.disabled).toBe(false);
     expect(container.textContent).toContain('this hub knows no session by that id');
+  });
+
+  /**
+   * The narrowings, now that they are the page's rather than this component's.
+   *
+   * The popover that offers most of them is drawn in the sidebar, which is this
+   * screen's sibling, so what is asserted here is that the cards follow the
+   * shared store: a write nobody on this screen made still narrows the list.
+   * The rules themselves -- which option survives a vanished machine, what a
+   * chip counts under -- are `session-list-model.test.ts`'s, and are asked here
+   * only where a component could fail to route through them.
+   */
+  function hrefs(): (string | null)[] {
+    return cardLinks().map((link) => link.getAttribute('href'));
+  }
+
+  function searchBox(): HTMLInputElement | null {
+    return container.querySelector<HTMLInputElement>('input[aria-label="Search sessions"]');
+  }
+
+  /** A status chip by the word it starts with; they are the pressable pair. */
+  function chipButton(label: string): HTMLElement {
+    const found = [...container.querySelectorAll<HTMLElement>('[aria-pressed]')].find((button) =>
+      button.textContent?.startsWith(label),
+    );
+    if (found === undefined) throw new Error(`no chip reading ${label}`);
+    return found;
+  }
+
+  async function narrowTo(changes: Partial<SessionListFilters>): Promise<void> {
+    await act(() => {
+      appSessionFiltersStore(store).set(changes);
+    });
+  }
+
+  it('draws no store or provider select of its own', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    // Both narrowings are sections of the sidebar's popover now. A select left
+    // here would be a second control writing what that one writes.
+    expect(container.querySelector('[aria-label="Store"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Provider"]')).toBeNull();
+  });
+
+  it('narrows the cards by a machine nothing on this screen chose', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    await narrowTo({ machine: 'registration-gpu-box-01' });
+
+    expect(hrefs()).toEqual([
+      '#/session/store-universe/session-docs-sweep',
+      '#/session/store-universe/session-bench-tokenizer',
+      '#/session/store-universe/session-train-lora',
+    ]);
+  });
+
+  it('counts the chips under the narrowings the popover is holding', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+    expect(container.textContent).toContain('All · 6');
+
+    await narrowTo({ machine: 'registration-gpu-box-01' });
+
+    // Three sessions on that machine, in three states: the All chip is a
+    // promise about the rows pressing it yields, not about the whole fleet.
+    expect(container.textContent).toContain('All · 3');
+  });
+
+  it('lets a narrowing whose option has left the fleet narrow nothing', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    await narrowTo({ storeId: 'store-nowhere' });
+
+    // The rule is `effectiveFilters`'s now. The choice is kept in case the
+    // store comes back; what it must not do is empty the list meanwhile.
+    expect(hrefs()).toHaveLength(6);
+  });
+
+  it('reads the age window against the clock it was given', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    await narrowTo({ updatedWithin: '1h' });
+
+    // The captured fleet against the fixed moment: one session was written two
+    // hours ago, and the one written exactly an hour ago is inside the window.
+    expect(hrefs()).toEqual([
+      '#/session/store-agentplex/session-migrate-db',
+      '#/session/store-universe/session-docs-sweep',
+      '#/session/store-agentplex/session-fix-auth',
+      '#/session/store-universe/session-bench-tokenizer',
+      '#/session/store-universe/session-train-lora',
+    ]);
+  });
+
+  it('draws the search box only in the phone form, where there is no sidebar', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    // The chips are on the screen at both widths, as the mockup draws them;
+    // the search box at this width belongs to the sidebar's filter row.
+    expect(container.textContent).toContain('Needs you · 2');
+    expect(searchBox()).toBeNull();
+  });
+
+  it('types the phone form’s search into the narrowings both forms share', async () => {
+    await mountWith(hubFrames.machineStatePopulated, undefined, 'phone');
+    const box = searchBox();
+    if (box === null) throw new Error('the phone form drew no search box');
+
+    await act(() => {
+      typeInto(box, 'docs');
+    });
+
+    expect(appSessionFiltersStore(store).getSnapshot().search).toBe('docs');
+    expect(hrefs()).toEqual(['#/session/store-universe/session-docs-sweep']);
+  });
+
+  it('presses a chip into the shared narrowings rather than into its own state', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    await click(chipButton('Needs you'));
+
+    expect(appSessionFiltersStore(store).getSnapshot().chip).toBe('needs-you');
+    expect(hrefs()).toEqual([
+      '#/session/store-agentplex/session-migrate-db',
+      '#/session/store-universe/session-docs-sweep',
+    ]);
+  });
+
+  it('shows a chip pressed when the store says it is, whoever wrote it', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    await narrowTo({ chip: 'idle' });
+
+    expect(chipButton('Idle').getAttribute('aria-pressed')).toBe('true');
+    expect(chipButton('All').getAttribute('aria-pressed')).toBe('false');
   });
 });
