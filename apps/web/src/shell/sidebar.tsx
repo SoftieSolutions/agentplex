@@ -28,6 +28,18 @@ import { SidebarSessions } from './sidebar-sessions.js';
  * the rows already paged, which is why the tab is cheap to leave and why the
  * rows are there before the answer is.
  *
+ * The one thing that chooses for the person is the address. `#/projects` is a
+ * place only a phone has a content region for, and at this width
+ * `resolveDestination` lands it on the session list -- so something following
+ * that address, the palette's project rows above all, would otherwise change
+ * nothing a person can see while the tree it meant sits one tab away. The tab
+ * adopts the address when the address moves to Projects and at no other
+ * moment: it is a starting point and not a binding, so pressing Sessions under
+ * `#/projects` stays on Sessions, and a second project followed from that same
+ * address moves nothing, because the address did not move either. Revealing
+ * and selecting the node itself is a ticket of its own; this is the column
+ * being on the right reading when the person arrives.
+ *
  * Under the tabs is the filter row both mockups draw (6a, 6b, 7a), and it is
  * one row over two tabs rather than one per tab. What the box narrows is the
  * tab's: the tree's letters are held here, because the panel under them is
@@ -68,6 +80,15 @@ export interface SidebarProps {
   readonly onPickMachine: (machine: ServerRegistrationId | null) => void;
   /** Where the content region is, so the nav can say which row is current. */
   readonly destination: Destination;
+  /**
+   * The address itself, before the form resolved it -- which is a different
+   * fact from the one above, and the difference is the whole of why this is
+   * here: at this width `#/projects` resolves to the session list, so
+   * `destination` cannot say that the projects were asked for. Handed down
+   * rather than parsed here, because the shell already reads the hash through
+   * `useDestination` and a second parser would be a second answer.
+   */
+  readonly address: Destination;
   readonly scheme: Scheme;
   /**
    * The clock the column is read against, injected so a test can pin an age.
@@ -86,10 +107,21 @@ export function Sidebar({
   machine,
   onPickMachine,
   destination,
+  address,
   scheme,
   now = Date.now,
 }: SidebarProps): JSX.Element {
   const [tab, setTab] = useState<SidebarTab>('projects');
+  // The address the tab was last reconciled with, so a move to Projects is
+  // adopted once and a render for any other reason leaves the reading alone.
+  // Written during render rather than from an effect: the tab is derived from
+  // a prop that changed, React re-runs the body before it commits anything,
+  // and an effect would draw the wrong reading for one frame.
+  const [addressed, setAddressed] = useState<Destination>(address);
+  if (address !== addressed) {
+    setAddressed(address);
+    if (address === 'projects') setTab('projects');
+  }
   // The tree's letters, held by the sidebar rather than by the panel because
   // the box is drawn out here and outlives the tab that mounts the panel.
   const [treeFilter, setTreeFilter] = useState('');

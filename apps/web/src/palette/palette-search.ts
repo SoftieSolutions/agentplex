@@ -326,8 +326,12 @@ function resultFor(item: CatalogueItem): PaletteResult | null {
       // says which of the two it is.
       detail: 'Project',
       // Where a project is, which is the tree, by the address the app already
-      // has for it: the phone's Projects tab and the sidebar's own reading of
-      // the same catalogue. Deliberately not a node-level address invented
+      // has for it. The phone has a content region for that address; the wide
+      // form does not -- `resolveDestination` lands it on the session list the
+      // sidebar stands beside -- so the tree it means is reached there by the
+      // column turning to its Projects reading, which `sidebar.tsx` does for
+      // this address and explains. Both forms show the same catalogue, by the
+      // one address. Deliberately not a node-level address invented
       // here. This app addresses exactly two nodes -- a session and a document
       // -- and both are addresses of a thing that opens in a pane; a project
       // opens nothing. An address that named the node would have to be one the

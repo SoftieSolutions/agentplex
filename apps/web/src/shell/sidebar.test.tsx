@@ -166,6 +166,7 @@ describe('the sidebar filter row, mounted', () => {
             machine={null}
             onPickMachine={() => {}}
             destination="sessions"
+            address="sessions"
             scheme="dark"
             now={() => NOW}
           />,

@@ -332,6 +332,33 @@ describe('the shell', () => {
     ];
   }
 
+  /** Which reading of the fleet the sidebar is showing. */
+  function chosenTab(): string | undefined {
+    return sidebarTabs().find((tab) => tab.checked)?.value;
+  }
+
+  /** Chooses the Sessions reading the way a person does: by pressing the tab. */
+  async function chooseSessionsTab(): Promise<void> {
+    const tab = sidebarTabs().find((input) => input.value === 'sessions');
+    if (tab === undefined) throw new Error('the sidebar drew no sessions tab');
+    await act(() => {
+      tab.click();
+    });
+  }
+
+  /**
+   * Follows an address the way a browser does. jsdom moves the hash on a task
+   * of its own and delivers no `hashchange` for the move; the event is what
+   * every route in this app subscribes to, so it is fired here -- the same
+   * stand-in the Settings action test above uses.
+   */
+  async function follow(hash: string): Promise<void> {
+    window.location.hash = hash;
+    await act(() => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+  }
+
   it('draws one sidebar, a top bar with the brand mark, and a content region', async () => {
     await mount();
 
@@ -680,6 +707,38 @@ describe('the shell', () => {
     expect(catalogueSearches('aside')).toHaveLength(1);
     expect(catalogueSearches('main')).toHaveLength(0);
     expect(container.querySelector('main')?.textContent).toContain('Sessions');
+  });
+
+  it('turns the sidebar to the tree when the address names the projects', async () => {
+    // What following a project row out of the palette does at this width: the
+    // row is an anchor at `#/projects`, the content region stays the list it
+    // already was, and the tree is in the column. A sidebar reading Sessions
+    // would leave that click with nothing visible behind it.
+    await mount();
+    await chooseSessionsTab();
+    expect(chosenTab()).toBe('sessions');
+
+    await follow(destinationHash('projects'));
+
+    expect(chosenTab()).toBe('projects');
+    expect(catalogueSearches('aside')).toHaveLength(1);
+  });
+
+  it('lets a person choose the other reading under that same address', async () => {
+    // The address says where the app was sent, not which reading it is pinned
+    // to: a sidebar that put the tree back on every render would be a tab pair
+    // one of whose tabs cannot be pressed.
+    const socket = await mount();
+    await follow(destinationHash('projects'));
+
+    await chooseSessionsTab();
+    expect(chosenTab()).toBe('sessions');
+
+    await act(() => {
+      socket.deliver(hubFrames.machineStatePopulated);
+    });
+
+    expect(chosenTab()).toBe('sessions');
   });
 });
 
