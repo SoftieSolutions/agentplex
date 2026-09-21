@@ -110,6 +110,13 @@ export function createFakeCatalogue(options: FakeCatalogueOptions = {}): FakeCat
       return layout;
     },
 
+    async projectOf(): Promise<null> {
+      // No tree here, so nothing is filed anywhere. `null` is the honest
+      // answer and it is the one that makes every request reach a person,
+      // which is what the suites using this fake are about.
+      return null;
+    },
+
     async query(request: CatalogueQuery): Promise<CataloguePageOutcome> {
       queried.push(request);
       if (failure !== null) throw failure;

@@ -23,6 +23,7 @@ import {
   NOT_AUTHORIZED,
 } from './features/client-auth/client-auth.js';
 import { createApprovals } from './features/approvals/approvals.js';
+import { createApprovalPolicy } from './features/approval-policy/approval-policy.js';
 import { createCatalogue } from './features/catalogue/catalogue.js';
 import { createClients, type Clients } from './features/clients/clients.js';
 import { createDiscovery, type BeaconSource } from './features/discovery/discovery.js';
@@ -429,6 +430,19 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // side of every one of them is a process parked on a socket with a timeout
   // running -- so boot starts empty and the servers' own gates still hold
   // whatever is really blocked. See `approvals.ts`.
+  // The standing policy: what each project has already decided, so that the
+  // requests somebody has answered before do not reach anybody again. Its rows
+  // are the one durable half of this feature -- a pending request is never
+  // written down, and a rule always is -- and it reaches the tree only through
+  // the one read it needs, which is where a session is filed.
+  const approvalPolicy = createApprovalPolicy({
+    database,
+    clock,
+    ids,
+    logger,
+    projectOf: (ref) => catalogue.projectOf(ref),
+  });
+
   const approvals = createApprovals({
     clock,
     logger,
@@ -452,6 +466,10 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
           (refusal) => resolve({ ok: false, code: refusal.code, problem: refusal.problem }),
         );
       }),
+    // Consulted before a request is put to anybody, and answering `null` for
+    // every way of not knowing -- which is what makes an unmatched request, a
+    // session in no project and an unreadable rule all reach a person.
+    policy: (ref, request) => approvalPolicy.grantFor(ref, request),
   });
 
   // Projects: the rows a user makes, and the browse a directory is picked with.

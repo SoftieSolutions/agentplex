@@ -4,6 +4,7 @@ import {
   COLUMNS,
   nodeKindRowSchema,
   nodeRowSchema,
+  PROJECT_KIND,
   removalRowSchema,
   type NodeKindRow,
   type RememberedRemoval,
@@ -77,6 +78,30 @@ export async function findNodeForSession(
   );
   const row = result.rows[0];
   return row === undefined ? null : nodeRowSchema.parse(row);
+}
+
+/**
+ * The project one session is filed under, or `null` for one filed nowhere.
+ *
+ * The nearest project above the session's node, and not the node's parent. The
+ * difference is somebody tidying a session into a folder inside a project,
+ * which the tree allows and which a lookup that only read the parent would
+ * answer `null` for -- and the first caller of this is the standing policy, so
+ * that answer would quietly leave every tidied session with no policy at all.
+ *
+ * `null` for a session with no node as well, which is the ordinary case for one
+ * discovered since the last time the tree was brought into line. It has no
+ * placement yet, so nothing has been decided about it, so it is asked about.
+ *
+ * The walk is `listAncestry`'s, which stops on a ring rather than spinning.
+ */
+export async function findProjectFor(database: Queryable, ref: SessionRef): Promise<NodeId | null> {
+  const node = await findNodeForSession(database, ref);
+  if (node === null) return null;
+  for (const above of await listAncestry(database, node.parentId)) {
+    if (above.kind === PROJECT_KIND) return above.id;
+  }
+  return null;
 }
 
 /**

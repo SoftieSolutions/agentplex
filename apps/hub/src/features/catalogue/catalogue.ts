@@ -18,7 +18,7 @@ import { discoverNodes, type SessionPlacements } from './discovery.js';
 import { createTreeMutations } from './mutations.js';
 import { pruneNodes } from './prune.js';
 import { queryCatalogue, sessionProjectsIn, type CataloguePageOutcome } from './query.js';
-import { listNodes, readLayout } from './reads.js';
+import { findProjectFor, listNodes, readLayout } from './reads.js';
 import type { TreeNode } from './rows.js';
 
 /**
@@ -291,6 +291,20 @@ export interface Catalogue extends ClientCatalogue {
    */
   readLayout(): Promise<Layout>;
   /**
+   * The project one session is filed under, or `null` for one filed nowhere.
+   *
+   * Here rather than on `projects` because the answer is the tree's and not the
+   * project rows': `projects.findByDirectory` says which project a *directory*
+   * is, which is the rule discovery places a new session by, and this says
+   * where a session actually sits now -- including after somebody moved it, and
+   * including through a folder they moved it into.
+   *
+   * The standing policy is the caller. A session with no node yet, or one
+   * outside every project, answers `null`, which that feature reads as "nothing
+   * has been decided about this, so ask".
+   */
+  projectOf(ref: SessionRef): Promise<NodeId | null>;
+  /**
    * Takes the news that a store was just read, and brings the tree into line
    * with what the hub now believes is in it.
    *
@@ -553,6 +567,7 @@ export function createCatalogue({
     ...mutations,
 
     readLayout: () => readLayout(database),
+    projectOf: (ref) => findProjectFor(database, ref),
 
     /**
      * One page, over the rows this feature owns joined with a reading of the
