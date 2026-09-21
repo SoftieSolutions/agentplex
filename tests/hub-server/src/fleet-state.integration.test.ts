@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  machineStateSchema,
   serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
@@ -45,7 +46,9 @@ import {
   type StoreView,
 } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
+import type { StoreReport } from '../../../apps/server/src/session-control.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { toMachineState } from '../../../apps/hub/src/features/fleet-state/machine-state.js';
 
 /**
  * The reducer against the real supervisor, over real handshakes.
@@ -95,7 +98,24 @@ function store(id: string, path: string): StoreDescriptor {
 }
 
 /** Which hostnames answer, and what each says when it does. */
-const machines = new Map<string, { serverId: string; stores: readonly StoreDescriptor[] }>();
+const machines = new Map<
+  string,
+  {
+    serverId: string;
+    stores: readonly StoreDescriptor[];
+    /**
+     * What that machine's own scan of a store finds, for the tests that are
+     * about a descriptor rather than about a connection.
+     *
+     * Most tests here hand the reducer a report directly, because what they are
+     * about is the merge. A test about what survives the trip cannot: the
+     * question is whether a field is still there after the server's frame, the
+     * wire and the hub's parser, and a report the test placed on the near side
+     * of all three would answer it by assumption.
+     */
+    reports?: readonly StoreReport[];
+  }
+>();
 const unreachable = new Set<string>();
 /** The server end of each open connection, so a test can pull the plug on one. */
 const live = new Map<string, MessageSocket>();
@@ -111,8 +131,18 @@ const dialer: SocketDialer = {
     }
 
     const { hubEnd, serverEnd } = createSocketPair();
+    const controller = createFakeSessionController({ reports: machine.reports ?? [] });
     serveServerEnd(serverEnd, {
-      sessions: createFakeSessionController(),
+      // A real scan reads a disk and takes event-loop turns; a fake resolving in
+      // the handshake's own microtask would race its report past the hub
+      // attaching its listener, an ordering no real store scan can produce.
+      sessions: {
+        ...controller,
+        report: async (storeId: StoreId) => {
+          await new Promise((resolve) => setImmediate(resolve));
+          return controller.report(storeId);
+        },
+      },
       terminals: createFakeTerminals().terminals,
       machineLoad: createFakeMachineLoadReader(),
       identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
@@ -155,6 +185,19 @@ async function startAll(): Promise<Servers> {
     logger,
     backoff: createExponentialBackoff({ baseMs: 500, maxMs: 8000, random: () => 0 }),
     onChange: (report) => reducer.applyConnection(report),
+    // The hub's other seam onto the supervisor, wired exactly as `hub.ts` wires
+    // it. It is what carries a store report from the socket into the reducer,
+    // and a suite that left it out could only ever drive descriptors it wrote
+    // itself.
+    onReport: (report) => {
+      reducer.applySessions({
+        registrationId: report.registrationId,
+        storeId: report.storeId,
+        sessions: report.sessions,
+        holding: report.holding,
+        reportedAt: START,
+      });
+    },
   });
   supervisor = running;
   await running.sync();
@@ -165,6 +208,16 @@ function session(
   id: string,
   storeId: StoreId,
   status: SessionDescriptor['status'],
+  /**
+   * The model that machine's adapter read out of the session's own record, or
+   * nothing for a record that named none.
+   *
+   * Omitted rather than nulled, because that is the frame an adapter that found
+   * no model actually sends, and absence is the case with a way of going wrong:
+   * an optional field is the one shape a wire parser can drop without anybody
+   * noticing.
+   */
+  model?: string,
 ): SessionDescriptor {
   return {
     storeId,
@@ -173,6 +226,7 @@ function session(
     status,
     updatedAt: START,
     cwd: '/volumes/claude/work',
+    ...(model === undefined ? {} : { model }),
     branch: null,
     title: null,
     uncommitted: null,
@@ -344,5 +398,54 @@ describe('the reducer over a live supervisor', () => {
 
     expect(reducer.snapshot().stores).toEqual([]);
     expect(reducer.snapshot().servers).toEqual([]);
+  });
+
+  /**
+   * The model, from the machine that read it to the frame a client is sent.
+   *
+   * Every other test in this suite hands the reducer a descriptor it wrote
+   * itself, which cannot answer this ticket's question: an optional field is
+   * exactly the shape that disappears quietly, stripped by a schema on either
+   * end, and a report placed on the near side of the wire would never meet
+   * them. Here the machine states it, its own report frame carries it, the
+   * hub's parser reads it, the reducer holds it and the projection publishes
+   * it -- and what is asserted is the output of the parser a client reads with.
+   */
+  it('carries the model a machine stated, and states none where that machine did not', async () => {
+    const shared = storeIdSchema.parse('store-shared');
+    machines.set('box.example', {
+      serverId: 'server-box',
+      stores: [store('store-shared', '/mnt/work')],
+      reports: [
+        {
+          storeId: shared,
+          sessions: [
+            // The model named in `packages/providers/fixtures/claude-completed
+            // -turn.jsonl`, which is the transcript the Claude adapter's own
+            // test reads this field out of. A made-up name here would pass
+            // against a relay that mangled a real one.
+            session('session-1', shared, 'working', 'claude-opus-5'),
+            session('session-2', shared, 'idle'),
+          ],
+          holding: [],
+        },
+      ],
+    });
+    await register('box');
+    const running = await startAll();
+    await until(() => phaseOf(running, 'box') === 'connected', 'the box to connect');
+    await until(
+      () => (reducer.snapshot().stores[0]?.sessions.length ?? 0) === 2,
+      "the box's own report to reach the reducer",
+    );
+
+    const published = machineStateSchema.parse(toMachineState(reducer.snapshot()));
+    const rows = published.stores.find((store) => store.storeId === shared)?.sessions ?? [];
+    expect(rows.map((row) => row.descriptor.sessionId)).toEqual(['session-1', 'session-2']);
+    expect(rows[0]?.descriptor.model).toBe('claude-opus-5');
+    // Absence survives as absence. Not `null`, and above all not the other
+    // session's model: a hub that filled this in from what it had seen would
+    // print a guess beside a session nobody can check.
+    expect(rows[1]?.descriptor).not.toHaveProperty('model');
   });
 });

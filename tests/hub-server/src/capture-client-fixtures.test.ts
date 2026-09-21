@@ -400,6 +400,15 @@ function descriptor(
    */
   branch: string | null = null,
   usage?: SessionDescriptor['usage'],
+  /**
+   * The model that session's record named, for the rows that have one.
+   *
+   * Beside `usage` and defaulted the same way, because it is the same kind of
+   * fact arriving by the same route: the adapter reads both out of the one
+   * session record it opened. Most rows here leave it out, which is the shape
+   * the client has to draw when nothing named a model.
+   */
+  model?: string,
 ): SessionDescriptor {
   return {
     storeId: storeIdSchema.parse(storeId),
@@ -410,6 +419,7 @@ function descriptor(
     cwd,
     branch,
     title,
+    ...(model === undefined ? {} : { model }),
     uncommitted,
     // Omitted rather than nulled when a session has no counts, so the captured
     // frames carry both shapes the client has to render: a session with a
@@ -417,6 +427,22 @@ function descriptor(
     ...(usage === undefined ? {} : { usage }),
   };
 }
+
+/**
+ * The models the captured sessions run, taken from real provider output.
+ *
+ * Each is the string that provider wrote into the transcript in
+ * `packages/providers/fixtures/` -- `claude-completed-turn.jsonl` names
+ * `claude-opus-5` on its assistant turns, `codex-completed-turn.jsonl` names
+ * `gpt-5.6-terra` on its turn context -- which are the same two records the
+ * adapters' own tests read this field out of, and the Claude one is where
+ * `CAPTURED_USAGE` was added up. A plausible-looking name written here instead
+ * would make the client's fixtures agree with an invention rather than with a
+ * provider, on exactly the field that exists because this repository does not
+ * get to decide what a model is called.
+ */
+const CAPTURED_CLAUDE_MODEL = 'claude-opus-5';
+const CAPTURED_CODEX_MODEL = 'gpt-5.6-terra';
 
 /**
  * Token counts for a captured session, taken from real provider output.
@@ -823,6 +849,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   },
                   'fix/auth-refresh',
                   CAPTURED_USAGE,
+                  CAPTURED_CLAUDE_MODEL,
                 ),
                 descriptor(
                   'store-agentplex',
@@ -832,6 +859,16 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   START - 3 * MINUTE,
                   '/Users/robert/code/agentplex/db',
                   'migrate-db-v9',
+                  // Nothing read this checkout and nothing counted its tokens,
+                  // but the record still named a model. The second provider
+                  // carries one so the client's fixtures hold a model that is
+                  // not Claude's, on a row with no usage beside it: a surface
+                  // that had learned to read the two together would pass
+                  // against a store where they always arrive together.
+                  null,
+                  null,
+                  undefined,
+                  CAPTURED_CODEX_MODEL,
                 ),
                 descriptor(
                   'store-agentplex',
@@ -1132,6 +1169,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   },
                   'fix/auth-refresh',
                   CAPTURED_USAGE,
+                  CAPTURED_CLAUDE_MODEL,
                 ),
                 descriptor(
                   'store-agentplex',

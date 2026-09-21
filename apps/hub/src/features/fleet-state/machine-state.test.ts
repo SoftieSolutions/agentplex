@@ -62,7 +62,7 @@ function connection(
   };
 }
 
-function session(id: string): SessionDescriptor {
+function session(id: string, model?: string): SessionDescriptor {
   return {
     storeId: store('store-work'),
     sessionId: sessionIdSchema.parse(id),
@@ -72,8 +72,27 @@ function session(id: string): SessionDescriptor {
     cwd: '/srv/work',
     branch: null,
     title: 'the ticket',
+    // Left off rather than nulled when there is none, because that is the frame
+    // a server actually sends for a session whose record named no model: a
+    // helper that put a `null` here would be asserting against a shape no
+    // adapter produces.
+    ...(model === undefined ? {} : { model }),
     uncommitted: null,
   };
+}
+
+/** The same fleet, with its one session reported as running a named model. */
+function publishedRunning(model: string) {
+  const state = createFleetState({ logger });
+  state.applyConnection(connection('workshop', 'connected', ['store-work']));
+  state.applySessions({
+    holding: [],
+    registrationId: registration('workshop'),
+    storeId: store('store-work'),
+    sessions: [session('session-1', model)],
+    reportedAt: START,
+  });
+  return toMachineState(state.snapshot());
 }
 
 /** Two servers with one volume mounted, one of them down, and a session on it. */
@@ -203,6 +222,36 @@ describe('toMachineState', () => {
     // The reducer's `ref` is not restated: it is the descriptor's own two
     // fields, and two fields on a wire that must agree can disagree.
     expect(row).not.toHaveProperty('ref');
+  });
+
+  it('publishes the model the server stated, through the parser a client reads with', () => {
+    // Parsed and not merely projected: the wire schema is the one thing on this
+    // path that can silently drop a field, because an object schema strips what
+    // it does not declare. Reading the value back off the parser's output is
+    // what makes this a test of the relay rather than of the projection.
+    const parsed = machineStateSchema.parse(publishedRunning('claude-opus-5'));
+    expect(parsed.stores[0]?.sessions[0]?.descriptor.model).toBe('claude-opus-5');
+  });
+
+  it('publishes a model this hub has never heard of, because it reads none of them', () => {
+    // The point of the field being a string: a model that shipped this morning
+    // reaches a client without a release here. A hub that checked the value
+    // against anything would turn a session running perfectly well into a row
+    // with no model on it, or no row at all.
+    const parsed = machineStateSchema.parse(publishedRunning('a-model-nobody-here-has-heard-of'));
+    expect(parsed.stores[0]?.sessions[0]?.descriptor.model).toBe(
+      'a-model-nobody-here-has-heard-of',
+    );
+  });
+
+  it('publishes no model at all for a session whose provider named none', () => {
+    // Absent, not `null` and not the provider's usual model. "probably opus"
+    // printed beside a session is a guess wearing a reading's clothes, and the
+    // only way a surface can draw the absence as absence is to be sent it.
+    const parsed = machineStateSchema.parse(published());
+    const descriptor = parsed.stores[0]?.sessions[0]?.descriptor;
+    expect(descriptor).toBeDefined();
+    expect(descriptor).not.toHaveProperty('model');
   });
 
   it('publishes each provider whole, version and directory included', () => {
