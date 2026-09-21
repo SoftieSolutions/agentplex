@@ -221,6 +221,8 @@ async function start(roots: readonly string[]): Promise<Harness> {
       connections,
       ids: { newId: () => 'unused' },
       logger,
+      // And so nothing here has a task to record either.
+      onStarted: async () => undefined,
     }),
     // The same two seams `hub.ts` hands the broadcast. Pairing is not this
     // file's subject, but a broadcast built without them would be a different

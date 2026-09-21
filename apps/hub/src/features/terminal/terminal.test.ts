@@ -172,8 +172,11 @@ function row(
     attention: UNATTENDED,
     project: null,
     // A terminal is watched whether or not the agent in it is blocked on
-    // anything, which is why every case here has nothing open.
+    // anything, which is why every case here has nothing open. A pane is
+    // opened on a session the hub started and on one it found alike, so the
+    // label is beside the point here too.
     approvals: NOTHING_PENDING,
+    task: null,
   };
 }
 

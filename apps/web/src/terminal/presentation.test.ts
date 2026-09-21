@@ -86,6 +86,9 @@ function stateWith(overrides?: {
             // field existed.
             project: overrides?.project ?? null,
             approvals: [],
+            // Routing is what these tests are about, and a session routed to a
+            // pane is as often one the hub found as one it started.
+            task: null,
           },
         ],
       },

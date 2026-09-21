@@ -83,6 +83,7 @@ import {
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
 import { createProjects, type Projects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
+import { createTasks } from '../../../apps/hub/src/features/tasks/tasks.js';
 import { createTerminal } from '../../../apps/hub/src/features/terminal/terminal.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 
@@ -435,6 +436,10 @@ async function start(
       // reports until `sync` at the end of this function.
       if (accepted) void catalogue.observe(report.storeId);
       terminal.noteStarts(report.registrationId, report.storeId, report.starts);
+      // The other reader of the same tags, wired as `hub.ts` wires it: a
+      // spawn's task has been waiting under its start handle since the start,
+      // because until this report there was no session to file it under.
+      void tasks.noteStarts(report.storeId, report.starts);
     },
     onStream: (registrationId, output) => terminal.deliver(registrationId, output),
   });
@@ -475,10 +480,26 @@ async function start(
     readFleet: () => state.published(),
   });
 
+  // The real table over the real migrated schema, because what a client is
+  // shown on the row is what this suite now asserts: a task that came from a
+  // fake would only ever agree with the fake.
+  const tasks = createTasks({
+    database,
+    logger,
+    onChanged: (ref, task) => state.applyTask(ref, task),
+  });
+
   // The same id source the tree is built from, because `hub.ts` hands
   // `createSessions` that one: a start handle and a node id are both names this
   // hub mints, and two sources would be two answers to "who names a thing here".
-  const sessions = createSessions({ state, projects, connections, ids, logger });
+  const sessions = createSessions({
+    state,
+    projects,
+    connections,
+    ids,
+    logger,
+    onStarted: (started) => tasks.noteStart(started),
+  });
 
   const clients = createClients({
     hubId: 'hub-under-test' as never,
@@ -719,6 +740,50 @@ describe('a client-initiated session start', () => {
       server: registrationOf('workshop'),
       stoppable: true,
     });
+  });
+
+  it('tells a client what a session was started to do, and nothing about one it found', async () => {
+    const client = await attach();
+    providerWrites('session-fresh', '/volumes/work');
+
+    await client.say({
+      type: 'session-start',
+      id: 2,
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: 'fix the auth refresh loop and open a PR against main',
+      server: registrationOf('workshop'),
+      project: null,
+    });
+    expect(client.reply(2).type).toBe('session-started');
+
+    // A state frame is coalesced behind a timer, so the broadcast the task is
+    // on is one this test has to let out.
+    await until(
+      () => client.row('session-fresh')?.task !== undefined,
+      'the hub to file the task under the session the provider named',
+    );
+    held().timers.fireAll();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Read off the state this client was actually sent, not off the reducer:
+    // what the panel draws is what crossed the wire and came back through the
+    // client's own parser.
+    const sent = client.states.at(-1);
+    const rows = sent?.stores.flatMap((store) => store.sessions) ?? [];
+
+    // The spawn had no session id when it was started, so this task waited
+    // under its start handle until the report that named the session carried
+    // the pair. That it is here is the whole of the rebinding working.
+    expect(rows.find((row) => row.descriptor.sessionId === 'session-fresh')?.task).toBe(
+      'fix the auth refresh loop and open a PR against main',
+    );
+
+    // And a session this hub merely found in the store says so. Its transcript
+    // opens with something -- every transcript does -- and a row that showed it
+    // here would be claiming a purpose nobody stated.
+    expect(rows.find((row) => row.descriptor.sessionId === 'session-quiet')?.task).toBeNull();
   });
 
   it('honours the machine the user picked', async () => {

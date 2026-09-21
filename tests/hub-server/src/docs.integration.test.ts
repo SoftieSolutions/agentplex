@@ -228,6 +228,8 @@ async function start(): Promise<Harness> {
       connections,
       ids: { newId: () => 'unused' },
       logger,
+      // And so nothing here has a task to record either.
+      onStarted: async () => undefined,
     }),
     // The same two seams `hub.ts` hands the broadcast. A broadcast built
     // without them would be a different broadcast.

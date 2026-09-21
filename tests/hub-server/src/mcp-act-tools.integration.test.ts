@@ -271,6 +271,10 @@ async function start(
     connections,
     ids: { newId: () => 'start-1' },
     logger,
+    // What a start was for is not this suite's subject. The tasks feature has
+    // its own, and `session-start.integration.test` is where a client reads a
+    // task off the row it is sent.
+    onStarted: async () => undefined,
   });
 
   await connections.sync();

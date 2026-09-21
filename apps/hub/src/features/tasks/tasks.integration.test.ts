@@ -72,12 +72,8 @@ describe('the task rows', () => {
       prompt: A_PROMPT,
     });
 
-    expect(await storedTasks()).toEqual([
-      { store_id: WORK, session_id: RESUMED, task: A_PROMPT },
-    ]);
-    expect(announced).toEqual([
-      { ref: { storeId: WORK, sessionId: RESUMED }, task: A_PROMPT },
-    ]);
+    expect(await storedTasks()).toEqual([{ store_id: WORK, session_id: RESUMED, task: A_PROMPT }]);
+    expect(announced).toEqual([{ ref: { storeId: WORK, sessionId: RESUMED }, task: A_PROMPT }]);
   });
 
   it('holds a spawn until the provider names it, because a start is not a session', async () => {
@@ -91,12 +87,8 @@ describe('the task rows', () => {
     // The next report carries the pair, which is the one moment the task has
     // somewhere to go.
     await tasks.noteStarts(WORK, [{ startId: START, sessionId: SPAWNED }]);
-    expect(await storedTasks()).toEqual([
-      { store_id: WORK, session_id: SPAWNED, task: A_PROMPT },
-    ]);
-    expect(announced).toEqual([
-      { ref: { storeId: WORK, sessionId: SPAWNED }, task: A_PROMPT },
-    ]);
+    expect(await storedTasks()).toEqual([{ store_id: WORK, session_id: SPAWNED, task: A_PROMPT }]);
+    expect(announced).toEqual([{ ref: { storeId: WORK, sessionId: SPAWNED }, task: A_PROMPT }]);
   });
 
   it('says nothing about a start it is still waiting on', async () => {
@@ -108,11 +100,36 @@ describe('the task rows', () => {
     expect(await storedTasks()).toEqual([]);
   });
 
-  it('ignores a tag for a start this hub did not make', async () => {
-    // Another hub's start ids mean nothing here, and a server reports each hub
-    // only its own -- but a row written for one would be a task on a session
-    // nobody here asked for.
-    await feature().noteStarts(WORK, [{ startId: START, sessionId: SPAWNED }]);
+  it('takes the naming before the prompt, which is the order a quick machine produces', async () => {
+    // The race nothing decides: the instruction is answered on one socket and
+    // the tag comes back on another, and a server that has already scanned
+    // reports the pair while the hub is still returning from the answer. A
+    // feature that only ever waited for the naming would lose the task of
+    // every session started on a machine that scans quickly.
+    const tasks = feature();
+    await tasks.noteStarts(WORK, [{ startId: START, sessionId: SPAWNED }]);
+    expect(await storedTasks()).toEqual([]);
+
+    await tasks.noteStart({ startId: START, storeId: WORK, sessionId: null, prompt: A_PROMPT });
+    expect(await storedTasks()).toEqual([{ store_id: WORK, session_id: SPAWNED, task: A_PROMPT }]);
+    expect(announced).toEqual([{ ref: { storeId: WORK, sessionId: SPAWNED }, task: A_PROMPT }]);
+  });
+
+  it('refuses a naming that arrived first under a store the start was not for', async () => {
+    const tasks = feature();
+    await tasks.noteStarts(ATTIC, [{ startId: START, sessionId: SPAWNED }]);
+    await tasks.noteStart({ startId: START, storeId: WORK, sessionId: null, prompt: A_PROMPT });
+    expect(await storedTasks()).toEqual([]);
+    expect(announced).toEqual([]);
+  });
+
+  it('writes nothing for a tag whose start carried no prompt', async () => {
+    // A naming with nothing to attach to it. The hub keeps the pair in case a
+    // prompt is still on its way, and a start made at the agent's own prompt
+    // never sends one -- so no row appears, which is what "no task" is.
+    const tasks = feature();
+    await tasks.noteStarts(WORK, [{ startId: START, sessionId: SPAWNED }]);
+    await tasks.noteStart({ startId: START, storeId: WORK, sessionId: null, prompt: null });
     expect(await storedTasks()).toEqual([]);
     expect(announced).toEqual([]);
   });
@@ -180,15 +197,18 @@ describe('the task rows', () => {
       prompt: 'now write the release notes',
     });
 
-    expect(await storedTasks()).toEqual([
-      { store_id: WORK, session_id: RESUMED, task: A_PROMPT },
-    ]);
+    expect(await storedTasks()).toEqual([{ store_id: WORK, session_id: RESUMED, task: A_PROMPT }]);
     expect(announced).toEqual([]);
   });
 
   it('reads its rows back at boot and announces each one', async () => {
     const written = feature();
-    await written.noteStart({ startId: START, storeId: WORK, sessionId: RESUMED, prompt: A_PROMPT });
+    await written.noteStart({
+      startId: START,
+      storeId: WORK,
+      sessionId: RESUMED,
+      prompt: A_PROMPT,
+    });
     await written.noteStart({
       startId: startIdSchema.parse('start-2'),
       storeId: ATTIC,
@@ -224,9 +244,7 @@ describe('the task rows', () => {
 
     announced = [];
     await feature().load();
-    expect(announced).toEqual([
-      { ref: { storeId: WORK, sessionId: RESUMED }, task: A_PROMPT },
-    ]);
+    expect(announced).toEqual([{ ref: { storeId: WORK, sessionId: RESUMED }, task: A_PROMPT }]);
   });
 
   it('says nothing at all about a session nobody started here', async () => {

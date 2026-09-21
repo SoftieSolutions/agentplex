@@ -338,6 +338,9 @@ async function start(
     connections,
     ids: { newId: () => `start-${(minted += 1)}` },
     logger,
+    // A pane is this suite's subject; what a start was for is the tasks
+    // feature's own.
+    onStarted: async () => undefined,
   });
 
   const clients = createClients({

@@ -43,21 +43,31 @@ import type { Database } from '../../db/database.js';
  * that the next scan rebuilds. What the reducer holds is the current reading of
  * these rows, handed to it the way a connection report is.
  *
- * ## The two moments a start has
+ * ## The two moments a start has, in either order
  *
  * A resume names its session, so its task has somewhere to go immediately. A
  * spawn does not: the provider mints the id and writes it, and the hub learns
- * the pair from the tag a server reports until it has. So a spawn's prompt
- * waits here under the start handle until that tag arrives, and the row is
- * written once the pair exists. Nothing is ever filed under a start handle: a
- * start is not a session, and a table keyed by one would need a second write to
- * become keyed by the other.
+ * the pair from the tag a server reports until it has. Nothing is ever filed
+ * under a start handle on disk -- a start is not a session, and a row keyed by
+ * one would need a second write to become keyed by the other -- so a spawn's
+ * prompt waits in memory until the pair exists.
  *
- * A start that is never named leaves its prompt in memory -- a provider that
- * died before writing a transcript, a machine that went away mid-fork. It is
- * one short string per such start, on the same terms as the relay's own map of
- * named starts, and the alternative is a timeout that would have to guess how
- * long a provider may take to write its first line.
+ * Which of the two arrives first is not decided anywhere, and this feature does
+ * not get to assume. The instruction is answered on one socket and the tag
+ * comes back on another, and a server that has already scanned reports the pair
+ * while the hub is still walking back up from the answer: in practice the tag
+ * wins that race more often than not. So both halves are held -- the prompt by
+ * start handle, the naming by start handle -- and whichever completes the pair
+ * writes the row. A feature that only waited for the naming would silently lose
+ * the task of every session started on a machine that scans quickly, which is
+ * the failure that reads as "it works on my laptop".
+ *
+ * Each half is one short string per start. A start that is never named keeps
+ * its prompt, and a naming nobody claims keeps a session ref -- a provider that
+ * died before writing a transcript, a hub that was not the one that started it.
+ * That is the same bargain the relay's own map of named starts makes, and the
+ * alternative is a timeout that would have to guess how long a provider may
+ * take to write its first line.
  */
 
 /** A start this hub made, as this feature is told about it. */
@@ -182,6 +192,35 @@ export function createTasks({ database, logger: parent, onChanged }: TasksDepend
    * under a different one can be refused rather than filed.
    */
   const awaitingId = new Map<StartId, { readonly storeId: StoreId; readonly task: string }>();
+  /**
+   * Which session each start turned out to be, for the starts named before
+   * their prompt got here.
+   *
+   * The other half of the same pair, held for the same reason and in the same
+   * shape. A server that has already scanned reports the naming while the hub
+   * is still returning from the answer that made the start, so this arrives
+   * first at least as often as it arrives second.
+   */
+  const named = new Map<StartId, SessionRef>();
+
+  /**
+   * Whether the store a start was made for is the store its naming came back
+   * under.
+   *
+   * The row a client reads is filed under the store the report was about, so a
+   * tag reported under another one has nowhere to go that would not be a task
+   * shown on a session it is not about. A server disagreeing with the start it
+   * was sent costs the label and nothing else.
+   */
+  const sameStore = (startId: StartId, asked: StoreId, named: SessionRef): boolean => {
+    if (asked === named.storeId) return true;
+    logger.warn('a start was reported under a store it was not made for', {
+      startId,
+      asked,
+      reported: named.storeId,
+    });
+    return false;
+  };
 
   const record = async (ref: SessionRef, task: string): Promise<void> => {
     if (rows.has(keyOf(ref))) {
@@ -243,35 +282,44 @@ export function createTasks({ database, logger: parent, onChanged }: TasksDepend
       const task = taskFromPrompt(started.prompt);
       if (task === null) return;
 
-      if (started.sessionId === null) {
-        awaitingId.set(started.startId, { storeId: started.storeId, task });
+      if (started.sessionId !== null) {
+        await record({ storeId: started.storeId, sessionId: started.sessionId }, task);
         return;
       }
 
-      await record({ storeId: started.storeId, sessionId: started.sessionId }, task);
+      // A spawn, which may already have been named: the server reports the
+      // pair as soon as it has scanned, and that frequently lands before the
+      // answer this call is walking back from.
+      const already = named.get(started.startId);
+      if (already === undefined) {
+        awaitingId.set(started.startId, { storeId: started.storeId, task });
+        return;
+      }
+      if (!sameStore(started.startId, started.storeId, already)) return;
+
+      named.delete(started.startId);
+      await record(already, task);
     },
 
     async noteStarts(storeId: StoreId, starts: readonly SessionStartTag[]): Promise<void> {
       for (const tag of starts) {
         if (tag.sessionId === null) continue;
+        const ref = { storeId, sessionId: tag.sessionId };
         const waiting = awaitingId.get(tag.startId);
-        if (waiting === undefined) continue;
 
-        // The row a client reads is filed under the store its report was
-        // about, so a tag reported under a store this start was not for has
-        // nowhere to go that would not be a task shown on the wrong session.
-        // It costs the label and nothing else.
-        if (waiting.storeId !== storeId) {
-          logger.warn('a start was reported under a store it was not made for', {
-            startId: tag.startId,
-            asked: waiting.storeId,
-            reported: storeId,
-          });
+        // Nothing waiting: either the prompt is still on its way here, or this
+        // start was made with no prompt, or it was not this hub's start at all.
+        // The naming is kept for the first of those, and costs a session ref
+        // for the other two.
+        if (waiting === undefined) {
+          named.set(tag.startId, ref);
           continue;
         }
 
+        if (!sameStore(tag.startId, waiting.storeId, ref)) continue;
+
         awaitingId.delete(tag.startId);
-        await record({ storeId, sessionId: tag.sessionId }, waiting.task);
+        await record(ref, waiting.task);
       }
     },
   };

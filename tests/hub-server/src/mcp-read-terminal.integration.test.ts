@@ -243,6 +243,9 @@ async function start(): Promise<Harness> {
       connections,
       ids: { newId: () => `start-${String((minted += 1))}` },
       logger,
+      // Reading a terminal is this suite's subject; what a start was for is
+      // the tasks feature's own.
+      onStarted: async () => undefined,
     }),
     // The seams `hub.ts` hands the broadcast alongside the relay. None of them
     // is this file's subject, but a broadcast built without them would be a
