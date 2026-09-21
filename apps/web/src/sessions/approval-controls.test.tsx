@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { parseClientFrame, parseTextFrame, type ClientFrame } from '@agentplex/protocol';
+import {
+  approvalIdSchema,
+  parseClientFrame,
+  parseTextFrame,
+  type ApprovalOutcome,
+  type ClientFrame,
+} from '@agentplex/protocol';
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -130,10 +136,47 @@ describe('the Allow and Deny a blocked agent is waiting on', () => {
     return item;
   }
 
+  /**
+   * Renders into the one root, and re-renders into it on a second call.
+   *
+   * Deliberately not a fresh root: a card that keeps its place in the list
+   * keeps this component mounted across a new request arriving, and a test that
+   * remounted would be testing the one case where the bug cannot happen.
+   */
   async function mount(item: SessionListItem): Promise<void> {
     await act(() => {
-      root = createRoot(container);
+      root ??= createRoot(container);
       root.render(withProvider(<ApprovalControls item={item} store={store} scheme="dark" />));
+    });
+  }
+
+  /**
+   * The same session asking again: the next request the hub reports on this
+   * row, once the one before it has ended.
+   *
+   * One captured request with a second id rather than a second capture, the
+   * move the provider tests make: a state holding request two is state the hub
+   * really sends, and every field but the id and the clock is as it was
+   * captured.
+   */
+  function nextRequest(item: SessionListItem): SessionListItem {
+    const { approval } = item;
+    if (approval === null) throw new Error('the captured state holds no open request');
+    return {
+      ...item,
+      approval: {
+        ...approval,
+        approvalId: approvalIdSchema.parse('approval-2'),
+        requestedAt: approval.requestedAt + 60_000,
+      },
+    };
+  }
+
+  /** The captured reply with one field changed: the ending it reports. */
+  function decidedWith(outcome: ApprovalOutcome): string {
+    return JSON.stringify({
+      ...(JSON.parse(hubFrames.approvalDecided) as Record<string, unknown>),
+      outcome,
     });
   }
 
@@ -318,5 +361,129 @@ describe('the Allow and Deny a blocked agent is waiting on', () => {
     // decided, so the buttons come back rather than staying dead.
     expect(statusWords()).toBe('the hub cannot reach mbp-robert right now');
     expect(button(`deny ${item.name}`).disabled).toBe(false);
+  });
+
+  it.each<[ApprovalOutcome, string]>([
+    ['denied', 'denied'],
+    ['withdrawn', 'withdrawn: the agent is no longer asking'],
+    ['expired', 'expired: the agent stopped waiting before this answer reached it'],
+  ])('reports %s in words that do not claim more than happened', async (outcome, words) => {
+    const socket = await fleet(hubFrames.machineStateApproval);
+    const item = asking();
+    await mount(item);
+
+    await click(button(`allow ${item.name}`));
+    await act(() => {
+      socket.deliver(decidedWith(outcome));
+    });
+
+    // The two endings that are not a decision are why these sentences are
+    // pinned: reporting either as a denial would tell a person they refused
+    // something they did not.
+    expect(statusWords()).toBe(words);
+  });
+
+  it('answers the next request on the same card rather than the last one', async () => {
+    const socket = await fleet(hubFrames.machineStateApproval);
+    const item = asking();
+    await mount(item);
+    await click(button(`allow ${item.name}`));
+    await act(() => {
+      socket.deliver(hubFrames.approvalDecided);
+    });
+    expect(statusWords()).toBe('granted');
+
+    await mount(nextRequest(item));
+
+    // A settled request is settled; this is a different one. Both buttons live
+    // and nothing under them, or the card would offer the last question's
+    // ending as this question's answer and never come back.
+    expect(button(`allow ${item.name}`).disabled).toBe(false);
+    expect(button(`deny ${item.name}`).disabled).toBe(false);
+    expect(statusWords()).toBe('');
+  });
+
+  it('carries no refusal over to the next request either', async () => {
+    const socket = await fleet(hubFrames.machineStateApproval);
+    const item = asking();
+    await mount(item);
+    await click(button(`deny ${item.name}`));
+    await act(() => {
+      socket.deliver(hubFrames.refusalTerminal);
+    });
+    expect(statusWords()).toBe('the hub cannot reach mbp-robert right now');
+
+    await mount(nextRequest(item));
+
+    // The refusal is still the last thing the hub said to this client, and it
+    // was about a frame this request has nothing to do with.
+    expect(statusWords()).toBe('');
+  });
+
+  it('names the new request when it is answered, and not the one before it', async () => {
+    const socket = await fleet(hubFrames.machineStateApproval);
+    const item = asking();
+    await mount(item);
+    await click(button(`allow ${item.name}`));
+    await act(() => {
+      socket.deliver(hubFrames.approvalDecided);
+    });
+
+    await mount(nextRequest(item));
+    await click(button(`deny ${item.name}`));
+
+    expect(sentFrames(socket).filter((frame) => frame.type === 'approval-decide')).toEqual([
+      {
+        type: 'approval-decide',
+        id: 2,
+        storeId: 'store-agentplex',
+        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        approvalId: 'approval-1',
+        decision: 'grant',
+      },
+      {
+        type: 'approval-decide',
+        id: 3,
+        storeId: 'store-agentplex',
+        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        approvalId: 'approval-2',
+        decision: 'deny',
+      },
+    ]);
+  });
+
+  it('draws the proposal left to right whatever the characters in it say', async () => {
+    await fleet(hubFrames.machineStateApproval);
+
+    await mount(asking());
+    const proposal = container.querySelector<HTMLElement>('pre');
+
+    // The provider strips the direction controls; this is the second half of
+    // the same answer, and the half that survives a proposal reaching the
+    // screen from anywhere else. A command runs left to right, so it is read
+    // left to right.
+    expect(proposal?.getAttribute('dir')).toBe('ltr');
+  });
+
+  it('keeps a long tool name inside the card rather than letting it widen', async () => {
+    await fleet(hubFrames.machineStateApproval);
+    const item = asking();
+    const { approval } = item;
+    if (approval === null) throw new Error('the captured state holds no open request');
+    // An MCP tool name, which is where the length is: server and tool joined
+    // with underscores, bounded by the wire at 200 characters and unbroken by
+    // anything a layout can wrap at.
+    const tool = 'mcp__internal_platform_services__provision_ephemeral_preview_environment';
+
+    await mount({ ...item, approval: { ...approval, tool } });
+
+    const label = [...container.querySelectorAll<HTMLElement>('p')].find(
+      (node) => node.textContent === tool,
+    );
+    if (label === undefined) throw new Error('the controls drew no tool name');
+    // The name is not truncated: an MCP name differs from its neighbours at the
+    // end, which is the half an ellipsis would take.
+    expect(label.style.overflowWrap).toBe('anywhere');
+    expect(label.getAttribute('dir')).toBe('ltr');
   });
 });

@@ -1,5 +1,5 @@
 import { useState, type JSX, type MouseEvent } from 'react';
-import type { ApprovalDecision, ApprovalOutcome, FrameId } from '@agentplex/protocol';
+import type { ApprovalDecision, ApprovalId, ApprovalOutcome, FrameId } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Text } from '../ui/components.js';
@@ -12,10 +12,12 @@ import type { SessionListItem } from './session-list-model.js';
  * to run, and two words back.
  *
  * Shaped after `attention-controls.tsx`, and for the same reasons: it owns
- * nothing but the id of the frame it is waiting on, the facts it draws come
- * off the session row every tab is sent, and an unanswered frame leaves both
- * controls disabled rather than inviting a second answer to one question.
- * Everything it decides comes from `approval-model.ts`.
+ * nothing but what it did about the request in front of it, the facts it draws
+ * come off the session row every tab is sent, and an unanswered frame leaves
+ * both controls disabled rather than inviting a second answer to one question.
+ * Everything it decides comes from `approval-model.ts`. What it owns is named
+ * for the request rather than the card, because the card outlives the request
+ * -- see `ApprovalAnswer`.
  *
  * Two things are its own. The proposal is the agent's claim about what it
  * wants to run: it is drawn as characters in the monospace face, in a box
@@ -65,6 +67,34 @@ function outcomeWords(outcome: ApprovalOutcome): string {
   }
 }
 
+/**
+ * What this client did about one request, and which request that was.
+ *
+ * The id is the whole point of keeping it in one object. A card outlives the
+ * request on it -- the session stays in the list, the element keeps its place,
+ * and the hub reports the next request on the same row -- so state that
+ * remembered only "a decision was sent" would answer a question that has been
+ * replaced: both buttons dead and the last request's ending underneath the new
+ * proposal, with nothing that ever clears it.
+ *
+ * Tied to the request here rather than by keying the element on `approvalId`
+ * where the card mounts it, which would work and would put this component's
+ * correctness in its caller. `session-pane.tsx` already names Approvals among
+ * the tabs to come, so there will be a second caller, and one that forgot the
+ * key would not fail -- it would show a stale answer above a live one. State
+ * that is a claim about a request carries the request's id, and then a mismatch
+ * is idle wherever it is mounted.
+ *
+ * Both fields describe the same send: `frameId` is the frame the hub owes an
+ * answer for, and `refusal` is the store declining to send at all -- an
+ * overflowed queue, a failed connection. Exactly one of them is set.
+ */
+interface ApprovalAnswer {
+  readonly approvalId: ApprovalId;
+  readonly frameId: FrameId | null;
+  readonly refusal: string | null;
+}
+
 export function ApprovalControls({
   item,
   store,
@@ -72,10 +102,7 @@ export function ApprovalControls({
   size = 'sm',
 }: ApprovalControlsProps): JSX.Element | null {
   const snapshot = useHubSnapshot(store);
-  /** The decision awaiting an answer, or `null` while none is. */
-  const [pending, setPending] = useState<FrameId | null>(null);
-  /** The store's own "no" -- an overflowed queue, a failed connection. */
-  const [rejected, setRejected] = useState<string | null>(null);
+  const [answer, setAnswer] = useState<ApprovalAnswer | null>(null);
 
   const { approval } = item;
   if (approval === null) return null;
@@ -83,8 +110,16 @@ export function ApprovalControls({
   // hoisted above the guard, so the narrowing does not reach it.
   const { approvalId } = approval;
 
-  const followUp = approvalFollowUp(pending, snapshot.lastApproval, snapshot.lastRefusal);
-  const refused = followUp.kind === 'refused' ? followUp.words : rejected;
+  // An answer to some other request is not this one's business. Not cleared
+  // either: there is nothing to clear it from, and a stale object that matches
+  // nothing is already idle.
+  const sent = answer !== null && answer.approvalId === approvalId ? answer : null;
+  const followUp = approvalFollowUp(
+    sent?.frameId ?? null,
+    snapshot.lastApproval,
+    snapshot.lastRefusal,
+  );
+  const refused = followUp.kind === 'refused' ? followUp.words : (sent?.refusal ?? null);
   // Disabled while the hub has not answered, and once it has: a request that
   // has ended has ended, and a live Allow over a settled one would be a button
   // whose press can do nothing. A refusal re-enables them, because a refusal
@@ -96,14 +131,12 @@ export function ApprovalControls({
     // a navigation, and a person aiming at Allow meant Allow.
     event.preventDefault();
     event.stopPropagation();
-    setRejected(null);
     const outcome = store.sendCommand(decideCommand(item.ref, approvalId, decision));
-    if (!outcome.accepted) {
-      setRejected(outcome.reason);
-      setPending(null);
-      return;
-    }
-    setPending(outcome.id);
+    setAnswer(
+      outcome.accepted
+        ? { approvalId, frameId: outcome.id, refusal: null }
+        : { approvalId, frameId: null, refusal: outcome.reason },
+    );
   }
 
   return (
@@ -119,7 +152,20 @@ export function ApprovalControls({
         minWidth: 0,
       }}
     >
-      <Text ff="monospace" fz={10} fw={500} c={colorForRole('textMuted', scheme)}>
+      <Text
+        ff="monospace"
+        fz={10}
+        fw={500}
+        c={colorForRole('textMuted', scheme)}
+        // Wrapped rather than truncated, and for the same reason the proposal
+        // is: an MCP tool name is a server and a tool joined by underscores,
+        // long, unbroken, and different from its neighbours at the end -- which
+        // is the half an ellipsis takes. A second line costs less than a name
+        // that could be any of four. `dir` for the reason the proposal has it:
+        // this is the agent's word too.
+        dir="ltr"
+        style={{ overflowWrap: 'anywhere' }}
+      >
         {approval.tool}
       </Text>
       <Text
@@ -127,6 +173,14 @@ export function ApprovalControls({
         ff="monospace"
         fz={11}
         c={colorForRole('text', scheme)}
+        // Stated rather than inherited, and it is the smaller half of the
+        // answer. Removing the direction controls is the provider parser's job
+        // and is what actually stops a proposal rendering in an order other
+        // than the one that runs; `dir` fixes the base level of the box so that
+        // agent text cannot decide it, and confines what any control that did
+        // survive can reach to this element. A command runs left to right, so
+        // it is read left to right.
+        dir="ltr"
         style={{
           margin: 0,
           background: colorForRole('background', scheme),
