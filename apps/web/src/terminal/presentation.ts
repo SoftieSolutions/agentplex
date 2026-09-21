@@ -7,7 +7,7 @@ import type {
   StaleReason,
   SubscriptionEndReason,
 } from '@agentplex/protocol';
-import { serverLabel } from '../sessions/session-list-model.js';
+import { serverLabel, statusWords } from '../sessions/session-list-model.js';
 import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
 import { EMULATOR_SCROLLBACK_LINES, type SearchResults } from './emulator.js';
@@ -46,6 +46,93 @@ export function findSessionRow(state: MachineState | null, ref: SessionRef): Ses
     }
   }
   return null;
+}
+
+/**
+ * How loudly a crumb is drawn. Two roles and not a colour: the header decides
+ * what each one looks like, and this file decides which of the two facts about
+ * a session a person is meant to read first.
+ */
+export type CrumbRole = 'muted' | 'emphatic';
+
+/** One segment of the header's breadcrumb: a word, and how loudly to say it. */
+export interface BreadcrumbSegment {
+  readonly text: string;
+  readonly role: CrumbRole;
+}
+
+/**
+ * Where a session is and what it is called, as two segments the header draws.
+ *
+ * Always two, and neither is ever empty. The pair is a place and a name, and
+ * each falls back on its own: the project the hub's tree puts the session in,
+ * or the storeId that was drawn there before the tree could say -- which is the
+ * fallback `project` was made nullable for, rather than absent -- and then the
+ * title the provider gave the session, or the sessionId, which is what this bar
+ * showed before a title reached it.
+ *
+ * The fallbacks are independent because the two facts are. A session in a
+ * project that its provider never named is still in that project, and dropping
+ * to `store-a / sess-1` there would throw away the one word a person recognises
+ * to keep a pair of identifiers together.
+ *
+ * The ref rather than the row supplies both fallbacks, so a pane whose session
+ * the state does not hold yet draws the same bar as a pane whose row has
+ * neither name -- and no combination of a null row, a null project and a null
+ * title can produce a blank crumb or the string "null", which is what a
+ * breadcrumb assembled by joining strings does the first time a field is
+ * absent.
+ */
+export function breadcrumb(row: SessionRow | null, ref: SessionRef): readonly BreadcrumbSegment[] {
+  return [
+    { text: row?.project?.name ?? ref.storeId, role: 'muted' },
+    { text: row?.descriptor.title ?? ref.sessionId, role: 'emphatic' },
+  ];
+}
+
+/**
+ * The one word beside the status dot.
+ *
+ * `statusWords` and not a switch here: the list and this header answer the same
+ * question about the same field, and a second mapping is how one screen comes
+ * to say "awaiting input" while another says "awaiting-input" about the same
+ * session. The exhaustiveness lives there too, so a sixth status is a
+ * compile error in one place rather than a silent fall-through in two.
+ *
+ * `not reported` for a row the state does not hold, which is deliberately not
+ * `unknown`: `unknown` is an adapter saying it looked and could not tell, and
+ * this is nobody having said anything about this session at all.
+ */
+export function statusWord(row: SessionRow | null): string {
+  return row === null ? 'not reported' : statusWords(row.descriptor.status);
+}
+
+/**
+ * The header's metadata line, as the segments it is made of.
+ *
+ * Provider, then the model, then the machine, then the working directory: what
+ * is running, what it is running as, where, and on what. Segments rather than a
+ * joined string because the separator is the header's business, and because a
+ * segment that is not there is the whole point of this function.
+ *
+ * The model is present only when the provider recorded one. It is omitted
+ * rather than drawn as a placeholder, for the reason `cwd` already was: a line
+ * reading `claude · — · mbp-robert` claims something is missing, where the
+ * truth is that this provider's transcript never named a model. An empty list
+ * before a row or a state exists says nothing at all, which is the same
+ * over-claim avoided one step earlier.
+ */
+export function metadataSegments(
+  state: MachineState | null,
+  row: SessionRow | null,
+): readonly string[] {
+  if (state === null || row === null) return [];
+  return [
+    row.descriptor.provider,
+    row.descriptor.model ?? null,
+    machineLabel(state, row),
+    row.descriptor.cwd,
+  ].filter((part): part is string => part !== null);
 }
 
 /**

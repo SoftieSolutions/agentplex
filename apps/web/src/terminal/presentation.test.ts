@@ -6,18 +6,23 @@ import {
   subscriptionEndReasonSchema,
   type MachineState,
   type ServerView,
+  type SessionRow,
 } from '@agentplex/protocol';
+import { statusWords } from '../sessions/session-list-model.js';
 import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import { createTerminalFeed } from './chunk-feed.js';
 import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
 import {
+  breadcrumb,
   findSessionRow,
   formatBytes,
   machineFor,
   machineLabel,
   matchSummary,
+  metadataSegments,
   paneAttachment,
   searchScopeNotice,
+  statusWord,
   terminalFeedNotice,
   terminalInputNotice,
   terminalIsPartial,
@@ -37,6 +42,10 @@ function stateWith(overrides?: {
   holder?: { server: string; stoppable: boolean } | null;
   /** What that machine's connectivity is, for the panes that read it. */
   server?: Record<string, unknown>;
+  /** Descriptor fields the header reads: the title, the model, the cwd. */
+  descriptor?: Record<string, unknown>;
+  /** Where the hub's tree places the session, when it places it anywhere. */
+  project?: { nodeId: string; name: string } | null;
 }): MachineState {
   return machineStateSchema.parse({
     version: 3,
@@ -59,6 +68,7 @@ function stateWith(overrides?: {
               branch: null,
               title: 'fix-auth-refresh',
               uncommitted: null,
+              ...overrides?.descriptor,
             },
             source: 'reg-1',
             reportedBy: ['reg-1'],
@@ -70,10 +80,11 @@ function stateWith(overrides?: {
                 : overrides.holder,
             acknowledgedThrough: null,
             mutedAt: null,
-            // In no project: the case this file's subject has to draw as
-            // readily as one in a project, since a pane's metadata falls back
-            // to what it said before the field existed.
-            project: null,
+            // In no project unless a case asks for one: the fallback has to be
+            // drawn as readily as the named case, since a pane whose hub
+            // places the session nowhere falls back to what it said before the
+            // field existed.
+            project: overrides?.project ?? null,
           },
         ],
       },
@@ -511,5 +522,125 @@ describe('paneAttachment', () => {
     expect(
       paneAttachment('connected', terminalWith({ attached: true, ended: 'session-ended' })),
     ).toEqual({ tone: 'blocked', words: 'Detached' });
+  });
+});
+
+/** The routed row out of a built state, or a failure that names the fixture. */
+function rowIn(state: MachineState): SessionRow {
+  const row = findSessionRow(state, ref);
+  if (row === null) throw new Error('the fixture lost its row');
+  return row;
+}
+
+describe('breadcrumb', () => {
+  it('names the project quietly and the session loudly', () => {
+    const state = stateWith({ project: { nodeId: 'node-7', name: 'universe' } });
+    expect(breadcrumb(rowIn(state), ref)).toEqual([
+      { text: 'universe', role: 'muted' },
+      { text: 'fix-auth-refresh', role: 'emphatic' },
+    ]);
+  });
+
+  it('falls back to the storeId when the tree places the session in no project', () => {
+    // The field's own contract: `null` is a fact about the tree, and the
+    // screens that name a project say what they said before it existed.
+    expect(breadcrumb(rowIn(stateWith()), ref)).toEqual([
+      { text: 'store-a', role: 'muted' },
+      { text: 'fix-auth-refresh', role: 'emphatic' },
+    ]);
+  });
+
+  it('falls back to the sessionId when the provider does not name its sessions', () => {
+    const state = stateWith({
+      descriptor: { title: null },
+      project: { nodeId: 'node-7', name: 'universe' },
+    });
+    expect(breadcrumb(rowIn(state), ref)).toEqual([
+      { text: 'universe', role: 'muted' },
+      { text: 'sess-1', role: 'emphatic' },
+    ]);
+  });
+
+  it('is exactly the storeId / sessionId pair when it knows neither name', () => {
+    const state = stateWith({ descriptor: { title: null } });
+    expect(breadcrumb(rowIn(state), ref)).toEqual([
+      { text: 'store-a', role: 'muted' },
+      { text: 'sess-1', role: 'emphatic' },
+    ]);
+    // And the same before any state arrives: the route is the only thing that
+    // names the session, and it names it the way it always has.
+    expect(breadcrumb(null, ref)).toEqual([
+      { text: 'store-a', role: 'muted' },
+      { text: 'sess-1', role: 'emphatic' },
+    ]);
+  });
+
+  it('never hands the header an empty segment or the word null', () => {
+    // Every combination of the two nullable names, because a crumb built by
+    // joining strings is exactly how `universe / null` reaches a screen.
+    for (const title of [null, 'fix-auth-refresh']) {
+      for (const project of [null, { nodeId: 'node-7', name: 'universe' }]) {
+        const segments = breadcrumb(rowIn(stateWith({ descriptor: { title }, project })), ref);
+        expect(segments.length).toBe(2);
+        for (const segment of segments) {
+          expect(segment.text.length).toBeGreaterThan(0);
+          expect(segment.text).not.toBe('null');
+          expect(segment.text).not.toBe('undefined');
+        }
+      }
+    }
+  });
+});
+
+describe('statusWord', () => {
+  it('says what the list says, for every status the wire can carry', () => {
+    // Against `statusWords` itself rather than a second table written here:
+    // the point of the reuse is that the header and the list cannot come to
+    // two words for one status, and a copy of the mapping in this file would
+    // be the drift it exists to prevent.
+    for (const status of sessionStatusSchema.options) {
+      const row = rowIn(stateWith({ descriptor: { status } }));
+      expect(statusWord(row)).toBe(statusWords(status));
+    }
+  });
+
+  it('says nothing has reported when the state holds no such row', () => {
+    // Not 'unknown', which is a reading an adapter took and could not resolve.
+    // Nobody has said anything about this session at all yet.
+    expect(statusWord(null)).toBe('not reported');
+  });
+});
+
+describe('metadataSegments', () => {
+  it('reads provider, machine and working directory', () => {
+    const state = stateWith();
+    expect(metadataSegments(state, rowIn(state))).toEqual([
+      'claude',
+      'mbp-robert',
+      '/home/robert/code/universe',
+    ]);
+  });
+
+  it('puts the model after the provider when the provider recorded one', () => {
+    const state = stateWith({ descriptor: { model: 'claude-opus-5' } });
+    expect(metadataSegments(state, rowIn(state))).toEqual([
+      'claude',
+      'claude-opus-5',
+      'mbp-robert',
+      '/home/robert/code/universe',
+    ]);
+  });
+
+  it('omits the segment for anything the descriptor does not carry', () => {
+    // A gap where the model would go is a claim that something is missing; an
+    // absent segment is the truth, which is that there was never one to show.
+    const state = stateWith({ descriptor: { cwd: null } });
+    expect(metadataSegments(state, rowIn(state))).toEqual(['claude', 'mbp-robert']);
+  });
+
+  it('says nothing at all before a row or a state exists to read', () => {
+    const state = stateWith();
+    expect(metadataSegments(null, rowIn(state))).toEqual([]);
+    expect(metadataSegments(state, null)).toEqual([]);
   });
 });
