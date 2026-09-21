@@ -34,6 +34,7 @@ import { createDocs } from './features/docs/docs.js';
 import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
+import { createTasks } from './features/tasks/tasks.js';
 import { createAttention } from './features/attention/attention.js';
 import { createTerminal } from './features/terminal/terminal.js';
 import { createWeb, type WebAssetFileSystem } from './features/web/web.js';
@@ -366,6 +367,13 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // the only thing that has been waiting to hear which session a spawn it
       // is already showing turned out to be.
       terminal.noteStarts(report.registrationId, report.storeId, report.starts);
+      // And to the one other thing waiting on the same fact, for a different
+      // reason: a spawn's task has been held since the start, under a handle,
+      // because there was no session to file it under until now. Not awaited,
+      // for the reason the tree write above is not -- a report is answered by
+      // the fleet state and the broadcast, and a row that failed to write
+      // costs one label, logged where it happened.
+      void tasks.noteStarts(report.storeId, report.starts);
     },
     onStream: (registrationId, output) => terminal.deliver(registrationId, output),
     // What a machine says about its own approvals, already told apart by the
@@ -438,7 +446,34 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     onTreeChanged: () => catalogue.changed(),
   });
 
-  const sessions = createSessions({ state, projects, connections: servers, ids, logger });
+  // What each session was started to do, which is the one durable fact about a
+  // session that no scan can rebuild: the prompt was typed here, placed as one
+  // argv element on another machine, and nothing out there records why. Its
+  // rows are this feature's and the current reading of them is the reducer's,
+  // joined by the callback below and by nothing else, exactly as attention is.
+  const tasks = createTasks({
+    database,
+    logger,
+    onChanged: (ref, task) => state.applyTask(ref, task),
+  });
+
+  // Read back before the first client is served, for the reason the mutes are:
+  // a hub that restarted must show the tasks its sessions were started with
+  // rather than a fleet of rows that suddenly have no labels.
+  await tasks.load();
+
+  const sessions = createSessions({
+    state,
+    projects,
+    connections: servers,
+    ids,
+    logger,
+    // The one thing a start leaves behind here. It is told after the server has
+    // answered, so that nothing is recorded for a start that was refused, and
+    // it is told the prompt rather than asked for one: no frame this hub sends
+    // gains a field, and the path the prompt takes to the agent is untouched.
+    onStarted: (started) => tasks.noteStart(started),
+  });
 
   // What the user has said about a session, as opposed to what a machine
   // reports about one. The rows are this feature's and the current reading of

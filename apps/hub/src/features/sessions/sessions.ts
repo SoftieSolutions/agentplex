@@ -75,6 +75,32 @@ export interface SessionsDependencies {
     ): Promise<InstructionOutcome>;
   };
   readonly logger: Logger;
+  /**
+   * Called with every start this hub actually made, and the prompt it was made
+   * with.
+   *
+   * A callback rather than a feature to call, so that this one goes on holding
+   * no rows: the composition root wires it to the tasks feature, which owns the
+   * table, and a write to this hub's own disk stays off the seam that carries
+   * an instruction to somebody else's machine. `tasks.ts` argues why the prompt
+   * is worth keeping and why a transcript is no substitute for it.
+   *
+   * Awaited, so a client's `session-started` reply does not race the row behind
+   * it. Its failure is not the start's, and is caught here: the session is
+   * running by the time this is called, and refusing a start because a label
+   * could not be written would be a "no" about something that already happened.
+   */
+  readonly onStarted: (started: StartedSession) => Promise<void>;
+}
+
+/** A start that happened, as the thing that records what it was for reads it. */
+export interface StartedSession {
+  readonly startId: StartId;
+  readonly storeId: StoreId;
+  /** `null` for a spawn, whose id the provider has not written yet. */
+  readonly sessionId: SessionId | null;
+  /** What the person asked for, or `null` for a start at the agent's own prompt. */
+  readonly prompt: string | null;
 }
 
 export interface StartSessionRequest {
@@ -150,7 +176,7 @@ export interface Sessions {
 }
 
 export function createSessions(dependencies: SessionsDependencies): Sessions {
-  const { state, projects, connections, ids } = dependencies;
+  const { state, projects, connections, ids, onStarted } = dependencies;
   const logger = dependencies.logger.child({ part: 'sessions' });
 
   return {
@@ -251,6 +277,27 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
         sessionId: answered.answer.sessionId,
         startId,
       });
+
+      // What the session was started to do, told to whoever keeps that, and
+      // never told to a server: the prompt reached the agent on the
+      // instruction above, as one argv element the adapter placed, and this
+      // path only records it. A failure here costs the label and not the
+      // session, which is running whatever this hub manages to write down.
+      try {
+        await onStarted({
+          startId,
+          storeId: answered.answer.storeId,
+          sessionId: answered.answer.sessionId,
+          prompt: request.prompt,
+        });
+      } catch (error) {
+        logger.warn('a started session kept no task', {
+          startId,
+          storeId: answered.answer.storeId,
+          problem: String(error),
+        });
+      }
+
       return {
         ok: true,
         storeId: answered.answer.storeId,
