@@ -960,6 +960,7 @@ describe('what an agent is waiting on', () => {
       approvalId: approvalIdSchema.parse(id),
       tool: 'Bash',
       proposal: 'prisma migrate deploy --schema ./db',
+      truncated: false,
       suggestions: [],
       requestedAt,
       answeredBy: null,

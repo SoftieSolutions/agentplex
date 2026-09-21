@@ -510,6 +510,11 @@ function toApprovalRequest(
     approvalId,
     tool: request.tool,
     proposal: request.proposal,
+    // Copied, never re-derived. Whether the text was cut is a fact about what
+    // the parser did with the tool input, and this side no longer holds the
+    // input to check it against -- so a length test here would be a guess that
+    // an agent ending its command in the marker's words could make wrong.
+    truncated: request.truncated,
     suggestions: request.suggestions.slice(0, APPROVAL_SUGGESTIONS_MAX).map((suggestion) => ({
       behavior: suggestion.behavior,
       destination: suggestion.destination,

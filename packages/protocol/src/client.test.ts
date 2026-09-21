@@ -792,6 +792,7 @@ describe('client and hub round trips', () => {
                     approvalId: approvalIdSchema.parse('approval-7f21'),
                     tool: 'Bash',
                     proposal: 'command: prisma migrate deploy --schema ./db',
+                    truncated: false,
                     suggestions: [
                       {
                         behavior: 'allow',

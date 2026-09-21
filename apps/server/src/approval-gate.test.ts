@@ -116,6 +116,7 @@ describe('createApprovalGate', () => {
             'command: prisma migrate deploy --schema ./db',
             'description: Apply pending Prisma migrations',
           ].join('\n'),
+          truncated: false,
           suggestions: [
             {
               behavior: 'allow',
@@ -130,6 +131,25 @@ describe('createApprovalGate', () => {
     // written and the connection stays open holding the tool call.
     expect(hook.writes).toEqual([]);
     expect(hook.closed).toBe(false);
+  });
+
+  it('carries the provider’s word that a proposal was cut, rather than the text', () => {
+    // The gate copies the parser's claim out to the wire untouched. Working it
+    // out here from the length, or from the marker in the text, would be a
+    // second opinion about a fact only the thing that did the cutting has.
+    const harness = gate();
+    const admission = harness.gate.admit(STORE);
+
+    harness.listener.present(
+      createFakeHookConnection(
+        sent(admission.secret, captured({ tool_input: { command: 'echo '.repeat(20_000) } })),
+      ).connection,
+    );
+
+    const requested = harness.events[0];
+    expect(requested?.type).toBe('approval-requested');
+    if (requested?.type !== 'approval-requested') return;
+    expect(requested.approval.truncated).toBe(true);
   });
 
   it('gives each launch its own secret', () => {

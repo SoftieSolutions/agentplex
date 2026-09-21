@@ -286,6 +286,7 @@ describe('toMachineState', () => {
       approvalId: approvalIdSchema.parse('approval-7f21'),
       tool: 'Bash',
       proposal: 'prisma migrate deploy --schema ./db',
+      truncated: false,
       suggestions: [],
       requestedAt: START + 500,
       answeredBy: null,

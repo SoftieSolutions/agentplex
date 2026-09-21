@@ -84,11 +84,12 @@ function feature(): Approvals {
   });
 }
 
-function request(approvalId: ApprovalId, tool = 'Bash'): ApprovalRequest {
+function request(approvalId: ApprovalId, tool = 'Bash', truncated = false): ApprovalRequest {
   return {
     approvalId,
     tool,
     proposal: 'prisma migrate deploy --schema ./db',
+    truncated,
     suggestions: [],
   };
 }
@@ -96,12 +97,13 @@ function request(approvalId: ApprovalId, tool = 'Bash'): ApprovalRequest {
 function requested(
   ref: SessionRef,
   approvalId: ApprovalId,
+  truncated = false,
 ): Extract<ServerToHubFrame, { type: 'approval-requested' }> {
   return {
     type: 'approval-requested',
     storeId: ref.storeId,
     sessionId: ref.sessionId,
-    approval: request(approvalId),
+    approval: request(approvalId, 'Bash', truncated),
   };
 }
 

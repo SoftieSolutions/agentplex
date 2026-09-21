@@ -24,6 +24,7 @@ const A_REQUEST = {
   approvalId: 'approval-7f21',
   tool: 'Bash',
   proposal: 'command: prisma migrate deploy --schema ./db\ndescription: run the migrations',
+  truncated: false,
   suggestions: [
     {
       behavior: 'allow',
@@ -58,6 +59,21 @@ describe('approvalRequestSchema', () => {
     const overIt = { ...A_REQUEST, proposal: 'x'.repeat(APPROVAL_PROPOSAL_MAX_CHARS + 1) };
     expect(approvalRequestSchema.safeParse(atTheBound).success).toBe(true);
     expect(approvalRequestSchema.safeParse(overIt).success).toBe(false);
+  });
+
+  it('says on every request whether the proposal was cut', () => {
+    // Stated by the edge that did the cutting rather than inferred downstream
+    // from the marker in the text. The marker is the agent's neighbour on the
+    // same line: a tool input ending in the words `[truncated]` would make a
+    // short proposal read as a long one, and this field is what the hub's
+    // refusal to match a rule against a cut proposal is decided on.
+    expect(approvalRequestSchema.safeParse({ ...A_REQUEST, truncated: true }).success).toBe(true);
+  });
+
+  it('refuses a request that does not say, because silence would read as no', () => {
+    const { truncated: _dropped, ...withoutTruncated } = A_REQUEST;
+    expect(approvalRequestSchema.safeParse(withoutTruncated).success).toBe(false);
+    expect(approvalRequestSchema.safeParse({ ...A_REQUEST, truncated: 'no' }).success).toBe(false);
   });
 
   it('accepts a proposal with nothing in it', () => {

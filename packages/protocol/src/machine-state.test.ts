@@ -74,6 +74,7 @@ const A_PENDING_APPROVAL = {
   approvalId: 'approval-7f21',
   tool: 'Bash',
   proposal: 'command: prisma migrate deploy --schema ./db',
+  truncated: false,
   suggestions: [],
   requestedAt: 1_100,
   answeredBy: null,

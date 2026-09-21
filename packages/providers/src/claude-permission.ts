@@ -63,6 +63,22 @@ export interface ClaudePermissionRequest {
    * which is the point.
    */
   readonly proposal: string;
+  /**
+   * Whether the proposal above is all of what the tool was asked to do.
+   *
+   * Said by the one place that knows -- the function that did or did not cut --
+   * rather than left for a reader to infer from the `[truncated]` marker. The
+   * marker is for a person and sits in text the agent wrote: a command ending
+   * in those words would read as cut, and an agent wanting to be taken for one
+   * is exactly what would write them.
+   *
+   * It matters because the cut is lossy in a direction nothing downstream can
+   * see. Two tool inputs agreeing for their first few thousand rendered
+   * characters produce one identical proposal, so a standing rule made from one
+   * grants the other -- a continuation nobody read. Everything that matches a
+   * rule against a request is required to refuse when this is `true`.
+   */
+  readonly truncated: boolean;
   /** What Claude Code offers to remember, if the person wants to stop being asked. */
   readonly suggestions: readonly ClaudePermissionSuggestion[];
 }
@@ -160,15 +176,23 @@ export function parseClaudePermissionRequest(contents: string): ClaudePermission
     return { ok: false, reason: 'refused', problem: z.prettifyError(parsed.error) };
   }
 
+  const described = describeToolInput(parsed.data.tool_input);
   return {
     ok: true,
     request: {
       sessionId: parsed.data.session_id,
       tool: displayableApprovalText(parsed.data.tool_name),
-      proposal: describeToolInput(parsed.data.tool_input),
+      proposal: described.text,
+      truncated: described.truncated,
       suggestions: readSuggestions(parsed.data.permission_suggestions ?? []),
     },
   };
+}
+
+/** Display text, and whether it is all of what there was. */
+interface BoundedText {
+  readonly text: string;
+  readonly truncated: boolean;
 }
 
 /**
@@ -186,7 +210,7 @@ export function parseClaudePermissionRequest(contents: string): ClaudePermission
  * on the day it shipped, in the one screen whose job is to say what is about
  * to happen.
  */
-function describeToolInput(input: Readonly<Record<string, unknown>>): string {
+function describeToolInput(input: Readonly<Record<string, unknown>>): BoundedText {
   const lines = Object.entries(input).map(
     ([name, value]) => `${name}: ${typeof value === 'string' ? value : JSON.stringify(value)}`,
   );
@@ -210,10 +234,20 @@ function describeToolInput(input: Readonly<Record<string, unknown>>): string {
  * All three are text from the same turn and all three are rendered: a tool name
  * is the label above the proposal, and a rule is what a person is offered as
  * "never ask me this again".
+ *
+ * The cut is reported as well as marked, and the two are not the same claim.
+ * The marker is for whoever reads the box; the flag is for whoever has to
+ * decide something, because a cut proposal no longer identifies what the tool
+ * was asked to do -- every input sharing that prefix renders as these same
+ * bytes. Returning the pair is what stops a later reader working the fact out
+ * of text the agent wrote most of.
  */
-function bounded(text: string): string {
-  if (text.length <= PROPOSAL_MAX_CHARS) return text;
-  return text.slice(0, PROPOSAL_MAX_CHARS - TRUNCATION_NOTE.length) + TRUNCATION_NOTE;
+function bounded(text: string): BoundedText {
+  if (text.length <= PROPOSAL_MAX_CHARS) return { text, truncated: false };
+  return {
+    text: text.slice(0, PROPOSAL_MAX_CHARS - TRUNCATION_NOTE.length) + TRUNCATION_NOTE,
+    truncated: true,
+  };
 }
 
 function readSuggestions(entries: readonly unknown[]): readonly ClaudePermissionSuggestion[] {

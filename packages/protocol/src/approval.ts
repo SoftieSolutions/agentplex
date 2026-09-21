@@ -10,7 +10,7 @@ import { nodeIdSchema } from './identity.js';
  * a Node builtin nor another workspace package -- and an approval object
  * imported from `packages/providers` would make the wire contract depend on
  * whichever provider happens to have a hook today. What crosses is the same
- * four fields the Claude Code parser produces, stated once, by the thing both
+ * five fields the Claude Code parser produces, stated once, by the thing both
  * ends already agree on.
  *
  * The id is the whole design. There is no `tool_use_id` or anything like it in
@@ -178,7 +178,7 @@ export type ApprovalSuggestion = z.infer<typeof approvalSuggestionSchema>;
 /**
  * What one server reports about one blocked tool call.
  *
- * Four fields and no timestamp. The moment is not the server's to state, for
+ * Five fields and no timestamp. The moment is not the server's to state, for
  * the reason `store-report` carries no date and `server-draining` sends a
  * duration: two machines' clocks disagree, and a hub comparing requests dated
  * by the machines that made them is comparing different times. The hub stamps
@@ -201,6 +201,26 @@ export const approvalRequestSchema = z.object({
    * hops at all. Empty is a tool called with no input, and is not an error.
    */
   proposal: z.string().max(APPROVAL_PROPOSAL_MAX_CHARS),
+  /**
+   * Whether the proposal above is all of what the tool was asked to do.
+   *
+   * `true` is the edge having cut it to `APPROVAL_PROPOSAL_MAX_CHARS`, and it
+   * is a field rather than something a reader works out from the `[truncated]`
+   * marker in the text. The marker is there for a person, and it sits in a
+   * string the agent wrote most of: a tool input ending in those words would
+   * make a short proposal read as a cut one, and an agent that wanted to be
+   * matched against a rule is exactly the thing that would write them. So the
+   * claim is carried by the only party that knows -- the parser that did or did
+   * not cut -- and the hub's refusal to match a standing rule against a cut
+   * proposal is decided on this rather than on anything an agent can type.
+   *
+   * It is what stops the cut being silently dangerous. Two different tool
+   * inputs sharing their first few thousand rendered characters produce one
+   * identical proposal, so a rule made from one would grant the other -- a
+   * continuation nobody read, which is the very thing exact match exists to
+   * refuse. Present on every request, never inferred.
+   */
+  truncated: z.boolean(),
   suggestions: z.array(approvalSuggestionSchema).max(APPROVAL_SUGGESTIONS_MAX),
 });
 export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;

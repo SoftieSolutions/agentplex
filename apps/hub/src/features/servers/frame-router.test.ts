@@ -240,6 +240,7 @@ describe('what a machine says about an approval', () => {
         approvalId: APPROVAL,
         tool: 'Bash',
         proposal: 'prisma migrate deploy --schema ./db',
+        truncated: false,
         suggestions: [],
       },
     },

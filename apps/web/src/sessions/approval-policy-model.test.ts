@@ -54,6 +54,7 @@ function pending(tool: string, proposal: string): PendingApproval {
     approvalId: approvalIdSchema.parse('approval-1'),
     tool,
     proposal,
+    truncated: false,
     suggestions: [],
     requestedAt: 1_756_000_000_000,
     answeredBy: null,
