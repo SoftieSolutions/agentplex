@@ -4,10 +4,13 @@ import {
   approvalDecisionSchema,
   approvalIdSchema,
   approvalOutcomeSchema,
+  approvalPolicyRuleMatches,
   approvalRequestSchema,
   approvalSettlementSchema,
   approvalSuggestionSchema,
+  parseApprovalPolicyRule,
   pendingApprovalSchema,
+  type ApprovalPolicyRule,
 } from './approval.js';
 
 /**
@@ -140,5 +143,143 @@ describe('the approval vocabulary', () => {
   it('brands an approval id, so nothing passes a session id where one belongs', () => {
     expect(approvalIdSchema.safeParse('approval-7f21').success).toBe(true);
     expect(approvalIdSchema.safeParse('').success).toBe(false);
+  });
+});
+
+/**
+ * The standing policy's rule, and the refusals that are the whole of its
+ * safety.
+ *
+ * Everything asserted here is a refusal or a match, because a rule is the one
+ * object in this protocol that answers on a person's behalf. A rule that parsed
+ * when it should not have is a question nobody is ever asked.
+ */
+describe('parseApprovalPolicyRule', () => {
+  const RULE = { tool: 'Bash', prefix: 'command: pnpm test' };
+
+  it('takes a tool and the prefix of a proposal', () => {
+    const parsed = parseApprovalPolicyRule(RULE);
+    expect(parsed).toEqual({ ok: true, rule: { tool: 'Bash', prefix: 'command: pnpm test' } });
+  });
+
+  it('refuses anything that is not a pair of strings', () => {
+    expect(parseApprovalPolicyRule(null).ok).toBe(false);
+    expect(parseApprovalPolicyRule({ tool: 'Bash' }).ok).toBe(false);
+    expect(parseApprovalPolicyRule({ tool: 12, prefix: 'command: pnpm test' }).ok).toBe(false);
+  });
+
+  it('refuses a rule with no tool, which would match every request there is', () => {
+    const parsed = parseApprovalPolicyRule({ tool: '', prefix: 'command: pnpm test' });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.problem).toContain('tool');
+
+    expect(parseApprovalPolicyRule({ tool: '   ', prefix: 'command: pnpm test' }).ok).toBe(false);
+  });
+
+  it('refuses a rule with no prefix, which would allow every use of its tool', () => {
+    // The table this rule is written into holds grants and nothing else, so a
+    // rule carrying only a tool is "never ask me about Bash again". That is a
+    // decision somebody may well want, and it is not one this grammar lets
+    // anybody make by leaving a field blank.
+    expect(parseApprovalPolicyRule({ tool: 'Bash', prefix: '' }).ok).toBe(false);
+    expect(parseApprovalPolicyRule({ tool: 'Bash', prefix: '  \n ' }).ok).toBe(false);
+  });
+
+  it('refuses a prefix that stops at a field name, which allows every value of it', () => {
+    // `command: ` is every Bash command there is, spelled so that it looks
+    // like a rule about one.
+    expect(parseApprovalPolicyRule({ tool: 'Bash', prefix: 'command:' }).ok).toBe(false);
+    expect(parseApprovalPolicyRule({ tool: 'Bash', prefix: 'command: ' }).ok).toBe(false);
+  });
+
+  it('refuses a wildcard in the tool, because the tool is matched exactly', () => {
+    const parsed = parseApprovalPolicyRule({ tool: 'Bash*', prefix: 'command: pnpm test' });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.problem).toContain('exactly');
+  });
+
+  it('refuses a tool with space around it, which could never match one', () => {
+    expect(parseApprovalPolicyRule({ tool: ' Bash', prefix: 'command: pnpm test' }).ok).toBe(false);
+    expect(parseApprovalPolicyRule({ tool: 'Bash ', prefix: 'command: pnpm test' }).ok).toBe(false);
+  });
+
+  it('refuses a rule carrying text the proposal it is compared with cannot hold', () => {
+    // A proposal has had its control and bidirectional characters removed at
+    // the provider's edge. A rule keeping one would be a rule that reads as
+    // one thing on the screen and matches another, or matches nothing at all.
+    expect(
+      parseApprovalPolicyRule({ tool: 'Bash', prefix: 'command: pnpm\u001b[2K test' }).ok,
+    ).toBe(false);
+    expect(parseApprovalPolicyRule({ tool: 'Bash', prefix: 'command: ‮rm -rf' }).ok).toBe(false);
+    expect(parseApprovalPolicyRule({ tool: 'Ba‎sh', prefix: 'command: pnpm test' }).ok).toBe(false);
+  });
+
+  it('refuses a prefix longer than the proposal it would be matched against', () => {
+    const parsed = parseApprovalPolicyRule({
+      tool: 'Bash',
+      prefix: `command: ${'x'.repeat(APPROVAL_PROPOSAL_MAX_CHARS)}`,
+    });
+    expect(parsed.ok).toBe(false);
+  });
+
+  it('keeps an asterisk in a prefix as an asterisk', () => {
+    // There is no pattern language here, so `rm *.tmp` is a command that
+    // starts with those characters and nothing else.
+    const parsed = parseApprovalPolicyRule({ tool: 'Bash', prefix: 'command: rm *.tmp' });
+    expect(parsed).toEqual({ ok: true, rule: { tool: 'Bash', prefix: 'command: rm *.tmp' } });
+  });
+});
+
+describe('approvalPolicyRuleMatches', () => {
+  const rule = (tool: string, prefix: string): ApprovalPolicyRule => {
+    const parsed = parseApprovalPolicyRule({ tool, prefix });
+    if (!parsed.ok) throw new Error(parsed.problem);
+    return parsed.rule;
+  };
+
+  it('matches the proposal the provider rendered, from its first character', () => {
+    expect(
+      approvalPolicyRuleMatches(rule('Bash', 'command: pnpm test'), {
+        tool: 'Bash',
+        proposal: 'command: pnpm test\ndescription: run the tests',
+      }),
+    ).toBe(true);
+  });
+
+  it('matches a tool exactly, never by prefix', () => {
+    expect(
+      approvalPolicyRuleMatches(rule('Bash', 'command: pnpm test'), {
+        tool: 'BashOutput',
+        proposal: 'command: pnpm test',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not match a proposal the prefix appears in the middle of', () => {
+    // Anchored at zero, so nothing an agent writes later in the text can put a
+    // rule's words where the match starts.
+    expect(
+      approvalPolicyRuleMatches(rule('Bash', 'command: pnpm test'), {
+        tool: 'Bash',
+        proposal: 'description: honest\ncommand: pnpm test',
+      }),
+    ).toBe(false);
+  });
+
+  it('compares bytes, folding no case and normalising no spelling', () => {
+    expect(
+      approvalPolicyRuleMatches(rule('Bash', 'command: pnpm test'), {
+        tool: 'Bash',
+        proposal: 'command: PNPM TEST',
+      }),
+    ).toBe(false);
+    expect(
+      approvalPolicyRuleMatches(rule('Bash', 'command: cat /etc/hosts'), {
+        tool: 'Bash',
+        // The same path spelled in full-width characters. A matcher that
+        // normalised would call these one string; this one does not.
+        proposal: 'command: cat /ｅtc/hosts',
+      }),
+    ).toBe(false);
   });
 });
