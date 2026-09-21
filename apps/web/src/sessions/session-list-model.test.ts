@@ -142,6 +142,52 @@ describe('flattening', () => {
   it('carries no model for a session whose record named none', () => {
     expect(item(populated, 'spike-wasm').model).toBeNull();
   });
+
+  /**
+   * Both providers again, and for the same reason: the Claude adapter can say
+   * only which tool the turn called, and the Codex one carries codex's own
+   * reading of the command line, so a field that carried one would pass here
+   * while half the fleet drew nothing.
+   */
+  it("carries the activity the provider's own record held", () => {
+    expect(item(populated, 'fix-auth-refresh').activity).toEqual({ kind: 'command', text: 'Bash' });
+    expect(item(populated, 'migrate-db-v9').activity).toEqual({
+      kind: 'command',
+      text: "printf 'hello' > probe.txt",
+      exitStatus: 1,
+    });
+  });
+
+  it('carries no activity for a session whose record held none', () => {
+    expect(item(populated, 'spike-wasm').activity).toBeNull();
+    expect(item(populated, 'bench-tokenizer').activity).toBeNull();
+  });
+
+  /**
+   * The summary is what it was: an activity is drawn beside this field and
+   * never folded into it. Two surfaces still fall back to the words here --
+   * the onboarding list has no activity to draw at all -- and a search that
+   * used to match a cwd goes on matching it because this string is still in
+   * the list the filter walks.
+   */
+  it('leaves the summary saying exactly what it said before', () => {
+    expect(item(populated, 'fix-auth-refresh').summary).toBe('/Users/robert/code/agentplex');
+    expect(item(populated, 'spike-wasm').summary).toBe('idle');
+  });
+
+  /**
+   * An activity is not a status. The two sessions carrying one are the two the
+   * tone and the partition must be unmoved by: a card that went loud because
+   * an agent ran a failing command would be claiming somebody is wanted.
+   */
+  it('lets no activity touch a tone or a needs-you reading', () => {
+    const fixAuth = item(populated, 'fix-auth-refresh');
+    expect(fixAuth.tone).toBe(toneForStatus(fixAuth.status));
+    expect(fixAuth.needsYou).toBe(false);
+    const migrate = item(populated, 'migrate-db-v9');
+    expect(migrate.tone).toBe(toneForStatus(migrate.status));
+    expect(migrate.needsYou).toBe(true);
+  });
 });
 
 describe('the place line', () => {
@@ -371,6 +417,35 @@ describe("search, the table's one filter", () => {
     const item = listSessions(populated)[0];
     if (item === undefined) throw new Error('no items');
     expect(matchesSearch(item, '   ')).toBe(true);
+  });
+
+  /**
+   * The line a card draws is now sometimes the activity rather than the cwd,
+   * and a word somebody can read off a card and not type into the box above it
+   * reads as a broken search. Both captured activities, since one is a tool
+   * name and the other a command line.
+   */
+  it('narrows by what the activity says', () => {
+    expect(matchesSearch(item(populated, 'fix-auth-refresh'), 'BASH')).toBe(true);
+    expect(matchesSearch(item(populated, 'migrate-db-v9'), 'probe.txt')).toBe(true);
+  });
+
+  /**
+   * The regression the widget could have caused: the cwd was the summary, the
+   * summary was what the filter matched, and a card that now draws an activity
+   * instead must not have stopped being findable by where it is running.
+   */
+  it('goes on matching a cwd, on the very session whose card now draws an activity', () => {
+    const fixAuth = item(populated, 'fix-auth-refresh');
+    expect(fixAuth.activity).not.toBeNull();
+    expect(matchesSearch(fixAuth, 'code/agentplex')).toBe(true);
+    expect(visibleSessions(populated, { ...NO_FILTERS, search: '/db' }).map((i) => i.name)).toEqual(
+      ['migrate-db-v9'],
+    );
+  });
+
+  it('matches nothing on an activity a session does not have', () => {
+    expect(matchesSearch(item(populated, 'spike-wasm'), 'probe.txt')).toBe(false);
   });
 });
 

@@ -56,18 +56,22 @@ export function ActivityWidget({ activity, form, scheme }: ActivityWidgetProps):
       ? colorForRole('terminalText', 'dark')
       : colorForRole('textFaint', 'light')
     : colorForRole('text', scheme);
+  // The library's own truncation, which is what every other fact on a card and
+  // a row already uses: one list whose facts were cut two different ways would
+  // be a list where one of them stopped being cut the day somebody changed the
+  // other. Spread rather than passed as `undefined`, because the prop is
+  // optional in the sense of absent and the app compiles with
+  // `exactOptionalPropertyTypes`.
+  const truncation = collapsed ? ({ truncate: 'end' } as const) : {};
   return (
     <Text
       fz={collapsed ? 11 : 12}
       lh={collapsed ? 1.45 : 1.55}
       c={color}
+      {...truncation}
       style={
         collapsed
-          ? // The mockup's own three declarations, written here rather than
-            // taken from the component library's truncation helper, because a
-            // test can read them off the element and a generated class name is
-            // not a promise this app made.
-            { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }
+          ? { minWidth: 0 }
           : // A command line has no spaces to break at, so an unbroken one
             // would push the session screen sideways; it breaks anywhere rather
             // than being cut, since the full form's whole job is showing all of

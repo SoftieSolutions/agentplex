@@ -174,13 +174,26 @@ describe('a session row', () => {
   it('draws the facts the mockup names, on the one line', () => {
     const { row } = draw(populated, 'migrate-db-v9');
     const text = article(row).textContent ?? '';
-    // The name, the place line through `placeLabel`, the status words the
-    // summary carries, the provider, and the age off the injected clock.
+    // The name, the place line through `placeLabel`, the summary line, the
+    // provider, and the age off the injected clock. The summary is this
+    // session's activity rather than its directory, because its provider
+    // recorded one: the directory is still on the item, still what the filter
+    // matches, and no longer the line -- what the agent is doing beats where
+    // it is doing it on the one line a row has.
     expect(text).toContain('migrate-db-v9');
     expect(text).toContain('store-agentplex · mbp-robert');
-    expect(text).toContain('/Users/robert/code/agentplex/db');
+    expect(text).toContain("printf 'hello' > probe.txt failed with exit status 1");
     expect(text).toContain('codex');
     expect(text).toContain('waiting 3m');
+  });
+
+  /**
+   * The other shape, on the same fleet: a session whose provider recorded no
+   * activity keeps drawing the directory it always drew.
+   */
+  it('keeps the directory on the line for a session with no activity', () => {
+    const { row } = draw(populated, 'bench-tokenizer');
+    expect(article(row).textContent ?? '').toContain('/mnt/volumes/universe/bench');
   });
 
   it('reads the age off the clock it is handed rather than a wall clock', () => {

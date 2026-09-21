@@ -108,7 +108,7 @@ export function SessionRow({ item, scheme, now, store, actions }: SessionRowProp
           reader can still use half of. `SessionSummaryLine` is the card's own,
           so the line quotes the session in the same ink in both forms. */}
       <Box style={{ flex: '1 1 auto', minWidth: 0 }}>
-        <SessionSummaryLine text={item.summary} scheme={scheme} />
+        <SessionSummaryLine activity={item.activity} text={item.summary} scheme={scheme} />
       </Box>
       <SessionMetaLine item={item} scheme={scheme} now={now} />
       {/* Above the link overlay, so a control is the control. Each of the

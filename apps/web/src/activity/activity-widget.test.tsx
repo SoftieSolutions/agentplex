@@ -132,20 +132,26 @@ describe('an activity widget', () => {
     expect(draw(ONE_OF_EACH.plain, 'collapsed').textContent).toBe('waiting on the sandbox');
   });
 
+  /**
+   * The same truncation the name, the place line and the small print on a card
+   * already use, asserted by the same attribute their own suites assert: a
+   * list whose facts were cut two different ways would be a list where one of
+   * them stopped being cut.
+   */
   it('truncates the collapsed form with an ellipsis and keeps it on one line', () => {
     for (const kind of KINDS) {
-      const style = draw(ONE_OF_EACH[kind], 'collapsed').style;
-      expect(style.whiteSpace, `${kind} collapsed`).toBe('nowrap');
-      expect(style.overflow, `${kind} collapsed`).toBe('hidden');
-      expect(style.textOverflow, `${kind} collapsed`).toBe('ellipsis');
+      const drawn = draw(ONE_OF_EACH[kind], 'collapsed');
+      expect(drawn.getAttribute('data-truncate'), `${kind} collapsed`).toBe('end');
+      expect(drawn.style.whiteSpace, `${kind} collapsed`).not.toBe('pre-wrap');
     }
   });
 
   it('wraps the full form instead of cutting it', () => {
     for (const kind of KINDS) {
-      const style = draw(ONE_OF_EACH[kind], 'full').style;
-      expect(style.whiteSpace, `${kind} full`).not.toBe('nowrap');
-      expect(style.textOverflow, `${kind} full`).toBe('');
+      const drawn = draw(ONE_OF_EACH[kind], 'full');
+      expect(drawn.getAttribute('data-truncate'), `${kind} full`).toBeNull();
+      expect(drawn.style.whiteSpace, `${kind} full`).toBe('pre-wrap');
+      expect(drawn.style.overflowWrap, `${kind} full`).toBe('anywhere');
     }
   });
 
