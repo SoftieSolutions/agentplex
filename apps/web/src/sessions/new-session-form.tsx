@@ -33,9 +33,12 @@ interface PendingStart {
  * component owns only what the user has typed and the id of the start it is
  * waiting on.
  *
- * The mockup's New popover lists five node kinds, but only Session is live in
- * this milestone, and a menu with one live option is not drawn: the button
- * opens this form directly.
+ * The mockup's New popover lists five node kinds and the chrome draws it now
+ * (AGX-124): its Session row is what opens this form in the wide shell, and
+ * the phone's action button is what opens it below the breakpoint. There is
+ * one of this form in the page and the shell owns it. The session list held a
+ * second copy wired without `onPending`, so whether a start opened a pane
+ * depended on which of two controls a person happened to press.
  *
  * The order the four choices are resolved in is the design, not an accident of
  * where the lines sit. The machine is resolved first, against the store's live

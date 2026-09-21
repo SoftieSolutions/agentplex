@@ -47,8 +47,8 @@ export interface NotificationListViewProps {
 }
 
 /**
- * Whether this click is asking for the session somewhere other than here: a
- * new tab, a new window, a download, or a button that is not the first.
+ * Whether this click is asking for the destination somewhere other than here:
+ * a new tab, a new window, a download, or a button that is not the first.
  *
  * The browser handles all of those and this page stays where it is, so the
  * panel stays open with it -- shutting it would take the list away from
@@ -58,8 +58,13 @@ export interface NotificationListViewProps {
  * is the whole reason a row is an anchor, and a handler that called
  * `preventDefault` would be taking back the middle click the row exists to
  * keep.
+ *
+ * Exported because the New popover's address row asks the same question
+ * (`shell/new-menu.tsx`), and the answer is about what the browser is already
+ * going to do rather than about notifications. Two spellings of it would be
+ * two overlays free to come to different conclusions about one middle click.
  */
-function opensElsewhere(event: MouseEvent<HTMLAnchorElement>): boolean {
+export function opensElsewhere(event: MouseEvent<HTMLAnchorElement>): boolean {
   return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 }
 

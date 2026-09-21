@@ -766,10 +766,12 @@ describe('an empty list, and what resolves it', () => {
 
   it('names the starter that is actually drawn at this width', () => {
     // Both forms have one, and they are two different controls with two
-    // different names: New session is `visibleFrom="sm"`, and below that the
-    // chrome's round button is what starts one. A single wording would send
-    // half the readers hunting for a button that is not there.
-    expect(emptyListing(populated, false, 'wide').words).toContain('New session starts one');
+    // different names: the wide form's is the chrome's New menu, and below
+    // that width the chrome's round button is what starts one. A single
+    // wording would send half the readers hunting for a button that is not
+    // there -- and the screen's own New session button, which this used to
+    // name, is not drawn in either form any more.
+    expect(emptyListing(populated, false, 'wide').words).toContain('New in the top bar starts one');
     expect(emptyListing(populated, false, 'phone').words).toContain(
       'the Start a session button starts one',
     );

@@ -21,8 +21,8 @@ import { colorForRole, type Scheme } from '../ui/tokens.js';
  *     not.
  *
  * A state whose resolution is not a destination -- the pairing form on the
- * screen you are already on, the New session button above the list -- carries
- * no action and names the control in its words instead. Pointing a link at the
+ * screen you are already on, the chrome's New menu above it -- carries no
+ * action and names the control in its words instead. Pointing a link at the
  * screen it is already on would be a route to nowhere.
  */
 export interface NextAction {

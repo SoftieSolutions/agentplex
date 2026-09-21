@@ -17,13 +17,14 @@ export type ShellForm = 'phone' | 'wide';
  * side.
  *
  * Every rule that has to agree with it is driven from this form rather than
- * from a breakpoint of its own. The session list's New session button is the
- * one that matters: below this width the phone chrome's action button is what
- * starts a session, so the screen takes the form as a prop and draws its
- * button only in the wide one. Written as a media query there instead -- which
- * is what it used to be -- the two rules would be a CSS `em` against the
+ * from a breakpoint of its own. Which control makes things is the one that
+ * matters: above this width it is the chrome's New menu, and below it the
+ * chrome's action button starts a session while the session list draws its own
+ * New project. The chrome and the screen both take the form rather than
+ * measuring again. Written as a media query instead -- which is what the
+ * screen's button used to be -- the two rules would be a CSS `em` against the
  * browser's font size and a JS CSS-pixel width, and a reader whose default
- * font is 20px would open a band where neither button is drawn.
+ * font is 20px would open a band where neither control is drawn.
  */
 export const WIDE_FROM = 768;
 

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sessionRefSchema } from '@agentplex/protocol';
 import { fakeStorage } from '../auth/fake-storage.js';
 import { createTokenStore, type TokenStore } from '../auth/token.js';
+import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
@@ -15,6 +16,7 @@ import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { AppShell } from './app-shell.js';
 import { destinationHash } from './destinations.js';
+import type { NewNodeKind } from './new-menu-model.js';
 
 /**
  * The frame, on a fleet a real hub reported: what is drawn around whatever
@@ -76,6 +78,33 @@ function catalogueSearchesIn(container: HTMLElement, region: string): HTMLElemen
   ];
 }
 
+/**
+ * The start form's autosizing prompt waits on the font set; jsdom ships none.
+ * The same stand-in `new-session-form.test.tsx` installs, needed here because
+ * the chrome is what opens that form now.
+ */
+function installFontFaceSet(): void {
+  Object.defineProperty(document, 'fonts', {
+    configurable: true,
+    value: { addEventListener: () => {}, removeEventListener: () => {} },
+  });
+}
+
+/**
+ * Every button the page holds, by what it says. The forms open into a portal,
+ * so the document is the haystack and not the container: what names a form as
+ * open is the button that submits it -- "Start session", "Create project" --
+ * because each belongs to one form and to nothing else on the page.
+ */
+function buttonWords(): string[] {
+  return [...document.body.querySelectorAll('button')].map((button) => button.textContent ?? '');
+}
+
+/** What the screen under the chrome offers, which is the other half of that. */
+function screenButtonWords(container: HTMLElement): string[] {
+  return [...container.querySelectorAll('main button')].map((button) => button.textContent ?? '');
+}
+
 /** Lets the ticket promise inside `connect` settle. */
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -114,6 +143,7 @@ describe('the shell', () => {
     window.innerWidth = 1024;
     installMatchMedia();
     installResizeObserver();
+    installFontFaceSet();
     container = document.createElement('div');
     document.body.append(container);
     sockets = createFakeSocketFactory();
@@ -253,6 +283,40 @@ describe('the shell', () => {
     ].map((row) => row.textContent ?? '');
   }
 
+  /**
+   * Presses the chrome's New button and waits for the popover it opens, the
+   * way `openBell` waits for the panel it opens: the dropdown is a portal
+   * placed a frame after the click that asked for it.
+   */
+  async function openNewMenu(): Promise<void> {
+    const button = container.querySelector<HTMLButtonElement>('header button[data-new-menu]');
+    if (button === null) throw new Error('the chrome drew no New button');
+    await act(() => {
+      button.click();
+    });
+    await act(settle);
+    await act(frame);
+    await act(settle);
+  }
+
+  /** One row of the open menu, which portals out of the shell like the panel. */
+  function newMenuRow(kind: NewNodeKind): HTMLElement {
+    const row = document.body.querySelector<HTMLElement>(`[data-new-menu-entry="${kind}"]`);
+    if (row === null) throw new Error(`the menu drew no ${kind} row`);
+    return row;
+  }
+
+  /** Chooses a kind and lets whatever that opens reach the document. */
+  async function pickNew(kind: NewNodeKind): Promise<void> {
+    await openNewMenu();
+    await act(() => {
+      newMenuRow(kind).click();
+    });
+    await act(settle);
+    await act(frame);
+    await act(settle);
+  }
+
   /** The Projects/Sessions pair, by the name the sidebar gives that control. */
   function sidebarTabs(): HTMLInputElement[] {
     return [
@@ -341,6 +405,67 @@ describe('the shell', () => {
     await openBell();
 
     expect(panelRowWords()[0]).toContain('store-agentplex · mbp-robert · 3m');
+  });
+
+  it('hangs the New menu in the top bar, after the bell as the mockup draws it', async () => {
+    await mount();
+
+    // One control for everything this app can make, in the chrome rather than
+    // on a screen, because it is offered at every address.
+    const slot = [
+      ...container.querySelectorAll<HTMLElement>(
+        'header [data-attention-bell], header [data-new-menu]',
+      ),
+    ];
+    expect(slot.map((control) => control.hasAttribute('data-new-menu'))).toEqual([false, true]);
+  });
+
+  it('leaves the screen under it no second way to start either kind', async () => {
+    await mount();
+
+    // The whole of this step: the list screen's own two buttons are gone in
+    // this form, so New is the one way in, and nobody has to learn which of
+    // two controls the app meant.
+    const words = screenButtonWords(container);
+    expect(words).not.toContain('New session');
+    expect(words).not.toContain('New project');
+  });
+
+  it('opens the start form when the menu’s Session row is chosen', async () => {
+    await mount();
+    expect(buttonWords()).not.toContain('Start session');
+
+    await pickNew('session');
+
+    // One form and not two: the chrome owns the only NewSessionForm in the
+    // page now, so a start opens a pane whichever control asked for it.
+    expect(buttonWords().filter((word) => word === 'Start session')).toHaveLength(1);
+  });
+
+  it('opens the project form when the menu’s Project row is chosen', async () => {
+    await mount();
+    expect(buttonWords()).not.toContain('Create project');
+
+    await pickNew('project');
+
+    expect(buttonWords().filter((word) => word === 'Create project')).toHaveLength(1);
+  });
+
+  it('sends Enroll machine to onboarding, as an address and not a form', async () => {
+    await mount();
+    await openNewMenu();
+
+    const row = newMenuRow('machine');
+    expect(row.tagName).toBe('A');
+    expect(row.getAttribute('href')).toBe(ONBOARDING_HASH);
+    await act(() => {
+      row.click();
+    });
+
+    // The second way into onboarding, which is what "you can enroll more
+    // machines later" was a promise of. The hash is the whole of it: what
+    // answers that address is `App.tsx`, above this shell.
+    expect(window.location.hash).toBe(ONBOARDING_HASH);
   });
 
   it('names the missing token in the chrome, and links to where one is typed', async () => {
@@ -529,6 +654,7 @@ describe('the shell on a phone', () => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     installMatchMedia();
     installResizeObserver();
+    installFontFaceSet();
     // A phone in portrait, which `shellForm` reads as the phone chrome.
     window.innerWidth = 390;
     container = document.createElement('div');
@@ -633,6 +759,39 @@ describe('the shell on a phone', () => {
     const panel = document.body.querySelector('[role="dialog"]');
     expect(panel?.querySelectorAll('a[data-notification-row]')).toHaveLength(2);
     expect(container.querySelectorAll('main')).toHaveLength(1);
+  });
+
+  it('draws no New menu, because the action button is what starts a session here', async () => {
+    await mount();
+
+    // The popover is the wide form's. A phone that drew both would offer two
+    // ways to start a session on one screen, which is the thing the wide form
+    // just stopped doing.
+    expect(container.querySelector('[data-new-menu]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Start a session"]')).not.toBeNull();
+    // And the screen keeps its own New project, because nothing in this
+    // chrome starts one: a phone that could start neither could only watch.
+    expect(screenButtonWords(container)).toContain('New project');
+  });
+
+  it('opens the shell’s one start form from the action button', async () => {
+    await mount();
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Start a session"]',
+    );
+    if (button === null) throw new Error('the phone chrome drew no action button');
+
+    await act(() => {
+      button.click();
+    });
+    await act(settle);
+    await act(frame);
+    await act(settle);
+
+    // The same single form the wide menu opens, and the same wiring with it:
+    // a second copy owned by the screen is what used to start a session
+    // without opening a pane for it.
+    expect(buttonWords().filter((word) => word === 'Start session')).toHaveLength(1);
   });
 
   it('puts the tree in the content region, where the Projects tab leads', async () => {

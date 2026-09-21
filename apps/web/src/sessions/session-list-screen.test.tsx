@@ -75,7 +75,11 @@ function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** One animation frame, which is what a Mantine dropdown opens across. */
+/**
+ * One animation frame. A dialog or a dropdown opens through a transition, so
+ * what a click asks for reaches the document a frame later rather than in the
+ * same flush.
+ */
 function frame(): Promise<void> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => resolve());
@@ -132,7 +136,13 @@ describe('the session list', () => {
     );
   }
 
-  /** Mounts the screen and walks its store's connection through to a state. */
+  /**
+   * Mounts the screen and walks its store's connection through to a state.
+   *
+   * The form is the shell's, and it is an argument because one control here
+   * depends on it: the chrome's New menu is what makes things in the wide
+   * form, so New project is this screen's own at phone width and nowhere else.
+   */
   async function mountWith(
     state: string,
     machine?: string,
@@ -205,6 +215,44 @@ describe('the session list', () => {
       target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
   }
+
+  /** Every button on the screen and in whatever it opened, by what it says. */
+  function buttonWords(): string[] {
+    return [...document.body.querySelectorAll('button')].map((button) => button.textContent ?? '');
+  }
+
+  it('draws neither New button in the wide form, where the chrome offers both', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    // The chrome's New menu makes both kinds at this width (AGX-124). Two
+    // buttons here beside it would be a second way to do one thing, and the
+    // one a person found first would decide whether their session opened a
+    // pane -- which is what the shell owning the form fixed.
+    const words = buttonWords();
+    expect(words).not.toContain('New session');
+    expect(words).not.toContain('New project');
+  });
+
+  it('keeps New project in the phone form, and opens the form it names', async () => {
+    await mountWith(hubFrames.machineStatePopulated, undefined, 'phone');
+
+    // No New menu at this width: the chrome's action button starts sessions
+    // and nothing in it starts a project, so this screen is where one is
+    // started from. A session is not, which is the half that has not changed.
+    expect(buttonWords()).not.toContain('New session');
+    const button = [...document.body.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent === 'New project',
+    );
+    if (button === undefined) throw new Error('the phone form drew no New project');
+    await click(button);
+    // The dialog opens through a transition, so it reaches the document a
+    // frame after the click rather than in the flush that asked for it.
+    await act(settle);
+    await act(frame);
+    await act(settle);
+
+    expect(buttonWords()).toContain('Create project');
+  });
 
   it('makes every card a link to its own session', async () => {
     await mountWith(hubFrames.machineStatePopulated);

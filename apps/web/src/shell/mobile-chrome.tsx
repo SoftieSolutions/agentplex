@@ -52,7 +52,10 @@ export interface MobileChromeProps {
    * is the way back to them.
    */
   readonly current: Destination | null;
-  /** Opens the start form the shell holds -- the same one New session opens. */
+  /**
+   * Opens the start form the shell holds -- the one instance in the page, and
+   * the same one the New menu's Session row opens in the wide form.
+   */
   readonly onStartSession: () => void;
   /**
    * How the connection is doing, in the header's own slot: the same node the

@@ -764,14 +764,15 @@ export interface EmptyListing {
  * honest answer there is the fact and no link, rather than a link to a screen
  * that cannot help. A narrowing is undone by
  * the controls directly above the list, and starting the first session is a
- * control on this screen or in the chrome around it -- and a link to the
- * screen you are reading is a route to nowhere.
+ * control in the chrome around this screen -- and a link to the screen you are
+ * reading is a route to nowhere.
  *
  * Which control that is depends on the form the shell is in, which is why the
- * form is an argument. The New session button is `visibleFrom="sm"`, and below
- * that width the thing that starts one is the chrome's round button, whose
- * name is "Start a session". Naming the wrong one is worse than naming none:
- * it sends somebody hunting for a button that is not drawn at their width.
+ * form is an argument. In the wide form it is the New menu in the top bar,
+ * whose Session row starts one (AGX-124); below the breakpoint there is no
+ * menu and the thing that starts one is the chrome's round button, whose name
+ * is "Start a session". Naming the wrong one is worse than naming none: it
+ * sends somebody hunting for a button that is not drawn at their width.
  */
 export function emptyListing(
   state: MachineState,
@@ -820,7 +821,7 @@ export function emptyListing(
       action: null,
     };
   }
-  const starter = form === 'phone' ? 'the Start a session button' : 'New session';
+  const starter = form === 'phone' ? 'the Start a session button' : 'New in the top bar';
   return { words: `No sessions in any store yet — ${starter} starts one.`, action: null };
 }
 
