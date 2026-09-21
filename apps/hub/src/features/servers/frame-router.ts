@@ -97,6 +97,7 @@ export function routeServerFrame(frame: ServerToHubFrame, handlers: ServerFrameH
   switch (frame.type) {
     case 'session-started':
     case 'session-stopped':
+    case 'session-transcript-read':
     case 'directory-listing':
     case 'doc-written':
     case 'doc-content':

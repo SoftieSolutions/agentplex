@@ -498,6 +498,25 @@ export function serveHubConnection(
         return;
       }
 
+      case 'session-transcript': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        // Not awaited, for the reason a start is not: reading a transcript
+        // opens a file on this machine's disk, and awaiting it inside
+        // `onMessage` would stall every later frame on this socket behind one
+        // read. Nothing on this frame reaches a process -- it names a store
+        // this server mounted, a session the provider named, and a count.
+        void runTranscript(frame.id, {
+          storeId: frame.storeId,
+          sessionId: frame.sessionId,
+          provider: frame.provider,
+          count: frame.count,
+        });
+        return;
+      }
+
       case 'directory-list': {
         if (state !== 'established') {
           handshakeFirst();
@@ -976,6 +995,63 @@ export function serveHubConnection(
       roots: [...outcome.roots],
       entries: [...outcome.entries],
       truncated: outcome.truncated,
+    });
+  }
+
+  /**
+   * Reads one session's transcript and answers the hub that asked.
+   *
+   * The rules are not here. What is here is that this connection is the only
+   * thing that can decide whether the socket is still worth answering, and
+   * that a throw becomes a refusal rather than an unhandled rejection: the
+   * controller returns its refusals as values, and it already catches what a
+   * third party's adapter throws, so anything reaching this catch is this
+   * server breaking on its own side.
+   *
+   * The answer is one frame and never a stream. The count on the instruction
+   * bounds it and the protocol's ceiling bounds the count, so a maximal answer
+   * is a quarter of what the socket will carry -- see `activity.ts` for the
+   * arithmetic. Nothing is held between requests: the file is the truth, and
+   * a transcript cached here would answer with what a session was doing when
+   * somebody last looked.
+   */
+  async function runTranscript(
+    replyTo: FrameId,
+    request: Parameters<SessionController['transcript']>[0],
+  ): Promise<void> {
+    let outcome;
+    try {
+      outcome = await sessions.transcript(request);
+    } catch (error) {
+      logger.error('could not read a transcript', {
+        storeId: request.storeId,
+        sessionId: request.sessionId,
+        problem: String(error),
+      });
+      answerFailure(replyTo, 'this server could not read that transcript');
+      return;
+    }
+    if (state !== 'established') return;
+
+    if (!outcome.ok) {
+      // `session-refused` with no hold, like the document frames: that frame's
+      // contract is "this server said no, and to which frame", and a
+      // transcript has no live process to name as the reason.
+      send({
+        type: 'session-refused',
+        replyTo,
+        code: outcome.code,
+        message: outcome.problem,
+        hold: null,
+      });
+      return;
+    }
+
+    send({
+      type: 'session-transcript-read',
+      replyTo,
+      activities: [...outcome.activities],
+      olderExist: outcome.olderExist,
     });
   }
 

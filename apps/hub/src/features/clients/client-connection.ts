@@ -514,6 +514,22 @@ export function serveClientConnection(
         return;
       }
 
+      case 'session-transcript': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason a document open is not: it reads a file
+        // on another machine, and awaiting it here would stall every later
+        // frame on this socket behind one disk somewhere else.
+        void answerTranscript(frame.id, {
+          storeId: frame.storeId,
+          sessionId: frame.sessionId,
+          count: frame.count,
+        });
+        return;
+      }
+
       case 'session-acknowledge': {
         if (state !== 'established') {
           helloFirst(frame.id);
@@ -1347,6 +1363,41 @@ export function serveClientConnection(
       logger.error('could not open a document', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not open that document');
+    }
+  }
+
+  /**
+   * Reads one session's transcript and answers the client that asked.
+   *
+   * The same shape a document open has, and nothing is stored on the way
+   * through: the hub relays the activities and keeps none of them, so two
+   * clients asking get two answers from the machine that has the file rather
+   * than one answer and a copy.
+   */
+  async function answerTranscript(
+    replyTo: FrameId,
+    request: Parameters<Sessions['transcript']>[0],
+  ): Promise<void> {
+    try {
+      const outcome = await sessions.transcript(request);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        // `holder: null`, like every other no on this direction that is not
+        // about a live process: an unreachable machine, a session the hub
+        // cannot see and a transcript that would not be read are sentences.
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'session-transcript-read',
+        replyTo,
+        activities: [...outcome.activities],
+        olderExist: outcome.olderExist,
+      });
+    } catch (error) {
+      logger.error('could not read a transcript', { ...request, problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not read that transcript');
     }
   }
 

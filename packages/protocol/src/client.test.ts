@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TRANSCRIPT_ACTIVITIES_MAX } from './activity.js';
 import {
   APPROVAL_POLICY_RULES_MAX,
   approvalIdSchema,
@@ -1320,5 +1321,58 @@ describe('the approval policy frames on the client leg', () => {
     expect(parsed.ok).toBe(true);
     if (!parsed.ok || parsed.value.type !== 'approval-decided') return;
     expect(parsed.value.answeredBy?.rule).toEqual(RULE);
+  });
+});
+
+describe('the transcript frames', () => {
+  const A_REQUEST = {
+    type: 'session-transcript',
+    id: 9,
+    storeId: 'store-a',
+    sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+    count: 50,
+  };
+
+  it('accepts a request addressing the session and bounding the answer', () => {
+    expect(parseClientFrame(A_REQUEST).ok).toBe(true);
+  });
+
+  it('gives a client nowhere to name the machine or the provider', () => {
+    // Which server holds the file and which provider wrote it are the hub's
+    // rows to read. A client that could name either would be a client choosing
+    // where a read lands, so both are dropped on the way in.
+    const parsed = parseClientFrame({ ...A_REQUEST, server: 'srv-1', provider: 'claude' });
+
+    expect(parsed.ok && Object.keys(parsed.value).sort()).toEqual([
+      'count',
+      'id',
+      'sessionId',
+      'storeId',
+      'type',
+    ]);
+  });
+
+  it('refuses a count of none, and one past the protocol’s ceiling', () => {
+    expect(parseClientFrame({ ...A_REQUEST, count: 0 }).ok).toBe(false);
+    expect(parseClientFrame({ ...A_REQUEST, count: TRANSCRIPT_ACTIVITIES_MAX + 1 }).ok).toBe(false);
+  });
+
+  it('answers with activities the activity schema parses, and nothing else', () => {
+    expect(
+      parseHubFrame({
+        type: 'session-transcript-read',
+        replyTo: 9,
+        activities: [{ kind: 'tests', passed: 12, failed: 0 }],
+        olderExist: false,
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseHubFrame({
+        type: 'session-transcript-read',
+        replyTo: 9,
+        activities: [{ kind: 'command', text: 'pnpm test', command: 'pnpm test' }],
+        olderExist: false,
+      }).ok,
+    ).toBe(false);
   });
 });

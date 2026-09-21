@@ -93,6 +93,14 @@ function machine(options: MachineOptions = {}): Machine {
         signal: 'awaiting-input',
         updatedAt: START - 1_000,
         cwd: '/volumes/work/project',
+        // What this made-up provider records of the work itself, which is
+        // what a transcript read answers with. Three, so a bound of two has
+        // something to leave behind.
+        activities: [
+          { kind: 'command', text: 'pnpm install', exitStatus: 0 },
+          { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+          { kind: 'command', text: 'pnpm test', exitStatus: 1 },
+        ],
       }),
       // A session this provider records no working directory for. Its adapter
       // refuses a resume rather than guessing one, and that refusal has to
@@ -537,5 +545,116 @@ describe('a stop', () => {
       hold: { sessionId: 'session-1', stoppable: false },
     });
     expect(ptys.last?.kills).toBe(0);
+  });
+});
+
+describe('the session controller reading one transcript', () => {
+  it('answers with the tail of what the session did, oldest first', async () => {
+    const { sessions } = machine();
+
+    const read = await sessions.transcript({
+      storeId: WORK,
+      sessionId: session('session-1'),
+      provider: 'claude',
+      count: 2,
+    });
+
+    expect(read).toEqual({
+      ok: true,
+      activities: [
+        { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+        { kind: 'command', text: 'pnpm test', exitStatus: 1 },
+      ],
+      olderExist: true,
+    });
+  });
+
+  it('refuses a store this server does not have mounted', async () => {
+    const { sessions } = machine();
+
+    const read = await sessions.transcript({
+      storeId: storeIdSchema.parse('store-elsewhere'),
+      sessionId: session('session-1'),
+      provider: 'claude',
+      count: 20,
+    });
+
+    expect(read).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'this server does not have that store mounted',
+    });
+  });
+
+  it('refuses a provider this build cannot drive', async () => {
+    const { sessions } = machine({ noAdapter: true });
+
+    const read = await sessions.transcript({
+      storeId: WORK,
+      sessionId: session('session-1'),
+      provider: 'claude',
+      count: 20,
+    });
+
+    expect(read.ok).toBe(false);
+    expect(!read.ok && read.code).toBe('refused');
+  });
+
+  it('refuses, in the adapter’s own words, a session it cannot find', async () => {
+    // The hub's view of a store is a scan or two old, so asking for a session
+    // that has since been deleted is ordinary. The sentence comes from the
+    // adapter, which is the only thing that knows what it looked for.
+    const { sessions } = machine();
+
+    const read = await sessions.transcript({
+      storeId: WORK,
+      sessionId: session('session-gone'),
+      provider: 'claude',
+      count: 20,
+    });
+
+    expect(read).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'this store holds no transcript for that session',
+    });
+  });
+
+  it('answers a refusal rather than a rejection when an adapter throws', async () => {
+    // Once this is open source an adapter is somebody else's code, and a
+    // transcript request that a third party can turn into an unhandled
+    // rejection is a hub left waiting for an answer that never comes.
+    const controller = createSessionController({
+      stores: [STORE],
+      providers: createProviderRegistry([
+        createFakeProviderAdapter({ provider: 'claude', throwsOnTranscript: 'no' }),
+      ]),
+      terminals: createTerminalManager({
+        supervisor: createPtySupervisor({
+          pty: createFakePtyFactory(),
+          clock,
+          ids: { newId: () => 'run-0' },
+          environment: {},
+        }),
+        clock,
+      }),
+      workingTree: createFakeWorkingTree(),
+      browse: createDirectoryBrowser({ roots: [], reader: DISK }),
+      // Nothing to hand a launch: this controller is built to answer one
+      // transcript read, which starts no process and asks nobody anything.
+      approvals: null,
+      clock,
+      logger,
+    });
+
+    const read = await controller.transcript({
+      storeId: WORK,
+      sessionId: session('session-1'),
+      provider: 'claude',
+      count: 20,
+    });
+
+    expect(read.ok).toBe(false);
+    expect(!read.ok && read.code).toBe('internal');
   });
 });

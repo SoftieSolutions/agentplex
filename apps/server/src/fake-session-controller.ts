@@ -4,6 +4,8 @@ import type {
   SessionOutcome,
   StartSessionRequest,
   StoreReport,
+  TranscriptOutcome,
+  TranscriptSessionRequest,
 } from './session-control.js';
 
 /**
@@ -33,14 +35,25 @@ export interface FakeSessionController extends SessionController {
    * hubs.
    */
   readonly scans: readonly StoreId[];
+  /** Every transcript it was asked for, in order. */
+  readonly transcripts: readonly TranscriptSessionRequest[];
   /** What the next start and stop answer with. */
   answerWith(outcome: SessionOutcome): void;
+  /**
+   * What the next transcript read answers with.
+   *
+   * Its own setter rather than sharing `answerWith`, because the two outcomes
+   * are different shapes: a transcript refusal has no hold to name, since a
+   * live process is never the reason a file cannot be read.
+   */
+  answerTranscriptWith(outcome: TranscriptOutcome): void;
   /** What this server says is in a store. A store with no report is not mounted. */
   setReport(report: StoreReport): void;
 }
 
 export interface FakeSessionControllerOptions {
   readonly outcome?: SessionOutcome;
+  readonly transcript?: TranscriptOutcome;
   readonly reports?: readonly StoreReport[];
 }
 
@@ -49,6 +62,7 @@ export function createFakeSessionController(
 ): FakeSessionController {
   const starts: StartSessionRequest[] = [];
   const stops: SessionRef[] = [];
+  const transcripts: TranscriptSessionRequest[] = [];
   const scans: StoreId[] = [];
   const reports = new Map<StoreId, StoreReport>(
     (options.reports ?? []).map((report) => [report.storeId, report]),
@@ -59,6 +73,12 @@ export function createFakeSessionController(
     code: 'refused',
     problem: 'this fake controller was given no answer',
     hold: null,
+  };
+
+  let transcript: TranscriptOutcome = options.transcript ?? {
+    ok: false,
+    code: 'refused',
+    problem: 'this fake controller was given no transcript',
   };
 
   return {
@@ -77,8 +97,17 @@ export function createFakeSessionController(
       return reports.get(storeId) ?? null;
     },
 
+    async transcript(request: TranscriptSessionRequest): Promise<TranscriptOutcome> {
+      transcripts.push(request);
+      return transcript;
+    },
+
     answerWith(next: SessionOutcome): void {
       outcome = next;
+    },
+
+    answerTranscriptWith(next: TranscriptOutcome): void {
+      transcript = next;
     },
 
     setReport(report: StoreReport): void {
@@ -95,6 +124,10 @@ export function createFakeSessionController(
 
     get scans(): readonly StoreId[] {
       return scans;
+    },
+
+    get transcripts(): readonly TranscriptSessionRequest[] {
+      return transcripts;
     },
   };
 }

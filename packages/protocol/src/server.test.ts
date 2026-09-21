@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TRANSCRIPT_ACTIVITIES_MAX } from './activity.js';
 import { approvalIdSchema } from './approval.js';
 import { PROTOCOL_VERSION } from './version.js';
 import {
@@ -976,5 +977,101 @@ describe('hub and server round trips', () => {
       ok: true,
       value: frame,
     });
+  });
+});
+
+describe('the transcript frames', () => {
+  const A_REQUEST = {
+    type: 'session-transcript',
+    id: 9,
+    storeId: 'store-a',
+    sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+    provider: 'claude',
+    count: 50,
+  };
+
+  it('accepts a request naming a store, a session, a provider and a bound', () => {
+    expect(parseHubToServerFrame(A_REQUEST).ok).toBe(true);
+  });
+
+  it('refuses a count of none, and one past the protocol’s ceiling', () => {
+    // The ceiling is what makes a maximal answer fit the socket by
+    // construction, so it is checked where the number arrives rather than
+    // where the answer is assembled. Asking for none is asking for nothing.
+    expect(parseHubToServerFrame({ ...A_REQUEST, count: 0 }).ok).toBe(false);
+    expect(parseHubToServerFrame({ ...A_REQUEST, count: TRANSCRIPT_ACTIVITIES_MAX + 1 }).ok).toBe(
+      false,
+    );
+    expect(parseHubToServerFrame({ ...A_REQUEST, count: TRANSCRIPT_ACTIVITIES_MAX }).ok).toBe(true);
+  });
+
+  it('carries no directory, however hard a sender tries to put one on it', () => {
+    // A transcript is addressed by the pair everything else is addressed by,
+    // and the server resolves the file out of its own store and its own
+    // adapter. A path sent alongside is not refused -- no frame on this
+    // direction is strict, so an older peer's extra field does not drop a
+    // connection -- it is dropped, which is the property that matters: nothing
+    // downstream can read a directory off this frame, because there is none.
+    const parsed = parseHubToServerFrame({ ...A_REQUEST, directory: '/Users/dev/Code' });
+
+    expect(parsed.ok && Object.keys(parsed.value).sort()).toEqual([
+      'count',
+      'id',
+      'provider',
+      'sessionId',
+      'storeId',
+      'type',
+    ]);
+  });
+
+  it('accepts an answer whose activities the activity schema parses', () => {
+    const read = parseServerToHubFrame({
+      type: 'session-transcript-read',
+      replyTo: 9,
+      activities: [
+        { kind: 'command', text: 'pnpm test', exitStatus: 0 },
+        { kind: 'edit', path: 'src/a.ts', added: 3, removed: 1 },
+        { kind: 'plain', text: 'something it could not classify' },
+      ],
+      olderExist: true,
+    });
+
+    expect(read.ok).toBe(true);
+  });
+
+  it('refuses an answer carrying an activity the vocabulary has no kind for', () => {
+    // One parser per direction, and it ends at the activity: nothing
+    // downstream re-checks a kind by hand, so this is the place a shape
+    // nobody defined has to be refused.
+    expect(
+      parseServerToHubFrame({
+        type: 'session-transcript-read',
+        replyTo: 9,
+        activities: [{ kind: 'spell', text: 'abracadabra' }],
+        olderExist: false,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('refuses an answer with more activities than the protocol’s ceiling', () => {
+    expect(
+      parseServerToHubFrame({
+        type: 'session-transcript-read',
+        replyTo: 9,
+        activities: Array.from({ length: TRANSCRIPT_ACTIVITIES_MAX + 1 }, () => ({
+          kind: 'command',
+          text: 'pnpm test',
+        })),
+        olderExist: false,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('refuses an answer that does not say whether older activities exist', () => {
+    // The one fact a reader cannot work out from the list. Absent would read
+    // as "no", which is the direction that over-claims.
+    expect(
+      parseServerToHubFrame({ type: 'session-transcript-read', replyTo: 9, activities: [] }).ok,
+    ).toBe(false);
   });
 });

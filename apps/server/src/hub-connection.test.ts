@@ -1248,3 +1248,84 @@ describe('an approval, from a blocked hook to a hub and back', () => {
     });
   });
 });
+
+describe('a hub reading one session’s transcript', () => {
+  function since(socket: { readonly sent: readonly string[] }, mark: number): ServerToHubFrame[] {
+    return replies(socket.sent.slice(mark));
+  }
+
+  /** A connection past its handshake, over a controller the test answers for. */
+  async function established(sessions: ReturnType<typeof createFakeSessionController>) {
+    const connected = connect({ sessions });
+    connected.socket.receive(handshake());
+    await settle();
+    return { ...connected, mark: connected.socket.sent.length };
+  }
+
+  const A_REQUEST = {
+    type: 'session-transcript',
+    id: 2,
+    storeId: 'store-a',
+    sessionId: 'session-a',
+    provider: 'claude',
+    count: 20,
+  };
+
+  it('answers with the activities the controller read, and what it was asked', async () => {
+    const sessions = createFakeSessionController({
+      transcript: {
+        ok: true,
+        activities: [{ kind: 'command', text: 'pnpm test', exitStatus: 0 }],
+        olderExist: true,
+      },
+    });
+    const { socket, mark } = await established(sessions);
+
+    socket.receive(JSON.stringify(A_REQUEST));
+    await settle();
+
+    expect(since(socket, mark)).toEqual([
+      {
+        type: 'session-transcript-read',
+        replyTo: 2,
+        activities: [{ kind: 'command', text: 'pnpm test', exitStatus: 0 }],
+        olderExist: true,
+      },
+    ]);
+    expect(sessions.transcripts).toEqual([
+      { storeId: 'store-a', sessionId: 'session-a', provider: 'claude', count: 20 },
+    ]);
+  });
+
+  it('refuses in words, and stays connected, for a session it cannot read', async () => {
+    const sessions = createFakeSessionController({
+      transcript: { ok: false, code: 'refused', problem: 'this store holds no such session' },
+    });
+    const { socket, connection, mark } = await established(sessions);
+
+    socket.receive(JSON.stringify(A_REQUEST));
+    await settle();
+
+    expect(since(socket, mark)).toEqual([
+      {
+        type: 'session-refused',
+        replyTo: 2,
+        code: 'refused',
+        message: 'this store holds no such session',
+        hold: null,
+      },
+    ]);
+    expect(connection.state).toBe('established');
+  });
+
+  it('will not read a transcript for a peer that has not handshaken', async () => {
+    const socket = createFakeMessageSocket();
+    const sessions = createFakeSessionController();
+    serveHubConnection(socket, deps({ sessions }));
+
+    socket.receive(JSON.stringify(A_REQUEST));
+    await settle();
+
+    expect(sessions.transcripts).toEqual([]);
+  });
+});

@@ -4,6 +4,8 @@ import type {
   StartOutcome,
   StartSessionRequest,
   StopSessionRequest,
+  TranscriptOutcome,
+  TranscriptRequest,
 } from './sessions.js';
 
 /**
@@ -30,21 +32,39 @@ export interface FakeSessions extends Sessions {
    * every test sets one.
    */
   answerWith(outcome: StartOutcome): void;
+  /** Every transcript it was asked for, in order. */
+  readonly transcripts: readonly TranscriptRequest[];
+  /**
+   * What every later transcript read answers with.
+   *
+   * Its own setter rather than sharing `answerWith`, because the outcomes are
+   * different shapes: a transcript refusal names no holder, since a live
+   * process is never the reason a file cannot be read.
+   */
+  answerTranscriptWith(outcome: TranscriptOutcome): void;
 }
 
 export interface FakeSessionsOptions {
   readonly outcome?: StartOutcome;
+  readonly transcript?: TranscriptOutcome;
 }
 
 export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessions {
   const starts: StartSessionRequest[] = [];
   const stops: StopSessionRequest[] = [];
+  const transcripts: TranscriptRequest[] = [];
 
   let outcome: StartOutcome = options.outcome ?? {
     ok: false,
     code: 'refused',
     problem: 'this fake control was given no answer',
     holder: null,
+  };
+
+  let transcript: TranscriptOutcome = options.transcript ?? {
+    ok: false,
+    code: 'refused',
+    problem: 'this fake control was given no transcript',
   };
 
   return {
@@ -58,8 +78,17 @@ export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessi
       return outcome;
     },
 
+    async transcript(request: TranscriptRequest): Promise<TranscriptOutcome> {
+      transcripts.push(request);
+      return transcript;
+    },
+
     answerWith(next: StartOutcome): void {
       outcome = next;
+    },
+
+    answerTranscriptWith(next: TranscriptOutcome): void {
+      transcript = next;
     },
 
     get starts(): readonly StartSessionRequest[] {
@@ -68,6 +97,10 @@ export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessi
 
     get stops(): readonly StopSessionRequest[] {
       return stops;
+    },
+
+    get transcripts(): readonly TranscriptRequest[] {
+      return transcripts;
     },
   };
 }

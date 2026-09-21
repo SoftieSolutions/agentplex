@@ -4,6 +4,7 @@ import {
   parseHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type Activity,
   type ApprovalAnsweredBy,
   type ApprovalOutcome,
   type ApprovalPolicyRecord,
@@ -445,6 +446,29 @@ export interface DocContentView {
 }
 
 /**
+ * One session's transcript as the hub answered it: the tail of what the
+ * session did, and whether there is more behind it.
+ *
+ * `replyTo` is what joins it to the request, for the reason a document's
+ * content carries one: a person may open a second session's Transcript tab
+ * while a slow disk answers the first, and a snapshot field with no id on it
+ * would draw the first session's history under the second session's name.
+ *
+ * One slot and not a map keyed by session. Nothing here is a cache: a
+ * transcript is a read of a file that is still being appended to, so what the
+ * store owes a pane is the answer to the question that pane asked, kept until
+ * that pane asks again. A per-session store would be a client-side copy of
+ * somebody else's file, going stale silently -- which is the thing the hub
+ * itself refuses to do.
+ */
+export interface TranscriptView {
+  readonly replyTo: FrameId;
+  readonly activities: readonly Activity[];
+  /** Whether the session did more before the oldest of these. */
+  readonly olderExist: boolean;
+}
+
+/**
  * The hub's answer to a save: when the machine holding the document wrote it.
  *
  * Kept rather than discarded, because it is the only evidence a client has
@@ -566,6 +590,15 @@ export interface HubSnapshot {
   readonly lastDocContent: DocContentView | null;
   /** The hub's most recent yes to a subscribe or an unsubscribe. */
   readonly lastPush: PushView | null;
+  /**
+   * The most recent transcript the hub answered with, kept until the next one.
+   *
+   * Nothing is kept per session beyond this. A pane that asked reads its own
+   * answer off the `replyTo` it holds and ignores an answer to somebody else's
+   * question; a pane that has not asked has nothing, which is exactly what a
+   * Transcript tab nobody has opened should show.
+   */
+  readonly lastTranscript: TranscriptView | null;
 }
 
 /**
@@ -639,7 +672,8 @@ type CommandFrame = Extract<
       | 'doc-save'
       | 'doc-open'
       | 'push-subscribe'
-      | 'push-unsubscribe';
+      | 'push-unsubscribe'
+      | 'session-transcript';
   }
 >;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -951,6 +985,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastDocContent: null,
     lastPush: null,
     pushPublicKey: null,
+    lastTranscript: null,
   };
 
   let socket: StoreSocket | null = null;
@@ -1579,6 +1614,21 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         });
         return;
       }
+      case 'session-transcript-read': {
+        pending.delete(frame.replyTo);
+        // Replaced whole, never merged with what was here. A transcript is one
+        // read of a file at one moment, and two answers stitched together
+        // would be a history that never existed on any disk.
+        update({
+          lastRefusal: null,
+          lastTranscript: {
+            replyTo: frame.replyTo,
+            activities: frame.activities,
+            olderExist: frame.olderExist,
+          },
+        });
+        return;
+      }
       case 'node-renamed':
       case 'node-moved':
       case 'node-removed':
@@ -1906,6 +1956,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // on its own machine while nothing here was connected, so holding the
       // characters would be holding a copy this store cannot vouch for.
       lastDocContent: null,
+      lastTranscript: null,
     });
   }
 

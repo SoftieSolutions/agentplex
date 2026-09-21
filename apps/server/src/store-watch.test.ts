@@ -277,6 +277,9 @@ describe('a store that changes while it is being scanned', () => {
       stop: () => {
         throw new Error('this controller stops nothing');
       },
+      transcript: () => {
+        throw new Error('this controller reads no transcript');
+      },
       async report(storeId: StoreId): Promise<StoreReport> {
         scans.push(storeId);
         await new Promise<void>((resolve) => {

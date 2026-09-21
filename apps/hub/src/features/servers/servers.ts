@@ -184,7 +184,9 @@ export function countsTowardAttention(report: ServerConnectionReport): boolean {
  * The set is still a list rather than every frame with an id -- a handshake and
  * a ping are the connection's own, not a caller's -- so adding one here stays a
  * decision somebody takes. The three document frames are the second such
- * addition, and the name has earned itself twice over.
+ * addition, and the name has earned itself twice over. `session-transcript` is
+ * the third, and it is about a session again -- one read of one session's own
+ * file, answered and not stored.
  */
 type WithoutFrameId<Frame> = Frame extends { id: FrameId } ? Omit<Frame, 'id'> : never;
 
@@ -193,7 +195,13 @@ export type ServerInstruction = WithoutFrameId<
     HubToServerFrame,
     {
       type:
-        'session-start' | 'session-stop' | 'directory-list' | 'doc-write' | 'doc-read' | 'doc-list';
+        | 'session-start'
+        | 'session-stop'
+        | 'session-transcript'
+        | 'directory-list'
+        | 'doc-write'
+        | 'doc-read'
+        | 'doc-list';
     }
   >
 >;
@@ -205,6 +213,7 @@ export type ServerAnswer = Extract<
     type:
       | 'session-started'
       | 'session-stopped'
+      | 'session-transcript-read'
       | 'directory-listing'
       | 'doc-written'
       | 'doc-content'

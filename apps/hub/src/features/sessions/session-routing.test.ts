@@ -15,7 +15,7 @@ import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type HubStateSnapshot } from '../fleet-state/fleet-state.js';
-import { routeStart, routeStop } from './session-routing.js';
+import { routeSessionRead, routeStart, routeStop } from './session-routing.js';
 
 /**
  * The scheduling decision, against real reduced state.
@@ -757,5 +757,116 @@ describe('routeStop', () => {
     const routed = routeStop(state, { storeId: SPARE, sessionId: sessionId('session-1') });
 
     expect(routed).toMatchObject({ ok: false, code: 'refused' });
+  });
+});
+
+describe('routeSessionRead', () => {
+  it('sends a read to the machine holding the session', () => {
+    // Preferred, not required. The holder has the file open and is the machine
+    // whose answer is freshest, and asking it costs nothing extra.
+    const state = fleet([
+      {
+        label: 'basement',
+        phase: 'connected',
+        stores: [WORK],
+        reports: [{ storeId: WORK, sessions: [session('session-1')] }],
+      },
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        reports: [
+          {
+            storeId: WORK,
+            sessions: [session('session-1')],
+            holding: [{ sessionId: sessionId('session-1'), stoppable: true }],
+          },
+        ],
+      },
+    ]);
+
+    const routed = routeSessionRead(state, { storeId: WORK, sessionId: sessionId('session-1') });
+
+    expect(routed.ok).toBe(true);
+    if (!routed.ok) return;
+    expect(routed.server.label).toBe('workshop');
+  });
+
+  it('sends a read to any reachable machine with the store when nobody holds it', () => {
+    // The difference from a stop, and the reason this is not `routeStop`. A
+    // stop needs the process, so only the holder will do; a transcript is a
+    // file on the volume, and every machine with the volume mounted can read
+    // it. A session nobody is running is the ordinary case for a transcript.
+    const state = fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        reports: [{ storeId: WORK, sessions: [session('session-1')] }],
+      },
+    ]);
+
+    const routed = routeSessionRead(state, { storeId: WORK, sessionId: sessionId('session-1') });
+
+    expect(routed.ok).toBe(true);
+    if (!routed.ok) return;
+    expect(routed.server.label).toBe('workshop');
+  });
+
+  it('refuses a store no paired server has mounted', () => {
+    const state = fleet([{ label: 'workshop', phase: 'connected', stores: [WORK] }]);
+
+    const routed = routeSessionRead(state, { storeId: SPARE, sessionId: sessionId('session-1') });
+
+    expect(routed).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'no server the hub is paired with has that store mounted',
+      holder: null,
+    });
+  });
+
+  it('refuses a session the hub cannot see in that store', () => {
+    const state = fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        reports: [{ storeId: WORK, sessions: [session('session-1')] }],
+      },
+    ]);
+
+    const routed = routeSessionRead(state, { storeId: WORK, sessionId: sessionId('session-2') });
+
+    expect(routed).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'the hub has no record of that session in that store',
+      holder: null,
+    });
+  });
+
+  it('refuses when every machine with the store has gone away', () => {
+    // The row is still shown -- a session on an unreachable machine is
+    // labelled rather than deleted -- so this is the refusal a Transcript tab
+    // renders, and it names the situation rather than the session.
+    const state = fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        reports: [{ storeId: WORK, sessions: [session('session-1')] }],
+      },
+      { label: 'workshop', phase: 'stale', stores: [WORK] },
+    ]);
+
+    const routed = routeSessionRead(state, { storeId: WORK, sessionId: sessionId('session-1') });
+
+    expect(routed).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'no server with that store mounted is connected right now',
+      holder: null,
+    });
   });
 });
