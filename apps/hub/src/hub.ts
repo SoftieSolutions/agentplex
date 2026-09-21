@@ -603,6 +603,12 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     catalogue,
     docs,
     terminal,
+    // The whole feature, narrowed by the seam a connection takes: a socket may
+    // say whether it wants to be told, and may not tell anybody. `null` is a
+    // hub with no push, which answers `pushPublicKey: null` on every welcome
+    // and refuses both frames in words rather than storing a subscription it
+    // can never send to.
+    push,
   });
 
   // Not awaited past its first read of the pairing table, and started before

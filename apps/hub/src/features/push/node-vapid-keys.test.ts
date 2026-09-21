@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nodeVapidKeyGenerator } from './node-vapid-keys.js';
-import { PUSH_KEY_MAX_CHARS } from './push.js';
+import { PUSH_KEY_MAX_CHARS } from '@agentplex/protocol';
 
 /**
  * The one test that runs the real library.

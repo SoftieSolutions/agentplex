@@ -37,6 +37,7 @@ import { createFakeProjects, type FakeProjects } from '../projects/fake-projects
 import { createFakeCatalogue, type FakeCatalogue } from '../catalogue/fake-catalogue.js';
 import { createFakeDocs, type FakeDocs } from '../docs/fake-docs.js';
 import { createFakeTerminal, type FakeTerminal } from '../terminal/fake-terminal.js';
+import { createFakePush, FAKE_PUSH_PUBLIC_KEY, type FakePush } from '../push/fake-push.js';
 
 /**
  * The pipeline, with the real reducer above it and fake sockets below.
@@ -128,6 +129,8 @@ interface Harness {
   readonly terminal: FakeTerminal;
   /** The open requests it hands decisions to, answered by hand. */
   readonly approvals: FakeApprovals;
+  /** The subscriptions this broadcast writes through, or `null` for no push. */
+  readonly push: FakePush | null;
 }
 
 /**
@@ -150,6 +153,7 @@ function harness(
   docs: FakeDocs = createFakeDocs(),
   attention: FakeAttention = createFakeAttention(),
   approvals: FakeApprovals = createFakeApprovals(),
+  push: FakePush | null = createFakePush(),
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
@@ -174,6 +178,7 @@ function harness(
     catalogue,
     docs,
     terminal,
+    push,
   });
   return {
     state,
@@ -188,7 +193,30 @@ function harness(
     catalogue,
     docs,
     terminal,
+    push,
   };
+}
+
+/**
+ * The harness with only its push seam chosen.
+ *
+ * A wrapper rather than a ninth default typed out at every call site: the
+ * push tests care about one of the ten seams and nothing about the other
+ * nine, and a row of `undefined` at each one reads as if it meant something.
+ */
+function pushHarness(push: FakePush | null): Harness {
+  return harness(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    push,
+  );
 }
 
 /**
@@ -1929,5 +1957,163 @@ describe('a client answering an approval', () => {
 
     expect(approvals.decided).toEqual([]);
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+  });
+});
+
+/**
+ * The two push frames, over the socket a person's browser is on.
+ *
+ * The subject is the connection: what the welcome says about this hub, which
+ * frame comes back, and what the seam was handed in between. The table itself
+ * is tested against a migrated schema, and the whole path -- a browser
+ * subscribing to a hub that then holds the row -- is in `tests/hub-server`.
+ */
+describe('a client that wants to be told when nobody is looking', () => {
+  const ENDPOINT = 'https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bHxN0-example';
+  const KEYS = {
+    p256dh:
+      'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM',
+    auth: 'tBHItJI5svbpez7KI4CCXg',
+  };
+
+  it('is told on the welcome which key to subscribe against', async () => {
+    const { broadcast } = pushHarness(createFakePush());
+    const client = attach(broadcast);
+
+    await client.hello();
+
+    expect(client.received[0]).toMatchObject({
+      type: 'welcome',
+      pushPublicKey: FAKE_PUSH_PUBLIC_KEY,
+    });
+  });
+
+  it('is told null by a hub that has no push, rather than an empty key', async () => {
+    // The state a hub served over plaintext is in anyway. A client reads this
+    // and stays on the in-page floor instead of offering a control that
+    // cannot work.
+    const { broadcast } = pushHarness(null);
+    const client = attach(broadcast);
+
+    await client.hello();
+
+    expect(client.received[0]).toMatchObject({ type: 'welcome', pushPublicKey: null });
+  });
+
+  it('has its subscription stored, and is told so', async () => {
+    const push = createFakePush();
+    const { broadcast } = pushHarness(push);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'push-subscribe',
+      id: 2,
+      subscription: { endpoint: ENDPOINT, keys: KEYS },
+    });
+    await settle();
+
+    expect(push.stored).toEqual([{ endpoint: ENDPOINT, keys: KEYS }]);
+    expect(client.received.at(-1)).toEqual({ type: 'push-subscribed', replyTo: 2 });
+  });
+
+  it('has the endpoint forgotten, and is told so', async () => {
+    const push = createFakePush();
+    const { broadcast } = pushHarness(push);
+    const client = attach(broadcast);
+    await client.hello();
+    await client.say({
+      type: 'push-subscribe',
+      id: 2,
+      subscription: { endpoint: ENDPOINT, keys: KEYS },
+    });
+    await settle();
+
+    await client.say({ type: 'push-unsubscribe', id: 3, endpoint: ENDPOINT });
+    await settle();
+
+    expect(push.stored).toEqual([]);
+    expect(client.received.at(-1)).toEqual({ type: 'push-unsubscribed', replyTo: 3 });
+  });
+
+  it('is refused in words by a hub with no push, rather than quietly accepted', async () => {
+    const { broadcast } = pushHarness(null);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'push-subscribe',
+      id: 2,
+      subscription: { endpoint: ENDPOINT, keys: KEYS },
+    });
+    await settle();
+
+    const answer = client.received.at(-1);
+    expect(answer).toMatchObject({ type: 'refusal', replyTo: 2, code: 'refused' });
+    if (answer?.type !== 'refusal') return;
+    expect(answer.message).toContain('attention floor');
+  });
+
+  it('is refused an unsubscribe by a hub with no push: it never held the row', async () => {
+    const { broadcast } = pushHarness(null);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'push-unsubscribe', id: 2, endpoint: ENDPOINT });
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 2, code: 'refused' });
+  });
+
+  it('needs a hello first, like everything else on this socket', async () => {
+    const push = createFakePush();
+    const { broadcast } = pushHarness(push);
+    const client = attach(broadcast);
+
+    await client.say({
+      type: 'push-subscribe',
+      id: 1,
+      subscription: { endpoint: ENDPOINT, keys: KEYS },
+    });
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
+    expect(push.stored).toEqual([]);
+  });
+
+  it('says the hub broke when the write itself failed, which retrying may fix', async () => {
+    const push = createFakePush();
+    push.failWith(new Error('database is locked'));
+    const { broadcast } = pushHarness(push);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({
+      type: 'push-subscribe',
+      id: 2,
+      subscription: { endpoint: ENDPOINT, keys: KEYS },
+    });
+    await settle();
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'internal' });
+  });
+
+  it('answers the client that asked and nobody else', async () => {
+    const { broadcast } = pushHarness(createFakePush());
+    const asking = attach(broadcast);
+    const watching = attach(broadcast);
+    await asking.hello();
+    await watching.hello();
+    const seenByWatcher = watching.socket.sent.length;
+
+    await asking.say({
+      type: 'push-subscribe',
+      id: 2,
+      subscription: { endpoint: ENDPOINT, keys: KEYS },
+    });
+    await settle();
+
+    expect(asking.received.at(-1)).toEqual({ type: 'push-subscribed', replyTo: 2 });
+    expect(watching.socket.sent.length).toBe(seenByWatcher);
   });
 });

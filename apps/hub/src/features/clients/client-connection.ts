@@ -13,6 +13,8 @@ import {
   type CatalogueQuery,
   type Layout,
   type NodeId,
+  type PushEndpoint,
+  type PushSubscription,
   type RefusalCode,
   type ServerRegistrationId,
   type SessionHolder,
@@ -105,6 +107,29 @@ export interface ClientConnection {
   deliver(state: EncodedMachineState): void;
   /** Closes from the hub's end. Closing twice does nothing the second time. */
   close(reason: SocketClosure): void;
+}
+
+/**
+ * What a client socket may do about web push, and no more than that.
+ *
+ * Three functions rather than the push feature itself, and the missing fourth
+ * is the reason: `notify` is the fan-out, it is driven by an edge detector
+ * watching the fleet state, and a connection that could reach it would be a
+ * socket able to make every subscribed browser buzz. Nothing here can send a
+ * notification; what a client may do is say whether it wants them.
+ *
+ * `publicKey` is a function and not a value because it is read at the moment a
+ * welcome is written. The pair is minted at boot, before the first socket, but
+ * a value captured at wiring time would be one more thing whose freshness
+ * depends on the order two lines ran in.
+ *
+ * The push feature satisfies this structurally, which is what keeps this file
+ * free of any import from it: what crosses is the protocol's own types.
+ */
+export interface ClientPush {
+  publicKey(): string | null;
+  subscribe(subscription: PushSubscription): Promise<void>;
+  unsubscribe(endpoint: PushEndpoint): Promise<void>;
 }
 
 export interface ClientConnectionDependencies {
@@ -232,6 +257,17 @@ export interface ClientConnectionDependencies {
    * socket goes away.
    */
   readonly terminal: Terminal;
+  /**
+   * Web push, or `null` for a hub that has none.
+   *
+   * `null` is not a degraded hub: it is one served over plaintext, or one whose
+   * composition root gave it no way to sign and send. Such a hub says so on the
+   * welcome and refuses the two frames in words, rather than accepting a
+   * subscription it can never push to -- which would be a browser waiting for
+   * notifications that were never going to come, with nothing anywhere saying
+   * why.
+   */
+  readonly push: ClientPush | null;
   /** Called once when this connection ends, so the broadcast can forget it. */
   readonly onClosed?: () => void;
 }
@@ -259,6 +295,7 @@ export function serveClientConnection(
     catalogue,
     docs,
     terminal,
+    push,
     onClosed,
   }: ClientConnectionDependencies,
 ): ClientConnection {
@@ -369,7 +406,16 @@ export function serveClientConnection(
         }
 
         state = 'established';
-        send({ type: 'welcome', replyTo: frame.id, protocolVersion: PROTOCOL_VERSION, hubId });
+        send({
+          type: 'welcome',
+          replyTo: frame.id,
+          protocolVersion: PROTOCOL_VERSION,
+          hubId,
+          // Read here rather than captured at wiring time, and `null` for a
+          // hub with no push. A client cannot mint a subscription without it,
+          // so it belongs on the one frame every connection starts with.
+          pushPublicKey: push?.publicKey() ?? null,
+        });
         // Immediately, and through the same path a broadcast takes, so that a
         // client's first state and its tenth are produced by one piece of code.
         deliver(currentState());
@@ -707,6 +753,28 @@ export function serveClientConnection(
         return;
       }
 
+      case 'push-subscribe': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, for the reason an acknowledgement is not: it writes a
+        // row, and a socket whose later frames queued behind one disk write
+        // would be a screen that stops taking clicks because somebody turned
+        // notifications on.
+        void answerPushSubscribe(frame.id, frame.subscription);
+        return;
+      }
+
+      case 'push-unsubscribe': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerPushUnsubscribe(frame.id, frame.endpoint);
+        return;
+      }
+
       case 'protocol-error': {
         // The client could not read something the hub sent. There is no reply
         // to an unsolicited error and nothing useful to retry: a client that
@@ -747,6 +815,86 @@ export function serveClientConnection(
       logger.error('could not read the layout', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not read its layout');
+    }
+  }
+
+  /**
+   * The sentence a hub with no push answers both push frames with.
+   *
+   * `refused` and not `internal`, because nothing broke: this hub was built
+   * without a way to sign or send, which is the ordinary state of one served
+   * over plaintext. It says what the client should do instead, because the
+   * client can do it -- the in-page floor is what everybody relies on anyway,
+   * and a bare "no" would leave a settings control with nothing to render.
+   *
+   * It is also already knowable: the welcome said `pushPublicKey: null`. A
+   * client that asked anyway is one that ignored it, and the refusal is what
+   * makes that legible rather than a subscription stored against a hub that
+   * will never push to it.
+   */
+  function noPush(replyTo: FrameId): void {
+    refuse(
+      replyTo,
+      'refused',
+      'this hub has no push key pair, so it cannot notify a browser; the in-page attention floor is what it has',
+    );
+  }
+
+  /**
+   * Records a browser's subscription and answers the client that sent it.
+   *
+   * The frame's subscription is already parsed -- the protocol's own schema
+   * held the endpoint to https, a host, no credentials and a bound -- so there
+   * is nothing here to check and nothing that could be checked a second way. A
+   * throw is `internal` for the reason `answerLayout` gives: the hub broke,
+   * retrying may work, and what broke inside its database is not a client's to
+   * render.
+   *
+   * The endpoint is not logged. It is the capability -- whoever holds it can
+   * push to that browser -- so the feature's own line says that somebody
+   * subscribed and not who.
+   */
+  async function answerPushSubscribe(
+    replyTo: FrameId,
+    subscription: PushSubscription,
+  ): Promise<void> {
+    if (push === null) {
+      noPush(replyTo);
+      return;
+    }
+    try {
+      await push.subscribe(subscription);
+      if (state !== 'established') return;
+      send({ type: 'push-subscribed', replyTo });
+    } catch (error) {
+      logger.error('could not store a push subscription', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not store that push subscription');
+    }
+  }
+
+  /**
+   * Forgets one endpoint and answers the client that asked.
+   *
+   * The same yes whether or not there was a row, because the browser ends in
+   * one state either way and a client that had to tell the two apart would be
+   * reading a difference it cannot act on. A hub with no push refuses instead
+   * of answering yes: it never held the row, and pretending it removed one
+   * would be a receipt for something that did not happen.
+   */
+  async function answerPushUnsubscribe(replyTo: FrameId, endpoint: PushEndpoint): Promise<void> {
+    if (push === null) {
+      noPush(replyTo);
+      return;
+    }
+    try {
+      await push.unsubscribe(endpoint);
+      if (state !== 'established') return;
+      send({ type: 'push-unsubscribed', replyTo });
+    } catch (error) {
+      logger.error('could not remove a push subscription', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not remove that push subscription');
     }
   }
 

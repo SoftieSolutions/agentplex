@@ -1,16 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-schema.js';
-import { sessionIdSchema, storeIdSchema } from '@agentplex/protocol';
+import {
+  pushEndpointSchema,
+  sessionIdSchema,
+  storeIdSchema,
+  type PushSubscription,
+} from '@agentplex/protocol';
 import {
   createPush,
-  pushEndpointSchema,
   type Push,
   type PushDelivery,
   type PushEvent,
   type PushOutcome,
   type PushSender,
-  type PushSubscription,
   type VapidKeyGenerator,
 } from './push.js';
 
@@ -388,26 +391,6 @@ describe('the fan-out', () => {
   });
 });
 
-describe('what a subscription is allowed to say', () => {
-  it('takes an https endpoint', () => {
-    expect(pushEndpointSchema.parse(ENDPOINT_A)).toBe(ENDPOINT_A);
-  });
-
-  it('refuses a plaintext endpoint, which no push service offers', () => {
-    expect(pushEndpointSchema.safeParse('http://push.example/x').success).toBe(false);
-  });
-
-  it('refuses an endpoint that is not a URL at all', () => {
-    expect(pushEndpointSchema.safeParse('fcm.googleapis.com/send/x').success).toBe(false);
-  });
-
-  it('refuses credentials in the endpoint, which are a secret nothing rotates', () => {
-    expect(pushEndpointSchema.safeParse('https://u:p@push.example/x').success).toBe(false);
-  });
-
-  it('refuses an endpoint longer than the bound', () => {
-    expect(pushEndpointSchema.safeParse(`https://push.example/${'x'.repeat(4_000)}`).success).toBe(
-      false,
-    );
-  });
-});
+// What an endpoint and a subscription may be is the protocol's rule now, and
+// its cases moved with it to `packages/protocol/src/push.test.ts`. A test that
+// stayed here would be this app asserting somebody else's parser.

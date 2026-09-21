@@ -604,6 +604,15 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
    *
    * The answer is `push-subscribed`, or the ordinary refusal when this hub has
    * no key pair to be subscribed against.
+   *
+   * The endpoint is parsed here rather than merely bounded, which is the
+   * opposite of what `server-pair` does above, and the difference is who typed
+   * it. A pairing address is typed by a person, so a strict schema would turn
+   * a typo into a `protocol-error` and a closed socket instead of a sentence
+   * they can read. A subscription is produced by `PushManager.subscribe` and
+   * never by a human, so one that is not a subscription is a broken client and
+   * not a mistake somebody made -- and the parser is the right place to stop
+   * it, before anything can be stored that nothing could ever be sent to.
    */
   z.object({
     type: z.literal('push-subscribe'),

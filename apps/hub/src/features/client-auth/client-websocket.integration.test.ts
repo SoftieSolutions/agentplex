@@ -186,6 +186,9 @@ describe('the client websocket', () => {
       replyTo: 1,
       protocolVersion: PROTOCOL_VERSION,
       hubId: 'hub-1',
+      // This hub was given no way to push, and says so rather than leaving the
+      // field out: a client has to be able to tell that from a hub that can.
+      pushPublicKey: null,
     });
     expect(state).toMatchObject({ type: 'machine-state', state: { stores: [], servers: [] } });
     expect(started.clients.attached).toBe(1);
