@@ -72,8 +72,26 @@ describe('createCodexAdapter.discover', () => {
         // adapter as the string it arrived as: nothing maps it and nothing
         // checks it against a set of models this repository knows.
         model: 'gpt-5.6-terra',
+        // A question answered and no tool run: this capture's only completed
+        // items are messages, whose text the capture redacts. The session
+        // that did run a command is below.
+        activity: null,
       },
     ]);
+  });
+
+  it('carries the command a rollout recorded out of the adapter as an activity', async () => {
+    // `codex-pending-tool-call.jsonl` completes one `CommandExecution`. The
+    // derivation is `codex-rollout.ts`'s; this is the assertion that it
+    // leaves the adapter intact, on the seam the store report is built from.
+    const adapter = adapterOver({ files: { [PENDING_PATH]: PENDING_TOOL_CALL } });
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.sessions.map((session) => session.activity)).toEqual([
+      { kind: 'command', text: "printf 'hello' > probe.txt", exitStatus: 1 },
+    ]);
+    expect(discovered.problems).toEqual([]);
   });
 
   it('reports no model for a rollout whose turns name none, and calls it no problem', async () => {

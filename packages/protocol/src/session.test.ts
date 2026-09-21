@@ -123,6 +123,40 @@ describe('sessionDescriptorSchema', () => {
     expect(sessionDescriptorSchema.safeParse({ ...descriptor, model: '' }).success).toBe(false);
   });
 
+  it('takes an activity, and an absent one is absence rather than an empty line', () => {
+    const withActivity = {
+      ...descriptor,
+      activity: { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+    };
+    const parsed = sessionDescriptorSchema.safeParse(withActivity);
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toEqual(withActivity);
+
+    // Optional, as `usage` and `model` are. An adapter that derived no activity
+    // sends no field, and the client draws nothing -- not a blank plain line,
+    // which would claim the session said something and then show none of it.
+    const bare = sessionDescriptorSchema.safeParse(descriptor);
+
+    expect(bare.success).toBe(true);
+    expect(bare.data && 'activity' in bare.data).toBe(false);
+  });
+
+  it('refuses a descriptor whose activity the activity parser refuses', () => {
+    // One parser, reached through the descriptor: nothing here re-states what
+    // an activity is, and a kind nobody defined costs the frame rather than
+    // arriving as a session with an unreadable line under it.
+    for (const activity of [
+      { kind: 'diff', text: 'a' },
+      { kind: 'command', text: 'ls', command: 'ls' },
+      { kind: 'tests', passed: -1 },
+      { kind: 'plain', text: '' },
+      null,
+    ]) {
+      expect(sessionDescriptorSchema.safeParse({ ...descriptor, activity }).success).toBe(false);
+    }
+  });
+
   it('refuses an empty cwd, branch or title, so a blank cannot pass for a value', () => {
     expect(sessionDescriptorSchema.safeParse({ ...descriptor, cwd: '' }).success).toBe(false);
     expect(sessionDescriptorSchema.safeParse({ ...descriptor, branch: '' }).success).toBe(false);

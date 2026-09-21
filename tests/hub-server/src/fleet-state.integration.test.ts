@@ -4,6 +4,7 @@ import {
   serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
+  type Activity,
   type HubId,
   type ServerRegistrationId,
   type SessionDescriptor,
@@ -218,6 +219,16 @@ function session(
    * noticing.
    */
   model?: string,
+  /**
+   * What that machine's adapter read the session as having just done, or
+   * nothing for a session it could name no activity for.
+   *
+   * Omitted the same way and for a sharper version of the same reason: the
+   * wire field has no `null`, so absence is the only way a server says "there
+   * is nothing to show", and it is a discriminated union rather than a string
+   * -- the shape with the most ways to arrive subtly wrong.
+   */
+  activity?: Activity,
 ): SessionDescriptor {
   return {
     storeId,
@@ -227,6 +238,7 @@ function session(
     updatedAt: START,
     cwd: '/volumes/claude/work',
     ...(model === undefined ? {} : { model }),
+    ...(activity === undefined ? {} : { activity }),
     branch: null,
     title: null,
     uncommitted: null,
@@ -447,5 +459,79 @@ describe('the reducer over a live supervisor', () => {
     // session's model: a hub that filled this in from what it had seen would
     // print a guess beside a session nobody can check.
     expect(rows[1]?.descriptor).not.toHaveProperty('model');
+  });
+
+  /**
+   * The activity, over the same route and for a harder reason than the model.
+   *
+   * A model is a string: a relay that mangled one would have to have replaced
+   * it. An activity is a discriminated union of strict objects with optional
+   * fields inside the variants, so there are three separate ways for it to
+   * arrive wrong and none of them look like a failure -- the field stripped by
+   * an object schema somewhere along the way, a variant's optional field
+   * dropped while the variant survives, or an absence turned into something.
+   * Only the real server end's parser and the real hub parser in series can
+   * say it did not happen, and what is asserted is the output of the parser a
+   * client reads with.
+   */
+  it('carries each shape of activity a machine stated, and states none where that machine had none', async () => {
+    const shared = storeIdSchema.parse('store-shared');
+    machines.set('box.example', {
+      serverId: 'server-box',
+      stores: [store('store-shared', '/mnt/work')],
+      reports: [
+        {
+          storeId: shared,
+          sessions: [
+            // The two activities the adapters actually derive from the captured
+            // rollout and transcript in `packages/providers/fixtures/`: codex's
+            // own reading of a command it ran, with the status it exited on,
+            // and the name of the tool a Claude turn called with no ending yet.
+            // Invented ones would pass against a relay that mangled a real one,
+            // and between them they are both shapes the field has today -- a
+            // variant with its optional field filled and one without.
+            session('session-1', shared, 'working', undefined, {
+              kind: 'command',
+              text: "printf 'hello' > probe.txt",
+              exitStatus: 1,
+            }),
+            session('session-2', shared, 'working', undefined, {
+              kind: 'command',
+              text: 'Bash',
+            }),
+            session('session-3', shared, 'idle'),
+          ],
+          holding: [],
+        },
+      ],
+    });
+    await register('box');
+    const running = await startAll();
+    await until(() => phaseOf(running, 'box') === 'connected', 'the box to connect');
+    await until(
+      () => (reducer.snapshot().stores[0]?.sessions.length ?? 0) === 3,
+      "the box's own report to reach the reducer",
+    );
+
+    const published = machineStateSchema.parse(toMachineState(reducer.snapshot()));
+    const rows = published.stores.find((store) => store.storeId === shared)?.sessions ?? [];
+    expect(rows.map((row) => row.descriptor.sessionId)).toEqual([
+      'session-1',
+      'session-2',
+      'session-3',
+    ]);
+    expect(rows[0]?.descriptor.activity).toEqual({
+      kind: 'command',
+      text: "printf 'hello' > probe.txt",
+      exitStatus: 1,
+    });
+    // The variant survives and so does the hole in it. `exitStatus` filled in
+    // from the row above, or defaulted to the `0` of a command that succeeded,
+    // would report a command still running as one that finished.
+    expect(rows[1]?.descriptor.activity).toEqual({ kind: 'command', text: 'Bash' });
+    expect(rows[1]?.descriptor.activity).not.toHaveProperty('exitStatus');
+    // Absence survives as absence, rather than as a `plain` line saying
+    // nothing under a session that is doing nothing worth naming.
+    expect(rows[2]?.descriptor).not.toHaveProperty('activity');
   });
 });

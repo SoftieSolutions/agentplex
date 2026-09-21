@@ -9,6 +9,14 @@ export { assertNever } from './exhaustive.js';
 export type { ParseFailure, ParseResult } from './parse.js';
 
 export {
+  ACTIVITY_PATH_MAX_CHARS,
+  ACTIVITY_TEXT_MAX_CHARS,
+  activitySchema,
+  displayableActivityText,
+} from './activity.js';
+export type { Activity, ActivityKind } from './activity.js';
+
+export {
   CATALOGUE_FILTER_MAX_KINDS,
   CATALOGUE_PAGE_MAX_LIMIT,
   CATALOGUE_SEARCH_MAX_CHARS,

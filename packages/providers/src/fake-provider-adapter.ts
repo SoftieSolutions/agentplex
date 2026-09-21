@@ -1,4 +1,5 @@
 import {
+  activitySchema,
   sessionIdSchema,
   sessionUsageSchema,
   type Provider,
@@ -67,6 +68,13 @@ const fakeTranscriptSchema = z.object({
    * wants a model on the wire has to put one in the transcript to get it.
    */
   model: z.string().min(1).nullish(),
+  /**
+   * What this made-up provider says the session is doing, when it says
+   * anything. The protocol's own schema rather than a shape of this fake's:
+   * an adapter is the last place an activity is parsed, and a fake that
+   * invented its own vocabulary would be exercising a seam nothing crosses.
+   */
+  activity: activitySchema.nullish(),
 });
 
 export interface FakeProviderAdapterOptions {
@@ -348,6 +356,7 @@ function parseTranscript(name: string, contents: string) {
       title: parsed.data.title ?? null,
       usage: parsed.data.usage ?? null,
       model: parsed.data.model ?? null,
+      activity: parsed.data.activity ?? null,
     },
   };
 }

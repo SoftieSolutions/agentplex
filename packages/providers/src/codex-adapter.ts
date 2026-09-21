@@ -250,6 +250,11 @@ async function readRollout(
     // on its release schedule, so one that shipped this morning has to reach a
     // screen without a release here.
     model: parsed.rollout.model,
+    // The newest command the rollout records, and `null` for a session that
+    // has run none: the rollout parser is the only thing that knows what a
+    // codex item means, and it is also the only thing that knows which of
+    // their fields the capture redacts.
+    activity: parsed.rollout.activity,
   });
 }
 

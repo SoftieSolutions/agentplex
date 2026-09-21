@@ -131,7 +131,7 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
         </Text>
         {actions}
       </Group>
-      <SessionSummaryLine text={item.summary} scheme={scheme} />
+      <SessionSummaryLine activity={item.activity} text={item.summary} scheme={scheme} />
       {/* The oldest request this session is holding, named by the session:
           one pair of buttons among a list of other sessions' cards, where the
           session is what tells this one apart. Every other request it is

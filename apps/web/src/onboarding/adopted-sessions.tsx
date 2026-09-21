@@ -139,8 +139,15 @@ function AdoptedSessionRow({ session, scheme, now }: AdoptedSessionRowProps): JS
         </Text>
       </Group>
       {/* The same monospace line the session card draws, because it is the
-          same claim: this is the session quoting itself, not the UI talking. */}
-      <SessionSummaryLine text={session.cwd ?? 'working directory not recorded'} scheme={scheme} />
+          same claim: this is the session quoting itself, not the UI talking.
+          No activity, and said rather than left off: this report's model
+          carries the status words in the column above and never the parsed
+          activity, so the line here is the directory or nothing. */}
+      <SessionSummaryLine
+        activity={null}
+        text={session.cwd ?? 'working directory not recorded'}
+        scheme={scheme}
+      />
     </Box>
   );
 }

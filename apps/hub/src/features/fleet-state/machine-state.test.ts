@@ -8,6 +8,7 @@ import {
   serverAddressSchema,
   sessionIdSchema,
   storeIdSchema,
+  type Activity,
   type MachineState,
   type ServerRegistrationId,
   type SessionDescriptor,
@@ -63,7 +64,7 @@ function connection(
   };
 }
 
-function session(id: string, model?: string): SessionDescriptor {
+function session(id: string, model?: string, activity?: Activity): SessionDescriptor {
   return {
     storeId: store('store-work'),
     sessionId: sessionIdSchema.parse(id),
@@ -78,6 +79,10 @@ function session(id: string, model?: string): SessionDescriptor {
     // helper that put a `null` here would be asserting against a shape no
     // adapter produces.
     ...(model === undefined ? {} : { model }),
+    // The same, and for a stronger reason: `activity` has no `null` on the
+    // wire at all, so a helper that offered one would be describing a frame
+    // the protocol refuses.
+    ...(activity === undefined ? {} : { activity }),
     uncommitted: null,
   };
 }
@@ -91,6 +96,20 @@ function publishedRunning(model: string) {
     registrationId: registration('workshop'),
     storeId: store('store-work'),
     sessions: [session('session-1', model)],
+    reportedAt: START,
+  });
+  return toMachineState(state.snapshot());
+}
+
+/** The same fleet, with its one session reported as doing something nameable. */
+function publishedDoing(activity: Activity) {
+  const state = createFleetState({ logger });
+  state.applyConnection(connection('workshop', 'connected', ['store-work']));
+  state.applySessions({
+    holding: [],
+    registrationId: registration('workshop'),
+    storeId: store('store-work'),
+    sessions: [session('session-1', undefined, activity)],
     reportedAt: START,
   });
   return toMachineState(state.snapshot());
@@ -253,6 +272,45 @@ describe('toMachineState', () => {
     const descriptor = parsed.stores[0]?.sessions[0]?.descriptor;
     expect(descriptor).toBeDefined();
     expect(descriptor).not.toHaveProperty('model');
+  });
+
+  it('publishes the activity the server stated, whole and unclassified by this hub', () => {
+    // The activity the Codex adapter derives from `packages/providers/fixtures/
+    // codex-pending-tool-call.jsonl`, exit status and all. The hub reads no
+    // provider's transcript and owns no part of this vocabulary: it either
+    // hands the variant across as the machine sent it or it silently reshapes
+    // what a card claims happened.
+    const parsed = machineStateSchema.parse(
+      publishedDoing({ kind: 'command', text: "printf 'hello' > probe.txt", exitStatus: 1 }),
+    );
+    expect(parsed.stores[0]?.sessions[0]?.descriptor.activity).toEqual({
+      kind: 'command',
+      text: "printf 'hello' > probe.txt",
+      exitStatus: 1,
+    });
+  });
+
+  it('publishes a kind whose optional fields the server left off, still left off', () => {
+    // The Claude adapter's shape: a tool name and no exit status, because the
+    // turn that called it has not come back. Absent and not `0`, which is the
+    // status of a command that succeeded -- a hub that filled this in would
+    // turn a command still running into one that finished well.
+    const parsed = machineStateSchema.parse(publishedDoing({ kind: 'command', text: 'Bash' }));
+    const activity = parsed.stores[0]?.sessions[0]?.descriptor.activity;
+    expect(activity).toEqual({ kind: 'command', text: 'Bash' });
+    expect(activity).not.toHaveProperty('exitStatus');
+  });
+
+  it('publishes no activity at all for a session whose adapter derived none', () => {
+    // Absent, not a `plain` line, and the difference is the whole reason the
+    // field is optional: `plain` says "here is what it said and I could not
+    // classify it", and absence says there is nothing to show. A hub that
+    // manufactured the first from the second would put a line under every
+    // quiet session in the fleet.
+    const parsed = machineStateSchema.parse(published());
+    const descriptor = parsed.stores[0]?.sessions[0]?.descriptor;
+    expect(descriptor).toBeDefined();
+    expect(descriptor).not.toHaveProperty('activity');
   });
 
   it('publishes each provider whole, version and directory included', () => {

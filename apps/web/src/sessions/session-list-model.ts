@@ -1,4 +1,5 @@
 import type {
+  Activity,
   ApprovalId,
   MachineState,
   NodeId,
@@ -10,6 +11,7 @@ import type {
   SessionStatus,
   StoreId,
 } from '@agentplex/protocol';
+import { activityWordsText } from '../activity/activity-words.js';
 import { destinationHash } from '../shell/destinations.js';
 import type { NextAction } from '../shell/next-action.js';
 import type { ShellForm } from '../shell/shell-form.js';
@@ -185,8 +187,31 @@ export interface SessionListItem {
    * `undefined` that reads as a field somebody forgot to set.
    */
   readonly model: string | null;
-  /** The one-line body: the working directory, or the status in words. */
+  /**
+   * The one-line body's fallback: the working directory, or the status in
+   * words. What the card drew before there was an activity to draw, and what
+   * it draws again for a session whose provider recorded none.
+   *
+   * Left exactly as it was rather than being replaced by the activity, because
+   * the two answer different questions and neither substitutes for the other:
+   * a session with nothing going on still has to say something, and the words
+   * here are the truthful something. It is also still the string the filter
+   * matches, which is what keeps a search for a directory working on a card
+   * that has stopped showing one.
+   */
   readonly summary: string;
+  /**
+   * What the session is doing, as the provider's own record had it, or `null`
+   * when it recorded nothing.
+   *
+   * The parsed union and not a pre-rendered line: the collapsed form on a card
+   * and the full form on the session screen are two readings of one fact, and
+   * a string flattened here would make the card's reading the only one there
+   * is. `null` rather than `undefined` on the rule every other absent fact on
+   * this item follows -- the wire leaves the key off, and a reader here has to
+   * answer for the absence rather than trip over it.
+   */
+  readonly activity: Activity | null;
   readonly updatedAt: number;
   readonly storeId: StoreId;
   /**
@@ -405,6 +430,7 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         cwd: descriptor.cwd,
         model: descriptor.model ?? null,
         summary: descriptor.cwd ?? statusWords(descriptor.status),
+        activity: descriptor.activity ?? null,
         updatedAt: descriptor.updatedAt,
         storeId: descriptor.storeId,
         project: row.project?.name ?? null,
@@ -437,6 +463,16 @@ export function partitionNeedsYou(items: readonly SessionListItem[]): readonly S
  * The project is in the list for exactly that reason: it is now drawn on the
  * row, and a word somebody can read off a card and not type into the box above
  * it reads as a broken search rather than as a narrow one.
+ *
+ * The activity is in it on the same rule, and the summary stays in it beside
+ * the activity rather than being displaced by it. A card whose line now says
+ * what the agent is doing is a card that has stopped showing its working
+ * directory -- and a person who found that session by typing its directory
+ * yesterday would find nothing today. So the filter matches both the line
+ * being drawn and the line it replaced, through `activityWordsText`, which is
+ * built from the very words the widget draws: a second walk over the kinds for
+ * the filter's benefit would be a second chance to word one of them
+ * differently here.
  */
 export function matchesSearch(item: SessionListItem, search: string): boolean {
   const query = search.trim().toLowerCase();
@@ -449,6 +485,7 @@ export function matchesSearch(item: SessionListItem, search: string): boolean {
     item.storeId,
     item.summary,
     item.project,
+    item.activity === null ? null : activityWordsText(item.activity),
   ].some((field) => field !== null && field.toLowerCase().includes(query));
 }
 

@@ -1,4 +1,4 @@
-import type { SessionUsage } from '@agentplex/protocol';
+import { activitySchema, type Activity, type SessionUsage } from '@agentplex/protocol';
 import { z } from 'zod';
 import type { TranscriptSignal } from './provider-adapter.js';
 
@@ -100,7 +100,32 @@ const turnSchema = z.object({
       content: z
         .union([
           z.string(),
-          z.array(z.object({ type: z.string(), id: z.string().optional() }).loose()),
+          z.array(
+            z
+              .object({
+                type: z.string(),
+                id: z.string().optional(),
+                /**
+                 * Which tool a `tool_use` block calls -- `Bash`, `Edit`,
+                 * `Read` -- as Claude Code names it.
+                 *
+                 * Declared here rather than reached for through the `.loose()`
+                 * on purpose, the same argument `message.model` above makes: a
+                 * field this parser reads is a field this parser parses. It is
+                 * optional because every other block type omits it, which is
+                 * ordinary and not a fault.
+                 *
+                 * The tool's `input` is deliberately still unread. It is where
+                 * the command line, the file path and the diff live, and it is
+                 * also the field the captured fixtures redact to `{}` -- so
+                 * there is nothing here to write a test against and nothing to
+                 * derive an `edit` or a `tests` activity from. AGX-263
+                 * re-captures with inputs.
+                 */
+                name: z.string().optional(),
+              })
+              .loose(),
+          ),
         ])
         .optional(),
     })
@@ -142,6 +167,14 @@ export interface ClaudeTranscript {
    * is actually running. Nothing here interprets the string.
    */
   readonly model: string | null;
+  /**
+   * What this session was last seen doing, or `null` when the transcript says
+   * nothing this parser can report honestly.
+   *
+   * `null` is the ordinary answer today rather than the exceptional one. See
+   * `activityOf` for what a Claude Code transcript actually yields.
+   */
+  readonly activity: Activity | null;
 }
 
 /**
@@ -238,8 +271,60 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
       signal: signalOf(last, pendingToolUse),
       usage,
       model,
+      activity: activityOf(last),
     },
   };
+}
+
+/**
+ * The one thing a captured Claude Code transcript says about what a session is
+ * doing: which tool its last turn called.
+ *
+ * Read off the last non-sidechain turn, which is the same turn the date and
+ * the signal come from, and for the same reason -- a `Task` subagent's tool
+ * calls are the session's work but not its conversation, and describing a
+ * session by what a subagent is doing is describing the wrong thing. Within
+ * that turn the last block wins: Claude Code writes thinking, then text, then
+ * the tool calls, in the order they happened, so the last one is the latest.
+ *
+ * What it can emit is `command`, and its `text` is the tool's *name*. That is
+ * not a shorthand for the command line -- there is no command line here. The
+ * tool's `input` is what holds one, and the captured fixtures redact it to
+ * `{}`, so `Bash` is the whole of what this parser honestly knows. A card
+ * saying `Bash` is true; a card saying anything more would be invented.
+ *
+ * What it can never emit today, and why:
+ *
+ * - `edit` and `tests` both need the tool's `input` -- the path, the counts,
+ *   the command that ran the suite. Redacted in every captured fixture.
+ * - `narration` needs the assistant's `text` block. Redacted in every
+ *   captured fixture to the literal string `REDACTED`, and a narration
+ *   reading REDACTED is worse than no narration at all. So a turn ending in
+ *   text yields nothing, which is also why nothing here compares a string
+ *   against the capture's marker: the redacted fields are simply not read.
+ * - `approval` is not in the transcript at all. A session stopped at a
+ *   permission prompt and one running a slow tool are the same bytes here --
+ *   see `signalOf` -- and the registry one file over is what knows the
+ *   difference.
+ * - `plain` is the escape hatch for a line of text whose kind is unknown, and
+ *   every line of text in a capture is redacted.
+ *
+ * AGX-263 re-captures the fixtures with tool inputs, and the variants above
+ * become derivable there rather than guessed at here.
+ */
+function activityOf(last: z.infer<typeof turnSchema>): Activity | null {
+  const content = last.message?.content;
+  if (!Array.isArray(content)) return null;
+
+  const block = content.at(-1);
+  if (block?.type !== 'tool_use' || typeof block.name !== 'string') return null;
+
+  // Parsed, not assembled. A tool name long enough to blow the protocol's
+  // bound, or one that is nothing but characters a screen cannot draw, costs
+  // this activity and nothing else: the session keeps its date, its model and
+  // its usage, and the descriptor simply carries no activity.
+  const activity = activitySchema.safeParse({ kind: 'command', text: block.name });
+  return activity.success ? activity.data : null;
 }
 
 /**

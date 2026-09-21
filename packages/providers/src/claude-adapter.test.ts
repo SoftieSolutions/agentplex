@@ -79,8 +79,29 @@ describe('createClaudeAdapter.discover', () => {
         // adapter as the string it arrived as: nothing maps it and nothing
         // checks it against a set of models this repository knows.
         model: 'claude-opus-5',
+        // This capture's last turn ends in a redacted `text` block, so there
+        // is nothing to report and the adapter says so out loud rather than
+        // leaving the field off. The session that does have one is below.
+        activity: null,
       },
     ]);
+  });
+
+  it('carries the tool the last turn called out of the adapter as an activity', async () => {
+    // `claude-pending-tool-use.jsonl` stops on an unanswered `tool_use` named
+    // `Bash`. The derivation is `claude-transcript.ts`'s; this is the
+    // assertion that it leaves the adapter intact, on the seam the store
+    // report is built from.
+    const adapter = adapterOver({
+      files: { [`${PROJECT}/${SESSION_ID}.jsonl`]: PENDING_TOOL_USE },
+    });
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.sessions.map((session) => session.activity)).toEqual([
+      { kind: 'command', text: 'Bash' },
+    ]);
+    expect(discovered.problems).toEqual([]);
   });
 
   it('reports no model for a transcript that names none, and calls it no problem', async () => {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { activitySchema } from './activity.js';
 import { providerSchema, sessionIdSchema, sessionRefSchema, startIdSchema } from './identity.js';
 
 /**
@@ -263,6 +264,25 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
    * none of it: the working tree is on one machine's disk and nowhere else.
    */
   uncommitted: uncommittedDiffSchema.nullable(),
+  /**
+   * What this session is doing, as its adapter read it out of the provider's
+   * own record -- or nothing at all.
+   *
+   * Optional, and the absence is load-bearing. An adapter that could derive no
+   * activity sends no field, and every surface draws nothing for it. What it
+   * must never become is `{ kind: 'plain' }` with something in it: `plain` is
+   * "here is a line the adapter could not classify", and absence is "there is
+   * nothing to show". A card that filled the gap with the session's status in
+   * words would be inventing an activity out of a fact it already draws.
+   *
+   * One activity and not a list, because this is the line under a session's
+   * name on a card and at the top of its screen -- the latest thing, not a
+   * feed. The feed is a transcript, it is routinely megabytes, and it is
+   * fetched for one session on demand rather than carried for every session in
+   * a store on every scan. That is also why everything on the union is bounded
+   * this tightly: the cost of a field here is paid per session per scan.
+   */
+  activity: activitySchema.optional(),
 });
 export type SessionDescriptor = z.infer<typeof sessionDescriptorSchema>;
 

@@ -12,6 +12,7 @@ import {
   sessionIdSchema,
   storeIdSchema,
   PROTOCOL_VERSION,
+  type Activity,
   type ProviderReadiness,
   type SessionDescriptor,
   type SessionHold,
@@ -498,6 +499,15 @@ function descriptor(
    * the client has to draw when nothing named a model.
    */
   model?: string,
+  /**
+   * What that session's adapter read it as having just done, for the two rows
+   * that have one.
+   *
+   * Last because it is the rarest: most of the captured fleet is sessions no
+   * adapter could name an activity for, which is the shape the client draws
+   * most often and the one it must draw as nothing at all.
+   */
+  activity?: Activity,
 ): SessionDescriptor {
   return {
     storeId: storeIdSchema.parse(storeId),
@@ -509,6 +519,9 @@ function descriptor(
     branch,
     title,
     ...(model === undefined ? {} : { model }),
+    // Omitted and never nulled: the wire field has no `null`, so an absent
+    // field is the only way a server says it found nothing to show.
+    ...(activity === undefined ? {} : { activity }),
     uncommitted,
     // Omitted rather than nulled when a session has no counts, so the captured
     // frames carry both shapes the client has to render: a session with a
@@ -532,6 +545,30 @@ function descriptor(
  */
 const CAPTURED_CLAUDE_MODEL = 'claude-opus-5';
 const CAPTURED_CODEX_MODEL = 'gpt-5.6-terra';
+
+/**
+ * The activities the adapters derive today, taken from real provider output.
+ *
+ * Each is what `packages/providers` actually produces from a capture in
+ * `packages/providers/fixtures/`, asserted there by the adapters' own tests.
+ * `codex-pending-tool-call.jsonl` records a `CommandExecution` whose
+ * `parsed_cmd` is codex's own reading of what it ran and whose `exit_code` is
+ * `1`; `claude-pending-tool-use.jsonl` stops on an unanswered `tool_use` named
+ * `Bash`, and a Claude transcript carries nothing else about it -- the tool's
+ * input is redacted in every capture, so the name is all there is.
+ *
+ * Between them they are the two shapes of the one variant an adapter emits:
+ * with an ending and without. Writing a prettier line here instead -- an
+ * `edit` with a path and a diffstat, say -- would give the client fixtures
+ * for widgets no provider fills in, and a session list tuned against them
+ * would be tuned against this repository's imagination.
+ */
+const CAPTURED_CODEX_ACTIVITY: Activity = {
+  kind: 'command',
+  text: "printf 'hello' > probe.txt",
+  exitStatus: 1,
+};
+const CAPTURED_CLAUDE_ACTIVITY: Activity = { kind: 'command', text: 'Bash' };
 
 /**
  * Token counts for a captured session, taken from real provider output.
@@ -953,6 +990,13 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   'fix/auth-refresh',
                   CAPTURED_USAGE,
                   CAPTURED_CLAUDE_MODEL,
+                  // Working, and what it is working on is a tool call that has
+                  // not come back: the shape with no ending on it. The same
+                  // session in both captures, because it is the same session --
+                  // a row that gained an activity on the way from the fleet to
+                  // the single machine would be a difference the client could
+                  // read as meaning something.
+                  CAPTURED_CLAUDE_ACTIVITY,
                 ),
                 descriptor(
                   'store-agentplex',
@@ -972,6 +1016,11 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   null,
                   undefined,
                   CAPTURED_CODEX_MODEL,
+                  // The other shape: a command codex ran and the status it
+                  // exited on. Non-zero, which is the case a card has to draw
+                  // without turning into an error screen -- a command that
+                  // failed is an ordinary minute in a session that is fine.
+                  CAPTURED_CODEX_ACTIVITY,
                 ),
                 descriptor(
                   'store-agentplex',
@@ -1411,6 +1460,13 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   'fix/auth-refresh',
                   CAPTURED_USAGE,
                   CAPTURED_CLAUDE_MODEL,
+                  // Working, and what it is working on is a tool call that has
+                  // not come back: the shape with no ending on it. The same
+                  // session in both captures, because it is the same session --
+                  // a row that gained an activity on the way from the fleet to
+                  // the single machine would be a difference the client could
+                  // read as meaning something.
+                  CAPTURED_CLAUDE_ACTIVITY,
                 ),
                 descriptor(
                   'store-agentplex',

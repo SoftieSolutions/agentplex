@@ -120,6 +120,14 @@ async function discoverWithAdapter(
       // carrying both shapes would invite a client to tell them apart. What
       // neither may become on the way is the model the provider usually runs.
       ...(session.model === null ? {} : { model: session.model }),
+      // And again, for the third field to arrive this way. An activity is
+      // already parsed by the protocol's own schema inside the adapter, which
+      // is the point of putting it there: nothing between an adapter and a
+      // card re-reads a provider's vocabulary or re-checks a `kind`. `null`
+      // means the adapter looked and the provider's record held nothing it
+      // could name, and absent is what that means to every reader of the wire
+      // -- there is nothing to draw under this session's name.
+      ...(session.activity === null ? {} : { activity: session.activity }),
       // Neither is read here, and `null` rather than absent. Discovery reads a
       // provider's own files; a branch or a diffstat means starting git, and
       // this package has no process runner and should not grow one to get
