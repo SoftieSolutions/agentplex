@@ -844,8 +844,9 @@ export function serveClientConnection(
    * Records a browser's subscription and answers the client that sent it.
    *
    * The frame's subscription is already parsed -- the protocol's own schema
-   * held the endpoint to https, a host, no credentials and a bound -- so there
-   * is nothing here to check and nothing that could be checked a second way. A
+   * held the endpoint to https, a host, no credentials, a bound and an address
+   * that is not one only this hub can reach -- so there is nothing here to
+   * check and nothing that could be checked a second way. A
    * throw is `internal` for the reason `answerLayout` gives: the hub broke,
    * retrying may work, and what broke inside its database is not a client's to
    * render.

@@ -44,6 +44,70 @@ describe('what an endpoint is allowed to be', () => {
   });
 });
 
+describe('the addresses an endpoint may not be pointed at', () => {
+  /** Refused, by family, each in every spelling a URL parser folds into one. */
+  const refusedByFamily: Readonly<Record<string, readonly string[]>> = {
+    'IPv4 loopback': [
+      'https://127.0.0.1/send/x',
+      // The same address in two spellings a URL parser normalises: a rule
+      // reading the text rather than the parsed host would miss both.
+      'https://127.1/send/x',
+      'https://0x7f.1/send/x',
+    ],
+    'IPv4 private': [
+      'https://10.0.0.5/send/x',
+      'https://172.16.0.1/send/x',
+      'https://172.31.255.255/send/x',
+      'https://192.168.1.10/send/x',
+    ],
+    // 169.254.169.254 is the cloud metadata address, which is most of the
+    // reason this rule is here rather than in a comment saying it would be nice.
+    'IPv4 link-local': ['https://169.254.169.254/send/x', 'https://169.254.0.1/send/x'],
+    'IPv4 unspecified': ['https://0.0.0.0/send/x', 'https://0.1.2.3/send/x'],
+    'IPv6 loopback': ['https://[::1]/send/x'],
+    'IPv6 unspecified': ['https://[::]/send/x'],
+    'IPv6 unique local': ['https://[fc00::1]/send/x', 'https://[fd12:3456:789a::1]/send/x'],
+    'IPv6 link-local': ['https://[fe80::1]/send/x', 'https://[FE80::dead:beef]/send/x'],
+    'IPv4 mapped into IPv6': [
+      'https://[::ffff:127.0.0.1]/send/x',
+      'https://[::ffff:10.0.0.1]/send/x',
+      // The last one again, in the hex a URL renders it back as.
+      'https://[::ffff:a00:1]/send/x',
+    ],
+  };
+
+  for (const [family, endpoints] of Object.entries(refusedByFamily)) {
+    it(`refuses a ${family} literal`, () => {
+      for (const endpoint of endpoints) {
+        expect(pushEndpointSchema.safeParse(endpoint).success).toBe(false);
+      }
+    });
+  }
+
+  it('takes a public literal, of either family', () => {
+    expect(pushEndpointSchema.safeParse('https://93.184.216.34/send/x').success).toBe(true);
+    expect(pushEndpointSchema.safeParse('https://[2606:4700::1111]/send/x').success).toBe(true);
+    // One octet past the private block, so what is refused is the documented
+    // range rather than "anything beginning 172".
+    expect(pushEndpointSchema.safeParse('https://172.32.0.1/send/x').success).toBe(true);
+  });
+
+  it('does not judge a hostname, and does not pretend to', () => {
+    // A name is resolved by somebody else at send time and can resolve
+    // somewhere else then. See the rule's comment for why refusing one here
+    // would read as a defence without being one.
+    expect(pushEndpointSchema.safeParse('https://push.example/send/x').success).toBe(true);
+    expect(pushEndpointSchema.parse(ENDPOINT)).toBe(ENDPOINT);
+  });
+
+  it('says what it refused, because somebody reads the refusal', () => {
+    const refused = pushEndpointSchema.safeParse('https://169.254.169.254/send/x');
+    expect(refused.success).toBe(false);
+    if (refused.success) return;
+    expect(refused.error.message).toContain('169.254.169.254');
+  });
+});
+
 describe('what a subscription is allowed to say', () => {
   const SUBSCRIPTION = { endpoint: ENDPOINT, keys: { p256dh: P256DH, auth: AUTH } };
 

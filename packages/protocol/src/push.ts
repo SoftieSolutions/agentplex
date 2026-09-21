@@ -41,6 +41,144 @@ export const PUSH_KEY_MAX_CHARS = 256;
 export const pushKeySchema = z.base64url().min(1).max(PUSH_KEY_MAX_CHARS);
 
 /**
+ * `null` when the host is an address the hub may POST to; otherwise which
+ * family it belongs to.
+ *
+ * ## Why this rule exists
+ *
+ * An endpoint is the one field on this wire that becomes a request the hub
+ * makes. Whoever holds this hub's client token can therefore hand it an address
+ * and have the hub POST to it from inside whatever network the hub sits in --
+ * a metadata service, a router's admin port, a database that trusts the subnet.
+ * Refusing the addresses that are only reachable from in there costs a line of
+ * parsing and removes the cheap half of that.
+ *
+ * ## Why only literals, and what the rest of the answer is
+ *
+ * A hostname is not judged, and pretending to judge one would be worse than
+ * not. A name is resolved by somebody else at the moment of the send, so a name
+ * that answers publicly when this parser runs can answer `127.0.0.1` a second
+ * later -- DNS rebinding, and it defeats any check made here by construction.
+ * Only a literal is decidable at parse time, so only a literal is judged.
+ *
+ * What keeps the rest small is the shape of the feature rather than this rule.
+ * The body is fixed -- a provider name, the words for a status, two ids -- and
+ * is built from an event the subscriber cannot influence, so nothing a client
+ * chooses reaches the request except the URL. Redirects are not followed, so
+ * one hop is all an endpoint gets. And the outcome never goes back to the
+ * client: a send is `delivered`, `gone` or `failed` in this hub's own log, so
+ * an endpoint cannot be used to read anything back. What remains is a blind
+ * POST of a fixed body to a name that resolves somewhere, which is the residual
+ * risk this accepts rather than claiming to have closed.
+ */
+function internalAddressFamily(hostname: string): string | null {
+  const four = ipv4Octets(hostname);
+  if (four !== null) return internalIpv4Family(four);
+
+  const six = ipv6Groups(hostname);
+  if (six === null) return null;
+
+  // Every group zero: the unspecified address, which on many stacks connects
+  // to the local host rather than failing.
+  if (six.every((group) => group === 0)) return 'IPv6 unspecified';
+  if (six[7] === 1 && six.slice(0, 7).every((group) => group === 0)) return 'IPv6 loopback';
+  // fe80::/10 and fc00::/7: the address a machine has on its own link, and the
+  // range a private network numbers itself out of.
+  if (((six[0] ?? 0) & 0xffc0) === 0xfe80) return 'IPv6 link-local';
+  if (((six[0] ?? 0) & 0xfe00) === 0xfc00) return 'IPv6 unique local';
+
+  // An IPv4 address wearing an IPv6 spelling. Five zero groups is either
+  // `::ffff:a.b.c.d`, which a stack sends to that IPv4 host, or the deprecated
+  // `::a.b.c.d`; both put an IPv4 address in the low 32 bits, and reading it
+  // there is what stops `[::ffff:127.0.0.1]` being the way around this rule.
+  if (six.slice(0, 5).every((group) => group === 0)) {
+    const high = six[6] ?? 0;
+    const low = six[7] ?? 0;
+    const embedded = internalIpv4Family([high >> 8, high & 0xff, low >> 8, low & 0xff]);
+    if (embedded !== null) return `${embedded}, mapped into IPv6`;
+  }
+  return null;
+}
+
+/** Which family an IPv4 address is in, of the four a hub may not be pointed at. */
+function internalIpv4Family(octets: readonly number[]): string | null {
+  const [a = 0, b = 0] = octets;
+  if (a === 127) return 'IPv4 loopback';
+  // 0.0.0.0/8 is "this network": the unspecified address and the addresses
+  // that are only meaningful to the host itself.
+  if (a === 0) return 'IPv4 unspecified';
+  if (a === 169 && b === 254) return 'IPv4 link-local';
+  if (a === 10) return 'IPv4 private';
+  if (a === 172 && b >= 16 && b <= 31) return 'IPv4 private';
+  if (a === 192 && b === 168) return 'IPv4 private';
+  return null;
+}
+
+/**
+ * The four octets of an IPv4 literal, or `null` when the host is not one.
+ *
+ * Read off `URL.hostname` rather than off the text, because a URL parser has
+ * already folded `127.1` and `0x7f.1` into the canonical dotted quad. A rule
+ * over the raw string would have to know every one of those spellings, and
+ * would be wrong about the next one.
+ */
+function ipv4Octets(hostname: string): readonly number[] | null {
+  const parts = hostname.split('.');
+  if (parts.length !== 4) return null;
+  const octets: number[] = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const value = Number(part);
+    if (value > 255) return null;
+    octets.push(value);
+  }
+  return octets;
+}
+
+/**
+ * The eight groups of an IPv6 literal, or `null` when the host is not one.
+ *
+ * Bracketed, because that is how a URL carries one and therefore the only way
+ * one can arrive here. A trailing dotted quad is expanded even though the URL
+ * parser normalises it away, so that this answers the same for an address that
+ * reached it from somewhere with a laxer parser.
+ */
+function ipv6Groups(hostname: string): readonly number[] | null {
+  if (!hostname.startsWith('[') || !hostname.endsWith(']')) return null;
+  const text = hostname.slice(1, -1).toLowerCase();
+
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const head = expandIpv6Groups(halves[0] ?? '');
+  const tail = halves.length === 2 ? expandIpv6Groups(halves[1] ?? '') : [];
+  if (head === null || tail === null) return null;
+
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const missing = 8 - head.length - tail.length;
+  if (missing < 1) return null;
+  return [...head, ...Array.from({ length: missing }, () => 0), ...tail];
+}
+
+/** One side of a `::`, as groups. An empty side is no groups, not one zero. */
+function expandIpv6Groups(side: string): number[] | null {
+  if (side.length === 0) return [];
+  const groups: number[] = [];
+  const pieces = side.split(':');
+  for (const [index, piece] of pieces.entries()) {
+    if (index === pieces.length - 1 && piece.includes('.')) {
+      const octets = ipv4Octets(piece);
+      if (octets === null) return null;
+      groups.push(((octets[0] ?? 0) << 8) | (octets[1] ?? 0));
+      groups.push(((octets[2] ?? 0) << 8) | (octets[3] ?? 0));
+      continue;
+    }
+    if (!/^[0-9a-f]{1,4}$/.test(piece)) return null;
+    groups.push(Number.parseInt(piece, 16));
+  }
+  return groups.length > 8 ? null : groups;
+}
+
+/**
  * `null` when the endpoint is a URL a push may be sent to; otherwise why not.
  *
  * One rule set rather than a regular expression, for the same reason a server
@@ -70,6 +208,10 @@ function endpointProblem(text: string): string | null {
     // never as a label.
     return 'expected no credentials in the endpoint; the endpoint is itself the capability';
   }
+  const family = internalAddressFamily(url.hostname);
+  if (family !== null) {
+    return `expected a push service reachable from anywhere; ${url.hostname} is an ${family} address`;
+  }
   return null;
 }
 
@@ -81,8 +223,11 @@ function endpointProblem(text: string): string | null {
  * as a URL; it must be `https:` and have a host, because the Push API is a
  * secure-context feature and no service issues anything else; it may carry no
  * credentials, because the endpoint is itself the capability and a userinfo
- * pair would be a second secret nothing rotates; and it is capped at
- * `PUSH_ENDPOINT_MAX_CHARS` so that a client cannot grow a row without bound.
+ * pair would be a second secret nothing rotates; it is capped at
+ * `PUSH_ENDPOINT_MAX_CHARS` so that a client cannot grow a row without bound;
+ * and its host may not be an IP literal on a loopback, private, link-local or
+ * unspecified address, because a client that may name where the hub POSTs
+ * should not be able to name somewhere only the hub can reach.
  *
  * What the hub sends to it is fixed and is decided nowhere near this frame: the
  * provider's name, the words for a status, and `{ storeId, sessionId }` for the
