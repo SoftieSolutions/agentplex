@@ -98,6 +98,9 @@ const SESSION = sessionRefSchema.parse({
   sessionId: 'session-migrate-db',
 });
 
+/** The moment the fixture was reported, so a pinned clock gives the real ages. */
+const NOW = 1_756_000_000_000;
+
 describe('the shell', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
@@ -147,13 +150,20 @@ describe('the shell', () => {
     );
   }
 
-  /** Mounts the shell at the current address and walks it through to a fleet. */
-  async function mount(): Promise<FakeSocket> {
+  /**
+   * Mounts the shell at the current address and walks it through to a fleet.
+   *
+   * The clock is the shell's own default unless a test pins one, because only
+   * the tests about what an age says need it fixed. Handed over explicitly
+   * rather than left off: `exactOptionalPropertyTypes` makes an absent prop
+   * and an undefined one two different things.
+   */
+  async function mount(now: () => number = Date.now): Promise<FakeSocket> {
     await act(async () => {
       root = createRoot(container);
       // No StrictMode: its simulated remount would subscribe, hang up and
       // dial again, and one dial is part of what the page test asserts.
-      root.render(withProvider(<AppShell hub={store} tokens={tokens} />));
+      root.render(withProvider(<AppShell hub={store} tokens={tokens} now={now} />));
     });
     await act(settle);
     const socket = sockets.sockets[0];
@@ -209,6 +219,40 @@ describe('the shell', () => {
     return catalogueSearchesIn(container, region);
   }
 
+  /**
+   * Presses the bell and waits for what it opens. The panel is a portal in
+   * both forms of the shell, so it is looked for in the document rather than
+   * in the container, and it is waited for rather than assumed -- see `frame`.
+   */
+  async function openBell(): Promise<void> {
+    const bell = container.querySelector<HTMLButtonElement>('header [data-attention-bell]');
+    if (bell === null) throw new Error('the chrome drew no bell');
+    await act(() => {
+      bell.click();
+    });
+    await act(settle);
+    await act(frame);
+    await act(settle);
+  }
+
+  /** Every session the open panel names, in the order it names them. */
+  function panelRows(): string[] {
+    return [
+      ...document.body.querySelectorAll<HTMLAnchorElement>(
+        '[role="dialog"] a[data-notification-row]',
+      ),
+    ].map((row) => row.getAttribute('href') ?? '');
+  }
+
+  /** Everything the open panel's rows say, in the order it drew them. */
+  function panelRowWords(): string[] {
+    return [
+      ...document.body.querySelectorAll<HTMLAnchorElement>(
+        '[role="dialog"] a[data-notification-row]',
+      ),
+    ].map((row) => row.textContent ?? '');
+  }
+
   /** The Projects/Sessions pair, by the name the sidebar gives that control. */
   function sidebarTabs(): HTMLInputElement[] {
     return [
@@ -241,11 +285,12 @@ describe('the shell', () => {
   it('hangs the bell in the top bar, counting the whole fleet', async () => {
     await mount();
 
-    const bell = container.querySelector<HTMLAnchorElement>('header [data-attention-bell]');
+    const bell = container.querySelector<HTMLButtonElement>('header [data-attention-bell]');
     expect(bell?.getAttribute('aria-label')).toBe('2 sessions need you');
-    // An address until the panel exists (AGX-259), and the address is the one
-    // whose first rows are what it is counting.
-    expect(bell?.getAttribute('href')).toBe(destinationHash('sessions'));
+    // A control and not an address: what it opens is the panel, which is why
+    // it says whether it is open rather than where it goes.
+    expect(bell?.getAttribute('href')).toBeNull();
+    expect(bell?.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('keeps the bell on the whole fleet when the app is narrowed to one machine', async () => {
@@ -265,9 +310,37 @@ describe('the shell', () => {
     expect(chips).toContain('Needs you · 1');
     expect(
       container
-        .querySelector<HTMLAnchorElement>('header [data-attention-bell]')
+        .querySelector<HTMLButtonElement>('header [data-attention-bell]')
         ?.getAttribute('aria-label'),
     ).toBe('2 sessions need you');
+  });
+
+  it('opens the fleet’s own list, from a chrome narrowed to one machine', async () => {
+    await mount();
+    await pickMachine('gpu-box-01');
+
+    await openBell();
+
+    // The panel is the other half of the same claim. Narrowing the screen must
+    // not quietly shorten what the bell opens, or the mark would count two and
+    // the list under it would name one.
+    expect(panelRows()).toEqual([
+      '#/session/store-agentplex/session-migrate-db',
+      '#/session/store-universe/session-docs-sweep',
+    ]);
+  });
+
+  it('ages the panel’s rows by the clock it was handed', async () => {
+    // The shell is where the fleet is turned into notifications, so the moment
+    // those ages are measured from is read here. It is injected for the reason
+    // the session list injects its own: a clock is something a test cannot
+    // supply otherwise, and against the real one the fixture's rows read
+    // however long ago it was captured -- a line nobody can assert on.
+    await mount(() => NOW);
+
+    await openBell();
+
+    expect(panelRowWords()[0]).toContain('store-agentplex · mbp-robert · 3m');
   });
 
   it('names the missing token in the chrome, and links to where one is typed', async () => {
@@ -528,7 +601,7 @@ describe('the shell on a phone', () => {
     // counting the same fleet. The action button wore a badge of its own once
     // -- narrowed by the machine this header picks, so it could disagree with
     // the bell above it by design -- and it no longer does.
-    const bell = container.querySelector<HTMLAnchorElement>('header [data-attention-bell]');
+    const bell = container.querySelector<HTMLButtonElement>('header [data-attention-bell]');
     expect(bell?.getAttribute('aria-label')).toBe('2 sessions need you');
     const chips = [...container.querySelectorAll('main [aria-pressed]')].map(
       (chip) => chip.textContent,
@@ -538,6 +611,28 @@ describe('the shell on a phone', () => {
     expect(
       container.querySelector('button[aria-label="Start a session"] + [role="status"]'),
     ).toBeNull();
+  });
+
+  it('opens the bell’s panel as a sheet, over whatever the address named', async () => {
+    await mount();
+    const bell = container.querySelector<HTMLButtonElement>('header [data-attention-bell]');
+    if (bell === null) throw new Error('the phone chrome drew no bell');
+
+    await act(() => {
+      bell.click();
+    });
+    await act(settle);
+    await act(frame);
+    await act(settle);
+
+    // One shell, one panel: the same two rows the wide form's popover holds,
+    // in the container this form has room for. That it is a sheet rather than
+    // a card is `attention-bell.test.tsx`; what is pinned here is that the
+    // phone chrome's bell opens at all, over a content region it does not
+    // replace.
+    const panel = document.body.querySelector('[role="dialog"]');
+    expect(panel?.querySelectorAll('a[data-notification-row]')).toHaveLength(2);
+    expect(container.querySelectorAll('main')).toHaveLength(1);
   });
 
   it('puts the tree in the content region, where the Projects tab leads', async () => {

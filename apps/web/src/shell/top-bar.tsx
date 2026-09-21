@@ -13,7 +13,7 @@ import { withSafeArea } from './safe-area.js';
  * like a search field and answers no keystroke is worse than the space it
  * would fill. The New popover (AGX-124) is absent for the same reason. The
  * bell is not: it goes in the actions slot, and it is drawn because it has
- * something true to say at every count and somewhere real to go.
+ * something true to say at every count and a panel to open that says the rest.
  *
  * The avatar the mockups draw beside it is not built and is not waiting on a
  * ticket. There is one person on a hub they paired themselves, so a portrait

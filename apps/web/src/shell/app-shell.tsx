@@ -12,8 +12,9 @@ import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogu
 import { useDocRoute } from '../docs/doc-route.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
-import { fleetAttentionCount } from '../sessions/attention-floor.js';
 import { NewSessionForm } from '../sessions/new-session-form.js';
+import { notificationList } from '../sessions/notification-model.js';
+import { listSessions } from '../sessions/session-list-model.js';
 import { SessionListScreen } from '../sessions/session-list-screen.js';
 import { SettingsRoute } from '../settings/settings-route.js';
 import type { HubStore } from '../store/hub-store.js';
@@ -72,9 +73,17 @@ export interface AppShellProps {
   readonly hub: HubStore;
   /** Where the credential lives: written by Settings, read by the store. */
   readonly tokens: TokenStore;
+  /**
+   * The clock, injected so a test can pin what the bell's panel says about how
+   * long a session has been waiting. The same seam `SessionListScreen` takes
+   * for its own ages, for the same reason: a wall clock is the one thing in
+   * here a test cannot supply, and every other reading the shell draws comes
+   * off a frame.
+   */
+  readonly now?: () => number;
 }
 
-export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
+export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.Element {
   const scheme: Scheme = useComputedColorScheme('dark');
   const snapshot = useHubSnapshot(hub);
   // Declaring interest in the tree here rather than in the sidebar, because
@@ -131,19 +140,32 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
     />
   );
   /**
-   * The bell, built here for the same reason the connection line is: one node,
-   * handed to whichever chrome is drawn, so a phone and a desk cannot come to
-   * different numbers for one fleet.
+   * The bell and the panel behind it, built here for the same reason the
+   * connection line is: one node, handed to whichever chrome is drawn, so a
+   * phone and a desk cannot come to different numbers for one fleet.
    *
-   * `machine` is deliberately not passed. The bell counts the fleet whole,
-   * which means a person who has narrowed to one machine sees a chip on the
-   * list counting fewer than the bell does. That is the right way round: the
-   * bell is the app's count of what is asking -- the same count the browser
-   * tab carries, and the tab strip has no selector on it -- and it has to keep
-   * meaning that on the Projects tab and over a session, where no list is
-   * drawn to compare it against.
+   * `machine` is deliberately not passed, and neither is a narrowed list. The
+   * bell counts the fleet whole, which means a person who has narrowed to one
+   * machine sees a chip on the list counting fewer than the bell does. That is
+   * the right way round: the bell is the app's count of what is asking -- the
+   * same count the browser tab carries, and the tab strip has no selector on
+   * it -- and it has to keep meaning that on the Projects tab and over a
+   * session, where no list is drawn to compare it against. What it opens has
+   * to be the same fleet, or the panel would answer the mark with a shorter
+   * list than the mark counted.
+   *
+   * `null` is the hub not having answered yet rather than a quiet fleet, and
+   * it draws an unmarked bell over an empty panel: the direction that does not
+   * over-claim.
+   *
+   * The clock is called during render, the way the session list calls it for
+   * its own ages. It is not a reactive source and nothing subscribes to it:
+   * what moves an age on screen is the next snapshot, which is this render
+   * again. It arrives as a prop rather than as `Date.now` read here, because
+   * an age is a reading a test has to be able to pin.
    */
-  const actions = <AttentionBell count={fleetAttentionCount(state)} scheme={scheme} />;
+  const notifications = notificationList(state === null ? [] : listSessions(state), now());
+  const actions = <AttentionBell list={notifications} store={hub} form={form} scheme={scheme} />;
   const region = content({
     hub,
     tokens,
