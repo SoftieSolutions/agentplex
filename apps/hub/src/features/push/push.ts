@@ -233,6 +233,22 @@ export interface Push {
    * things this feature exists to be the only holder of.
    */
   notify(event: PushEvent): Promise<void>;
+  /**
+   * Stops pushing. After this returns, nothing here touches the database.
+   *
+   * Called from `hub.stop()`, and before everything else it stops, because
+   * every step of a shutdown publishes state changes and each of those reaches
+   * the edge detector: a fan-out started during the shutdown would be one
+   * still running when `boot.ts` closes the database underneath it.
+   *
+   * Synchronous, and it waits for nothing. A send in flight is a POST to
+   * somebody else's service, and a shutdown that waited on one would be a hub
+   * held open by a push service having a bad minute. What makes abandoning
+   * safe instead is where the flag is read: immediately before each statement,
+   * with no await in between, so a fan-out that outlives this call can still
+   * finish its sends but can no longer reach the database.
+   */
+  stop(): void;
 }
 
 /**
@@ -280,6 +296,13 @@ export function createPush({
    * found one and been able to read it.
    */
   let keys: VapidKeyPair | null = null;
+
+  /**
+   * Whether the hub has stopped. Read immediately before every statement a
+   * fan-out runs, which is the whole of how this feature keeps its promise not
+   * to touch a database that is about to be closed.
+   */
+  let stopped = false;
 
   /**
    * The stored pair, or `null` when there is none or it cannot be read.
@@ -345,55 +368,151 @@ export function createPush({
     await database.query('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
   };
 
-  return {
-    async load(): Promise<void> {
-      const stored = await readStoredKeys();
-      if (stored !== null) {
-        keys = stored;
-        logger.info('VAPID key pair read back', { publicKey: stored.publicKey });
-        return;
-      }
+  /**
+   * The key pair, read or minted. Separated from `load` so that `load` is
+   * nothing but the promise it makes -- that whatever happens in here, a hub
+   * with no key pair starts anyway and says it has none.
+   */
+  const loadKeys = async (): Promise<void> => {
+    const stored = await readStoredKeys();
+    if (stored !== null) {
+      keys = stored;
+      logger.info('VAPID key pair read back', { publicKey: stored.publicKey });
+      return;
+    }
 
-      let minted: VapidKeyPair;
+    let minted: VapidKeyPair;
+    try {
+      const generated = generateKeys();
+      // Parsed and not trusted: this is another program's output, and a
+      // generator that returned an empty string would otherwise become a hub
+      // that advertises the empty key.
+      minted = {
+        publicKey: pushKeySchema.parse(generated.publicKey),
+        privateKey: pushKeySchema.parse(generated.privateKey),
+      };
+    } catch (error) {
+      logger.warn('no VAPID key pair could be minted; this hub will not push', {
+        problem: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    // `ON CONFLICT DO NOTHING` against the single-row table is what makes the
+    // mint idempotent without a read-then-write race, exactly as the hub's
+    // identity is minted: two starts produce one pair and the loser reads the
+    // winner's. It is also what keeps the unreadable row above safe -- the
+    // insert cannot overwrite it, it simply does nothing.
+    await database.query(
+      `INSERT INTO push_vapid_keys (public_key, private_key, created_at)
+       VALUES (?, ?, ?) ON CONFLICT (only_row) DO NOTHING`,
+      [minted.publicKey, minted.privateKey, clock.now()],
+    );
+
+    // Read back rather than assumed, because what is on disk may be the other
+    // starter's pair, or the unreadable row that made us try in the first
+    // place. Whatever is there is what every browser will be subscribed to.
+    const after = await readStoredKeys();
+    if (after === null) {
+      logger.warn('a VAPID key pair was minted but could not be read back; this hub will not push');
+      return;
+    }
+    keys = after;
+    logger.info('VAPID key pair minted', { publicKey: after.publicKey });
+  };
+
+  /**
+   * One notification, to every browser this hub holds a subscription for.
+   *
+   * Separate from `notify` so that `notify` is nothing but its contract: the
+   * promise that it resolves whatever happens in here. Every statement it runs
+   * is preceded by the `stopped` check with no await in between, which is what
+   * lets the hub abandon a fan-out at shutdown without waiting for a push
+   * service to answer.
+   */
+  const fanOut = async (event: PushEvent, vapid: VapidKeyPair): Promise<void> => {
+    const held = await readSubscriptions();
+    if (held.length === 0) return;
+
+    // Built once for the fan-out, because it is the same notification to
+    // everybody: there is one client token and no user identity, so every
+    // browser that subscribed gets every edge.
+    const payload = JSON.stringify({
+      title: event.provider,
+      body: statusWords(event.status),
+      // The ids and nothing else, so the service worker has somewhere to
+      // send the tap. They name a session to whoever already holds this
+      // hub's token and nothing to anybody else.
+      data: { storeId: event.storeId, sessionId: event.sessionId },
+    });
+
+    for (const subscription of held) {
+      if (stopped) return;
+      let outcome: PushOutcome;
       try {
-        const generated = generateKeys();
-        // Parsed and not trusted: this is another program's output, and a
-        // generator that returned an empty string would otherwise become a hub
-        // that advertises the empty key.
-        minted = {
-          publicKey: pushKeySchema.parse(generated.publicKey),
-          privateKey: pushKeySchema.parse(generated.privateKey),
-        };
+        outcome = await send({ subscription, payload, vapid });
       } catch (error) {
-        logger.warn('no VAPID key pair could be minted; this hub will not push', {
+        // A sender is somebody else's network. It is contracted to answer
+        // rather than throw, and this is here because a contract is not a
+        // guarantee: one that throws costs its own subscription and the rest
+        // of the fan-out carries on.
+        logger.warn('a push sender threw instead of answering', {
           problem: error instanceof Error ? error.message : String(error),
         });
-        return;
+        continue;
       }
 
-      // `ON CONFLICT DO NOTHING` against the single-row table is what makes the
-      // mint idempotent without a read-then-write race, exactly as the hub's
-      // identity is minted: two starts produce one pair and the loser reads the
-      // winner's. It is also what keeps the unreadable row above safe -- the
-      // insert cannot overwrite it, it simply does nothing.
-      await database.query(
-        `INSERT INTO push_vapid_keys (public_key, private_key, created_at)
-         VALUES (?, ?, ?) ON CONFLICT (only_row) DO NOTHING`,
-        [minted.publicKey, minted.privateKey, clock.now()],
-      );
-
-      // Read back rather than assumed, because what is on disk may be the other
-      // starter's pair, or the unreadable row that made us try in the first
-      // place. Whatever is there is what every browser will be subscribed to.
-      const after = await readStoredKeys();
-      if (after === null) {
-        logger.warn(
-          'a VAPID key pair was minted but could not be read back; this hub will not push',
-        );
-        return;
+      switch (outcome.kind) {
+        case 'delivered':
+          break;
+        case 'gone':
+          // The push service says this browser is never coming back. Keeping
+          // the row would be a hub that pushes to nothing for ever and a
+          // subscription list nobody can read as a count of who is listening.
+          //
+          // The check is here, immediately before the statement, rather than
+          // once at the top: the send above is an await, and the hub may have
+          // stopped across it.
+          if (stopped) return;
+          try {
+            await forget(subscription.endpoint);
+            logger.info('a push subscription has gone and was forgotten');
+          } catch (error) {
+            // A delete that could not run costs that subscription its removal
+            // and costs the rest of the fan-out nothing: the browsers after it
+            // are still told. The row is tried again on the next edge.
+            logger.warn('a gone push subscription could not be forgotten', {
+              problem: error instanceof Error ? error.message : String(error),
+            });
+          }
+          break;
+        case 'failed':
+          // Everything else is weather: a rate limit, a service that was
+          // down, a request refused. The subscription survives it, because
+          // dropping a live browser over somebody else's bad minute is the
+          // failure that cannot be noticed from here.
+          logger.warn('a push could not be delivered', { problem: outcome.problem });
+          break;
+        default:
+          assertNever(outcome, 'push outcome');
       }
-      keys = after;
-      logger.info('VAPID key pair minted', { publicKey: after.publicKey });
+    }
+  };
+
+  return {
+    async load(): Promise<void> {
+      try {
+        await loadKeys();
+      } catch (error) {
+        // The database is the one thing in here that can fail without having
+        // been asked a question this feature knows how to answer. It is caught
+        // because `boot.ts` awaits this before the hub is served: a rejection
+        // would be a hub that refuses to start because the optional thing is
+        // unavailable, which is the opposite of what this feature is for.
+        logger.warn('the VAPID key pair could not be read; this hub will not push', {
+          problem: error instanceof Error ? error.message : String(error),
+        });
+      }
     },
 
     publicKey(): string | null {
@@ -434,57 +553,25 @@ export function createPush({
       // change on either would be a log that scrolls a busy fleet's real
       // events off the screen, for a fact that never varies between restarts.
       if (vapid === null) return;
-      const held = await readSubscriptions();
-      if (held.length === 0) return;
+      // A fan-out begun after the stop is one nothing is waiting for and whose
+      // database may already have been closed under it.
+      if (stopped) return;
 
-      // Built once for the fan-out, because it is the same notification to
-      // everybody: there is one client token and no user identity, so every
-      // browser that subscribed gets every edge.
-      const payload = JSON.stringify({
-        title: event.provider,
-        body: statusWords(event.status),
-        // The ids and nothing else, so the service worker has somewhere to
-        // send the tap. They name a session to whoever already holds this
-        // hub's token and nothing to anybody else.
-        data: { storeId: event.storeId, sessionId: event.sessionId },
-      });
-
-      for (const subscription of held) {
-        let outcome: PushOutcome;
-        try {
-          outcome = await send({ subscription, payload, vapid });
-        } catch (error) {
-          // A sender is somebody else's network. It is contracted to answer
-          // rather than throw, and this is here because a contract is not a
-          // guarantee: one that throws costs its own subscription and the rest
-          // of the fan-out carries on.
-          logger.warn('a push sender threw instead of answering', {
-            problem: error instanceof Error ? error.message : String(error),
-          });
-          continue;
-        }
-
-        switch (outcome.kind) {
-          case 'delivered':
-            break;
-          case 'gone':
-            // The push service says this browser is never coming back. Keeping
-            // the row would be a hub that pushes to nothing for ever and a
-            // subscription list nobody can read as a count of who is listening.
-            await forget(subscription.endpoint);
-            logger.info('a push subscription has gone and was forgotten');
-            break;
-          case 'failed':
-            // Everything else is weather: a rate limit, a service that was
-            // down, a request refused. The subscription survives it, because
-            // dropping a live browser over somebody else's bad minute is the
-            // failure that cannot be noticed from here.
-            logger.warn('a push could not be delivered', { problem: outcome.problem });
-            break;
-          default:
-            assertNever(outcome, 'push outcome');
-        }
+      try {
+        await fanOut(event, vapid);
+      } catch (error) {
+        // The promise this returns is floated by the hub, from inside the
+        // fleet state's publish, and the process installs no
+        // `unhandledRejection` handler. So every failure in there is somebody
+        // else's push not arriving, and none of them is this daemon exiting.
+        logger.warn('a push fan-out did not finish', {
+          problem: error instanceof Error ? error.message : String(error),
+        });
       }
+    },
+
+    stop(): void {
+      stopped = true;
     },
   };
 }

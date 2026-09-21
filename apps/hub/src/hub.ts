@@ -712,7 +712,14 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     state,
     clients,
     async stop() {
-      // Clients first. Every server dropping in turn is a real sequence of
+      // Push first, and before anything that publishes a state change. Every
+      // step below does publish one -- every server dropping is a change the
+      // edge detector sees -- and a fan-out begun during the shutdown would
+      // still be running when `boot.ts` closes the database the moment this
+      // returns. It waits for nothing: what makes that safe is that the
+      // feature reads its own stop immediately before each statement.
+      push?.stop();
+      // Clients next. Every server dropping in turn is a real sequence of
       // changes, and a client still attached through the shutdown would be sent
       // each one -- a screen that reports the fleet collapsing when what is
       // actually happening is that the hub is going away.

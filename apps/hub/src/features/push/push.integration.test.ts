@@ -68,23 +68,68 @@ const countingKeys: VapidKeyGenerator = () => {
   };
 };
 
+/**
+ * What the sender does about one endpoint: answer, throw, or hang until the
+ * test says otherwise. The third is how a slow push service is written down
+ * here -- a promise nobody resolves rather than a wait nobody can afford.
+ */
+type Answer = PushOutcome | Error | Promise<PushOutcome>;
+
 /** Every delivery the feature handed to the sender, in the order it did. */
 let delivered: PushDelivery[] = [];
 /** What the sender answers, by endpoint. Anything unnamed is delivered. */
-let answers = new Map<string, PushOutcome | Error>();
+let answers = new Map<string, Answer>();
 
 const recordingSender: PushSender = (delivery) => {
   delivered.push(delivery);
   const answer = answers.get(delivery.subscription.endpoint);
   if (answer instanceof Error) return Promise.reject(answer);
+  if (answer instanceof Promise) return answer;
   return Promise.resolve(answer ?? { kind: 'delivered' });
 };
+
+/** A send in flight, and the handle a test finishes it with. */
+function hanging(): { readonly promise: Promise<PushOutcome>; finish(outcome: PushOutcome): void } {
+  let finish: (outcome: PushOutcome) => void = () => {};
+  const promise = new Promise<PushOutcome>((resolve) => {
+    finish = resolve;
+  });
+  return { promise, finish: (outcome) => finish(outcome) };
+}
+
+/**
+ * Lets everything already queued run. Not a wait: a turn of the loop, which is
+ * what a test needs when the thing under test is a promise nobody is awaiting.
+ */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 function feature(
   generateKeys: VapidKeyGenerator = countingKeys,
   send: PushSender = recordingSender,
+  database: MigratedSchema['database'] = db(),
 ): Push {
-  return createPush({ database: db(), clock: { now: () => now }, logger, generateKeys, send });
+  return createPush({ database, clock: { now: () => now }, logger, generateKeys, send });
+}
+
+/**
+ * The real database, with every statement matching `matching` rejecting.
+ *
+ * The real one underneath rather than a fake, because what the tests using it
+ * ask is what the feature does when SQL that ordinarily works stops working --
+ * a disk that went away, a connection closed under it at shutdown -- and a
+ * fake that answered everything would not be the same question.
+ */
+function databaseRejecting(matching: string): MigratedSchema['database'] {
+  const real = db();
+  return {
+    ...real,
+    query: async (sql, params) => {
+      if (sql.includes(matching)) throw new Error(`no such connection: ${matching}`);
+      return real.query(sql, params);
+    },
+  };
 }
 
 function subscription(endpoint: string): PushSubscription {
@@ -238,6 +283,7 @@ describe('the push feature', () => {
       'load',
       'notify',
       'publicKey',
+      'stop',
       'subscribe',
       'subscriptions',
       'unsubscribe',
@@ -260,6 +306,15 @@ describe('the push feature', () => {
     // Null and never an empty string: a hub with no key has to be able to say
     // so, and the client's whole job on reading it is to stay on the in-page
     // floor rather than offer a control that cannot work.
+    expect(push.publicKey()).toBeNull();
+  });
+
+  it('says it has no key rather than throwing when the database cannot answer', async () => {
+    // `load` is documented as never throwing, and `boot.ts` awaits it before
+    // the hub is served: a rejection here would be a hub that refuses to start
+    // because the one optional thing it does is unavailable.
+    const push = feature(countingKeys, recordingSender, databaseRejecting('push_vapid_keys'));
+    await expect(push.load()).resolves.toBeUndefined();
     expect(push.publicKey()).toBeNull();
   });
 
@@ -463,6 +518,71 @@ describe('the fan-out', () => {
     // read. A hub with no key pair has already said so once, at load.
     expect(delivered).toEqual([]);
     expect(logged).toEqual([]);
+  });
+
+  it('stays resolved when the subscriptions cannot be read at all', async () => {
+    // The contract this feature's one caller stands on: the hub floats
+    // `notify` from inside the fleet state's publish, and there is no
+    // `unhandledRejection` handler over it. A rejection here is not a push
+    // that did not arrive, it is the daemon going away.
+    const push = feature(countingKeys, recordingSender, databaseRejecting('SELECT endpoint'));
+    await push.load();
+    await push.subscribe(subscription(ENDPOINT_A));
+    logged = [];
+
+    await expect(push.notify(EDGE)).resolves.toBeUndefined();
+
+    expect(delivered).toEqual([]);
+    expect(JSON.stringify(logged)).toContain('no such connection');
+  });
+
+  it('stays resolved when forgetting a gone subscription fails', async () => {
+    const push = feature(countingKeys, recordingSender, databaseRejecting('DELETE FROM'));
+    await push.load();
+    await push.subscribe(subscription(ENDPOINT_A));
+    await push.subscribe(subscription(ENDPOINT_B));
+    logged = [];
+    answers.set(ENDPOINT_A, { kind: 'gone' });
+
+    await expect(push.notify(EDGE)).resolves.toBeUndefined();
+
+    // A delete that could not run costs that subscription its removal and
+    // nothing else: the other browser is still told.
+    expect(delivered.map((one) => one.subscription.endpoint)).toEqual([ENDPOINT_A, ENDPOINT_B]);
+    expect(JSON.stringify(logged)).toContain('no such connection');
+  });
+
+  it('touches no database once the hub has stopped, even mid-send', async () => {
+    const push = await loadedWithTwoBrowsers();
+    const send = hanging();
+    answers.set(ENDPOINT_A, send.promise);
+
+    // The shutdown path: `hub.stop()` runs while a send is in flight, and
+    // `boot.ts` closes the database the moment it returns.
+    const fanOut = push.notify(EDGE);
+    await settle();
+    push.stop();
+
+    // The service answers after all that, and says the subscription is dead --
+    // which is the one outcome that would otherwise write to the database.
+    send.finish({ kind: 'gone' });
+    await expect(fanOut).resolves.toBeUndefined();
+    await settle();
+
+    // The delete never ran. Had it run here it would have run against a
+    // connection `boot.ts` closes the moment `hub.stop()` returns, and the
+    // rejection would have been on nobody's promise.
+    const rows = await db().query('SELECT count(*) AS n FROM push_subscriptions');
+    expect(rows.rows[0]).toEqual({ n: 2 });
+  });
+
+  it('starts no new fan-out once the hub has stopped', async () => {
+    const push = await loadedWithTwoBrowsers();
+    push.stop();
+
+    await expect(push.notify(EDGE)).resolves.toBeUndefined();
+
+    expect(delivered).toEqual([]);
   });
 
   it('does nothing and says nothing when nobody has subscribed', async () => {
