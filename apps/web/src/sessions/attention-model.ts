@@ -1,6 +1,6 @@
 import type { FrameId } from '@agentplex/protocol';
 import type { HubCommand, RefusalView, AttentionView } from '../store/hub-store.js';
-import type { SessionListItem } from './session-list-model.js';
+import { unseenPrompt, type SessionListItem } from './session-list-model.js';
 
 /**
  * Everything acknowledging and muting decides, as pure functions: what each
@@ -51,9 +51,13 @@ export function muteCommand(item: SessionListItem, muted: boolean): HubCommand {
  * and has not been seen since it last spoke. A button on a working session
  * would acknowledge a prompt that does not exist, and one on an already
  * acknowledged session would restamp a moment to no effect.
+ *
+ * That is `unseenPrompt` and not a second spelling of it: the button exists
+ * for exactly the session the card and the row draw the accent on, and two
+ * copies of the rule would let the control appear where the accent does not.
  */
 export function offersAcknowledge(item: SessionListItem): boolean {
-  return item.needsYou && !item.acknowledged;
+  return unseenPrompt(item);
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   providerOptions,
   storeOptions,
   toneForStatus,
+  unseenPrompt,
   visibleSessions,
   wantsAttention,
   type SessionListItem,
@@ -678,6 +679,33 @@ describe('a mute', () => {
 
   it('leaves the chip counts alone: a muted session is still in its state', () => {
     expect(chipCounts(listSessions(attended))).toEqual(chipCounts(listSessions(populated)));
+  });
+});
+
+describe('an unseen prompt, which is what the accent and the waiting clock follow', () => {
+  it('is a session wanting a human that nobody has said they have seen', () => {
+    const unseen = listSessions(populated)
+      .filter(unseenPrompt)
+      .map((entry) => entry.name);
+    expect([...unseen].sort()).toEqual(['docs-sweep', 'migrate-db-v9']);
+  });
+
+  it('is spent by the acknowledgement, which is what makes saying seen worth doing', () => {
+    expect(unseenPrompt(item(attended, 'migrate-db-v9'))).toBe(false);
+  });
+
+  it('survives a mute, where wanting attention does not', () => {
+    // The one place the two rules part. Muting silences the alert and not the
+    // fact, so the muted row keeps its accent and still says how long it has
+    // been waiting -- and only the bell, the title and the push go quiet.
+    const muted = item(attended, 'docs-sweep');
+    expect(muted.muted).toBe(true);
+    expect(unseenPrompt(muted)).toBe(true);
+    expect(wantsAttention(muted)).toBe(false);
+  });
+
+  it('is absent from a session nobody is waiting on', () => {
+    expect(unseenPrompt(item(populated, 'fix-auth-refresh'))).toBe(false);
   });
 });
 

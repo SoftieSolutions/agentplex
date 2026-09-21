@@ -32,9 +32,49 @@ import { clearedFilters, NO_FILTERS, type SessionListFilters } from './session-l
  * `useSyncExternalStore` compares what it is handed and a fresh object per
  * keystroke that narrowed nothing would re-render both readers.
  */
+/**
+ * Which of the two forms the same sessions are drawn in: the mockups' grid of
+ * cards, or the one-row-per-session list the toggle beside the heading offers.
+ *
+ * Its own type rather than a field of `SessionListFilters`, because it is not
+ * one: every member of that type answers "which sessions", and this one
+ * answers "drawn how". The difference is not bookkeeping -- it is what keeps
+ * `Clear` from throwing away a choice about reading that nobody asked it to
+ * touch, and what keeps the popover's badge from counting a narrowing that
+ * hides nothing. Both rules follow from the field not being there at all,
+ * rather than from two call sites remembering to skip it.
+ *
+ * It lives here beside the narrowings for the reason they live here: the
+ * toggle is drawn above the list and read by the list, and a second store
+ * would be a second subscription for one screen's worth of state.
+ *
+ * In memory, and so back to the grid on the next page load. The ticket says to
+ * follow the catalogue panel's tree-or-list toggle, and that toggle is not
+ * persisted either: `CatalogueShape.view` is a field of the catalogue store's
+ * snapshot and nothing writes it anywhere, while the only piece of that panel
+ * the hub keeps is the sidebar's `collapsed`. The workspace blob is the one
+ * place a preference could go, and putting this there would mean a section of
+ * its own in it, versioned the way the catalogue's is, and a save to the hub on
+ * every press of the toggle. That is a larger decision than this ticket, and
+ * one worth making for both toggles at once rather than for this one alone.
+ */
+export type SessionListView = 'grid' | 'list';
+
+/**
+ * The grid, which is the form selected in every mockup that draws the toggle.
+ */
+const DEFAULT_VIEW: SessionListView = 'grid';
+
 export interface SessionFiltersStore {
   subscribe(listener: () => void): () => void;
   getSnapshot(): SessionListFilters;
+  /**
+   * The view, read through its own `useSyncExternalStore` off the subscription
+   * above. A string, so a reader that only draws the toggle re-renders on a
+   * value change and not on every keystroke in the search box.
+   */
+  getView(): SessionListView;
+  setView(view: SessionListView): void;
   /**
    * Writes the narrowings named and leaves the rest standing.
    *
@@ -45,7 +85,10 @@ export interface SessionFiltersStore {
    * taken off, which is a different thing and the one that narrows nothing.
    */
   set(changes: Partial<SessionListFilters>): void;
-  /** Every narrowing off and the search box empty, per `clearedFilters`. */
+  /**
+   * Every narrowing off and the search box empty, per `clearedFilters`. The
+   * view is left standing: it is not one of the things Clear is about.
+   */
   clear(): void;
 }
 
@@ -54,11 +97,16 @@ export function createSessionFiltersStore(
 ): SessionFiltersStore {
   const listeners = new Set<() => void>();
   let snapshot = initial;
+  let view = DEFAULT_VIEW;
+
+  function notify(): void {
+    for (const listener of [...listeners]) listener();
+  }
 
   function publish(next: SessionListFilters): void {
     if (same(snapshot, next)) return;
     snapshot = next;
-    for (const listener of [...listeners]) listener();
+    notify();
   }
 
   return {
@@ -69,6 +117,16 @@ export function createSessionFiltersStore(
 
     getSnapshot(): SessionListFilters {
       return snapshot;
+    },
+
+    getView(): SessionListView {
+      return view;
+    },
+
+    setView(next: SessionListView): void {
+      if (view === next) return;
+      view = next;
+      notify();
     },
 
     set(changes: Partial<SessionListFilters>): void {
