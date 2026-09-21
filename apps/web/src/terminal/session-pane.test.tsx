@@ -1093,3 +1093,160 @@ describe('the session tab strip', () => {
     expect(attachment()).toBe('Dropped');
   });
 });
+
+/**
+ * The bar above the terminal, drawn off a captured hub state.
+ *
+ * The state is the one a real fleet published, and the session is named per
+ * test, because every case here is the same bar pointed at a different row:
+ * one in a project with a title, one the tree places nowhere, one the provider
+ * never named, one that carries a model and one that does not. A hand-written
+ * row could be given whichever of those five shapes made the assertion pass;
+ * this file has to take the shapes the capture happens to hold, which is why
+ * the fallbacks are asserted against `store-agentplex` and `session-train-lora`
+ * rather than against names invented here.
+ *
+ * What each part is made of is `presentation.test.ts`'s question. What this
+ * one asks is whether the header draws those answers where the mockup puts
+ * them, with the roles the mockup draws them in, and without inventing a
+ * separator or a segment of its own.
+ */
+describe('the header above a session', () => {
+  async function mountHeaderOn(storeId: string, sessionId: string): Promise<void> {
+    const hub = buildStore();
+    await mount(
+      <SessionPane
+        sessionRef={sessionRefSchema.parse({ storeId, sessionId })}
+        store={hub.store}
+        emulators={emulators}
+      />,
+    );
+    const socket = hub.socket();
+    await act(async () => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(hubFrames.machineStatePopulated);
+    });
+  }
+
+  /**
+   * The breadcrumb as a person reads it, separators and all.
+   *
+   * The whole string rather than the segments, because the failure this is
+   * here for is a separator with nothing on one side of it -- which is exactly
+   * what a list of segments cannot show.
+   */
+  function crumbText(): string {
+    return container.querySelector('[data-crumbs]')?.textContent ?? '';
+  }
+
+  /** Each crumb with the role it was drawn in, in document order. */
+  function crumbs(): { readonly text: string; readonly role: string | null }[] {
+    return [...container.querySelectorAll('[data-crumb]')].map((crumb) => ({
+      text: crumb.textContent ?? '',
+      role: crumb.getAttribute('data-crumb'),
+    }));
+  }
+
+  /** The word beside the status dot, and whether that dot is animated. */
+  function status(): { readonly word: string; readonly live: boolean } {
+    const badge = container.querySelector('[data-status]');
+    if (badge === null) throw new Error('the header drew no status');
+    return { word: badge.textContent ?? '', live: badge.querySelector('[data-live]') !== null };
+  }
+
+  /** The metadata line, or '' when the header drew none. */
+  function metadata(): string {
+    return container.querySelector('[data-metadata]')?.textContent ?? '';
+  }
+
+  it('names the project, then the session, and says which of the two to read first', async () => {
+    await mountHeaderOn('store-universe', 'session-bench-tokenizer');
+
+    expect(crumbs()).toEqual([
+      { text: 'universe', role: 'muted' },
+      { text: 'bench-tokenizer', role: 'emphatic' },
+    ]);
+    // One separator, between the two and at neither end: the bar reads as a
+    // sentence about where this session is, and a trailing slash would promise
+    // a crumb that is not coming.
+    expect(crumbText()).toBe('universe / bench-tokenizer');
+  });
+
+  it('keeps the project when the provider never named the session', async () => {
+    await mountHeaderOn('store-universe', 'session-train-lora');
+
+    // The fallbacks are independent, which is the whole of why this case is
+    // not `store-universe / session-train-lora`: the hub's tree really does
+    // place this session in `universe`, and saying so is worth more than
+    // keeping a pair of identifiers together.
+    expect(crumbText()).toBe('universe / session-train-lora');
+    expect(crumbText()).not.toContain('null');
+  });
+
+  it('falls back to the store when the tree places the session nowhere', async () => {
+    await mountHeaderOn('store-agentplex', 'session-fix-auth');
+
+    expect(crumbs()).toEqual([
+      { text: 'store-agentplex', role: 'muted' },
+      { text: 'fix-auth-refresh', role: 'emphatic' },
+    ]);
+  });
+
+  it('draws the route itself for a session the state does not describe', async () => {
+    await mountHeaderOn('store-agentplex', 'session-that-is-not-there');
+
+    // The same bar a pane whose row has not arrived draws, which is the point
+    // of taking both fallbacks off the route: an empty crumb and the word
+    // `null` are the two things a header must never show.
+    expect(crumbText()).toBe('store-agentplex / session-that-is-not-there');
+    expect(status().word).toBe('not reported');
+  });
+
+  it('says in a word what the session is doing, and animates the one that is live', async () => {
+    await mountHeaderOn('store-universe', 'session-bench-tokenizer');
+
+    expect(status()).toEqual({ word: 'working', live: true });
+    // And the rule the dot names is in the document: a marked dot with no
+    // keyframes behind it animates nothing, and no assertion about the dot
+    // alone could tell the difference.
+    expect(document.head.textContent).toContain('@keyframes agx-pulse');
+  });
+
+  it('says the words the list says, and animates nothing that is not working', async () => {
+    await mountHeaderOn('store-universe', 'session-docs-sweep');
+
+    // `awaiting input` and not `awaiting-input`: the header and the list read
+    // the same field through the same mapping, so one screen cannot start
+    // spelling a status differently from the other.
+    expect(status()).toEqual({ word: 'awaiting input', live: false });
+  });
+
+  it('leaves the model out of the metadata line when the descriptor names none', async () => {
+    await mountHeaderOn('store-universe', 'session-bench-tokenizer');
+
+    // Provider, machine, working directory, and nothing at all between the
+    // first two: a placeholder there would claim something is missing, where
+    // the truth is that this transcript never named a model.
+    expect(metadata()).toBe('claude · gpu-box-01 · /mnt/volumes/universe/bench');
+  });
+
+  it('puts the model after the provider when the descriptor states one', async () => {
+    await mountHeaderOn('store-agentplex', 'session-fix-auth');
+
+    expect(metadata()).toBe('claude · claude-opus-5 · mbp-robert · /Users/robert/code/agentplex');
+  });
+
+  it('draws nothing it cannot do, and nothing it cannot know', async () => {
+    await mountHeaderOn('store-universe', 'session-bench-tokenizer');
+
+    // Pause, hand off and replay are each their own milestone, and a button
+    // that cannot do its job must not be drawn. The multiplexer segment the
+    // mockup shows is not built at all: no frame says whether a session runs
+    // under one, so the bar says nothing rather than guessing.
+    expect(container.textContent).not.toContain('Pause');
+    expect(container.textContent).not.toContain('Hand off');
+    expect(container.textContent).not.toContain('Replay');
+    expect(container.textContent).not.toContain('tmux');
+  });
+});
