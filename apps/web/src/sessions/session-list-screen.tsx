@@ -22,6 +22,7 @@ import {
   connectionNotice,
   emptyListing,
   listSessions,
+  NO_FILTERS,
   providerOptions,
   storeOptions,
   visibleSessions,
@@ -140,7 +141,13 @@ export function SessionListScreen({
   const chips = chipCounts(narrowed);
   const activeChip = chip !== null && chips.some((entry) => entry.chip === chip) ? chip : null;
 
+  // Spread, not a bare literal: the popover's narrowings -- machine, project,
+  // last updated -- are fields on these filters now, and this screen does not
+  // offer them yet. A literal that left them out would narrow on `undefined`
+  // and show nothing. The rest of this block moves into `effectiveFilters`
+  // when the popover replaces these selects.
   const visible = visibleSessions(state, {
+    ...NO_FILTERS,
     search,
     chip: activeChip,
     storeId: activeStore,

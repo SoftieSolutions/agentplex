@@ -4,17 +4,24 @@ import { hubFrames } from '../store/hub-frames.fixture.js';
 import { destinationHash } from '../shell/destinations.js';
 import {
   acknowledgementHolds,
+  activeFilterCount,
   ageLabel,
   chipCounts,
+  chipOptions,
+  clearedFilters,
   connectionNotice,
+  effectiveFilters,
   emptyListing,
+  hiddenCount,
   listSessions,
+  machineOptions,
   matchesSearch,
   needsYouCount,
   NO_FILTERS,
   orderByActivity,
   partitionNeedsYou,
   placeLabel,
+  projectOptions,
   providerOptions,
   storeOptions,
   toneForStatus,
@@ -330,6 +337,247 @@ describe('narrowings before the table', () => {
     expect(visibleSessions(populated, { ...NO_FILTERS, server: 'registration-unpaired' })).toEqual(
       [],
     );
+  });
+});
+
+/**
+ * The clock the age narrowing is read against. The captured fleet's newest
+ * session was written three minutes before it and its oldest two hours before,
+ * so every window in these tests is a real distance over captured timestamps.
+ */
+const NOW = 1_756_000_000_000;
+
+describe('the popover the filter row opens', () => {
+  it('offers a machine per machine holding a reading, named and in a stable order', () => {
+    // Named by the server the reading came from, which is the field the
+    // narrowing is defined over. Ordered by name rather than by the order
+    // sessions arrived, so a dropdown does not reshuffle itself every time
+    // somebody's agent writes a line.
+    expect(machineOptions(populated, listSessions(populated))).toEqual([
+      { id: 'registration-gpu-box-01', label: 'gpu-box-01' },
+      { id: 'registration-mbp-robert', label: 'mbp-robert' },
+    ]);
+  });
+
+  it('offers no machine section when every session came off one machine', () => {
+    expect(machineOptions(single, listSessions(single))).toEqual([]);
+    expect(machineOptions(empty, listSessions(empty))).toEqual([]);
+  });
+
+  it('offers the projects the tree places sessions in, in a stable order', () => {
+    // The captured fleet puts one store's sessions in `universe` and the
+    // other's in no project, so the two-option rule needs a second name: one
+    // field varied off captured items, into the shape the hub sends for a
+    // session the tree does place.
+    const placed = listSessions(populated).map((row) =>
+      row.project === null ? { ...row, project: 'agentplex' } : row,
+    );
+    expect(projectOptions(placed)).toEqual(['agentplex', 'universe']);
+  });
+
+  it('offers no project section when the tree places sessions in one project or none', () => {
+    expect(projectOptions(listSessions(populated))).toEqual([]);
+  });
+
+  it('counts the status pills under the other narrowings, the clock included', () => {
+    // Two hours is outside the hour, and the only idle session is two hours
+    // old: the Idle pill is not drawn, because a pill promising a row that
+    // pressing it does not yield is worse than an absent pill.
+    expect(chipOptions(populated, { ...NO_FILTERS, updatedWithin: '1h' }, NOW)).toEqual([
+      { chip: 'needs-you', label: 'Needs you', count: 2 },
+      { chip: 'running', label: 'Running', count: 2 },
+      { chip: 'unknown', label: 'Unknown', count: 1 },
+    ]);
+  });
+
+  it('counts the pills over the whole fleet when nothing else narrows', () => {
+    expect(chipOptions(populated, NO_FILTERS, NOW)).toEqual(chipCounts(listSessions(populated)));
+  });
+});
+
+describe("the popover's machine, which is not the selector's", () => {
+  it('narrows the list on its own', () => {
+    expect(
+      visibleSessions(populated, { ...NO_FILTERS, machine: 'registration-mbp-robert' }).map(
+        (item) => item.name,
+      ),
+    ).toEqual(['migrate-db-v9', 'fix-auth-refresh', 'spike-wasm']);
+  });
+
+  it('is dropped when the fleet drops it, where the selector keeps narrowing', () => {
+    // The asymmetry this ticket turns on. The popover's machine is one of this
+    // list's own narrowings and follows the rule every other option follows:
+    // an option that is gone narrows nothing. The selector's choice is the
+    // same fact the catalogue query is narrowed by at that moment, so it keeps
+    // narrowing to nothing rather than letting one pane widen under another.
+    const effective = effectiveFilters(populated, {
+      ...NO_FILTERS,
+      machine: 'registration-unpaired',
+      server: 'registration-unpaired',
+    });
+
+    expect(effective.machine).toBeNull();
+    expect(effective.server).toBe('registration-unpaired');
+    expect(visibleSessions(populated, effective)).toEqual([]);
+  });
+});
+
+describe('the age narrowing', () => {
+  it('keeps what was written inside the window', () => {
+    expect(
+      visibleSessions(populated, { ...NO_FILTERS, updatedWithin: '1h' }, NOW).map(
+        (item) => item.name,
+      ),
+    ).toEqual([
+      'migrate-db-v9',
+      'docs-sweep',
+      'fix-auth-refresh',
+      'bench-tokenizer',
+      'session-train-lora',
+    ]);
+  });
+
+  it('counts the edge of the window as inside it', () => {
+    // session-train-lora was written exactly an hour before NOW. A window
+    // somebody picked to see the last hour that drops the session on the hour
+    // is a window that reads as broken from the row it just removed.
+    expect(NOW - item(populated, 'session-train-lora').updatedAt).toBe(3_600_000);
+    expect(
+      visibleSessions(populated, { ...NO_FILTERS, updatedWithin: '1h' }, NOW).map(
+        (item) => item.name,
+      ),
+    ).toContain('session-train-lora');
+  });
+
+  it('narrows nothing when every session is inside the window', () => {
+    expect(visibleSessions(populated, { ...NO_FILTERS, updatedWithin: '24h' }, NOW)).toHaveLength(
+      6,
+    );
+    expect(visibleSessions(populated, { ...NO_FILTERS, updatedWithin: '7d' }, NOW)).toHaveLength(6);
+  });
+});
+
+describe('a choice whose option has vanished', () => {
+  it('keeps every choice the state still offers', () => {
+    const filters = {
+      ...NO_FILTERS,
+      storeId: 'store-universe',
+      provider: 'claude',
+      machine: 'registration-gpu-box-01',
+      chip: 'running' as const,
+    };
+    expect(effectiveFilters(populated, filters)).toEqual(filters);
+  });
+
+  it('drops a store and a provider the state no longer offers', () => {
+    const effective = effectiveFilters(single, {
+      ...NO_FILTERS,
+      storeId: 'store-universe',
+      provider: 'codex',
+    });
+    expect(effective.storeId).toBeNull();
+    expect(effective.provider).toBeNull();
+  });
+
+  it('drops a project the tree places nothing in', () => {
+    expect(effectiveFilters(populated, { ...NO_FILTERS, project: 'cathedral' }).project).toBeNull();
+  });
+
+  it('drops a status pill the surviving sessions are not in', () => {
+    // Nothing in the universe store is idle, so the Idle pill is not drawn
+    // there and a choice of it cannot go on narrowing invisibly.
+    expect(
+      effectiveFilters(populated, { ...NO_FILTERS, storeId: 'store-universe', chip: 'idle' }).chip,
+    ).toBeNull();
+  });
+
+  it('drops a status pill the age narrowing took away, and keeps one it left', () => {
+    const within = { ...NO_FILTERS, chip: 'idle' as const, updatedWithin: '1h' as const };
+    expect(effectiveFilters(populated, within, NOW).chip).toBeNull();
+    expect(effectiveFilters(populated, { ...within, updatedWithin: '24h' }, NOW).chip).toBe('idle');
+  });
+});
+
+describe('the badge and the line under the row', () => {
+  it('counts nothing while nothing is narrowed', () => {
+    expect(activeFilterCount(NO_FILTERS)).toBe(0);
+    expect(hiddenCount(populated, NO_FILTERS, NOW)).toBe(0);
+  });
+
+  it('counts a machine and a status as two', () => {
+    expect(
+      activeFilterCount({
+        ...NO_FILTERS,
+        machine: 'registration-mbp-robert',
+        chip: 'needs-you',
+      }),
+    ).toBe(2);
+  });
+
+  it('counts each popover narrowing once', () => {
+    expect(
+      activeFilterCount({
+        search: 'db',
+        chip: 'running',
+        storeId: 'store-universe',
+        provider: 'claude',
+        machine: 'registration-gpu-box-01',
+        project: 'universe',
+        updatedWithin: '24h',
+        server: 'registration-gpu-box-01',
+      }),
+    ).toBe(6);
+  });
+
+  it('counts neither the typed search nor the fleet the selector is on', () => {
+    // The search says what it is doing in the box it is typed into, and the
+    // fleet selection is the selector's own control with its own label. A
+    // badge on the popover button that counted either would send somebody
+    // opening the popover looking for a narrowing that is not in it.
+    expect(activeFilterCount({ ...NO_FILTERS, search: 'db' })).toBe(0);
+    expect(activeFilterCount({ ...NO_FILTERS, server: 'registration-gpu-box-01' })).toBe(0);
+  });
+
+  it('says how many sessions the narrowings are keeping out of sight', () => {
+    expect(hiddenCount(populated, { ...NO_FILTERS, chip: 'running' }, NOW)).toBe(4);
+    expect(hiddenCount(populated, { ...NO_FILTERS, updatedWithin: '1h' }, NOW)).toBe(1);
+    expect(hiddenCount(populated, { ...NO_FILTERS, search: 'migrate' }, NOW)).toBe(5);
+  });
+
+  it('counts nothing hidden by the fleet the selector is on', () => {
+    // The fleet selection is not one of this list's narrowings, so the
+    // sessions on other machines are not rows this row is hiding: a line
+    // reading "0 filters - 3 hidden" beside an untouched popover is the screen
+    // blaming itself for the selector's choice.
+    expect(hiddenCount(populated, { ...NO_FILTERS, server: 'registration-gpu-box-01' }, NOW)).toBe(
+      0,
+    );
+    expect(
+      hiddenCount(
+        populated,
+        { ...NO_FILTERS, server: 'registration-gpu-box-01', chip: 'needs-you' },
+        NOW,
+      ),
+    ).toBe(2);
+  });
+});
+
+describe('clearing', () => {
+  it('drops every narrowing and the search at once, and leaves the fleet alone', () => {
+    const cleared = clearedFilters({
+      search: 'db',
+      chip: 'running',
+      storeId: 'store-universe',
+      provider: 'claude',
+      machine: 'registration-gpu-box-01',
+      project: 'universe',
+      updatedWithin: '1h',
+      server: 'registration-gpu-box-01',
+    });
+
+    expect(cleared).toEqual({ ...NO_FILTERS, server: 'registration-gpu-box-01' });
+    expect(activeFilterCount(cleared)).toBe(0);
+    expect(hiddenCount(populated, cleared, NOW)).toBe(0);
   });
 });
 
