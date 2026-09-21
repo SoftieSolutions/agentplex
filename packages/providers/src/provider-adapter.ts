@@ -1,4 +1,5 @@
 import type {
+  Activity,
   Provider,
   SessionId,
   SessionRef,
@@ -198,6 +199,30 @@ export interface DiscoveredSession {
    * segment on the one line that claims to say what is running.
    */
   readonly model: string | null;
+  /**
+   * What this session was last seen doing, in the one vocabulary every
+   * provider is reduced to, or `null` when the provider's own files say
+   * nothing this adapter can report honestly.
+   *
+   * Required and nullable for the reason `usage` and `model` above are, and
+   * the reason bites harder here. An adapter is the only thing that can read
+   * a provider's own record of its work, so it is the one place that has to
+   * answer out loud -- and a new adapter that simply omitted this would be a
+   * provider silently reporting that nothing ever happens, which is
+   * indistinguishable from a quiet fleet. The type is what stops that being
+   * possible by accident.
+   *
+   * `null` is a real and common answer: it means the adapter looked and the
+   * record held nothing it could name. What it must never mean is a guess --
+   * an activity is a claim about what an agent did, and the surfaces above
+   * draw it as one.
+   *
+   * Already parsed by the protocol's own schema by the time it gets here. An
+   * adapter that could not get a derivation past that schema reports `null`,
+   * because a refused activity costs itself and never the session it belongs
+   * to.
+   */
+  readonly activity: Activity | null;
 }
 
 export interface DiscoveryProblem {

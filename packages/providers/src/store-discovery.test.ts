@@ -197,6 +197,54 @@ describe('discoverStoreSessions', () => {
     expect(session !== undefined && 'model' in session).toBe(false);
   });
 
+  it("carries the adapter's activity through to the descriptor untouched", async () => {
+    // The third field to take this route, and the one with the most to gain
+    // from it: an activity is already parsed by the protocol's own schema
+    // inside the adapter, so nothing between here and a card re-reads a
+    // provider's vocabulary or re-checks a `kind`.
+    const activity = { kind: 'command', text: 'pnpm test', exitStatus: 0 };
+    const files = createFakeProviderFiles({
+      files: {
+        [`${transcriptsAt('claude')}/session-a.json`]: JSON.stringify({
+          signal: 'quiet',
+          updatedAt: NOW - 1_000,
+          activity,
+        }),
+      },
+    });
+    const registry = createProviderRegistry([createFakeProviderAdapter({ files })]);
+
+    const discovered = await discoverStoreSessions(STORE, {
+      registry,
+      clock,
+      liveness: nothingRunning,
+    });
+
+    expect(discovered.sessions[0]?.activity).toEqual(activity);
+  });
+
+  it('leaves the activity off a session the adapter found none for, rather than nulling it', async () => {
+    // Exactly the treatment usage and the model already get. `null` is the
+    // adapter saying it looked and found nothing to report, and absent is
+    // what that means to every reader of the wire -- there is nothing to draw
+    // under this session's name. Carrying both shapes would invite a client
+    // to tell them apart.
+    const files = createFakeProviderFiles({
+      files: { [`${transcriptsAt('claude')}/session-a.json`]: transcript('quiet') },
+    });
+    const registry = createProviderRegistry([createFakeProviderAdapter({ files })]);
+
+    const discovered = await discoverStoreSessions(STORE, {
+      registry,
+      clock,
+      liveness: nothingRunning,
+    });
+
+    const [session] = discovered.sessions;
+    expect(session).toBeDefined();
+    expect(session !== undefined && 'activity' in session).toBe(false);
+  });
+
   it('hands the adapter liveness and the clock, and takes the status it answers', async () => {
     // Only the adapter knows what its own transcript signal means; only the
     // server knows whether a process is alive and what time it is. Status is

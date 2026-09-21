@@ -212,6 +212,11 @@ async function readProject(
         title: parsed.transcript.title,
         usage: parsed.transcript.usage,
         model: parsed.transcript.model,
+        // Off the last non-sidechain turn, and `null` for a turn that ended
+        // in text: the transcript parser is the only thing that knows what a
+        // Claude Code content block means, and it is also the only thing that
+        // knows which of them the capture redacts.
+        activity: parsed.transcript.activity,
       });
     } else if (parsed.reason === 'damaged') {
       problems.push({ subject: path, problem: `cannot read transcript: ${parsed.problem}` });
