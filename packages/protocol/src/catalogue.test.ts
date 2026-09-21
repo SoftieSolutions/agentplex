@@ -183,6 +183,7 @@ describe('a catalogue item', () => {
       mutedAt: null,
       project: null,
       approvals: [],
+      task: null,
     };
 
     expect(catalogueItemSchema.parse({ ...ITEM, session })).toMatchObject({ session });

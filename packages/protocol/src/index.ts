@@ -141,6 +141,7 @@ export {
 export type { Layout, LayoutNode } from './layout.js';
 
 export {
+  SESSION_TASK_MAX_CHARS,
   cpuSampleSchema,
   machineLoadSchema,
   machineStateSchema,
