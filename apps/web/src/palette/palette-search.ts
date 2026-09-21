@@ -274,7 +274,10 @@ function resultFor(item: CatalogueItem): PaletteResult | null {
       // arrives here under the id the client-held half already gave it and the
       // dialog can drop the duplicate by id.
       id: `session:${JSON.stringify([anchor.storeId, anchor.sessionId])}`,
-      kind: 'session',
+      // The item's own kind, which `SESSION_KIND` is what it was matched
+      // against: a row carries the hub's string rather than a second spelling
+      // of it, so the dialog's heading for a kind is the kind the hub named.
+      kind: item.kind,
       label: item.displayName,
       detail: sessionDetail(item, anchor.storeId),
       href: sessionHash(anchor),
@@ -283,7 +286,7 @@ function resultFor(item: CatalogueItem): PaletteResult | null {
   if (item.kind === DOC_KIND) {
     return {
       id: `doc:${item.id}`,
-      kind: 'doc',
+      kind: item.kind,
       label: item.displayName,
       // The kind, because that is what this build knows about a document on a
       // page: `CatalogueItem.server` is on the frame and answered `null` here
