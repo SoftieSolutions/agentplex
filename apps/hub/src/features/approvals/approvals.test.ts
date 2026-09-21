@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   approvalIdSchema,
+  approvalPolicyRuleIdSchema,
   sessionRefSchema,
   type ApprovalId,
   type ApprovalRequest,
   type PendingApproval,
+  nodeIdSchema,
   type ServerRegistrationId,
   type ServerToHubFrame,
   type SessionRef,
@@ -17,6 +19,7 @@ import {
   type ApprovalInstruction,
   type Approvals,
 } from './approvals.js';
+import type { ApprovalPolicyGrant } from '../approval-policy/approval-policy.js';
 
 /**
  * The requests this hub is holding open, driven by hand.
@@ -53,6 +56,17 @@ let changes: { ref: SessionRef; approvals: readonly PendingApproval[] }[] = [];
 let dispatched: ApprovalInstruction[] = [];
 /** What the connection seam answers with. `ok` is a server that said nothing. */
 let dispatchAnswer: ApprovalDispatch = { ok: true };
+/** What the standing policy answers with. `null` is "ask somebody". */
+let policyAnswer: () => Promise<ApprovalPolicyGrant | null> = () => Promise.resolve(null);
+/** Every request the policy was consulted about, in order. */
+let consulted: { tool: string; proposal: string }[] = [];
+
+const A_PROJECT = nodeIdSchema.parse('node-project-work');
+const A_GRANT: ApprovalPolicyGrant = {
+  project: A_PROJECT,
+  ruleId: approvalPolicyRuleIdSchema.parse('rule-1'),
+  rule: { tool: 'Bash', proposal: 'command: prisma migrate deploy' },
+};
 
 function feature(): Approvals {
   return createApprovals({
@@ -63,14 +77,19 @@ function feature(): Approvals {
       dispatched.push(instruction);
       return dispatchAnswer;
     },
+    policy: (_ref, request) => {
+      consulted.push({ tool: request.tool, proposal: request.proposal });
+      return policyAnswer();
+    },
   });
 }
 
-function request(approvalId: ApprovalId, tool = 'Bash'): ApprovalRequest {
+function request(approvalId: ApprovalId, tool = 'Bash', truncated = false): ApprovalRequest {
   return {
     approvalId,
     tool,
     proposal: 'prisma migrate deploy --schema ./db',
+    truncated,
     suggestions: [],
   };
 }
@@ -78,12 +97,13 @@ function request(approvalId: ApprovalId, tool = 'Bash'): ApprovalRequest {
 function requested(
   ref: SessionRef,
   approvalId: ApprovalId,
+  truncated = false,
 ): Extract<ServerToHubFrame, { type: 'approval-requested' }> {
   return {
     type: 'approval-requested',
     storeId: ref.storeId,
     sessionId: ref.sessionId,
-    approval: request(approvalId),
+    approval: request(approvalId, 'Bash', truncated),
   };
 }
 
@@ -146,6 +166,8 @@ describe('the approvals the hub is holding', () => {
     changes = [];
     dispatched = [];
     dispatchAnswer = { ok: true };
+    consulted = [];
+    policyAnswer = () => Promise.resolve(null);
   });
 
   it("holds a request as pending for its session, stamped with this hub's clock", () => {
@@ -156,7 +178,9 @@ describe('the approvals the hub is holding', () => {
     // The hub's own reading, because the frame carries no date: two machines'
     // clocks disagree, and how long somebody has been waiting is a fact the
     // receiver can state honestly and the sender cannot.
-    expect(lastChange(MIGRATING)).toEqual([{ ...request(FIRST), requestedAt: START + 4_000 }]);
+    expect(lastChange(MIGRATING)).toEqual([
+      { ...request(FIRST), requestedAt: START + 4_000, answeredBy: null },
+    ]);
   });
 
   it('holds two open requests for one session, oldest first', () => {
@@ -196,7 +220,7 @@ describe('the approvals the hub is holding', () => {
 
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
     await settle();
-    expect(held.answer).toEqual({ ok: true, outcome: 'granted' });
+    expect(held.answer).toEqual({ ok: true, outcome: 'granted', answeredBy: null });
     // And the request is no longer open on the row.
     expect(lastChange(MIGRATING)).toEqual([]);
   });
@@ -233,7 +257,7 @@ describe('the approvals the hub is holding', () => {
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
     await settle();
 
-    expect(winner.answer).toEqual({ ok: true, outcome: 'granted' });
+    expect(winner.answer).toEqual({ ok: true, outcome: 'granted', answeredBy: null });
     expect(loser.answer?.ok).toBe(false);
     // The refusal carries the outcome: the person who tapped second is owed
     // what became of the request, not merely that they were late.
@@ -298,6 +322,7 @@ describe('the approvals the hub is holding', () => {
     expect(answer).toEqual({
       ok: false,
       outcome: null,
+      answeredBy: null,
       code: 'refused',
       problem: expect.stringContaining('no approval'),
     });
@@ -380,6 +405,7 @@ describe('the approvals the hub is holding', () => {
     expect(first).toEqual({
       ok: false,
       outcome: null,
+      answeredBy: null,
       code: 'refused',
       problem: 'that approval is unknown',
     });
@@ -390,5 +416,219 @@ describe('the approvals the hub is holding', () => {
     void approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'deny' });
     await settle();
     expect(dispatched).toHaveLength(2);
+  });
+});
+
+/**
+ * The standing policy, from the side that has to act on it.
+ *
+ * What is asserted here is not what a rule means -- that is the protocol's
+ * parser and the policy feature's rows -- but that a grant nobody was asked for
+ * takes the same path a person's does. One instruction leaves the hub, the
+ * settlement is still what ends the request, and everything that is not an
+ * unambiguous match reaches a person.
+ */
+describe('a request the standing policy already answered', () => {
+  beforeEach(() => {
+    now = START;
+    changes = [];
+    dispatched = [];
+    dispatchAnswer = { ok: true };
+    consulted = [];
+    policyAnswer = () => Promise.resolve(null);
+  });
+
+  it('is granted by the hub, without any client being asked', async () => {
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    expect(consulted).toEqual([{ tool: 'Bash', proposal: 'prisma migrate deploy --schema ./db' }]);
+    expect(dispatched).toEqual([{ registrationId: LAPTOP, approvalId: FIRST, decision: 'grant' }]);
+  });
+
+  it('is still open until the machine says what happened', async () => {
+    // The same rule a person's answer lives under: the hub knows it sent a
+    // grant and can still be wrong about the result, because a grant that met
+    // a hook which had stopped waiting changed nothing.
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    expect(lastChange(MIGRATING)).toHaveLength(1);
+    approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
+    expect(lastChange(MIGRATING)).toEqual([]);
+  });
+
+  it('says on the row that a rule answered it, before the machine confirms', async () => {
+    // How every client learns a grant was automatic. The request is still open
+    // -- the machine holding the hook is the authority on what happened -- and
+    // for that window the row says who answered it and with which rule.
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+
+    // Announced the moment it arrives, before the policy has been read: a read
+    // of this hub's disk must not sit between a blocked agent and the screen.
+    expect(lastChange(MIGRATING)?.[0]?.answeredBy).toBe(null);
+    await settle();
+    expect(lastChange(MIGRATING)?.[0]?.answeredBy).toEqual(A_GRANT);
+  });
+
+  it('names the rule on the receipt, to the client that tapped and lost', async () => {
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    // A person who tapped Allow a moment after a rule did would read a bare
+    // `granted` as their own tap having done something. The rule is what tells
+    // them otherwise, and it travels on the same receipt as the word.
+    const late = approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' });
+    approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
+
+    expect(await late).toEqual({
+      ok: false,
+      outcome: 'granted',
+      answeredBy: A_GRANT,
+      code: 'refused',
+      problem: 'that approval was already answered, and is granted',
+    });
+  });
+
+  it('is put to a person when no rule covers it', async () => {
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    expect(dispatched).toEqual([]);
+    expect(lastChange(MIGRATING)).toHaveLength(1);
+  });
+
+  it('is put to a person when the policy could not be read at all', async () => {
+    // The seam is not supposed to reject -- the policy feature answers `null`
+    // for every way of not knowing -- but a request left hanging because
+    // something upstream threw would be an agent blocked with nobody asked.
+    policyAnswer = () => Promise.reject(new Error('disk gone'));
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    expect(dispatched).toEqual([]);
+    expect(lastChange(MIGRATING)).toHaveLength(1);
+  });
+
+  it('settles once when a person answers in the same moment', async () => {
+    // The policy is read asynchronously, so a person tapping while that read
+    // is in flight is the ordinary race. The claim is what decides it, and it
+    // is the same claim two clients race for.
+    let release = (): void => undefined;
+    policyAnswer = () =>
+      new Promise((resolve) => {
+        release = () => resolve(A_GRANT);
+      });
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    const person = approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'deny' });
+    release();
+    await settle();
+
+    expect(dispatched).toEqual([{ registrationId: LAPTOP, approvalId: FIRST, decision: 'deny' }]);
+    approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'denied'));
+    expect(await person).toEqual({ ok: true, outcome: 'denied', answeredBy: null });
+  });
+
+  it('is never matched against a rule when its proposal was cut', async () => {
+    // The hole this closes: a proposal bounded at the provider's edge no
+    // longer identifies the tool input it came from, because every input
+    // sharing that prefix renders as the same bytes. A rule matched against
+    // one of them would stand for all of them, so the policy is not consulted
+    // at all and a person is asked -- which is what an unmatched request gets.
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST, true));
+    await settle();
+
+    expect(consulted).toEqual([]);
+    expect(dispatched).toEqual([]);
+    expect(lastChange(MIGRATING)).toHaveLength(1);
+    expect(lastChange(MIGRATING)?.[0]?.answeredBy).toBe(null);
+  });
+
+  it('still asks about a cut request whose text a rule would match', async () => {
+    // Two requests one hook apart, sharing every byte a person could read and
+    // differing in what would run. The first is whole and a rule answers it;
+    // the second was cut, and the identical text buys it nothing.
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+    approvals.requested(LAPTOP, requested(FIXING, SECOND, true));
+    await settle();
+
+    expect(dispatched).toEqual([{ registrationId: LAPTOP, approvalId: FIRST, decision: 'grant' }]);
+    expect(lastChange(FIXING)?.[0]?.answeredBy).toBe(null);
+  });
+
+  it('takes the rule off the row when the machine refuses the grant it sent', async () => {
+    // Nothing was applied, so the request is open again and a person will
+    // answer it. A row still saying a standing rule answered it would be a
+    // screen reporting a grant that never happened -- and the person who then
+    // taps Allow would be told their tap did nothing, for a grant that was
+    // theirs.
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    dispatchAnswer = { ok: false, code: 'refused', problem: 'that machine is draining' };
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    expect(lastChange(MIGRATING)?.[0]?.answeredBy).toBe(null);
+
+    // And the person's own answer is theirs: the receipt carries no rule.
+    dispatchAnswer = { ok: true };
+    const person = approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' });
+    await settle();
+    approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
+
+    expect(dispatched).toHaveLength(2);
+    expect(await person).toEqual({ ok: true, outcome: 'granted', answeredBy: null });
+  });
+
+  it('tells the waiting clients a refused grant is open again, not answered by a rule', async () => {
+    policyAnswer = () => Promise.resolve(A_GRANT);
+    dispatchAnswer = { ok: false, code: 'refused', problem: 'that machine is draining' };
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    // The row was published as answered by the rule while the decision was in
+    // flight -- that is what the claim buys -- so the retraction has to be
+    // published too, or every client keeps the marker until something else
+    // moves the state.
+    const marks = changes
+      .filter((change) => change.ref.sessionId === MIGRATING.sessionId)
+      .map((change) => change.approvals[0]?.answeredBy ?? null);
+    expect(marks).toEqual([null, A_GRANT, null]);
+  });
+
+  it('grants nothing for a request the agent took back while the policy was read', async () => {
+    let release = (): void => undefined;
+    policyAnswer = () =>
+      new Promise((resolve) => {
+        release = () => resolve(A_GRANT);
+      });
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    await settle();
+
+    approvals.withdrawn(LAPTOP, withdrawn(MIGRATING, FIRST));
+    release();
+    await settle();
+
+    expect(dispatched).toEqual([]);
   });
 });

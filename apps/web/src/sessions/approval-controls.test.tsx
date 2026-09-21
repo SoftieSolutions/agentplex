@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {
   approvalIdSchema,
+  nodeIdSchema,
   parseClientFrame,
   parseTextFrame,
   type ApprovalOutcome,
@@ -17,6 +18,7 @@ import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { ApprovalControls } from './approval-controls.js';
+import { TOO_LONG_TO_REMEMBER_WORDS, type SessionProject } from './approval-policy-model.js';
 import { listSessions, type SessionListItem } from './session-list-model.js';
 
 /**
@@ -143,10 +145,25 @@ describe('the Allow and Deny a blocked agent is waiting on', () => {
    * keeps this component mounted across a new request arriving, and a test that
    * remounted would be testing the one case where the bug cannot happen.
    */
-  async function mount(item: SessionListItem): Promise<void> {
+  async function mount(item: SessionListItem, project?: SessionProject): Promise<void> {
     await act(() => {
       root ??= createRoot(container);
-      root.render(withProvider(<ApprovalControls item={item} store={store} scheme="dark" />));
+      root.render(
+        withProvider(
+          // As the card hands it over: the session, the one request it is
+          // holding, and the session's name on the buttons. The project is the
+          // tab's to supply, and a surface that cannot name one -- the card in
+          // a list -- passes nothing and gets the pair it always had.
+          <ApprovalControls
+            sessionRef={item.ref}
+            approval={item.approval}
+            name={item.name}
+            store={store}
+            scheme="dark"
+            project={project ?? { kind: 'unplaced' }}
+          />,
+        ),
+      );
     });
   }
 
@@ -485,5 +502,323 @@ describe('the Allow and Deny a blocked agent is waiting on', () => {
     // end, which is the half an ellipsis would take.
     expect(label.style.overflowWrap).toBe('anywhere');
     expect(label.getAttribute('dir')).toBe('ltr');
+  });
+});
+
+/**
+ * "Always allow this exact request in <project>", beside Allow and Deny.
+ *
+ * Two sends behind one tap, and the test worth having is about what each half
+ * is allowed to claim when the other one does not happen. The request is
+ * answered first and the rule written second, so a refused rule leaves a
+ * person with the thing they were waiting for, and neither half's sentence
+ * mentions the other.
+ */
+describe('always allowing the request in front of you', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+  let store: HubStore;
+  let sockets: ReturnType<typeof createFakeSocketFactory>;
+  let watching: (() => void) | null = null;
+
+  const PROJECT: SessionProject = {
+    kind: 'project',
+    id: nodeIdSchema.parse('hub-3'),
+    label: 'agentplex',
+  };
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    installMatchMedia();
+    container = document.createElement('div');
+    document.body.append(container);
+    sockets = createFakeSocketFactory();
+    store = createHubStore({
+      fetchTicket: () => Promise.resolve('ticket-1'),
+      createSocket: (ticket) => sockets.create(ticket),
+      timers: createFakeTimers(),
+      frameIds: createFrameIdCounter(),
+    });
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+    watching?.();
+    watching = null;
+    container.remove();
+  });
+
+  async function fleet(): Promise<FakeSocket> {
+    watching = store.subscribe(() => {});
+    await act(settle);
+    const socket = sockets.sockets[0];
+    if (socket === undefined) throw new Error('the store dialled nothing');
+    await act(() => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(hubFrames.machineStateApproval);
+    });
+    return socket;
+  }
+
+  function asking(): SessionListItem {
+    const state = store.getSnapshot().machineState;
+    if (state === null) throw new Error('no machine state arrived');
+    const item = listSessions(state).find((candidate) => candidate.approval !== null);
+    if (item === undefined) throw new Error('the captured state holds no open request');
+    return item;
+  }
+
+  async function mount(item: SessionListItem, project: SessionProject): Promise<void> {
+    await act(() => {
+      root ??= createRoot(container);
+      root.render(
+        withProvider(
+          <ApprovalControls
+            sessionRef={item.ref}
+            approval={item.approval}
+            name={item.name}
+            store={store}
+            scheme="dark"
+            project={project}
+          />,
+        ),
+      );
+    });
+  }
+
+  function withProvider(element: JSX.Element): JSX.Element {
+    return (
+      <MantineProvider
+        theme={theme}
+        cssVariablesResolver={cssVariablesResolver}
+        defaultColorScheme="dark"
+      >
+        {element}
+      </MantineProvider>
+    );
+  }
+
+  function always(): HTMLButtonElement {
+    const found = [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      (button.getAttribute('aria-label') ?? '').startsWith('always allow'),
+    );
+    if (found === undefined) throw new Error('no always-allow control');
+    return found;
+  }
+
+  function regions(): string[] {
+    return [...container.querySelectorAll('[role="status"]')].map((node) => node.textContent ?? '');
+  }
+
+  /**
+   * Every sentence this component drew, status or not.
+   *
+   * Paragraphs rather than the container's own text, for the reason the first
+   * suite avoids a text comparison on it: Mantine writes its stylesheet in
+   * there, and that is not this component's doing.
+   */
+  function sentences(): string {
+    return [...container.querySelectorAll('p')].map((node) => node.textContent ?? '').join(' ');
+  }
+
+  function sentFrames(socket: FakeSocket): ClientFrame[] {
+    return socket.sent.map((text) => {
+      const parsed = parseTextFrame(parseClientFrame, text);
+      if (!parsed.ok) throw new Error(`the store sent something unreadable: ${parsed.reason}`);
+      return parsed.value;
+    });
+  }
+
+  async function click(target: Element): Promise<void> {
+    await act(() => {
+      target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+  }
+
+  /** A captured frame, answering the frame this client actually sent. */
+  function answering(fixture: string, replyTo: number): string {
+    return JSON.stringify({
+      ...(JSON.parse(fixture) as Record<string, unknown>),
+      replyTo,
+    });
+  }
+
+  it('says exact, and names the project the rule would live in', async () => {
+    await fleet();
+
+    await mount(asking(), PROJECT);
+
+    // Both words are load-bearing. A rule is written into one project's policy
+    // and applies to every session filed under it, so the project is named; and
+    // it grants this text and no continuation of it, so the offer says exact
+    // rather than leaving a reader to assume a pattern.
+    const label = always().getAttribute('aria-label') ?? '';
+    expect(label).toContain('exact');
+    expect(label).toContain('agentplex');
+  });
+
+  it('offers nothing for a request too long to have been shown whole', async () => {
+    await fleet();
+    const item = asking();
+    const { approval } = item;
+    if (approval === null) throw new Error('the captured state holds no open request');
+
+    await mount({ ...item, approval: { ...approval, truncated: true } }, PROJECT);
+
+    // Allow and Deny, and no third control. The proposal was cut to fit, so it
+    // is the text of every request that starts the same way -- a rule made of
+    // it would answer commands nobody read, and the hub refuses to write one.
+    // A button that could only be refused is worse than a sentence.
+    expect(container.querySelectorAll('button')).toHaveLength(2);
+    expect(sentences()).toContain(TOO_LONG_TO_REMEMBER_WORDS);
+  });
+
+  it('says nothing about remembering a request it can show whole', async () => {
+    await fleet();
+
+    await mount(asking(), PROJECT);
+
+    expect(sentences()).not.toContain(TOO_LONG_TO_REMEMBER_WORDS);
+  });
+
+  it('offers nothing to a session with nowhere to keep a rule', async () => {
+    await fleet();
+
+    await mount(asking(), { kind: 'unfiled' });
+
+    // Allow and Deny, and no third control: there is no project to name in the
+    // question, and a button that could only fail is worse than no button.
+    expect(container.querySelectorAll('button')).toHaveLength(2);
+  });
+
+  it('offers nothing while the tree has not said where the session is', async () => {
+    await fleet();
+
+    await mount(asking(), { kind: 'unplaced' });
+
+    expect(container.querySelectorAll('button')).toHaveLength(2);
+  });
+
+  it('answers the request first, then writes the rule it is', async () => {
+    const socket = await fleet();
+    const item = asking();
+    await mount(item, PROJECT);
+
+    await click(always());
+
+    // The order is the decision. The grant is what the blocked agent is
+    // waiting for and the rule cannot answer it -- the hub matches at the
+    // moment a request arrives, so a rule written first would still leave this
+    // request to be answered. Answering first means a refused rule costs the
+    // rule and not the unblocking.
+    expect(sentFrames(socket).slice(1)).toEqual([
+      {
+        type: 'approval-decide',
+        id: 2,
+        storeId: 'store-agentplex',
+        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        approvalId: 'approval-1',
+        decision: 'grant',
+      },
+      {
+        type: 'approval-policy-add',
+        id: 3,
+        projectId: 'hub-3',
+        // Exactly the request: the tool as the provider spells it and the
+        // proposal byte for byte, with nothing for this client to trim or
+        // widen on the way.
+        rule: { tool: item.approval?.tool, proposal: item.approval?.proposal },
+      },
+    ]);
+  });
+
+  it('offers no second tap on either half while the hub has not answered', async () => {
+    const socket = await fleet();
+    const item = asking();
+    await mount(item, PROJECT);
+
+    await click(always());
+
+    expect(always().disabled).toBe(true);
+    expect(sentFrames(socket).filter((frame) => frame.type === 'approval-policy-add')).toHaveLength(
+      1,
+    );
+  });
+
+  it('says a refused rule without pretending the request went unanswered', async () => {
+    const socket = await fleet();
+    await mount(asking(), PROJECT);
+    await click(always());
+
+    await act(() => {
+      socket.deliver(hubFrames.approvalDecided);
+      socket.deliver(answering(hubFrames.refusal, 3));
+    });
+
+    // Two regions, two facts: the request really was granted, and the rule
+    // really was not written. Either sentence alone would be a lie about the
+    // other half.
+    expect(regions()).toEqual([
+      'granted',
+      'the rule was not added: no server the hub is paired with has that store mounted',
+    ]);
+  });
+
+  it('says a refused grant without claiming a rule was added', async () => {
+    const socket = await fleet();
+    await mount(asking(), PROJECT);
+    await click(always());
+
+    await act(() => {
+      socket.deliver(hubFrames.refusalTerminal);
+    });
+
+    expect(regions()[0]).toBe('the hub cannot reach mbp-robert right now');
+    expect(regions()[1]).toBe('');
+  });
+
+  it('says the rule is saved, naming the project it is saved in', async () => {
+    const socket = await fleet();
+    await mount(asking(), PROJECT);
+    await click(always());
+
+    await act(() => {
+      socket.deliver(hubFrames.approvalDecided);
+      socket.deliver(answering(hubFrames.approvalPolicy, 3));
+    });
+
+    expect(regions()[1]).toBe('saved in agentplex: this exact request will not be asked again');
+  });
+
+  it('credits a standing rule for a grant rather than the tap', async () => {
+    const socket = await fleet();
+    await mount(asking(), PROJECT);
+    await click(always());
+
+    // The hub's receipt: this one was already covered, so the answer that took
+    // effect was the project's policy and not this person's tap. It is the one
+    // place a client reliably learns an auto-grant happened -- the row marker
+    // usually never reaches anybody, because the far machine settles inside one
+    // broadcast flush.
+    await act(() => {
+      socket.deliver(
+        JSON.stringify({
+          type: 'approval-decided',
+          replyTo: 2,
+          outcome: 'granted',
+          answeredBy: {
+            project: 'hub-3',
+            ruleId: 'hub-4',
+            rule: { tool: 'Bash', proposal: 'command: pnpm test' },
+          },
+        }),
+      );
+    });
+
+    expect(regions()[0]).toBe("granted by this project's standing policy, not by this tap");
   });
 });

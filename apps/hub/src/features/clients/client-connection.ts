@@ -4,7 +4,10 @@ import {
   parseClientFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type ApprovalAnsweredBy,
   type ApprovalOutcome,
+  type ApprovalPolicyRule,
+  type ApprovalPolicyRuleId,
   type ClientFrame,
   type DocName,
   type FrameId,
@@ -29,6 +32,7 @@ import {
   type SocketClosure,
 } from '@agentplex/node-shared';
 import type { Approvals, DecideRequest } from '../approvals/approvals.js';
+import type { ApprovalPolicy } from '../approval-policy/approval-policy.js';
 import type { Attention, AttentionOutcome } from '../attention/attention.js';
 import type { CatalogueQueries, TreeChanged, TreeMutations } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
@@ -196,6 +200,17 @@ export interface ClientConnectionDependencies {
    */
   readonly approvals: Approvals;
   /**
+   * The standing policy, as the feature that owns those rows.
+   *
+   * Beside `approvals` and not inside it, because the two are opposite in the
+   * way that matters: a request is a claim about now, held in memory on the
+   * machine that is holding a process open, and a rule is a thing a person
+   * decided on purpose and wrote down. What this connection may do with it is
+   * read one project's rules, add one, and take one out -- every refusal, and
+   * every sentence explaining one, is the feature's.
+   */
+  readonly approvalPolicy: ApprovalPolicy;
+  /**
    * Which servers this hub may dial, as the feature that owns those rows.
    *
    * The whole seam rather than two functions, because what a pairing frame
@@ -289,6 +304,7 @@ export function serveClientConnection(
     sessions,
     attention,
     approvals,
+    approvalPolicy,
     pairing,
     syncServers,
     projects,
@@ -772,6 +788,33 @@ export function serveClientConnection(
           return;
         }
         void answerPushUnsubscribe(frame.id, frame.endpoint);
+        return;
+      }
+
+      case 'approval-policy-list': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerPolicy(frame.id, frame.projectId);
+        return;
+      }
+
+      case 'approval-policy-add': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void addPolicyRule(frame.id, frame.projectId, frame.rule);
+        return;
+      }
+
+      case 'approval-policy-remove': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void removePolicyRule(frame.id, frame.projectId, frame.ruleId);
         return;
       }
 
@@ -1397,18 +1440,21 @@ export function serveClientConnection(
    * waited on, and the decision still stands -- what is dropped is the receipt.
    */
   async function answerApproval(replyTo: FrameId, request: DecideRequest): Promise<void> {
-    const decided = (outcome: ApprovalOutcome): void =>
-      send({ type: 'approval-decided', replyTo, outcome });
+    const decided = (outcome: ApprovalOutcome, answeredBy: ApprovalAnsweredBy | null): void =>
+      send({ type: 'approval-decided', replyTo, outcome, answeredBy });
 
     try {
       const answer = await approvals.decide(request);
       if (state !== 'established') return;
       if (answer.ok) {
-        decided(answer.outcome);
+        decided(answer.outcome, answer.answeredBy);
         return;
       }
       if (answer.outcome !== null) {
-        decided(answer.outcome);
+        // The standing rule travels with the word even here, and especially
+        // here: this is the client that tapped and was not the one applied, and
+        // `granted` with nothing beside it reads as its own tap having counted.
+        decided(answer.outcome, answer.answeredBy);
         return;
       }
       refuse(replyTo, answer.code, answer.problem);
@@ -1416,6 +1462,99 @@ export function serveClientConnection(
       logger.error('could not answer an approval', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not answer that approval');
+    }
+  }
+
+  /**
+   * Answers one project's policy, whole.
+   *
+   * The one answer all three policy frames end in, which is why it is a
+   * function rather than three near-copies: list, add and remove all end with
+   * the policy as it now stands, and a client that had to apply its own add
+   * would be holding a policy nobody vouched for.
+   *
+   * A read that fails is a refusal and never an empty policy. An empty list
+   * means "this project has decided nothing", which is a claim -- and one that
+   * would be drawn as "every request here reaches you" while the truth was that
+   * the hub could not read its own disk.
+   */
+  async function answerPolicy(replyTo: FrameId, projectId: NodeId): Promise<void> {
+    try {
+      const rules = await approvalPolicy.rulesFor(projectId);
+      if (state !== 'established') return;
+      send({
+        type: 'approval-policy',
+        replyTo,
+        projectId,
+        rules: rules.map((record) => ({
+          ruleId: record.ruleId,
+          rule: record.rule,
+          createdAt: record.createdAt,
+        })),
+      });
+    } catch (error) {
+      logger.error('could not read a standing policy', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not read that project\u2019s standing policy');
+    }
+  }
+
+  /**
+   * Writes one rule and answers with the policy it is now part of.
+   *
+   * The rule goes to the feature as it arrived, unparsed by this file: what a
+   * rule may be -- no empty tool, no empty text, no control characters, no text
+   * longer than a proposal -- is `parseApprovalPolicyRule`'s to say, and a
+   * check here would be a second opinion free to disagree with the one that
+   * decides what actually matches.
+   */
+  async function addPolicyRule(
+    replyTo: FrameId,
+    projectId: NodeId,
+    rule: ApprovalPolicyRule,
+  ): Promise<void> {
+    try {
+      const written = await approvalPolicy.add({ project: projectId, rule });
+      if (state !== 'established') return;
+      if (!written.ok) {
+        // The feature's own sentence, passed through. It is what the person who
+        // typed the rule needs to read, and rewording it here would be this
+        // file inventing a reason it does not have.
+        refuse(replyTo, written.code, written.problem);
+        return;
+      }
+      await answerPolicy(replyTo, projectId);
+    } catch (error) {
+      logger.error('could not write a policy rule', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not write that rule');
+    }
+  }
+
+  /**
+   * Takes one rule out and answers with what is left.
+   *
+   * A rule that was not there is a refusal rather than a silent success. The
+   * two are different things to show somebody: one is "it is gone", and the
+   * other is "the screen you are looking at is not the policy this hub holds".
+   */
+  async function removePolicyRule(
+    replyTo: FrameId,
+    projectId: NodeId,
+    ruleId: ApprovalPolicyRuleId,
+  ): Promise<void> {
+    try {
+      const removed = await approvalPolicy.remove({ project: projectId, ruleId });
+      if (state !== 'established') return;
+      if (!removed) {
+        refuse(replyTo, 'refused', 'that project holds no rule by that id');
+        return;
+      }
+      await answerPolicy(replyTo, projectId);
+    } catch (error) {
+      logger.error('could not remove a policy rule', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not remove that rule');
     }
   }
 

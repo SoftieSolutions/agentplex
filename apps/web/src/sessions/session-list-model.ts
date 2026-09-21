@@ -43,6 +43,15 @@ export interface SessionApproval {
   /** The tool's name as the provider spells it: `Bash`, `Edit`, `WebFetch`. */
   readonly tool: string;
   readonly proposal: string;
+  /**
+   * Whether the proposal above is all of what was proposed.
+   *
+   * Narrowed through with the text rather than left on the row, because a
+   * surface decides on it: a cut proposal stands for every request that starts
+   * the same way, so the control offering to remember it is withheld. A screen
+   * that had the text and not this fact would offer a rule the hub refuses.
+   */
+  readonly truncated: boolean;
   /** When the hub heard, by the hub's clock, which is what the age counts from. */
   readonly requestedAt: number;
 }
@@ -63,17 +72,35 @@ export interface SessionApproval {
  * the same millisecond.
  */
 export function oldestApproval(approvals: readonly PendingApproval[]): SessionApproval | null {
-  let oldest: PendingApproval | undefined;
-  for (const approval of approvals) {
-    if (oldest === undefined || approval.requestedAt < oldest.requestedAt) oldest = approval;
-  }
-  if (oldest === undefined) return null;
-  return {
-    approvalId: oldest.approvalId,
-    tool: oldest.tool,
-    proposal: oldest.proposal,
-    requestedAt: oldest.requestedAt,
-  };
+  return approvalsOldestFirst(approvals)[0] ?? null;
+}
+
+/**
+ * Every open request a session is holding, narrowed the same way and in the
+ * order the Approvals tab draws them: longest-waiting first.
+ *
+ * The same rule as `oldestApproval` over the whole list rather than a second
+ * opinion about it, which is why that one is defined in terms of this one: the
+ * card shows the head of this list, and a tab and a card that each sorted for
+ * themselves could come to different answers about which request has been
+ * waiting longest -- on one screen, at the same moment, about the same session.
+ *
+ * `sort` is stable in every runtime this ships to, so requests heard in the
+ * same millisecond keep the order the hub sent, which is arrival order on the
+ * machine that minted the ids.
+ */
+export function approvalsOldestFirst(
+  approvals: readonly PendingApproval[],
+): readonly SessionApproval[] {
+  return [...approvals]
+    .sort((left, right) => left.requestedAt - right.requestedAt)
+    .map((approval) => ({
+      approvalId: approval.approvalId,
+      tool: approval.tool,
+      proposal: approval.proposal,
+      truncated: approval.truncated,
+      requestedAt: approval.requestedAt,
+    }));
 }
 
 /** One session as the list renders it, flattened out of its store. */

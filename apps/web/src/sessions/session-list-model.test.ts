@@ -11,6 +11,7 @@ import {
   acknowledgementHolds,
   activeFilterCount,
   ageLabel,
+  approvalsOldestFirst,
   chipCounts,
   chipOptions,
   clearedFilters,
@@ -154,16 +155,18 @@ describe('the place line', () => {
 });
 
 describe('the request on a card', () => {
-  it('carries the open request as the four things a card draws, and nothing else', () => {
-    // The proposal is the agent's claim about what it wants to run, as text.
-    // `suggestions` is deliberately not here: what the card offers is Allow
-    // and Deny, and a remembered rule is a different decision on a different
-    // screen -- an exact match is what keeps it from arriving by accident.
+  it('carries the open request as the five things a card draws, and nothing else', () => {
+    // The proposal is the agent's claim about what it wants to run, as text,
+    // with the provider's word on whether it is all of it. `suggestions` is
+    // deliberately not here: what the card offers is Allow and Deny, and a
+    // remembered rule is a different decision on a different screen -- an
+    // exact match is what keeps it from arriving by accident.
     expect(item(asked, 'migrate-db').approval).toEqual({
       approvalId: 'approval-1',
       tool: 'Bash',
       proposal:
         'command: prisma migrate deploy --schema ./db\ndescription: Apply pending Prisma migrations',
+      truncated: false,
       requestedAt: 1_756_000_000_000,
     });
   });
@@ -217,6 +220,75 @@ describe('choosing among open requests', () => {
     const second: PendingApproval = { ...capturedApproval, tool: 'Edit' };
     expect(oldestApproval([capturedApproval, second])?.tool).toBe(capturedApproval.tool);
     expect(oldestApproval([second, capturedApproval])?.tool).toBe('Edit');
+  });
+});
+
+describe('listing every open request', () => {
+  it('has nothing to list from an empty list', () => {
+    expect(approvalsOldestFirst([])).toEqual([]);
+  });
+
+  it('puts the oldest first, whatever order the row lists them in', () => {
+    // The same rule the card's one request follows, applied to all of them:
+    // the longest-waiting hook is the nearest its own timeout, so it is the
+    // one at the top of the tab.
+    const newer: PendingApproval = {
+      ...capturedApproval,
+      tool: 'Edit',
+      requestedAt: capturedApproval.requestedAt + 60_000,
+    };
+    expect(approvalsOldestFirst([newer, capturedApproval]).map((open) => open.tool)).toEqual([
+      capturedApproval.tool,
+      'Edit',
+    ]);
+  });
+
+  it('keeps the hub order among requests heard in the same millisecond', () => {
+    const second: PendingApproval = { ...capturedApproval, tool: 'Edit' };
+    expect(approvalsOldestFirst([capturedApproval, second]).map((open) => open.tool)).toEqual([
+      capturedApproval.tool,
+      'Edit',
+    ]);
+  });
+
+  it('narrows each request to what a surface draws, and leaves the suggestions behind', () => {
+    // The captured request really carries them: they are the rules a provider
+    // would remember an answer as, which is policy and a different decision on
+    // a different surface. A list that handed them through would put a policy
+    // change one field access from a pair of buttons that answer once.
+    expect(capturedApproval.suggestions.length).toBeGreaterThan(0);
+
+    expect(approvalsOldestFirst([capturedApproval])).toEqual([
+      {
+        approvalId: capturedApproval.approvalId,
+        tool: capturedApproval.tool,
+        proposal: capturedApproval.proposal,
+        truncated: capturedApproval.truncated,
+        requestedAt: capturedApproval.requestedAt,
+      },
+    ]);
+  });
+
+  it('keeps whether the proposal was cut, because a surface decides on it', () => {
+    // A cut proposal is not a description of one tool call, so the control
+    // that would remember it is withheld. The narrowing is the only thing
+    // between the row and that decision, so the fact has to survive it.
+    const cut: PendingApproval = { ...capturedApproval, truncated: true };
+    expect(approvalsOldestFirst([cut])[0]?.truncated).toBe(true);
+    expect(oldestApproval([cut])?.truncated).toBe(true);
+    expect(oldestApproval([capturedApproval])?.truncated).toBe(false);
+  });
+
+  it('heads the list with the request the card shows', () => {
+    const newer: PendingApproval = {
+      ...capturedApproval,
+      requestedAt: capturedApproval.requestedAt + 60_000,
+    };
+    // One rule, two surfaces: a tab and a card can never disagree about which
+    // request has been waiting longest.
+    expect(approvalsOldestFirst([newer, capturedApproval])[0]).toEqual(
+      oldestApproval([newer, capturedApproval]),
+    );
   });
 });
 

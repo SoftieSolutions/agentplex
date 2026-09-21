@@ -616,6 +616,7 @@ describe('the approval frames on the server leg', () => {
       approvalId: 'approval-7f21',
       tool: 'Bash',
       proposal: 'command: prisma migrate deploy --schema ./db',
+      truncated: false,
       suggestions: [],
     },
   };
@@ -938,6 +939,7 @@ describe('hub and server round trips', () => {
         approvalId: approvalIdSchema.parse('approval-7f21'),
         tool: 'Bash',
         proposal: 'command: prisma migrate deploy --schema ./db',
+        truncated: false,
         suggestions: [
           {
             behavior: 'allow',

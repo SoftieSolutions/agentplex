@@ -9,6 +9,7 @@ import type {
   SessionRef,
 } from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
+import type { ApprovalPolicyGrant } from '../approval-policy/approval-policy.js';
 
 /**
  * The requests this hub is holding open on somebody's behalf.
@@ -136,10 +137,15 @@ export interface DecideRequest {
  * waiting, and the tool call fell through as though nobody had answered.
  */
 export type ApprovalAnswer =
-  | { readonly ok: true; readonly outcome: ApprovalOutcome }
+  | {
+      readonly ok: true;
+      readonly outcome: ApprovalOutcome;
+      readonly answeredBy: ApprovalPolicyGrant | null;
+    }
   | {
       readonly ok: false;
       readonly outcome: ApprovalOutcome | null;
+      readonly answeredBy: ApprovalPolicyGrant | null;
       readonly code: RefusalCode;
       readonly problem: string;
     };
@@ -170,6 +176,27 @@ export interface ApprovalsDependencies {
    * that nothing here can reach a machine for any other purpose.
    */
   readonly dispatch: (instruction: ApprovalInstruction) => Promise<ApprovalDispatch>;
+  /**
+   * What the project this session is filed under has already decided about a
+   * request like this one, or `null`: ask somebody.
+   *
+   * A function for the reason `dispatch` is one -- what this file does with a
+   * standing grant is then a unit test rather than something only a populated
+   * node tree and a migrated database could demonstrate -- and it takes the two
+   * fields a person would have read rather than the whole request, so that
+   * nothing a policy is ever handed can include an id or a decision.
+   *
+   * It is expected not to reject: `ApprovalPolicy.grantFor` answers `null` for
+   * every way of not knowing, because a policy that fails closed asks a
+   * question somebody already answered and a policy that fails open runs a
+   * command nobody approved. A rejection is caught here anyway, and reaches a
+   * person, because the alternative is an agent left blocked by an error
+   * thrown in the code path whose job is to make sure somebody is asked.
+   */
+  readonly policy: (
+    ref: SessionRef,
+    request: { readonly tool: string; readonly proposal: string },
+  ) => Promise<ApprovalPolicyGrant | null>;
 }
 
 export interface Approvals {
@@ -219,7 +246,12 @@ function endingKey(ref: SessionRef, approvalId: ApprovalId): string {
 /** One open request, with the two things only this hub knows about it. */
 interface OpenApproval {
   readonly ref: SessionRef;
-  readonly pending: PendingApproval;
+  /**
+   * The row as every client reads it, replaced rather than mutated when a rule
+   * answers: the list handed to `onChanged` is what a client is sent, so the
+   * mark saying nobody was asked has to be on the object that travels.
+   */
+  pending: PendingApproval;
   /** The machine that reported it, which is the only one that can answer it. */
   readonly source: ServerRegistrationId;
   /**
@@ -234,6 +266,17 @@ interface OpenApproval {
    */
   claimed: boolean;
   readonly waiting: ((answer: ApprovalAnswer) => void)[];
+  /**
+   * The standing rule that answered this, when nobody was asked.
+   *
+   * Set in the one tick that also takes the claim, so it can never describe a
+   * decision a person got to first, and cleared again if the machine refuses
+   * the decision it produced -- a rule that answered nothing did not answer
+   * this. It is what makes an auto-grant attributable: the log line for the
+   * settlement names the project and the rule, rather than reporting a grant
+   * with nobody's name on it.
+   */
+  grantedByPolicy: ApprovalPolicyGrant | null;
 }
 
 export function createApprovals({
@@ -241,6 +284,7 @@ export function createApprovals({
   logger: parent,
   onChanged,
   dispatch,
+  policy,
 }: ApprovalsDependencies): Approvals {
   const logger = parent.child({ part: 'approvals' });
 
@@ -291,10 +335,14 @@ export function createApprovals({
       const applied = index === 0 && (outcome === 'granted' || outcome === 'denied');
       answer(
         applied
-          ? { ok: true, outcome }
+          ? { ok: true, outcome, answeredBy: entry.grantedByPolicy }
           : {
               ok: false,
               outcome,
+              // Told to the losers of the race as well as to the winner: a
+              // person who tapped Allow a moment after a rule did is owed the
+              // rule, rather than a bare `granted` they would read as theirs.
+              answeredBy: entry.grantedByPolicy,
               code: 'refused',
               problem:
                 index === 0
@@ -372,10 +420,11 @@ export function createApprovals({
         // The hub's own clock, because the frame carries no date: two machines'
         // clocks disagree, and a client rendering "waiting four minutes" is
         // comparing this with its own notion of now.
-        pending: { ...frame.approval, requestedAt: clock.now() },
+        pending: { ...frame.approval, requestedAt: clock.now(), answeredBy: null },
         source,
         claimed: false,
         waiting: [],
+        grantedByPolicy: null,
       });
       logger.info('approval requested', {
         ...ref,
@@ -383,7 +432,16 @@ export function createApprovals({
         tool: frame.approval.tool,
         source,
       });
+      // Announced before the policy is consulted, and that order is the
+      // decision. The row appears on every client's screen either way; what a
+      // matching rule then does is answer it a moment later, exactly as a
+      // person tapping would. The other order -- hold the request back until
+      // the policy has been read -- would mean a read of this hub's disk
+      // sitting between a blocked agent and the screen that shows it, so a
+      // database that had gone slow would look like an agent that had gone
+      // quiet.
       announce(ref);
+      void consult(ref, frame.approval.approvalId);
     },
 
     withdrawn(source: ServerRegistrationId, frame: ApprovalWithdrawnFrame): void {
@@ -402,6 +460,17 @@ export function createApprovals({
         ...ref,
         approvalId: frame.approvalId,
         outcome: frame.outcome,
+        // Named on the way out as well as on the way in, so that one line in
+        // the log says both that a tool call ran and that nobody was asked
+        // about it. An auto-grant that appeared only as a settlement would be
+        // the silent half of this feature.
+        ...(entry.grantedByPolicy === null
+          ? {}
+          : {
+              grantedBy: 'policy',
+              project: entry.grantedByPolicy.project,
+              ruleId: entry.grantedByPolicy.ruleId,
+            }),
       });
       end(entry, frame.outcome);
     },
@@ -420,68 +489,172 @@ export function createApprovals({
       }
     },
 
-    decide(request: DecideRequest): Promise<ApprovalAnswer> {
-      const entry = lookup(request.ref, request.approvalId);
-      if (entry === undefined) {
-        const remembered = endings.get(endingKey(request.ref, request.approvalId));
-        if (remembered === undefined) {
-          logger.info('approval decision refused', {
-            ...request.ref,
-            approvalId: request.approvalId,
-            problem: 'no such approval',
-          });
-          return Promise.resolve({
-            ok: false,
-            outcome: null,
-            code: 'refused',
-            problem: 'this hub is holding no approval by that id for that session',
-          });
-        }
+    decide,
+  };
+
+  /**
+   * Answers one open request, once, and resolves when the machine holding it
+   * says what happened.
+   *
+   * Hoisted rather than written into the object above, because it has two
+   * callers now: a client, through the interface, and this hub's own standing
+   * policy through `consult`. One function for both is the whole of "a policy
+   * grant goes through the same decide-once path as a person's" -- a second
+   * path that also dispatched would be a second place the claim could be
+   * skipped.
+   */
+  function decide(request: DecideRequest): Promise<ApprovalAnswer> {
+    const entry = lookup(request.ref, request.approvalId);
+    if (entry === undefined) {
+      const remembered = endings.get(endingKey(request.ref, request.approvalId));
+      if (remembered === undefined) {
+        logger.info('approval decision refused', {
+          ...request.ref,
+          approvalId: request.approvalId,
+          problem: 'no such approval',
+        });
         return Promise.resolve({
           ok: false,
-          outcome: remembered,
+          outcome: null,
+          answeredBy: null,
           code: 'refused',
-          problem: `that approval is ${remembered}`,
+          problem: 'this hub is holding no approval by that id for that session',
         });
       }
+      return Promise.resolve({
+        ok: false,
+        outcome: remembered,
+        // The request is gone and so is the rule that answered it. What is
+        // remembered is the word, bounded; a rule kept alongside would be this
+        // hub holding a copy of a policy that may since have been revoked.
+        answeredBy: null,
+        code: 'refused',
+        problem: `that approval is ${remembered}`,
+      });
+    }
 
-      const answered = new Promise<ApprovalAnswer>((resolve) => entry.waiting.push(resolve));
+    const answered = new Promise<ApprovalAnswer>((resolve) => entry.waiting.push(resolve));
 
-      // Claimed before anything is sent, so that a second client arriving while
-      // this frame is in the socket finds it taken. Deciding once is this line.
-      if (entry.claimed) return answered;
-      entry.claimed = true;
+    // Claimed before anything is sent, so that a second client arriving while
+    // this frame is in the socket finds it taken. Deciding once is this line.
+    if (entry.claimed) return answered;
+    entry.claimed = true;
 
-      // Watched rather than awaited, and that is what this function returning
-      // here rather than below buys. The seam answers with a refusal or with
-      // silence, and silence is only known to be silence once a deadline has
-      // passed at the connection; an answer that waited for that would hold
-      // every *working* decision open for it, although the settlement it is
-      // really waiting for may already have arrived on the same socket.
-      void dispatch({
-        registrationId: entry.source,
-        approvalId: request.approvalId,
-        decision: request.decision,
-      }).then(
-        (put) => {
-          if (put.ok) return;
-          refuseDispatch(entry, request, put.code, put.problem);
-        },
-        (error: unknown) => {
-          // The hub's own side failed on the way to the socket. Nothing was
-          // applied, which is exactly what a refusal states, so it is said the
-          // same way rather than thrown at whoever tapped.
-          refuseDispatch(
-            entry,
-            request,
-            'internal',
-            `the hub could not put that decision to the server: ${String(error)}`,
-          );
-        },
-      );
-      return answered;
-    },
-  };
+    // Watched rather than awaited, and that is what this function returning
+    // here rather than below buys. The seam answers with a refusal or with
+    // silence, and silence is only known to be silence once a deadline has
+    // passed at the connection; an answer that waited for that would hold
+    // every *working* decision open for it, although the settlement it is
+    // really waiting for may already have arrived on the same socket.
+    void dispatch({
+      registrationId: entry.source,
+      approvalId: request.approvalId,
+      decision: request.decision,
+    }).then(
+      (put) => {
+        if (put.ok) return;
+        refuseDispatch(entry, request, put.code, put.problem);
+      },
+      (error: unknown) => {
+        // The hub's own side failed on the way to the socket. Nothing was
+        // applied, which is exactly what a refusal states, so it is said the
+        // same way rather than thrown at whoever tapped.
+        refuseDispatch(
+          entry,
+          request,
+          'internal',
+          `the hub could not put that decision to the server: ${String(error)}`,
+        );
+      },
+    );
+    return answered;
+  }
+
+  /**
+   * Asks the standing policy about one request the moment it arrives, and
+   * grants it if a rule already covers it.
+   *
+   * Read here and nowhere else, with nothing cached, which is what makes a
+   * rule removed while a request is pending stop applying to it: there is no
+   * decision held anywhere that a rule produced earlier.
+   *
+   * Everything that is not an unambiguous match falls through to a person --
+   * the policy answering `null`, the request having ended while the policy was
+   * read, a person having tapped first, and the seam rejecting at all.
+   *
+   * A request whose proposal was cut is never put to the policy at all, and
+   * that is the first thing here rather than a check buried inside matching. A
+   * bounded proposal does not identify the tool input it came from: every input
+   * agreeing for its first few thousand rendered characters renders as the same
+   * bytes, so a rule matched against one of them would stand for all of them --
+   * including whatever the agent wrote past the cut, which nobody has read. No
+   * reading of the text can tell those apart, so there is nothing to be clever
+   * about: a cut request is a question, and it reaches a person exactly as one
+   * no rule covers does.
+   */
+  async function consult(ref: SessionRef, approvalId: ApprovalId): Promise<void> {
+    const pending = lookup(ref, approvalId);
+    if (pending === undefined) return;
+    if (pending.pending.truncated) {
+      logger.info('a request too long to be shown whole is never matched, so somebody is asked', {
+        ...ref,
+        approvalId,
+        tool: pending.pending.tool,
+      });
+      return;
+    }
+
+    let grant: ApprovalPolicyGrant | null;
+    try {
+      grant = await policy(ref, { tool: pending.pending.tool, proposal: pending.pending.proposal });
+    } catch (error) {
+      logger.warn('the standing policy could not be consulted, so somebody will be asked', {
+        ...ref,
+        approvalId,
+        problem: String(error),
+      });
+      return;
+    }
+    if (grant === null) return;
+
+    // Read again rather than trusting the entry from before the await: the
+    // agent may have taken the request back, or its machine may have gone,
+    // while this hub was reading its own disk.
+    const entry = lookup(ref, approvalId);
+    if (entry === undefined || entry !== pending) return;
+    if (entry.claimed) {
+      // A person got there first, in the window the policy read opened. Their
+      // answer is the one that counts, and this is not a second decision.
+      logger.info('a standing rule matched an approval somebody had already answered', {
+        ...ref,
+        approvalId,
+        project: grant.project,
+        ruleId: grant.ruleId,
+      });
+      return;
+    }
+
+    // Set and claimed in one tick -- `decide` takes the claim synchronously --
+    // so this can never end up describing a decision somebody else made.
+    entry.grantedByPolicy = grant;
+    // Put on the row and announced before the decision leaves this hub, which
+    // is how every client learns a grant was automatic. The request is drawn as
+    // answered-by-a-rule for as long as the machine holding the hook takes to
+    // confirm, and then leaves the row like any other. The alternative -- a
+    // frame of its own, broadcast -- would be a second channel saying something
+    // about a request the row is already carrying.
+    entry.pending = { ...entry.pending, answeredBy: grant };
+    announce(ref);
+    logger.info('approval granted by a standing rule, with nobody asked', {
+      ...ref,
+      approvalId,
+      tool: entry.pending.tool,
+      project: grant.project,
+      ruleId: grant.ruleId,
+      rule: `${grant.rule.tool} ${grant.rule.proposal}`,
+    });
+    void decide({ ref, approvalId, decision: 'grant' });
+  }
 
   /**
    * Nothing was applied: the request goes back to being answerable and
@@ -493,6 +666,14 @@ export function createApprovals({
    * frame it was: nothing happened, so nobody is owed an outcome and nobody
    * may be left holding a promise that only an answer which never happened
    * could settle.
+   *
+   * A grant a standing rule made is taken back off the row here for the same
+   * reason the claim is released. The mark is published the moment the rule
+   * takes the claim, before the decision leaves this hub, so a refusal leaves
+   * every client drawing a request as answered by a rule while it is still
+   * open -- and the person who then taps Allow would be told their tap lost to
+   * a policy, about a grant that was theirs. Nothing was applied, so nothing
+   * answered it, and the row has to say so.
    */
   function refuseDispatch(
     entry: OpenApproval,
@@ -500,13 +681,29 @@ export function createApprovals({
     code: RefusalCode,
     problem: string,
   ): void {
-    if (lookup(request.ref, request.approvalId) === entry) entry.claimed = false;
+    const stillOpen = lookup(request.ref, request.approvalId) === entry;
+    if (stillOpen) entry.claimed = false;
+    if (entry.grantedByPolicy !== null) {
+      entry.grantedByPolicy = null;
+      entry.pending = { ...entry.pending, answeredBy: null };
+      // Announced, not merely corrected in memory: the mark reached every
+      // client on its own broadcast, so the retraction needs one too. Only
+      // while the request is still this hub's to talk about -- one that ended
+      // in the meantime has already been announced without it.
+      if (stillOpen) announce(entry.ref);
+    }
     logger.info('a server refused a decision', {
       ...request.ref,
       approvalId: request.approvalId,
       problem,
     });
-    const refusal: ApprovalAnswer = { ok: false, outcome: null, code, problem };
+    const refusal: ApprovalAnswer = {
+      ok: false,
+      outcome: null,
+      answeredBy: null,
+      code,
+      problem,
+    };
     for (const resolve of entry.waiting.splice(0)) resolve(refusal);
   }
 }

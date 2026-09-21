@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { approvalIdSchema } from './approval.js';
+import {
+  APPROVAL_POLICY_RULES_MAX,
+  approvalIdSchema,
+  approvalPolicyRuleIdSchema,
+} from './approval.js';
 import { PROTOCOL_VERSION } from './version.js';
 import { parseClientFrame, parseHubFrame, type ClientFrame, type HubFrame } from './client.js';
 import { pairedServerAddressSchema } from './pairing.js';
@@ -639,6 +643,19 @@ describe('client and hub round trips', () => {
       approvalId: approvalIdSchema.parse('approval-7f21'),
       decision: 'grant',
     },
+    { type: 'approval-policy-list', id: 27, projectId: nodeIdSchema.parse('node-project-work') },
+    {
+      type: 'approval-policy-add',
+      id: 28,
+      projectId: nodeIdSchema.parse('node-project-work'),
+      rule: { tool: 'Bash', proposal: 'command: pnpm test' },
+    },
+    {
+      type: 'approval-policy-remove',
+      id: 29,
+      projectId: nodeIdSchema.parse('node-project-work'),
+      ruleId: approvalPolicyRuleIdSchema.parse('rule-1'),
+    },
   ];
 
   const hubFrames: readonly HubFrame[] = [
@@ -775,6 +792,7 @@ describe('client and hub round trips', () => {
                     approvalId: approvalIdSchema.parse('approval-7f21'),
                     tool: 'Bash',
                     proposal: 'command: prisma migrate deploy --schema ./db',
+                    truncated: false,
                     suggestions: [
                       {
                         behavior: 'allow',
@@ -783,6 +801,9 @@ describe('client and hub round trips', () => {
                       },
                     ],
                     requestedAt: 1_100,
+                    // No rule has answered this one, which is what every
+                    // pending approval says until one does.
+                    answeredBy: null,
                   },
                 ],
                 // What this session was started to do, as somebody typed it
@@ -929,8 +950,36 @@ describe('client and hub round trips', () => {
       content: '# Plan\n\n- read the failing test\n',
       updatedAt: 1_756_000_000_000,
     },
-    { type: 'approval-decided', replyTo: 26, outcome: 'granted' },
-    { type: 'approval-decided', replyTo: 26, outcome: 'withdrawn' },
+    { type: 'approval-decided', replyTo: 26, outcome: 'granted', answeredBy: null },
+    { type: 'approval-decided', replyTo: 26, outcome: 'withdrawn', answeredBy: null },
+    {
+      type: 'approval-decided',
+      replyTo: 26,
+      outcome: 'granted',
+      answeredBy: {
+        project: nodeIdSchema.parse('node-project-work'),
+        ruleId: approvalPolicyRuleIdSchema.parse('rule-1'),
+        rule: { tool: 'Bash', proposal: 'command: pnpm test' },
+      },
+    },
+    {
+      type: 'approval-policy',
+      replyTo: 27,
+      projectId: nodeIdSchema.parse('node-project-work'),
+      rules: [
+        {
+          ruleId: approvalPolicyRuleIdSchema.parse('rule-1'),
+          rule: { tool: 'Bash', proposal: 'command: pnpm test' },
+          createdAt: 1_756_000_000_000,
+        },
+      ],
+    },
+    {
+      type: 'approval-policy',
+      replyTo: 27,
+      projectId: nodeIdSchema.parse('node-project-work'),
+      rules: [],
+    },
   ];
 
   it('sends terminal output with no replyTo either: a stream is nobody\u2019s reply', () => {
@@ -1132,19 +1181,144 @@ describe('the approval frames on the client leg', () => {
 
   it('answers with what became of the request, including the two races', () => {
     for (const outcome of ['granted', 'denied', 'withdrawn', 'expired']) {
-      expect(parseHubFrame({ type: 'approval-decided', replyTo: 30, outcome }).ok).toBe(true);
+      expect(
+        parseHubFrame({ type: 'approval-decided', replyTo: 30, outcome, answeredBy: null }).ok,
+      ).toBe(true);
     }
   });
 
   it('refuses an outcome outside the four', () => {
-    expect(parseHubFrame({ type: 'approval-decided', replyTo: 30, outcome: 'pending' }).ok).toBe(
-      false,
-    );
+    expect(
+      parseHubFrame({
+        type: 'approval-decided',
+        replyTo: 30,
+        outcome: 'pending',
+        answeredBy: null,
+      }).ok,
+    ).toBe(false);
   });
 
   it('is a reply and never a broadcast: it says which frame it answers', () => {
     // The change itself reaches every other client on the session row of the
     // next machine state. This is the receipt for the one that asked.
-    expect(parseHubFrame({ type: 'approval-decided', outcome: 'granted' }).ok).toBe(false);
+    expect(
+      parseHubFrame({ type: 'approval-decided', outcome: 'granted', answeredBy: null }).ok,
+    ).toBe(false);
+  });
+});
+
+/**
+ * The client leg of the standing policy: three questions, one answer.
+ *
+ * A rule answers on a person's behalf, so every refusal the parser can make is
+ * worth a line here. The two that matter most are the shape of the rule itself,
+ * which is the protocol's own and not a loose pair of strings, and the project:
+ * a policy is keyed by a project node and there is no session-scoped form of
+ * any of these frames to reach for.
+ */
+describe('the approval policy frames on the client leg', () => {
+  const PROJECT = nodeIdSchema.parse('node-project-work');
+  const RULE = { tool: 'Bash', proposal: 'command: pnpm test' };
+
+  it('asks for one project’s rules, naming the project by its node', () => {
+    expect(parseClientFrame({ type: 'approval-policy-list', id: 1, projectId: PROJECT }).ok).toBe(
+      true,
+    );
+  });
+
+  it('refuses a policy question naming a session instead of a project', () => {
+    // There is no per-session policy and no frame that could ask for one. A
+    // rule is a statement about a body of work, and the only handle on one here
+    // is a node id.
+    expect(
+      parseClientFrame({
+        type: 'approval-policy-list',
+        id: 1,
+        storeId: storeIdSchema.parse('store-work'),
+        sessionId: sessionIdSchema.parse('session-1'),
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('carries a rule as the protocol’s own pair and not as free text', () => {
+    expect(
+      parseClientFrame({ type: 'approval-policy-add', id: 2, projectId: PROJECT, rule: RULE }).ok,
+    ).toBe(true);
+    expect(
+      parseClientFrame({
+        type: 'approval-policy-add',
+        id: 2,
+        projectId: PROJECT,
+        rule: 'Bash command: pnpm test',
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('refuses an add whose rule has no tool or no text', () => {
+    // The bound is the frame's; the sentence is `parseApprovalPolicyRule`'s.
+    // Both run, and this one is what stops a shapeless rule reaching the hub.
+    for (const rule of [{ tool: '', proposal: 'command: pnpm test' }, { tool: 'Bash' }]) {
+      expect(
+        parseClientFrame({ type: 'approval-policy-add', id: 2, projectId: PROJECT, rule }).ok,
+      ).toBe(false);
+    }
+  });
+
+  it('removes by the id the hub minted, scoped to the project it is in', () => {
+    expect(
+      parseClientFrame({
+        type: 'approval-policy-remove',
+        id: 3,
+        projectId: PROJECT,
+        ruleId: 'rule-1',
+      }).ok,
+    ).toBe(true);
+    // Without the project there is nothing to answer the removal with, and
+    // nothing scoping the delete to the policy the client was looking at.
+    expect(parseClientFrame({ type: 'approval-policy-remove', id: 3, ruleId: 'rule-1' }).ok).toBe(
+      false,
+    );
+  });
+
+  it('answers with the whole policy, and with an empty one for a project with none', () => {
+    expect(
+      parseHubFrame({ type: 'approval-policy', replyTo: 1, projectId: PROJECT, rules: [] }).ok,
+    ).toBe(true);
+  });
+
+  it('refuses an answered rule the rule parser would refuse', () => {
+    // A row an older build wrote is read back through the same schema. What
+    // cannot be a rule does not cross as one.
+    expect(
+      parseHubFrame({
+        type: 'approval-policy',
+        replyTo: 1,
+        projectId: PROJECT,
+        rules: [{ ruleId: 'rule-1', rule: { tool: 'Bash', proposal: '' }, createdAt: 1 }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('refuses a policy bigger than one frame may carry', () => {
+    const rules = Array.from({ length: APPROVAL_POLICY_RULES_MAX + 1 }, (_unused, index) => ({
+      ruleId: `rule-${String(index)}`,
+      rule: { tool: 'Bash', proposal: `command: pnpm test ${String(index)}` },
+      createdAt: 1,
+    }));
+    expect(
+      parseHubFrame({ type: 'approval-policy', replyTo: 1, projectId: PROJECT, rules }).ok,
+    ).toBe(false);
+  });
+
+  it('names the rule that answered a request nobody was asked about', () => {
+    const parsed = parseHubFrame({
+      type: 'approval-decided',
+      replyTo: 1,
+      outcome: 'granted',
+      answeredBy: { project: PROJECT, ruleId: 'rule-1', rule: RULE },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.value.type !== 'approval-decided') return;
+    expect(parsed.value.answeredBy?.rule).toEqual(RULE);
   });
 });

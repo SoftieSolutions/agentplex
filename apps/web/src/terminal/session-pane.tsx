@@ -7,7 +7,12 @@ import {
   type JSX,
   type KeyboardEvent,
 } from 'react';
-import type { ClientTerminalTarget, SessionRef, TerminalSize } from '@agentplex/protocol';
+import type {
+  ClientTerminalTarget,
+  PendingApproval,
+  SessionRef,
+  TerminalSize,
+} from '@agentplex/protocol';
 
 import { terminalKey, type HubStore, type TerminalWatchView } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
@@ -28,6 +33,8 @@ import {
   NOTHING_SELECTED,
   type Clipboard,
 } from './clipboard.js';
+import { ApprovalsBlock } from './approvals-block.js';
+import { ApprovalsTab } from './approvals-tab.js';
 import { ContextPanel, type ContextBlock } from './context-panel.js';
 import type { EmulatorFactory, TerminalEmulator } from './emulator.js';
 import { FindBar } from './find-bar.js';
@@ -45,6 +52,8 @@ import {
   toneForStatus,
   type CrumbRole,
 } from './presentation.js';
+import { projectForSession, type SessionProject } from '../sessions/approval-policy-model.js';
+import { approvalsOldestFirst } from '../sessions/session-list-model.js';
 import { StopButton } from '../sessions/stop-button.js';
 import { ToneDot } from '../ui/tone-dot.js';
 import { useShellForm } from '../shell/shell-form.js';
@@ -60,13 +69,15 @@ import { useTerminalWatch } from './use-terminal-watch.js';
  * The open-session screen (mockup 7c): header row, tab strip, terminal, steer
  * bar.
  *
- * The strip is drawn with the one tab that is built. It stopped being the
- * control with a single option that is not worth drawing the moment it became
- * the mount point three other screens need: Transcript (AGX-82), Diff
- * (AGX-105) and Approvals (AGX-104) each append a tab to a list rather than
- * introduce a control, and until they do, nothing disabled and nothing
- * placeholder stands in for them. What the mockup shows and this still does
- * not draw: the Pause / Hand off / Replay buttons.
+ * The strip is drawn with the tabs that are built, which is now two: the
+ * Terminal, and Approvals while this session is holding a request. That is the
+ * arrangement the strip was given a list for -- Transcript (AGX-82) and Diff
+ * (AGX-105) append a tab each when they land, and until they do, nothing
+ * disabled and nothing placeholder stands in for them. Approvals goes further
+ * than appending, because it is the first tab whose existence is a fact about
+ * the session rather than about what has been built: it is offered while
+ * something is asking and not otherwise. What the mockup shows and this still
+ * does not draw: the Pause / Hand off / Replay buttons.
  *
  * The context panel is the second mount point, and it works the same way. The
  * pane's body is a row -- the terminal and everything said about it on the
@@ -86,17 +97,33 @@ import { useTerminalWatch } from './use-terminal-watch.js';
 const MONO_META = { fontFamily: 'var(--mantine-font-family-monospace)' } as const;
 
 /**
- * The tabs this pane has. One, today.
+ * The tabs this pane has: the Terminal, and Approvals while something is
+ * asking.
  *
- * A module constant and not a memo: it depends on nothing about a session yet,
- * and a list rebuilt per render would give the strip a new array to diff on
- * every keystroke that re-renders the pane. When Transcript, Diff and
- * Approvals land, the ones carrying a count (`+142 -38`, `3`) become a
- * derivation of what the hub published and this stops being a constant --
- * which is exactly why the strip takes the list as a prop.
+ * It stopped being a module constant when the second tab landed, which is what
+ * the strip taking a list was for. Approvals is drawn only while the session is
+ * holding a request, with the count as its badge -- the mockup's `3` -- and it
+ * disappears when the last one settles. A tab that stayed with `0` on it would
+ * be a control that opens an empty screen, and the strip's own rule is that
+ * nothing disabled and nothing placeholder stands in for a screen.
+ *
+ * The one-tab answer is a module constant rather than a fresh array so that a
+ * pane on a session that never asks for anything -- every codex session -- hands
+ * the strip the same list on every keystroke that re-renders the pane.
+ *
+ * Outside the component body because it needs nothing from it.
  */
 const TERMINAL_TAB = 'terminal';
-const SESSION_TABS: readonly SessionTab[] = [{ id: TERMINAL_TAB, label: 'Terminal', badge: null }];
+const APPROVALS_TAB = 'approvals';
+const TERMINAL_ONLY: readonly SessionTab[] = [{ id: TERMINAL_TAB, label: 'Terminal', badge: null }];
+
+function sessionTabs(pending: number): readonly SessionTab[] {
+  if (pending === 0) return TERMINAL_ONLY;
+  return [...TERMINAL_ONLY, { id: APPROVALS_TAB, label: 'Approvals', badge: String(pending) }];
+}
+
+/** A session asking for nothing, as one array rather than a new one per render. */
+const NO_APPROVALS: readonly PendingApproval[] = [];
 
 /**
  * How loudly each crumb is drawn, as the two roles `breadcrumb` hands back.
@@ -116,29 +143,47 @@ const CRUMB_ROLES: Record<
 };
 
 /**
- * The blocks in the context panel, built from the row the hub published.
+ * The blocks in the context panel, built from the row the hub published and
+ * from where the tree has this session filed.
  *
  * It stopped being a module constant the moment the first block landed, which
  * is what the frame was built to allow: a block is `{ key, title, body }` and a
  * ticket that adds one appends to this list and writes the component its body
- * renders. APPROVALS (AGX-104), COST (AGX-107) and the machine and diff blocks
- * each arrive as another entry here, and none of them touches `ContextPanel`.
+ * renders. COST (AGX-107) and the machine and diff blocks each arrive as
+ * another entry here, and none of them touches `ContextPanel`.
  *
- * TASK is here on one condition, and it is the ticket's whole decision: the
- * task is `row.task`, the prompt the session was started with, and a session
- * the hub has no task for -- every session it adopted off a machine rather
- * than started -- gets no block. Not an empty one: a TASK heading with nothing
- * under it reads as a fact that failed to load. And with no other block built
- * yet, no task means no panel at all, which the frame already decides for
- * itself.
+ * TASK is here on one condition, and it is AGX-130's whole decision: the task
+ * is `row.task`, the prompt the session was started with, and a session the hub
+ * has no task for -- every session it adopted off a machine rather than started
+ * -- gets no block. Not an empty one: a TASK heading with nothing under it
+ * reads as a fact that failed to load.
+ *
+ * APPROVALS is here on no condition at all, and that is the difference between
+ * the two. The policy is a standing fact about what this session will and will
+ * not be asked about, and the answer for a session filed under no project is
+ * not "nothing to say" -- it is that there is nowhere for a rule to live, which
+ * is exactly what somebody looking for the policy needs to be told. So the
+ * block draws for every session, and the panel is now drawn for every session
+ * that has a pane, which is the first time that has been true.
  *
  * Outside the component body because it needs nothing from it.
  */
-const NO_CONTEXT_BLOCKS: readonly ContextBlock[] = [];
-
-function contextBlocks(task: string | null, scheme: Scheme): readonly ContextBlock[] {
-  if (task === null) return NO_CONTEXT_BLOCKS;
-  return [{ key: 'task', title: 'Task', body: <TaskBlock task={task} scheme={scheme} /> }];
+function contextBlocks(
+  task: string | null,
+  project: SessionProject,
+  store: HubStore,
+  scheme: Scheme,
+): readonly ContextBlock[] {
+  const blocks: ContextBlock[] = [];
+  if (task !== null) {
+    blocks.push({ key: 'task', title: 'Task', body: <TaskBlock task={task} scheme={scheme} /> });
+  }
+  blocks.push({
+    key: 'approvals',
+    title: 'Approvals',
+    body: <ApprovalsBlock project={project} store={store} scheme={scheme} />,
+  });
+  return blocks;
 }
 
 /**
@@ -221,6 +266,24 @@ export function SessionPane({
   );
   useTerminalWatch(hub, target);
   const terminal: TerminalWatchView | null = snapshot.terminals.get(terminalKey(target)) ?? null;
+  /**
+   * The tree, for the one question the panel asks of it: which project this
+   * session is filed under, and therefore whose standing policy decides what it
+   * is asked about.
+   *
+   * Read out of the snapshot rather than subscribed to here. The tree is
+   * page-wide standing interest -- the shell declares it for every screen it
+   * mounts, once, and the store re-asks for it on every reconnection -- so a
+   * pane taking a second watch would be declaring interest in something that is
+   * already being kept current for it. What makes reading safe is that the
+   * answer has a third value: a pane handed no tree says it does not know where
+   * this session is filed, which is a different sentence from "no project" and
+   * the only one it is entitled to.
+   */
+  const project = useMemo(
+    () => projectForSession(snapshot.layout, sessionRef),
+    [snapshot.layout, sessionRef],
+  );
 
   // Pane-lifetime collaborators, not render data: the registry holds the
   // chord bindings. One per mounted pane; the route keys the pane so another
@@ -460,17 +523,36 @@ export function SessionPane({
   // The machine's own reading, so a pane whose hub cannot connect at all says
   // that rather than telling somebody to wait for a dial that will be refused.
   const feed = terminalFeedNotice(terminal, machineFor(state, row));
-  const shownTab = activeTab(SESSION_TABS, requestedTab);
+  /**
+   * Every request this session is blocked on, oldest first, and the tabs that
+   * follow from how many there are.
+   *
+   * Memoized on the row's own array: a row is a fresh object on every state
+   * frame the hub sends, and this pane re-renders on every keystroke that
+   * changes anything else about it, so a list rebuilt each time would hand the
+   * tab a new array of new objects for requests that have not changed.
+   *
+   * `shownTab` resolves the request against the strip as it stands now, which
+   * is the whole of what happens when the last request settles under somebody
+   * looking at the Approvals tab: the tab stops being in the list and the pane
+   * shows the first one that is, which is the Terminal.
+   */
+  const approvals = useMemo(() => approvalsOldestFirst(row?.approvals ?? NO_APPROVALS), [row]);
+  const tabs = useMemo(() => sessionTabs(approvals.length), [approvals.length]);
+  const shownTab = activeTab(tabs, requestedTab);
   /**
    * What the panel has to say about this session.
    *
-   * Memoized on the task text and the scheme rather than on the row: a row is
-   * a fresh object on every state frame the hub sends, and this pane re-renders
-   * on every keystroke that changes anything else about it, so a list rebuilt
-   * each time would hand the panel a new array and a new block element for a
-   * task that has not changed since the session started.
+   * Memoized on the task text, the project and the scheme rather than on the
+   * row: a row is a fresh object on every state frame the hub sends, and this
+   * pane re-renders on every keystroke that changes anything else about it, so
+   * a list rebuilt each time would hand the panel a new array and a new block
+   * element for facts that have not changed since the session started.
    */
-  const blocks = useMemo(() => contextBlocks(row?.task ?? null, scheme), [row?.task, scheme]);
+  const blocks = useMemo(
+    () => contextBlocks(row?.task ?? null, project, hub, scheme),
+    [row?.task, project, hub, scheme],
+  );
   // Attachment is a claim about a socket and the subscription on it, which is
   // why it is read off the store and never off the route: an address says
   // where a user pointed, not what a hub answered.
@@ -619,7 +701,7 @@ export function SessionPane({
       </Group>
 
       <TabStrip
-        tabs={SESSION_TABS}
+        tabs={tabs}
         activeId={shownTab}
         onSelect={setRequestedTab}
         scheme={scheme}
@@ -674,66 +756,97 @@ export function SessionPane({
             </Text>
           )}
 
-          {finding && (
-            <FindBar
-              search={paneSearch}
-              truncated={() => terminalIsPartial(terminal)}
+          {/**
+           * What is under the tab that is open.
+           *
+           * The Approvals tab replaces the terminal rather than sitting beside
+           * it, and the terminal is unmounted rather than hidden. Hiding it
+           * would leave the fit addon measuring a box with no size and telling
+           * a pty on another machine it is zero columns wide; unmounting is the
+           * lifetime `terminal-view.tsx` is built for -- the emulator goes with
+           * its element, and the feed does not go with either. The feed belongs
+           * to the watched target and is held by the store, so coming back
+           * builds an emulator and replays into it, the same path a second pane
+           * opened on one session already takes.
+           *
+           * The find bar and the sentences about how much of the session this
+           * pane is not showing go with the terminal, because that is what they
+           * are about. The header, the strip and the steer bar are the pane's
+           * and stay whichever tab is open: steering goes down the same
+           * terminal-input path whether or not an emulator is mounted to echo
+           * it.
+           *
+           * The strip still carries no `aria-controls`: the element a tab would
+           * point at here is the emulator's own box, which belongs to
+           * `terminal-view.tsx`, and naming one of the two panels and not the
+           * other would be worse than naming neither.
+           */}
+          {shownTab === APPROVALS_TAB ? (
+            <ApprovalsTab
+              sessionRef={sessionRef}
+              approvals={approvals}
+              project={project}
+              store={hub}
               scheme={scheme}
-              onClose={closeFind}
-              inputRef={findRef}
             />
-          )}
-
-          {/* What is under the Terminal tab, drawn unconditionally because it
-              is the only tab there is: a switch on `shownTab` today would be a
-              branch with one arm, and the ticket that adds the second tab adds
-              it with the panel it is a tab for. The strip carries no
-              `aria-controls` for the same reason -- the element a tab would
-              point at is the emulator's own box, which belongs to
-              `terminal-view.tsx`, and the ids arrive with the real panels. */}
-          {terminal === null ? (
-            // The watch is declared in a subscription, which React runs after
-            // the first commit, so there is one frame in which this pane has no
-            // feed to hand an emulator. The same well, painted, rather than an
-            // emulator built against a buffer that is about to be replaced.
-            <Box style={{ flex: 1, background: colorForRole('terminalBackground', scheme) }} />
           ) : (
-            <TerminalView
-              feed={terminal.feed}
-              scheme={scheme}
-              onData={sendInput}
-              onResize={sendResize}
-              emulatorReady={emulatorReady}
-              emulators={emulators}
-            />
-          )}
+            <>
+              {finding && (
+                <FindBar
+                  search={paneSearch}
+                  truncated={() => terminalIsPartial(terminal)}
+                  scheme={scheme}
+                  onClose={closeFind}
+                  inputRef={findRef}
+                />
+              )}
 
-          {feed !== null && (
-            <Text
-              fz={11}
-              px={18}
-              py={6}
-              style={{ color: colorForTone('blocked', scheme), borderTop: border }}
-            >
-              {feed}
-            </Text>
-          )}
+              {terminal === null ? (
+                // The watch is declared in a subscription, which React runs
+                // after the first commit, so there is one frame in which this
+                // pane has no feed to hand an emulator. The same well, painted,
+                // rather than an emulator built against a buffer that is about
+                // to be replaced.
+                <Box style={{ flex: 1, background: colorForRole('terminalBackground', scheme) }} />
+              ) : (
+                <TerminalView
+                  feed={terminal.feed}
+                  scheme={scheme}
+                  onData={sendInput}
+                  onResize={sendResize}
+                  emulatorReady={emulatorReady}
+                  emulators={emulators}
+                />
+              )}
 
-          {scope !== null && (
-            <Text
-              fz={11}
-              px={18}
-              py={6}
-              style={{ color: colorForRole('textFaint', scheme), borderTop: border }}
-            >
-              {scope}
-            </Text>
-          )}
+              {feed !== null && (
+                <Text
+                  fz={11}
+                  px={18}
+                  py={6}
+                  style={{ color: colorForTone('blocked', scheme), borderTop: border }}
+                >
+                  {feed}
+                </Text>
+              )}
 
-          {notice !== null && (
-            <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>
-              {notice}
-            </Text>
+              {scope !== null && (
+                <Text
+                  fz={11}
+                  px={18}
+                  py={6}
+                  style={{ color: colorForRole('textFaint', scheme), borderTop: border }}
+                >
+                  {scope}
+                </Text>
+              )}
+
+              {notice !== null && (
+                <Text fz={11} px={18} py={6} style={{ color: colorForTone('blocked', scheme) }}>
+                  {notice}
+                </Text>
+              )}
+            </>
           )}
 
           <Group gap={8} px={18} py={10} style={{ borderTop: border }} wrap="nowrap">

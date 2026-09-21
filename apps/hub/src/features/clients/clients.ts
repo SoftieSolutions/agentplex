@@ -11,6 +11,7 @@ import type { ClientCatalogue } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
 import type { Projects } from '../projects/projects.js';
 import type { Approvals } from '../approvals/approvals.js';
+import type { ApprovalPolicy } from '../approval-policy/approval-policy.js';
 import type { Attention } from '../attention/attention.js';
 import type { Sessions } from '../sessions/sessions.js';
 import type { FleetState } from '../fleet-state/fleet-state.js';
@@ -92,6 +93,14 @@ export interface ClientsDependencies {
    * per-socket copy of that record would be one blocked agent released twice.
    */
   readonly approvals: Approvals;
+  /**
+   * The standing policy, passed through to every connection.
+   *
+   * Beside `approvals` for the reason the connection states: a request is a
+   * claim about now and a rule is a thing somebody wrote down, and this feature
+   * owns neither -- it hands both to the sockets that ask about them.
+   */
+  readonly approvalPolicy: ApprovalPolicy;
   /**
    * Pairing and unpairing servers, handed to every client this serves.
    *
@@ -210,6 +219,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
     sessions,
     attention,
     approvals,
+    approvalPolicy,
     pairing,
     syncServers,
     projects,
@@ -310,6 +320,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         sessions,
         attention,
         approvals,
+        approvalPolicy,
         pairing,
         syncServers,
         projects,

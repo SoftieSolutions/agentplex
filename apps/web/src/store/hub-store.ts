@@ -4,7 +4,9 @@ import {
   parseHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type ApprovalAnsweredBy,
   type ApprovalOutcome,
+  type ApprovalPolicyRecord,
   type CatalogueItem,
   type CatalogueQuery,
   type ClientFrame,
@@ -315,6 +317,32 @@ export interface AttentionView {
 export interface ApprovalView {
   readonly replyTo: FrameId;
   readonly outcome: ApprovalOutcome;
+  /**
+   * The standing rule whose grant took effect, or `null` for a request a person
+   * answered.
+   *
+   * Kept because the outcome alone is not enough for the control that asked:
+   * `granted` is `granted` whether this tap was the one applied or a rule got
+   * there first, and a screen that could not tell those apart would report
+   * somebody's tap as having done something it did not do.
+   */
+  readonly answeredBy: ApprovalAnsweredBy | null;
+}
+
+/**
+ * One project's standing policy as this client last read it.
+ *
+ * The whole policy, never a page: the hub answers it whole, and a client
+ * holding part of one would be a client saying a request will be asked about
+ * when it will not.
+ *
+ * Kept by project rather than in one newest slot, because more than one screen
+ * can be looking at a policy -- a session pane and the project it is filed
+ * under -- and a single slot would show one of them the other's answer.
+ */
+export interface ApprovalPolicyView {
+  readonly replyTo: FrameId;
+  readonly rules: readonly ApprovalPolicyRecord[];
 }
 
 /**
@@ -512,6 +540,8 @@ export interface HubSnapshot {
   readonly lastAttention: AttentionView | null;
   /** What the hub last said became of an approval this client answered. */
   readonly lastApproval: ApprovalView | null;
+  /** Every project's standing policy this client has been answered, by node. */
+  readonly approvalPolicies: ReadonlyMap<NodeId, ApprovalPolicyView>;
   /** The hub's most recent directory listing, kept until the next one. */
   readonly lastListing: DirectoryListingView | null;
   /** The hub's most recent yes to a project create, kept until the next one. */
@@ -567,6 +597,15 @@ export interface HubSnapshot {
  * it is what the hub stores rather than a secret the user typed -- and turning
  * notifications on while the connection blinks is still turning them on.
  *
+ * The three policy frames are commands for the plainest reason too: reading a
+ * project's rules is a question asked once by somebody who opened a panel, and
+ * writing or removing one is something a person did once. None of them is
+ * standing interest -- nothing re-reads a policy on every reconnection, the way
+ * the layout is re-asked -- so none of them is a subscription. Queueing a write
+ * over a blink is right for the same reason it is right for an acknowledgement:
+ * "stop asking me about this" is still what the person meant a second later,
+ * and the hub refuses the rule if it has since become one it will not take.
+ *
  * `approval-decide` is a command for that reason too, and it is the one where
  * queueing looks riskiest and is not: a decision held over a blink can reach a
  * hub that has nothing left to apply it to. What makes it safe is that the hub
@@ -585,6 +624,9 @@ type CommandFrame = Extract<
       | 'session-acknowledge'
       | 'session-mute'
       | 'approval-decide'
+      | 'approval-policy-list'
+      | 'approval-policy-add'
+      | 'approval-policy-remove'
       | 'pane-layout-save'
       | 'directory-list'
       | 'project-create'
@@ -899,6 +941,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastStopped: null,
     lastAttention: null,
     lastApproval: null,
+    approvalPolicies: new Map(),
     lastListing: null,
     lastProjectCreated: null,
     lastTreeChange: null,
@@ -1425,7 +1468,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // state, never out of here.
         update({
           lastRefusal: null,
-          lastApproval: { replyTo: frame.replyTo, outcome: frame.outcome },
+          lastApproval: {
+            replyTo: frame.replyTo,
+            outcome: frame.outcome,
+            answeredBy: frame.answeredBy,
+          },
         });
         return;
       }
@@ -1439,6 +1486,18 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           lastRefusal: null,
           lastPush: { replyTo: frame.replyTo, subscribed: frame.type === 'push-subscribed' },
         });
+        return;
+      }
+      case 'approval-policy': {
+        pending.delete(frame.replyTo);
+        // Replaced whole, and by the project the frame names rather than by
+        // whichever question was asked: list, add and remove all answer with
+        // the policy as it now stands, so there is nothing here to apply and
+        // nothing to get wrong. A client that applied its own add would be a
+        // client holding a policy nobody vouched for.
+        const policies = new Map(snapshot.approvalPolicies);
+        policies.set(frame.projectId, { replyTo: frame.replyTo, rules: frame.rules });
+        update({ lastRefusal: null, approvalPolicies: policies });
         return;
       }
       case 'server-paired':

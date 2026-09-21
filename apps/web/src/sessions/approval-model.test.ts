@@ -29,7 +29,11 @@ function approvalFrom(text: string): ApprovalView {
   if (!parsed.ok || parsed.value.type !== 'approval-decided') {
     throw new Error('the fixture is not an approval-decided frame');
   }
-  return { replyTo: parsed.value.replyTo, outcome: parsed.value.outcome };
+  return {
+    replyTo: parsed.value.replyTo,
+    outcome: parsed.value.outcome,
+    answeredBy: parsed.value.answeredBy,
+  };
 }
 
 /** The one session in the captured state that has a request open on it. */
@@ -102,7 +106,7 @@ describe('what the hub has said about the answer', () => {
     // are the endings where somebody answered and nothing happened, and
     // reporting either as a denial would be the one dishonest thing here.
     for (const outcome of ['denied', 'withdrawn', 'expired'] as const) {
-      expect(approvalFollowUp(4, { replyTo: 4, outcome }, null)).toEqual({
+      expect(approvalFollowUp(4, { replyTo: 4, outcome, answeredBy: null }, null)).toEqual({
         kind: 'decided',
         outcome,
       });

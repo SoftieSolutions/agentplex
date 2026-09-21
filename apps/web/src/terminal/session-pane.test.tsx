@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  approvalIdSchema,
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
@@ -245,7 +246,17 @@ function control(label: string): HTMLElement {
  * document order.
  */
 function summary(): string {
-  return [...container.querySelectorAll('[role="status"]')].at(-1)?.textContent ?? '';
+  // The last live region the terminal column holds, which is the find bar's
+  // count. The context panel beside it has one of its own -- the APPROVALS
+  // block mounts a status region before it has words -- and a query over the
+  // whole pane would have started reading the panel's the moment that block
+  // landed.
+  const panel = container.querySelector('[aria-label="session context"]');
+  return (
+    [...container.querySelectorAll('[role="status"]')]
+      .filter((region) => panel === null || !panel.contains(region))
+      .at(-1)?.textContent ?? ''
+  );
 }
 
 /** The word in the header's attachment chip, which is the first live region. */
@@ -1038,13 +1049,18 @@ describe('the body of a session pane', () => {
     return [Number.parseFloat(style.paddingTop), Number.parseFloat(style.paddingLeft)];
   }
 
-  it('draws no context panel while no block has been built for it', async () => {
+  it('draws the panel for the one block every session has', async () => {
     await mountPane();
 
-    // The frame ships empty: AGX-129, AGX-138 and the TASK step append blocks
-    // to a list, and until one does there is nothing for a 300px column to
-    // hold, so the terminal has the whole pane exactly as it did before.
-    expect(contextPanel()).toBeNull();
+    // The panel is no longer conditional on a session having been started with
+    // a prompt: the standing policy is a fact about every session, including
+    // the answer "this session is in no project, so every request reaches you",
+    // and that is the answer somebody opening the panel came for.
+    const panel = contextPanel();
+    expect(panel).not.toBeNull();
+    expect(
+      [...container.querySelectorAll('section')].map((node) => node.getAttribute('aria-label')),
+    ).toEqual(['Approvals']);
   });
 
   it('leaves the terminal a column that can shrink and no padding to be fitted around', async () => {
@@ -1097,9 +1113,10 @@ describe('the session tab strip', () => {
     expect(tabLabels()).toEqual(['Terminal']);
     // Not a disabled Transcript, not a greyed Diff: a tab nobody can open is
     // a promise the screen cannot keep, and the strip is a list rather than a
-    // fixed set of four.
+    // fixed set of four. Asked of the strip rather than of the pane, because
+    // the panel beside it now has an APPROVALS heading of its own and that is
+    // a block about the standing policy, not a tab.
     expect(container.textContent).not.toContain('Transcript');
-    expect(container.textContent).not.toContain('Approvals');
     expect(container.querySelector('[role="tab"]')?.getAttribute('aria-selected')).toBe('true');
   });
 
@@ -1400,22 +1417,23 @@ describe('the task beside a session', () => {
     expect(block?.textContent).toContain(PROMPT);
   });
 
-  it('draws no panel at all for a session the hub holds no task for', async () => {
+  it('draws no task block at all for a session the hub holds no task for', async () => {
     // An adopted session: the hub found it on a machine rather than starting
-    // it, so there is no prompt anybody typed and nothing else in the panel is
-    // built yet. Not an empty column with a heading over it -- a TASK heading
-    // with nothing under it is a promise this screen cannot keep, and the
-    // first thing a reader would do is look for the sentence that is missing.
+    // it, so there is no prompt anybody typed. Not an empty block -- a TASK
+    // heading with nothing under it is a promise this screen cannot keep, and
+    // the first thing a reader would do is look for the sentence that is
+    // missing. The panel itself stays, because the block below it is about the
+    // policy and every session has one of those.
     await mountPaneOn(TASKED, hubFrames.machineStatePopulated);
 
     expect(taskBlock()).toBeNull();
-    expect(panel()).toBeNull();
+    expect(panel()).not.toBeNull();
   });
 
-  it('draws no panel for a session the state does not describe at all', async () => {
+  it('says nothing about a task for a session the state does not describe at all', async () => {
     await mountPaneOn('session-that-is-not-there', hubFrames.machineStatePopulated);
 
-    expect(panel()).toBeNull();
+    expect(taskBlock()).toBeNull();
   });
 
   it('draws no panel in the phone form, task or no task', async () => {
@@ -1433,5 +1451,186 @@ describe('the task beside a session', () => {
     } finally {
       window.innerWidth = 1024;
     }
+  });
+});
+
+/**
+ * The Approvals tab: the second tab this pane has ever had, and the reason the
+ * strip took a list rather than drawing a control.
+ *
+ * The state is the captured approval frame with more requests stated on a
+ * parsed copy of it. A fixture is captured output, so a session holding three
+ * open requests is stated here rather than typed into the capture, and what is
+ * stated goes back through the store's own parser -- a state that stopped being
+ * a machine-state frame fails here rather than arriving as nothing.
+ *
+ * The two claims that are the pane's rather than the tab's: the tab exists only
+ * while something is asking, with the count on it, and the pane falls back to
+ * the Terminal when the last request settles under a person who is looking at
+ * the tab. An empty Approvals tab is the blank screen this app keeps refusing
+ * to draw.
+ */
+describe('the Approvals tab in a session pane', () => {
+  const ASKING = '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde';
+
+  /**
+   * The captured state with a stated number of open requests on the session
+   * that is asking, listed newest first.
+   *
+   * Newest first deliberately: the order the tab draws them in is a rule, and
+   * a row that arrived already sorted would let a tab that did nothing pass.
+   * The ids go through the wire's own parser; everything else about each
+   * request is the captured one, with the command named so the order is
+   * readable in an assertion.
+   */
+  function statingApprovals(count: number): string {
+    const parsed = parseTextFrame(parseHubFrame, hubFrames.machineStateApproval);
+    if (!parsed.ok) throw new Error(`the fixture is unreadable: ${parsed.reason}`);
+    if (parsed.value.type !== 'machine-state') throw new Error('that fixture is not a state frame');
+    const state = parsed.value.state;
+    const [captured] = state.stores
+      .flatMap((store) => store.sessions)
+      .flatMap((row) => row.approvals);
+    if (captured === undefined) throw new Error('the captured state holds no open request');
+    const approvals = Array.from({ length: count }, (_unused, index) => ({
+      ...captured,
+      approvalId: approvalIdSchema.parse(`approval-${String(count - index)}`),
+      proposal: `request ${String(count - index)}`,
+      requestedAt: captured.requestedAt + (count - index) * 60_000,
+    }));
+    return JSON.stringify({
+      type: 'machine-state',
+      state: {
+        ...state,
+        stores: state.stores.map((store) => ({
+          ...store,
+          sessions: store.sessions.map((row) =>
+            row.descriptor.sessionId === ASKING ? { ...row, approvals } : row,
+          ),
+        })),
+      },
+    });
+  }
+
+  async function mountAsking(state: string): Promise<FakeSocket> {
+    const hub = buildStore();
+    await mount(
+      <SessionPane
+        sessionRef={sessionRefSchema.parse({ storeId: 'store-agentplex', sessionId: ASKING })}
+        store={hub.store}
+        emulators={emulators}
+      />,
+    );
+    const socket = hub.socket();
+    await act(async () => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(state);
+    });
+    return socket;
+  }
+
+  function tabLabels(): string[] {
+    return [...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent ?? '');
+  }
+
+  function selectedTab(): string {
+    const selected = container.querySelector('[role="tab"][aria-selected="true"]');
+    return selected?.textContent ?? '';
+  }
+
+  async function openApprovals(): Promise<void> {
+    const tab = container.querySelector<HTMLElement>('[role="tab"][data-tab-id="approvals"]');
+    if (tab === null) throw new Error('the strip offers no Approvals tab');
+    await act(() => {
+      tab.click();
+    });
+  }
+
+  function proposals(): string[] {
+    return [...container.querySelectorAll('li pre')].map((node) => node.textContent ?? '');
+  }
+
+  /** Whether the terminal is the thing under the strip, by its own box. */
+  function terminalDrawn(): boolean {
+    return [...container.querySelectorAll<HTMLElement>('div')].some(
+      (element) => getComputedStyle(element).touchAction === 'none',
+    );
+  }
+
+  it('offers no Approvals tab for a session that is asking for nothing', async () => {
+    // Every row in the populated capture is holding no request, which is every
+    // codex session always -- there is no permission hook to ask through -- and
+    // every quiet claude one.
+    await mountAsking(hubFrames.machineStatePopulated);
+
+    // The strip, not the pane: the context panel's APPROVALS block is drawn
+    // whatever a session is asking, because it is about the standing policy
+    // rather than about a request.
+    expect(tabLabels()).toEqual(['Terminal']);
+  });
+
+  it('offers it with the count on it while requests are open', async () => {
+    await mountAsking(statingApprovals(3));
+
+    // The badge is the mockup's `3`: the strip places a tab's own words, and
+    // this is the first tab that has any.
+    expect(tabLabels()).toEqual(['Terminal', 'Approvals3']);
+  });
+
+  it('opens on the Terminal all the same', async () => {
+    await mountAsking(statingApprovals(3));
+
+    expect(selectedTab()).toBe('Terminal');
+    expect(terminalDrawn()).toBe(true);
+    expect(proposals()).toEqual([]);
+  });
+
+  it('lists every open request oldest first once the tab is chosen', async () => {
+    await mountAsking(statingApprovals(3));
+
+    await openApprovals();
+
+    expect(selectedTab()).toBe('Approvals3');
+    expect(proposals()).toEqual(['request 1', 'request 2', 'request 3']);
+  });
+
+  it('falls back to the terminal when the last request settles under it', async () => {
+    const socket = await mountAsking(statingApprovals(1));
+    await openApprovals();
+    expect(proposals()).toEqual(['request 1']);
+
+    // The agent stopped asking: the hub reports the session with nothing
+    // pending, so the tab a person is standing on stops existing.
+    await deliver(socket, statingApprovals(0));
+
+    // Not an empty Approvals tab, which would be a heading over the absence of
+    // the thing it names. The strip answers a request for a tab it no longer
+    // holds with the first one it does, which is the Terminal.
+    expect(tabLabels()).toEqual(['Terminal']);
+    expect(selectedTab()).toBe('Terminal');
+    expect(proposals()).toEqual([]);
+    expect(terminalDrawn()).toBe(true);
+  });
+
+  it('gives the terminal back its box when the Terminal tab is chosen again', async () => {
+    await mountAsking(statingApprovals(2));
+    await openApprovals();
+
+    // The emulator goes with its element, which is the one lifetime it can
+    // correctly have. What it was showing does not go with it: the feed belongs
+    // to the watched target and not to this pane, so the emulator the return
+    // builds is handed the same feed and replays it.
+    expect(terminalDrawn()).toBe(false);
+
+    const tab = container.querySelector<HTMLElement>('[role="tab"][data-tab-id="terminal"]');
+    if (tab === null) throw new Error('the strip offers no Terminal tab');
+    await act(() => {
+      tab.click();
+    });
+
+    expect(terminalDrawn()).toBe(true);
+    expect(proposals()).toEqual([]);
+    expect(emulators.created).toHaveLength(2);
   });
 });

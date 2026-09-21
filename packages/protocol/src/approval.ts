@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nodeIdSchema } from './identity.js';
 
 /**
  * An approval: an agent asking a person for something, and what became of it.
@@ -9,7 +10,7 @@ import { z } from 'zod';
  * a Node builtin nor another workspace package -- and an approval object
  * imported from `packages/providers` would make the wire contract depend on
  * whichever provider happens to have a hook today. What crosses is the same
- * four fields the Claude Code parser produces, stated once, by the thing both
+ * five fields the Claude Code parser produces, stated once, by the thing both
  * ends already agree on.
  *
  * The id is the whole design. There is no `tool_use_id` or anything like it in
@@ -124,6 +125,46 @@ export const approvalRuleSchema = z.object({
 });
 export type ApprovalRule = z.infer<typeof approvalRuleSchema>;
 
+/**
+ * Text an agent wrote, with the parts of it that are not text removed.
+ *
+ * It lives here rather than beside the provider that first needed it because
+ * two things now depend on it agreeing with itself: the proposal a person is
+ * shown, and the standing policy's rule that is compared against that proposal.
+ * A second copy of this function at the edge would be a second alphabet, and
+ * the day the two drifted apart would be the day a rule matched something a
+ * person would have read differently. One function, in the package both ends
+ * already agree on.
+ *
+ * Two classes, removed together because they are the same claim. A tool input
+ * can carry an escape sequence -- a `Bash` command that clears the screen, a
+ * file with a bell in it -- and a proposal is rendered wherever an approval is
+ * shown, including a log an operator is reading in a terminal. Tabs and
+ * newlines survive because they are layout; the rest are removed rather than
+ * escaped, because a person deciding on a command is not helped by seeing
+ * `\u001b` and a person is who this string is for.
+ *
+ * The bidirectional controls are the ones that cost something to see. Every
+ * string this function guards is written by the agent that is asking, drawn
+ * directly above the button that answers, and a right-to-left override in it
+ * makes the line render in an order other than the one that runs: `rm -rf /x`
+ * with a comment after it can be painted as a comment with a harmless-looking
+ * command after that. Nothing downstream can undo it either -- by the time the
+ * text is a DOM node the reordering is the browser doing its job correctly, and
+ * `dir` on the element bounds the damage without removing it. So the marks, the
+ * embeddings, the overrides, the pop and the isolates all go here, at the edge,
+ * where the text stops being the provider's and starts being something a person
+ * is asked to read.
+ */
+export function displayableApprovalText(text: string): string {
+  return (
+    text
+      // eslint-disable-next-line no-control-regex -- the point is the control characters.
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+      .replace(/[؜‎‏‪-‮⁦-⁩]/g, '')
+  );
+}
+
 /** A remembered answer the provider would accept for requests like this one. */
 export const approvalSuggestionSchema = z.object({
   /** The three answers a rule can carry. A fourth is one nobody could explain. */
@@ -137,7 +178,7 @@ export type ApprovalSuggestion = z.infer<typeof approvalSuggestionSchema>;
 /**
  * What one server reports about one blocked tool call.
  *
- * Four fields and no timestamp. The moment is not the server's to state, for
+ * Five fields and no timestamp. The moment is not the server's to state, for
  * the reason `store-report` carries no date and `server-draining` sends a
  * duration: two machines' clocks disagree, and a hub comparing requests dated
  * by the machines that made them is comparing different times. The hub stamps
@@ -160,9 +201,263 @@ export const approvalRequestSchema = z.object({
    * hops at all. Empty is a tool called with no input, and is not an error.
    */
   proposal: z.string().max(APPROVAL_PROPOSAL_MAX_CHARS),
+  /**
+   * Whether the proposal above is all of what the tool was asked to do.
+   *
+   * `true` is the edge having cut it to `APPROVAL_PROPOSAL_MAX_CHARS`, and it
+   * is a field rather than something a reader works out from the `[truncated]`
+   * marker in the text. The marker is there for a person, and it sits in a
+   * string the agent wrote most of: a tool input ending in those words would
+   * make a short proposal read as a cut one, and an agent that wanted to be
+   * matched against a rule is exactly the thing that would write them. So the
+   * claim is carried by the only party that knows -- the parser that did or did
+   * not cut -- and the hub's refusal to match a standing rule against a cut
+   * proposal is decided on this rather than on anything an agent can type.
+   *
+   * It is what stops the cut being silently dangerous. Two different tool
+   * inputs sharing their first few thousand rendered characters produce one
+   * identical proposal, so a rule made from one would grant the other -- a
+   * continuation nobody read, which is the very thing exact match exists to
+   * refuse. Present on every request, never inferred.
+   */
+  truncated: z.boolean(),
   suggestions: z.array(approvalSuggestionSchema).max(APPROVAL_SUGGESTIONS_MAX),
 });
 export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
+
+/**
+ * One rule of a project's standing policy: a tool, and one whole proposal.
+ *
+ * ## Exactly which text a rule is matched against
+ *
+ * `ApprovalRequest.proposal`, byte for byte, whole, and nothing else. That
+ * string is built once, at the provider's edge, by rendering every field of the
+ * tool input as `name: value` on its own line in the order the provider sent
+ * them and putting the result through `displayableApprovalText`. It is the same
+ * string a client draws above the button a person would have tapped. The hub
+ * does not re-derive it, and `approvalPolicyRuleMatches` does not decode,
+ * unescape, trim, case-fold or Unicode-normalise either side before comparing.
+ *
+ * ## A request that was cut is never matched at all
+ *
+ * The edge also bounds that string to `APPROVAL_PROPOSAL_MAX_CHARS`, and a
+ * proposal it had to cut is not a description of one tool call. Every input
+ * agreeing for its first few thousand rendered characters renders as the same
+ * bytes: `command: AAA…AAA && ls` and `command: AAA…AAA && curl … | sh` are one
+ * string by the time anybody reads either, so a rule made from one would grant
+ * the other -- the continuation nobody read, which is the thing this whole
+ * grammar exists to refuse.
+ *
+ * So the cut is carried as `ApprovalRequest.truncated`, set by the parser that
+ * did the cutting, and everything downstream fails closed on it. The hub does
+ * not consult the policy for a cut request, so no rule can answer one; this
+ * parser refuses a rule whose text fills the bound, since text that long is
+ * what a cut produces; the hub refuses `approval-policy-add` for such a rule in
+ * those words; and a client withholds the control that would offer one. A
+ * request too long to be shown whole is asked about, every time, and that is
+ * the answer rather than a gap.
+ *
+ * The flag is the claim and the `[truncated]` marker in the text is not. The
+ * marker is display text sitting in a string the agent wrote most of, and a
+ * command ending in those words would read as a cut that never happened.
+ *
+ * ## What exact match protects against, and what it does not
+ *
+ * A rule granted every continuation of itself while this was a prefix, and that
+ * is what it was changed away from. `command: pnpm test` also granted
+ * `command: pnpm test && curl … | sh`; `file_path: /srv/app/src/auth/` also
+ * granted `file_path: /srv/app/src/auth/../../../etc/shadow`. The agent writes
+ * the continuation, and nothing on this side could see it coming. So a rule now
+ * grants one request and that request is the one it is: a proposal differing by
+ * one byte -- a flag, a trailing space, a second command after `&&` -- is a
+ * proposal nobody has answered, and it goes to a person.
+ *
+ * The text in the rule is therefore the text somebody read above Allow. That is
+ * the promise, and it is the only one. There is no normalisation, so no two
+ * distinct strings compare equal: `RM` is not `rm`, `/ｅtc` is not `/etc`, a
+ * trailing space is a character. An agent that wants a proposal to satisfy a
+ * rule has to emit those exact bytes -- it cannot spell them another way and it
+ * cannot hide them behind a control character or a bidirectional override,
+ * because the same strip that removed those from the proposal refuses them in
+ * the rule.
+ *
+ * What exact match does not protect against is the request itself. `rm -rf /`
+ * granted once is granted every time it is proposed again, and the same bytes
+ * mean different things in different working directories -- a proposal names no
+ * directory, and two sessions in one project run in two checkouts. A rule is a
+ * standing decision about a body of work, and the decision is a person's. What
+ * this grammar buys is that it is a decision about something they read, whole,
+ * rather than about an open-ended set they were shown one member of -- which is
+ * why a proposal nobody could be shown whole is not something a rule can be
+ * made of.
+ *
+ * ## What is still refused
+ *
+ * A rule with no tool matches every request there is; a rule with no text would
+ * match every use of a tool if the comparison ever loosened, and is the shape
+ * somebody arrives at by leaving a box empty. Both are refused with a sentence.
+ * So are a tool with space around it or a `*` in it, which could never match
+ * anything and would be stored and never fire; and so is text carrying a
+ * control or bidirectional character, which the proposal it is compared with
+ * cannot contain. So is text filling `APPROVAL_PROPOSAL_MAX_CHARS`, for the
+ * reason above: a proposal that long has been cut, and stands for more requests
+ * than the one somebody read.
+ */
+export const approvalPolicyRuleSchema = z.object({
+  /** Matched exactly against `ApprovalRequest.tool`. Never a pattern. */
+  tool: z.string().min(1).max(APPROVAL_TOOL_MAX_CHARS),
+  /** Matched for equality against the whole of `ApprovalRequest.proposal`. */
+  proposal: z.string().min(1).max(APPROVAL_PROPOSAL_MAX_CHARS),
+});
+export type ApprovalPolicyRule = z.infer<typeof approvalPolicyRuleSchema>;
+
+/**
+ * A rule, or the sentence saying why that is not one.
+ *
+ * A refusal carries text rather than a code because every caller of this shows
+ * it to the person who typed the rule: a client writing one, and a hub reading
+ * a row back that some older build wrote.
+ */
+export type ApprovalPolicyRuleParse =
+  | { readonly ok: true; readonly rule: ApprovalPolicyRule }
+  | { readonly ok: false; readonly problem: string };
+
+function refuse(problem: string): ApprovalPolicyRuleParse {
+  return { ok: false, problem };
+}
+
+export function parseApprovalPolicyRule(draft: unknown): ApprovalPolicyRuleParse {
+  const parsed = approvalPolicyRuleSchema.safeParse(draft);
+  if (!parsed.success) return refuse(z.prettifyError(parsed.error));
+  const { tool, proposal } = parsed.data;
+
+  // Both of the next two are what somebody gets by leaving a box empty, and
+  // both would stand for far more than they read as.
+  if (tool.trim().length === 0) {
+    return refuse('a rule needs a tool: one without a tool would match every request there is');
+  }
+  if (proposal.trim().length === 0) {
+    return refuse(
+      'a rule needs the proposal it stands for: one without it would allow every use of that tool',
+    );
+  }
+
+  if (tool !== tool.trim()) {
+    return refuse('a tool name is matched exactly, so one with space around it could never match');
+  }
+  if (tool.includes('*')) {
+    return refuse('a tool name is matched exactly, not as a pattern: there is no wildcard here');
+  }
+
+  // Text this long is what the cut at the provider's edge produces, and a cut
+  // proposal stands for every tool input sharing its opening rather than for
+  // one request -- so a rule carrying it would grant all of them. The cost is
+  // stated rather than hidden: a whole proposal that happens to end exactly on
+  // the bound is refused with it, and that request is asked about every time,
+  // which is the direction this feature is allowed to be wrong in.
+  if (proposal.length >= APPROVAL_PROPOSAL_MAX_CHARS) {
+    return refuse(
+      'that request is too long to be remembered exactly: a proposal this long has been cut to fit, so it stands for every request that starts the same way rather than for this one',
+    );
+  }
+
+  // The proposal has had these removed at the provider's edge, so a rule
+  // keeping one reads as one thing on the screen and matches another -- or, in
+  // the ordinary case, matches nothing at all and quietly never fires.
+  if (tool !== displayableApprovalText(tool) || proposal !== displayableApprovalText(proposal)) {
+    return refuse(
+      'a rule may not carry a control or bidirectional character: the proposal it is compared with has none',
+    );
+  }
+
+  return { ok: true, rule: { tool, proposal } };
+}
+
+/**
+ * Whether one rule covers one request.
+ *
+ * Two equalities and no third. The tool is the tool and the proposal is the
+ * proposal: no prefix, no suffix, no pattern, nothing an agent can append to
+ * text a person approved.
+ *
+ * It takes the two fields rather than a whole `ApprovalRequest` so that nothing
+ * it is ever handed can include a decision, an id, or the suggestions: what
+ * decides a match is what a person would have read, and the reason that is the
+ * only argument is so that no later version of this can quietly start matching
+ * on something else.
+ */
+export function approvalPolicyRuleMatches(
+  rule: ApprovalPolicyRule,
+  request: { readonly tool: string; readonly proposal: string },
+): boolean {
+  return rule.tool === request.tool && rule.proposal === request.proposal;
+}
+
+/**
+ * The hub's name for one stored rule.
+ *
+ * Minted by the hub that holds the row and meaningless anywhere else, which is
+ * why it is branded like the ids in `identity.ts` rather than left a string: the
+ * frames that name one also name a project, and two opaque strings side by side
+ * are two strings a refactor can swap without anything objecting.
+ *
+ * It is what removal names, and it is the only handle a client ever has on a
+ * rule. Removing by tool and text instead would mean a client restating the
+ * rule it wanted gone, and a client that restated it slightly differently would
+ * delete nothing while appearing to succeed.
+ */
+export const approvalPolicyRuleIdSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .brand<'ApprovalPolicyRuleId'>();
+export type ApprovalPolicyRuleId = z.infer<typeof approvalPolicyRuleIdSchema>;
+
+/**
+ * How many rules one project's policy may hold.
+ *
+ * A bound because the whole policy crosses in one frame: there is no paging
+ * here, on purpose -- a screen showing half a policy is a screen saying a
+ * request will be asked about when it will not. So the list is whole or it is
+ * nothing, and the hub refuses the rule that would make it too big to send
+ * rather than sending a prefix of a policy and calling it one.
+ *
+ * Five hundred is far past what anybody curates by hand and far short of what
+ * would trouble a socket.
+ */
+export const APPROVAL_POLICY_RULES_MAX = 500;
+
+/** One stored rule, with the two things only the hub that holds it knows. */
+export const approvalPolicyRecordSchema = z.object({
+  ruleId: approvalPolicyRuleIdSchema,
+  rule: approvalPolicyRuleSchema,
+  /** When it was written, by the hub's clock. */
+  createdAt: z.int().nonnegative(),
+});
+export type ApprovalPolicyRecord = z.infer<typeof approvalPolicyRecordSchema>;
+
+/**
+ * That a standing rule answered a request, and which rule it was.
+ *
+ * One shape, carried in the two places an approval is reported: on the pending
+ * request in the session row, the moment the rule claims it, and on the receipt
+ * a deciding client is sent. A grant nobody was asked about is the one thing in
+ * this feature that could be silent, so it is named wherever the request is
+ * named, rather than only in a log an operator has to go and read.
+ *
+ * It carries the rule and not merely a flag, because "nobody was asked" is only
+ * answerable if the sentence that did the answering comes with it. A person
+ * looking at a tool call that ran is owed the rule they wrote and the project
+ * they wrote it in -- that is what makes it revocable.
+ */
+export const approvalAnsweredBySchema = z.object({
+  /** The project whose policy answered. A rule belongs to one and only one. */
+  project: nodeIdSchema,
+  ruleId: approvalPolicyRuleIdSchema,
+  /** The rule as it stood when it matched, so a later edit cannot rewrite it. */
+  rule: approvalPolicyRuleSchema,
+});
+export type ApprovalAnsweredBy = z.infer<typeof approvalAnsweredBySchema>;
 
 /**
  * A request the hub is holding open, as a client reads it off a session row.
@@ -182,5 +477,24 @@ export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
 export const pendingApprovalSchema = approvalRequestSchema.extend({
   /** When the hub was told, by the hub's clock. */
   requestedAt: z.int().nonnegative(),
+  /**
+   * The standing rule that has already answered this, or `null` for one still
+   * waiting on a person.
+   *
+   * Present and null on every pending approval rather than absent, for the
+   * reason the `approvals` list itself is present and empty: an absent field
+   * would make "nobody has answered" and "this build cannot tell you" one value
+   * no client could tell apart.
+   *
+   * This is how every client learns that a grant was automatic, and it is here
+   * rather than on a broadcast of its own because the row is already where each
+   * of them reads what is open. A policy grant is set the moment the rule takes
+   * the claim and before the decision leaves this hub, so the request is drawn
+   * as answered-by-a-rule for as long as the machine holding the hook takes to
+   * confirm, and then leaves the row like any other. The client that asked is
+   * also told on its own receipt -- see `approval-decided` -- because a person
+   * who tapped and lost to a rule is owed the rule rather than a bare word.
+   */
+  answeredBy: approvalAnsweredBySchema.nullable(),
 });
 export type PendingApproval = z.infer<typeof pendingApprovalSchema>;

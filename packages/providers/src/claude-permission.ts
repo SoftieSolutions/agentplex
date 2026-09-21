@@ -1,4 +1,4 @@
-import { sessionIdSchema, type SessionId } from '@agentplex/protocol';
+import { displayableApprovalText, sessionIdSchema, type SessionId } from '@agentplex/protocol';
 import { z } from 'zod';
 
 /**
@@ -63,6 +63,22 @@ export interface ClaudePermissionRequest {
    * which is the point.
    */
   readonly proposal: string;
+  /**
+   * Whether the proposal above is all of what the tool was asked to do.
+   *
+   * Said by the one place that knows -- the function that did or did not cut --
+   * rather than left for a reader to infer from the `[truncated]` marker. The
+   * marker is for a person and sits in text the agent wrote: a command ending
+   * in those words would read as cut, and an agent wanting to be taken for one
+   * is exactly what would write them.
+   *
+   * It matters because the cut is lossy in a direction nothing downstream can
+   * see. Two tool inputs agreeing for their first few thousand rendered
+   * characters produce one identical proposal, so a standing rule made from one
+   * grants the other -- a continuation nobody read. Everything that matches a
+   * rule against a request is required to refuse when this is `true`.
+   */
+  readonly truncated: boolean;
   /** What Claude Code offers to remember, if the person wants to stop being asked. */
   readonly suggestions: readonly ClaudePermissionSuggestion[];
 }
@@ -160,15 +176,23 @@ export function parseClaudePermissionRequest(contents: string): ClaudePermission
     return { ok: false, reason: 'refused', problem: z.prettifyError(parsed.error) };
   }
 
+  const described = describeToolInput(parsed.data.tool_input);
   return {
     ok: true,
     request: {
       sessionId: parsed.data.session_id,
-      tool: displayable(parsed.data.tool_name),
-      proposal: describeToolInput(parsed.data.tool_input),
+      tool: displayableApprovalText(parsed.data.tool_name),
+      proposal: described.text,
+      truncated: described.truncated,
       suggestions: readSuggestions(parsed.data.permission_suggestions ?? []),
     },
   };
+}
+
+/** Display text, and whether it is all of what there was. */
+interface BoundedText {
+  readonly text: string;
+  readonly truncated: boolean;
 }
 
 /**
@@ -186,54 +210,44 @@ export function parseClaudePermissionRequest(contents: string): ClaudePermission
  * on the day it shipped, in the one screen whose job is to say what is about
  * to happen.
  */
-function describeToolInput(input: Readonly<Record<string, unknown>>): string {
+function describeToolInput(input: Readonly<Record<string, unknown>>): BoundedText {
   const lines = Object.entries(input).map(
     ([name, value]) => `${name}: ${typeof value === 'string' ? value : JSON.stringify(value)}`,
   );
-  return bounded(displayable(lines.join('\n')));
+  return bounded(displayableApprovalText(lines.join('\n')));
 }
 
 /**
  * Control characters are not display text, and neither is anything that
  * reorders it.
  *
- * Two classes, removed together because they are the same claim. A tool input
- * can carry an escape sequence -- a `Bash` command that clears the screen, a
- * file with a bell in it -- and a proposal is rendered wherever an approval is
- * shown, including a log an operator is reading in a terminal. Tabs and
- * newlines survive because they are layout; the rest are removed rather than
- * escaped, because a person deciding on a command is not helped by seeing
- * `\u001b` and a person is who this string is for.
- *
- * The bidirectional controls are the ones that cost something to see. Every
- * string this function guards is written by the agent that is asking, drawn
- * directly above the button that answers, and a right-to-left override in it
- * makes the line render in an order other than the one that runs: `rm -rf /x`
- * with a comment after it can be painted as a comment with a harmless-looking
- * command after that. Nothing downstream can undo it either -- by the time the
- * text is a DOM node the reordering is the browser doing its job correctly, and
- * `dir` on the element bounds the damage without removing it. So the marks, the
- * embeddings, the overrides, the pop and the isolates all go here, at the edge,
- * where the text stops being the provider's and starts being something a person
- * is asked to read.
+ * The strip itself is `displayableApprovalText`, in `packages/protocol`, and it
+ * is there rather than here for a reason worth keeping in front of whoever
+ * moves it back. The standing policy's rules are compared against the proposal
+ * this function produces, so the alphabet the proposal is written in and the
+ * alphabet a rule is refused for carrying have to be one alphabet: two copies
+ * that drifted apart would be a rule matching text a person would have read
+ * differently. The argument for removing these characters at all is with the
+ * function.
  *
  * It guards the tool name and a suggestion's rule as well as the proposal.
  * All three are text from the same turn and all three are rendered: a tool name
  * is the label above the proposal, and a rule is what a person is offered as
  * "never ask me this again".
+ *
+ * The cut is reported as well as marked, and the two are not the same claim.
+ * The marker is for whoever reads the box; the flag is for whoever has to
+ * decide something, because a cut proposal no longer identifies what the tool
+ * was asked to do -- every input sharing that prefix renders as these same
+ * bytes. Returning the pair is what stops a later reader working the fact out
+ * of text the agent wrote most of.
  */
-function displayable(text: string): string {
-  return (
-    text
-      // eslint-disable-next-line no-control-regex -- the point is the control characters.
-      .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
-      .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
-  );
-}
-
-function bounded(text: string): string {
-  if (text.length <= PROPOSAL_MAX_CHARS) return text;
-  return text.slice(0, PROPOSAL_MAX_CHARS - TRUNCATION_NOTE.length) + TRUNCATION_NOTE;
+function bounded(text: string): BoundedText {
+  if (text.length <= PROPOSAL_MAX_CHARS) return { text, truncated: false };
+  return {
+    text: text.slice(0, PROPOSAL_MAX_CHARS - TRUNCATION_NOTE.length) + TRUNCATION_NOTE,
+    truncated: true,
+  };
 }
 
 function readSuggestions(entries: readonly unknown[]): readonly ClaudePermissionSuggestion[] {
@@ -245,8 +259,8 @@ function readSuggestions(entries: readonly unknown[]): readonly ClaudePermission
       behavior: parsed.data.behavior,
       destination: parsed.data.destination,
       rules: parsed.data.rules.map((rule) => ({
-        tool: displayable(rule.toolName),
-        content: displayable(rule.ruleContent),
+        tool: displayableApprovalText(rule.toolName),
+        content: displayableApprovalText(rule.ruleContent),
       })),
     });
   }

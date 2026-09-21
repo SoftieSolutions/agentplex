@@ -282,6 +282,7 @@ function labelFor(text: string): string {
     ['approval-decided', 'approvalDecided'],
     ['push-subscribed', 'pushSubscribed'],
     ['push-unsubscribed', 'pushUnsubscribed'],
+    ['approval-policy', 'approvalPolicy'],
     ['session-unsubscribed', 'sessionUnsubscribed'],
     ['session-subscription-ended', 'sessionSubscriptionEnded'],
     ['protocol-error', 'protocolError'],
@@ -1305,6 +1306,16 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     const machineStateApproval = await captureState(asked.hub);
 
+    // Read off the row rather than written here: the text a rule carries has
+    // to be the text the request carried, byte for byte, or the fixture would
+    // record a rule that could never fire.
+    const blocked = asked.hub.state
+      .published()
+      .stores.flatMap((store) => store.sessions)
+      .flatMap((row) => row.approvals)
+      .at(0);
+    if (blocked === undefined) throw new Error('nothing is pending to make a rule from');
+
     // And the answer to it, which is a receipt about the request rather than
     // about the tap: it says what became of the approval, and it arrives only
     // once the machine holding the blocked process has said so.
@@ -1324,6 +1335,38 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the approval to be answered',
     );
     const approvalDecided = firstFrame(answering, 'approvalDecided');
+
+    // A project's standing policy, captured from the same hub: the rule this
+    // client writes is the tool and the whole proposal of the request it just
+    // answered, which is exactly what "always allow this" sends. The project
+    // is made first because a policy is keyed by one and a session filed under
+    // nothing has nowhere for a rule to live.
+    answering.send({
+      type: 'project-create',
+      id: 3,
+      name: 'agentplex',
+      directory: '/Users/robert/code/agentplex',
+    });
+    await until(
+      () => answering.received.some((text) => labelFor(text) === 'projectCreated'),
+      'the project to be created',
+    );
+    const projectForPolicy = firstFrame(answering, 'projectCreated');
+    const parsedProject = parseTextFrame(parseHubFrame, projectForPolicy);
+    if (!parsedProject.ok || parsedProject.value.type !== 'project-created') {
+      throw new Error('the project was refused');
+    }
+    answering.send({
+      type: 'approval-policy-add',
+      id: 4,
+      projectId: parsedProject.value.nodeId,
+      rule: { tool: blocked.tool, proposal: blocked.proposal },
+    });
+    await until(
+      () => answering.received.some((text) => labelFor(text) === 'approvalPolicy'),
+      'the rule to be written',
+    );
+    const approvalPolicy = firstFrame(answering, 'approvalPolicy');
     await asked.cleanup();
 
     // One machine, one store, one provider: the state in which no store or
@@ -2704,6 +2747,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('pushSubscribed', pushSubscribed);
     captured.set('pushUnsubscribed', pushUnsubscribed);
     captured.set('refusalNoPush', refusalNoPush);
+    captured.set('approvalPolicy', approvalPolicy);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)
