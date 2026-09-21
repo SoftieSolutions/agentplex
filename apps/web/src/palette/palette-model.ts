@@ -7,7 +7,7 @@ import {
   type SessionListItem,
 } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
-import { DOC_KIND, SESSION_KIND } from '../tree/node-kinds.js';
+import { DOC_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 
 /**
  * The command palette's model, and why it is a second search control rather
@@ -53,15 +53,13 @@ import { DOC_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 /**
  * What a result points at: a node kind, the hub's own string.
  *
- * Not a union of the two this build mints. A kind is a row in the hub's
+ * Not a union of the three this build mints. A kind is a row in the hub's
  * `node_kinds` table -- migration 0004 made it one so that adding a kind costs
  * an INSERT -- and `tree/node-kinds.ts` is the one place this app parses the
  * strings it knows the names of. A palette that closed the set here would have
  * to be released again for a kind the hub can already return, and the grouping
  * below is written so it does not have to be: a kind nobody named is drawn
- * under its own name. `project` is absent for a different reason, which is that
- * the hub answers a flat search with leaves only; `palette-search.ts` records
- * it and AGX-261 is filed to change it.
+ * under its own name.
  */
 export type PaletteResultKind = NodeKind;
 
@@ -165,20 +163,55 @@ export interface PaletteGroup {
 }
 
 /**
+ * Every kind this dialog has a heading for, in the order the headings are
+ * written, with what each is called above its rows.
+ *
+ * One list rather than a chain of comparisons, because it is read twice: as
+ * the headings below, and as `PALETTE_KINDS` -- the selection
+ * `palette-search.ts` puts on the query. A kind with a heading and no place in
+ * the question would be a heading nothing can draw rows under; a kind in the
+ * question with no heading would be rows filed under their own bare kind
+ * string. Keeping both off one list is what makes those two impossible.
+ *
+ * The kinds are named through `tree/node-kinds.ts` rather than spelled out
+ * here, because that file is where a kind string is parsed and one more copy
+ * of the word is one more place to disagree with the tree.
+ */
+const HEADINGS: ReadonlyMap<PaletteResultKind, string> = new Map([
+  [SESSION_KIND, 'Sessions'],
+  [DOC_KIND, 'Documents'],
+  [PROJECT_KIND, 'Projects'],
+]);
+
+/**
+ * The kinds the palette asks the hub for: exactly the ones it draws headings
+ * for, and the reason a project is findable at all.
+ *
+ * A flat catalogue page keeps leaves only unless the query names the kinds it
+ * wants (AGX-261), so this is what puts a container on the page. Asking for
+ * exactly what is drawn rather than for everything is the other half of it: a
+ * folder the hub returned would be a row the dialog drops after the page was
+ * bounded around it, spending a slot and making the hub's `total` a count of
+ * rows nobody can see.
+ *
+ * A graph is deliberately not here. The kind is unseeded until AGX-144, and
+ * the selection is asked for by name, so it can be added to the list above the
+ * day the migration lands -- without a protocol change, because a kind is a
+ * row and not an enum.
+ */
+export const PALETTE_KINDS: readonly PaletteResultKind[] = [...HEADINGS.keys()];
+
+/**
  * What a kind is called above its rows.
  *
- * The two this build knows are named through `tree/node-kinds.ts` rather than
- * by comparing against `'session'` here, because that file is where a kind
- * string is parsed and one more copy of the word is one more place to disagree
- * with the tree. Anything else is labelled with the kind itself: the hub can
- * return a kind this release has never heard of -- a graph, when AGX-110 lands
- * -- and a heading reading `graph` is worse than the word the hub would have
- * used and far better than the row being dropped or filed under a guess.
+ * A kind with no heading is labelled with the kind itself: the hub can return
+ * one this release has never heard of -- a graph, when AGX-144 lands, or a
+ * kind a later migration seeds -- and a heading reading `graph` is worse than
+ * the word the hub would have used and far better than the row being dropped
+ * or filed under a guess.
  */
 export function headingFor(kind: PaletteResultKind): string {
-  if (kind === SESSION_KIND) return 'Sessions';
-  if (kind === DOC_KIND) return 'Documents';
-  return kind;
+  return HEADINGS.get(kind) ?? kind;
 }
 
 /** The rows to draw, grouped, and how many there were before the bound. */
@@ -198,7 +231,8 @@ export interface PaletteListing {
 }
 
 /**
- * The results as the dialog receives them: gathered by kind, then bounded.
+ * The results as the dialog receives them: gathered by kind, then bounded so
+ * that every kind that matched keeps at least its best row.
  *
  * Grouped before bounding, because grouping moves rows: a bound applied first
  * would decide which rows are drawn by an order nobody sees. The groups
@@ -207,6 +241,28 @@ export interface PaletteListing {
  * and a fixed order would claim sessions matter more than documents in a
  * dialog that was handed both.
  *
+ * ## Why the bound is dealt rather than sliced
+ *
+ * The rows arrive as one concatenation with the client-held sessions leading,
+ * because those are computed synchronously and the hub's half is not
+ * (`mergeResults`). Slicing that concatenation makes the limit fall wherever
+ * the fleet happens to put it: eight matching sessions and the document and
+ * the project of the same name never reach the screen at all, and a person who
+ * typed a project's name is told it does not exist by a dialog that was handed
+ * it.
+ *
+ * So the groups are dealt from instead -- one row from each in turn, round
+ * after round, until the limit is spent. Every kind that matched keeps its
+ * best row, each kind keeps a prefix of its own rows so the order inside a
+ * kind is still the order it arrived in, and what shrinks is how many rows the
+ * largest group gets, which is the thing more typing fixes. The total is still
+ * bounded by `limit` and `total` still counts everything that matched, so the
+ * "N of M" line the dialog draws stays true.
+ *
+ * More kinds than the limit is the one case where a kind still goes undrawn.
+ * There is no bound that draws a row for each and honours the limit, and the
+ * count line is what says rows were left out.
+ *
  * The limit is an argument with a default rather than a constant read inside,
  * so a test can pin the rule without a fixture large enough to trip it.
  */
@@ -214,9 +270,26 @@ export function paletteListing(
   results: readonly PaletteResult[],
   limit: number = PALETTE_RESULT_LIMIT,
 ): PaletteListing {
-  const ordered = groupsOf(results).flatMap((group) => group.results);
-  const drawn = ordered.slice(0, limit);
-  return { results: drawn, groups: groupsOf(drawn), total: results.length };
+  const drawn = groupsOf(dealt(groupsOf(results), limit));
+  return {
+    results: drawn.flatMap((group) => group.results),
+    groups: drawn,
+    total: results.length,
+  };
+}
+
+/** One row from each group in turn, in group order, until the limit is spent. */
+function dealt(groups: readonly PaletteGroup[], limit: number): readonly PaletteResult[] {
+  const taken: PaletteResult[] = [];
+  const deepest = groups.reduce((rows, group) => Math.max(rows, group.results.length), 0);
+  for (let round = 0; round < deepest && taken.length < limit; round += 1) {
+    for (const group of groups) {
+      if (taken.length >= limit) break;
+      const row = group.results[round];
+      if (row !== undefined) taken.push(row);
+    }
+  }
+  return taken;
 }
 
 /** Each kind's rows in one run, the kinds in the order they first appear. */

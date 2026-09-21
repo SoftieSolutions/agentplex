@@ -3,6 +3,7 @@ import { parseHubFrame, parseTextFrame, type CatalogueQuery } from '@agentplex/p
 import { type CataloguePage } from '../catalogue/catalogue-model.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createFakeTimers } from '../store/timers.js';
+import { PALETTE_KINDS } from './palette-model.js';
 import {
   catalogueResults,
   createPaletteSearch,
@@ -71,6 +72,19 @@ describe('the question the palette asks', () => {
     // so a machine narrowing nobody applied must not ride along.
     expect(query.filter.server).toBeUndefined();
     expect(query.filter.project).toBeUndefined();
+  });
+
+  it('names the kinds the dialog draws headings for, which is what makes a project findable', () => {
+    const query = paletteQuery('agentplex');
+
+    // Exactly the dialog's own list, so a kind drawn under a heading is a kind
+    // the hub was asked for: a flat page holds containers only for the kinds
+    // the query names (AGX-261), and a project is one of them.
+    expect(query.filter.kinds).toEqual([...PALETTE_KINDS]);
+    expect(query.filter.kinds).toContain('project');
+    // And still no graph: the kind is unseeded, and asking for a heading this
+    // build cannot fill would claim the palette searches one.
+    expect(query.filter.kinds).not.toContain('graph');
   });
 
   it('clamps a query longer than the protocol admits rather than being refused for it', () => {
@@ -171,12 +185,30 @@ describe('the answer', () => {
   });
 
   it('costs an item this build cannot address itself, and not the listing', () => {
-    // A folder and a project are on this page and neither is a place this
-    // build can go: they are left out and the two leaves still answer.
+    // A folder is on this page and is not a place this build can go: it is
+    // left out and every other item still answers.
     expect(WITH_CONTAINERS.items).toHaveLength(4);
     const results = catalogueResults(WITH_CONTAINERS.items);
 
-    expect(results.map((result) => result.kind)).toEqual(['session', 'doc']);
+    expect(results.map((result) => result.kind)).toEqual(['session', 'project', 'doc']);
+  });
+
+  it('turns a project into a row that says which kind it is and goes to the tree', () => {
+    const project = catalogueResults(WITH_CONTAINERS.items).find(
+      (result) => result.kind === 'project',
+    );
+
+    expect(project).toEqual({
+      // Namespaced by kind, so a project and a document of one name are two
+      // rows and two selections rather than one id twice.
+      id: 'project:hub-5',
+      kind: 'project',
+      // The hub's own display name, through the name-source rules every other
+      // row is drawn by: nothing is invented here for a container.
+      label: 'agentplex (main checkout)',
+      detail: 'Project',
+      href: '#/projects',
+    });
   });
 
   it('says there may be more when the hub had more to give', async () => {

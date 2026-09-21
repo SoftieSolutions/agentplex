@@ -9,8 +9,9 @@ import { docHash } from '../docs/doc-route.js';
 import { statusWords } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { browserTimers, type Timers } from '../store/timers.js';
-import { DOC_KIND, SESSION_KIND } from '../tree/node-kinds.js';
-import type { PaletteResult } from './palette-model.js';
+import { destinationHash } from '../shell/destinations.js';
+import { DOC_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
+import { PALETTE_KINDS, type PaletteResult } from './palette-model.js';
 
 /**
  * The half of the palette the hub answers.
@@ -25,13 +26,19 @@ import type { PaletteResult } from './palette-model.js';
  *
  * ## What comes back, and what cannot
  *
- * The query asks for `view: 'list'`, and a list view returns leaves only: the
- * hub's `listOrder` keeps `!item.container`, so a project or a folder cannot
- * appear in one however well its name matches. This build therefore searches
- * sessions and documents, and AGX-261 is where the hub learns to return
- * containers in a flat search -- until it does, a project is findable in the
- * tree panel and not here, and this file is where that is written down rather
- * than left for somebody to discover by typing a project's name.
+ * The query asks for `view: 'list'`, which keeps leaves only -- a project or a
+ * folder cannot appear in one however well its name matches -- unless the
+ * filter names the kinds it wants. It names them: `PALETTE_KINDS`, which is
+ * the dialog's own heading list, so a session, a document and a project can
+ * each come back and each has a heading to come back under. A folder is not on
+ * that list and so never reaches the page, which is the point of asking by
+ * kind rather than for containers in general: a folder the hub returned would
+ * be a row dropped below, after the page had been bounded around it.
+ *
+ * A graph is not on the list either, because the kind is unseeded until
+ * AGX-144. A selection naming an unseeded kind matches nothing and is refused
+ * by nothing, so the day the migration lands the kind joins `HEADINGS` in
+ * `palette-model.ts` and this file changes not at all.
  *
  * It is one page and never paged. A palette is a short list by construction
  * (`PALETTE_RESULT_LIMIT`); past that, the answer is more typing rather than
@@ -74,19 +81,27 @@ import type { PaletteResult } from './palette-model.js';
 export const PALETTE_SEARCH_DELAY_MS = 250;
 
 /**
- * The question, minus the text: a flat list of everything, in name order.
+ * The question, minus the text: a flat list of the kinds the dialog draws, in
+ * name order.
  *
  * `groupBy: 'none'` because the dialog groups by kind and a hub-side grouping
  * it does not draw is a field nothing reads. Name order because it is the one
  * order a person typing a name can predict, and because this re-orders nothing
  * the hub sent -- the ranking question the ticket leaves open is the hub's to
  * answer, not this file's to invent a score for.
+ *
+ * `kinds` is `PALETTE_KINDS` and not a second list of the same words: the
+ * dialog's headings and the hub's selection are one list in `palette-model.ts`
+ * for the reason written there.
  */
 const PALETTE_SHAPE: CatalogueShape = {
   view: 'list',
   groupBy: 'none',
   sort: { key: 'name', direction: 'asc' },
-  filter: {},
+  // Copied rather than shared: the filter schema's list is a mutable array,
+  // and one shape read by every query must not be a list a caller could push
+  // a kind onto.
+  filter: { kinds: [...PALETTE_KINDS] },
 };
 
 /**
@@ -259,11 +274,12 @@ export function catalogueResults(items: readonly CatalogueItem[]): readonly Pale
 /**
  * One row, or `null` for an item there is nowhere to send a person.
  *
- * Three ways an item has no address: it is a container (a `view: 'list'` page
- * holds none, and a caller may hand this a tree page that does), it is a kind
- * this build has never heard of -- `node-kinds.ts` argues why that is possible
- * and not a bug -- or it is a session node whose `anchor` is `null`, which is a
- * node pointing at nothing rather than a session that is merely unreachable.
+ * Three ways an item has no address: it is a folder -- a container the query
+ * did not ask for, which a caller handing this a tree page can still produce
+ * -- it is a kind this build has never heard of, which `node-kinds.ts` argues
+ * is possible and not a bug, or it is a session node whose `anchor` is `null`,
+ * which is a node pointing at nothing rather than a session that is merely
+ * unreachable.
  */
 function resultFor(item: CatalogueItem): PaletteResult | null {
   if (item.kind === SESSION_KIND) {
@@ -295,6 +311,31 @@ function resultFor(item: CatalogueItem): PaletteResult | null {
       // second line; one naming a machine would be one this made up.
       detail: 'Document',
       href: docHash(item.id),
+    };
+  }
+  if (item.kind === PROJECT_KIND) {
+    return {
+      id: `project:${item.id}`,
+      kind: item.kind,
+      label: item.displayName,
+      // The kind, for the reason a document says its kind: a project node
+      // carries no server, no session and no directory of its own on a
+      // catalogue item, so the honest second line is what it is. The heading
+      // says the same word, and deliberately: a row torn out of its group --
+      // read aloud, or glanced at beside a session of the same name -- still
+      // says which of the two it is.
+      detail: 'Project',
+      // Where a project is, which is the tree, by the address the app already
+      // has for it: the phone's Projects tab and the sidebar's own reading of
+      // the same catalogue. Deliberately not a node-level address invented
+      // here. This app addresses exactly two nodes -- a session and a document
+      // -- and both are addresses of a thing that opens in a pane; a project
+      // opens nothing. An address that named the node would have to be one the
+      // tree honours by revealing and selecting it, and no screen does that
+      // yet, so minting `#/node/<id>` here would be a link that parses and
+      // goes nowhere in particular. Sending a person to the tree is the small
+      // true answer; revealing the node in it is a ticket of its own.
+      href: destinationHash('projects'),
     };
   }
   return null;

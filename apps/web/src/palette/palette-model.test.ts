@@ -15,7 +15,7 @@ import {
   type SessionListItem,
 } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
-import { DOC_KIND, SESSION_KIND } from '../tree/node-kinds.js';
+import { DOC_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 import { catalogueResults } from './palette-search.js';
 import {
   firstResult,
@@ -24,6 +24,7 @@ import {
   mergeResults,
   nextResult,
   paletteListing,
+  PALETTE_KINDS,
   PALETTE_RESULT_LIMIT,
   previousResult,
   sessionResults,
@@ -204,6 +205,15 @@ describe('grouping by kind', () => {
   it('names each kind in the words the app uses for it', () => {
     expect(headingFor(SESSION_KIND)).toBe('Sessions');
     expect(headingFor(DOC_KIND)).toBe('Documents');
+    expect(headingFor(PROJECT_KIND)).toBe('Projects');
+  });
+
+  it('is one list with the kinds the query asks for, so the two cannot disagree', () => {
+    // `palette-search.ts` asks the hub for exactly these, and a kind with a
+    // heading but no place in the question would be a heading nothing ever
+    // draws rows under.
+    expect(PALETTE_KINDS).toEqual([SESSION_KIND, DOC_KIND, PROJECT_KIND]);
+    for (const kind of PALETTE_KINDS) expect(headingFor(kind)).not.toBe(kind);
   });
 
   it('labels a kind this build has never heard of with the kind itself', () => {
@@ -252,9 +262,58 @@ describe('grouping by kind', () => {
     const listing = paletteListing(mergeResults(sessionResults(sessions, ''), [doc]), 2);
 
     expect(listing.results).toHaveLength(2);
-    expect(listing.groups.map((group) => group.heading)).toEqual(['Sessions']);
+    // One row each and not the two leading sessions: the bound is dealt round
+    // by round, so a kind that matched is on screen. See `paletteListing`.
+    expect(listing.groups.map((group) => group.heading)).toEqual(['Sessions', 'Documents']);
+    expect(listing.results.map((result) => result.id)).toEqual(
+      listing.groups.flatMap((group) => group.results.map((result) => result.id)),
+    );
     expect(listing.total).toBe(7);
   });
+
+  it('keeps every kind that matched, with its best rows, when one kind fills the bound', () => {
+    // Eight sessions, a document and a project, all called the same thing --
+    // which is the case a flat slice loses: the client-held sessions are
+    // computed synchronously and always lead, so the two rows the person is
+    // most likely to be looking for would begin past the limit and vanish.
+    const eight = Array.from({ length: 8 }, (_, index) => namesake(SESSION_KIND, index));
+    const project: PaletteResult = {
+      id: 'project:hub-5',
+      kind: PROJECT_KIND,
+      label: 'spike-wasm',
+      detail: 'Project',
+      href: '#/projects',
+    };
+
+    const listing = paletteListing([...eight, doc, project], 8);
+
+    expect(listing.groups.map((group) => group.heading)).toEqual([
+      'Sessions',
+      'Documents',
+      'Projects',
+    ]);
+    expect(listing.groups.map((group) => group.results.length)).toEqual([6, 1, 1]);
+    // Each kind keeps a prefix of its own rows, so the order inside a kind is
+    // still the order it arrived in.
+    expect(listing.groups[0]?.results.map((result) => result.id)).toEqual(
+      eight.slice(0, 6).map((result) => result.id),
+    );
+    // Bounded, and the count the dialog says "8 of 10" from is everything that
+    // matched rather than everything drawn.
+    expect(listing.results).toHaveLength(8);
+    expect(listing.total).toBe(10);
+  });
+
+  /** One more row of a kind, for a bound that has to choose between kinds. */
+  function namesake(kind: PaletteResult['kind'], index: number): PaletteResult {
+    return {
+      id: `${kind}:${String(index)}`,
+      kind,
+      label: 'spike-wasm',
+      detail: 'one of many',
+      href: `#/session/store-agentplex/session-${String(index)}`,
+    };
+  }
 });
 
 describe('separateness from the session list’s filter', () => {
