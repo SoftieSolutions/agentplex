@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  activitySchema,
   approvalIdSchema,
   parseClientFrame,
   parseHubFrame,
@@ -1714,13 +1715,57 @@ describe('the transcript tab', () => {
     const socket = await connect(hub);
     await press(tab('Transcript'));
 
-    // The captured answer: four activities across four kinds, oldest first,
-    // and a hub that said there are more behind them.
+    // The captured answer: four commands, oldest first, and a hub that said
+    // there are more behind them. Four of one kind because that is what an
+    // adapter derives out of a captured Claude transcript -- a tool name, the
+    // tool's input being redacted in every capture -- and the fixture is what
+    // a hub really sent rather than what would have made a livelier screen.
     await deliver(socket, hubFrames.sessionTranscript);
 
-    expect(widgetKinds()).toEqual(['narration', 'edit', 'tests', 'command']);
-    expect(container.textContent).toContain('src/auth/refresh.ts');
+    expect(widgetKinds()).toEqual(['command', 'command', 'command', 'command']);
+    expect(container.textContent).toContain('Bash');
     expect(status()).toContain('Showing the last 4');
+  });
+
+  it('draws the kinds no adapter emits yet, each in its own widget', async () => {
+    // Hand-built, and parsed through `activitySchema` before they go anywhere,
+    // which is what keeps them honest: the shapes are the schema's rather than
+    // this test's, and the frame they ride is one the store's own parser took.
+    //
+    // Hand-built because no provider fixture in this repository holds them --
+    // Claude Code's captured tool inputs are redacted and no codex capture has
+    // a file change in it -- so the captured client fixture carries commands
+    // and nothing else, on purpose. AGX-263 re-captures provider fixtures with
+    // tool inputs; when it lands these kinds reach the fixture the way the
+    // commands did, and this test goes back to being about widgets alone.
+    const activities = [
+      { kind: 'narration', text: 'reading the failing test before changing anything' },
+      { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+      { kind: 'tests', passed: 118, failed: 1 },
+      { kind: 'approval', text: 'may I write to src/auth/refresh.ts' },
+      { kind: 'plain', text: 'a line this adapter could not classify' },
+    ].map((activity) => activitySchema.parse(activity));
+
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(tab('Transcript'));
+    const asked = sentFrames(socket).find((frame) => frame.type === 'session-transcript');
+    if (asked === undefined) throw new Error('the pane asked for no transcript');
+
+    await deliver(
+      socket,
+      JSON.stringify({
+        type: 'session-transcript-read',
+        replyTo: asked.id,
+        activities,
+        olderExist: false,
+      }),
+    );
+
+    expect(widgetKinds()).toEqual(['narration', 'edit', 'tests', 'approval', 'plain']);
+    expect(container.textContent).toContain('src/auth/refresh.ts');
+    expect(container.textContent).toContain('118');
   });
 
   it('unmounts the terminal rather than hiding it, and replays it on the way back', async () => {

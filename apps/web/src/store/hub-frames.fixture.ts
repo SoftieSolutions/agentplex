@@ -103,7 +103,7 @@ export const hubFrames = {
   machineStateJustPaired:
     '{"type":"machine-state","state":{"version":2,"stores":[{"storeId":"store-agentplex","servers":["registration-1"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[]}],"servers":[{"registrationId":"registration-1","label":"mbp-robert","address":"wss://mbp-robert.example:8443","serverId":"server-mbp","phase":"connected","stores":["store-agentplex"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null}],"candidates":[]}}',
   sessionTranscript:
-    '{"type":"session-transcript-read","replyTo":3,"activities":[{"kind":"narration","text":"reading the failing test before changing anything"},{"kind":"edit","path":"src/auth/refresh.ts","added":18,"removed":4},{"kind":"tests","passed":118,"failed":1},{"kind":"command","text":"pnpm test"}],"olderExist":true}',
+    '{"type":"session-transcript-read","replyTo":3,"activities":[{"kind":"command","text":"Bash"},{"kind":"command","text":"Bash"},{"kind":"command","text":"Bash"},{"kind":"command","text":"Bash"}],"olderExist":true}',
   sessionSubscribed:
     '{"type":"session-subscribed","replyTo":2,"storeId":"store-work","sessionId":"session-build","startId":null,"replayChunks":2,"droppedBytes":0}',
   sessionSubscribedTruncated:

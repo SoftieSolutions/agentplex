@@ -631,16 +631,31 @@ function buildLiveMachine(): LiveMachine {
       signal: 'awaiting-input',
       updatedAt: START,
       cwd: LIVE_STORE.path,
-      // What this session has done, for the transcript capture below. Four
-      // kinds rather than four commands, because the fixture is what the web's
-      // widget switch is drawn against and a capture of one kind would leave
-      // the other five untested against a real frame.
+      // What this session has done, for the transcript capture below.
+      //
+      // The one variant an adapter emits today, in the form this machine's own
+      // provider emits it. The store is a Claude Code store, and what the
+      // Claude adapter derives out of `packages/providers/fixtures/` is a tool
+      // name and nothing else -- the captured tool inputs are redacted, so
+      // `Bash` is the whole of what the file honestly says. Repeating it is a
+      // session that ran the same tool five times, which is a thing that
+      // happens; writing five different lines here would not be.
+      //
+      // A prettier history here -- a narration, an edit with a diffstat, a test
+      // run -- would put content into the client's fixture that no adapter
+      // produces, and the web would then be drawn against this repository's
+      // imagination. Those kinds are exercised by unit tests over hand-built
+      // activities until AGX-263 re-captures provider fixtures with tool inputs
+      // in them; then they belong here.
+      //
+      // Five, against a capture that asks for four, so `olderExist` on the
+      // captured answer is a real count and not a flag somebody set.
       activities: [
-        { kind: 'command', text: 'pnpm install', exitStatus: 0 },
-        { kind: 'narration', text: 'reading the failing test before changing anything' },
-        { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
-        { kind: 'tests', passed: 118, failed: 1 },
-        { kind: 'command', text: 'pnpm test' },
+        CAPTURED_CLAUDE_ACTIVITY,
+        CAPTURED_CLAUDE_ACTIVITY,
+        CAPTURED_CLAUDE_ACTIVITY,
+        CAPTURED_CLAUDE_ACTIVITY,
+        CAPTURED_CLAUDE_ACTIVITY,
       ],
     }),
   };

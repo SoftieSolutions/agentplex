@@ -2094,16 +2094,19 @@ describe('one session’s transcript', () => {
 
     socket.deliver(hubFrames.sessionTranscript);
 
-    // Exactly what a real hub sent: four activities oldest first, and the
-    // word that there is more behind them. Nothing here re-reads a kind or
-    // re-orders a list -- the frame is the answer.
+    // Exactly what a real hub sent: the tail of what the adapter derived out of
+    // a captured transcript, oldest first, and the word that there is more
+    // behind it. Four tool names and nothing about what they ran, because a
+    // captured Claude transcript's tool inputs are redacted -- the fixture says
+    // what the provider says. Nothing here re-reads a kind or re-orders a list:
+    // the frame is the answer.
     expect(h.store.getSnapshot().lastTranscript).toEqual({
       replyTo: 3,
       activities: [
-        { kind: 'narration', text: 'reading the failing test before changing anything' },
-        { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
-        { kind: 'tests', passed: 118, failed: 1 },
-        { kind: 'command', text: 'pnpm test' },
+        { kind: 'command', text: 'Bash' },
+        { kind: 'command', text: 'Bash' },
+        { kind: 'command', text: 'Bash' },
+        { kind: 'command', text: 'Bash' },
       ],
       olderExist: true,
     });
