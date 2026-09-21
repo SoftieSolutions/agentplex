@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  parseClientFrame,
   parseHubFrame,
+  parseHubToServerFrame,
+  parseServerToHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
   serverIdSchema,
@@ -8,6 +11,8 @@ import {
   storeIdSchema,
   type ClientFrame,
   type HubFrame,
+  type HubToServerFrame,
+  type ServerToHubFrame,
   type ServerRegistrationId,
   type StoreDescriptor,
 } from '@agentplex/protocol';
@@ -15,6 +20,7 @@ import {
   createFakeMessageSocket,
   createFakeTimers,
   createSocketPair,
+  type FakeMessageSocket,
 } from '@agentplex/node-shared/testing';
 import {
   createLogger,
@@ -31,6 +37,7 @@ import {
 } from '@agentplex/providers/testing';
 import { createClaudeAdapter, createProviderRegistry } from '@agentplex/providers';
 import { serveServerEnd } from './server-end.js';
+import { forbiddenKeysIn, keysOf } from './frame-keys.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
 import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
@@ -109,6 +116,14 @@ interface Harness {
   readonly connections: Servers;
   /** The server end of each socket dialled, so a test can make the machine go away. */
   readonly live: MessageSocket[];
+  /**
+   * Both ends of every socket dialled, kept for the frame-shape sweep.
+   *
+   * A fake socket records what it sent, so the hub end's `sent` is the
+   * hub-to-server leg and the server end's is the leg back. Nothing is wrapped
+   * and nothing is intercepted: what is asserted on is what a peer would read.
+   */
+  readonly dialled: { readonly hubEnd: FakeMessageSocket; readonly serverEnd: FakeMessageSocket }[];
 }
 
 let migrated: MigratedSchema | null = null;
@@ -126,6 +141,7 @@ async function start(transcripts: Readonly<Record<string, string>>): Promise<Har
   migrated = await openMigratedSchema(`transcript-relay-${suite}`);
   const database = migrated.database;
   const live: MessageSocket[] = [];
+  const dialled: { hubEnd: FakeMessageSocket; serverEnd: FakeMessageSocket }[] = [];
 
   await registerServer(
     database,
@@ -168,6 +184,7 @@ async function start(transcripts: Readonly<Record<string, string>>): Promise<Har
         logger,
       });
       live.push(serverEnd);
+      dialled.push({ hubEnd, serverEnd });
       serverEnd.onMessage(() => {});
       return { ok: true, socket: hubEnd };
     },
@@ -254,7 +271,7 @@ async function start(transcripts: Readonly<Record<string, string>>): Promise<Har
 
   await connections.sync();
 
-  return { state, clients, connections, live };
+  return { state, clients, connections, live, dialled };
 }
 
 async function until(predicate: () => boolean, what: string): Promise<void> {
@@ -268,6 +285,23 @@ async function until(predicate: () => boolean, what: string): Promise<void> {
 interface Client {
   say(frame: ClientFrame): Promise<void>;
   reply(id: number): HubFrame;
+  /** Everything this client put on the wire, and everything the hub sent it. */
+  said(): ClientFrame[];
+  heard(): HubFrame[];
+}
+
+/**
+ * A frame read back through the parser the peer it was addressed to would use.
+ *
+ * Parsed rather than `JSON.parse`d, in every direction: what a test asserts on
+ * is then what a peer would actually read, and a frame that no longer parses
+ * fails here rather than being walked as an anonymous object.
+ */
+function parsedFrame<T>(parser: (raw: unknown) => { ok: boolean }, text: string): T {
+  const result = parseTextFrame(parser as never, text) as
+    { ok: true; value: T } | { ok: false; reason: string };
+  if (!result.ok) throw new Error(`an unparseable frame reached a peer: ${result.reason}`);
+  return result.value;
 }
 
 /** A client on a socket, read back through the parser a client would use. */
@@ -276,9 +310,13 @@ async function attach(): Promise<Client> {
   socket.onMessage(() => {});
   held().clients.attach(socket);
 
+  const outbound: string[] = [];
+
   const client: Client = {
     async say(frame: ClientFrame): Promise<void> {
-      socket.receive(JSON.stringify(frame));
+      const text = JSON.stringify(frame);
+      outbound.push(text);
+      socket.receive(text);
       // An answer that crosses to another machine and back takes more than one
       // turn of the loop.
       for (let turn = 0; turn < 40; turn += 1) {
@@ -286,14 +324,15 @@ async function attach(): Promise<Client> {
       }
     },
     reply(id: number): HubFrame {
-      const answers = socket.sent.map((text) => {
-        const parsed = parseTextFrame(parseHubFrame, text);
-        if (!parsed.ok) throw new Error(`the hub sent an unparseable frame: ${parsed.reason}`);
-        return parsed.value;
-      });
-      const answer = answers.find((frame) => 'replyTo' in frame && frame.replyTo === id);
+      const answer = client.heard().find((frame) => 'replyTo' in frame && frame.replyTo === id);
       if (answer === undefined) throw new Error(`nothing answered frame ${String(id)}`);
       return answer;
+    },
+    said(): ClientFrame[] {
+      return outbound.map((text) => parsedFrame(parseClientFrame, text));
+    },
+    heard(): HubFrame[] {
+      return socket.sent.map((text) => parsedFrame(parseHubFrame, text));
     },
   };
 
@@ -423,6 +462,55 @@ describe('reading a captured transcript through the hub', () => {
       code: 'refused',
       message: 'no server the hub is paired with has that store mounted',
     });
+  });
+
+  it('carries no key that would make a transcript an execution surface', async () => {
+    // The rule `session-start.integration.test.ts` holds the start and stop
+    // frames to, applied to the four frames this ticket added -- which that
+    // suite cannot see, because it walks the frames its own conversation
+    // produced. The walk itself is shared rather than copied, so a rule that
+    // moves moves for both.
+    //
+    // A transcript is where this matters most: every activity on it is derived
+    // from something an agent actually ran, so the temptation to call the
+    // display string `command` is right there in the data. It crosses as
+    // `text`, and this says so about the real frames rather than about a
+    // schema.
+    const client = await attach();
+
+    await client.say({
+      type: 'session-transcript',
+      id: 2,
+      storeId: WORK,
+      sessionId: SESSION,
+      count: 50,
+    });
+
+    const hubToServer = held().dialled.flatMap((pair) =>
+      pair.hubEnd.sent.map((text) => parsedFrame<HubToServerFrame>(parseHubToServerFrame, text)),
+    );
+    const serverToHub = held().dialled.flatMap((pair) =>
+      pair.serverEnd.sent.map((text) => parsedFrame<ServerToHubFrame>(parseServerToHubFrame, text)),
+    );
+
+    // The frames this ticket added really are among what is about to be walked.
+    // A sweep over a conversation that never happened would pass on its own.
+    expect(client.said().some((frame) => frame.type === 'session-transcript')).toBe(true);
+    expect(client.heard().some((frame) => frame.type === 'session-transcript-read')).toBe(true);
+    expect(hubToServer.some((frame) => frame.type === 'session-transcript')).toBe(true);
+    expect(serverToHub.some((frame) => frame.type === 'session-transcript-read')).toBe(true);
+
+    for (const frame of [...client.said(), ...client.heard(), ...hubToServer, ...serverToHub]) {
+      expect(forbiddenKeysIn(frame), `${frame.type} carried a forbidden key`).toEqual([]);
+    }
+
+    // And the one word with two meanings: a session descriptor carries `cwd` as
+    // a label somebody reads, and no instruction may carry it at all, because a
+    // `{ cwd }` on an instruction is a remote code execution primitive wearing
+    // a path. A transcript request names a session and never a directory.
+    for (const frame of [...client.said(), ...hubToServer]) {
+      expect(keysOf(frame), `${frame.type} carried a cwd`).not.toContain('cwd');
+    }
   });
 
   it('refuses, rather than serving a copy, when the machine has gone away', async () => {
