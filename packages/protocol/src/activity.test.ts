@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ACTIVITY_COUNT_MAX,
   ACTIVITY_PATH_MAX_CHARS,
   ACTIVITY_TEXT_MAX_CHARS,
   activitySchema,
   displayableActivityText,
+  TRANSCRIPT_ACTIVITIES_MAX,
 } from './activity.js';
 
 /** The key names `tests/hub-server` walks every frame to forbid. */
@@ -123,6 +125,84 @@ describe('activitySchema', () => {
 
     expect(activitySchema.safeParse({ kind: 'edit', path }).success).toBe(true);
     expect(activitySchema.safeParse({ kind: 'edit', path: `${path}p` }).success).toBe(false);
+  });
+
+  it('refuses a line count past the stated maximum, so a count cannot be any number', () => {
+    // The counts are the only unbounded numbers the union ever carried, and
+    // `TRANSCRIPT_ACTIVITIES_MAX` is an arithmetic claim about the largest
+    // variant -- which is this one. A count of arbitrary length would make that
+    // sum a guess.
+    expect(
+      activitySchema.safeParse({ kind: 'edit', path: 'a.ts', added: ACTIVITY_COUNT_MAX }).success,
+    ).toBe(true);
+    expect(
+      activitySchema.safeParse({ kind: 'edit', path: 'a.ts', removed: ACTIVITY_COUNT_MAX + 1 })
+        .success,
+    ).toBe(false);
+    expect(
+      activitySchema.safeParse({ kind: 'tests', passed: ACTIVITY_COUNT_MAX + 1 }).success,
+    ).toBe(false);
+    expect(
+      activitySchema.safeParse({ kind: 'tests', failed: Number.MAX_SAFE_INTEGER }).success,
+    ).toBe(false);
+  });
+
+  /**
+   * The reason `TRANSCRIPT_ACTIVITIES_MAX` is the number it is. Its comment
+   * says a maximal answer is about a quarter of the socket's frame limit, and
+   * that is arithmetic about JSON and UTF-8 rather than an opinion: this
+   * measures it, over the largest variant rather than a chosen one. The ceiling
+   * is `DEFAULT_MAX_PAYLOAD_BYTES` in `packages/node-shared/src/
+   * ws-message-socket.ts`, spelled again here because this package may not
+   * import another workspace package.
+   */
+  it('serialises a maximal answer as a frame the socket will carry', () => {
+    const SOCKET_CEILING_BYTES = 1_000_000;
+    const PER_ACTIVITY_BUDGET_BYTES = 1_300;
+    const encoder = new TextEncoder();
+
+    for (const [why, character] of [
+      ['ascii', 'x'],
+      ['a two-byte letter', 'д'],
+      ['the worst of the Basic Multilingual Plane', '漢'],
+      ['a quote, which JSON escapes', '"'],
+    ] as const) {
+      // Every variant, so the budget is measured against whichever is largest
+      // rather than against the one the comment happens to name.
+      const text = character.repeat(ACTIVITY_TEXT_MAX_CHARS);
+      const path = character.repeat(ACTIVITY_PATH_MAX_CHARS);
+      const every = [
+        { kind: 'command', text, exitStatus: 255 },
+        { kind: 'edit', path, added: ACTIVITY_COUNT_MAX, removed: ACTIVITY_COUNT_MAX },
+        { kind: 'tests', passed: ACTIVITY_COUNT_MAX, failed: ACTIVITY_COUNT_MAX },
+        { kind: 'narration', text },
+        { kind: 'approval', text },
+        { kind: 'plain', text },
+      ];
+
+      for (const activity of every) {
+        expect(activitySchema.safeParse(activity).success, `${why}: ${activity.kind}`).toBe(true);
+        expect(
+          encoder.encode(JSON.stringify(activity)).length,
+          `${why}: ${activity.kind}`,
+        ).toBeLessThanOrEqual(PER_ACTIVITY_BUDGET_BYTES);
+      }
+
+      // And the whole answer, envelope included, against the socket's limit.
+      const largest = every.reduce((worst, activity) =>
+        JSON.stringify(activity).length > JSON.stringify(worst).length ? activity : worst,
+      );
+      const answer = {
+        type: 'session-transcript-read',
+        replyTo: 4096,
+        activities: Array.from({ length: TRANSCRIPT_ACTIVITIES_MAX }, () => largest),
+        olderExist: true,
+      };
+
+      expect(encoder.encode(JSON.stringify(answer)).length, why).toBeLessThan(
+        SOCKET_CEILING_BYTES / 2,
+      );
+    }
   });
 
   it('strips the control and bidi characters out of every display string', () => {

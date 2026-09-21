@@ -11,6 +11,7 @@ export { assertNever } from './exhaustive.js';
 export type { ParseFailure, ParseResult } from './parse.js';
 
 export {
+  ACTIVITY_COUNT_MAX,
   ACTIVITY_PATH_MAX_CHARS,
   ACTIVITY_TEXT_MAX_CHARS,
   TRANSCRIPT_ACTIVITIES_MAX,
