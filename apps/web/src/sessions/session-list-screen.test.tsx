@@ -75,6 +75,13 @@ function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** One animation frame, which is what a Mantine dropdown opens across. */
+function frame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
 /** The moment every age on these renders is measured against. */
 const NOW = 1_756_000_000_000;
 
@@ -490,7 +497,40 @@ describe('the session list', () => {
   }
 
   function searchBox(): HTMLInputElement | null {
-    return container.querySelector<HTMLInputElement>('input[aria-label="Search sessions"]');
+    return container.querySelector<HTMLInputElement>('input[aria-label="Filter sessions"]');
+  }
+
+  /** The popover's trigger, which comes with the row the phone form draws. */
+  function filterTrigger(): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>('button[aria-label="Filters"]');
+  }
+
+  /**
+   * Opens the popover and picks an option out of one of its dropdowns, the way
+   * somebody on a phone reaches a narrowing that has no other surface there.
+   */
+  async function narrowThroughPopover(section: string, option: string): Promise<void> {
+    const opener = filterTrigger();
+    if (opener === null) throw new Error('the screen drew no popover trigger');
+    await click(opener);
+    // Mantine places the dropdown with a floating-ui measurement and opens it
+    // through a transition, so it reaches the document a frame after the click
+    // rather than in the flush that asked for it.
+    await act(settle);
+    await act(frame);
+    await act(settle);
+    const input = document.body.querySelector<HTMLInputElement>(`input[aria-label="${section}"]`);
+    if (input === null) throw new Error(`the popover drew no ${section} chooser`);
+    await act(() => {
+      input.click();
+    });
+    const found = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (candidate) => candidate.textContent === option,
+    );
+    if (found === undefined) throw new Error(`${section} offers no ${option}`);
+    await act(() => {
+      found.click();
+    });
   }
 
   /** A status chip by the word it starts with; they are the pressable pair. */
@@ -511,8 +551,8 @@ describe('the session list', () => {
   it('draws no store or provider select of its own', async () => {
     await mountWith(hubFrames.machineStatePopulated);
 
-    // Both narrowings are sections of the sidebar's popover now. A select left
-    // here would be a second control writing what that one writes.
+    // Both narrowings are sections of the filter row's popover now. A select
+    // left here would be a second control writing what that one writes.
     expect(container.querySelector('[aria-label="Store"]')).toBeNull();
     expect(container.querySelector('[aria-label="Provider"]')).toBeNull();
   });
@@ -566,19 +606,21 @@ describe('the session list', () => {
     ]);
   });
 
-  it('draws the search box only in the phone form, where there is no sidebar', async () => {
+  it('draws the filter row only in the phone form, where there is no sidebar', async () => {
     await mountWith(hubFrames.machineStatePopulated);
 
     // The chips are on the screen at both widths, as the mockup draws them;
-    // the search box at this width belongs to the sidebar's filter row.
+    // the row at this width is the sidebar's, and a second one here would be
+    // two boxes typing into one field and two badges counting one set.
     expect(container.textContent).toContain('Needs you · 2');
     expect(searchBox()).toBeNull();
+    expect(filterTrigger()).toBeNull();
   });
 
-  it('types the phone form’s search into the narrowings both forms share', async () => {
+  it('types the phone form’s letters into the narrowings both forms share', async () => {
     await mountWith(hubFrames.machineStatePopulated, undefined, 'phone');
     const box = searchBox();
-    if (box === null) throw new Error('the phone form drew no search box');
+    if (box === null) throw new Error('the phone form drew no filter box');
 
     await act(() => {
       typeInto(box, 'docs');
@@ -586,6 +628,22 @@ describe('the session list', () => {
 
     expect(appSessionFiltersStore(store).getSnapshot().search).toBe('docs');
     expect(hrefs()).toEqual(['#/session/store-universe/session-docs-sweep']);
+  });
+
+  it('reaches the store narrowing through the popover on a phone', async () => {
+    // The phone has no sidebar, so this row is the only way to Store, Provider
+    // and the three narrowings beside them. Before it was drawn here, moving
+    // the two selects into the popover took them off the phone altogether.
+    await mountWith(hubFrames.machineStatePopulated, undefined, 'phone');
+
+    await narrowThroughPopover('Store', 'store-universe');
+
+    expect(appSessionFiltersStore(store).getSnapshot().storeId).toBe('store-universe');
+    expect(hrefs()).toEqual([
+      '#/session/store-universe/session-docs-sweep',
+      '#/session/store-universe/session-bench-tokenizer',
+      '#/session/store-universe/session-train-lora',
+    ]);
   });
 
   it('presses a chip into the shared narrowings rather than into its own state', async () => {

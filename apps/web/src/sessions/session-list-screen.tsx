@@ -6,7 +6,6 @@ import {
   SimpleGrid,
   Stack,
   Text,
-  TextInput,
   Title,
   UnstyledButton,
   useComputedColorScheme,
@@ -16,6 +15,7 @@ import type { ShellForm } from '../shell/shell-form.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import { NextActionLink } from '../shell/next-action.js';
+import { SidebarFilter } from '../shell/sidebar-filter.js';
 import {
   chipOptions,
   connectionNotice,
@@ -53,12 +53,17 @@ import { stoppedNotice } from './stop-model.js';
  * nothing, and through `visibleSessions` and `chipOptions` against the clock
  * it was handed.
  *
- * The filter row is drawn twice over, in the two places the two forms have
- * room for it: the sidebar has it in the wide form, and in the phone form,
- * which has no sidebar, this screen draws it (mockup 6c). The chips stay on
- * the screen at both widths, where mockup 7a keeps them, and the search box
- * here is the phone form's only -- at the wider one it would be the second of
- * two boxes typing into the same field.
+ * The filter row is drawn in the two places the two forms have room for it:
+ * the sidebar has it in the wide form, and in the phone form, which has no
+ * sidebar at all, this screen draws it (mockup 6c). It is the same component
+ * either way (`shell/sidebar-filter.tsx`), which is why it takes what it
+ * narrows as props rather than reading a tab: a bare box here would have moved
+ * Store and Provider off the phone when it moved them into the popover, and
+ * left five narrowings reachable only at a width the phone does not have. The
+ * chips stay on the screen at both widths, where mockup 7a keeps them, and the
+ * row here is the phone form's only -- at the wider one it would be the second
+ * of two boxes typing into one field, under the second of two badges counting
+ * one set of choices.
  *
  * The mockup's floating action button used to be drawn here, fixed to the
  * corner at narrow widths. It belongs to the phone chrome (AGX-125): it floats
@@ -215,6 +220,29 @@ export function SessionListScreen({
 
       <ProjectDocuments store={store} scheme={scheme} />
 
+      {/* The wide form's row is in the sidebar, above whichever tab is
+          showing, so this one is the phone form's. Not a media query, for the
+          reason the New session button above it is not one: the shell's form
+          is one rule in one place, and a second spelling of it disagrees at
+          any font size but the default.
+
+          The moment is the one the cards are drawn against rather than a
+          second reading of the clock, so the age window cannot mean one thing
+          in the popover and another in the list under it. */}
+      {form === 'phone' ? (
+        <SidebarFilter
+          state={state}
+          filters={filtersStore}
+          machine={machine}
+          label="Filter sessions"
+          text={filters.search}
+          onText={(text) => filtersStore.set({ search: text })}
+          popover
+          scheme={scheme}
+          now={() => moment}
+        />
+      ) : null}
+
       <Group gap={10}>
         {chips.length === 0 ? null : (
           <StatusChips
@@ -225,21 +253,6 @@ export function SessionListScreen({
             scheme={scheme}
           />
         )}
-        {/* The wide form's box is in the sidebar's filter row, above whichever
-            tab is showing, so this one is the phone form's. Not a media query,
-            for the reason the New session button beside it is not one: the
-            shell's form is one rule in one place, and a second spelling of it
-            disagrees at any font size but the default. */}
-        {form === 'phone' ? (
-          <TextInput
-            size="xs"
-            aria-label="Search sessions"
-            placeholder="Search sessions"
-            value={filters.search}
-            onChange={(event) => filtersStore.set({ search: event.currentTarget.value })}
-            style={{ flex: 1, maxWidth: 380 }}
-          />
-        ) : null}
       </Group>
 
       {visible.length === 0 ? (
