@@ -146,7 +146,19 @@ describe('the Allow and Deny a blocked agent is waiting on', () => {
   async function mount(item: SessionListItem): Promise<void> {
     await act(() => {
       root ??= createRoot(container);
-      root.render(withProvider(<ApprovalControls item={item} store={store} scheme="dark" />));
+      root.render(
+        withProvider(
+          // As the card hands it over: the session, the one request it is
+          // holding, and the session's name on the buttons.
+          <ApprovalControls
+            sessionRef={item.ref}
+            approval={item.approval}
+            name={item.name}
+            store={store}
+            scheme="dark"
+          />,
+        ),
+      );
     });
   }
 

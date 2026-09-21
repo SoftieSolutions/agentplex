@@ -1,11 +1,17 @@
 import { useState, type JSX, type MouseEvent } from 'react';
-import type { ApprovalDecision, ApprovalId, ApprovalOutcome, FrameId } from '@agentplex/protocol';
+import type {
+  ApprovalDecision,
+  ApprovalId,
+  ApprovalOutcome,
+  FrameId,
+  SessionRef,
+} from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import { approvalFollowUp, decideCommand } from './approval-model.js';
-import type { SessionListItem } from './session-list-model.js';
+import type { SessionApproval } from './session-list-model.js';
 
 /**
  * The one thing a blocked agent is waiting for: the command it says it wants
@@ -33,9 +39,36 @@ import type { SessionListItem } from './session-list-model.js';
  * A session holding no request draws nothing at all, which is every codex
  * session -- it has no permission hook to ask through -- and every claude one
  * that is not presently asking.
+ *
+ * It takes one request and not the row it came off, and that is what let the
+ * Approvals tab (AGX-129) reuse it whole rather than grow a second pair of
+ * buttons beside the card's: a card draws the oldest request on a session, the
+ * tab draws every request on one session, and both are this component handed
+ * one narrowed request and told which session it belongs to.
  */
 export interface ApprovalControlsProps {
-  readonly item: SessionListItem;
+  /** The session the decision names. A decision is about a request on a row. */
+  readonly sessionRef: SessionRef;
+  /**
+   * The one request this pair answers, already narrowed by
+   * `approvalsOldestFirst` -- so the suggestions are not here to be read, and
+   * neither surface can hand a policy change to a pair of buttons that promise
+   * to answer one command.
+   *
+   * `null` draws nothing at all: every codex session, which has no permission
+   * hook to ask through, and every claude one that is not presently asking.
+   */
+  readonly approval: SessionApproval | null;
+  /**
+   * What the buttons say they are answering, in the words that tell this pair
+   * apart from the ones beside it.
+   *
+   * The session on a card, where one request stands for a session among other
+   * sessions; the tool on the Approvals tab, where several requests for one
+   * session are drawn at once and the session's name would label every pair the
+   * same. Each surface names the thing that varies down its own list.
+   */
+  readonly name: string;
   readonly store: HubStore;
   readonly scheme: Scheme;
   /**
@@ -79,11 +112,12 @@ function outcomeWords(outcome: ApprovalOutcome): string {
  *
  * Tied to the request here rather than by keying the element on `approvalId`
  * where the card mounts it, which would work and would put this component's
- * correctness in its caller. `session-pane.tsx` already names Approvals among
- * the tabs to come, so there will be a second caller, and one that forgot the
+ * correctness in its caller. The Approvals tab is that second caller, and it
+ * mounts one of these per open request on one session: a caller that forgot the
  * key would not fail -- it would show a stale answer above a live one. State
  * that is a claim about a request carries the request's id, and then a mismatch
- * is idle wherever it is mounted.
+ * is idle wherever it is mounted, which is also what keeps the tab's answers
+ * apart from each other.
  *
  * Both fields describe the same send: `frameId` is the frame the hub owes an
  * answer for, and `refusal` is the store declining to send at all -- an
@@ -96,7 +130,9 @@ interface ApprovalAnswer {
 }
 
 export function ApprovalControls({
-  item,
+  sessionRef,
+  approval,
+  name,
   store,
   scheme,
   size = 'sm',
@@ -104,7 +140,6 @@ export function ApprovalControls({
   const snapshot = useHubSnapshot(store);
   const [answer, setAnswer] = useState<ApprovalAnswer | null>(null);
 
-  const { approval } = item;
   if (approval === null) return null;
   // Read out here rather than inside the handler: a function declaration is
   // hoisted above the guard, so the narrowing does not reach it.
@@ -131,7 +166,7 @@ export function ApprovalControls({
     // a navigation, and a person aiming at Allow meant Allow.
     event.preventDefault();
     event.stopPropagation();
-    const outcome = store.sendCommand(decideCommand(item.ref, approvalId, decision));
+    const outcome = store.sendCommand(decideCommand(sessionRef, approvalId, decision));
     setAnswer(
       outcome.accepted
         ? { approvalId, frameId: outcome.id, refusal: null }
@@ -203,7 +238,7 @@ export function ApprovalControls({
           size={size}
           disabled={spent}
           onClick={(event) => decide(event, 'grant')}
-          aria-label={`allow ${item.name}`}
+          aria-label={`allow ${name}`}
         >
           Allow
         </Button>
@@ -215,7 +250,7 @@ export function ApprovalControls({
           variant="default"
           disabled={spent}
           onClick={(event) => decide(event, 'deny')}
-          aria-label={`deny ${item.name}`}
+          aria-label={`deny ${name}`}
         >
           Deny
         </Button>

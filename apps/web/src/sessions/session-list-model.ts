@@ -63,17 +63,34 @@ export interface SessionApproval {
  * the same millisecond.
  */
 export function oldestApproval(approvals: readonly PendingApproval[]): SessionApproval | null {
-  let oldest: PendingApproval | undefined;
-  for (const approval of approvals) {
-    if (oldest === undefined || approval.requestedAt < oldest.requestedAt) oldest = approval;
-  }
-  if (oldest === undefined) return null;
-  return {
-    approvalId: oldest.approvalId,
-    tool: oldest.tool,
-    proposal: oldest.proposal,
-    requestedAt: oldest.requestedAt,
-  };
+  return approvalsOldestFirst(approvals)[0] ?? null;
+}
+
+/**
+ * Every open request a session is holding, narrowed the same way and in the
+ * order the Approvals tab draws them: longest-waiting first.
+ *
+ * The same rule as `oldestApproval` over the whole list rather than a second
+ * opinion about it, which is why that one is defined in terms of this one: the
+ * card shows the head of this list, and a tab and a card that each sorted for
+ * themselves could come to different answers about which request has been
+ * waiting longest -- on one screen, at the same moment, about the same session.
+ *
+ * `sort` is stable in every runtime this ships to, so requests heard in the
+ * same millisecond keep the order the hub sent, which is arrival order on the
+ * machine that minted the ids.
+ */
+export function approvalsOldestFirst(
+  approvals: readonly PendingApproval[],
+): readonly SessionApproval[] {
+  return [...approvals]
+    .sort((left, right) => left.requestedAt - right.requestedAt)
+    .map((approval) => ({
+      approvalId: approval.approvalId,
+      tool: approval.tool,
+      proposal: approval.proposal,
+      requestedAt: approval.requestedAt,
+    }));
 }
 
 /** One session as the list renders it, flattened out of its store. */

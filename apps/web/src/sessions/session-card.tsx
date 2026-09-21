@@ -123,7 +123,17 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
         {actions}
       </Group>
       <SessionSummaryLine text={item.summary} scheme={scheme} />
-      <ApprovalControls item={item} store={store} scheme={scheme} />
+      {/* The oldest request this session is holding, named by the session:
+          one pair of buttons among a list of other sessions' cards, where the
+          session is what tells this one apart. Every other request it is
+          holding is on the session screen's Approvals tab. */}
+      <ApprovalControls
+        sessionRef={item.ref}
+        approval={item.approval}
+        name={item.name}
+        store={store}
+        scheme={scheme}
+      />
       <Group gap={8} wrap="nowrap" justify="space-between" align="center">
         {/* The provider, the age and the qualifications on it, drawn by the
             component the list's row draws too: the judgements in that sentence

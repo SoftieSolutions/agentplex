@@ -11,6 +11,7 @@ import {
   acknowledgementHolds,
   activeFilterCount,
   ageLabel,
+  approvalsOldestFirst,
   chipCounts,
   chipOptions,
   clearedFilters,
@@ -217,6 +218,64 @@ describe('choosing among open requests', () => {
     const second: PendingApproval = { ...capturedApproval, tool: 'Edit' };
     expect(oldestApproval([capturedApproval, second])?.tool).toBe(capturedApproval.tool);
     expect(oldestApproval([second, capturedApproval])?.tool).toBe('Edit');
+  });
+});
+
+describe('listing every open request', () => {
+  it('has nothing to list from an empty list', () => {
+    expect(approvalsOldestFirst([])).toEqual([]);
+  });
+
+  it('puts the oldest first, whatever order the row lists them in', () => {
+    // The same rule the card's one request follows, applied to all of them:
+    // the longest-waiting hook is the nearest its own timeout, so it is the
+    // one at the top of the tab.
+    const newer: PendingApproval = {
+      ...capturedApproval,
+      tool: 'Edit',
+      requestedAt: capturedApproval.requestedAt + 60_000,
+    };
+    expect(approvalsOldestFirst([newer, capturedApproval]).map((open) => open.tool)).toEqual([
+      capturedApproval.tool,
+      'Edit',
+    ]);
+  });
+
+  it('keeps the hub order among requests heard in the same millisecond', () => {
+    const second: PendingApproval = { ...capturedApproval, tool: 'Edit' };
+    expect(approvalsOldestFirst([capturedApproval, second]).map((open) => open.tool)).toEqual([
+      capturedApproval.tool,
+      'Edit',
+    ]);
+  });
+
+  it('narrows each request to what a surface draws, and leaves the suggestions behind', () => {
+    // The captured request really carries them: they are the rules a provider
+    // would remember an answer as, which is policy and a different decision on
+    // a different surface. A list that handed them through would put a policy
+    // change one field access from a pair of buttons that answer once.
+    expect(capturedApproval.suggestions.length).toBeGreaterThan(0);
+
+    expect(approvalsOldestFirst([capturedApproval])).toEqual([
+      {
+        approvalId: capturedApproval.approvalId,
+        tool: capturedApproval.tool,
+        proposal: capturedApproval.proposal,
+        requestedAt: capturedApproval.requestedAt,
+      },
+    ]);
+  });
+
+  it('heads the list with the request the card shows', () => {
+    const newer: PendingApproval = {
+      ...capturedApproval,
+      requestedAt: capturedApproval.requestedAt + 60_000,
+    };
+    // One rule, two surfaces: a tab and a card can never disagree about which
+    // request has been waiting longest.
+    expect(approvalsOldestFirst([newer, capturedApproval])[0]).toEqual(
+      oldestApproval([newer, capturedApproval]),
+    );
   });
 });
 
