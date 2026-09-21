@@ -22,6 +22,12 @@ import { ageLabel, unseenPrompt, type SessionListItem } from './session-list-mod
  * two lines high, and a card whose small print wrapped would be taller than
  * the card beside it; the fact that gets cut is the last qualification, and
  * the accent and the dimming beside it are still saying so.
+ *
+ * The waiting clock is the same judgement made once for the same reason: a
+ * session with a request open has been waiting since the hub heard the
+ * request, not since the transcript it interrupted last moved, and a row and
+ * a card that disagreed about which clock "waiting" runs on would be two
+ * answers to one question.
  */
 export interface SessionMetaLineProps {
   readonly item: SessionListItem;
@@ -33,13 +39,16 @@ export interface SessionMetaLineProps {
 export function SessionMetaLine({ item, scheme, now }: SessionMetaLineProps): JSX.Element {
   const muted = colorForRole('textMuted', scheme);
   const age = ageLabel(now, item.updatedAt);
+  // Two clocks, one label. The request wins where there is one, because the
+  // request is what the wait is about.
+  const waited = ageLabel(now, item.approval?.requestedAt ?? item.updatedAt);
   const unseen = unseenPrompt(item);
   return (
     <Text fz={11} c={muted} truncate="end" style={{ minWidth: 0 }}>
       {item.provider} {'·'}{' '}
       {unseen ? (
         <Text component="span" fz={11} c={colorForTone('needs-you', scheme)}>
-          waiting {age}
+          waiting {waited}
         </Text>
       ) : (
         age
