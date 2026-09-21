@@ -747,6 +747,27 @@ describe('the catalogue cursor', () => {
     expect(widened.problem).toContain('different query');
   });
 
+  it('accepts a cursor whose kinds were named in another order, because a set has none', async () => {
+    // The other half of the rule above: the selection is a set, so the same
+    // kinds listed in another order are the same question and a position in it
+    // is still exactly true. A client building that list off an object's keys,
+    // or off a `Set` it filled as it went, would otherwise be refused
+    // mid-paging for a query it never changed.
+    const catalogue = over(rows, readings);
+    const kinds = [nodeKindSchema.parse('session'), nodeKindSchema.parse('project')];
+    const first = await catalogue.page({ limit: 1, filter: { kinds } });
+    const cursor = first.nextCursor;
+    if (cursor === null) throw new Error('the first page ended the answer');
+
+    const reversed = await catalogue.page({
+      limit: 10,
+      cursor,
+      filter: { kinds: [...kinds].reverse() },
+    });
+
+    expect(idsOf(reversed.items)).toEqual(['three', 'two']);
+  });
+
   it('accepts a cursor across a change of page size, because the order did not move', async () => {
     const catalogue = over(rows, readings);
     const first = await catalogue.page({ limit: 1 });
