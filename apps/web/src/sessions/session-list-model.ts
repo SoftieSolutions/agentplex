@@ -196,6 +196,22 @@ export function acknowledgementHolds(
 }
 
 /**
+ * Whether this session is sitting on a prompt nobody has said they have seen.
+ *
+ * The fact the accent border and the waiting clock follow, on the card and on
+ * the row alike, and the fact the acknowledge control is offered for. One
+ * function because two forms of the same list draw it: a rule spelled inline
+ * in each is a rule one of them will keep after somebody changes the other.
+ *
+ * Mute is deliberately not in it, and that is the whole difference from
+ * `wantsAttention` below: muting silences the alert, not the fact, so a muted
+ * session still wears its accent and still says how long it has been waiting.
+ */
+export function unseenPrompt(item: SessionListItem): boolean {
+  return item.needsYou && !item.acknowledged;
+}
+
+/**
  * Whether this session should be making a noise: it wants a human, nobody has
  * said they have seen it, and it is not muted.
  *
@@ -206,7 +222,7 @@ export function acknowledgementHolds(
  * been acknowledged or muted, and only the noise stops.
  */
 export function wantsAttention(item: SessionListItem): boolean {
-  return item.needsYou && !item.acknowledged && !item.muted;
+  return unseenPrompt(item) && !item.muted;
 }
 
 export function statusWords(status: SessionStatus): string {

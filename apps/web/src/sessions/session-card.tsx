@@ -4,7 +4,8 @@ import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import type { HubStore } from '../store/hub-store.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { AttentionControls } from './attention-controls.js';
-import { ageLabel, placeLabel, type SessionListItem } from './session-list-model.js';
+import { placeLabel, unseenPrompt, type SessionListItem } from './session-list-model.js';
+import { SessionMetaLine } from './session-meta-line.js';
 import { SessionSummaryLine } from './session-summary-line.js';
 import { StopButton } from './stop-button.js';
 
@@ -64,10 +65,10 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
   // needs-you fact: saying "seen" has to do something visible, or nobody will
   // say it twice. Muting deliberately does not touch it -- a muted card is the
   // same card, dimmed.
-  const unseen = item.needsYou && !item.acknowledged;
-  const border = unseen ? colorForTone('needs-you', scheme) : colorForRole('border', scheme);
+  const border = unseenPrompt(item)
+    ? colorForTone('needs-you', scheme)
+    : colorForRole('border', scheme);
   const muted = colorForRole('textMuted', scheme);
-  const age = ageLabel(now, item.updatedAt);
   return (
     <Box
       component="article"
@@ -114,39 +115,10 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
       </Group>
       <SessionSummaryLine text={item.summary} scheme={scheme} />
       <Group gap={8} wrap="nowrap" justify="space-between" align="center">
-        <Text fz={11} c={muted}>
-          {item.provider} {'·'}{' '}
-          {unseen ? (
-            <Text component="span" fz={11} c={colorForTone('needs-you', scheme)}>
-              waiting {age}
-            </Text>
-          ) : (
-            age
-          )}
-          {item.needsYou && item.acknowledged ? (
-            // Said in words rather than by the absence of the accent, so that
-            // a row still wanting a human does not read as one that has
-            // stopped wanting anything.
-            <Text component="span" fz={11} c={muted}>
-              {' '}
-              {'·'} seen
-            </Text>
-          ) : null}
-          {item.muted ? (
-            <Text component="span" fz={11} c={muted}>
-              {' '}
-              {'·'} muted
-            </Text>
-          ) : null}
-          {item.reachable ? null : (
-            // The row stays, labelled: an unreachable session is a fact with an
-            // age on it, not a session to hide and not one to show as live.
-            <Text component="span" fz={11} c={muted}>
-              {' '}
-              {'·'} unreachable
-            </Text>
-          )}
-        </Text>
+        {/* The provider, the age and the qualifications on it, drawn by the
+            component the list's row draws too: the judgements in that sentence
+            are the same judgements whichever way the fleet is being read. */}
+        <SessionMetaLine item={item} scheme={scheme} now={now} />
         {/* Above the link overlay, so the button is the button. It renders
             nothing at all unless the holder says this session can be stopped. */}
         <Box style={{ position: 'relative', flexShrink: 0, display: 'flex', gap: 6 }}>
