@@ -790,3 +790,102 @@ function rowIn(state: MachineState, sessionId: string): SessionRow | undefined {
     .flatMap((store) => store.sessions)
     .find((row) => row.descriptor.sessionId === sessionId);
 }
+
+/**
+ * A flat search that can return a project, against a hub with a real schema.
+ *
+ * The one thing this suite can say that `query.test` cannot: which kinds are
+ * containers is a fact the migrations wrote into `node_kinds`, not a set a test
+ * scripted. A unit test hands the query its own four rows for that table and
+ * would go on passing if a migration changed its mind about `project`; here the
+ * project is one a client made through `project-create`, filed by the feature
+ * that owns projects, and the reason it never came back from a flat search is
+ * the seeded row that says it contains.
+ */
+describe('a flat catalogue search over the kinds a client names', () => {
+  async function listing(client: Client, filter: Record<string, unknown>): Promise<HubFrame> {
+    return client.ask({
+      type: 'catalogue-query',
+      view: 'list',
+      groupBy: 'none',
+      sort: { key: 'name', direction: 'asc' },
+      filter,
+      cursor: null,
+      limit: 10,
+    });
+  }
+
+  async function reportingHubWithAProject(): Promise<{ client: Client; projectId: string }> {
+    const laptop = machine('mbp-robert', 'server-mbp', AGENTPLEX, '/Users/robert/code/agentplex', [
+      descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh'),
+    ]);
+    fleet = await startFleetHub([laptop]);
+    const client = await openClient(fleet.hub);
+    await settles(client, ['store-agentplex/session-fix-auth']);
+
+    const created = await client.ask({
+      type: 'project-create',
+      name: 'agentplex',
+      directory: '/Users/robert/code/agentplex',
+    });
+    if (created.type !== 'project-created') {
+      throw new Error(`the project was answered ${created.type}`);
+    }
+    return { client, projectId: created.nodeId };
+  }
+
+  it('answers a project to a search that names its kind, and none to one that does not', async () => {
+    const { client, projectId } = await reportingHubWithAProject();
+
+    const named = await listing(client, { search: 'agentplex', kinds: ['project'] });
+    if (named.type !== 'catalogue-page') throw new Error(`the query was answered ${named.type}`);
+
+    expect(named.items.map((item) => item.id)).toEqual([projectId]);
+    expect(named.total).toBe(1);
+    // A container has no reading behind it, so the name is the only field a
+    // search can hit and the row says so rather than inventing a second one.
+    expect(named.items[0]?.kind).toBe('project');
+    expect(named.items[0]?.matched).toBe('name');
+    expect(named.items[0]?.session).toBeNull();
+    expect(named.items[0]?.anchor).toBeNull();
+
+    // The same search with no kind named: the leaves-only rule stands, and the
+    // project sitting right there is not among the answers. That is what the
+    // sidebar catalogue panel goes on getting.
+    const unnamed = await listing(client, { search: 'agentplex' });
+    if (unnamed.type !== 'catalogue-page') {
+      throw new Error(`the query was answered ${unnamed.type}`);
+    }
+    expect(unnamed.items).toEqual([]);
+  });
+
+  it('puts a project and a session in one flat order when both kinds are named', async () => {
+    const { client, projectId } = await reportingHubWithAProject();
+
+    const answered = await listing(client, { kinds: ['project', 'session'] });
+    if (answered.type !== 'catalogue-page') {
+      throw new Error(`the query was answered ${answered.type}`);
+    }
+
+    expect(answered.items.map((item) => [item.id, item.kind, item.displayName])).toEqual([
+      [projectId, 'project', 'agentplex'],
+      [answered.items[1]?.id, 'session', 'fix-auth-refresh'],
+    ]);
+    expect(answered.items[1]?.anchor?.sessionId).toBe('session-fix-auth');
+  });
+
+  it('answers nothing for a kind no migration has seeded, and refuses nothing', async () => {
+    // What lets a palette ask for `graph` before the migration that seeds it:
+    // an empty page rather than a refusal, so the kind can be asked for from
+    // the day the client draws a heading for it.
+    const { client } = await reportingHubWithAProject();
+
+    const answered = await listing(client, { kinds: ['graph'] });
+    if (answered.type !== 'catalogue-page') {
+      throw new Error(`the query was answered ${answered.type}`);
+    }
+
+    expect(answered.items).toEqual([]);
+    expect(answered.total).toBe(0);
+  });
+});

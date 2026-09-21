@@ -11,7 +11,7 @@ import {
 import { listSessions } from '../sessions/session-list-model.js';
 import type { ShellForm } from '../shell/shell-form.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { DOC_KIND, SESSION_KIND } from '../tree/node-kinds.js';
+import { DOC_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { CommandPalette } from './palette.js';
@@ -104,6 +104,19 @@ const NAMESAKE_DOC: PaletteResult = {
   label: 'spike-wasm',
   detail: 'Document',
   href: '#/doc/hub-6',
+};
+
+/**
+ * A project of that name as well, which is the collision AGX-261 adds: the hub
+ * can now answer a flat search with a container, so one name can be a session,
+ * a document and a project at once.
+ */
+const NAMESAKE_PROJECT: PaletteResult = {
+  id: 'project:hub-5',
+  kind: PROJECT_KIND,
+  label: 'spike-wasm',
+  detail: 'Project',
+  href: '#/projects',
 };
 
 const QUIET: PaletteSearchSnapshot = {
@@ -346,6 +359,20 @@ describe('the command palette', () => {
     expect(trigger().textContent).toContain('Search sessions');
   });
 
+  it('names the three kinds it can answer with, and claims no graphs', async () => {
+    draw();
+
+    // The mockup's field says "sessions, projects, graphs". Projects are real
+    // now (AGX-261); the graph kind is unseeded until AGX-144, and a control
+    // that offered it would be a promise the hub cannot keep.
+    expect(trigger().textContent).toContain('Search sessions, documents and projects');
+    expect(trigger().textContent).not.toContain('graph');
+
+    await open();
+    expect(field().getAttribute('aria-label')).toContain('projects');
+    expect(openedDialog().textContent).not.toContain('graph');
+  });
+
   it('draws the chord as text and claims nothing about it', () => {
     draw({ form: 'wide' });
 
@@ -556,6 +583,42 @@ describe('the command palette', () => {
     ]);
   });
 
+  it('heads a project row Projects, and tells it from the namesakes of other kinds', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({ results: [NAMESAKE_DOC, NAMESAKE_PROJECT] });
+
+    expect(outline()).toEqual([
+      '# Sessions',
+      'spike-wasm',
+      '# Documents',
+      'spike-wasm',
+      '# Projects',
+      'spike-wasm',
+    ]);
+    // Three rows of one name, told apart by the heading over each, by the
+    // second line on each and by where each one goes.
+    expect(rows().map((row) => row.getAttribute('href'))).toEqual([
+      '#/session/store-agentplex/session-spike-wasm',
+      '#/doc/hub-6',
+      '#/projects',
+    ]);
+    expect(rows()[2]?.textContent).toContain('Project');
+  });
+
+  it('follows a project row to the tree, the address the app already has for one', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({ results: [NAMESAKE_PROJECT] });
+    await press('ArrowDown');
+    await press('Enter');
+    await untilClosed();
+
+    expect(went).toEqual(['#/projects']);
+  });
+
   it('labels a kind it has never heard of with the kind itself', async () => {
     draw();
     await open();
@@ -633,6 +696,31 @@ describe('the command palette', () => {
     expect(headings()).toEqual(['Sessions']);
   });
 
+  it('says a miss it could not check as one, rather than as a miss', async () => {
+    draw();
+    await open();
+    await type('nothing-matches-this');
+    await answer({
+      results: [],
+      searching: false,
+      problem: 'the connection is down: a catalogue page is a read of now',
+    });
+
+    // Nothing is drawn and half the question was never asked: "Nothing matches
+    // that" over that is a claim this does not have, and it is the claim a
+    // person acts on by retyping a word that was never looked up.
+    const empty = words('data-palette-empty');
+    expect(empty).not.toContain('Nothing matches that');
+    expect(empty).toContain('the hub could not be asked');
+    expect(empty).toContain('the connection is down');
+    // Said once: with no rows over it the refusal line would be the same
+    // sentence a second time, and its own wording is about rows that are still
+    // listed, of which there are none.
+    expect(openedDialog().querySelector('[data-palette-problem]')).toBeNull();
+    // What is seen and what is announced are the one answer.
+    expect(announced()).toBe(empty);
+  });
+
   it('says the hub had more matches than the rows account for', async () => {
     draw();
     await open();
@@ -657,6 +745,43 @@ describe('the command palette', () => {
 
     await type('nothing-matches-this');
     expect(announced()).toContain('Nothing matches');
+  });
+
+  it('announces that the hub could not be asked rather than claiming a miss', async () => {
+    draw();
+    await open();
+    // Nothing this browser holds matches, so the only half that could have
+    // answered is the one that just refused.
+    await type('nothing-matches-this');
+    await answer({
+      results: [],
+      searching: false,
+      problem: 'the connection is down: a catalogue page is a read of now',
+    });
+
+    // "Nothing matches that" is a claim about a question the hub never
+    // answered, and the refusal line under the rows is not in a live region:
+    // what is announced has to carry it.
+    expect(announced()).toContain('could not be asked');
+    expect(announced()).toContain('the connection is down');
+    expect(announced()).not.toContain('Nothing matches that.');
+  });
+
+  it('announces the refusal beside the count when the client-held rows stand', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({
+      results: [],
+      searching: false,
+      problem: 'the connection is down: a catalogue page is a read of now',
+    });
+
+    // One row is drawn and it is this browser's own: a count announced alone
+    // would present half an answer as the whole of one.
+    expect(labels()).toEqual(['spike-wasm']);
+    expect(announced()).toContain('1 match');
+    expect(announced()).toContain('the connection is down');
   });
 
   it('ignores the keyboard while a candidate is being composed', async () => {

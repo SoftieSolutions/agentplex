@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CATALOGUE_PAGE_MAX_LIMIT,
   nodeIdSchema,
+  nodeKindSchema,
   serverAddressSchema,
   serverRegistrationIdSchema,
   sessionIdSchema,
@@ -10,6 +11,7 @@ import {
   type CatalogueQuery,
   type MachineState,
   type NodeId,
+  type NodeKind,
   type ServerRegistrationId,
   type SessionRow,
   type StoreId,
@@ -351,6 +353,12 @@ describe('the catalogue query', () => {
     expect(answered.nextCursor).toBeNull();
   });
 
+  /**
+   * The default, and now only the default: a query that names no kinds is
+   * answered with the leaves it has always been answered with. What a kind
+   * selection does to this rule is the subject of its own describe below, and
+   * the sidebar catalogue panel -- which sends none -- is on this side of it.
+   */
   it('flattens containers out of the list view and keeps them in the tree', async () => {
     const rows = [
       folder('folder', null, 0, 'archive'),
@@ -547,6 +555,92 @@ describe('the catalogue query, searched', () => {
   });
 });
 
+/**
+ * The kind selection: the one thing that lets a flat answer carry a project.
+ *
+ * Flat means leaves, and `node_kinds` marks `folder` and `project` containers
+ * alike -- so until this field a search over the list view could find a session
+ * or a doc and nothing else, whatever the user typed. Naming kinds lifts the
+ * leaves-only rule for exactly the kinds named, which is why a palette asks for
+ * the kinds it draws headings for rather than being handed folders to drop.
+ *
+ * What it is not is the tree view. The tree keeps every container on the way to
+ * a hit, matching or not, because a search from a tree is asking where the hits
+ * are. A flat answer is asking what the hits are, and an ancestor that matched
+ * nothing is not one.
+ */
+describe('the catalogue query, over the kinds it names', () => {
+  const rows = [
+    folder('folder', null, 0, 'archive'),
+    project('project', 'folder', 0, 'agentplex'),
+    session('session', 'project', 0, 'session-one', 'fix auth'),
+    session('elsewhere', null, 1, 'session-two', 'agentplex rewrite'),
+  ];
+  const readings: Reading[] = [
+    { sessionId: 'session-one', cwd: '/Users/robert/code/agentplex' },
+    { sessionId: 'session-two' },
+  ];
+  const kinds = (...named: readonly string[]): NodeKind[] =>
+    named.map((kind) => nodeKindSchema.parse(kind));
+
+  it('answers a flat search with a project, matched on the only field it has', async () => {
+    const answered = await over(rows, readings).page({
+      filter: { search: 'agentplex', kinds: kinds('project') },
+    });
+
+    expect(idsOf(answered.items)).toEqual(['project']);
+    expect(answered.total).toBe(1);
+    // A container has no session id, no working directory and no server, so
+    // the name is the only field `matchOf` can hit on -- which is why this
+    // needed no new `CatalogueMatchField`.
+    expect(answered.items[0]?.matched).toBe('name');
+    expect(answered.items[0]?.session).toBeNull();
+    expect(answered.items[0]?.anchor).toBeNull();
+    expect(answered.items[0]?.server).toBeNull();
+  });
+
+  it('answers the same search with no project at all when no kind is named', async () => {
+    const answered = await over(rows, readings).page({ filter: { search: 'agentplex' } });
+
+    // The session whose name holds it and the session whose cwd does. The
+    // project named exactly that is unreachable, which is the whole complaint.
+    expect(idsOf(answered.items)).toEqual(['elsewhere', 'session']);
+  });
+
+  it('sorts a container in among the leaves rather than beside them', async () => {
+    const answered = await over(rows, readings).page({
+      filter: { kinds: kinds('project', 'session') },
+    });
+
+    expect(idsOf(answered.items)).toEqual(['project', 'elsewhere', 'session']);
+  });
+
+  it('leaves out the non-matching containers a tree search would keep', async () => {
+    const selection = kinds('folder', 'project', 'session');
+
+    const list = await over(rows, readings).page({ filter: { search: 'fix', kinds: selection } });
+    expect(idsOf(list.items)).toEqual(['session']);
+
+    const tree = await over(rows, readings).page({
+      view: 'tree',
+      filter: { search: 'fix', kinds: selection },
+    });
+    expect(idsOf(tree.items)).toEqual(['folder', 'project', 'session']);
+  });
+
+  it('matches nothing for a kind no migration has seeded, and refuses nothing', async () => {
+    // What lets a client ask for `graph` before the migration that seeds it:
+    // the answer is an empty page at the version the catalogue is at, not a
+    // refusal a client would have to be released to stop sending.
+    const answered = await over(rows, readings).ask({ filter: { kinds: kinds('graph') } });
+
+    expect(answered.ok).toBe(true);
+    if (!answered.ok) return;
+    expect(answered.items).toEqual([]);
+    expect(answered.total).toBe(0);
+  });
+});
+
 describe('the catalogue query, grouped', () => {
   const rows = [
     project('project', null, 0, 'agentplex'),
@@ -629,6 +723,49 @@ describe('the catalogue cursor', () => {
     expect(flipped.ok).toBe(false);
     if (flipped.ok) return;
     expect(flipped.problem).toContain('different query');
+  });
+
+  it('refuses a cursor minted under a different kind selection', async () => {
+    // The selection is part of the order and not a view of it: a position in
+    // the sessions-only order names a different row once projects are in it.
+    const catalogue = over(rows, readings);
+    const first = await catalogue.page({
+      limit: 1,
+      filter: { kinds: [nodeKindSchema.parse('session')] },
+    });
+    const cursor = first.nextCursor;
+    if (cursor === null) throw new Error('the first page ended the answer');
+
+    const widened = await catalogue.ask({
+      limit: 1,
+      cursor,
+      filter: { kinds: [nodeKindSchema.parse('session'), nodeKindSchema.parse('project')] },
+    });
+
+    expect(widened.ok).toBe(false);
+    if (widened.ok) return;
+    expect(widened.problem).toContain('different query');
+  });
+
+  it('accepts a cursor whose kinds were named in another order, because a set has none', async () => {
+    // The other half of the rule above: the selection is a set, so the same
+    // kinds listed in another order are the same question and a position in it
+    // is still exactly true. A client building that list off an object's keys,
+    // or off a `Set` it filled as it went, would otherwise be refused
+    // mid-paging for a query it never changed.
+    const catalogue = over(rows, readings);
+    const kinds = [nodeKindSchema.parse('session'), nodeKindSchema.parse('project')];
+    const first = await catalogue.page({ limit: 1, filter: { kinds } });
+    const cursor = first.nextCursor;
+    if (cursor === null) throw new Error('the first page ended the answer');
+
+    const reversed = await catalogue.page({
+      limit: 10,
+      cursor,
+      filter: { kinds: [...kinds].reverse() },
+    });
+
+    expect(idsOf(reversed.items)).toEqual(['three', 'two']);
   });
 
   it('accepts a cursor across a change of page size, because the order did not move', async () => {

@@ -1648,6 +1648,71 @@ describe('the detached catalogue query', () => {
     expect(h.store.getSnapshot().catalogue).toEqual(drawn);
   });
 
+  it('keeps two questions in flight apart when their answers come back interleaved', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const unwatch = h.store.subscribeCatalogue();
+
+    // Both in flight at once, which is the ordinary case and not a race: the
+    // panel asks when a screen mounts and the palette asks on a keystroke.
+    const panel = h.store.queryCatalogue({ ...CATALOGUE, view: 'tree', groupBy: 'none' });
+    const panelId = lastSentId(socket);
+    const asking = h.store.queryCatalogueDetached({ ...CATALOGUE, filter: { search: 'spike' } });
+    const detachedId = lastSentId(socket);
+    expect(detachedId).not.toBe(panelId);
+
+    // The second question answers first, which is what a small search does
+    // beside a whole tree.
+    socket.deliver(addressedTo(hubFrames.cataloguePage, detachedId));
+    const found = await asking;
+    expect(found.items).toHaveLength(2);
+    // And nothing is drawn from it: the panel's question is still unanswered,
+    // and a detached page is never what a screen is looking at.
+    expect(h.store.getSnapshot().catalogue).toBeNull();
+
+    socket.deliver(addressedTo(hubFrames.catalogueTreePage, panelId));
+    const drawn = await panel;
+
+    // Each caller has its own answer, told apart by the id it asked under
+    // rather than by the order the two came back in.
+    expect(drawn.items).toHaveLength(4);
+    expect(h.store.getSnapshot().catalogue).toEqual(drawn);
+
+    unwatch();
+  });
+
+  it('settles a detached question the connection dropped under, and remembers none of it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const asking = h.store.queryCatalogueDetached(CATALOGUE);
+    expect(sentFrames(socket).at(-1)).toMatchObject({ type: 'catalogue-query' });
+
+    socket.drop();
+
+    // Settled rather than left hanging: the caller is a dialog that says it is
+    // searching until this answers, and a promise nobody settles is a dialog
+    // that says so for as long as it is open.
+    await expect(asking).rejects.toThrow(/dropped/);
+
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+
+    // Nothing of it is replayed either. A detached question is its caller's
+    // own and not a standing interest, so a reconnection re-asks what a screen
+    // is drawing -- here, nothing -- and not what somebody typed into a dialog
+    // that has since been closed.
+    expect(sentFrames(next).filter((frame) => frame.type === 'catalogue-query')).toEqual([]);
+
+    // And the store is not stuck on the question it could not answer: the next
+    // one is asked and answered on the new connection.
+    const again = h.store.queryCatalogueDetached(CATALOGUE);
+    next.deliver(addressedTo(hubFrames.cataloguePage, lastSentId(next)));
+    expect((await again).items).toHaveLength(2);
+    expect(h.store.getSnapshot().catalogue).toBeNull();
+  });
+
   it('rejects with the hub own sentence when the hub refuses it', async () => {
     const h = harness();
     const { socket } = await establish(h);

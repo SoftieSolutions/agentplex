@@ -339,6 +339,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
             machine={machine}
             onPickMachine={pickMachine}
             destination={place}
+            address={destination}
             scheme={scheme}
           />
         </Box>
