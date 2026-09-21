@@ -1,4 +1,12 @@
-import { useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+  type KeyboardEvent,
+} from 'react';
 import type { ClientTerminalTarget, SessionRef, TerminalSize } from '@agentplex/protocol';
 
 import { terminalKey, type HubStore, type TerminalWatchView } from '../store/hub-store.js';
@@ -23,17 +31,21 @@ import {
 import type { EmulatorFactory, TerminalEmulator } from './emulator.js';
 import { FindBar } from './find-bar.js';
 import {
+  breadcrumb,
   findSessionRow,
-  machineLabel,
+  metadataSegments,
   paneAttachment,
+  statusWord,
   terminalInputNotice,
   terminalIsPartial,
   machineFor,
   terminalFeedNotice,
   terminalScopeNotice,
   toneForStatus,
+  type CrumbRole,
 } from './presentation.js';
 import { StopButton } from '../sessions/stop-button.js';
+import { ToneDot } from '../ui/tone-dot.js';
 import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
 import { TabStrip } from './tab-strip.js';
 import { activeTab, type SessionTab } from './tab-strip-model.js';
@@ -75,6 +87,23 @@ const MONO_META = { fontFamily: 'var(--mantine-font-family-monospace)' } as cons
  */
 const TERMINAL_TAB = 'terminal';
 const SESSION_TABS: readonly SessionTab[] = [{ id: TERMINAL_TAB, label: 'Terminal', badge: null }];
+
+/**
+ * How loudly each crumb is drawn, as the two roles `breadcrumb` hands back.
+ *
+ * A record keyed by the role rather than a conditional at the call site, so
+ * that a third role would be a type error here instead of quietly rendering
+ * in the muted one. The weights are the mockup's: where the session is, said
+ * quietly, and what it is called, said at the size a person picks a window out
+ * by.
+ */
+const CRUMB_ROLES: Record<
+  CrumbRole,
+  { readonly c?: string; readonly fw?: number; readonly fz?: number }
+> = {
+  muted: { c: 'dimmed' },
+  emphatic: { fw: 700, fz: 15 },
+};
 
 /**
  * Whether this device's main pointer is a finger, which is the whole of what
@@ -369,14 +398,15 @@ export function SessionPane({
   const state = snapshot.machineState;
   const row = findSessionRow(state, sessionRef);
   const tone = row === null ? 'idle' : toneForStatus(row.descriptor.status);
-  const statusWord = row === null ? 'not reported' : row.descriptor.status;
-  const name = row?.descriptor.title ?? sessionRef.sessionId;
-  const metadata =
-    row === null || state === null
-      ? null
-      : [row.descriptor.provider, machineLabel(state, row), row.descriptor.cwd]
-          .filter((part): part is string => part !== null)
-          .join(' · ');
+  const word = statusWord(row);
+  const crumbs = breadcrumb(row, sessionRef);
+  // The one tone that means something is happening as you look at it, which is
+  // the whole of what the mockup animates. Read off the tone rather than off
+  // the status a second time, so the two cannot come to disagree about which
+  // status is the live one.
+  const live = tone === 'running';
+  const parts = metadataSegments(state, row);
+  const metadata = parts.length === 0 ? null : parts.join(' · ');
   const notice = terminalInputNotice(snapshot, terminal);
   const scope = terminalScopeNotice(terminal);
   // The machine's own reading, so a pane whose hub cannot connect at all says
@@ -411,24 +441,50 @@ export function SessionPane({
       onKeyDownCapture={(event) => registry.handleKeyDown(event)}
     >
       <Group gap={10} px={18} py={10} style={{ borderBottom: border }} wrap="nowrap">
-        <Text c="dimmed" style={{ whiteSpace: 'nowrap' }}>
-          {sessionRef.storeId} /
-        </Text>
-        <Text fw={700} fz={15} style={{ whiteSpace: 'nowrap' }}>
-          {name}
-        </Text>
-        <Group gap={5} wrap="nowrap">
-          <Box
-            w={6}
-            h={6}
-            style={{ borderRadius: '50%', background: colorForTone(tone, scheme) }}
-          />
+        {/* The three readings of one row, each from a function in
+            presentation.ts, each marked with a `data-` attribute the suite
+            beside this file reads. Nothing draws off those attributes: they
+            are here because the alternative is asserting on Mantine's
+            generated class names or on the whole bar's text run together, and
+            both fail for reasons that have nothing to do with this header. */}
+        <Box
+          component="span"
+          data-crumbs
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {crumbs.map((crumb, index) => (
+            // Keyed by the role: there are two of them, they are distinct, and
+            // the text is the thing that changes as a session is renamed.
+            <Fragment key={crumb.role}>
+              {/* Between the crumbs and nowhere else. A separator drawn after
+                  each one leaves a trailing slash promising a crumb that is
+                  not coming, which is what a bar built by concatenation does
+                  the first time a field is absent. */}
+              {index > 0 && (
+                <Text component="span" c="dimmed">
+                  {' / '}
+                </Text>
+              )}
+              <Text component="span" data-crumb={crumb.role} {...CRUMB_ROLES[crumb.role]}>
+                {crumb.text}
+              </Text>
+            </Fragment>
+          ))}
+        </Box>
+        <Group gap={5} wrap="nowrap" data-status style={{ flex: 'none' }}>
+          <ToneDot tone={tone} scheme={scheme} live={live} />
           <Text fz={10} fw={500} style={{ ...MONO_META, color: colorForTone(tone, scheme) }}>
-            {statusWord}
+            {word}
           </Text>
         </Group>
         {metadata !== null && (
           <Text
+            data-metadata
             c="dimmed"
             fz={10}
             fw={500}
