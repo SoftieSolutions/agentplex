@@ -2,14 +2,21 @@
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import {
+  nodeKindSchema,
+  parseHubFrame,
+  parseTextFrame,
+  type MachineState,
+} from '@agentplex/protocol';
 import { listSessions } from '../sessions/session-list-model.js';
 import type { ShellForm } from '../shell/shell-form.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { DOC_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { CommandPalette } from './palette.js';
-import { PALETTE_RESULT_LIMIT } from './palette-model.js';
+import { PALETTE_RESULT_LIMIT, type PaletteResult } from './palette-model.js';
+import type { PaletteSearch, PaletteSearchSnapshot } from './palette-search.js';
 
 /**
  * The trigger and the dialog, over a fleet a real hub reported: six sessions,
@@ -84,17 +91,87 @@ function stateFrom(text: string): MachineState {
 
 const sessions = listSessions(stateFrom(hubFrames.machineStatePopulated));
 
+/**
+ * A document named after a session, which is the collision the grouping exists
+ * for: `spike-wasm` is a session in the fixture fleet and this is a document
+ * called the same thing. What the hub's own rows look like is
+ * `palette-search.test.ts`, against captured pages; this file needs a hub half
+ * it can hold still, so it is handed one.
+ */
+const NAMESAKE_DOC: PaletteResult = {
+  id: 'doc:hub-6',
+  kind: DOC_KIND,
+  label: 'spike-wasm',
+  detail: 'Document',
+  href: '#/doc/hub-6',
+};
+
+const QUIET: PaletteSearchSnapshot = {
+  results: [],
+  searching: false,
+  more: false,
+  problem: null,
+};
+
+interface SearchDouble {
+  readonly search: PaletteSearch;
+  /** Every text the dialog asked about, in order. */
+  readonly typed: string[];
+  /** How many times the dialog said it was done with the answer. */
+  resets: number;
+  /** The hub half moving, as a test drives it. Call inside `act`. */
+  answer(changes: Partial<PaletteSearchSnapshot>): void;
+}
+
+/**
+ * The hub half as an injected seam rather than a hub.
+ *
+ * `palette-search.ts` is the thing that talks to the store and it has its own
+ * tests; what the dialog has to be pinned against is the snapshot -- rows,
+ * searching, more, a refusal -- and a double is the only way to hold one of
+ * those still while a keystroke lands.
+ */
+function searchDouble(): SearchDouble {
+  const listeners = new Set<() => void>();
+  let snapshot: PaletteSearchSnapshot = QUIET;
+  const double: SearchDouble = {
+    typed: [],
+    resets: 0,
+    answer(changes: Partial<PaletteSearchSnapshot>): void {
+      snapshot = { ...snapshot, ...changes };
+      for (const listener of [...listeners]) listener();
+    },
+    search: {
+      subscribe(listener: () => void): () => void {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      getSnapshot: (): PaletteSearchSnapshot => snapshot,
+      search(text: string): void {
+        double.typed.push(text);
+      },
+      reset(): void {
+        double.resets += 1;
+        snapshot = QUIET;
+      },
+    },
+  };
+  return double;
+}
+
 describe('the command palette', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
   /** Every address the dialog asked the browser for, in order. */
   let went: string[] = [];
+  let hub: SearchDouble;
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     installMatchMedia();
     installResizeObserver();
     went = [];
+    hub = searchDouble();
     container = document.createElement('div');
     document.body.append(container);
   });
@@ -125,6 +202,7 @@ describe('the command palette', () => {
           form={form}
           limit={limit}
           scheme="dark"
+          search={hub.search}
           navigate={(hash) => {
             went.push(hash);
           }}
@@ -175,6 +253,39 @@ describe('the command palette', () => {
     return rows().map((row) => row.querySelector('[data-palette-label]')?.textContent ?? '');
   }
 
+  /** The headings over the rows, in drawn order. */
+  function headings(): readonly string[] {
+    return [...openedDialog().querySelectorAll('[data-palette-heading]')].map(
+      (heading) => heading.textContent ?? '',
+    );
+  }
+
+  /** The dialog and its rows in drawn order: a heading, then the rows under it. */
+  function outline(): readonly string[] {
+    return [...openedDialog().querySelectorAll('[data-palette-heading], [data-palette-label]')].map(
+      (node) =>
+        node.hasAttribute('data-palette-heading')
+          ? `# ${node.textContent ?? ''}`
+          : (node.textContent ?? ''),
+    );
+  }
+
+  /** What the off-screen region is saying, which is what is announced. */
+  function announced(): string {
+    return container.querySelector('[data-palette-announcement]')?.textContent ?? '';
+  }
+
+  function words(mark: string): string {
+    return openedDialog().querySelector(`[${mark}]`)?.textContent ?? '';
+  }
+
+  /** The hub half moving under a drawn dialog. */
+  async function answer(changes: Partial<PaletteSearchSnapshot>): Promise<void> {
+    await act(() => {
+      hub.answer(changes);
+    });
+  }
+
   /** The row the keyboard is on, by the mark the dialog puts on it. */
   function active(): string {
     const row = rows().find((candidate) => candidate.getAttribute('aria-selected') === 'true');
@@ -199,6 +310,22 @@ describe('the command palette', () => {
     const input = field();
     await act(() => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    });
+  }
+
+  /** The same press, mid-composition: what an IME sends before a candidate is picked. */
+  async function compose(key: string): Promise<void> {
+    const input = field();
+    await act(() => {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key,
+          isComposing: true,
+          keyCode: 229,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
     });
   }
 
@@ -377,6 +504,175 @@ describe('the command palette', () => {
     const words = openedDialog().querySelector('[data-palette-empty]')?.textContent ?? '';
     expect(words).toContain('Nothing matches');
     expect(words).toContain('store');
+  });
+
+  it('asks the hub what was typed, and forgets the question when it closes', async () => {
+    draw();
+    await open();
+    await type('spike');
+
+    expect(hub.typed).toEqual(['spike']);
+    const before = hub.resets;
+    await press('Escape');
+    await untilClosed();
+    expect(hub.resets).toBeGreaterThan(before);
+  });
+
+  it('draws the two halves under a heading each, the client-held row winning', async () => {
+    draw();
+    await open();
+    await type('spike');
+    // The hub returns the session the client already holds, as it does for a
+    // real query, plus a document named after it.
+    await answer({
+      results: [
+        {
+          id: 'session:["store-agentplex","session-spike-wasm"]',
+          kind: SESSION_KIND,
+          label: 'spike-wasm',
+          detail: 'store-agentplex · idle',
+          href: '#/session/store-agentplex/session-spike-wasm',
+        },
+        NAMESAKE_DOC,
+      ],
+    });
+
+    expect(outline()).toEqual(['# Sessions', 'spike-wasm', '# Documents', 'spike-wasm']);
+    // One session row, not two, and the one that names the machine.
+    expect(rows()).toHaveLength(2);
+    expect(rows()[0]?.textContent).toContain('mbp-robert');
+  });
+
+  it('tells a session and a document of one name apart by where each one goes', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({ results: [NAMESAKE_DOC] });
+
+    expect(labels()).toEqual(['spike-wasm', 'spike-wasm']);
+    expect(rows().map((row) => row.getAttribute('href'))).toEqual([
+      '#/session/store-agentplex/session-spike-wasm',
+      '#/doc/hub-6',
+    ]);
+  });
+
+  it('labels a kind it has never heard of with the kind itself', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({
+      results: [{ ...NAMESAKE_DOC, id: 'graph:1', kind: nodeKindSchema.parse('graph') }],
+    });
+
+    // A kind is a row in the hub's table, so one arrives without a release
+    // here. It is drawn under its own name rather than dropped.
+    expect(headings()).toEqual(['Sessions', 'graph']);
+  });
+
+  it('moves the arrows across the groups in drawn order, over the headings', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({ results: [NAMESAKE_DOC] });
+
+    expect(active()).toBe('spike-wasm');
+    expect(rows()[0]?.getAttribute('href')).toBe('#/session/store-agentplex/session-spike-wasm');
+    await press('ArrowDown');
+
+    // The second row is under the next heading, and the heading itself was
+    // never a place the selection could land: it is not an option.
+    const selected = rows().filter((row) => row.getAttribute('aria-selected') === 'true');
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.getAttribute('href')).toBe('#/doc/hub-6');
+    expect(openedDialog().querySelectorAll('[data-palette-heading][role="option"]')).toHaveLength(
+      0,
+    );
+  });
+
+  it('follows a document row through the address a document already has', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({ results: [NAMESAKE_DOC] });
+    await press('ArrowDown');
+    await press('Enter');
+    await untilClosed();
+
+    expect(went).toEqual(['#/doc/hub-6']);
+  });
+
+  it('says the hub is still answering without taking away the rows it has', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({ searching: true });
+
+    expect(words('data-palette-searching')).not.toBe('');
+    // The client-held half is computed here and owes the hub nothing: a dialog
+    // that blanked while the hub thought would flicker through a typed word.
+    expect(labels()).toEqual(['spike-wasm']);
+    // And it does not claim a miss while an answer is on its way.
+    expect(openedDialog().querySelector('[data-palette-empty]')).toBeNull();
+  });
+
+  it('says a refusal in words, and it costs the hub-answered half only', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({ results: [NAMESAKE_DOC] });
+    expect(rows()).toHaveLength(2);
+
+    await answer({
+      results: [],
+      searching: false,
+      problem: 'the connection is down: a catalogue page is a read of now',
+    });
+
+    expect(words('data-palette-problem')).toContain('the connection is down');
+    expect(labels()).toEqual(['spike-wasm']);
+    expect(headings()).toEqual(['Sessions']);
+  });
+
+  it('says the hub had more matches than the rows account for', async () => {
+    draw();
+    await open();
+    await type('spike');
+    await answer({ results: [NAMESAKE_DOC], more: true });
+
+    expect(words('data-palette-more')).toContain('more');
+  });
+
+  it('announces the count, and the miss, in a region that was already mounted', async () => {
+    draw();
+    // Mounted before it has words: a live region that arrives with its text
+    // is a region a screen reader has nothing to compare against.
+    expect(container.querySelector('[data-palette-announcement]')).not.toBeNull();
+    expect(announced()).toBe('');
+
+    await open();
+    expect(announced()).toContain('6');
+
+    await type('spike');
+    expect(announced()).toContain('1 match');
+
+    await type('nothing-matches-this');
+    expect(announced()).toContain('Nothing matches');
+  });
+
+  it('ignores the keyboard while a candidate is being composed', async () => {
+    draw();
+    await open();
+    await type('spike');
+
+    // Committing an IME candidate is an Enter the field has already spent. A
+    // palette that followed it would navigate away mid-word, and the arrows
+    // would walk the results instead of the candidate list.
+    await compose('Enter');
+    expect(went).toEqual([]);
+    expect(dialog()).not.toBeNull();
+
+    await compose('ArrowDown');
+    expect(active()).toBe('spike-wasm');
   });
 
   it('forgets the query between openings, so it opens on the resting list', async () => {

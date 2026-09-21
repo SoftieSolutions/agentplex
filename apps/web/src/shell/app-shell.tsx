@@ -14,6 +14,7 @@ import { appLayoutStore } from '../layout/app-layout.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
 import { CommandPalette } from '../palette/palette.js';
+import { createPaletteSearch, type PaletteSearch } from '../palette/palette-search.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
 import { NewSessionForm } from '../sessions/new-session-form.js';
 import { notificationList } from '../sessions/notification-model.js';
@@ -116,6 +117,12 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
   // Built once and inert until something subscribes: creating a catalogue
   // store dials nothing, and the panel's first subscriber is what asks.
   const [catalogue] = useState<CatalogueStore>(() => createCatalogueStore({ hub }));
+  // The palette's own question, built here and not in the dialog: the dialog is
+  // unmounted between openings in neither chrome, but it is drawn twice in the
+  // tree of a shell that changes form, and one asker is what keeps two
+  // keystroke streams from racing on one socket. It asks nothing until the
+  // dialog is typed into.
+  const [paletteSearch] = useState<PaletteSearch>(() => createPaletteSearch({ hub }));
   const [starting, setStarting] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
 
@@ -214,8 +221,15 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
    * One node for both chromes, so the trigger the top bar draws beside the mark
    * and the row the phone draws under its header are the same control over the
    * same fleet.
+   *
+   * The sessions are this half of the answer; the other half is the hub's, and
+   * `paletteSearch` above is what asks it. Both are handed in because a dialog
+   * that reached for either itself would be a second thing in the page holding
+   * a fleet and a socket.
    */
-  const palette = <CommandPalette items={sessions} form={form} scheme={scheme} />;
+  const palette = (
+    <CommandPalette items={sessions} form={form} search={paletteSearch} scheme={scheme} />
+  );
   /**
    * The chrome's actions, which is the bell at every width and the New menu at
    * one of them.

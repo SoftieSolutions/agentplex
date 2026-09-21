@@ -1580,6 +1580,87 @@ describe('the catalogue query', () => {
 });
 
 /**
+ * The second way to ask: a query that answers its caller and nothing else.
+ *
+ * The catalogue channel is one channel -- one `lastQuery`, one
+ * `snapshot.catalogue`, one re-issue on `catalogue-changed` -- because one
+ * screen draws it. A second asker (the command palette) is not a second screen
+ * drawing the catalogue; it is a caller with a question of its own whose answer
+ * it keeps to itself. Sharing the channel would have the first keystroke in the
+ * palette replace the tree panel's rows and its re-asks, so these tests pin the
+ * two things that must stay true of the panel while the palette asks.
+ */
+describe('the detached catalogue query', () => {
+  it('answers its caller without touching the page a watching screen is drawing', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const unwatch = h.store.subscribeCatalogue();
+
+    const panel = h.store.queryCatalogue({ ...CATALOGUE, view: 'tree', groupBy: 'none' });
+    socket.deliver(addressedTo(hubFrames.catalogueTreePage, lastSentId(socket)));
+    const drawn = await panel;
+    expect(h.store.getSnapshot().catalogue).toEqual(drawn);
+
+    const asking = h.store.queryCatalogueDetached({
+      ...CATALOGUE,
+      filter: { search: 'spike' },
+    });
+    expect(sentFrames(socket).at(-1)).toMatchObject({
+      type: 'catalogue-query',
+      filter: { search: 'spike' },
+    });
+    socket.deliver(addressedTo(hubFrames.cataloguePage, lastSentId(socket)));
+    const found = await asking;
+
+    // The caller has its answer, and the snapshot still holds the one the
+    // panel is drawing rather than the one the palette asked for.
+    expect(found.items).toHaveLength(2);
+    expect(h.store.getSnapshot().catalogue).toEqual(drawn);
+
+    // And the standing interest is still the panel's question: a change
+    // re-asks what is on screen, not what somebody typed into a dialog.
+    const before = sentFrames(socket).length;
+    socket.deliver(hubFrames.catalogueChanged);
+    const reissued = sentFrames(socket).slice(before);
+    expect(reissued).toHaveLength(1);
+    expect(reissued[0]).toMatchObject({ type: 'catalogue-query', view: 'tree', filter: {} });
+
+    unwatch();
+  });
+
+  it('rejects rather than queueing while the connection is down, and leaves the page held', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeCatalogue();
+
+    const panel = h.store.queryCatalogue(CATALOGUE);
+    socket.deliver(addressedTo(hubFrames.cataloguePagePartial, lastSentId(socket)));
+    const drawn = await panel;
+
+    socket.drop();
+    const before = sentFrames(socket).length;
+
+    await expect(h.store.queryCatalogueDetached(CATALOGUE)).rejects.toThrow();
+    expect(sentFrames(socket).slice(before)).toEqual([]);
+    expect(h.store.getSnapshot().commandQueue.queued).toBe(0);
+    // A page is a read of a moment, and the moment did not stop being true
+    // because a second caller could not ask a question.
+    expect(h.store.getSnapshot().catalogue).toEqual(drawn);
+  });
+
+  it('rejects with the hub own sentence when the hub refuses it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const asking = h.store.queryCatalogueDetached(CATALOGUE);
+    socket.deliver(addressedTo(hubFrames.refusalStaleCursor, lastSentId(socket)));
+
+    await expect(asking).rejects.toThrow(/stale/);
+    expect(h.store.getSnapshot().catalogue).toBeNull();
+  });
+});
+
+/**
  * The document frames, and what the store owes an editor that has not been
  * written yet.
  *

@@ -347,7 +347,7 @@ describe('the shell', () => {
 
     // Said even when all is well: a status line that empties when there is
     // nothing wrong is one nobody can tell apart from a broken one.
-    const status = container.querySelector('header [role="status"]');
+    const status = container.querySelector('header [data-connection-status]');
     expect(status?.textContent).toContain('connected');
     expect(status?.querySelector('a')).toBeNull();
   });
@@ -524,7 +524,7 @@ describe('the shell', () => {
     });
     await act(settle);
 
-    const status = container.querySelector('header [role="status"]');
+    const status = container.querySelector('header [data-connection-status]');
     expect(status?.textContent).toContain('no hub token on this device');
     const link = status?.querySelector('a');
     expect(link?.textContent).toBe('Settings');
@@ -545,7 +545,7 @@ describe('the shell', () => {
     });
     await act(settle);
 
-    const status = container.querySelector('header [role="status"]');
+    const status = container.querySelector('header [data-connection-status]');
     expect(status?.textContent).not.toContain('no hub token');
     expect(status?.querySelector('a')).toBeNull();
   });
@@ -582,7 +582,7 @@ describe('the shell', () => {
     });
     await act(settle);
 
-    const link = container.querySelector<HTMLAnchorElement>('header [role="status"] a');
+    const link = container.querySelector<HTMLAnchorElement>('header [data-connection-status] a');
     if (link === null) throw new Error('the chrome offered no next action');
     await act(() => {
       link.click();

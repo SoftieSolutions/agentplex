@@ -38,6 +38,10 @@ export interface ConnectionStatusProps {
 export function ConnectionStatus({ view, scheme }: ConnectionStatusProps): JSX.Element {
   return (
     <Group
+      // Marked because it is no longer the only live region in the chrome: the
+      // bell and the palette announce their own counts, and a test looking for
+      // "the status in the header" would otherwise find whichever came first.
+      data-connection-status
       role="status"
       aria-live="polite"
       gap={6}

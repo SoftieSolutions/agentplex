@@ -1,3 +1,4 @@
+import type { NodeKind } from '@agentplex/protocol';
 import {
   matchesSearch,
   orderByActivity,
@@ -6,6 +7,7 @@ import {
   type SessionListItem,
 } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
+import { DOC_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 
 /**
  * The command palette's model, and why it is a second search control rather
@@ -32,27 +34,36 @@ import { sessionHash } from '../terminal/session-route.js';
  * takes items, not `MachineState` and filters, so there is no seam through
  * which the list's chip or machine selection can reach the palette.
  *
- * ## Shaped for AGX-140
+ * ## Two halves, one list
  *
- * Today every result is a session the client already holds, so the whole list
- * is computed synchronously from state in the browser. AGX-140 adds results
- * the hub answers -- other kinds, arriving later and out of a query -- and the
- * dialog must not change shape for that. Hence `PaletteResult` carries no
- * session in it: a result is a kind, a label, a second line and an href, which
- * is all a row needs to be drawn and followed, and every kind can produce one.
- * `sessionResults` builds the client-held half, a later `catalogueResults`
- * builds the hub-answered half, and `paletteListing` takes the concatenation
- * without knowing what is in it. It re-orders nothing, so the caller decides
- * which kind leads; the ids are namespaced by kind so two halves assembled
- * from different sources cannot collide on one.
+ * A session is in the browser already, so `sessionResults` computes that half
+ * synchronously from state; every other kind is the hub's to answer, and
+ * `palette-search.ts` asks for it. `PaletteResult` is what lets one dialog draw
+ * both: it carries no session in it, only a kind, a label, a second line and an
+ * href, which is all a row needs to be drawn and followed, and which every kind
+ * can produce.
+ *
+ * `mergeResults` puts the two together and `paletteListing` gathers them by
+ * kind. The ids are namespaced by kind because two halves assembled from
+ * different sources must not collide on one -- and, for a session, minted
+ * identically on both sides, because a session the client holds and the hub
+ * also returned is one row and the id is how that is noticed.
  */
 
 /**
- * What a result points at. One member today, and a union rather than a string
- * so the day AGX-140 adds `doc` the dialog's switch over kinds fails to
- * compile until it says what a doc row looks like.
+ * What a result points at: a node kind, the hub's own string.
+ *
+ * Not a union of the two this build mints. A kind is a row in the hub's
+ * `node_kinds` table -- migration 0004 made it one so that adding a kind costs
+ * an INSERT -- and `tree/node-kinds.ts` is the one place this app parses the
+ * strings it knows the names of. A palette that closed the set here would have
+ * to be released again for a kind the hub can already return, and the grouping
+ * below is written so it does not have to be: a kind nobody named is drawn
+ * under its own name. `project` is absent for a different reason, which is that
+ * the hub answers a flat search with leaves only; `palette-search.ts` records
+ * it and AGX-261 is filed to change it.
  */
-export type PaletteResultKind = 'session';
+export type PaletteResultKind = NodeKind;
 
 /** One row of the palette, as the dialog draws and follows it. */
 export interface PaletteResult {
@@ -115,22 +126,86 @@ export function sessionResults(
 function sessionResult(item: SessionListItem): PaletteResult {
   return {
     id: `session:${item.key}`,
-    kind: 'session',
+    kind: SESSION_KIND,
     label: item.name,
     detail: `${item.storeId} · ${item.machine} · ${statusWords(item.status)}`,
     href: sessionHash(item.ref),
   };
 }
 
-/** The rows to draw, and how many there were before the bound. */
-export interface PaletteListing {
+/**
+ * The two halves as one list: the client's rows, then the hub's rows the
+ * client did not already hold.
+ *
+ * Deduplicated by id, which is why the ids are minted the way they are: the
+ * hub-answered half builds a session row under the id `sessionResults` gives
+ * the same session, so a session in both halves is one row without either side
+ * comparing labels or addresses. The client-held row is the one kept, because
+ * it says more -- it names the machine the session is on, which a page asked
+ * with `groupBy: 'none'` carries no group to read a label off.
+ *
+ * The client's rows lead for the same reason they are computed synchronously:
+ * they are there before the hub is asked, so a person typing sees the list they
+ * already had settle rather than reorder under them when the answer lands.
+ */
+export function mergeResults(
+  clientHeld: readonly PaletteResult[],
+  hubAnswered: readonly PaletteResult[],
+): readonly PaletteResult[] {
+  const held = new Set(clientHeld.map((result) => result.id));
+  return [...clientHeld, ...hubAnswered.filter((result) => !held.has(result.id))];
+}
+
+/** One heading and the rows under it. */
+export interface PaletteGroup {
+  readonly kind: PaletteResultKind;
+  /** What the heading says, from `headingFor`. */
+  readonly heading: string;
   readonly results: readonly PaletteResult[];
+}
+
+/**
+ * What a kind is called above its rows.
+ *
+ * The two this build knows are named through `tree/node-kinds.ts` rather than
+ * by comparing against `'session'` here, because that file is where a kind
+ * string is parsed and one more copy of the word is one more place to disagree
+ * with the tree. Anything else is labelled with the kind itself: the hub can
+ * return a kind this release has never heard of -- a graph, when AGX-110 lands
+ * -- and a heading reading `graph` is worse than the word the hub would have
+ * used and far better than the row being dropped or filed under a guess.
+ */
+export function headingFor(kind: PaletteResultKind): string {
+  if (kind === SESSION_KIND) return 'Sessions';
+  if (kind === DOC_KIND) return 'Documents';
+  return kind;
+}
+
+/** The rows to draw, grouped, and how many there were before the bound. */
+export interface PaletteListing {
+  /**
+   * The drawn order, flat: the groups' rows concatenated.
+   *
+   * The keyboard walks this, so the arrows move down the dialog as it is drawn
+   * rather than through the order the rows arrived in. A listing whose flat
+   * list and whose groups disagreed would send the selection to a row further
+   * up the screen than the one it left.
+   */
+  readonly results: readonly PaletteResult[];
+  readonly groups: readonly PaletteGroup[];
   /** Everything that matched, drawn or not. */
   readonly total: number;
 }
 
 /**
- * The results as the dialog receives them: bounded, in the order given.
+ * The results as the dialog receives them: gathered by kind, then bounded.
+ *
+ * Grouped before bounding, because grouping moves rows: a bound applied first
+ * would decide which rows are drawn by an order nobody sees. The groups
+ * themselves are in the order their kinds first appear, which is the one order
+ * this file can defend -- there is no relevance score here to rank kinds by,
+ * and a fixed order would claim sessions matter more than documents in a
+ * dialog that was handed both.
  *
  * The limit is an argument with a default rather than a constant read inside,
  * so a test can pin the rule without a fixture large enough to trip it.
@@ -139,7 +214,20 @@ export function paletteListing(
   results: readonly PaletteResult[],
   limit: number = PALETTE_RESULT_LIMIT,
 ): PaletteListing {
-  return { results: results.slice(0, limit), total: results.length };
+  const ordered = groupsOf(results).flatMap((group) => group.results);
+  const drawn = ordered.slice(0, limit);
+  return { results: drawn, groups: groupsOf(drawn), total: results.length };
+}
+
+/** Each kind's rows in one run, the kinds in the order they first appear. */
+function groupsOf(results: readonly PaletteResult[]): readonly PaletteGroup[] {
+  const byKind = new Map<PaletteResultKind, PaletteResult[]>();
+  for (const result of results) {
+    const rows = byKind.get(result.kind);
+    if (rows === undefined) byKind.set(result.kind, [result]);
+    else rows.push(result);
+  }
+  return [...byKind].map(([kind, rows]) => ({ kind, heading: headingFor(kind), results: rows }));
 }
 
 /** The top row, or `null` when there is nothing to select. */

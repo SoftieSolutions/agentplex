@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
+import {
+  nodeKindSchema,
+  parseHubFrame,
+  parseTextFrame,
+  type MachineState,
+  type NodeKind,
+} from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import {
   listSessions,
@@ -9,9 +15,13 @@ import {
   type SessionListItem,
 } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
+import { DOC_KIND, SESSION_KIND } from '../tree/node-kinds.js';
+import { catalogueResults } from './palette-search.js';
 import {
   firstResult,
+  headingFor,
   lastResult,
+  mergeResults,
   nextResult,
   paletteListing,
   PALETTE_RESULT_LIMIT,
@@ -141,6 +151,109 @@ describe('the listing', () => {
       ...sessionResults(sessions, 'migrate-db'),
     ]);
     expect(labels(merged.results)).toEqual(['docs-sweep', 'migrate-db-v9']);
+  });
+});
+
+describe('the two halves, merged', () => {
+  /**
+   * The hub-answered half, out of a page a real hub sent: one session -- which
+   * the client also holds -- and one document.
+   */
+  function hubAnswered(): readonly PaletteResult[] {
+    const parsed = parseTextFrame(parseHubFrame, hubFrames.cataloguePage);
+    if (!parsed.ok || parsed.value.type !== 'catalogue-page') {
+      throw new Error('the fixture is not a catalogue page');
+    }
+    return catalogueResults(parsed.value.items);
+  }
+
+  it('holds a session found in both halves once, keeping the client-held row', () => {
+    const client = sessionResults(sessions, 'spike');
+    const hub = hubAnswered();
+    expect(hub.map((result) => result.id)).toContain(client[0]?.id);
+
+    const merged = mergeResults(client, hub);
+
+    expect(merged.filter((result) => result.id === client[0]?.id)).toHaveLength(1);
+    // The client-held row wins because it says more: it names the machine the
+    // session is on, which a `groupBy: 'none'` page carries no group to read.
+    expect(merged[0]?.detail).toBe(client[0]?.detail);
+    expect(merged[0]?.detail).toContain('mbp-robert');
+  });
+
+  it('keeps a hub-answered row the client holds nothing for', () => {
+    const merged = mergeResults(sessionResults(sessions, 'spike'), hubAnswered());
+    expect(labels(merged)).toEqual(['spike-wasm', 'plan.md']);
+  });
+
+  it('is the client-held half when the hub has answered nothing', () => {
+    const client = sessionResults(sessions, '');
+    expect(mergeResults(client, [])).toEqual(client);
+  });
+});
+
+describe('grouping by kind', () => {
+  const doc: PaletteResult = {
+    id: 'doc:hub-6',
+    kind: DOC_KIND,
+    label: 'spike-wasm',
+    detail: 'Document',
+    href: '#/doc/hub-6',
+  };
+
+  it('names each kind in the words the app uses for it', () => {
+    expect(headingFor(SESSION_KIND)).toBe('Sessions');
+    expect(headingFor(DOC_KIND)).toBe('Documents');
+  });
+
+  it('labels a kind this build has never heard of with the kind itself', () => {
+    // A kind is a row in the hub's table, so a later one arrives without a
+    // release here: it is drawn under its own name rather than dropped or
+    // labelled with a guess. `node-kinds.ts` argues why that is possible.
+    const graph: NodeKind = nodeKindSchema.parse('graph');
+    expect(headingFor(graph)).toBe('graph');
+  });
+
+  it('gathers each kind under one heading, in the order the kinds first appear', () => {
+    const listing = paletteListing(mergeResults(sessionResults(sessions, ''), [doc]));
+
+    expect(listing.groups.map((group) => group.heading)).toEqual(['Sessions', 'Documents']);
+    expect(listing.groups[0]?.results).toHaveLength(6);
+    expect(listing.groups[1]?.results.map((result) => result.id)).toEqual(['doc:hub-6']);
+  });
+
+  it('tells a session and a document of one name apart by the group they are under', () => {
+    const session = sessionResults(sessions, 'spike')[0];
+    const listing = paletteListing(mergeResults(session === undefined ? [] : [session], [doc]));
+
+    expect(session?.label).toBe(doc.label);
+    expect(listing.groups.map((group) => [group.heading, group.results[0]?.href])).toEqual([
+      ['Sessions', '#/session/store-agentplex/session-spike-wasm'],
+      ['Documents', '#/doc/hub-6'],
+    ]);
+  });
+
+  it('draws the rows in group order, which is the order the arrows move in', () => {
+    // Interleaved on the way in: a listing whose rows and whose groups
+    // disagreed would move the selection to a row further up the dialog.
+    const [first, second] = sessionResults(sessions, '');
+    const interleaved = [first, doc, second].filter(
+      (result): result is PaletteResult => result !== undefined,
+    );
+    const listing = paletteListing(interleaved);
+
+    expect(listing.results.map((result) => result.id)).toEqual(
+      listing.groups.flatMap((group) => group.results.map((result) => result.id)),
+    );
+    expect(listing.results[1]?.id).toBe(second?.id);
+  });
+
+  it('bounds the rows after grouping them, so the groups hold what is drawn', () => {
+    const listing = paletteListing(mergeResults(sessionResults(sessions, ''), [doc]), 2);
+
+    expect(listing.results).toHaveLength(2);
+    expect(listing.groups.map((group) => group.heading)).toEqual(['Sessions']);
+    expect(listing.total).toBe(7);
   });
 });
 
