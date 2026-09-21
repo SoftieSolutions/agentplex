@@ -13,6 +13,7 @@ import {
   storeIdSchema,
 } from './identity.js';
 import { parseTextFrame } from './parse.js';
+import { pushEndpointSchema, pushSubscriptionSchema } from './push.js';
 import { encodeTerminalChunk } from './terminal.js';
 import { DOC_CONTENT_MAX_CHARS, docNameSchema } from './doc.js';
 
@@ -308,6 +309,75 @@ describe('parseClientFrame on the tree frames', () => {
   });
 });
 
+/**
+ * The two push frames, and what a subscription may not smuggle.
+ *
+ * The subscription schema is the protocol's own (`push.ts`), so what is proved
+ * here is the frame around it: that a client may say "tell me" and "stop
+ * telling me", and that neither frame is a place to describe the session a
+ * notification would be about. The endpoint rules themselves live beside the
+ * schema, where a refusal's words are the thing under test.
+ */
+describe('parseClientFrame on the push frames', () => {
+  const ENDPOINT = 'https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bHxN0-example';
+  const KEYS = {
+    p256dh:
+      'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM',
+    auth: 'tBHItJI5svbpez7KI4CCXg',
+  };
+
+  it('accepts a subscribe carrying what the browser handed over', () => {
+    expect(
+      parseClientFrame({
+        type: 'push-subscribe',
+        id: 1,
+        subscription: { endpoint: ENDPOINT, keys: KEYS },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('refuses a subscribe whose endpoint is not one the hub may POST to', () => {
+    for (const endpoint of ['http://push.example/x', 'https://u:p@push.example/x', 'nonsense']) {
+      expect(
+        parseClientFrame({
+          type: 'push-subscribe',
+          id: 1,
+          subscription: { endpoint, keys: KEYS },
+        }).ok,
+      ).toBe(false);
+    }
+  });
+
+  it('carries no title, directory or branch: a notification says none of them', () => {
+    // The fields that would put a proposal or a path on a lock screen. What a
+    // push says is built from an edge the hub saw, and a subscriber never
+    // names any of it -- so there is nowhere here to put one.
+    const smuggled = parseClientFrame({
+      type: 'push-subscribe',
+      id: 1,
+      subscription: { endpoint: ENDPOINT, keys: KEYS },
+      title: 'fix-auth-refresh',
+      cwd: '/Users/robert/code/agentplex',
+      branch: 'fix/auth-refresh',
+    });
+    expect(smuggled.ok).toBe(true);
+    if (!smuggled.ok) return;
+    for (const forbidden of ['title', 'cwd', 'branch']) {
+      expect(smuggled.value).not.toHaveProperty(forbidden);
+    }
+  });
+
+  it('accepts an unsubscribe naming the endpoint, which is the subscription', () => {
+    expect(parseClientFrame({ type: 'push-unsubscribe', id: 2, endpoint: ENDPOINT }).ok).toBe(true);
+  });
+
+  it('refuses an unsubscribe whose endpoint could not have been stored', () => {
+    expect(
+      parseClientFrame({ type: 'push-unsubscribe', id: 2, endpoint: 'http://push.example/x' }).ok,
+    ).toBe(false);
+  });
+});
+
 describe('parseHubFrame', () => {
   it('accepts a welcome', () => {
     const result = parseHubFrame({
@@ -315,8 +385,57 @@ describe('parseHubFrame', () => {
       replyTo: 1,
       protocolVersion: PROTOCOL_VERSION,
       hubId: 'hub-1',
+      pushPublicKey: null,
     });
     expect(result.ok).toBe(true);
+  });
+
+  it('carries the key a browser subscribes against, or null for a hub with none', () => {
+    const key =
+      'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM';
+    const withKey = parseHubFrame({
+      type: 'welcome',
+      replyTo: 1,
+      protocolVersion: PROTOCOL_VERSION,
+      hubId: 'hub-1',
+      pushPublicKey: key,
+    });
+    expect(withKey).toEqual({
+      ok: true,
+      value: {
+        type: 'welcome',
+        replyTo: 1,
+        protocolVersion: PROTOCOL_VERSION,
+        hubId: 'hub-1',
+        pushPublicKey: key,
+      },
+    });
+  });
+
+  it('refuses a welcome that leaves the push key out, so every welcome answers it', () => {
+    // Absent and `null` would be one state read two ways. A client has to be
+    // able to tell "this hub cannot push" from "this hub did not say", and a
+    // missing field is what makes an old hub look like the first.
+    expect(
+      parseHubFrame({
+        type: 'welcome',
+        replyTo: 1,
+        protocolVersion: PROTOCOL_VERSION,
+        hubId: 'hub-1',
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('refuses a welcome whose push key is the empty string rather than null', () => {
+    expect(
+      parseHubFrame({
+        type: 'welcome',
+        replyTo: 1,
+        protocolVersion: PROTOCOL_VERSION,
+        hubId: 'hub-1',
+        pushPublicKey: '',
+      }).ok,
+    ).toBe(false);
   });
 
   it('accepts a refusal with a known code', () => {
@@ -492,6 +611,25 @@ describe('client and hub round trips', () => {
     },
     { type: 'doc-save', id: 24, nodeId: nodeIdSchema.parse('node-3'), content: '' },
     { type: 'doc-open', id: 25, nodeId: nodeIdSchema.parse('node-3') },
+    {
+      type: 'push-subscribe',
+      id: 26,
+      subscription: pushSubscriptionSchema.parse({
+        endpoint: 'https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bHxN0-example',
+        keys: {
+          p256dh:
+            'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM',
+          auth: 'tBHItJI5svbpez7KI4CCXg',
+        },
+      }),
+    },
+    {
+      type: 'push-unsubscribe',
+      id: 27,
+      endpoint: pushEndpointSchema.parse(
+        'https://updates.push.services.mozilla.com/wpush/v2/gAAAAABexample',
+      ),
+    },
     { type: 'protocol-error', code: 'bad-request', message: 'frame is not valid JSON' },
     {
       type: 'approval-decide',
@@ -509,7 +647,18 @@ describe('client and hub round trips', () => {
       replyTo: 1,
       protocolVersion: PROTOCOL_VERSION,
       hubId: hubIdSchema.parse('hub-1'),
+      pushPublicKey: null,
     },
+    {
+      type: 'welcome',
+      replyTo: 2,
+      protocolVersion: PROTOCOL_VERSION,
+      hubId: hubIdSchema.parse('hub-1'),
+      pushPublicKey:
+        'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM',
+    },
+    { type: 'push-subscribed', replyTo: 26 },
+    { type: 'push-unsubscribed', replyTo: 27 },
     { type: 'pong', replyTo: 2 },
     {
       type: 'refusal',
