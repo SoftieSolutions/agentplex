@@ -5,16 +5,15 @@ import { destinationHash } from './destinations.js';
 import { withSafeArea } from './safe-area.js';
 
 /**
- * The bar across the top: the brand mark, and the two slots the chrome keeps
- * -- how things are, and what it offers at every address.
+ * The bar across the top: the brand mark, and the three slots the chrome keeps
+ * -- what it searches, how things are, and what it offers at every address.
  *
- * The mockups put a search field beside the mark. It is the command palette
- * (AGX-139) and it is not built, so nothing is drawn for it: a box that looks
- * like a search field and answers no keystroke is worse than the space it
- * would fill. The bell and the New menu are built, and both arrive in the
- * actions slot: the bell has something true to say at every count and a panel
- * that says the rest, and New offers only the kinds that exist rather than a
- * row per kind the mockup drew (AGX-124).
+ * The search bar the mockups put beside the mark is the command palette
+ * (AGX-139), and it is a real control now: it opens a dialog that searches the
+ * fleet and ends on an address. The bell and the New menu arrive in the actions
+ * slot: the bell has something true to say at every count and a panel that says
+ * the rest, and New offers only the kinds that exist rather than a row per kind
+ * the mockup drew (AGX-124).
  *
  * The avatar the mockups draw beside it is not built and is not waiting on a
  * ticket. There is one person on a hub they paired themselves, so a portrait
@@ -31,6 +30,14 @@ import { withSafeArea } from './safe-area.js';
  */
 export interface TopBarProps {
   readonly scheme: Scheme;
+  /**
+   * The palette's trigger, beside the mark as mockup 7a draws it.
+   *
+   * A node the shell builds, for the reason the two slots below are: the
+   * palette is one control over one fleet, and the phone chrome is handed the
+   * same one rather than a second copy that could search something else.
+   */
+  readonly search?: ReactNode;
   /**
    * The right-hand slot: how the connection is doing, and whatever else the
    * chrome has to say at every width.
@@ -58,7 +65,7 @@ export interface TopBarProps {
   readonly actions?: ReactNode;
 }
 
-export function TopBar({ scheme, status, actions }: TopBarProps): JSX.Element {
+export function TopBar({ scheme, search, status, actions }: TopBarProps): JSX.Element {
   return (
     <Group
       component="header"
@@ -99,6 +106,8 @@ export function TopBar({ scheme, status, actions }: TopBarProps): JSX.Element {
           </Text>
         </Group>
       </UnstyledButton>
+
+      {search}
 
       <Group gap={8} align="center" wrap="nowrap" style={{ marginLeft: 'auto' }}>
         {status}

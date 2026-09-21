@@ -13,6 +13,7 @@ import { useDocRoute } from '../docs/doc-route.js';
 import { appLayoutStore } from '../layout/app-layout.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
+import { CommandPalette } from '../palette/palette.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
 import { NewSessionForm } from '../sessions/new-session-form.js';
 import { notificationList } from '../sessions/notification-model.js';
@@ -197,8 +198,24 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
    * again. It arrives as a prop rather than as `Date.now` read here, because
    * an age is a reading a test has to be able to pin.
    */
-  const notifications = notificationList(state === null ? [] : listSessions(state), now());
+  const sessions = state === null ? [] : listSessions(state);
+  const notifications = notificationList(sessions, now());
   const bell = <AttentionBell list={notifications} store={hub} form={form} scheme={scheme} />;
+  /**
+   * The palette, built here for the reason the bell is, and handed the whole
+   * fleet for a reason of its own.
+   *
+   * `machine` is deliberately not passed, and neither is the session list's own
+   * narrowing: the palette is reachable from every address, including the ones
+   * that draw no list, and a jump that could only reach what the screen behind
+   * it had already narrowed to would be the list's filter wearing a dialog.
+   * `palette-model.ts` is where that argument lives.
+   *
+   * One node for both chromes, so the trigger the top bar draws beside the mark
+   * and the row the phone draws under its header are the same control over the
+   * same fleet.
+   */
+  const palette = <CommandPalette items={sessions} form={form} scheme={scheme} />;
   /**
    * The chrome's actions, which is the bell at every width and the New menu at
    * one of them.
@@ -265,6 +282,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
         onStartSession={() => setStarting(true)}
         status={status}
         actions={actions}
+        search={palette}
         scheme={scheme}
       >
         {region}
@@ -285,7 +303,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
         background: colorForRole('background', scheme),
       }}
     >
-      <TopBar scheme={scheme} status={status} actions={actions} />
+      <TopBar scheme={scheme} search={palette} status={status} actions={actions} />
       <Box style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Box
           component="aside"
