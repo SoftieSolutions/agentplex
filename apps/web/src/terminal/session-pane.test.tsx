@@ -9,7 +9,7 @@ import {
   TERMINAL_INPUT_MAX_CHARS,
   type ClientFrame,
 } from '@agentplex/protocol';
-import { act, type JSX } from 'react';
+import { act, Fragment, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
@@ -1675,6 +1675,50 @@ describe('the transcript tab', () => {
     return found as HTMLElement;
   }
 
+  /** One pane's copy of a tab, by the order the panes were rendered in. */
+  function tabOn(pane: number, label: string): HTMLElement {
+    const found = [...container.querySelectorAll('[role="tab"]')].filter(
+      (element): element is HTMLElement => element.textContent === label,
+    )[pane];
+    if (found === undefined) throw new Error(`no ${label} tab on pane ${String(pane)}`);
+    return found;
+  }
+
+  /**
+   * One pane's transcript panel, by the order it was rendered in.
+   *
+   * A pane showing the terminal renders no transcript panel at all -- the tab
+   * switch unmounts rather than hides -- so the panels that exist are the panes
+   * on this tab, in document order.
+   */
+  function panel(pane: number): Element {
+    const panels = [...container.querySelectorAll('[data-transcript-feed]')];
+    const found = panels[pane];
+    if (found === undefined) throw new Error(`no transcript panel for pane ${String(pane)}`);
+    return found;
+  }
+
+  function paneWidgetKinds(pane: number): string[] {
+    return [...panel(pane).querySelectorAll('[data-activity]')].map(
+      (element) => element.getAttribute('data-activity') ?? '',
+    );
+  }
+
+  function paneStatus(pane: number): string {
+    return [...container.querySelectorAll('[data-transcript-status]')][pane]?.textContent ?? '';
+  }
+
+  /**
+   * The captured answer, re-addressed to the read that is being answered.
+   *
+   * `replyTo` is the envelope's correlation id and not a word the hub said
+   * about the world, and it is the only field touched, so what either pane
+   * draws is still exactly what a hub sent.
+   */
+  function addressedTo(frame: string, replyTo: number): string {
+    return JSON.stringify({ ...(JSON.parse(frame) as Record<string, unknown>), replyTo });
+  }
+
   async function press(element: HTMLElement): Promise<void> {
     await act(async () => {
       element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -1803,10 +1847,81 @@ describe('the transcript tab', () => {
     expect(sentFrames(socket).filter((frame) => frame.type === 'session-transcript')).toHaveLength(
       2,
     );
-    // The first read's answer is not the second read's answer, so the tab says
-    // it is reading rather than showing a history as of before the press.
+    // The list stays and the sentence says a read is out. Blanking it would
+    // throw away something true -- what the session had done as of the last
+    // read -- to make room for something truer that has not arrived, and the
+    // sentence beside it is what stops the list reading as current.
     expect(status()).toContain('Reading this session');
-    expect(widgetKinds()).toEqual([]);
+    expect(widgetKinds()).toEqual(['command', 'command', 'command', 'command']);
+  });
+
+  it('draws the refresh’s own answer the moment it lands', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(tab('Transcript'));
+    await deliver(socket, hubFrames.sessionTranscript);
+
+    const refresh = container.querySelector('button[aria-label^="read this session"]');
+    await press(refresh as HTMLElement);
+    const asked = sentFrames(socket).filter((frame) => frame.type === 'session-transcript');
+    const again = asked.at(-1);
+    if (again === undefined) throw new Error('the pane asked for no transcript');
+
+    await deliver(
+      socket,
+      JSON.stringify({
+        type: 'session-transcript-read',
+        replyTo: again.id,
+        activities: [{ kind: 'command', text: 'pnpm lint', exitStatus: 0 }],
+        olderExist: false,
+      }),
+    );
+
+    expect(widgetKinds()).toEqual(['command']);
+    expect(status()).toBe('');
+  });
+
+  it('leaves the other pane on this session alone when its answer lands', async () => {
+    // The case a per-pane id exists for, and the one a single held answer got
+    // wrong: with two panes on one session, the second pane's answer used to
+    // overwrite the slot the first was reading, so the first pane's list
+    // vanished and it said it was reading with no read of its own outstanding.
+    const hub = buildStore();
+    await mount(
+      <Fragment>
+        <SessionPane sessionRef={SESSION} store={hub.store} emulators={emulators} />
+        <SessionPane sessionRef={SESSION} store={hub.store} emulators={emulators} />
+      </Fragment>,
+    );
+    const socket = await connect(hub);
+
+    await press(tabOn(0, 'Transcript'));
+    await press(tabOn(1, 'Transcript'));
+    const asked = sentFrames(socket).filter((frame) => frame.type === 'session-transcript');
+    expect(asked).toHaveLength(2);
+    const [first, second] = asked;
+    if (first === undefined || second === undefined) throw new Error('a pane asked for nothing');
+
+    // The captured answer, re-addressed to each pane's own read: `replyTo` is
+    // the envelope's correlation id rather than something the hub said about
+    // the world, so everything either pane draws is still what a hub sent.
+    await deliver(socket, addressedTo(hubFrames.sessionTranscript, first.id));
+    await deliver(
+      socket,
+      JSON.stringify({
+        type: 'session-transcript-read',
+        replyTo: second.id,
+        activities: [{ kind: 'command', text: 'pnpm lint', exitStatus: 0 }],
+        olderExist: false,
+      }),
+    );
+
+    // The second pane drew its own answer, and the first still has its own.
+    expect(paneWidgetKinds(1)).toEqual(['command']);
+    expect(paneWidgetKinds(0)).toEqual(['command', 'command', 'command', 'command']);
+    expect(paneStatus(0)).not.toContain('Reading this session');
+    expect(paneStatus(0)).toContain('Showing the last 4');
   });
 
   it('shows the hub’s own words when the read was refused', async () => {

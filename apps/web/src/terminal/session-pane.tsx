@@ -11,7 +11,6 @@ import {
 import {
   assertNever,
   type ClientTerminalTarget,
-  type FrameId,
   type PendingApproval,
   type SessionRef,
   type TerminalSize,
@@ -64,7 +63,7 @@ import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
 import { TabStrip } from './tab-strip.js';
 import { activeTab, type SessionTab } from './tab-strip-model.js';
 import { TaskBlock } from './task-block.js';
-import { transcriptState, TRANSCRIPT_COUNT } from './transcript-model.js';
+import { transcriptState, TRANSCRIPT_COUNT, type TranscriptAsks } from './transcript-model.js';
 import { TranscriptPanel } from './transcript-panel.js';
 import { chunkTerminalInput } from './terminal-input.js';
 import { TerminalView } from './terminal-view.js';
@@ -349,15 +348,18 @@ export function SessionPane({
    */
   const [requestedTab, setRequestedTab] = useState<string>(TERMINAL_TAB);
   /**
-   * The frame id this pane's last transcript read went out under, or `null`
-   * before it has asked for one.
+   * The reads this pane has made, or `null` before it has made one.
    *
-   * The pane's and not the store's, because the store keeps one answer for
-   * whoever asked last and two panes can be open on one session. This is what
-   * says which of those answers is this pane's, and it is why a second pane
-   * opening its own tab cannot repaint this one.
+   * The pane's and not the store's, because the store files every client's
+   * answers together and two panes can be open on one session. These ids are
+   * what say which of those answers are this pane's, and they are why a second
+   * pane opening its own tab cannot repaint this one.
+   *
+   * Two of them, because a refresh is a second question about the same session:
+   * `latest` is what the tab's sentence is about, and `answered` is the list it
+   * goes on drawing until the new answer lands.
    */
-  const [transcriptAsk, setTranscriptAsk] = useState<FrameId | null>(null);
+  const [transcriptAsks, setTranscriptAsks] = useState<TranscriptAsks | null>(null);
   /**
    * The last thing the clipboard would not do, or `null` while it has done
    * everything asked of it.
@@ -571,6 +573,12 @@ export function SessionPane({
    * the answer will carry. A read that was not accepted leaves the pane on
    * whatever it asked before, which is what makes the Refresh button's failure
    * mode "nothing changed" rather than "the history vanished".
+   *
+   * The id it keeps beside the new one is whichever of its own reads it has an
+   * answer to, decided here rather than watched for: the store is asked once,
+   * at the moment of asking again, which is the one moment the question has an
+   * answer that cannot change under it. That is what a `useEffect` on the
+   * snapshot would have been for, and there is nothing for one to do.
    */
   const readTranscript = useCallback((): void => {
     const outcome = hub.sendCommand({
@@ -579,7 +587,14 @@ export function SessionPane({
       sessionId: sessionRef.sessionId,
       count: TRANSCRIPT_COUNT,
     });
-    if (outcome.accepted) setTranscriptAsk(outcome.id);
+    if (!outcome.accepted) return;
+    const id = outcome.id;
+    setTranscriptAsks((asks) => {
+      if (asks === null) return { latest: id, answered: null };
+      const answers = hub.getSnapshot().transcripts;
+      const drawn = answers.has(asks.latest) ? asks.latest : asks.answered;
+      return { latest: id, answered: drawn };
+    });
   }, [hub, sessionRef]);
 
   /**
@@ -595,9 +610,9 @@ export function SessionPane({
   const selectTab = useCallback(
     (id: string): void => {
       setRequestedTab(id);
-      if (id === TRANSCRIPT_TAB && transcriptAsk === null) readTranscript();
+      if (id === TRANSCRIPT_TAB && transcriptAsks === null) readTranscript();
     },
-    [readTranscript, transcriptAsk],
+    [readTranscript, transcriptAsks],
   );
 
   const state = snapshot.machineState;
@@ -645,7 +660,7 @@ export function SessionPane({
   // name a tab this session is not offering.
   const shown: ShownTab =
     shownTab === TRANSCRIPT_TAB || shownTab === APPROVALS_TAB ? shownTab : TERMINAL_TAB;
-  const transcript = transcriptState(transcriptAsk, snapshot.lastTranscript, snapshot.lastRefusal);
+  const transcript = transcriptState(transcriptAsks, snapshot.transcripts, snapshot.lastRefusal);
   /**
    * What the panel has to say about this session.
    *

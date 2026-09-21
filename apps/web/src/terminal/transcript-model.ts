@@ -11,11 +11,13 @@ import type { RefusalView, TranscriptView } from '../store/hub-store.js';
  * hub that said no -- and every one of them is a value a test can write down.
  * Nothing here renders and nothing here asks.
  *
- * The `replyTo` comparison is the whole of the correlation, and it is what
- * makes two panes on one session safe: the store keeps one answer, each pane
- * knows the id it asked with, and an answer to the other pane's question is
- * simply not this pane's answer. A pane that read the slot without checking
- * would draw one session's history under another session's name.
+ * The lookup by frame id is the whole of the correlation, and it is what makes
+ * two panes on one session safe: the store files every answer under the id of
+ * the frame that asked for it, each pane knows the ids it asked with, and the
+ * other pane's answer is simply an entry this one never reads. A pane that read
+ * "the newest answer" instead would draw one session's history under another
+ * session's name -- and, worse, would go back to saying it was reading the
+ * moment the other pane was answered, with no read of its own outstanding.
  */
 
 /**
@@ -28,6 +30,25 @@ import type { RefusalView, TranscriptView } from '../store/hub-store.js';
  * fact about the session rather than about its own settings.
  */
 export const TRANSCRIPT_COUNT = TRANSCRIPT_ACTIVITIES_MAX;
+
+/**
+ * The reads this pane has out, as the pane remembers them.
+ *
+ * Two ids and not a list, because two is all a pane can use: the read it is
+ * waiting on, and the newest earlier read it has an answer to, which is the
+ * list it goes on drawing until the new one lands. The pane decides which
+ * earlier id that is at the moment it asks again -- see `SessionPane` -- so
+ * nothing here has to search a history and nothing accumulates.
+ */
+export interface TranscriptAsks {
+  /** The frame the most recent read went out under. */
+  readonly latest: FrameId;
+  /**
+   * The newest earlier read this pane had an answer to when it asked again, or
+   * `null` when it had none.
+   */
+  readonly answered: FrameId | null;
+}
 
 /**
  * What the tab draws, and what it says out loud.
@@ -48,6 +69,17 @@ export interface TranscriptState {
 const WAITING = 'Reading this session’s transcript…';
 const NOTHING = 'This session’s transcript holds nothing this view can show yet.';
 const UNASKED = 'This session’s transcript has not been read yet.';
+/**
+ * The answer that was cut short and still came back empty.
+ *
+ * Reachable, and not a contradiction: the machine reads the tail of the file by
+ * bytes, and a window holding no complete activity -- one line longer than the
+ * tail is enough -- is an empty list with the older-exist flag on it. Saying
+ * "nothing to show" there would be a claim about the session. This is a claim
+ * about the view, which is what is actually true.
+ */
+const UNREADABLE =
+  'Nothing in the end of this session’s transcript could be read into this view, and there is more of it on the machine that holds the file.';
 
 /** The sentence for an answer that was cut short by the count. */
 function olderThan(shown: number): string {
@@ -55,42 +87,53 @@ function olderThan(shown: number): string {
 }
 
 export function transcriptState(
-  askedWith: FrameId | null,
-  answer: TranscriptView | null,
+  asks: TranscriptAsks | null,
+  answers: ReadonlyMap<FrameId, TranscriptView>,
   refusal: RefusalView | null,
 ): TranscriptState {
   // Nothing has been asked. Reachable only before the tab has ever been
   // shown, and it says so rather than claiming the session did nothing -- the
   // difference between "we have not looked" and "there is nothing there" is
   // the whole of what this screen must not get wrong.
-  if (askedWith === null) return { activities: [], status: UNASKED, tone: 'muted' };
+  if (asks === null) return { activities: [], status: UNASKED, tone: 'muted' };
 
-  // The hub's own words, and only when they answer this pane's question. A
-  // refusal to another pane's read, or to a stop somebody pressed, is not this
-  // tab's business: the store keeps the newest "no" on the connection, and
+  const fresh = answers.get(asks.latest) ?? null;
+  // What stays on screen while the newest read is unanswered: the last list
+  // this pane was given. Keeping it loses nothing and claims nothing -- the
+  // sentence beside it says a read is out -- where blanking it throws away
+  // something true because something truer is on its way.
+  const kept = fresh ?? (asks.answered === null ? null : (answers.get(asks.answered) ?? null));
+  const standing = kept?.activities ?? [];
+
+  // The hub's own words, and only when they answer this pane's newest question.
+  // A refusal to another pane's read, or to a stop somebody pressed, is not
+  // this tab's business: the store keeps the newest "no" on the connection, and
   // drawing it here would put an unrelated sentence under a transcript.
-  if (refusal !== null && refusal.replyTo === askedWith) {
-    return { activities: [], status: refusal.message, tone: 'blocked' };
+  if (refusal !== null && refusal.replyTo === asks.latest) {
+    return { activities: standing, status: refusal.message, tone: 'blocked' };
   }
 
-  // Asked, and nothing back yet -- or something back that answers an earlier
-  // ask. Both are "still reading" to a person looking at the tab, and both are
-  // states a refresh resolves.
-  if (answer === null || answer.replyTo !== askedWith) {
-    return { activities: [], status: WAITING, tone: 'muted' };
-  }
+  // Asked, and nothing back yet. The list under it is whatever this pane was
+  // last given, which on a first read is nothing at all.
+  if (fresh === null) return { activities: standing, status: WAITING, tone: 'muted' };
 
-  if (answer.activities.length === 0) {
+  if (fresh.activities.length === 0) {
     // Not an error and not a blank panel. A session that has only been talked
     // to, or one whose provider records nothing this vocabulary can carry,
     // reaches here, and the honest thing is a sentence rather than emptiness
-    // that reads as a screen that failed to load.
-    return { activities: [], status: NOTHING, tone: 'muted' };
+    // that reads as a screen that failed to load. An empty answer that was
+    // *also* cut short is the other sentence: there is more, and none of it
+    // fitted the window this view read.
+    return {
+      activities: [],
+      status: fresh.olderExist ? UNREADABLE : NOTHING,
+      tone: 'muted',
+    };
   }
 
   return {
-    activities: answer.activities,
-    status: answer.olderExist ? olderThan(answer.activities.length) : null,
+    activities: fresh.activities,
+    status: fresh.olderExist ? olderThan(fresh.activities.length) : null,
     tone: 'muted',
   };
 }

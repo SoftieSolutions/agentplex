@@ -454,12 +454,11 @@ export interface DocContentView {
  * while a slow disk answers the first, and a snapshot field with no id on it
  * would draw the first session's history under the second session's name.
  *
- * One slot and not a map keyed by session. Nothing here is a cache: a
- * transcript is a read of a file that is still being appended to, so what the
- * store owes a pane is the answer to the question that pane asked, kept until
- * that pane asks again. A per-session store would be a client-side copy of
- * somebody else's file, going stale silently -- which is the thing the hub
- * itself refuses to do.
+ * Kept by the frame that asked, and never by session. Nothing here is a cache:
+ * a transcript is a read of a file that is still being appended to, so what the
+ * store owes a pane is the answer to the question that pane asked. A
+ * per-session store would be a client-side copy of somebody else's file, going
+ * stale silently -- which is the thing the hub itself refuses to do.
  */
 export interface TranscriptView {
   readonly replyTo: FrameId;
@@ -591,14 +590,21 @@ export interface HubSnapshot {
   /** The hub's most recent yes to a subscribe or an unsubscribe. */
   readonly lastPush: PushView | null;
   /**
-   * The most recent transcript the hub answered with, kept until the next one.
+   * What the hub has answered each transcript read with, by the id of the
+   * frame that asked.
    *
-   * Nothing is kept per session beyond this. A pane that asked reads its own
-   * answer off the `replyTo` it holds and ignores an answer to somebody else's
-   * question; a pane that has not asked has nothing, which is exactly what a
-   * Transcript tab nobody has opened should show.
+   * A map rather than one slot, for the reason `starts` is one: two panes can
+   * be open on one session -- which is the case this screen exists to serve --
+   * and with a single slot the second pane's answer would erase the first
+   * pane's. The first pane's `replyTo` would then match nothing, so it would go
+   * back to saying it was reading with no read of its own outstanding, which is
+   * a sentence claiming a machine is being asked something when it is not.
+   *
+   * Bounded by `MAX_REMEMBERED_TRANSCRIPTS`, oldest first. A pane that has not
+   * asked finds nothing, which is exactly what a Transcript tab nobody has
+   * opened should show.
    */
-  readonly lastTranscript: TranscriptView | null;
+  readonly transcripts: ReadonlyMap<FrameId, TranscriptView>;
 }
 
 /**
@@ -878,6 +884,24 @@ export function encodeClientFrame(frame: ClientFrame): string {
  */
 const MAX_REMEMBERED_STARTS = 64;
 
+/**
+ * How many transcript answers a connection remembers.
+ *
+ * Far smaller than the number of starts, because these are not two fields and
+ * a boolean: one answer is up to two hundred activities, which the protocol's
+ * own arithmetic sizes at a quarter of a megabyte. The cap is still well above
+ * any arrangement of panes -- a screen of twelve panes all on Transcript is
+ * twelve entries -- so what falls off is an answer an earlier read left behind
+ * rather than one somebody is looking at.
+ *
+ * Oldest first, and plainly so: every entry here is an answer that has already
+ * arrived, and the oldest of them is the one a pane is least likely to still be
+ * drawing. A pane that refreshes keeps a pointer at its own previous answer
+ * (`TranscriptAsks`), and that pointer is the newest of its entries, so
+ * evicting from the old end takes the stale ones first.
+ */
+export const MAX_REMEMBERED_TRANSCRIPTS = 16;
+
 export function terminalKey(target: ClientTerminalTarget): string {
   return target.by === 'start'
     ? JSON.stringify(['start', target.startId])
@@ -985,7 +1009,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastDocContent: null,
     lastPush: null,
     pushPublicKey: null,
-    lastTranscript: null,
+    transcripts: new Map(),
   };
 
   let socket: StoreSocket | null = null;
@@ -1015,6 +1039,14 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
    * waiting on is ever the entry that goes.
    */
   const starts = new Map<FrameId, StartView>();
+  /**
+   * What each transcript read was answered with, by the frame that asked.
+   *
+   * Written only when an answer arrives, unlike `starts`: a pane already knows
+   * the id it asked with and says "reading" off that, so there is nothing an
+   * empty entry would tell it that it does not hold itself.
+   */
+  const transcripts = new Map<FrameId, TranscriptView>();
   /**
    * Requests whose caller is waiting, by the id the answer will name.
    *
@@ -1155,6 +1187,21 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       const [oldest] = settled ?? [...starts][0] ?? [];
       if (oldest === undefined) return;
       starts.delete(oldest);
+    }
+  }
+
+  /**
+   * Brings the remembered transcripts back under the cap, oldest first.
+   *
+   * No passing over, unlike `evictOldestStarts`: every entry here is already an
+   * answer, so there is no unsettled one to protect and the insertion order is
+   * the order they arrived in.
+   */
+  function evictOldestTranscripts(): void {
+    while (transcripts.size > MAX_REMEMBERED_TRANSCRIPTS) {
+      const [oldest] = [...transcripts.keys()];
+      if (oldest === undefined) return;
+      transcripts.delete(oldest);
     }
   }
 
@@ -1616,17 +1663,18 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'session-transcript-read': {
         pending.delete(frame.replyTo);
-        // Replaced whole, never merged with what was here. A transcript is one
-        // read of a file at one moment, and two answers stitched together
-        // would be a history that never existed on any disk.
-        update({
-          lastRefusal: null,
-          lastTranscript: {
-            replyTo: frame.replyTo,
-            activities: frame.activities,
-            olderExist: frame.olderExist,
-          },
+        // Filed under the frame that asked, and whole: a transcript is one read
+        // of a file at one moment, and two answers stitched together would be a
+        // history that never existed on any disk. It replaces nothing but what
+        // was filed under this same id, so the pane that asked something else
+        // still has its own answer to draw.
+        transcripts.set(frame.replyTo, {
+          replyTo: frame.replyTo,
+          activities: frame.activities,
+          olderExist: frame.olderExist,
         });
+        evictOldestTranscripts();
+        update({ lastRefusal: null, transcripts: new Map(transcripts) });
         return;
       }
       case 'node-renamed':
@@ -1956,8 +2004,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // on its own machine while nothing here was connected, so holding the
       // characters would be holding a copy this store cannot vouch for.
       lastDocContent: null,
-      lastTranscript: null,
+      // And the same again: the transcript file goes on being appended to on
+      // its own machine while nothing here is connected.
+      transcripts: new Map(),
     });
+    transcripts.clear();
   }
 
   /**
