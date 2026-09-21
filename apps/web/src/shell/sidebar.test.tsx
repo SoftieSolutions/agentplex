@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { NO_PAGES, pageAdopted, type CataloguePages } from '../catalogue/catalogue-model.js';
 import { fakeCatalogueStore } from '../catalogue/fake-catalogue-store.js';
+import { appSessionFiltersStore } from '../sessions/session-filters-store.js';
 import { SessionListScreen } from '../sessions/session-list-screen.js';
 import { createFakeSocketFactory } from '../store/fake-socket.js';
 import { createFrameIdCounter } from '../store/frame-ids.js';
@@ -17,7 +18,8 @@ import { Sidebar } from './sidebar.js';
 
 /**
  * The filter row where it is actually mounted: over whichever tab is showing,
- * with the tab deciding what the letters narrow.
+ * with the tab deciding what the letters narrow and whether the sessions'
+ * narrowings come with them.
  *
  * The row itself, the popover and every count in it are `sidebar-filter`'s and
  * are pinned next door. What only this mounting can answer is the wiring: that
@@ -185,13 +187,25 @@ describe('the sidebar filter row, mounted', () => {
    * answers to what is typed.
    */
   function box(): HTMLInputElement {
-    const trigger = column.querySelector('button[aria-label="Filters"]');
-    if (trigger === null) throw new Error('the sidebar drew no filter row');
-    const beside = trigger.parentElement?.querySelector<HTMLInputElement>('input') ?? null;
-    if (beside === null) throw new Error('the filter row drew no box');
-    const every = column.querySelectorAll('input[aria-label^="Filter "]');
-    if (every.length > 1) throw new Error('the sidebar drew two filter boxes');
-    return beside;
+    const every = [...column.querySelectorAll<HTMLInputElement>('input[aria-label^="Filter "]')];
+    const only = every[0];
+    if (every.length !== 1 || only === undefined) {
+      throw new Error(`expected one filter box, found ${String(every.length)}`);
+    }
+    return only;
+  }
+
+  /** The popover's trigger, or `null` on a tab that is not offered one. */
+  function trigger(): HTMLButtonElement | null {
+    return column.querySelector<HTMLButtonElement>('button[aria-label="Filters"]');
+  }
+
+  /** The `N filters - M hidden` line, or `null` where the row drew none. */
+  function summary(): string | null {
+    const found = [...column.querySelectorAll('span')].find((span) =>
+      (span.textContent ?? '').endsWith(' hidden'),
+    );
+    return found?.textContent ?? null;
   }
 
   async function type(text: string): Promise<void> {
@@ -226,12 +240,29 @@ describe('the sidebar filter row, mounted', () => {
   it('names the box for the tab under it, and draws one box either way', async () => {
     await mount();
     expect(box().getAttribute('aria-label')).toBe('Filter tree');
-    expect(column.querySelector('button[aria-label="Filters"]')).not.toBeNull();
 
     await showSessions();
 
     expect(box().getAttribute('aria-label')).toBe('Filter sessions');
-    expect(column.querySelector('button[aria-label="Filters"]')).not.toBeNull();
+  });
+
+  it('hangs the narrowings off the Sessions tab and leaves the tree the box', async () => {
+    await mount();
+    await act(() => {
+      appSessionFiltersStore(store).set({ machine: 'registration-mbp-robert' });
+    });
+
+    // Every narrowing in the popover narrows sessions, and the tab is not the
+    // route: with a session or a document open beside the tree, the popover
+    // would be narrowing nothing a person on this tab can see while its hidden
+    // count sat above a tree that publishes a hidden count of its own.
+    expect(trigger()).toBeNull();
+    expect(summary()).toBeNull();
+
+    await showSessions();
+
+    expect(trigger()).not.toBeNull();
+    expect(summary()).toBe('1 filter · 3 hidden');
   });
 
   it('narrows the tree with the letters typed on the Projects tab', async () => {
@@ -280,7 +311,12 @@ describe('the sidebar filter row, mounted', () => {
     await mount(null);
 
     expect(column.querySelector('input[aria-label="Filter tree"]')).toBeNull();
-    expect(column.querySelector('button[aria-label="Filters"]')).toBeNull();
+    expect(trigger()).toBeNull();
     expect(column.textContent).toContain('waiting for the hub');
+
+    await showSessions();
+
+    expect(column.querySelector('input[aria-label="Filter sessions"]')).toBeNull();
+    expect(trigger()).toBeNull();
   });
 });

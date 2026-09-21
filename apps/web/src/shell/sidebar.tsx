@@ -34,10 +34,15 @@ import { SidebarSessions } from './sidebar-sessions.js';
  * unmounted by a tab switch and a filter that emptied itself on the way back
  * would be a box that forgets; the sessions' letters are the `search` field of
  * the narrowings the popover writes and the cards in the content region read,
- * which is the whole reason that store exists. The popover is the sessions'
- * either way -- on the Projects tab it is narrowing the cards beside the tree
- * rather than the tree, and those are on screen, so its badge is still
- * counting something a person can see.
+ * which is the whole reason that store exists.
+ *
+ * The popover comes with the Sessions tab and not with the other, which is
+ * what mockup 6a draws: the Projects tab gets the box alone. Every narrowing
+ * in it narrows sessions, and the tab is independent of the route -- with a
+ * session or a document open in the content region there are no cards beside
+ * the tree at all -- so on the Projects tab it would be a badge counting rows
+ * nobody can see, over a line saying how many sessions are hidden directly
+ * above a tree saying how many nodes are.
  *
  * Nothing above a fleet: with no `MachineState` there is no option to offer,
  * no count to draw and nothing to narrow, so the row is not drawn at all
@@ -110,6 +115,7 @@ export function Sidebar({
             if (projects) setTreeFilter(text);
             else filters.set({ search: text });
           }}
+          popover={!projects}
           scheme={scheme}
         />
       )}

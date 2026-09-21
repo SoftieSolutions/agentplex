@@ -157,7 +157,7 @@ describe('the sidebar filter row', () => {
     container.remove();
   });
 
-  function draw(state: MachineState = populated, text = ''): void {
+  function draw(state: MachineState = populated, text = '', popover = true): void {
     act(() => {
       root = createRoot(container);
       root.render(
@@ -173,6 +173,7 @@ describe('the sidebar filter row', () => {
             label="Filter sessions"
             text={text}
             onText={(value) => typed.push(value)}
+            popover={popover}
             scheme="dark"
             now={() => NOW}
           />
@@ -408,6 +409,19 @@ describe('the sidebar filter row', () => {
     expect(trigger().getAttribute('aria-expanded')).toBe('false');
     await open();
     expect(trigger().getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('draws the box alone where the popover was not asked for', () => {
+    // Everything the popover holds narrows sessions. Over a reading that is
+    // not the sessions there is nothing for it to narrow that a person can
+    // see, so the trigger, the badge and the line all go with it and the box
+    // -- which narrows whatever is under it -- stays.
+    filters.set({ machine: 'registration-mbp-robert', chip: 'needs-you' });
+    draw(populated, '', false);
+
+    expect(container.querySelector('button[aria-label="Filters"]')).toBeNull();
+    expect(summary()).toBeNull();
+    expect(container.querySelector('input[aria-label="Filter sessions"]')).not.toBeNull();
   });
 
   it('carries the name it was given on the box, and hands the typing back', () => {

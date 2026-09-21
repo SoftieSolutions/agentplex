@@ -31,13 +31,21 @@ import { colorForRole, type Scheme } from '../ui/tokens.js';
  * narrows whatever is below it, and beside it the popover holding every other
  * narrowing, a badge counting them and a line saying what they hid.
  *
- * It knows nothing about which tab it sits over. The box is the tab's -- its
- * name and what its text narrows arrive as props, because on one tab the
- * letters narrow the tree and on the other the session list -- while the
- * popover is always the sessions': those narrowings are one set of choices
- * held in one place (`session-filters-store.ts` argues why), and a popover
- * that changed meaning with the tab would be a badge counting something a
- * person cannot see.
+ * It knows nothing about which tab it sits over, or whether it is over a tab
+ * at all: it is the row in the sidebar's two forms and the row the phone form
+ * of the session list draws for itself. The box is the caller's -- its name
+ * and what its text narrows arrive as props, because in one place the letters
+ * narrow the tree and in the others the session list.
+ *
+ * The popover is always the sessions', and is drawn only where the caller says
+ * sessions are on screen (`popover`). Every narrowing in it narrows sessions,
+ * so over the catalogue tree it would be a badge counting rows nobody on that
+ * tab can see -- the tab is independent of the route, and with a session or a
+ * document open the content region is not the list -- and its hidden count
+ * would sit directly above the tree's own count of what the tree is hiding.
+ * One prop rather than a second component, because everything else about the
+ * row is the same row: mockup 6a draws the Projects tab with the box alone and
+ * 6b draws the Sessions tab with the slider beside it.
  *
  * Everything the popover decides comes from `session-list-model.ts`, read
  * through `effectiveFilters` so that a choice whose option has left the fleet
@@ -75,6 +83,12 @@ export interface SidebarFilterProps {
   /** What is typed in the box, held by whoever owns the thing it narrows. */
   readonly text: string;
   readonly onText: (text: string) => void;
+  /**
+   * Whether the sessions' narrowings are drawn beside the box: the popover,
+   * the badge counting them and the line saying what they hid. False where the
+   * sessions are not what is under the row, which is the Projects tab.
+   */
+  readonly popover: boolean;
   readonly scheme: Scheme;
   /** The clock the age narrowing is read against, injected so a test can fix it. */
   readonly now?: () => number;
@@ -87,11 +101,35 @@ export function SidebarFilter({
   label,
   text,
   onText,
+  popover,
   scheme,
   now = Date.now,
 }: SidebarFilterProps): JSX.Element {
   const held = useSyncExternalStore(filters.subscribe, filters.getSnapshot);
   const [opened, setOpened] = useState(false);
+
+  const box = (
+    <TextInput
+      size="xs"
+      aria-label={label}
+      placeholder={label}
+      value={text}
+      onChange={(event) => onText(event.currentTarget.value)}
+      style={{ flex: 1, minWidth: 0 }}
+    />
+  );
+
+  // Every hook is above this line, so the row with nothing beside the box is
+  // an early return rather than a tree of conditions: none of what follows --
+  // the option lists, the counts, the windows -- is worth computing over a
+  // reading the popover does not narrow.
+  if (!popover) {
+    return (
+      <Group gap={6} wrap="nowrap" align="center">
+        {box}
+      </Group>
+    );
+  }
 
   const moment = now();
   const items = listSessions(state);
@@ -111,14 +149,7 @@ export function SidebarFilter({
   return (
     <Stack gap={6}>
       <Group gap={6} wrap="nowrap" align="center">
-        <TextInput
-          size="xs"
-          aria-label={label}
-          placeholder={label}
-          value={text}
-          onChange={(event) => onText(event.currentTarget.value)}
-          style={{ flex: 1, minWidth: 0 }}
-        />
+        {box}
         {/* `trapFocus` and `returnFocus` are both off by default in Mantine
             9.6.0, and with `withinPortal` the dropdown is drawn at the end of
             the body: opening it would leave the focus on the trigger, so Tab
