@@ -6,6 +6,7 @@ import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/pro
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider, Text } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
+import { AttentionBell } from './attention-bell.js';
 import { connectionView } from './connection-model.js';
 import { ConnectionStatus } from './connection-status.js';
 import { destinationHash } from './destinations.js';
@@ -18,9 +19,9 @@ import { MobileChrome } from './mobile-chrome.js';
  * layout: nothing here can be answered by measuring, and a test that set a
  * width and then asserted on what CSS did would be asserting on nothing. The
  * width decision is pinned as a function in `shell-form.test.ts`; what is left
- * for this file is what the chrome draws once that decision is made, which is
- * everything the ticket is about -- the header, the tab bar, and the action
- * button with the attention count on it.
+ * for this file is what the chrome draws once that decision is made -- the
+ * header and the two slots the shell fills, the tab bar, and the action
+ * button.
  */
 
 declare global {
@@ -98,12 +99,12 @@ describe('the phone chrome', () => {
   });
 
   interface Options {
-    readonly needsYou?: number;
     readonly current?: 'sessions' | 'projects' | 'more' | null;
     readonly status?: JSX.Element;
+    readonly actions?: JSX.Element;
   }
 
-  function draw({ needsYou = 0, current = 'sessions', status }: Options = {}): void {
+  function draw({ current = 'sessions', status, actions }: Options = {}): void {
     const element: JSX.Element = (
       <MantineProvider
         theme={theme}
@@ -115,11 +116,11 @@ describe('the phone chrome', () => {
           machine={null}
           onPickMachine={() => {}}
           current={current}
-          needsYou={needsYou}
           onStartSession={() => {
             started += 1;
           }}
           status={status}
+          actions={actions}
           scheme="dark"
         >
           <Text>the content region</Text>
@@ -146,21 +147,8 @@ describe('the phone chrome', () => {
     return button;
   }
 
-  /**
-   * The live region. Mounted at every count, which is half of what it is for.
-   *
-   * Addressed through the button rather than as "the live region on screen":
-   * the header holds one too since AGX-119 -- the connection line -- and a
-   * query that took the first would have started reading that one instead.
-   */
-  function announcement(): HTMLElement | null {
-    return container.querySelector<HTMLElement>(
-      'button[aria-label="Start a session"] + [role="status"]',
-    );
-  }
-
-  /** The drawn badge, which exists only above zero. */
-  function badge(): HTMLElement | null {
+  /** The attention mark, wherever it is: the phone draws exactly one. */
+  function attentionMark(): HTMLElement | null {
     return container.querySelector<HTMLElement>('[data-needs-you]');
   }
 
@@ -237,7 +225,7 @@ describe('the phone chrome', () => {
   });
 
   it('floats nothing over a session, where the corner is the last line of output', () => {
-    draw({ current: null, needsYou: 2 });
+    draw({ current: null });
 
     expect(maybeActionButton()).toBeNull();
     // The bar is still the way back to a place the button is drawn on.
@@ -254,31 +242,33 @@ describe('the phone chrome', () => {
     expect(started).toBe(1);
   });
 
-  it('carries the needs-you count as a badge, and says it in words', () => {
-    draw({ needsYou: 2 });
+  it('carries the chrome’s actions slot in the header, so the bell is on a phone too', () => {
+    draw({ actions: <AttentionBell count={2} scheme="dark" /> });
 
-    expect(badge()?.textContent).toBe('2');
-    expect(announcement()?.textContent).toBe('2 sessions need you');
-    // The count is not part of the button's name: "Start a session, 2" is not
-    // what either half means.
+    const header = container.querySelector('header');
+    expect(header?.querySelector('[data-attention-bell]')?.getAttribute('aria-label')).toBe(
+      '2 sessions need you',
+    );
+  });
+
+  it('leaves the count to the bell: the action button is a way to start and nothing else', () => {
+    draw({ actions: <AttentionBell count={2} scheme="dark" /> });
+
+    // One screen, one attention number. The button used to wear a badge of
+    // its own, narrowed by the machine the header had picked, so a phone
+    // could show two different counts for one fleet; the bell is the one that
+    // survived, because it is the one the tab title agrees with.
+    expect(attentionMark()?.closest('[data-attention-bell]')).not.toBeNull();
     expect(actionButton().getAttribute('aria-label')).toBe('Start a session');
+    expect(actionButton().parentElement?.querySelector('[role="status"]')).toBeNull();
   });
 
-  it('says it in the singular for one session', () => {
-    draw({ needsYou: 1 });
+  it('draws no mark anywhere when nothing is waiting on anyone', () => {
+    draw({ actions: <AttentionBell count={0} scheme="dark" /> });
 
-    expect(announcement()?.textContent).toBe('1 session needs you');
-  });
-
-  it('draws no badge when nothing is waiting on anyone', () => {
-    draw({ needsYou: 0 });
-
-    expect(badge()).toBeNull();
-    // The region itself stays mounted and empty, because a live region
-    // inserted along with its first number is a region nothing was watching.
-    expect(announcement()?.textContent).toBe('');
-    // And the button is still there: it is how a session is started, not only
-    // a place to hang a count.
+    expect(attentionMark()).toBeNull();
+    // And the button is still there: it is how a session is started, which
+    // never depended on the count it used to carry.
     expect(actionButton()).not.toBeNull();
   });
 });

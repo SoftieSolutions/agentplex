@@ -12,15 +12,16 @@ import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogu
 import { useDocRoute } from '../docs/doc-route.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
+import { fleetAttentionCount } from '../sessions/attention-floor.js';
 import { NewSessionForm } from '../sessions/new-session-form.js';
 import { SessionListScreen } from '../sessions/session-list-screen.js';
-import { needsYouCount, visibleSessions, NO_FILTERS } from '../sessions/session-list-model.js';
 import { SettingsRoute } from '../settings/settings-route.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import { useSessionRoute } from '../terminal/session-route.js';
 import { Box, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
+import { AttentionBell } from './attention-bell.js';
 import { connectionView } from './connection-model.js';
 import { ConnectionStatus } from './connection-status.js';
 import { resolveDestination, useDestination, type Destination } from './destinations.js';
@@ -50,7 +51,8 @@ import { TopBar } from './top-bar.js';
  *
  *   * the machine the app is narrowed to. The selector writes it -- it is in
  *     the sidebar in one form and in the header in the other; the catalogue
- *     query, the cards in the content region and the attention badge read it.
+ *     query and the cards in the content region read it. The bell above them
+ *     deliberately does not: see the node it is built in.
  *     `machine-selector-model.ts` argues why it is one fact.
  *   * the catalogue question itself, as a store. The panel draws it and the
  *     selection narrows it, and the store outlives both the panel's tab and
@@ -128,6 +130,20 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
       scheme={scheme}
     />
   );
+  /**
+   * The bell, built here for the same reason the connection line is: one node,
+   * handed to whichever chrome is drawn, so a phone and a desk cannot come to
+   * different numbers for one fleet.
+   *
+   * `machine` is deliberately not passed. The bell counts the fleet whole,
+   * which means a person who has narrowed to one machine sees a chip on the
+   * list counting fewer than the bell does. That is the right way round: the
+   * bell is the app's count of what is asking -- the same count the browser
+   * tab carries, and the tab strip has no selector on it -- and it has to keep
+   * meaning that on the Projects tab and over a session, where no list is
+   * drawn to compare it against.
+   */
+  const actions = <AttentionBell count={fleetAttentionCount(state)} scheme={scheme} />;
   const region = content({
     hub,
     tokens,
@@ -151,9 +167,9 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
         // A session or a document is a thing and not one of the three places
         // the bar offers, so no tab claims to be where the app is.
         current={sessionRef !== null || doc !== null ? null : place}
-        needsYou={attentionCount(state, machine)}
         onStartSession={() => setStarting(true)}
         status={status}
+        actions={actions}
         scheme={scheme}
       >
         {region}
@@ -179,7 +195,7 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
         background: colorForRole('background', scheme),
       }}
     >
-      <TopBar scheme={scheme} status={status} />
+      <TopBar scheme={scheme} status={status} actions={actions} />
       <Box style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Box
           component="aside"
@@ -219,24 +235,6 @@ export function AppShell({ hub, tokens }: AppShellProps): JSX.Element {
       </Box>
     </Box>
   );
-}
-
-/**
- * How many sessions are waiting on a human, narrowed by what the chrome is
- * narrowed by.
- *
- * The machine selection and nothing else, because that is the whole of what
- * the chrome knows: the store and provider narrowings and the search field are
- * the list screen's own state, held there because they are things done to that
- * screen. So a person who narrows the list further will see a chip counting
- * fewer than the badge does. That is the right way round -- the badge is the
- * app's count of what wants attention, not a count of what this screen is
- * currently showing, and it has to keep meaning the same thing on the Projects
- * tab and over a session.
- */
-function attentionCount(state: MachineState | null, machine: ServerRegistrationId | null): number {
-  if (state === null) return 0;
-  return needsYouCount(visibleSessions(state, { ...NO_FILTERS, server: machine }));
 }
 
 interface ContentProps {

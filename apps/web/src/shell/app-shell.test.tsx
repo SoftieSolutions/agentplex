@@ -28,7 +28,7 @@ import { destinationHash } from './destinations.js';
  *
  * The phone form is mounted here too, at a window narrow enough to ask for it.
  * What that pins is the wiring rather than the layout -- one shell, one set of
- * addresses, the badge reading the count the list reads -- because jsdom has no
+ * addresses, one bell counting the fleet in both forms -- because jsdom has no
  * layout to assert on. The chrome's own drawing is `mobile-chrome.test.tsx`,
  * and the width rule is `shell-form.test.ts`.
  */
@@ -236,6 +236,38 @@ describe('the shell', () => {
     const status = container.querySelector('header [role="status"]');
     expect(status?.textContent).toContain('connected');
     expect(status?.querySelector('a')).toBeNull();
+  });
+
+  it('hangs the bell in the top bar, counting the whole fleet', async () => {
+    await mount();
+
+    const bell = container.querySelector<HTMLAnchorElement>('header [data-attention-bell]');
+    expect(bell?.getAttribute('aria-label')).toBe('2 sessions need you');
+    // An address until the panel exists (AGX-259), and the address is the one
+    // whose first rows are what it is counting.
+    expect(bell?.getAttribute('href')).toBe(destinationHash('sessions'));
+  });
+
+  it('keeps the bell on the whole fleet when the app is narrowed to one machine', async () => {
+    await mount();
+
+    await pickMachine('gpu-box-01');
+
+    // The screen narrows and the bell does not. The bell is an ambient
+    // surface, like the browser tab beside it -- neither has a machine
+    // selector on it -- and two attention numbers that disagree because one of
+    // them quietly answered a different question is how both stop being
+    // believed. The chip counts what this screen is showing; the bell counts
+    // what the app knows.
+    const chips = [...container.querySelectorAll('main [aria-pressed]')].map(
+      (chip) => chip.textContent,
+    );
+    expect(chips).toContain('Needs you · 1');
+    expect(
+      container
+        .querySelector<HTMLAnchorElement>('header [data-attention-bell]')
+        ?.getAttribute('aria-label'),
+    ).toBe('2 sessions need you');
   });
 
   it('names the missing token in the chrome, and links to where one is typed', async () => {
@@ -489,24 +521,23 @@ describe('the shell on a phone', () => {
     expect(tabs().map((tab) => tab.textContent)).toEqual(['Sessions', 'Projects', 'More']);
   });
 
-  it('badges the action button with the sessions waiting on a human', async () => {
+  it('hangs the bell in the phone header, and hangs no second count on the button', async () => {
     await mount();
 
-    // Every machine in this fleet is up, so the chip below says the same two
-    // the badge does. They part company on an unreachable one, which is
-    // `needsYouCount`'s own test rather than this one.
+    // One screen, one attention number: the same bell the wide form draws,
+    // counting the same fleet. The action button wore a badge of its own once
+    // -- narrowed by the machine this header picks, so it could disagree with
+    // the bell above it by design -- and it no longer does.
+    const bell = container.querySelector<HTMLAnchorElement>('header [data-attention-bell]');
+    expect(bell?.getAttribute('aria-label')).toBe('2 sessions need you');
     const chips = [...container.querySelectorAll('main [aria-pressed]')].map(
       (chip) => chip.textContent,
     );
     expect(chips).toContain('Needs you · 2');
-    expect(container.querySelector('[data-needs-you]')?.textContent).toBe('2');
-    // The live region is addressed through the button: the header holds one
-    // too since AGX-119 -- the connection line -- and the first one on screen
-    // is that one.
+    expect(container.querySelectorAll('[data-needs-you]')).toHaveLength(1);
     expect(
-      container.querySelector('button[aria-label="Start a session"] + [role="status"]')
-        ?.textContent,
-    ).toBe('2 sessions need you');
+      container.querySelector('button[aria-label="Start a session"] + [role="status"]'),
+    ).toBeNull();
   });
 
   it('puts the tree in the content region, where the Projects tab leads', async () => {
