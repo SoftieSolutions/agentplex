@@ -18,7 +18,7 @@ import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { parseSessionHash } from '../terminal/session-route.js';
-import { appSessionFiltersStore } from './session-filters-store.js';
+import { appSessionFiltersStore, type SessionListView } from './session-filters-store.js';
 import type { SessionListFilters } from './session-list-model.js';
 import { SessionListScreen } from './session-list-screen.js';
 
@@ -665,5 +665,168 @@ describe('the session list', () => {
 
     expect(chipButton('Idle').getAttribute('aria-pressed')).toBe('true');
     expect(chipButton('All').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  /**
+   * The two forms, and the toggle that chooses between them.
+   *
+   * What is asserted here is the thing the ticket is actually about: the same
+   * sessions, read two ways. So every test below goes through `hrefs()` -- the
+   * addresses the list drew -- rather than through counting elements, because
+   * "the list shows what the grid showed" is a claim about which sessions are
+   * on the screen and in what order, and one `visible` array behind both forms
+   * is what makes it true.
+   */
+
+  /**
+   * Which component drew each article the list put out. The card stacks its
+   * facts down a column and the row lines them up across one line: that is the
+   * whole difference between the two forms, and the one part of it a DOM with
+   * no layout engine can still be asked about.
+   */
+  function drawnForms(): string[] {
+    return [...container.querySelectorAll<HTMLElement>('article')].map((article) =>
+      article.style.flexDirection === 'column' ? 'card' : 'row',
+    );
+  }
+
+  /** The toggle's options, which are words rather than icons on purpose. */
+  function viewButtons(): string[] {
+    return [...container.querySelectorAll<HTMLElement>('[aria-pressed]')]
+      .map((button) => button.textContent ?? '')
+      .filter((text) => text === 'Grid' || text === 'List');
+  }
+
+  function viewButton(label: string): HTMLElement {
+    const found = [...container.querySelectorAll<HTMLElement>('[aria-pressed]')].find(
+      (button) => button.textContent === label,
+    );
+    if (found === undefined) throw new Error(`no view button reading ${label}`);
+    return found;
+  }
+
+  /** The node menus the screen built out of the tree, one per session it holds. */
+  function menuLabels(): (string | null)[] {
+    return [...container.querySelectorAll('button[aria-label^="Actions for "]')].map((button) =>
+      button.getAttribute('aria-label'),
+    );
+  }
+
+  /** A view written by nobody on this screen, the way the toggle writes it. */
+  async function showAs(view: SessionListView): Promise<void> {
+    await act(() => {
+      appSessionFiltersStore(store).setView(view);
+    });
+  }
+
+  it('names its two forms in words, so neither option is an icon alone', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    expect(viewButtons()).toEqual(['Grid', 'List']);
+    // The grid is the form every mockup that draws the toggle draws selected.
+    expect(viewButton('Grid').getAttribute('aria-pressed')).toBe('true');
+    expect(viewButton('List').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('draws no toggle in the phone form, where the feed is the only form', async () => {
+    await mountWith(hubFrames.machineStatePopulated, undefined, 'phone');
+
+    // Gated on the form the screen was handed rather than on a media query,
+    // for the reason the New session button beside it is: one rule in one
+    // place, or two spellings of the breakpoint that disagree at any font size
+    // but the default.
+    expect(viewButtons()).toEqual([]);
+  });
+
+  it('presses the view into the shared store rather than into its own state', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    await click(viewButton('List'));
+
+    expect(appSessionFiltersStore(store).getView()).toBe('list');
+  });
+
+  it('shows the form the store says, whoever wrote it', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+    expect(drawnForms()).toEqual(['card', 'card', 'card', 'card', 'card', 'card']);
+
+    await showAs('list');
+
+    expect(viewButton('List').getAttribute('aria-pressed')).toBe('true');
+    expect(drawnForms()).toEqual(['row', 'row', 'row', 'row', 'row', 'row']);
+  });
+
+  it('draws in the list exactly the sessions the grid drew, in the same order', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+    await narrowTo({ machine: 'registration-gpu-box-01' });
+    const inTheGrid = hrefs();
+    expect(inTheGrid).toHaveLength(3);
+
+    await showAs('list');
+
+    // One `visible` array behind both forms, which is what makes the same
+    // narrowing incapable of yielding two counts.
+    expect(hrefs()).toEqual(inTheGrid);
+  });
+
+  it('keeps the needs-you partition at the head of the list, as the grid does', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+    const inTheGrid = hrefs();
+
+    await showAs('list');
+
+    // The partition is an ordering and not a heading -- there is no heading to
+    // draw in either form -- so what holds is that the two sessions asking for
+    // somebody still lead the six, in the order the grid had them.
+    expect(hrefs()).toEqual(inTheGrid);
+    expect(hrefs().slice(0, 2)).toEqual([
+      '#/session/store-agentplex/session-migrate-db',
+      '#/session/store-universe/session-docs-sweep',
+    ]);
+    expect(buttonsLabelled('acknowledge').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'acknowledge migrate-db-v9',
+      'acknowledge docs-sweep',
+    ]);
+  });
+
+  it('hands a row the node menu the card was handed, off the same tree', async () => {
+    const socket = await mountWith(hubFrames.machineStatePopulated);
+    // Captured from a real hub: a tree holding two of the six sessions. The
+    // other four get no menu in either form, which is the rule about a session
+    // the tree has no node for and not a difference between the forms.
+    await act(() => {
+      socket.deliver(hubFrames.layoutWithProject);
+    });
+    const inTheGrid = menuLabels();
+    expect(inTheGrid).toEqual(['Actions for fix-auth-refresh', 'Actions for spike-wasm']);
+
+    await showAs('list');
+
+    expect(menuLabels()).toEqual(inTheGrid);
+  });
+
+  it('keeps the row’s stop and attention, which are the card’s own', async () => {
+    await mountWith(hubFrames.machineStatePopulated);
+
+    await showAs('list');
+
+    expect(stopButtons().map((button) => button.getAttribute('aria-label'))).toEqual([
+      'stop session-migrate-db',
+    ]);
+    expect(buttonsLabelled('mute').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'mute migrate-db-v9',
+      'mute docs-sweep',
+    ]);
+  });
+
+  it('draws cards on a phone whatever the view was last left on', async () => {
+    await mountWith(hubFrames.machineStatePopulated, undefined, 'phone');
+
+    await showAs('list');
+
+    // The phone feed is the grid at one column (mockup 7e) and there is no
+    // toggle there to have chosen otherwise, so a list written at a wider
+    // width must not follow the window down.
+    expect(drawnForms()).toEqual(['card', 'card', 'card', 'card', 'card', 'card']);
   });
 });

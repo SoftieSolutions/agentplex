@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore, type JSX } from 'react';
-import type { ServerRegistrationId } from '@agentplex/protocol';
+import type { Layout, ServerRegistrationId } from '@agentplex/protocol';
 import {
   Button,
   Group,
@@ -25,9 +25,10 @@ import {
   visibleSessions,
   type ChipCount,
   type EmptyListing as EmptyListingView,
+  type SessionListItem,
   type StatusChip,
 } from './session-list-model.js';
-import { appSessionFiltersStore } from './session-filters-store.js';
+import { appSessionFiltersStore, type SessionListView } from './session-filters-store.js';
 import { appLayoutStore } from '../layout/app-layout.js';
 import { ProjectDocuments } from '../docs/project-docs.js';
 import { NewProjectForm } from '../projects/new-project-form.js';
@@ -35,6 +36,7 @@ import { NodeMenu } from '../tree/node-menu.js';
 import { nodeForSession } from '../tree/tree-model.js';
 import { NewSessionForm } from './new-session-form.js';
 import { SessionCard } from './session-card.js';
+import { SessionRow } from './session-row.js';
 import { stoppedNotice } from './stop-model.js';
 
 /**
@@ -42,6 +44,17 @@ import { stoppedNotice } from './stop-model.js';
  * partition. The chips exist only for states that exist. Layout is the
  * approved mockup's card grid (turn 7, 7a/7b), which collapses to the mobile
  * card feed (7e) by dropping to one column rather than by being a second view.
+ *
+ * The toggle beside the chips (mockup 7a, at the right of that row) is the
+ * third thing and not a replacement for that collapse: it chooses between the
+ * grid and a one-row-per-session list, at the widths that have a choice. Both
+ * forms are drawn by `SessionListing` off one `visible` array and one `actions`
+ * slot per session, which is what makes "the same sessions, in the same order,
+ * under the same narrowing" true by construction rather than by two call sites
+ * agreeing. Below the breakpoint the toggle is not drawn and the cards are
+ * what is drawn, however the choice was left at a wider width: the phone feed
+ * is the grid at one column, and a list arriving there would be a form nobody
+ * on that screen could get out of.
  *
  * The store and provider selects that used to stand above the cards are gone:
  * they are sections of the sidebar's filter popover now (mockup 6b), which is
@@ -123,6 +136,9 @@ export function SessionListScreen({
   // `useSyncExternalStore` and not an effect, like everything else here.
   const filtersStore = appSessionFiltersStore(store);
   const held = useSyncExternalStore(filtersStore.subscribe, filtersStore.getSnapshot);
+  // The view, off the same subscription and its own string snapshot, so that
+  // typing in the search box does not re-render through this reader as well.
+  const chosen = useSyncExternalStore(filtersStore.subscribe, filtersStore.getView);
   const [creating, setCreating] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
 
@@ -153,6 +169,11 @@ export function SessionListScreen({
   // the sum of what they carry -- every session falls under exactly one chip.
   const total = chips.reduce((count, entry) => count + entry.count, 0);
   const visible = visibleSessions(state, filters, moment);
+  // The phone has no toggle, so it has no list: the feed is the grid at one
+  // column. The choice is left standing in the store rather than written back
+  // to `grid` here -- a window narrowed and widened again should come back to
+  // the form it was reading in, not to the one the phone had to draw.
+  const view: SessionListView = form === 'phone' ? 'grid' : chosen;
   // What the last stop landed on, from the reply's own payload. Kept brief and
   // kept at all because the answer reaches the client that asked: without it a
   // session stopped in another tab is a row that quietly stops being held.
@@ -243,7 +264,7 @@ export function SessionListScreen({
         />
       ) : null}
 
-      <Group gap={10}>
+      <Group gap={10} align="center" wrap="nowrap">
         {chips.length === 0 ? null : (
           <StatusChips
             chips={chips}
@@ -253,6 +274,12 @@ export function SessionListScreen({
             scheme={scheme}
           />
         )}
+        {/* Mockup 7a puts it at the far right of this row, past the chips. Not
+            drawn in the phone form, for the reason the New session button is
+            not: the shell's form is one rule in one place. */}
+        {form === 'phone' ? null : (
+          <ViewToggle view={view} onPick={(next) => filtersStore.setView(next)} scheme={scheme} />
+        )}
       </Group>
 
       {visible.length === 0 ? (
@@ -261,37 +288,166 @@ export function SessionListScreen({
           scheme={scheme}
         />
       ) : (
-        <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
-          {visible.map((item) => {
-            // A session the tree holds no node for gets no menu: there is
-            // nothing to rename, move or remove, and a menu that opened onto
-            // three refusals would be worse than no menu.
-            const node = nodeForSession(layout, item.ref);
-            return (
-              <SessionCard
-                key={item.key}
-                item={item}
-                scheme={scheme}
-                now={moment}
-                store={store}
-                actions={
-                  node === null ? null : (
-                    <NodeMenu
-                      store={store}
-                      nodeId={node.id}
-                      name={node.name ?? item.name}
-                      layout={layout}
-                      anchor={item.ref}
-                      scheme={scheme}
-                    />
-                  )
-                }
-              />
-            );
-          })}
-        </SimpleGrid>
+        <SessionListing
+          view={view}
+          items={visible}
+          layout={layout}
+          store={store}
+          scheme={scheme}
+          now={moment}
+        />
       )}
     </Stack>
+  );
+}
+
+interface SessionListingProps {
+  readonly view: SessionListView;
+  readonly items: readonly SessionListItem[];
+  readonly layout: Layout | null;
+  readonly store: HubStore;
+  readonly scheme: Scheme;
+  /** The moment every age in the listing is measured against. */
+  readonly now: number;
+}
+
+/**
+ * The visible sessions in whichever form the toggle is on.
+ *
+ * One array in, and the same `actions` slot built for each session whichever
+ * component ends up drawing it: the two forms differ in how a session is laid
+ * out and in nothing else. That is the ticket's whole claim -- a list is a
+ * re-layout of a known set, not a second listing -- and putting the choice
+ * here rather than around two copies of the loop is what keeps a narrowing,
+ * an ordering or a menu from being applied to one form and forgotten on the
+ * other.
+ */
+function SessionListing({
+  view,
+  items,
+  layout,
+  store,
+  scheme,
+  now,
+}: SessionListingProps): JSX.Element {
+  const drawn = items.map((item) => {
+    // A session the tree holds no node for gets no menu: there is nothing to
+    // rename, move or remove, and a menu that opened onto three refusals would
+    // be worse than no menu.
+    const node = nodeForSession(layout, item.ref);
+    return {
+      item,
+      actions:
+        node === null ? null : (
+          <NodeMenu
+            store={store}
+            nodeId={node.id}
+            name={node.name ?? item.name}
+            layout={layout}
+            anchor={item.ref}
+            scheme={scheme}
+          />
+        ),
+    };
+  });
+
+  if (view === 'list') {
+    return (
+      <Stack gap={6}>
+        {drawn.map(({ item, actions }) => (
+          <SessionRow
+            key={item.key}
+            item={item}
+            scheme={scheme}
+            now={now}
+            store={store}
+            actions={actions}
+          />
+        ))}
+      </Stack>
+    );
+  }
+  return (
+    <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing={10}>
+      {drawn.map(({ item, actions }) => (
+        <SessionCard
+          key={item.key}
+          item={item}
+          scheme={scheme}
+          now={now}
+          store={store}
+          actions={actions}
+        />
+      ))}
+    </SimpleGrid>
+  );
+}
+
+interface ViewToggleProps {
+  readonly view: SessionListView;
+  readonly onPick: (view: SessionListView) => void;
+  readonly scheme: Scheme;
+}
+
+/**
+ * The mockup's two-button bordered pill, the shape the status chips beside it
+ * already are, because it is the same kind of control: a small set of
+ * exclusive options, one of them pressed.
+ *
+ * The mockup draws an icon in each half. These are words instead. The icons
+ * would need labels anyway -- a toggle whose options a screen reader cannot
+ * tell apart is a toggle with one option -- and two four-letter words at this
+ * size cost no more room than the glyphs and the `aria-label`s they would have
+ * needed. It follows the catalogue panel's tree-or-list toggle in being a view
+ * choice held beside the narrowings and drawn above what it re-lays-out; it
+ * does not follow it into `SegmentedControl`, whose radio group would be a
+ * second spelling of the pressed state this screen already has in its chips.
+ */
+function ViewToggle({ view, onPick, scheme }: ViewToggleProps): JSX.Element {
+  return (
+    <Group
+      gap={2}
+      wrap="nowrap"
+      ml="auto"
+      p={2}
+      style={{ border: `1px solid ${colorForRole('border', scheme)}`, borderRadius: 7 }}
+    >
+      <ViewButton
+        label="Grid"
+        selected={view === 'grid'}
+        onPick={() => onPick('grid')}
+        scheme={scheme}
+      />
+      <ViewButton
+        label="List"
+        selected={view === 'list'}
+        onPick={() => onPick('list')}
+        scheme={scheme}
+      />
+    </Group>
+  );
+}
+
+interface ViewButtonProps {
+  readonly label: string;
+  readonly selected: boolean;
+  readonly onPick: () => void;
+  readonly scheme: Scheme;
+}
+
+function ViewButton({ label, selected, onPick, scheme }: ViewButtonProps): JSX.Element {
+  return (
+    <UnstyledButton
+      onClick={onPick}
+      aria-pressed={selected}
+      fz={12}
+      fw={selected ? 600 : 400}
+      c={colorForRole(selected ? 'text' : 'textMuted', scheme)}
+      bg={selected ? colorForRole('raised', scheme) : 'transparent'}
+      style={{ padding: '3px 8px', borderRadius: 5, whiteSpace: 'nowrap' }}
+    >
+      {label}
+    </UnstyledButton>
   );
 }
 
