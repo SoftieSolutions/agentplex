@@ -3,10 +3,16 @@ import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-schema.js';
 import {
   pushEndpointSchema,
+  serverAddressSchema,
   sessionIdSchema,
   storeIdSchema,
   type PushSubscription,
+  type ServerRegistrationId,
+  type SessionDescriptor,
 } from '@agentplex/protocol';
+import { readyProvider } from '@agentplex/providers/testing';
+import { createFleetState } from '../fleet-state/fleet-state.js';
+import { createAttentionEdge } from './attention-edge.js';
 import {
   createPush,
   type Push,
@@ -92,6 +98,83 @@ const EDGE: PushEvent = {
   provider: 'claude',
   status: 'awaiting-permission',
 };
+
+/**
+ * The three things a descriptor knows that a lock screen may not be told.
+ *
+ * Distinctive strings rather than plausible ones, so that the assertion they
+ * are used in is a search of the actual payload and not a comparison of two
+ * literals written in the same file.
+ */
+const TELLING_TITLE = 'merge the billing migration';
+const TELLING_CWD = '/srv/work/acme-billing';
+const TELLING_BRANCH = 'spike/price-rules';
+
+const REGISTRATION = 'registration-workshop' as ServerRegistrationId;
+
+function tellingSession(status: SessionDescriptor['status'], updatedAt: number): SessionDescriptor {
+  return {
+    storeId: EDGE.storeId,
+    sessionId: EDGE.sessionId,
+    provider: 'claude',
+    status,
+    updatedAt,
+    cwd: TELLING_CWD,
+    branch: TELLING_BRANCH,
+    title: TELLING_TITLE,
+    uncommitted: null,
+  };
+}
+
+/**
+ * An edge as the hub actually produces one: off a real row, through the real
+ * detector, from a session whose descriptor is as talkative as a real one.
+ *
+ * The reducer and the detector are here rather than a literal because what is
+ * being asked is whether a descriptor's fields can reach a notification, and
+ * the answer has to be read out of the thing that assembles the event rather
+ * than out of the test's own idea of it.
+ */
+function edgeFromATellingRow(): PushEvent {
+  const caught: PushEvent[] = [];
+  const state = createFleetState({ logger });
+  const edge = createAttentionEdge({ notify: (event) => caught.push(event), logger });
+  state.subscribe((snapshot) => edge.observe(snapshot));
+
+  state.applyConnection({
+    registrationId: REGISTRATION,
+    label: 'workshop',
+    address: serverAddressSchema.parse('wss://workshop.example:8443'),
+    serverId: null,
+    phase: 'connected',
+    providers: [readyProvider()],
+    stores: [EDGE.storeId],
+    connectedSince: START,
+    staleSince: null,
+    lastConnectedAt: START,
+    failedAttempts: 0,
+    problem: null,
+    staleReason: null,
+    draining: null,
+  });
+  const report = (session: SessionDescriptor): void => {
+    state.applySessions({
+      registrationId: REGISTRATION,
+      storeId: EDGE.storeId,
+      sessions: [session],
+      holding: [],
+      reportedAt: START,
+    });
+  };
+  // The first report seeds the store, so the prompt has to arrive after it --
+  // which is also the only order in which this hub ever pushes.
+  report(tellingSession('working', START));
+  report(tellingSession('awaiting-permission', START + 1));
+
+  const event = caught[0];
+  if (event === undefined) throw new Error('no edge: the detector said nothing about that row');
+  return event;
+}
 
 describe('the push feature', () => {
   beforeEach(async () => {
@@ -316,16 +399,19 @@ describe('the fan-out', () => {
   it('puts nothing on a lock screen that was not asked for', async () => {
     const push = await loadedWithTwoBrowsers();
 
-    await push.notify(EDGE);
+    // Not the hand-built `EDGE` above: the event is taken off a real row,
+    // through the real detector, because the question is whether anything a
+    // descriptor carries can reach a payload and a literal written in this
+    // file could only ever agree with itself. The row's title, directory and
+    // branch are distinctive strings, and the assertion is over the bytes the
+    // sender was handed -- so a field added to either the event or the
+    // template fails here rather than arriving on somebody's phone.
+    await push.notify(edgeFromATellingRow());
 
-    // The three fields a descriptor carries and a notification may not. They
-    // cannot reach a payload because they never reach a `PushEvent`, and this
-    // is the assertion that says so out loud rather than leaving it to
-    // whoever next adds a field to the template.
     const payload = delivered[0]?.payload ?? '';
     expect(Object.keys(JSON.parse(payload) as object).sort()).toEqual(['body', 'data', 'title']);
-    for (const forbidden of ['title', 'cwd', 'branch'] as const) {
-      expect(Object.keys(EDGE)).not.toContain(forbidden);
+    for (const secret of [TELLING_TITLE, TELLING_CWD, TELLING_BRANCH]) {
+      expect(payload).not.toContain(secret);
     }
   });
 
