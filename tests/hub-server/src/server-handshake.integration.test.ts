@@ -107,6 +107,9 @@ async function startServer(storePaths: readonly string[] = []) {
     // the one thing it will not open: the handshake is what is under test, and
     // a beacon would put datagrams on the network of whoever runs the tests.
     // `null` is what a server without the setting is given.
+    // No socket for permission hooks, which is the server a machine that
+    // could not open one runs: its launches carry no hook.
+    approvals: null,
     announce: null,
   });
 }

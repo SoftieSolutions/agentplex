@@ -123,6 +123,12 @@ export function createCodexAdapter({ files }: CodexAdapterDependencies): Provide
     // of every codex, and an adapter that had to be handed one would be an
     // adapter a caller could hand the wrong one.
     provisioning: createCodexProvisioning(),
+
+    // codex has no hook that fires before a tool call and blocks it, so there
+    // is nothing to point at the gate and no settings file to write. Its
+    // sessions produce no approvals at all, which is a different thing from
+    // producing ones nobody can answer.
+    permissionHook: null,
   };
 }
 

@@ -18,6 +18,7 @@ import type { Clock, Logger, SocketDialer, Timers } from '@agentplex/node-shared
 import type { Pairing } from '../pairing/pairing.js';
 import { createExponentialBackoff, type BackoffPolicy } from './backoff.js';
 import { startDialLoop, type DialLoop } from './dial-loop.js';
+import type { ApprovalRequested, ApprovalSettled, ApprovalWithdrawn } from './frame-router.js';
 import type { HandshakeFailureReason } from './server-handshake.js';
 import { createMessageSocketTransports, type ServerTransportOpener } from './transport.js';
 
@@ -234,6 +235,47 @@ export type StreamAnswer = Extract<
 >;
 
 /**
+ * One decision on its way to the machine holding the blocked process.
+ *
+ * Its own kind of instruction, because it is answered in its own way: there is
+ * no reply on the way it worked. A granted command may run for ten minutes and
+ * the server acknowledges nothing, so `ask` would time the decision out at
+ * thirty seconds and call a working one a failure -- what actually happened
+ * arrives unsolicited as `approval-settled`. Only a refusal comes back, and
+ * only the hub that asked is owed it.
+ */
+export type DecideInstruction = WithoutFrameId<
+  Extract<HubToServerFrame, { type: 'approval-decide' }>
+>;
+
+/**
+ * Why a decision was not put to a hook, in the words a client is told.
+ *
+ * No `hold` and no answer half: nothing here names a live process, and the
+ * only thing this path can say is that nothing was applied.
+ */
+export interface DecideRefusal {
+  readonly code: RefusalCode;
+  readonly problem: string;
+}
+
+/**
+ * What a machine says about its own approvals, unsolicited.
+ *
+ * One object with three methods rather than three dependencies, because they
+ * are one seam: the feature on the other side of it is the only thing that
+ * holds an open request, and a wiring that had two of the three attached would
+ * be a hub that shows a question nobody can end. The frames arrive already
+ * discriminated -- see `frame-router.ts` -- so nothing downstream re-reads a
+ * `type`.
+ */
+export interface ServerApprovalReports {
+  requested(registrationId: ServerRegistrationId, frame: ApprovalRequested): void;
+  withdrawn(registrationId: ServerRegistrationId, frame: ApprovalWithdrawn): void;
+  settled(registrationId: ServerRegistrationId, frame: ApprovalSettled): void;
+}
+
+/**
  * One chunk of a terminal's output, exactly as the frame carries it.
  *
  * On the entry file because the relay reads one, and a feature reaches this one
@@ -337,6 +379,16 @@ export interface ServersDependencies {
    * after what it was meant to position paints somewhere else.
    */
   readonly onStream?: (registrationId: ServerRegistrationId, output: TerminalOutputFrame) => void;
+  /**
+   * Called with everything any server says about an approval. The approvals
+   * feature's seam.
+   *
+   * Carries the registration with every frame, because the machine is what a
+   * decision is addressed to and the frame does not name it: the hub chose the
+   * connection, and a machine telling a hub which machine it is would be a
+   * field nothing could check.
+   */
+  readonly onApprovals?: ServerApprovalReports;
   readonly instructionTimeoutMs?: number;
 }
 
@@ -403,6 +455,26 @@ export interface Servers {
     registrationId: ServerRegistrationId,
     frame: StreamInstruction,
     answer: (outcome: StreamOutcome) => void,
+  ): void;
+  /**
+   * Puts one decision to the machine holding the blocked process, and waits on
+   * nothing.
+   *
+   * `refused` is called when the machine would not take it, and never when it
+   * did: silence is what a server that handed a decision to a hook says, and
+   * what the hook then did comes back unsolicited as `approval-settled`. So
+   * this returns nothing -- a promise here would be a promise most callers
+   * could only resolve by waiting out a deadline, and the caller that matters
+   * is waiting for the settlement rather than for this.
+   *
+   * A machine this hub has no connection to is a refusal rather than a throw,
+   * for the reason `ask` gives, and it is the honest answer: an approval that
+   * cannot be reached is one nobody's tap can apply.
+   */
+  decide(
+    registrationId: ServerRegistrationId,
+    instruction: DecideInstruction,
+    refused: (refusal: DecideRefusal) => void,
   ): void;
   stop(): Promise<void>;
 }
@@ -491,6 +563,9 @@ export function createServers(dependencies: ServersDependencies): Servers {
           ...(dependencies.onChange === undefined ? {} : { onChange: dependencies.onChange }),
           ...(dependencies.onReport === undefined ? {} : { onReport: dependencies.onReport }),
           ...(dependencies.onStream === undefined ? {} : { onStream: dependencies.onStream }),
+          ...(dependencies.onApprovals === undefined
+            ? {}
+            : { onApprovals: dependencies.onApprovals }),
         }),
       );
     }
@@ -534,6 +609,19 @@ export function createServers(dependencies: ServersDependencies): Servers {
         return;
       }
       connection.stream(frame, answer);
+    },
+
+    decide(
+      registrationId: ServerRegistrationId,
+      instruction: DecideInstruction,
+      refused: (refusal: DecideRefusal) => void,
+    ): void {
+      const connection = connections.get(registrationId);
+      if (connection === undefined) {
+        refused({ code: 'refused', problem: 'this hub has no such server paired' });
+        return;
+      }
+      connection.decide(instruction, refused);
     },
 
     async stop(): Promise<void> {

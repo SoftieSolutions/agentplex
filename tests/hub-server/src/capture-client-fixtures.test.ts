@@ -16,13 +16,22 @@ import {
   type SessionDescriptor,
   type SessionHold,
   type StoreDescriptor,
+  type StoreId,
 } from '@agentplex/protocol';
+import { createApprovalGate } from '../../../apps/server/src/approval-gate.js';
+import {
+  createFakeApprovalListener,
+  createFakeHookConnection,
+  hookLine,
+} from '../../../apps/server/src/fake-approval-hooks.js';
+import { createHubAudience } from '../../../apps/server/src/hub-audience.js';
 import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
 import {
   createFakeStoreFiles,
   createFakeProviderAdapter,
   createFakeProviderFiles,
   missingProvider,
+  readProviderFixture,
   readyProvider,
   unauthenticatedProvider,
   unknownProvider,
@@ -254,6 +263,7 @@ function labelFor(text: string): string {
     ['doc-created', 'docCreated'],
     ['doc-saved', 'docSaved'],
     ['doc-content', 'docContent'],
+    ['approval-decided', 'approvalDecided'],
     ['session-unsubscribed', 'sessionUnsubscribed'],
     ['session-subscription-ended', 'sessionSubscriptionEnded'],
     ['protocol-error', 'protocolError'],
@@ -301,6 +311,14 @@ interface Machine {
    * faked, exactly as `terminal-relay.integration.test.ts` does.
    */
   readonly live?: LiveMachine;
+  /**
+   * Whether this machine holds approvals, with the real gate behind it.
+   *
+   * Off for every machine but one, because a server that could not open the
+   * socket its hooks connect to is the shape most of these captures are: a
+   * fleet reporting sessions and nothing blocked on anything.
+   */
+  readonly approvals?: boolean;
 }
 
 /** The shipped server-side terminal path, with a fake pty under it. */
@@ -321,6 +339,19 @@ interface LiveMachine {
 
 const START = 1_756_000_000_000;
 const MINUTE = 60_000;
+
+/**
+ * A real `PermissionRequest` payload, and the session id inside it.
+ *
+ * The same file `approval-gate.test.ts` and the providers' own parser tests
+ * read: a capture taken from a real `claude`, which is what makes the approval
+ * on the captured row a thing an agent actually asked rather than a shape
+ * somebody imagined. The session it names is the session this fleet reports,
+ * for the same reason -- the id on the row and the id in the payload are one
+ * fact, and writing either of them by hand would break that.
+ */
+const BLOCKED_PAYLOAD = await readProviderFixture('claude-permission-request.json');
+const BLOCKED_SESSION = (JSON.parse(BLOCKED_PAYLOAD) as { session_id: string }).session_id;
 const logger = createLogger('error', () => {});
 
 function fleetDialer(
@@ -333,6 +364,14 @@ function fleetDialer(
    * produces is to have the real server end send the real frame.
    */
   served: Map<string, HubConnection>,
+  /**
+   * How to block a hook on a machine that holds approvals, by host.
+   *
+   * Filled in as that machine is dialled, because the gate belongs to the
+   * connection this dial serves -- and a hook cannot block on a server nobody
+   * has connected to yet.
+   */
+  blocks: Map<string, () => void> = new Map(),
 ): SocketDialer {
   return {
     dial: async (address: string): Promise<DialResult> => {
@@ -347,18 +386,49 @@ function fleetDialer(
             ? { reports: machine.reports }
             : { reports: machine.reports, outcome: machine.startOutcome },
         );
-      const connection = serveServerEnd(serverEnd, {
-        // A real scan reads a disk and takes event-loop turns; a fake that
-        // resolved in the same microtask as the handshake would race its
-        // report past the hub attaching its listener, an ordering no real
-        // store scan can produce.
-        sessions: {
-          ...controller,
-          report: async (storeId) => {
-            await new Promise((resolve) => setImmediate(resolve));
-            return controller.report(storeId);
-          },
+      // A real scan reads a disk and takes event-loop turns; a fake that
+      // resolved in the same microtask as the handshake would race its report
+      // past the hub attaching its listener, an ordering no real store scan can
+      // produce.
+      const sessions = {
+        ...controller,
+        report: async (storeId: StoreId) => {
+          await new Promise((resolve) => setImmediate(resolve));
+          return controller.report(storeId);
         },
+      };
+      // The audience is built here rather than left to the default, because a
+      // gate's events reach hubs through it: what a blocked hook produces is
+      // an unsolicited frame to everybody connected, which is the one line
+      // `server.ts` writes.
+      const audience = createHubAudience({ sessions, logger });
+      const listener = createFakeApprovalListener();
+      let mintedApproval = 0;
+      const gate =
+        machine.approvals === true
+          ? createApprovalGate({
+              listener,
+              clock: { now: () => START },
+              ids: { newId: () => `approval-${(mintedApproval += 1)}` },
+              timers: createFakeTimers(),
+              tokens: { newToken: () => 'the-launch-secret' },
+              logger,
+              onEvent: (event) => void audience.tellAll(event),
+            })
+          : null;
+      const store = machine.stores[0];
+      if (gate !== null && store !== undefined) {
+        blocks.set(host, () => {
+          const admission = gate.admit(store.storeId);
+          listener.present(
+            createFakeHookConnection(hookLine(admission.secret, BLOCKED_PAYLOAD)).connection,
+          );
+        });
+      }
+      const connection = serveServerEnd(serverEnd, {
+        sessions,
+        audience,
+        approvals: gate,
         terminals: machine.live?.terminals ?? createFakeTerminals().terminals,
         machineLoad: createFakeMachineLoadReader(),
         identity: { serverId: serverIdSchema.parse(machine.serverId), token: `tok-${host}` },
@@ -524,6 +594,9 @@ function buildLiveMachine(): LiveMachine {
       // resumes a session that names its own directory, and nothing captured
       // here starts in a project.
       browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
+      // No hook socket in these suites: what a launch is handed before it
+      // starts has its own tests on the server side.
+      approvals: null,
       clock,
       logger,
     }),
@@ -598,6 +671,8 @@ async function startFleetHub(
   newRegistrationId: () => string = countingHubIds(),
   /** Each machine's own end, for the capture that needs a server to announce a drain. */
   served: Map<string, HubConnection> = new Map(),
+  /** How to block a hook, for the one capture whose subject is an approval. */
+  blocks: Map<string, () => void> = new Map(),
 ): Promise<{ hub: Hub; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(join(tmpdir(), 'agentplex-capture-'));
   const database = createSqliteDatabase(join(directory, 'hub.db'));
@@ -627,7 +702,7 @@ async function startFleetHub(
     clock,
     clientToken: CLIENT_TOKEN,
     tokens: { newToken: () => `fleet-ticket-${(nextTicket += 1)}` },
-    dialer: fleetDialer(machines, live, served),
+    dialer: fleetDialer(machines, live, served, blocks),
     discovery,
     timers: createFakeTimers(),
     migrationsDirectory,
@@ -1127,6 +1202,102 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const sessionUnmuted = firstFrame(attender, 'sessionUnmuted');
     const refusalAttention = firstFrame(attender, 'refusal');
     await attentive.cleanup();
+
+    // An approval: an agent blocked on a tool call, and what a client is told
+    // when it answers.
+    //
+    // Its own hub over its own one-machine fleet, for the reason the attention
+    // captures have one: a request can only be answered once, so a hub that had
+    // been asked could not be handed back to the next capture clean. The
+    // machine here is the only one in this file that holds approvals -- the
+    // real gate, with only the unix socket a hook would connect on faked --
+    // and the payload the hook presents is the captured one a real `claude`
+    // sent. The session it is reported for is the session in that payload, so
+    // the id on the row and the id in the request are one fact rather than two
+    // that have to be kept in step.
+    const blockedFleet = new Map<string, Machine>([
+      [
+        'mbp-robert.example',
+        {
+          serverId: 'server-mbp',
+          approvals: true,
+          providers: [readyProvider('claude'), readyProvider('codex')],
+          stores: [
+            {
+              storeId: storeIdSchema.parse('store-agentplex'),
+              path: '/Users/robert/code/agentplex',
+            },
+          ],
+          reports: [
+            {
+              storeId: storeIdSchema.parse('store-agentplex'),
+              sessions: [
+                descriptor(
+                  'store-agentplex',
+                  BLOCKED_SESSION,
+                  'claude',
+                  'awaiting-permission',
+                  START - 3 * MINUTE,
+                  '/Users/robert/code/agentplex',
+                  'migrate-db',
+                ),
+              ],
+              holding: [hold(BLOCKED_SESSION, true)],
+            },
+          ],
+        },
+      ],
+    ]);
+    const blocks = new Map<string, () => void>();
+    const asked = await startFleetHub(
+      blockedFleet,
+      [{ label: 'mbp-robert', host: 'mbp-robert.example' }],
+      new Map(),
+      createFakeBeaconSource(),
+      countingHubIds(),
+      new Map(),
+      blocks,
+    );
+    await until(
+      () =>
+        asked.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
+        sessionCount(asked.hub) === 1,
+      () =>
+        `the blocked machine to connect and report: ${JSON.stringify(asked.hub.state.snapshot())}`,
+    );
+
+    const block = blocks.get('mbp-robert.example');
+    if (block === undefined) throw new Error('the machine holding approvals was never dialled');
+    block();
+    await until(
+      () =>
+        asked.hub.state
+          .published()
+          .stores.some((store) => store.sessions.some((row) => row.approvals.length > 0)),
+      'the blocked hook to reach the hub as a pending approval',
+    );
+    const machineStateApproval = await captureState(asked.hub);
+
+    // And the answer to it, which is a receipt about the request rather than
+    // about the tap: it says what became of the approval, and it arrives only
+    // once the machine holding the blocked process has said so.
+    const answering = await openClient(asked.hub);
+    answering.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    await answering.framesReceived(2);
+    answering.send({
+      type: 'approval-decide',
+      id: 2,
+      storeId: 'store-agentplex',
+      sessionId: BLOCKED_SESSION,
+      approvalId: 'approval-1',
+      decision: 'grant',
+    });
+    await until(
+      () => answering.received.some((text) => labelFor(text) === 'approvalDecided'),
+      'the approval to be answered',
+    );
+    const approvalDecided = firstFrame(answering, 'approvalDecided');
+    await asked.cleanup();
 
     // One machine, one store, one provider: the state in which no store or
     // provider narrowing may be drawn, captured rather than derived.
@@ -2425,6 +2596,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('sessionSubscribedPending', sessionSubscribedPending);
     captured.set('terminalOutputPending', terminalOutputPending);
     captured.set('terminalOutputNamed', terminalOutputNamed);
+    captured.set('machineStateApproval', machineStateApproval);
+    captured.set('approvalDecided', approvalDecided);
 
     const entries = [...captured]
       .map(([label, text]) => `  ${label}: ${JSON.stringify(text)},`)

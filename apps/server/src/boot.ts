@@ -11,6 +11,7 @@ import type {
 } from '@agentplex/providers';
 import type { BeaconNetwork } from './server-beacon.js';
 import type { StoreWatcher } from './store-watch.js';
+import type { ApprovalHooks } from './approval-launch.js';
 import { startSessionServer, type SessionServer } from './server.js';
 import type { MachineLoadReader } from './machine-load.js';
 import type { WorkingTree } from './working-tree.js';
@@ -158,6 +159,16 @@ export interface RuntimeDependencies {
    * build. A test drives the whole runtime without a network on the machine.
    */
   readonly beacon: BeaconNetwork;
+  /**
+   * The socket blocked permission hooks connect to, and what a launch is
+   * pointed at, or `null` for a process that opened none.
+   *
+   * Injected for the reason the beacon and the pty are: `main` owns the one
+   * place a socket is bound and the one place this process's own paths are
+   * resolved, and a test starts the whole runtime without either. `null` is a
+   * server whose agents ask at their own terminals.
+   */
+  readonly approvals: ApprovalHooks | null;
   readonly timers: Timers;
   readonly clock: Clock;
 }
@@ -205,6 +216,7 @@ export async function startRuntime(
     workingTree,
     machineLoad,
     beacon,
+    approvals,
     timers,
     clock,
   } = dependencies;
@@ -256,6 +268,7 @@ export async function startRuntime(
     // The setting decides, in the one place that has read it. A server that
     // was not asked to announce is handed no socket to do it with.
     announce: config.announce ? beacon : null,
+    approvals,
   });
 
   logger.info('agentplex server started');

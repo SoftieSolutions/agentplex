@@ -29,6 +29,7 @@ import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
 import { createClients, type Clients } from './clients.js';
+import { createFakeApprovals, type FakeApprovals } from '../approvals/fake-approvals.js';
 import { createFakeAttention, type FakeAttention } from '../attention/fake-attention.js';
 import { createFakePairing, type FakePairing } from '../pairing/fake-pairing.js';
 import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions.js';
@@ -125,6 +126,8 @@ interface Harness {
   readonly docs: FakeDocs;
   /** The relay it hands terminal frames to, which records rather than answers. */
   readonly terminal: FakeTerminal;
+  /** The open requests it hands decisions to, answered by hand. */
+  readonly approvals: FakeApprovals;
 }
 
 /**
@@ -146,6 +149,7 @@ function harness(
   catalogue: FakeCatalogue = createFakeCatalogue(),
   docs: FakeDocs = createFakeDocs(),
   attention: FakeAttention = createFakeAttention(),
+  approvals: FakeApprovals = createFakeApprovals(),
 ): Harness {
   const state = createFleetState({ logger });
   const timers = createFakeTimers();
@@ -161,6 +165,7 @@ function harness(
     writePaneLayout: paneLayout.write ?? (async () => undefined),
     sessions,
     attention,
+    approvals,
     pairing,
     syncServers: async () => {
       syncs += 1;
@@ -176,6 +181,7 @@ function harness(
     broadcast,
     sessions,
     attention,
+    approvals,
     pairing,
     syncs: () => syncs,
     projects,
@@ -1826,5 +1832,102 @@ describe('a client that unpairs a server', () => {
 
     expect(asking.received.at(-1)).toEqual({ type: 'server-unpaired', replyTo: 2 });
     expect(watching.socket.sent.length).toBe(seenByWatcher);
+  });
+});
+
+describe('a client answering an approval', () => {
+  const STORE = 'store-work';
+  const SESSION = 'session-1';
+
+  /** The frame a client sends, with the one id this file spends on it. */
+  const decide = {
+    type: 'approval-decide',
+    id: 2,
+    storeId: STORE,
+    sessionId: SESSION,
+    approvalId: 'approval-1',
+    decision: 'grant',
+  };
+
+  it('says nothing until the machine holding the request says what happened', async () => {
+    const { broadcast, approvals } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say(decide);
+
+    // The frame has gone to the machine and nothing has come back. A receipt
+    // written here would be this hub reporting a grant it cannot see the end
+    // of: the hook it released may run for ten minutes.
+    expect(approvals.decided).toEqual([
+      { ref: { storeId: STORE, sessionId: SESSION }, approvalId: 'approval-1', decision: 'grant' },
+    ]);
+    expect(client.received.some((frame) => frame.type === 'approval-decided')).toBe(false);
+
+    approvals.answer({ ok: true, outcome: 'granted' });
+    await Promise.resolve();
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'approval-decided',
+      replyTo: 2,
+      outcome: 'granted',
+    });
+  });
+
+  it('gives the client that lost the race the ending rather than a refusal', async () => {
+    const { broadcast, approvals } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    await client.say(decide);
+
+    // Somebody else's tap was the one applied. What this client is owed is
+    // what became of the request -- which is exactly what the receipt carries,
+    // and why it has no "you won" on it.
+    approvals.answer({
+      ok: false,
+      outcome: 'granted',
+      code: 'refused',
+      problem: 'that approval was already answered, and is granted',
+    });
+    await Promise.resolve();
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'approval-decided',
+      replyTo: 2,
+      outcome: 'granted',
+    });
+  });
+
+  it('refuses when there is no ending to report, because a receipt would invent one', async () => {
+    const { broadcast, approvals } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    await client.say(decide);
+
+    approvals.answer({
+      ok: false,
+      outcome: null,
+      code: 'refused',
+      problem: 'this hub is holding no approval by that id for that session',
+    });
+    await Promise.resolve();
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+      message: 'this hub is holding no approval by that id for that session',
+      holder: null,
+    });
+  });
+
+  it('needs a hello first, like every other frame on the socket', async () => {
+    const { broadcast, approvals } = harness();
+    const client = attach(broadcast);
+
+    await client.say(decide);
+
+    expect(approvals.decided).toEqual([]);
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', code: 'bad-request' });
   });
 });

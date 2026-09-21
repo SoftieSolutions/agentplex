@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { approvalIdSchema } from './approval.js';
 import { PROTOCOL_VERSION } from './version.js';
 import {
   parseHubToServerFrame,
@@ -606,6 +607,128 @@ describe('parseServerToHubFrame', () => {
   });
 });
 
+describe('the approval frames on the server leg', () => {
+  const A_REQUEST = {
+    type: 'approval-requested',
+    storeId: 'store-1',
+    sessionId: 'session-1',
+    approval: {
+      approvalId: 'approval-7f21',
+      tool: 'Bash',
+      proposal: 'command: prisma migrate deploy --schema ./db',
+      suggestions: [],
+    },
+  };
+
+  it('accepts a request naming the session and what is being asked', () => {
+    expect(parseServerToHubFrame(A_REQUEST).ok).toBe(true);
+  });
+
+  it('strips a date off a request: the hub stamps what it receives', () => {
+    // The rule `store-report` and `server-draining` are shaped by. Two
+    // machines' clocks disagree, so how long an approval has been waiting is
+    // the hub's to say and never the reporting machine's.
+    const parsed = parseServerToHubFrame({ ...A_REQUEST, requestedAt: 1_756_000_000_000 });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).not.toHaveProperty('requestedAt');
+  });
+
+  it('strips the tool input, an argv and a cwd off a request', () => {
+    // The proposal is the whole of what crosses. Anything structured here
+    // would be an argument something downstream could read back out.
+    const parsed = parseServerToHubFrame({
+      ...A_REQUEST,
+      approval: { ...A_REQUEST.approval, toolInput: { command: 'rm -rf /' }, cwd: '/srv/work' },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.value.type !== 'approval-requested') return;
+    expect(parsed.value.approval).not.toHaveProperty('toolInput');
+    expect(parsed.value.approval).not.toHaveProperty('cwd');
+  });
+
+  it('withdraws by id, because an id is what a decision would have named', () => {
+    expect(
+      parseServerToHubFrame({
+        type: 'approval-withdrawn',
+        storeId: 'store-1',
+        sessionId: 'session-1',
+        approvalId: 'approval-7f21',
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('settles an approval with what happened at the hook', () => {
+    expect(
+      parseServerToHubFrame({
+        type: 'approval-settled',
+        storeId: 'store-1',
+        sessionId: 'session-1',
+        approvalId: 'approval-7f21',
+        outcome: 'expired',
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('refuses a settlement that claims a withdrawal', () => {
+    // A withdrawal is nothing having been decided, and it has its own frame.
+    // Two ways to say it would be two facts the hub has to reconcile.
+    expect(
+      parseServerToHubFrame({
+        type: 'approval-settled',
+        storeId: 'store-1',
+        sessionId: 'session-1',
+        approvalId: 'approval-7f21',
+        outcome: 'withdrawn',
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('takes a decision by the id the server itself minted, and no session', () => {
+    // The hub knows this id only because this server said it. Restating the
+    // session beside it would be two fields that have to agree, with the
+    // machine holding the blocked hook as the only source of either.
+    const parsed = parseHubToServerFrame({
+      type: 'approval-decide',
+      id: 21,
+      approvalId: 'approval-7f21',
+      decision: 'deny',
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).not.toHaveProperty('storeId');
+  });
+
+  it('carries no message toward the agent on a denial', () => {
+    // What a denied agent is told is composed where the hook is answered. A
+    // sentence chosen by a client and delivered into an agent's context two
+    // hops away is the surface this protocol keeps shut everywhere else.
+    const parsed = parseHubToServerFrame({
+      type: 'approval-decide',
+      id: 22,
+      approvalId: 'approval-7f21',
+      decision: 'deny',
+      message: 'run it on staging instead',
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).not.toHaveProperty('message');
+  });
+
+  it('refuses a decision spelled as an outcome', () => {
+    // `granted` is what became of an approval; `grant` is the instruction. One
+    // word for both would let a hub say a thing has happened by asking for it.
+    expect(
+      parseHubToServerFrame({
+        type: 'approval-decide',
+        id: 23,
+        approvalId: 'approval-7f21',
+        decision: 'granted',
+      }).ok,
+    ).toBe(false);
+  });
+});
+
 /** The same check as the client half: what one side builds, the other parses. */
 describe('hub and server round trips', () => {
   const hubToServer: readonly HubToServerFrame[] = [
@@ -690,6 +813,12 @@ describe('hub and server round trips', () => {
     { type: 'protocol-error', code: 'bad-request', message: 'type: invalid input' },
     { type: 'directory-list', id: 14, directory: null },
     { type: 'directory-list', id: 15, directory: '/srv/work' },
+    {
+      type: 'approval-decide',
+      id: 16,
+      approvalId: approvalIdSchema.parse('approval-7f21'),
+      decision: 'grant',
+    },
   ];
 
   const serverToHub: readonly ServerToHubFrame[] = [
@@ -801,6 +930,36 @@ describe('hub and server round trips', () => {
       message: '/etc is not under a directory this server will browse',
     },
     { type: 'protocol-error', code: 'protocol-version', message: 'this server speaks version 2' },
+    {
+      type: 'approval-requested',
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      approval: {
+        approvalId: approvalIdSchema.parse('approval-7f21'),
+        tool: 'Bash',
+        proposal: 'command: prisma migrate deploy --schema ./db',
+        suggestions: [
+          {
+            behavior: 'allow',
+            destination: 'projectSettings',
+            rules: [{ tool: 'Bash', content: 'prisma migrate deploy:*' }],
+          },
+        ],
+      },
+    },
+    {
+      type: 'approval-withdrawn',
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      approvalId: approvalIdSchema.parse('approval-7f21'),
+    },
+    {
+      type: 'approval-settled',
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      approvalId: approvalIdSchema.parse('approval-7f21'),
+      outcome: 'granted',
+    },
   ];
 
   it.each(hubToServer)('a server reads back the $type the hub sends', (frame) => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROTOCOL_VERSION,
+  approvalIdSchema,
   machineStateSchema,
   nodeIdSchema,
   serverIdSchema,
@@ -269,6 +270,42 @@ describe('toMachineState', () => {
         problem: null,
       },
     ]);
+  });
+
+  it('carries the open requests onto the row, which is where a client reads them', () => {
+    const state = createFleetState({ logger });
+    state.applyConnection(connection('workshop', 'connected', ['store-work']));
+    state.applySessions({
+      holding: [],
+      registrationId: registration('workshop'),
+      storeId: store('store-work'),
+      sessions: [session('session-1')],
+      reportedAt: START,
+    });
+    const waiting = {
+      approvalId: approvalIdSchema.parse('approval-7f21'),
+      tool: 'Bash',
+      proposal: 'prisma migrate deploy --schema ./db',
+      suggestions: [],
+      requestedAt: START + 500,
+    };
+    state.applyApprovals(
+      { storeId: store('store-work'), sessionId: sessionIdSchema.parse('session-1') },
+      [waiting],
+    );
+
+    const sent = toMachineState(state.snapshot());
+    expect(sent.stores[0]?.sessions[0]?.approvals).toEqual([waiting]);
+    // Through the wire's own parser, because a request a client cannot read is
+    // an agent nobody can unblock.
+    expect(machineStateSchema.safeParse(sent).success).toBe(true);
+  });
+
+  it('publishes an empty list for a session with nothing open', () => {
+    // Empty is the true value and not a placeholder. A codex session has no
+    // hook to ask through and will always publish this, so "nothing is
+    // waiting" must not be the same value as "this build cannot tell you".
+    expect(published().stores[0]?.sessions[0]?.approvals).toEqual([]);
   });
 
   it('publishes the empty state a hub with no pairings has', () => {

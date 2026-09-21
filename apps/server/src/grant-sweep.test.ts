@@ -15,6 +15,7 @@ function audience(grants: readonly string[]) {
     join: () => () => {},
     reportToAll: () => Promise.resolve(),
     reportTo: () => Promise.resolve(),
+    tellAll: () => {},
     disconnect(grantId, reason) {
       const held = live.filter((one) => one === grantId).length;
       if (held > 0) closed.push({ grantId, reason });

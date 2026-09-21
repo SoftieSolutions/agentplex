@@ -18,7 +18,10 @@ import type { BackoffPolicy } from './backoff.js';
 import type { DrainingNotice } from './frame-router.js';
 import type { DialTarget } from './server-handshake.js';
 import type {
+  DecideInstruction,
+  DecideRefusal,
   InstructionOutcome,
+  ServerApprovalReports,
   ServerConnectionPhase,
   ServerConnectionReport,
   ServerStoreReport,
@@ -117,6 +120,21 @@ export interface DialLoopDependencies {
    * subscribe until this loop is holding a connection to put the frame on.
    */
   readonly onStream?: (registrationId: ServerRegistrationId, output: TerminalOutputFrame) => void;
+  /**
+   * Called with everything this server says about its own approvals.
+   *
+   * Straight through like the output above and not buffered like a report,
+   * and for a sharper reason than the terminal's: a request arriving before
+   * the hub had somewhere to put it would be an agent blocked on a question
+   * nobody is ever shown. Nothing produces one until a session on this machine
+   * runs a tool, which is long after a handshake.
+   *
+   * The registration is added here because this is the layer that knows which
+   * machine the socket belongs to, and because a decision is addressed to a
+   * machine: a request held without knowing whose it is could be answered into
+   * the wrong box.
+   */
+  readonly onApprovals?: ServerApprovalReports;
 }
 
 const DEFAULT_REFUSED_RETRY_MS = 60_000;
@@ -166,6 +184,16 @@ export interface DialLoop {
    * of the difference is a sentence saying which server the hub cannot reach.
    */
   stream(frame: StreamInstruction, answer: (outcome: StreamOutcome) => void): void;
+  /**
+   * Puts one approval decision to this server, and calls back only if nothing
+   * was applied.
+   *
+   * Refuses rather than throwing when there is nothing to put it on, for the
+   * reason `ask` does -- and the refusal is what the person who tapped is owed:
+   * the request may well still be open over there, and this hub has no route to
+   * it.
+   */
+  decide(frame: DecideInstruction, refused: (refusal: DecideRefusal) => void): void;
   /**
    * Stops dialling and closes whatever is held. Resolves when the loop has
    * actually finished, so a hub shutdown cannot leave a dial in flight.
@@ -406,6 +434,9 @@ export function startDialLoop(
         noteDraining(notice);
       },
       onOutput: (output) => dependencies.onStream?.(registration.id, output),
+      onApprovalRequested: (frame) => dependencies.onApprovals?.requested(registration.id, frame),
+      onApprovalWithdrawn: (frame) => dependencies.onApprovals?.withdrawn(registration.id, frame),
+      onApprovalSettled: (frame) => dependencies.onApprovals?.settled(registration.id, frame),
     });
   };
 
@@ -575,6 +606,17 @@ export function startDialLoop(
         return;
       }
       transport.stream(frame, answer);
+    },
+    decide(frame: DecideInstruction, refused: (refusal: DecideRefusal) => void): void {
+      const transport = held;
+      if (transport === null) {
+        refused({
+          code: 'refused',
+          problem: `the hub is not connected to ${registration.label}`,
+        });
+        return;
+      }
+      transport.decide(frame, refused);
     },
     stop(): Promise<void> {
       stopped = true;

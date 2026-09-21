@@ -365,16 +365,16 @@ const SESSION = sessionRefSchema.parse({ storeId: STORE.storeId, sessionId: SESS
 function everyArgv() {
   const adapter = adapterOver({});
   const plans = [
-    adapter.spawn({ store: STORE, cwd: CWD, prompt: null }),
-    adapter.spawn({ store: STORE, cwd: CWD, prompt: 'fix the flaky test' }),
-    adapter.resume({ store: STORE, session: SESSION, cwd: CWD }),
+    adapter.spawn({ store: STORE, cwd: CWD, prompt: null, approval: null }),
+    adapter.spawn({ store: STORE, cwd: CWD, prompt: 'fix the flaky test', approval: null }),
+    adapter.resume({ store: STORE, session: SESSION, cwd: CWD, approval: null }),
   ];
   return plans.flatMap((launch) => (launch.ok ? [launch.plan.args] : []));
 }
 
 describe('createClaudeAdapter.spawn', () => {
   it('runs claude in the directory the caller resolved, with no prompt to open with', () => {
-    const spawned = adapterOver({}).spawn({ store: STORE, cwd: CWD, prompt: null });
+    const spawned = adapterOver({}).spawn({ store: STORE, cwd: CWD, prompt: null, approval: null });
 
     expect(spawned).toEqual({
       ok: true,
@@ -396,6 +396,7 @@ describe('createClaudeAdapter.spawn', () => {
       store: STORE,
       cwd: CWD,
       prompt: 'rm -rf / ; echo "not a command"',
+      approval: null,
     });
 
     expect(spawned.ok && spawned.plan.args).toEqual(['rm -rf / ; echo "not a command"']);
@@ -406,7 +407,7 @@ describe('createClaudeAdapter.spawn', () => {
     // own `~/.claude` and the store agentplex is watching never hears about the
     // session it just started. The variable is set *after* the CLAUDE scrub,
     // which is the whole reason the supervisor applies a plan's variables last.
-    const spawned = adapterOver({}).spawn({ store: STORE, cwd: CWD, prompt: null });
+    const spawned = adapterOver({}).spawn({ store: STORE, cwd: CWD, prompt: null, approval: null });
 
     expect(spawned.ok && spawned.plan.env.CLAUDE_CONFIG_DIR).toBe(STORE.path);
     expect(spawned.ok && spawned.plan.scrubEnvPrefixes).toContain('CLAUDE');
@@ -417,6 +418,7 @@ describe('createClaudeAdapter.spawn', () => {
       store: STORE,
       cwd: `${STORE.path}/${CLAUDE_PROJECTS_DIRECTORY}`,
       prompt: null,
+      approval: null,
     });
 
     expect(spawned.ok).toBe(false);
@@ -424,7 +426,12 @@ describe('createClaudeAdapter.spawn', () => {
   });
 
   it('refuses a working directory that is not an absolute path', () => {
-    const spawned = adapterOver({}).spawn({ store: STORE, cwd: 'Code/agentplex', prompt: null });
+    const spawned = adapterOver({}).spawn({
+      store: STORE,
+      cwd: 'Code/agentplex',
+      prompt: null,
+      approval: null,
+    });
 
     expect(spawned.ok).toBe(false);
   });
@@ -432,7 +439,12 @@ describe('createClaudeAdapter.spawn', () => {
 
 describe('createClaudeAdapter.resume', () => {
   it('resumes by session id, in the directory the session already had', () => {
-    const resumed = adapterOver({}).resume({ store: STORE, session: SESSION, cwd: CWD });
+    const resumed = adapterOver({}).resume({
+      store: STORE,
+      session: SESSION,
+      cwd: CWD,
+      approval: null,
+    });
 
     expect(resumed).toEqual({
       ok: true,
@@ -451,7 +463,12 @@ describe('createClaudeAdapter.resume', () => {
     // somebody guessed would silently continue the conversation somewhere it
     // has never run, with every relative path in its history now pointing
     // somewhere else.
-    const resumed = adapterOver({}).resume({ store: STORE, session: SESSION, cwd: null });
+    const resumed = adapterOver({}).resume({
+      store: STORE,
+      session: SESSION,
+      cwd: null,
+      approval: null,
+    });
 
     expect(resumed.ok).toBe(false);
     expect(!resumed.ok && resumed.problem).toContain('working directory');

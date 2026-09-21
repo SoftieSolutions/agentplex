@@ -100,6 +100,20 @@ export interface ProviderAdapter {
    * the provider, and grouping it says so.
    */
   readonly provisioning: ProviderProvisioning;
+
+  /**
+   * How this provider can be made to ask before it runs a tool, or `null` when
+   * it cannot be made to.
+   *
+   * A property for the reason `provisioning` is one: it is a constant of the
+   * provider rather than something answered per store or per session, and a
+   * caller holding an adapter is asking "can this one ask at all" before it has
+   * a launch to plan. A server reads it, writes whatever it is given, and hands
+   * the path back on the next `spawn` or `resume`; it learns no provider's
+   * settings grammar on the way, which is what keeps the second provider with a
+   * hook a new file rather than a branch in the session controller.
+   */
+  readonly permissionHook: PermissionHook | null;
 }
 
 export interface ProviderDiscovery {
@@ -228,6 +242,69 @@ export interface StatusObservation {
   readonly now: number;
 }
 
+/**
+ * How a provider is pointed at the program that asks this machine before a tool
+ * call runs, or `null` for one that cannot be.
+ *
+ * Two halves, and they are deliberately on opposite sides of this seam. What
+ * goes *in* the file -- which event, which key, how a command is spelled -- is
+ * provider knowledge and lives here. *Writing* it is the server's: it is a file
+ * on a disk with a lifetime, owner-only permissions and a removal when the
+ * launch ends, none of which belongs in a pure function that builds argv.
+ *
+ * `null` is a whole answer and not a gap. codex has no hook equivalent at all,
+ * and a provider that cannot ask is one whose sessions simply never produce an
+ * approval -- which is different from producing one nobody can answer.
+ */
+export interface PermissionHook {
+  /**
+   * What the per-launch settings file is called. The provider's vocabulary: a
+   * server writes the name it is given and reads nothing in it.
+   */
+  readonly settingsFileName: string;
+  /**
+   * The document to write in that file, pointing the provider's hook at one
+   * program.
+   *
+   * The timeout is the caller's because the machine holding the blocked process
+   * is the one that has to give up first: the number here and the deadline the
+   * gate expires on are one decision, and two files stating it separately
+   * eventually state it differently.
+   */
+  settings(hook: PermissionHookCommand): string;
+}
+
+export interface PermissionHookCommand {
+  /** The program the provider runs, absolute. Never a shell string this side. */
+  readonly command: string;
+  readonly args: readonly string[];
+  /** How long the provider waits for an answer before giving up, in seconds. */
+  readonly timeoutSeconds: number;
+}
+
+/**
+ * One launch's way of asking, as the launch plan needs it.
+ *
+ * The file is named on argv and everything secret rides in the environment,
+ * which is the split the security of this path rests on: argv is world-readable
+ * through `ps` on every machine agentplex runs on, and a child's environment is
+ * not. Neither half crosses a wire -- a launch is planned on the machine that
+ * will run it, out of a socket that machine opened and a secret it minted.
+ */
+export interface LaunchApproval {
+  /** The per-launch settings file the server wrote, absolute. */
+  readonly settingsFile: string;
+  /**
+   * What the hook needs to find its way back, as variables the provider's child
+   * passes down to it: where to connect, and what to present when it does.
+   *
+   * Opaque here on purpose. The names belong to the program on the other end of
+   * them, which is the server's own hook, and an adapter that knew them would be
+   * a second place they are spelled.
+   */
+  readonly env: Readonly<Record<string, string>>;
+}
+
 export interface SpawnRequest {
   readonly store: StoreDescriptor;
   /**
@@ -256,6 +333,16 @@ export interface SpawnRequest {
    * argv element and no shell ever sees it.
    */
   readonly prompt: string | null;
+  /**
+   * How this launch asks before a tool call, or `null` for one that does not.
+   *
+   * Required rather than optional, and that is the point of it: a Claude
+   * session started without one is a session that will never ask anybody
+   * anything, and the person watching it in agentplex is shown no approval and
+   * told no reason. A field a caller can forget is a feature that stops working
+   * silently, so the compiler is the thing that remembers.
+   */
+  readonly approval: LaunchApproval | null;
 }
 
 export interface ResumeRequest {
@@ -272,6 +359,8 @@ export interface ResumeRequest {
    * provider never recorded one, and an adapter refuses rather than guessing.
    */
   readonly cwd: string | null;
+  /** As on a spawn: this launch's way of asking, or `null` for none. */
+  readonly approval: LaunchApproval | null;
 }
 
 /**

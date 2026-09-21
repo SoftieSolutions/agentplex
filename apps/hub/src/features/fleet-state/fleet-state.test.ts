@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROTOCOL_VERSION,
+  approvalIdSchema,
   nodeIdSchema,
   serverAddressSchema,
   serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
+  type PendingApproval,
   type ServerRegistrationId,
   type SessionDescriptor,
   type StoreId,
@@ -933,5 +935,122 @@ describe('what project a session is in', () => {
     reducer.applyProjects(placements({ ...universe, name: 'universe-renamed' }));
     expect(reducer.snapshot().version).toBeGreaterThan(settled);
     expect(rowFor(reducer, 'session-1')?.project?.name).toBe('universe-renamed');
+  });
+});
+
+describe('what an agent is waiting on', () => {
+  /** A reducer with one connected server and one session in one store. */
+  function reducerWithSession(): FleetState {
+    const reducer = reduce();
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+    reducer.applySessions({
+      holding: [],
+      registrationId: 'registration-laptop' as ServerRegistrationId,
+      storeId: store('store-work'),
+      sessions: [session('session-1', { status: 'awaiting-permission' })],
+      reportedAt: START,
+    });
+    return reducer;
+  }
+
+  const ref = { storeId: store('store-work'), sessionId: sessionIdSchema.parse('session-1') };
+
+  function pending(id: string, requestedAt = START): PendingApproval {
+    return {
+      approvalId: approvalIdSchema.parse(id),
+      tool: 'Bash',
+      proposal: 'prisma migrate deploy --schema ./db',
+      suggestions: [],
+      requestedAt,
+    };
+  }
+
+  it('says nothing is waiting on a session nobody has asked about', () => {
+    const [row] = only(reducerWithSession().snapshot().stores).sessions;
+    // Empty rather than absent, so that "nothing is open" and "this build
+    // cannot tell you" are not one value on any row.
+    expect(row?.approvals).toEqual([]);
+  });
+
+  it('merges the open requests onto the row the servers reported', () => {
+    const reducer = reducerWithSession();
+    reducer.applyApprovals(ref, [pending('approval-7f21')]);
+
+    const [row] = only(reducer.snapshot().stores).sessions;
+    expect(row?.approvals).toEqual([pending('approval-7f21')]);
+    // The machine's own reading is untouched. An approval is not a second
+    // source of status: `awaiting-permission` is what the provider recorded.
+    expect(row?.descriptor.status).toBe('awaiting-permission');
+  });
+
+  it('bumps the version, so the broadcast does not keep serving the row as it was', () => {
+    const reducer = reducerWithSession();
+    const before = reducer.snapshot().version;
+    reducer.applyApprovals(ref, [pending('approval-7f21')]);
+    expect(reducer.snapshot().version).toBeGreaterThan(before);
+  });
+
+  it('changes nothing when told the same list twice', () => {
+    const reducer = reducerWithSession();
+    reducer.applyApprovals(ref, [pending('approval-7f21')]);
+    const settled = reducer.snapshot().version;
+    // Two hubs' worth of frames about one request, or a feature re-announcing
+    // what it already holds. Waking every screen for it would make the version
+    // mean "a server spoke" rather than "something changed".
+    reducer.applyApprovals(ref, [pending('approval-7f21')]);
+    expect(reducer.snapshot().version).toBe(settled);
+  });
+
+  it('bumps the version when a request ends, which is the same list minus one', () => {
+    const reducer = reducerWithSession();
+    reducer.applyApprovals(ref, [pending('approval-7f21'), pending('approval-91c4')]);
+    const waiting = reducer.snapshot().version;
+    reducer.applyApprovals(ref, [pending('approval-91c4')]);
+    expect(reducer.snapshot().version).toBeGreaterThan(waiting);
+    expect(only(reducer.snapshot().stores).sessions[0]?.approvals).toEqual([
+      pending('approval-91c4'),
+    ]);
+  });
+
+  it('bumps the version when one request replaces another of the same length', () => {
+    const reducer = reducerWithSession();
+    reducer.applyApprovals(ref, [pending('approval-7f21')]);
+    const waiting = reducer.snapshot().version;
+    // A settlement and a fresh request between two announcements: a comparison
+    // that counted the list would say nothing had changed and leave a client
+    // answering a question that had already ended.
+    reducer.applyApprovals(ref, [pending('approval-91c4')]);
+    expect(reducer.snapshot().version).toBeGreaterThan(waiting);
+  });
+
+  it('holds a request for a session no server has reported yet, and surfaces it when one does', () => {
+    const reducer = reduce();
+    // The order a redial produces: a machine says an agent is blocked before
+    // its first store report has arrived.
+    reducer.applyApprovals(ref, [pending('approval-7f21')]);
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+    reducer.applySessions({
+      holding: [],
+      registrationId: 'registration-laptop' as ServerRegistrationId,
+      storeId: store('store-work'),
+      sessions: [session('session-1')],
+      reportedAt: START,
+    });
+
+    expect(only(reducer.snapshot().stores).sessions[0]?.approvals).toEqual([
+      pending('approval-7f21'),
+    ]);
+  });
+
+  it('forgets a session whose last request ended, rather than keeping an empty list for it', () => {
+    const reducer = reducerWithSession();
+    reducer.applyApprovals(ref, [pending('approval-7f21')]);
+    reducer.applyApprovals(ref, []);
+    const settled = reducer.snapshot().version;
+
+    expect(only(reducer.snapshot().stores).sessions[0]?.approvals).toEqual([]);
+    // Nothing became nothing, so nothing changed.
+    reducer.applyApprovals(ref, []);
+    expect(reducer.snapshot().version).toBe(settled);
   });
 });

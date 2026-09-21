@@ -36,6 +36,7 @@ import {
   type TerminalManager,
 } from '../../../apps/server/src/terminal-manager.js';
 import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
+import { createFakeApprovals } from '../../../apps/hub/src/features/approvals/fake-approvals.js';
 import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
 import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
@@ -176,6 +177,9 @@ async function start(): Promise<Harness> {
           // this file starts in a project, so no instruction carries a
           // directory to be bounded against.
           browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),
+          // No hook socket in these suites: what a launch is handed before
+          // it starts has its own tests on the server side.
+          approvals: null,
           clock,
           logger,
         }),
@@ -246,6 +250,9 @@ async function start(): Promise<Harness> {
     // Not this suite's subject; the fake keeps the rows in memory and answers
     // the two frames the way the real feature does.
     attention: createFakeAttention(),
+    // Nothing in this file answers an approval; a broadcast built without the
+    // seam would be a different broadcast from the one the hub runs.
+    approvals: createFakeApprovals(),
     pairing,
     syncServers: () => connections.sync(),
     projects: createFakeProjects(),

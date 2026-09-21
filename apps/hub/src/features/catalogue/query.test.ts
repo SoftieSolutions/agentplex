@@ -165,6 +165,7 @@ function fleet(readings: readonly Reading[]): MachineState {
           acknowledgedThrough: null,
           mutedAt: null,
           project: null,
+          approvals: [],
         })),
       },
     ],

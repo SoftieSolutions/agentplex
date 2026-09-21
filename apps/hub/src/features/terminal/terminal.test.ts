@@ -23,6 +23,7 @@ import type {
   StreamOutcome,
   TerminalOutputFrame,
 } from '../servers/servers.js';
+import { NOTHING_PENDING } from '../approvals/approvals.js';
 import { UNATTENDED } from '../attention/attention.js';
 import type { HubStateSnapshot, SessionRow, StoreView } from '../fleet-state/fleet-state.js';
 import {
@@ -170,6 +171,9 @@ function row(
     holder,
     attention: UNATTENDED,
     project: null,
+    // A terminal is watched whether or not the agent in it is blocked on
+    // anything, which is why every case here has nothing open.
+    approvals: NOTHING_PENDING,
   };
 }
 

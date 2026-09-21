@@ -143,6 +143,10 @@ function machine(options: MachineOptions = {}): Machine {
         roots: [...(options.browseRoots ?? [])],
         reader: DISK,
       }),
+      // No approvals here: what a launch is handed before it starts has a
+      // suite of its own, and every rule in this one is about the directory,
+      // the holder and the cap.
+      approvals: null,
       clock,
       logger,
     }),

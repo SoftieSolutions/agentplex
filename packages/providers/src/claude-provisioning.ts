@@ -186,7 +186,10 @@ export function createClaudeProvisioning(): ProviderProvisioning {
       // of sharing the builder: the login lands its credentials in this store
       // because `CLAUDE_CONFIG_DIR` is set the one way it is ever set, and it
       // is scrubbed of the nested-run markers for the same reason a session is.
-      return planClaudeLaunch(request.store, request.cwd, CLAUDE_LOGIN_ARGS);
+      // No approval, and it is not an omission: a login is a person at a
+      // terminal answering a browser, not an agent proposing a tool call, and a
+      // hook pointed at the gate here would admit a launch that never asks.
+      return planClaudeLaunch(request.store, request.cwd, CLAUDE_LOGIN_ARGS, null);
     },
   };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  approvalIdSchema,
   docNameSchema,
   nodeIdSchema,
   parseClientFrame,
@@ -452,6 +453,52 @@ describe('commands', () => {
     // queued acknowledgement ends up worth is decided by whether the session
     // spoke in the meantime -- the rule it already lives by.
     expect(outcome).toEqual({ accepted: true, id: 1, delivery: 'queued' });
+  });
+
+  it('an approval-decided reply says what became of the request, not what the click did', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    // Captured from a real hub answering a real decision. It carries no
+    // approval id and no "you won": `replyTo` says which question this
+    // answers, and the outcome is about the request -- the answer that took
+    // effect may have been another client's.
+    socket.deliver(hubFrames.approvalDecided);
+    expect(h.store.getSnapshot().lastApproval).toEqual({ replyTo: 2, outcome: 'granted' });
+  });
+
+  it('an approval-decided reply clears the refusal that preceded it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.refusal);
+    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
+    socket.deliver(hubFrames.approvalDecided);
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('queues a decision while the connection is down, and sends it whole', async () => {
+    const h = harness();
+    h.store.subscribe(() => {});
+    await settle();
+
+    // A decision made while the connection blinks is still a decision, and it
+    // is safe to hold because the hub answers honestly about a late one:
+    // `withdrawn` if the agent took the question back, `expired` if the hook
+    // stopped waiting. Nothing here has to guess which.
+    const decide: HubCommand = {
+      type: 'approval-decide',
+      storeId: SESSION.storeId,
+      sessionId: SESSION.sessionId,
+      approvalId: approvalIdSchema.parse('approval-1'),
+      decision: 'grant',
+    };
+    expect(h.store.sendCommand(decide)).toMatchObject({ accepted: true, delivery: 'queued' });
+
+    const socket = h.sockets.sockets[0] as FakeSocket;
+    socket.open();
+    socket.deliver(hubFrames.welcome);
+    expect(sentFrames(socket).at(-1)).toEqual({ ...decide, id: 1 });
   });
 
   it('a session-stopped reply clears the refusal that preceded it', async () => {

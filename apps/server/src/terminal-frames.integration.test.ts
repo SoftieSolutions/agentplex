@@ -115,6 +115,9 @@ function harness(scrollbackBytes?: number, socketOptions?: FakeMessageSocketOpti
     providers: [readyProvider()],
     sessions,
     terminals,
+    // No approvals: this file's subject is terminal bytes, and a hook has
+    // nothing to do with them.
+    approvals: null,
     // Nothing to browse. This file's subject is terminal bytes, and a machine
     // with no browse roots is the default one anyway.
     browse: createDirectoryBrowser({ roots: [], reader: createFakeDirectoryReader() }),

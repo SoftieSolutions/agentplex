@@ -65,6 +65,15 @@ const A_SESSION_ROW = {
   acknowledgedThrough: null,
   mutedAt: null,
   project: null,
+  approvals: [],
+};
+
+const A_PENDING_APPROVAL = {
+  approvalId: 'approval-7f21',
+  tool: 'Bash',
+  proposal: 'command: prisma migrate deploy --schema ./db',
+  suggestions: [],
+  requestedAt: 1_100,
 };
 
 describe('serverViewSchema', () => {
@@ -309,6 +318,49 @@ describe('sessionRowSchema', () => {
     const { project, ...without } = A_SESSION_ROW;
     expect(project).toBeNull();
     expect(sessionRowSchema.safeParse(without).success).toBe(false);
+  });
+  it('carries what the agent on this session is waiting for an answer about', () => {
+    const parsed = sessionRowSchema.safeParse({
+      ...A_SESSION_ROW,
+      approvals: [A_PENDING_APPROVAL],
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.approvals[0]?.approvalId).toBe('approval-7f21');
+  });
+
+  it('rejects a row with no approvals field, present and empty being the answer', () => {
+    // The row of a session with nothing pending says so, and so does the row
+    // of a provider that has no such thing to report at all -- codex has no
+    // hook, and an absent list would make "nothing is waiting" and "this build
+    // cannot tell you" one value. A client that reconnects reads every row and
+    // knows, for each of them, exactly what is open.
+    const { approvals, ...without } = A_SESSION_ROW;
+    expect(approvals).toEqual([]);
+    expect(sessionRowSchema.safeParse(without).success).toBe(false);
+  });
+
+  it('refuses an approval the hub has not dated', () => {
+    // Same rule as everything else a server reports: the hub stamps what it
+    // receives, so a pending approval on the wire always says since when.
+    const { requestedAt, ...undated } = A_PENDING_APPROVAL;
+    expect(requestedAt).toBe(1_100);
+    expect(sessionRowSchema.safeParse({ ...A_SESSION_ROW, approvals: [undated] }).success).toBe(
+      false,
+    );
+  });
+
+  it('refuses a status folded into an approval, which would be a second source for one word', () => {
+    // `awaiting-permission` is the provider's own record of the session, read
+    // off the transcript. An approval that also set a status could say a
+    // session is waiting after the provider has recorded that it stopped.
+    const parsed = sessionRowSchema.safeParse({
+      ...A_SESSION_ROW,
+      approvals: [{ ...A_PENDING_APPROVAL, status: 'awaiting-permission' }],
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.approvals[0]).not.toHaveProperty('status');
   });
 });
 

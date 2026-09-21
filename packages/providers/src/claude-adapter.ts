@@ -1,7 +1,11 @@
 import { join } from 'node:path';
 import { sessionIdSchema, type SessionStatus, type StoreDescriptor } from '@agentplex/protocol';
 import type { ProcessProbe } from './process-probe.js';
-import { CLAUDE_DEFAULT_STORE_DIRECTORY, planClaudeLaunch } from './claude-launch.js';
+import {
+  claudePermissionHook,
+  CLAUDE_DEFAULT_STORE_DIRECTORY,
+  planClaudeLaunch,
+} from './claude-launch.js';
 import { createClaudeProvisioning } from './claude-provisioning.js';
 import {
   CLAUDE_SESSIONS_DIRECTORY,
@@ -97,6 +101,7 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
         request.store,
         request.cwd,
         request.prompt === null ? [] : [request.prompt],
+        request.approval,
       );
     },
 
@@ -104,7 +109,12 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
       // `--resume <id>`, and nothing else. Not `--fork-session`, which gives
       // the resumed session a new id: the client goes on watching the
       // transcript it knows while the work continues in a file nobody reads.
-      return planClaudeLaunch(request.store, request.cwd, ['--resume', request.session.sessionId]);
+      return planClaudeLaunch(
+        request.store,
+        request.cwd,
+        ['--resume', request.session.sessionId],
+        request.approval,
+      );
     },
 
     status(observation: StatusObservation): SessionStatus {
@@ -116,6 +126,11 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
     // true of every Claude Code, and an adapter that had to be handed one would
     // be an adapter a caller could hand the wrong one.
     provisioning: createClaudeProvisioning(),
+
+    // The one provider in this build that can be made to ask. What goes in the
+    // file is this adapter's; writing it, and removing it when the launch ends,
+    // is the server's.
+    permissionHook: claudePermissionHook,
   };
 }
 

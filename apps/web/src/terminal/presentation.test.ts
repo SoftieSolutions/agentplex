@@ -85,6 +85,7 @@ function stateWith(overrides?: {
             // places the session nowhere falls back to what it said before the
             // field existed.
             project: overrides?.project ?? null,
+            approvals: [],
           },
         ],
       },
@@ -142,6 +143,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     starts: new Map(),
     lastStopped: null,
     lastAttention: null,
+    lastApproval: null,
     lastListing: null,
     lastTreeChange: null,
     catalogue: null,

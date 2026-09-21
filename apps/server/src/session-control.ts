@@ -10,6 +10,7 @@ import type {
 } from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
 import { type ProviderRegistry, discoverStoreSessions } from '@agentplex/providers';
+import type { LaunchApprovals, OpenLaunchApproval } from './approval-launch.js';
 import type { DirectoryGuard } from './directory-browse.js';
 import type { Terminal, TerminalManager, TerminalOutcome } from './terminal-manager.js';
 import { readWorkingTrees, type WorkingTree } from './working-tree.js';
@@ -77,6 +78,21 @@ export interface SessionControllerDependencies {
    * decides whether a spawn is bounded.
    */
   readonly browse: DirectoryGuard;
+  /**
+   * How a launch is given a way to ask this machine before it runs a tool, or
+   * `null` on a server that has none.
+   *
+   * It is prepared here because here is where a launch is built, and it is
+   * retired when the process ends because a launch is exactly what a hook's
+   * secret belongs to: there is no session id at a spawn -- the provider mints
+   * its own moments later -- so the launch is the only thing there is to key on.
+   *
+   * `null` is a server that could not open the socket hooks connect to, or one
+   * whose providers have no hook to point at it. Its sessions run and its
+   * agents ask at their own terminals, which is what a machine with no
+   * agentplex on it does.
+   */
+  readonly approvals: LaunchApprovals | null;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -155,7 +171,7 @@ export interface SessionController {
 export function createSessionController(
   dependencies: SessionControllerDependencies,
 ): SessionController {
-  const { stores, providers, terminals, workingTree, browse, clock } = dependencies;
+  const { stores, providers, terminals, workingTree, browse, approvals, clock } = dependencies;
   const logger = dependencies.logger.child({ part: 'sessions' });
 
   const storeOf = (storeId: StoreId): StoreDescriptor | undefined =>
@@ -166,6 +182,28 @@ export function createSessionController(
     terminals.terminals.filter(
       (terminal) => terminal.storeId === storeId && terminal.run.exit === null,
     );
+
+  /**
+   * Ties one launch's secret and settings file to the life of its process.
+   *
+   * Both ends of it are here because both are the same fact. A launch that
+   * never started -- an adapter's refusal, a cap with nothing evictable behind
+   * it -- is retired at once rather than leaving a live secret and a file
+   * behind for a process that does not exist; one that did start is retired
+   * when it exits, which is the moment the hook it points at can no longer be
+   * running. `whenExited` settles whatever ended the process, including
+   * an eviction and a shutdown, so there is no path that ends a process and
+   * skips this -- and it settles for a caller that arrives after the exit,
+   * which a subscription would not.
+   */
+  const retireWith = (outcome: TerminalOutcome, opened: OpenLaunchApproval | null): void => {
+    if (opened === null) return;
+    if (!outcome.ok) {
+      opened.close();
+      return;
+    }
+    void outcome.terminal.run.whenExited().then(() => void opened.close());
+  };
 
   const answer = (storeId: StoreId, outcome: TerminalOutcome): SessionOutcome => {
     if (outcome.ok) {
@@ -225,9 +263,20 @@ export function createSessionController(
           return { ok: false, code: cwd.code, problem: cwd.problem, hold: null };
         }
 
-        const launch = adapter.spawn({ store, cwd: cwd.directory, prompt: request.prompt });
+        const opened = await approvals?.open(store, adapter.permissionHook);
+        const launch = adapter.spawn({
+          store,
+          cwd: cwd.directory,
+          prompt: request.prompt,
+          approval: opened?.approval ?? null,
+        });
         const started = terminals.spawn(store, launch);
-        logger.info('session spawn', { storeId: store.storeId, ok: started.ok });
+        retireWith(started, opened ?? null);
+        logger.info('session spawn', {
+          storeId: store.storeId,
+          ok: started.ok,
+          asks: opened !== undefined && opened !== null,
+        });
         return answer(store.storeId, started);
       }
 
@@ -265,9 +314,20 @@ export function createSessionController(
         };
       }
 
-      const launch = adapter.resume({ store, session, cwd: descriptor.cwd });
+      const opened = await approvals?.open(store, adapter.permissionHook);
+      const launch = adapter.resume({
+        store,
+        session,
+        cwd: descriptor.cwd,
+        approval: opened?.approval ?? null,
+      });
       const resumed = terminals.resume(session, launch);
-      logger.info('session resume', { ...session, ok: resumed.ok });
+      retireWith(resumed, opened ?? null);
+      logger.info('session resume', {
+        ...session,
+        ok: resumed.ok,
+        asks: opened !== undefined && opened !== null,
+      });
       return answer(store.storeId, resumed);
     },
 

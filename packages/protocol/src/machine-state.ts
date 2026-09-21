@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { pendingApprovalSchema } from './approval.js';
 import {
   nodeIdSchema,
   serverIdSchema,
@@ -424,6 +425,30 @@ export const sessionRowSchema = z.object({
    * screens that name a project fall back to the storeId they named before.
    */
   project: sessionProjectSchema.nullable(),
+  /**
+   * What the agent on this session is presently blocked asking for.
+   *
+   * Present and empty on every row, which is the half of this that is a
+   * decision rather than a shape. A session with nothing pending says so; so
+   * does a session whose provider has no such thing to report at all -- codex
+   * has no permission hook, so its rows are always empty here -- and an absent
+   * list would make "nothing is waiting" and "this build cannot tell you" one
+   * value that no client could tell apart.
+   *
+   * On the row rather than on a frame of its own, because a pending approval is
+   * a claim about now and the state is where the hub states what is true now. A
+   * client that has just reconnected, or has never connected, reads the rows it
+   * is sent and knows what is open -- with no second channel it could have
+   * missed a frame on, and no fetch to be half way through while the state says
+   * something else. What that costs is the proposal text of every open approval
+   * in every state frame, which is bounded and rarely more than one.
+   *
+   * It is not where `awaiting-permission` comes from. That status is read off
+   * the provider's own record of the session, and a list that also decided a
+   * status would be a second source for one word, free to disagree with the
+   * transcript the moment a hook and a scan land in the wrong order.
+   */
+  approvals: z.array(pendingApprovalSchema),
 });
 export type SessionRow = z.infer<typeof sessionRowSchema>;
 

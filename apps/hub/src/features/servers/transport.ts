@@ -14,7 +14,14 @@ import type {
   Timers,
 } from '@agentplex/node-shared';
 import { startHeartbeat } from './connection-heartbeat.js';
-import { routeServerFrame, type DrainingNotice, type StoreReport } from './frame-router.js';
+import {
+  routeServerFrame,
+  type ApprovalRequested,
+  type ApprovalSettled,
+  type ApprovalWithdrawn,
+  type DrainingNotice,
+  type StoreReport,
+} from './frame-router.js';
 import { createInstructionChannel } from './instruction-channel.js';
 import { createStreamChannel } from './stream-channel.js';
 import {
@@ -23,6 +30,8 @@ import {
   type HandshakeFailureReason,
 } from './server-handshake.js';
 import type {
+  DecideInstruction,
+  DecideRefusal,
   InstructionOutcome,
   ServerInstruction,
   StreamInstruction,
@@ -76,6 +85,17 @@ export interface ServerTransportHandlers {
    * client its history in an order no emulator can undo.
    */
   onOutput(output: TerminalOutputFrame): void;
+  /**
+   * What this server says about its own approvals, unsolicited and already
+   * told apart by the router.
+   *
+   * Three handlers rather than one, for the reason `frame-router.ts` gives:
+   * the union is discriminated once, and what arrives above this is the frame
+   * it is rather than something with a `type` to read again.
+   */
+  onApprovalRequested(frame: ApprovalRequested): void;
+  onApprovalWithdrawn(frame: ApprovalWithdrawn): void;
+  onApprovalSettled(frame: ApprovalSettled): void;
 }
 
 export interface ServerTransport {
@@ -83,6 +103,18 @@ export interface ServerTransport {
   ask(instruction: ServerInstruction): Promise<InstructionOutcome>;
   /** Puts one terminal frame to the server and answers where the reply is read. */
   stream(frame: StreamInstruction, answer: (outcome: StreamOutcome) => void): void;
+  /**
+   * Puts one approval decision to the server and calls back only if it is
+   * refused.
+   *
+   * On the correlating channel rather than the instruction one, because a
+   * server that took a decision says nothing at all: the settlement is
+   * unsolicited and may be ten minutes behind the tool it released. What the
+   * correlation buys is the other case -- a machine that says it is holding no
+   * such approval -- which is the one thing a client that tapped is owed and
+   * cannot learn any other way.
+   */
+  decide(frame: DecideInstruction, refused: (refusal: DecideRefusal) => void): void;
   /**
    * Attaches the handlers for what the server says unprompted. Called once,
    * before anything is awaited, so that nothing the server says in the
@@ -205,6 +237,9 @@ function overSocket(
       onReport: (report) => handlers?.onReport(report),
       onDraining: (notice) => handlers?.onDraining(notice),
       onOutput: (output) => handlers?.onOutput(output),
+      onApprovalRequested: (frame) => handlers?.onApprovalRequested(frame),
+      onApprovalWithdrawn: (frame) => handlers?.onApprovalWithdrawn(frame),
+      onApprovalSettled: (frame) => handlers?.onApprovalSettled(frame),
     });
   });
 
@@ -235,6 +270,16 @@ function overSocket(
   return {
     ask: channel.ask,
     stream: streams.put,
+    decide(frame: DecideInstruction, refused: (refusal: DecideRefusal) => void): void {
+      streams.put(frame, (outcome) => {
+        // Silence is the success, and the deadline that produces it says
+        // nothing happened rather than that something did. Only the refusal is
+        // passed on, which is the whole of what this direction can tell a
+        // client about a decision.
+        if (outcome.ok) return;
+        refused({ code: outcome.code, problem: outcome.problem });
+      });
+    },
     watch(attached: ServerTransportHandlers): void {
       handlers = attached;
     },

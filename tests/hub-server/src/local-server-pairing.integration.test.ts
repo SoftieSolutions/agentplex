@@ -118,6 +118,9 @@ async function startServer({
     dataRoot: '/var/lib/agentplex',
     projectFiles: createFakeProjectFiles(),
     timers: systemTimers,
+    // No socket for permission hooks, which is the server a machine that
+    // could not open one runs: its launches carry no hook.
+    approvals: null,
     announce: null,
   });
 }

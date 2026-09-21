@@ -162,5 +162,11 @@ function toSessionRow(row: ReducedSessionRow): SessionRow {
     // to copy defensively here: both fields are values, and a row is rebuilt
     // rather than mutated whenever the tree says something new.
     project: row.project,
+    // Copied rather than passed through, so that nothing a client is sent
+    // shares an array with the reducer's own. Empty is the true value and not
+    // a placeholder: a provider with no hook to ask through publishes this on
+    // every row, which is what keeps "nothing is waiting" and "this build
+    // cannot tell you" two different answers.
+    approvals: [...row.approvals],
   };
 }

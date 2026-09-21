@@ -4,6 +4,7 @@ import {
   parseHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
+  type ApprovalOutcome,
   type CatalogueItem,
   type CatalogueQuery,
   type ClientFrame,
@@ -297,6 +298,26 @@ export interface AttentionView {
 }
 
 /**
+ * The hub's answer to a decision: what became of the request, in one word.
+ *
+ * Two fields because the frame has two, and the narrowness is the point. It
+ * names no session and no approval -- `replyTo` already says which question
+ * this answers, and the id is spent the moment the request ends -- so nothing
+ * can read a row out of it. What is still pending leaves the session row of
+ * the next machine state, which is where every client reads it, this one
+ * included.
+ *
+ * The outcome is about the request and not about the tap: `granted` may be
+ * somebody else's grant, which is what deciding once means, and `withdrawn`
+ * and `expired` are the two endings where a person answered and nothing
+ * happened. Keeping it is what lets the control that asked say which.
+ */
+export interface ApprovalView {
+  readonly replyTo: FrameId;
+  readonly outcome: ApprovalOutcome;
+}
+
+/**
  * The hub's answer to a browse, kept so the picker that asked can render it.
  *
  * `replyTo` is what joins it to the request, because a picker may have more
@@ -458,6 +479,8 @@ export interface HubSnapshot {
   readonly lastStopped: StoppedView | null;
   /** The hub's most recent yes to an acknowledgement or a mute. */
   readonly lastAttention: AttentionView | null;
+  /** What the hub last said became of an approval this client answered. */
+  readonly lastApproval: ApprovalView | null;
   /** The hub's most recent directory listing, kept until the next one. */
   readonly lastListing: DirectoryListingView | null;
   /** The hub's most recent yes to a project create, kept until the next one. */
@@ -505,6 +528,15 @@ export interface HubSnapshot {
  * when the user clicked — so what a queued acknowledgement ends up worth is
  * decided by whether the session spoke in the meantime, which is the rule an
  * acknowledgement already lives by.
+ *
+ * `approval-decide` is a command for that reason too, and it is the one where
+ * queueing looks riskiest and is not: a decision held over a blink can reach a
+ * hub that has nothing left to apply it to. What makes it safe is that the hub
+ * says so -- `withdrawn` for a question the agent took back, `expired` for a
+ * hook that stopped waiting -- so a late answer is reported as what it was
+ * rather than swallowed or mistaken for a denial. Dropping it instead would
+ * lose the one case that matters most: a person answering the moment they saw
+ * the request, over a connection that blinked while they read it.
  */
 type CommandFrame = Extract<
   ClientFrame,
@@ -514,6 +546,7 @@ type CommandFrame = Extract<
       | 'session-stop'
       | 'session-acknowledge'
       | 'session-mute'
+      | 'approval-decide'
       | 'pane-layout-save'
       | 'directory-list'
       | 'project-create'
@@ -825,6 +858,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     starts: new Map(),
     lastStopped: null,
     lastAttention: null,
+    lastApproval: null,
     lastListing: null,
     lastProjectCreated: null,
     lastTreeChange: null,
@@ -1331,6 +1365,20 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
             acknowledgedThrough: frame.acknowledgedThrough,
             mutedAt: frame.mutedAt,
           },
+        });
+        return;
+      }
+      case 'approval-decided': {
+        pending.delete(frame.replyTo);
+        // Kept the way an attention reply is kept, and clearing the refusal
+        // for the same reason: the last thing the hub said about this client's
+        // frames is now a yes, and a card showing both would put a sentence
+        // about an answered question beside the answer. The outcome is the
+        // whole payload -- what is still open is read off the next machine
+        // state, never out of here.
+        update({
+          lastRefusal: null,
+          lastApproval: { replyTo: frame.replyTo, outcome: frame.outcome },
         });
         return;
       }
