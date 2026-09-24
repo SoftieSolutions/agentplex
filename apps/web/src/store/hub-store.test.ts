@@ -2540,6 +2540,31 @@ describe('graph runs', () => {
     unsubscribe();
   });
 
+  it('takes an open answered as answered: the run is filed, and nothing is left waiting', async () => {
+    // The hub answers an open in the read's shape, addressed to the open, so
+    // the captured read answer is the open's answer once the ids line up.
+    const h = harness({ frameIds: capturedIds(1, 32) });
+    const { socket, unsubscribe } = await establish(h);
+
+    h.store.sendCommand({
+      type: 'graph-run-open',
+      nodeId: nodeIdSchema.parse('hub-14'),
+      runId: 'hub-15' as never,
+    });
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'graph-run-open',
+      id: 32,
+      nodeId: 'hub-14',
+      runId: 'hub-15',
+    });
+    socket.deliver(hubFrames.graphRunLatestFound);
+
+    expect(h.store.getSnapshot().runs.get('hub-15' as never)).toMatchObject({ number: 1 });
+    socket.drop();
+    expect(h.store.getSnapshot().problem).toBeNull();
+    unsubscribe();
+  });
+
   it('keeps the hub’s yes to a cancel', async () => {
     const h = harness();
     const { socket } = await establish(h);
@@ -2572,5 +2597,54 @@ describe('graph runs', () => {
 
     expect(h.store.getSnapshot().runs.size).toBe(0);
     unsubscribe();
+  });
+
+  it('sends a history request and an open of one run as commands', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    h.store.sendCommand({ type: 'graph-run-history-request', nodeId: GRAPH });
+    h.store.sendCommand({ type: 'graph-run-open', nodeId: GRAPH, runId: 'hub-11' as never });
+
+    expect(sentFrames(socket).slice(-2)).toEqual([
+      { type: 'graph-run-history-request', id: 2, nodeId: 'hub-10' },
+      { type: 'graph-run-open', id: 3, nodeId: 'hub-10', runId: 'hub-11' },
+    ]);
+  });
+
+  it('files a history by the graph it names, newest first as the hub sent it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphRunHistory);
+
+    const parsed = JSON.parse(hubFrames.graphRunHistory) as { nodeId: string };
+    const history = h.store.getSnapshot().runHistories.get(parsed.nodeId as never);
+    expect(history?.replyTo).toBe(42);
+    expect(history?.runs.map((run) => run.number)).toEqual([2, 1]);
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('keeps the child a SUB-GRAPH step names on the run it files', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphRunStateSubgraph);
+
+    const [run] = [...h.store.getSnapshot().runs.values()];
+    expect(run?.steps.map((step) => step.child)).toEqual([null, { runId: 'hub-21', number: 2 }]);
+  });
+
+  it('forgets the histories it holds when the connection goes', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.graphRunHistory);
+    expect(h.store.getSnapshot().runHistories.size).toBe(1);
+
+    unsubscribe();
+
+    // A run may have started or ended while nothing here was connected; the
+    // screen asks again on the next welcome.
+    expect(h.store.getSnapshot().runHistories.size).toBe(0);
   });
 });

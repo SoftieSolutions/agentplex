@@ -879,6 +879,29 @@ export function serveClientConnection(
         return;
       }
 
+      case 'graph-run-history-request': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // A reply to the asking client alone, like the node tree's. It also
+        // marks the graph watched, as a read does: the list is drawn beside
+        // the run, and the run's states are how the screen knows to ask again.
+        watch(frame.nodeId);
+        void answerGraphRunHistory(frame.id, frame.nodeId);
+        return;
+      }
+
+      case 'graph-run-open': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        watch(frame.nodeId);
+        void answerGraphRunOpen(frame.id, frame.nodeId, frame.runId);
+        return;
+      }
+
       case 'session-subscribe': {
         if (state !== 'established') {
           helloFirst(frame.id);
@@ -1668,6 +1691,51 @@ export function serveClientConnection(
       logger.error('could not read a run', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not read that graph’s runs');
+    }
+  }
+
+  /**
+   * Answers with the graph's runs newest first, bounded, to this client
+   * alone. An empty list is the answer for a graph that has never run, and
+   * for a node that is no graph: the list of its runs is empty either way.
+   */
+  async function answerGraphRunHistory(replyTo: FrameId, nodeId: NodeId): Promise<void> {
+    try {
+      const runs = await graphRuns.history(nodeId);
+      if (state !== 'established') return;
+      send({ type: 'graph-run-history', replyTo, nodeId, runs: [...runs] });
+    } catch (error) {
+      logger.error('could not read a graph’s run history', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not read that graph’s runs');
+    }
+  }
+
+  /**
+   * Answers one run of the graph, whole, in a `graph-run-latest` addressed to
+   * the open -- the answer shape the read already has, so the client settles
+   * the frame it filed as pending and files the run under its id the same way
+   * -- or a refusal when the graph has no run by that id. Never another graph's run:
+   * the feature checks the pair, so a screen is not handed a run to draw as
+   * its own that belongs to something else.
+   */
+  async function answerGraphRunOpen(
+    replyTo: FrameId,
+    nodeId: NodeId,
+    runId: GraphRunId,
+  ): Promise<void> {
+    try {
+      const run = await graphRuns.open(nodeId, runId);
+      if (state !== 'established') return;
+      if (run === null) {
+        refuse(replyTo, 'refused', 'that graph has no run by that id');
+        return;
+      }
+      send({ type: 'graph-run-latest', replyTo, nodeId, run });
+    } catch (error) {
+      logger.error('could not open a run', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not read that run');
     }
   }
 

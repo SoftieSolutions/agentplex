@@ -136,6 +136,7 @@ describe('lastOutputFor', () => {
         attempt: 0,
         outcome: 'succeeded',
         output: { kind: 'route', route: 0, to: 'review' },
+        child: null,
       },
     });
   });
@@ -149,7 +150,7 @@ describe('lastOutputFor', () => {
     const retried: GraphRunState = {
       ...state(hubFrames.graphRunStateRunning),
       steps: [
-        { nodeId: id('review'), attempt: 0, outcome: 'failed', output: null },
+        { nodeId: id('review'), attempt: 0, outcome: 'failed', output: null, child: null },
         {
           nodeId: id('review'),
           attempt: 1,
@@ -160,6 +161,7 @@ describe('lastOutputFor', () => {
             sessionId: sessionIdSchema.parse('session-9'),
             status: 'idle',
           },
+          child: null,
         },
       ],
     };
@@ -178,6 +180,14 @@ describe('lastOutputText', () => {
     expect(lastOutputText(failed)).toBe('failed');
   });
 
+  it('names the child run a SUB-GRAPH step started, from the captured parent run', () => {
+    const last = lastOutputFor(state(hubFrames.graphRunStateSubgraph), id('smoke'));
+    if (last === null) throw new Error('the SUB-GRAPH has no step');
+
+    expect(last.step.child).toEqual({ runId: 'hub-21', number: 2 });
+    expect(lastOutputText(last)).toBe('child run #2 · succeeded');
+  });
+
   it('reads a router’s choice and an agent’s session in words', () => {
     const routed = lastOutputFor(state(hubFrames.graphRunStateRunning), id('classify'));
     if (routed === null) throw new Error('the router has no step');
@@ -192,6 +202,7 @@ describe('lastOutputText', () => {
           attempt: 0,
           outcome: 'succeeded',
           output: { kind: 'route', route: null, to: id('docs') },
+          child: null,
         },
       }),
     ).toBe('otherwise to docs');
@@ -208,6 +219,7 @@ describe('lastOutputText', () => {
             sessionId: sessionIdSchema.parse('session-9'),
             status: 'awaiting-input',
           },
+          child: null,
         },
       }),
     ).toBe('session session-9 · awaiting-input');

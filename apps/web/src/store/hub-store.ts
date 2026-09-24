@@ -18,6 +18,7 @@ import {
   type GraphPublishedVersion,
   type GraphRunId,
   type GraphRunState,
+  type GraphRunSummary,
   type HubFrame,
   type HubId,
   type Layout,
@@ -586,6 +587,17 @@ export interface RunLatestView {
 }
 
 /**
+ * The hub's answer to a history request: one graph's runs, newest first, at
+ * most the protocol's bound, as summaries without steps. Filed by the graph
+ * it names, so two screens open on two graphs each find their own list.
+ */
+export interface RunHistoryView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+  readonly runs: readonly GraphRunSummary[];
+}
+
+/**
  * The hub's yes to a subscribe or an unsubscribe, kept so the control that
  * asked can stop waiting.
  *
@@ -721,6 +733,14 @@ export interface HubSnapshot {
    * when the connection went, and nothing on this socket will move it.
    */
   readonly runs: ReadonlyMap<GraphRunId, GraphRunState>;
+  /**
+   * Each graph's run history as the hub last answered it, by the graph.
+   *
+   * A reply and never pushed: a screen asks on open, on every reconnection
+   * and when one of its graph's runs moves in a way the list does not show
+   * yet. Dropped with the connection, like `runs`.
+   */
+  readonly runHistories: ReadonlyMap<NodeId, RunHistoryView>;
   /** The hub's most recent yes to a subscribe or an unsubscribe. */
   readonly lastPush: PushView | null;
   /**
@@ -820,6 +840,8 @@ type CommandFrame = Extract<
       | 'graph-run'
       | 'graph-run-cancel'
       | 'graph-run-read'
+      | 'graph-run-history-request'
+      | 'graph-run-open'
       | 'push-subscribe'
       | 'push-unsubscribe'
       | 'session-transcript';
@@ -1162,6 +1184,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastRunCancelled: null,
     lastRunLatest: null,
     runs: new Map(),
+    runHistories: new Map(),
     lastPush: null,
     pushPublicKey: null,
     transcripts: new Map(),
@@ -1943,6 +1966,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         return;
       }
       case 'graph-run-latest': {
+        // The answer to a read, and to an open of one run: either way it is
+        // addressed, and the frame that asked is settled here.
         pending.delete(frame.replyTo);
         // A run in the answer is filed like any state, so that a screen
         // reading its graph's newest out of `runs` finds it there too.
@@ -1952,6 +1977,19 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           lastRunLatest: { replyTo: frame.replyTo, nodeId: frame.nodeId, run: frame.run },
           ...(frame.run === null ? {} : { runs: new Map(runs) }),
         });
+        return;
+      }
+      case 'graph-run-history': {
+        pending.delete(frame.replyTo);
+        // Filed by the graph and replacing the list held for it: the answer
+        // is whole, newest first, as the hub read it.
+        const histories = new Map(snapshot.runHistories);
+        histories.set(frame.nodeId, {
+          replyTo: frame.replyTo,
+          nodeId: frame.nodeId,
+          runs: frame.runs,
+        });
+        update({ lastRefusal: null, runHistories: histories });
         return;
       }
       case 'session-transcript-read': {
@@ -2304,6 +2342,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // A run moves on the hub's own clock. What this store held is where a
       // run was when the socket went, and the next state to arrive is whole.
       runs: new Map(),
+      // A run may have started or ended meanwhile, so a list held from then
+      // is a list nobody can vouch for; the screen asks again.
+      runHistories: new Map(),
       // And the same again: the transcript file goes on being appended to on
       // its own machine while nothing here is connected.
       transcripts: new Map(),

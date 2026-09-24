@@ -104,16 +104,39 @@ export const graphRunStepOutputSchema = z.discriminatedUnion('kind', [
 export type GraphRunStepOutput = z.infer<typeof graphRunStepOutputSchema>;
 
 /**
+ * The run a SUB-GRAPH step started, named and never carried.
+ *
+ * A child is a run of another graph, with its own row, its own number in that
+ * graph and its own states sent to whoever watches that graph. The parent's
+ * step names it -- the id every frame files it under, and the number a person
+ * says -- so that a person reading the parent can follow the link to the
+ * child, and the parent's state stays the size of the parent's own steps
+ * however deep the chain beneath it goes.
+ */
+export const graphRunChildSchema = z.strictObject({
+  runId: graphRunIdSchema,
+  number: z.int().positive(),
+});
+export type GraphRunChild = z.infer<typeof graphRunChildSchema>;
+
+/**
  * One attempt at one node.
  *
  * `output` is what the attempt recorded, in the bounded shape above; `null`
  * while the attempt is running and for an attempt that made nothing.
+ *
+ * `child` is the run a SUB-GRAPH attempt started, from the moment it was
+ * numbered, and `null` on every other step. Required rather than optional: a
+ * record that is silent about a child and one that says there was none would
+ * otherwise be two shapes for one fact. A retried SUB-GRAPH node is a new
+ * child per attempt, so each attempt names its own.
  */
 export const graphRunStepSchema = z.object({
   nodeId: graphNodeIdSchema,
   attempt: z.int().nonnegative(),
   outcome: stepOutcomeSchema,
   output: graphRunStepOutputSchema.nullable(),
+  child: graphRunChildSchema.nullable(),
 });
 export type GraphRunStep = z.infer<typeof graphRunStepSchema>;
 
@@ -147,3 +170,33 @@ export const graphRunStateSchema = z.object({
   steps: z.array(graphRunStepSchema).max(GRAPH_RUN_STEPS_MAX),
 });
 export type GraphRunState = z.infer<typeof graphRunStateSchema>;
+
+/**
+ * The most runs one history answer lists: the graph's newest, and no more.
+ *
+ * A graph run every few minutes for a year is a hundred thousand rows, and a
+ * list nobody scrolls to the bottom of is bytes sent to every screen that
+ * opens it. Fifty is more than a person reads before they would rather ask a
+ * question of the history than scroll it.
+ */
+export const GRAPH_RUN_HISTORY_MAX = 50;
+
+/**
+ * One run as the history list draws it: its name, its number, how it ended
+ * and when, and the sentence it ended with.
+ *
+ * No steps. A history of fifty runs each carrying its step list would be the
+ * frame `graph-run-state` is careful not to be, fifty times over; a person
+ * who wants a run's steps picks the row, and that one run is read whole.
+ * `endedAt` is `null` while the run is still going, and `reason` is `null`
+ * for one that is going or that succeeded, as on the state.
+ */
+export const graphRunSummarySchema = z.strictObject({
+  runId: graphRunIdSchema,
+  number: z.int().positive(),
+  status: runStatusSchema,
+  startedAt: z.int().nonnegative(),
+  endedAt: z.int().nonnegative().nullable(),
+  reason: z.string().nullable(),
+});
+export type GraphRunSummary = z.infer<typeof graphRunSummarySchema>;

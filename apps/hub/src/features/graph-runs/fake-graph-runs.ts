@@ -2,6 +2,7 @@ import {
   graphRunIdSchema,
   type GraphRunId,
   type GraphRunState,
+  type GraphRunSummary,
   type NodeId,
   type RouteInput,
   type SessionStartTag,
@@ -26,10 +27,18 @@ export interface FakeGraphRuns extends GraphRuns {
   readonly cancels: readonly GraphRunId[];
   /** Every read asked for, in order. */
   readonly reads: readonly NodeId[];
+  /** Every history asked for, in order. */
+  readonly histories: readonly NodeId[];
+  /** Every open of one run asked for, in order. */
+  readonly opens: readonly { nodeId: NodeId; runId: GraphRunId }[];
   /** What every later start and cancel answers with, in place of the default yes. */
   refuseWith(refusal: Omit<GraphRunRefusal, 'ok'> | null): void;
   /** What every later read answers with. `null`, the default, is a graph that has never run. */
   answerReadsWith(state: GraphRunState | null): void;
+  /** What every later history answers with. Empty, the default, is a graph never run. */
+  answerHistoryWith(runs: readonly GraphRunSummary[]): void;
+  /** What every later open answers with. `null`, the default, is a run the graph does not have. */
+  answerOpensWith(state: GraphRunState | null): void;
   /** Publishes a state as the real feature would, through `onState`. */
   emit(state: GraphRunState): void;
 }
@@ -42,6 +51,10 @@ export function createFakeGraphRuns(options: FakeGraphRunsOptions = {}): FakeGra
   const starts: { nodeId: NodeId; input: RouteInput }[] = [];
   const cancels: GraphRunId[] = [];
   const reads: NodeId[] = [];
+  const histories: NodeId[] = [];
+  const opens: { nodeId: NodeId; runId: GraphRunId }[] = [];
+  let history: readonly GraphRunSummary[] = [];
+  let opened: GraphRunState | null = null;
   let refusal: Omit<GraphRunRefusal, 'ok'> | null = null;
   let latest: GraphRunState | null = null;
   let minted = 0;
@@ -67,6 +80,16 @@ export function createFakeGraphRuns(options: FakeGraphRunsOptions = {}): FakeGra
       return latest;
     },
 
+    async history(nodeId: NodeId): Promise<readonly GraphRunSummary[]> {
+      histories.push(nodeId);
+      return history;
+    },
+
+    async open(nodeId: NodeId, runId: GraphRunId): Promise<GraphRunState | null> {
+      opens.push({ nodeId, runId });
+      return opened;
+    },
+
     noteStarts(_storeId: StoreId, _starts: readonly SessionStartTag[]): void {},
 
     stop(): void {},
@@ -77,6 +100,14 @@ export function createFakeGraphRuns(options: FakeGraphRunsOptions = {}): FakeGra
 
     answerReadsWith(state: GraphRunState | null): void {
       latest = state;
+    },
+
+    answerHistoryWith(runs: readonly GraphRunSummary[]): void {
+      history = runs;
+    },
+
+    answerOpensWith(state: GraphRunState | null): void {
+      opened = state;
     },
 
     emit(state: GraphRunState): void {
@@ -91,6 +122,12 @@ export function createFakeGraphRuns(options: FakeGraphRunsOptions = {}): FakeGra
     },
     get reads() {
       return reads;
+    },
+    get histories() {
+      return histories;
+    },
+    get opens() {
+      return opens;
     },
   };
 }

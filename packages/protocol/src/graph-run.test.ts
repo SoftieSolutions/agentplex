@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { parseClientFrame, parseHubFrame } from './client.js';
 import {
+  GRAPH_RUN_HISTORY_MAX,
   GRAPH_RUN_OUTPUT_MAX_CHARS,
   GRAPH_RUN_STEPS_MAX,
+  graphRunChildSchema,
   graphRunIdSchema,
+  graphRunSummarySchema,
   graphRunStateSchema,
   graphRunStepOutputSchema,
   graphRunStepSchema,
@@ -25,6 +28,15 @@ const STEP = {
   attempt: 0,
   outcome: 'succeeded',
   output: { kind: 'text', text: '{"language":"rust"}' },
+  child: null,
+};
+const SUMMARY = {
+  runId: RUN_ID,
+  number: 38,
+  status: 'failed',
+  startedAt: 1_756_000_000_000,
+  endedAt: 1_756_000_060_000,
+  reason: 'no route on classify matched and it has no otherwise',
 };
 const SESSION_OUTPUT = {
   kind: 'session',
@@ -88,6 +100,43 @@ describe('the run vocabulary', () => {
       false,
     );
     expect(graphRunStepOutputSchema.safeParse({ kind: 'route', route: 0 }).success).toBe(false);
+  });
+
+  it('names the child run a SUB-GRAPH step started, or null on every other step', () => {
+    const child = { runId: 'run-7', number: 4 };
+    expect(graphRunChildSchema.safeParse(child).success).toBe(true);
+    expect(graphRunStepSchema.safeParse({ ...STEP, child }).success).toBe(true);
+    expect(graphRunStepSchema.parse({ ...STEP, child }).child).toEqual(child);
+    // Required on every step: a record that says nothing about a child is
+    // not a record of a step that had none.
+    const { child: _dropped, ...withoutChild } = STEP;
+    expect(graphRunStepSchema.safeParse(withoutChild).success).toBe(false);
+    expect(graphRunStepSchema.safeParse({ ...STEP, child: { runId: 'run-7' } }).success).toBe(
+      false,
+    );
+    expect(graphRunStepSchema.safeParse({ ...STEP, child: { ...child, number: 0 } }).success).toBe(
+      false,
+    );
+    expect(
+      graphRunChildSchema.safeParse({ ...child, steps: [] }).success,
+      'a child is named, never carried whole',
+    ).toBe(false);
+  });
+
+  it('summarises a run for the history list without its steps', () => {
+    expect(graphRunSummarySchema.parse(SUMMARY)).toEqual(SUMMARY);
+    expect(
+      graphRunSummarySchema.safeParse({
+        ...SUMMARY,
+        status: 'running',
+        endedAt: null,
+        reason: null,
+      }).success,
+    ).toBe(true);
+    expect(graphRunSummarySchema.safeParse({ ...SUMMARY, steps: [STEP] }).success).toBe(false);
+    expect(graphRunSummarySchema.safeParse({ ...SUMMARY, number: 0 }).success).toBe(false);
+    const { endedAt: _endedAt, ...withoutEnd } = SUMMARY;
+    expect(graphRunSummarySchema.safeParse(withoutEnd).success).toBe(false);
   });
 
   it('bounds the one free text a step may record', () => {
@@ -159,6 +208,21 @@ describe('parseClientFrame on the run frames', () => {
     expect(parseClientFrame({ type: 'graph-run-read', id: 3, nodeId: GRAPH }).ok).toBe(true);
     expect(parseClientFrame({ type: 'graph-run-read', id: 3 }).ok).toBe(false);
     expect(parseClientFrame({ type: 'graph-run-read', id: 3, runId: RUN_ID }).ok).toBe(false);
+  });
+
+  it('takes a history request that names the graph and nothing else', () => {
+    expect(parseClientFrame({ type: 'graph-run-history-request', id: 4, nodeId: GRAPH }).ok).toBe(
+      true,
+    );
+    expect(parseClientFrame({ type: 'graph-run-history-request', id: 4 }).ok).toBe(false);
+  });
+
+  it('takes an open of one run that names its graph and the run', () => {
+    expect(
+      parseClientFrame({ type: 'graph-run-open', id: 5, nodeId: GRAPH, runId: RUN_ID }).ok,
+    ).toBe(true);
+    expect(parseClientFrame({ type: 'graph-run-open', id: 5, nodeId: GRAPH }).ok).toBe(false);
+    expect(parseClientFrame({ type: 'graph-run-open', id: 5, runId: RUN_ID }).ok).toBe(false);
   });
 });
 
@@ -245,6 +309,52 @@ describe('parseHubFrame on the run frames', () => {
       step: 2,
       of: 9,
       steps: [STEP],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('answers a history request with the graph and its runs, bounded', () => {
+    const result = parseHubFrame({
+      type: 'graph-run-history',
+      replyTo: 4,
+      nodeId: GRAPH,
+      runs: [SUMMARY, { ...SUMMARY, runId: 'run-37', number: 37 }],
+    });
+    expect(result.ok).toBe(true);
+    expect(
+      parseHubFrame({ type: 'graph-run-history', replyTo: 4, nodeId: GRAPH, runs: [] }).ok,
+    ).toBe(true);
+    expect(parseHubFrame({ type: 'graph-run-history', replyTo: 4, runs: [] }).ok).toBe(false);
+    const tooMany = Array.from({ length: GRAPH_RUN_HISTORY_MAX + 1 }, (_, index) => ({
+      ...SUMMARY,
+      runId: `run-${String(index)}`,
+      number: index + 1,
+    }));
+    expect(
+      parseHubFrame({ type: 'graph-run-history', replyTo: 4, nodeId: GRAPH, runs: tooMany }).ok,
+    ).toBe(false);
+  });
+
+  it('carries a SUB-GRAPH step naming its child run on a state', () => {
+    const result = parseHubFrame({
+      type: 'graph-run-state',
+      nodeId: GRAPH,
+      runId: RUN_ID,
+      number: 38,
+      status: 'running',
+      reason: null,
+      step: 2,
+      of: 3,
+      steps: [
+        STEP,
+        {
+          nodeId: 'lint',
+          attempt: 0,
+          outcome: 'running',
+          output: null,
+          child: { runId: 'run-7', number: 4 },
+        },
+      ],
     });
     expect(result.ok).toBe(true);
   });

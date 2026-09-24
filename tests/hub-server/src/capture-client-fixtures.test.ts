@@ -275,6 +275,11 @@ function labelFor(text: string): string {
     return frame.run === null ? 'graphRunLatestNone' : 'graphRunLatestFound';
   }
   if (frame.type === 'graph-run-state') {
+    // A run whose step started a SUB-GRAPH child is its own reading: the
+    // step names the child the inspector links to.
+    if (frame.status === 'succeeded' && frame.steps.some((step) => step.child !== null)) {
+      return 'graphRunStateSubgraph';
+    }
     // Labelled by where the run is, because those are the readings the strip
     // has to draw apart: live, and each of the three ways a run ends.
     switch (frame.status) {
@@ -317,6 +322,7 @@ function labelFor(text: string): string {
     ['graph-published', 'graphPublished'],
     ['graph-run-started', 'graphRunStarted'],
     ['graph-run-cancelled', 'graphRunCancelled'],
+    ['graph-run-history', 'graphRunHistory'],
     ['approval-decided', 'approvalDecided'],
     ['push-subscribed', 'pushSubscribed'],
     ['push-unsubscribed', 'pushUnsubscribed'],
@@ -2281,6 +2287,76 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const approvalDecidedRun = starter.received.find(answersGateDecision);
     if (approvalDecidedRun === undefined) throw new Error('the grant was not answered');
 
+    // A SUB-GRAPH run. A fifth graph whose one node after the TRIGGER runs
+    // the smoke-test graph at its published v1: the child is a run of the
+    // smoke-test graph, numbered 2 there after its own run above, and the
+    // parent's step names it. Then the smoke-test graph's history, which is
+    // what the list on its screen draws: both of its runs, newest first,
+    // the child's among them under its own number.
+    starter.send({
+      type: 'graph-create',
+      id: 38,
+      projectId: created.value.nodeId,
+      name: 'release-train',
+    });
+    const answersTrainCreate = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-created' && seen.value.replyTo === 38;
+    };
+    await until(() => starter.received.some(answersTrainCreate), 'the parent graph to be made');
+    const trainCreated = starter.received.find(answersTrainCreate);
+    const train = trainCreated === undefined ? null : parseTextFrame(parseHubFrame, trainCreated);
+    if (train === null || !train.ok || train.value.type !== 'graph-created') {
+      throw new Error('the parent graph was not made');
+    }
+    starter.send({
+      type: 'graph-save',
+      id: 39,
+      nodeId: train.value.nodeId,
+      document: {
+        nodes: [
+          { ...graphBase, id: 'start', kind: 'trigger', label: 'Tag pushed', source: 'manual' },
+          {
+            ...graphBase,
+            id: 'smoke',
+            kind: 'subgraph',
+            label: 'Smoke test',
+            position: { x: 250, y: 84 },
+            graph: smoke.value.nodeId,
+            version: 1,
+          },
+        ],
+        edges: [{ from: 'start', to: 'smoke' }],
+      },
+    });
+    starter.send({ type: 'graph-publish', id: 40, nodeId: train.value.nodeId });
+    const answersTrainPublish = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-published' && seen.value.replyTo === 40;
+    };
+    await until(() => starter.received.some(answersTrainPublish), 'the parent graph to publish');
+    starter.send({
+      type: 'graph-run',
+      id: 41,
+      nodeId: train.value.nodeId,
+      input: { tag: 'v2.1.0' },
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunStateSubgraph'),
+      'the parent run to succeed through its child',
+    );
+    const graphRunStateSubgraph = starter.received.find(
+      (text) => labelFor(text) === 'graphRunStateSubgraph',
+    );
+    if (graphRunStateSubgraph === undefined) throw new Error('the parent run did not succeed');
+    starter.send({ type: 'graph-run-history-request', id: 42, nodeId: smoke.value.nodeId });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunHistory'),
+      'the history of the child graph to be answered',
+    );
+    const graphRunHistory = starter.received.find((text) => labelFor(text) === 'graphRunHistory');
+    if (graphRunHistory === undefined) throw new Error('the history was not answered');
+
     // The same save once the machine has gone away, which is the refusal the
     // editor is written around: the hub holds no copy of a document, so a
     // write it cannot deliver is a no with the machine named in it, and what
@@ -3256,6 +3332,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('graphRunStateWaiting', graphRunStateWaiting);
     captured.set('machineStateGraphRunWaiting', machineStateGraphRunWaiting);
     captured.set('approvalDecidedRun', approvalDecidedRun);
+    captured.set('graphRunStateSubgraph', graphRunStateSubgraph);
+    captured.set('graphRunHistory', graphRunHistory);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);
     captured.set('nodeMoved', nodeMoved);
