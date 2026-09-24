@@ -33,6 +33,12 @@
 -- the stored lists are rewritten here to carry `"child": null` on every step
 -- rather than the schema growing a second shape for old rows.
 --
+-- The list is rebuilt in its own order by the aggregate's ORDER BY on the
+-- element's index: without one SQLite documents the order an aggregate sees
+-- its rows in as arbitrary, and a step list is read by position. An ORDER BY
+-- inside an aggregate needs SQLite 3.44; every Node the engines field allows
+-- bundles a newer one in node:sqlite.
+--
 -- ## Indexes
 --
 -- The history list reads one graph's runs newest first, parents or not: a run
@@ -50,7 +56,12 @@ ALTER TABLE graph_runs
 
 UPDATE graph_runs
    SET steps = (
-         SELECT coalesce(json_group_array(json_set(step.value, '$.child', json('null'))), '[]')
+         SELECT coalesce(
+                  json_group_array(
+                    json_set(step.value, '$.child', json('null')) ORDER BY step.key
+                  ),
+                  '[]'
+                )
            FROM json_each(graph_runs.steps) AS step
        );
 

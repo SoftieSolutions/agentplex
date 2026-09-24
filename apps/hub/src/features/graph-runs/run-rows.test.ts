@@ -29,6 +29,7 @@ import {
   replaceSteps,
   runHistory,
   type RunEnd,
+  type RunRow,
 } from './run-rows.js';
 
 /**
@@ -463,7 +464,11 @@ describe('run rows', () => {
 });
 
 describe('0019 over step lists written before it', () => {
-  it('gives every stored step a null child, so an old run still reads back', async () => {
+  /**
+   * Migrates a fresh database up to 0018, stores one run with these steps as
+   * 0018 wrote them, applies 0019 and after, and reads the run back.
+   */
+  async function migratedOver(legacy: readonly object[]): Promise<RunRow | null> {
     const directory = await mkdtemp(join(tmpdir(), 'agentplex-AGX-265-0019-'));
     const database = createSqliteDatabase(join(directory, 'hub.db'));
     try {
@@ -488,7 +493,6 @@ describe('0019 over step lists written before it', () => {
       if (!made.ok) throw new Error(made.problem);
       await graphs.save(made.nodeId, TRIGGER_ONLY);
       await graphs.publish(made.nodeId);
-      const legacy = [{ nodeId: 'start', attempt: 0, outcome: 'succeeded', output: null }];
       await database.query(
         `INSERT INTO graph_runs (id, graph_node_id, version, number, input, steps, status, reason, started_at, ended_at)
          VALUES ('old-run', ?, 1, 1, '{}', ?, 'succeeded', NULL, ?, ?)`,
@@ -499,14 +503,67 @@ describe('0019 over step lists written before it', () => {
         await database.query(migration.sql);
       }
 
-      expect(await readRun(database, graphRunIdSchema.parse('old-run'))).toMatchObject({
-        steps: [{ nodeId: 'start', attempt: 0, outcome: 'succeeded', output: null, child: null }],
-        parentRunId: null,
-        parentNodeId: null,
-      });
+      return await readRun(database, graphRunIdSchema.parse('old-run'));
     } finally {
       await database.close();
       await rm(directory, { recursive: true, force: true });
     }
+  }
+
+  it('gives every stored step a null child, so an old run still reads back', async () => {
+    const legacy = [{ nodeId: 'start', attempt: 0, outcome: 'succeeded', output: null }];
+
+    expect(await migratedOver(legacy)).toMatchObject({
+      steps: [{ nodeId: 'start', attempt: 0, outcome: 'succeeded', output: null, child: null }],
+      parentRunId: null,
+      parentNodeId: null,
+    });
+  });
+
+  /**
+   * A step list is the order the run walked, and the strip, LAST OUTPUT and
+   * a retry's attempt count all read it by position. Enough steps that an
+   * aggregate free to reorder would be caught doing it.
+   */
+  it('keeps a long step list in the order it was written', async () => {
+    const legacy = Array.from({ length: 64 }, (_, index) => ({
+      nodeId: `node-${String(63 - index)}`,
+      attempt: index % 3,
+      outcome: 'succeeded',
+      output: null,
+    }));
+
+    const run = await migratedOver(legacy);
+
+    expect(run?.steps.map((step) => [step.nodeId, step.attempt])).toEqual(
+      legacy.map((step) => [step.nodeId, step.attempt]),
+    );
+    expect(run?.steps.every((step) => step.child === null)).toBe(true);
+  });
+
+  it('leaves an empty step list empty', async () => {
+    expect((await migratedOver([]))?.steps).toEqual([]);
+  });
+
+  it('carries a step’s nested output through the rewrite as it was, JSON text still text', async () => {
+    const legacy = [
+      {
+        nodeId: 'start',
+        attempt: 0,
+        outcome: 'succeeded',
+        output: { kind: 'text', text: '{"language":"rust"}' },
+      },
+      {
+        nodeId: 'classify',
+        attempt: 1,
+        outcome: 'succeeded',
+        output: { kind: 'route', route: 0, to: 'review' },
+      },
+    ];
+
+    expect((await migratedOver(legacy))?.steps).toEqual([
+      { ...legacy[0], child: null },
+      { ...legacy[1], child: null },
+    ]);
   });
 });

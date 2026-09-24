@@ -46,10 +46,17 @@ import type { Executor, WalkOutcome } from './walker.js';
  * child of a graph already on the stack is a cycle, said as one.
  *
  * `SUBGRAPH_DEPTH_LIMIT` bounds the chain of distinct graphs. The root is
- * depth 0, and a child deeper than the limit is refused the same way. In
- * practice `GRAPH_RUNS_MAX_ACTIVE` is reached first on a hub with other runs
- * in flight, since every level of a chain is a run in flight; the depth
- * limit is the bound that holds whatever that cap is set to.
+ * depth 0, and a child deeper than the limit is refused the same way. Every
+ * level of a chain is a run in flight, and the hub-wide cap,
+ * `GRAPH_RUNS_MAX_ACTIVE`, is 8: the root and seven children are eight runs,
+ * so the cap refuses the child at depth 8 before this limit is consulted,
+ * even on a hub with nothing else running. The depth limit is the bound that
+ * holds whatever that cap is set to.
+ *
+ * Both the depth and the cycle check are run-time only, made when the step
+ * is reached. Publish checks that a pin names a published version and walks
+ * no further, so a graph whose chain reaches itself or goes too deep
+ * publishes and then fails its first run at that step, in these words.
  *
  * ## Cancel goes down the chain
  *
