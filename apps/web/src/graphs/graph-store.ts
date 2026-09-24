@@ -17,7 +17,7 @@ import type {
   HubCommand,
   RefusalView,
   RunCancelledView,
-  RunNoneView,
+  RunLatestView,
   RunStartedView,
 } from '../store/hub-store.js';
 import type { GraphEdit } from './graph-model.js';
@@ -81,10 +81,11 @@ import type { GraphEdit } from './graph-model.js';
  * that the hub's restart swept, would otherwise read `live` for ever with
  * Run disabled and Cancel refused. So the store sends `graph-run-read` with
  * the open and again on every drop, marks the run it holds stale until the
- * answer lands, and takes the answer whole: a state for this graph, or the
- * hub's word that it has never run. Run is held while the read is out, for
- * the same reason a second Run is held while a run is live: a run started
- * from another tab, or by this one just as its socket went, is a run.
+ * answer lands, and takes the answer whole: the graph's newest run, or the
+ * hub's word that it has never run, in the one frame that answers the read.
+ * Run is held while the read is out, for the same reason a second Run is
+ * held while a run is live: a run started from another tab, or by this one
+ * just as its socket went, is a run.
  *
  * The run shown is the graph's newest, whoever started it. A state carries
  * its graph, so the store picks the highest-numbered run of this graph out
@@ -100,7 +101,7 @@ export interface GraphStoreHub {
     readonly lastGraphPublished: GraphPublishedView | null;
     readonly lastRunStarted: RunStartedView | null;
     readonly lastRunCancelled: RunCancelledView | null;
-    readonly lastRunNone: RunNoneView | null;
+    readonly lastRunLatest: RunLatestView | null;
     readonly runs: ReadonlyMap<GraphRunId, GraphRunState>;
     readonly lastRefusal: RefusalView | null;
   };
@@ -395,10 +396,15 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       moveTo({ run: newest, readingRun: false });
     }
 
-    const none = snapshot.lastRunNone;
-    if (none !== null && readFrame !== null && none.replyTo === readFrame) {
+    const latest = snapshot.lastRunLatest;
+    if (latest !== null && readFrame !== null && latest.replyTo === readFrame) {
       readFrame = null;
-      moveTo({ run: null, readingRun: false });
+      // A run in the answer was filed in `runs` as well, so the newest there
+      // is at least as new as it; `null` is the graph never having run.
+      moveTo({
+        run: latest.run === null ? null : (newestRun(snapshot.runs) ?? latest.run),
+        readingRun: false,
+      });
     }
 
     const cancelled = snapshot.lastRunCancelled;

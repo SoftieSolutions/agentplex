@@ -88,7 +88,9 @@ export const hubFrames = {
     '{"type":"graph-run-state","nodeId":"hub-10","runId":"hub-13","number":2,"status":"failed","reason":"the ROUTER node Classify diff failed: no route on Classify diff matched and it has no otherwise","step":2,"of":3,"steps":[{"nodeId":"start","attempt":0,"outcome":"succeeded","output":{"kind":"text","text":"{\\"language\\":\\"go\\"}"}},{"nodeId":"classify","attempt":0,"outcome":"failed","output":null}]}',
   graphRunStateSucceeded:
     '{"type":"graph-run-state","nodeId":"hub-14","runId":"hub-15","number":1,"status":"succeeded","reason":null,"step":1,"of":1,"steps":[{"nodeId":"start","attempt":0,"outcome":"succeeded","output":{"kind":"text","text":"{\\"suite\\":\\"nightly\\",\\"language\\":\\"rust\\"}"}}]}',
-  graphRunNone: '{"type":"graph-run-none","replyTo":30,"nodeId":"hub-14"}',
+  graphRunLatestNone: '{"type":"graph-run-latest","replyTo":30,"nodeId":"hub-14","run":null}',
+  graphRunLatestFound:
+    '{"type":"graph-run-latest","replyTo":32,"nodeId":"hub-14","run":{"nodeId":"hub-14","runId":"hub-15","number":1,"status":"succeeded","reason":null,"step":1,"of":1,"steps":[{"nodeId":"start","attempt":0,"outcome":"succeeded","output":{"kind":"text","text":"{\\"suite\\":\\"nightly\\",\\"language\\":\\"rust\\"}"}}]}}',
   layoutWithProject:
     '{"type":"layout","replyTo":13,"nodes":[{"id":"hub-2","parentId":null,"kind":"session","position":0,"name":"fix-auth-refresh","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-fix-auth"}},{"id":"hub-3","parentId":null,"kind":"session","position":1,"name":"spike-wasm","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-spike-wasm"}},{"id":"hub-5","parentId":null,"kind":"project","position":2,"name":"agentplex (main checkout)","named":true,"anchor":null},{"id":"hub-6","parentId":"hub-5","kind":"doc","position":0,"name":"plan.md","named":true,"anchor":null}]}',
   nodeCreated: '{"type":"node-created","replyTo":8,"nodeId":"hub-7"}',

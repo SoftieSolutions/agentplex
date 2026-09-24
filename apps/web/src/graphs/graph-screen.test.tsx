@@ -195,7 +195,7 @@ describe('GraphScreen', () => {
     await act(settle);
     const read = sent(socket).find((each) => each.type === 'graph-run-read');
     if (read === undefined || read.type !== 'graph-run-read') throw new Error('no read was sent');
-    const none = JSON.parse(hubFrames.graphRunNone) as { replyTo: number; nodeId: string };
+    const none = JSON.parse(hubFrames.graphRunLatestNone) as object;
     await act(() => {
       socket.deliver(JSON.stringify({ ...none, replyTo: read.id, nodeId: 'hub-10' }));
     });

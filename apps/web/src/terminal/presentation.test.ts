@@ -159,7 +159,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastGraphPublished: null,
     lastRunStarted: null,
     lastRunCancelled: null,
-    lastRunNone: null,
+    lastRunLatest: null,
     runs: new Map(),
     lastPush: null,
     pushPublicKey: null,

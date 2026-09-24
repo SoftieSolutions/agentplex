@@ -84,6 +84,19 @@ import type { Terminal, TerminalClient } from '../terminal/terminal.js';
 export type ClientConnectionState = 'awaiting-hello' | 'established' | 'closed';
 
 /**
+ * The most graphs one connection is sent run states for.
+ *
+ * A connection is marked as watching a graph when it opens, runs or reads
+ * one, and a tab left open for a week on a big project would otherwise
+ * collect every graph in it and be sent every run on the hub, hundreds of
+ * step records a frame. Sixteen is more graphs than a person has open in
+ * tabs; the one asked about longest ago is forgotten first, and asking about
+ * a graph again moves it to the front. A screen that has been forgotten asks
+ * again when it next opens or reconnects, which is what marks it again.
+ */
+export const WATCHED_GRAPHS_MAX = 16;
+
+/**
  * A machine-state frame, encoded once for everybody, with the version it
  * carries kept alongside so a connection can tell whether it already has it.
  */
@@ -357,8 +370,23 @@ export function serveClientConnection(
 ): ClientConnection {
   let state: ClientConnectionState = 'awaiting-hello';
   let lastVersion: number | null = null;
-  /** The graphs this client has asked about, which is what run states are fanned out by. */
+  /**
+   * The graphs this client has asked about, which is what run states are
+   * fanned out by. In the order they were last asked about, oldest first, and
+   * bounded by `WATCHED_GRAPHS_MAX`.
+   */
   const watchedGraphs = new Set<NodeId>();
+
+  function watch(nodeId: NodeId): void {
+    // Deleted first so that a graph asked about again moves to the end.
+    watchedGraphs.delete(nodeId);
+    watchedGraphs.add(nodeId);
+    while (watchedGraphs.size > WATCHED_GRAPHS_MAX) {
+      const oldest = watchedGraphs.values().next().value;
+      if (oldest === undefined) break;
+      watchedGraphs.delete(oldest);
+    }
+  }
 
   const send = (frame: HubFrame): void => void socket.send(encodeHubFrame(frame));
 
@@ -799,7 +827,7 @@ export function serveClientConnection(
           helloFirst(frame.id);
           return;
         }
-        watchedGraphs.add(frame.nodeId);
+        watch(frame.nodeId);
         void answerGraphOpen(frame.id, frame.nodeId);
         return;
       }
@@ -827,7 +855,7 @@ export function serveClientConnection(
           helloFirst(frame.id);
           return;
         }
-        watchedGraphs.add(frame.nodeId);
+        watch(frame.nodeId);
         void answerGraphRun(frame.id, frame.nodeId, frame.input);
         return;
       }
@@ -846,7 +874,7 @@ export function serveClientConnection(
           helloFirst(frame.id);
           return;
         }
-        watchedGraphs.add(frame.nodeId);
+        watch(frame.nodeId);
         void answerGraphRunRead(frame.id, frame.nodeId);
         return;
       }
@@ -1617,21 +1645,14 @@ export function serveClientConnection(
   }
 
   /**
-   * Answers where the graph's newest run stands: as a `graph-run-state`,
-   * which the client files by the graph on it rather than by this frame, or
-   * as `graph-run-none` for a graph that has never run. The one read on this
-   * socket that is answered by an unsolicited-shaped frame, so that a run
-   * arrives in one shape however a client came to hold it.
+   * Answers where the graph's newest run stands, addressed to the read that
+   * asked: the run whole, or `null` for a graph that has never run.
    */
   async function answerGraphRunRead(replyTo: FrameId, nodeId: NodeId): Promise<void> {
     try {
       const latest = await graphRuns.latest(nodeId);
       if (state !== 'established') return;
-      if (latest === null) {
-        send({ type: 'graph-run-none', replyTo, nodeId });
-        return;
-      }
-      send({ type: 'graph-run-state', ...latest });
+      send({ type: 'graph-run-latest', replyTo, nodeId, run: latest });
     } catch (error) {
       logger.error('could not read a run', { problem: String(error) });
       if (state !== 'established') return;

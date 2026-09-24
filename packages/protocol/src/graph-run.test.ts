@@ -190,8 +190,33 @@ describe('parseHubFrame on the run frames', () => {
   });
 
   it('answers a read of a graph with no run by naming the graph and the frame', () => {
-    expect(parseHubFrame({ type: 'graph-run-none', replyTo: 5, nodeId: GRAPH }).ok).toBe(true);
-    expect(parseHubFrame({ type: 'graph-run-none', replyTo: 5 }).ok).toBe(false);
+    expect(
+      parseHubFrame({ type: 'graph-run-latest', replyTo: 5, nodeId: GRAPH, run: null }).ok,
+    ).toBe(true);
+    expect(parseHubFrame({ type: 'graph-run-latest', replyTo: 5, run: null }).ok).toBe(false);
+    expect(parseHubFrame({ type: 'graph-run-latest', replyTo: 5, nodeId: GRAPH }).ok).toBe(false);
+    // The answer that replaced it; nothing else is spelled that way any more.
+    expect(parseHubFrame({ type: 'graph-run-none', replyTo: 5, nodeId: GRAPH }).ok).toBe(false);
+  });
+
+  it('answers a read of a graph that has run with the run, whole, and the frame it answers', () => {
+    const run = {
+      nodeId: GRAPH,
+      runId: RUN_ID,
+      number: 38,
+      status: 'succeeded',
+      reason: null,
+      step: 1,
+      of: 1,
+      steps: [STEP],
+    };
+    const result = parseHubFrame({ type: 'graph-run-latest', replyTo: 5, nodeId: GRAPH, run });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.type !== 'graph-run-latest') return;
+    expect(result.value.replyTo).toBe(5);
+    expect(result.value.run?.runId).toBe(RUN_ID);
+    // A read without its frame id is not an answer to anything.
+    expect(parseHubFrame({ type: 'graph-run-latest', nodeId: GRAPH, run }).ok).toBe(false);
   });
 
   it('carries the sentence a failed run ended with', () => {

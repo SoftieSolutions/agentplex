@@ -269,6 +269,11 @@ function labelFor(text: string): string {
     // front of them, and bytes that did not.
     return frame.droppedChunks > 0 ? 'terminalOutputDropped' : 'terminalOutput';
   }
+  if (frame.type === 'graph-run-latest') {
+    // Labelled by whether the graph has run, because those are the two answers
+    // a screen takes apart: drop the run it held, or hold this one.
+    return frame.run === null ? 'graphRunLatestNone' : 'graphRunLatestFound';
+  }
   if (frame.type === 'graph-run-state') {
     // Labelled by where the run is, because those are the readings the strip
     // has to draw apart: live, and each of the three ways a run ends.
@@ -310,7 +315,6 @@ function labelFor(text: string): string {
     ['graph-published', 'graphPublished'],
     ['graph-run-started', 'graphRunStarted'],
     ['graph-run-cancelled', 'graphRunCancelled'],
-    ['graph-run-none', 'graphRunNone'],
     ['approval-decided', 'approvalDecided'],
     ['push-subscribed', 'pushSubscribed'],
     ['push-unsubscribed', 'pushUnsubscribed'],
@@ -2142,15 +2146,17 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     };
     await until(() => starter.received.some(answersSmokePublish), 'the second graph to publish');
     // A read of a graph that has never run, which is what a screen asks on
-    // open and on every reconnection: the answer is the frame that says so,
-    // and the store reads it to drop a run it may be holding from before.
+    // open and on every reconnection: the answer says so, and the store reads
+    // it to drop a run it may be holding from before.
     starter.send({ type: 'graph-run-read', id: 30, nodeId: smoke.value.nodeId });
     await until(
-      () => starter.received.some((text) => labelFor(text) === 'graphRunNone'),
+      () => starter.received.some((text) => labelFor(text) === 'graphRunLatestNone'),
       'the read of a graph never run to be answered',
     );
-    const graphRunNone = starter.received.find((text) => labelFor(text) === 'graphRunNone');
-    if (graphRunNone === undefined) throw new Error('the read was not answered');
+    const graphRunLatestNone = starter.received.find(
+      (text) => labelFor(text) === 'graphRunLatestNone',
+    );
+    if (graphRunLatestNone === undefined) throw new Error('the read was not answered');
     starter.send({
       type: 'graph-run',
       id: 31,
@@ -2165,6 +2171,18 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       (text) => labelFor(text) === 'graphRunStateSucceeded',
     );
     if (graphRunStateSucceeded === undefined) throw new Error('the third run did not succeed');
+    // And the same read once it has run: the answer carries the run whole,
+    // addressed to the frame that asked, which is what lets the store stop
+    // waiting on it.
+    starter.send({ type: 'graph-run-read', id: 32, nodeId: smoke.value.nodeId });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunLatestFound'),
+      'the read of a graph that has run to be answered',
+    );
+    const graphRunLatestFound = starter.received.find(
+      (text) => labelFor(text) === 'graphRunLatestFound',
+    );
+    if (graphRunLatestFound === undefined) throw new Error('the second read was not answered');
 
     // The same save once the machine has gone away, which is the refusal the
     // editor is written around: the hub holds no copy of a document, so a
@@ -3135,7 +3153,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('graphRunStateCancelled', graphRunStateCancelled);
     captured.set('graphRunStateFailed', graphRunStateFailed);
     captured.set('graphRunStateSucceeded', graphRunStateSucceeded);
-    captured.set('graphRunNone', graphRunNone);
+    captured.set('graphRunLatestNone', graphRunLatestNone);
+    captured.set('graphRunLatestFound', graphRunLatestFound);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);
     captured.set('nodeMoved', nodeMoved);

@@ -720,10 +720,10 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
    * A run's states arrive unsolicited only while a socket is up; a screen
    * whose socket dropped holds the run where it was when the connection went,
    * and the hub sends nothing about a run that ended meanwhile. So a screen
-   * asks, on open and on every reconnection, and is answered with a
-   * `graph-run-state` for the newest run of that graph or `graph-run-none`
-   * when the graph has never run. Sending it also marks this connection as
-   * watching that graph, which is what run states are fanned out by.
+   * asks, on open and on every reconnection, and is answered with
+   * `graph-run-latest`: the newest run of that graph, or `null` when the
+   * graph has never run. Sending it also marks this connection as watching
+   * that graph, which is what run states are fanned out by.
    */
   z.object({
     type: z.literal('graph-run-read'),
@@ -1353,20 +1353,31 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
    * step, while a tab open on something else has no use for hundreds of step
    * records. It has no `replyTo` because nobody asked for this particular
    * frame: the client that pressed Run was answered by `graph-run-started`, a
-   * `graph-run-read` is answered by the next one of these for its graph, and
-   * everything else is the run moving. The fields are `graphRunStateSchema`'s,
+   * `graph-run-read` by `graph-run-latest`, and everything else is the run
+   * moving. The fields are `graphRunStateSchema`'s,
    * spread here rather than nested so the frame reads like every other frame
    * on this direction.
    */
   z.object({ type: z.literal('graph-run-state'), ...graphRunStateSchema.shape }),
   /**
-   * The graph a read named has never run. Names the graph as well as the
-   * frame, so a screen filing runs by graph can drop the one it held.
+   * The answer to a `graph-run-read`: where the graph's newest run stands,
+   * or `null` when the graph has never run.
+   *
+   * Its own frame rather than a `graph-run-state` with an optional `replyTo`,
+   * because every frame on this direction is either an answer, whose
+   * `replyTo` is required, or unsolicited, and has none. A state that is
+   * sometimes an answer would be the one frame a client has to inspect a
+   * field of to know which, and a client that forgot to would leave the read
+   * waiting for an answer that had already come -- which is what the first
+   * shape of this did. The run is nested rather than spread because it may be
+   * absent, and it names the graph again beside it so that the no-run answer
+   * still says which graph a screen filing runs by graph should drop.
    */
   z.object({
-    type: z.literal('graph-run-none'),
+    type: z.literal('graph-run-latest'),
     replyTo: frameIdSchema,
     nodeId: nodeIdSchema,
+    run: graphRunStateSchema.nullable(),
   }),
   /**
    * The cancel was taken. The run's end arrives as `graph-run-state` with

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   approvalIdSchema,
   docNameSchema,
+  frameIdSchema,
   nodeIdSchema,
   parseClientFrame,
   parseTextFrame,
@@ -2468,6 +2469,22 @@ describe('graph runs', () => {
     });
   });
 
+  /**
+   * Hands out the ids the captured conversation used, in order, so that a
+   * captured answer lands on the command this store sent: the hello, then
+   * each command in turn.
+   */
+  function capturedIds(...ids: number[]): { next(): FrameId } {
+    let at = 0;
+    return {
+      next() {
+        const id = ids[at] ?? 1_000 + at;
+        at += 1;
+        return frameIdSchema.parse(id);
+      },
+    };
+  }
+
   it('sends a read as a command, and keeps the hub’s word that the graph has never run', async () => {
     const h = harness();
     const { socket } = await establish(h);
@@ -2475,12 +2492,38 @@ describe('graph runs', () => {
     h.store.sendCommand({ type: 'graph-run-read', nodeId: GRAPH });
     expect(sentFrames(socket).at(-1)).toEqual({ type: 'graph-run-read', id: 2, nodeId: 'hub-10' });
 
-    socket.deliver(hubFrames.graphRunNone);
+    socket.deliver(hubFrames.graphRunLatestNone);
 
     // The graph the fixture's read named is the one its succeeded run is of.
     const succeeded = JSON.parse(hubFrames.graphRunStateSucceeded) as { nodeId: string };
-    expect(h.store.getSnapshot().lastRunNone).toEqual({ replyTo: 30, nodeId: succeeded.nodeId });
+    expect(h.store.getSnapshot().lastRunLatest).toEqual({
+      replyTo: 30,
+      nodeId: succeeded.nodeId,
+      run: null,
+    });
     expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('takes a read answered with a run as answered: the run is filed, and nothing is left waiting', async () => {
+    const h = harness({ frameIds: capturedIds(1, 32) });
+    const { socket, unsubscribe } = await establish(h);
+
+    h.store.sendCommand({ type: 'graph-run-read', nodeId: nodeIdSchema.parse('hub-14') });
+    expect(sentFrames(socket).at(-1)).toEqual({ type: 'graph-run-read', id: 32, nodeId: 'hub-14' });
+    socket.deliver(hubFrames.graphRunLatestFound);
+
+    const snapshot = h.store.getSnapshot();
+    expect(snapshot.lastRunLatest).toMatchObject({
+      replyTo: 32,
+      nodeId: 'hub-14',
+      run: { runId: 'hub-15', status: 'succeeded' },
+    });
+    expect(snapshot.runs.get('hub-15' as never)).toMatchObject({ number: 1, status: 'succeeded' });
+
+    // The read was answered, so a drop now has nothing to own up to.
+    socket.drop();
+    expect(h.store.getSnapshot().problem).toBeNull();
+    unsubscribe();
   });
 
   it('keeps the hub’s yes to a cancel', async () => {
@@ -2492,7 +2535,7 @@ describe('graph runs', () => {
     expect(h.store.getSnapshot().lastRunCancelled).toEqual({ replyTo: 25, runId: 'hub-11' });
   });
 
-  it('forgets the runs it holds when the connection goes: the next state is whole', async () => {
+  it('forgets the runs it holds when the store is torn down: the next state is whole', async () => {
     const h = harness();
     const { socket, unsubscribe } = await establish(h);
     socket.deliver(hubFrames.graphRunStateRunning);
@@ -2501,5 +2544,19 @@ describe('graph runs', () => {
     unsubscribe();
 
     expect(h.store.getSnapshot().runs.size).toBe(0);
+  });
+
+  it('forgets the runs it holds when the socket drops, while the store stays up', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.graphRunStateRunning);
+    expect(h.store.getSnapshot().runs.size).toBe(1);
+
+    // A run held across a drop is where it was when the socket went, and
+    // nothing will move it: a screen mounted now must not draw it live.
+    socket.drop();
+
+    expect(h.store.getSnapshot().runs.size).toBe(0);
+    unsubscribe();
   });
 });

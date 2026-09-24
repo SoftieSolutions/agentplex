@@ -571,9 +571,13 @@ describe('a graph run over the whole path', () => {
 
     // The other client asked about nothing: it heard nothing of this run.
     expect(runStates(watcher)).toEqual([]);
-    // One that asks afterwards is told where the run stands, whole, by graph.
+    // One that asks afterwards is told where the run stands, whole, in an
+    // answer to the frame that asked.
     await watcher.say({ type: 'graph-run-read', id: 2, nodeId });
-    expect(runStates(watcher)).toEqual([states.at(-1)]);
+    const ended = states.at(-1);
+    if (ended === undefined) throw new Error('the run published no state');
+    const { type: _type, ...run } = ended;
+    expect(watcher.reply(2)).toEqual({ type: 'graph-run-latest', replyTo: 2, nodeId, run });
 
     // The machine forked the prompt as one argv element, in the project's directory.
     expect(held().machine.ptys.opened.map((request) => request.args)).toEqual([[PROMPT]]);
@@ -630,7 +634,12 @@ describe('a graph run over the whole path', () => {
       code: 'refused',
       message: 'no run by that id is in flight',
     });
-    expect(client.reply(5)).toEqual({ type: 'graph-run-none', replyTo: 5, nodeId: created.nodeId });
+    expect(client.reply(5)).toEqual({
+      type: 'graph-run-latest',
+      replyTo: 5,
+      nodeId: created.nodeId,
+      run: null,
+    });
   });
 
   it('carries no forbidden key on any frame in any direction', async () => {

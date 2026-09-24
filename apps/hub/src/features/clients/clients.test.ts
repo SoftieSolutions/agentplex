@@ -30,6 +30,7 @@ import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
 import { createClients, type Clients } from './clients.js';
+import { WATCHED_GRAPHS_MAX } from './client-connection.js';
 import { createFakeApprovals, type FakeApprovals } from '../approvals/fake-approvals.js';
 import {
   createFakeApprovalPolicy,
@@ -2532,7 +2533,7 @@ describe('a graph run', () => {
     expect(elsewhere.received.length).toBe(elsewhereSaw);
   });
 
-  it('answers a read with the graph’s latest run as a state, addressed by the graph and not the frame', async () => {
+  it('answers a read with the graph’s latest run, addressed to the frame that asked', async () => {
     const { broadcast, graphRuns } = harness();
     const client = attach(broadcast);
     await client.hello();
@@ -2542,19 +2543,64 @@ describe('a graph run', () => {
 
     expect(graphRuns.reads).toEqual([GRAPH]);
     expect(client.received.at(-1)).toEqual({
-      type: 'graph-run-state',
-      ...runState(GRAPH, 'succeeded'),
+      type: 'graph-run-latest',
+      replyTo: 2,
+      nodeId: GRAPH,
+      run: runState(GRAPH, 'succeeded'),
     });
   });
 
-  it('answers a read of a graph that has never run with none, naming the graph', async () => {
+  it('answers a read of a graph that has never run with no run, naming the graph', async () => {
     const { broadcast } = harness();
     const client = attach(broadcast);
     await client.hello();
 
     await client.say({ type: 'graph-run-read', id: 2, nodeId: GRAPH });
 
-    expect(client.received.at(-1)).toEqual({ type: 'graph-run-none', replyTo: 2, nodeId: GRAPH });
+    expect(client.received.at(-1)).toEqual({
+      type: 'graph-run-latest',
+      replyTo: 2,
+      nodeId: GRAPH,
+      run: null,
+    });
+  });
+
+  /**
+   * A connection that has been open all week and looked at every graph in a
+   * big project would otherwise be sent every run on the hub. The watched set
+   * is the most recent graphs asked about, and asking again moves a graph to
+   * the front.
+   */
+  it('watches only the graphs most recently asked about, the oldest forgotten first', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    const graphs = Array.from({ length: WATCHED_GRAPHS_MAX + 1 }, (_, index) =>
+      nodeIdSchema.parse(`node-graph-${String(index)}`),
+    );
+    const [first, second] = graphs;
+    if (first === undefined || second === undefined) throw new Error('no graphs');
+    await client.say({ type: 'graph-run-read', id: 2, nodeId: first });
+    await client.say({ type: 'graph-run-read', id: 3, nodeId: second });
+    // The first is asked about again, so the second is now the oldest.
+    await client.say({ type: 'graph-run-read', id: 4, nodeId: first });
+    let id = 5;
+    for (const graph of graphs.slice(2)) {
+      await client.say({ type: 'graph-run-read', id, nodeId: graph });
+      id += 1;
+    }
+    const saw = client.received.length;
+
+    for (const graph of graphs) graphRuns.emit(runState(graph));
+    await Promise.resolve();
+
+    const heard = client.received
+      .slice(saw)
+      .flatMap((frame) => (frame.type === 'graph-run-state' ? [frame.nodeId] : []));
+    expect(heard).toHaveLength(WATCHED_GRAPHS_MAX);
+    expect(heard).toContain(first);
+    expect(heard).not.toContain(second);
+    expect(heard).toContain(graphs.at(-1));
   });
 
   it('refuses a read before hello, and reads nothing', async () => {
