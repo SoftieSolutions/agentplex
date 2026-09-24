@@ -21,6 +21,7 @@ import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js
 import type {
   StartOutcome,
   StartSessionRequest,
+  SessionOutcome,
   StopSessionRequest,
 } from '../sessions/sessions.js';
 import { createAgentExecutor, type AgentExecutor } from './agent-executor.js';
@@ -90,18 +91,24 @@ function descriptor(sessionId: string, status: SessionStatus): SessionDescriptor
   };
 }
 
-/** A start seam whose answer the test releases when it chooses, and that records every stop. */
+/**
+ * A start seam whose answer the test releases when it chooses, and that
+ * records every stop and answers each one only when the test says so.
+ */
 interface DeferredSessions {
   start(request: StartSessionRequest): Promise<StartOutcome>;
-  stop(request: StopSessionRequest): Promise<never>;
+  stop(request: StopSessionRequest): Promise<SessionOutcome>;
   readonly requests: StartSessionRequest[];
   readonly stops: StopSessionRequest[];
   answer(outcome: StartOutcome): void;
+  /** Answers every stop asked for so far with the machine's yes. */
+  answerStops(): void;
 }
 
 function deferredSessions(): DeferredSessions {
   const requests: StartSessionRequest[] = [];
   const stops: StopSessionRequest[] = [];
+  const stopAnswers: ((outcome: SessionOutcome) => void)[] = [];
   let release: ((outcome: StartOutcome) => void) | null = null;
   return {
     requests,
@@ -114,14 +121,19 @@ function deferredSessions(): DeferredSessions {
     },
     stop(request) {
       stops.push(request);
-      // What the machine answered is nobody's business here: the executor
-      // asked and moved on, so the answer is never read.
-      return new Promise<never>(() => {});
+      return new Promise((resolve) => {
+        stopAnswers.push(resolve);
+      });
     },
     answer(outcome) {
       if (release === null) throw new Error('nothing has asked for a start');
       release(outcome);
       release = null;
+    },
+    answerStops() {
+      for (const answer of stopAnswers.splice(0)) {
+        answer({ ok: true, storeId: WORK, sessionId: null, server: ATTIC });
+      }
     },
   };
 }
@@ -139,7 +151,8 @@ describe('the AGENT executor', () => {
   let sessions: DeferredSessions;
   let timers: FakeTimers;
   let executor: AgentExecutor;
-  let cancelListeners: (() => void)[];
+  /** Cancels the run the step belongs to, the way the walker does. */
+  let cancel: () => void;
   let context: StepContext;
   const START_ID = startIdSchema.parse('start-1');
 
@@ -160,16 +173,30 @@ describe('the AGENT executor', () => {
     report([], []);
     sessions = deferredSessions();
     timers = createFakeTimers();
-    cancelListeners = [];
     executor = createAgentExecutor({ sessions, state, timers, logger, namingDeadlineMs: 30_000 });
+    // Shaped like the walker's own: a listener added after the cancel is
+    // called at once, which is what a step that awaits past a cancel meets.
+    const listeners = new Set<() => void>();
+    let cancelled = false;
+    cancel = () => {
+      cancelled = true;
+      for (const listener of [...listeners]) listener();
+      listeners.clear();
+    };
     context = {
       document: { nodes: [NODE], edges: [] },
       attempt: 0,
       cancellation: {
-        cancelled: false,
+        get cancelled() {
+          return cancelled;
+        },
         onCancel: (listener) => {
-          cancelListeners.push(listener);
-          return () => {};
+          if (cancelled) {
+            listener();
+            return () => {};
+          }
+          listeners.add(listener);
+          return () => void listeners.delete(listener);
         },
       },
     };
@@ -314,8 +341,13 @@ describe('the AGENT executor', () => {
       await settle();
       sessions.answer(started(START_ID));
       await settle();
-      for (const listener of cancelListeners) listener();
-      await expect(pending).resolves.toMatchObject({ ok: false });
+      cancel();
+      // Says what will happen to the spawn, which is not being left alone.
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        problem:
+          'the run was cancelled while Rust reviewer was starting; its session will be stopped when a server names it',
+      });
 
       executor.noteStarts(WORK, [{ startId: START_ID, sessionId: LATE }]);
       await settle();
@@ -337,38 +369,61 @@ describe('the AGENT executor', () => {
 
       expect(sessions.stops).toHaveLength(1);
     });
-  });
 
-  describe('two attempts of one run', () => {
-    it('never have two unnamed spawns out at once: the second start waits for the first to be named', async () => {
-      const step = executor.forProject(PROJECT);
-      const first = step(NODE as Extract<GraphNode, { kind: 'agent' }>, {}, context);
+    it('is stopped at once when it was named before the start answered, on a run cancelled meanwhile', async () => {
+      const pending = run();
+      await settle();
+      // The tag lands first, which is the ordinary order, and the run is
+      // cancelled before the start's answer walks back up here.
+      executor.noteStarts(WORK, [{ startId: START_ID, sessionId: LATE }]);
+      cancel();
+      sessions.answer(started(START_ID));
+
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        problem: 'the run was cancelled while Rust reviewer was starting; its session was stopped',
+      });
+      expect(sessions.stops).toEqual([{ storeId: WORK, sessionId: LATE }]);
+    });
+
+    it('is forgotten once its stop is answered, and takes its deadline with it', async () => {
+      const pending = run();
       await settle();
       sessions.answer(started(START_ID));
       await settle();
+      timers.fireAll();
+      await pending;
+      // The naming deadline has fired; what is left is the one that bounds
+      // how long an abandoned start is remembered.
+      expect(timers.pending).toBe(1);
 
-      const second = step(
-        NODE as Extract<GraphNode, { kind: 'agent' }>,
-        {},
-        { ...context, attempt: 1 },
-      );
+      executor.noteStarts(WORK, [{ startId: START_ID, sessionId: LATE }]);
+      await settle();
+      sessions.answerStops();
       await settle();
 
-      // One start asked for, not two: the first spawn has no name yet.
-      expect(sessions.requests).toHaveLength(1);
-
-      executor.noteStarts(WORK, [
-        { startId: START_ID, sessionId: sessionIdSchema.parse('session-9') },
-      ]);
-      await settle();
-      expect(sessions.requests).toHaveLength(2);
-
-      report([descriptor('session-9', 'idle')], []);
-      await expect(first).resolves.toMatchObject({ ok: true });
-      sessions.answer({ ok: false, code: 'refused', problem: 'attic said no', holder: null });
-      await expect(second).resolves.toEqual({ ok: false, problem: 'attic said no' });
+      expect(timers.pending).toBe(0);
     });
 
+    it('is forgotten when nothing names it within a second deadline, and is not stopped after', async () => {
+      const pending = run();
+      await settle();
+      sessions.answer(started(START_ID));
+      await settle();
+      timers.fireAll();
+      await pending;
+      expect(timers.delays).toEqual([30_000]);
+
+      timers.fireAll();
+      executor.noteStarts(WORK, [{ startId: START_ID, sessionId: LATE }]);
+      await settle();
+
+      expect(sessions.stops).toEqual([]);
+      expect(timers.pending).toBe(0);
+    });
+  });
+
+  describe('two attempts of one node', () => {
     it('lets the second start go once the first spawn has passed its deadline', async () => {
       const step = executor.forProject(PROJECT);
       const first = step(NODE as Extract<GraphNode, { kind: 'agent' }>, {}, context);
@@ -520,7 +575,7 @@ describe('the AGENT executor', () => {
       const { pending } = await named();
       report([descriptor('session-9', 'working')], [HELD]);
 
-      for (const listener of cancelListeners) listener();
+      cancel();
 
       await expect(pending).resolves.toEqual({
         ok: false,

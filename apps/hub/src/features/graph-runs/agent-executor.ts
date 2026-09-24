@@ -47,10 +47,22 @@ import { nameOf, type Executor, type StepResult } from './walker.js';
  * process with nobody watching it. It is stopped through `Sessions.stop`, the
  * path every client's stop takes, and the naming is not kept: `abandoned`
  * remembers each start that was given up on so that its late tag is a stop
- * and not an entry in `named` for a start that will never ask again. And a
- * run has at most one unnamed spawn out at a time: a retry waits for the
- * previous attempt's spawn to be named or abandoned before it starts its own,
- * so two attempts of one node never have two PTYs starting at once.
+ * and not an entry in `named` for a start that will never ask again. A spawn
+ * that was named before its start answered, on a run cancelled meanwhile, is
+ * the same process by an earlier road, and it is stopped the same way at once.
+ *
+ * Nothing makes a retry wait for the previous attempt's spawn: attempts are
+ * sequential, and an attempt ends only once its spawn is named or abandoned,
+ * so a retry after a deadline can start while the abandoned spawn is still
+ * coming up. What bounds that leak is abandoned-then-stop -- every abandoned
+ * spawn that ever names itself is stopped -- and not a lock across attempts.
+ *
+ * An abandoned start is remembered until its stop is answered, or for one
+ * more naming deadline if nothing ever names it: a spawn that has said
+ * nothing for twice the deadline is taken to have died, and a hub that
+ * remembered every one for its whole life would grow by one entry per failed
+ * spawn. The cost is that a spawn slower than that is left running; that is
+ * the bargain, made in the direction of a bounded hub.
  *
  * A session that completes a step is a different matter, and it is left
  * alive on purpose. It is the step's output -- the row the next node's
@@ -121,8 +133,37 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
 
   /** Namings that arrived before their start did. */
   const named = new Map<StartId, SessionRef>();
-  /** Starts whose attempt gave up on them, and the session each was later stopped as, if any. */
-  const abandoned = new Map<StartId, { readonly storeId: StoreId; stopped: SessionId | null }>();
+  /**
+   * Starts whose attempt gave up on them, the session each was later stopped
+   * as, if any, and the cancel of the deadline after which it is forgotten.
+   */
+  const abandoned = new Map<
+    StartId,
+    { readonly storeId: StoreId; stopped: SessionId | null; readonly forget: () => void }
+  >();
+
+  /** Remembers a start its attempt gave up on, for a bounded while. */
+  function abandon(startId: StartId, storeId: StoreId): void {
+    const forget = timers.schedule(deadlineMs, () => void abandoned.delete(startId));
+    abandoned.set(startId, { storeId, stopped: null, forget });
+  }
+
+  /** Stops a spawn nobody is waiting for, through the path every stop takes. */
+  function stopSpawn(ref: SessionRef, settled: () => void): void {
+    const failed = (problem: string): void => {
+      logger.warn('a spawn nobody is waiting for could not be stopped', { ...ref, problem });
+    };
+    sessions.stop(ref).then(
+      (stopped) => {
+        if (!stopped.ok) failed(stopped.problem);
+        settled();
+      },
+      (error: unknown) => {
+        failed(String(error));
+        settled();
+      },
+    );
+  }
   /** Starts waiting to be named, with what to do when they are. */
   const awaiting = new Map<
     StartId,
@@ -158,7 +199,7 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
         awaiting.delete(startId);
         cancelDeadline();
         detach();
-        if (ref === null) abandoned.set(startId, { storeId, stopped: null });
+        if (ref === null) abandon(startId, storeId);
         resolve(ref);
       };
       const cancelDeadline = timers.schedule(deadlineMs, () => finish(null));
@@ -253,15 +294,10 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
 
   return {
     forProject(project: NodeId | null): Executor<'agent'> {
-      /** This run's one unnamed spawn, while it has one. */
-      let unnamed: Promise<SessionRef | null> | null = null;
       return async (node, _input, context) => {
         const placed = placeNode(state.snapshot(), node);
         if (!placed.ok) return { ok: false, problem: placed.problem };
 
-        // One unnamed spawn per run: a retry does not start its own while
-        // the previous attempt's is still nameless.
-        if (unnamed !== null) await unnamed;
         if (context.cancellation.cancelled) {
           return {
             ok: false,
@@ -282,18 +318,29 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
         const onCancel = context.cancellation.onCancel.bind(context.cancellation);
         let ref: SessionRef | null;
         if (outcome.sessionId === null) {
-          const naming = awaitNaming(outcome.startId, outcome.storeId, onCancel);
-          unnamed = naming;
-          ref = await naming;
-          if (unnamed === naming) unnamed = null;
+          ref = await awaitNaming(outcome.startId, outcome.storeId, onCancel);
         } else {
           ref = { storeId: outcome.storeId, sessionId: outcome.sessionId };
+        }
+        if (ref !== null && context.cancellation.cancelled) {
+          // Named before the start answered, and the run was cancelled in
+          // between: the spawn is this step's and nobody will wait on it.
+          logger.info('a run was cancelled as its spawn was named; stopping it', {
+            node: node.id,
+            startId: outcome.startId,
+            ...ref,
+          });
+          stopSpawn(ref, () => {});
+          return {
+            ok: false,
+            problem: `the run was cancelled while ${nameOf(node)} was starting; its session was stopped`,
+          };
         }
         if (ref === null) {
           if (context.cancellation.cancelled) {
             return {
               ok: false,
-              problem: `the run was cancelled while ${nameOf(node)} was starting; its session was left alone`,
+              problem: `the run was cancelled while ${nameOf(node)} was starting; its session will be stopped when a server names it`,
             };
           }
           const where =
@@ -330,22 +377,14 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
             startId: tag.startId,
             ...ref,
           });
-          sessions.stop(ref).then(
-            (stopped) => {
-              if (!stopped.ok) {
-                logger.warn('a late-named spawn could not be stopped', {
-                  ...ref,
-                  problem: stopped.problem,
-                });
-              }
-            },
-            (error: unknown) => {
-              logger.warn('a late-named spawn could not be stopped', {
-                ...ref,
-                problem: String(error),
-              });
-            },
-          );
+          const startId = tag.startId;
+          // Forgotten once the stop is answered, whichever way: the session
+          // it named is gone or refused, and either way nothing here will
+          // stop it again.
+          stopSpawn(ref, () => {
+            givenUp.forget();
+            abandoned.delete(startId);
+          });
           continue;
         }
         const waiting = awaiting.get(tag.startId);

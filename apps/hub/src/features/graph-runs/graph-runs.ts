@@ -287,11 +287,25 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
           byGraph.delete(nodeId);
           return refused('this graph has no published version to run; publish it first');
         }
+        // Checked again after every await: stop() cancels the runs it finds
+        // in `active`, and a run that joined after it looked would be walked
+        // by nobody's stop into a database being closed.
+        if (stopped) {
+          byGraph.delete(nodeId);
+          return refused('the hub is stopping');
+        }
         const { runId, number } = await insertRun(database, ids, clock, {
           graphNodeId: nodeId,
           version: published.version,
           input,
         });
+        if (stopped) {
+          byGraph.delete(nodeId);
+          logger.info('a run was numbered as the hub stopped; the next boot sweeps its row', {
+            runId,
+          });
+          return refused('the hub is stopping');
+        }
         document = published.document;
         run = {
           nodeId,

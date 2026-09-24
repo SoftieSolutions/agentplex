@@ -630,6 +630,26 @@ describe('graph runs', () => {
         problem: 'the hub is stopping',
       });
     });
+
+    it('refuses a start that was already reading when the stop came, and walks nothing', async () => {
+      const h = build();
+      const graph = await publishedGraph(h);
+      h.agent.answerWith('hang');
+
+      // Past the first check and awaiting the graph's rows when the stop
+      // lands: stop() has already snapshotted what is in flight, so a run
+      // that joined afterwards would be walked by nobody's stop.
+      const starting = h.runs.start(graph, { language: 'rust' });
+      h.runs.stop();
+
+      await expect(starting).resolves.toMatchObject({
+        ok: false,
+        problem: 'the hub is stopping',
+      });
+      await settle();
+      expect(h.published).toEqual([]);
+      expect(await h.runs.latest(graph)).toBeNull();
+    });
   });
 
   it('hands start tags on to the agent executor', () => {
