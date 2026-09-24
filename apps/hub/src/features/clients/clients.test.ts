@@ -2717,7 +2717,12 @@ describe('a graph run', () => {
     expect(graphRuns.histories).toEqual([]);
   });
 
-  it('answers an open of one run as a state, and refuses a run the graph does not have', async () => {
+  /**
+   * Addressed, like the read's answer: a client files the open as pending,
+   * and an answer that named no frame would leave it there until the next
+   * drop reported it unanswered.
+   */
+  it('answers an open of one run addressed to it, and refuses a run the graph does not have', async () => {
     const { broadcast, graphRuns } = harness();
     const client = attach(broadcast);
     await client.hello();
@@ -2727,8 +2732,10 @@ describe('a graph run', () => {
 
     expect(graphRuns.opens).toEqual([{ nodeId: GRAPH, runId: 'run-1' }]);
     expect(client.received.at(-1)).toEqual({
-      type: 'graph-run-state',
-      ...runState(GRAPH, 'succeeded'),
+      type: 'graph-run-latest',
+      replyTo: 2,
+      nodeId: GRAPH,
+      run: runState(GRAPH, 'succeeded'),
     });
 
     graphRuns.answerOpensWith(null);

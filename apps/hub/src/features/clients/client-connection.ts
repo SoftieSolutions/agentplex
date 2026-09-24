@@ -1712,9 +1712,10 @@ export function serveClientConnection(
   }
 
   /**
-   * Answers one run of the graph, whole, as a `graph-run-state` -- the one
-   * shape a run arrives in, filed by the client under its run id -- or a
-   * refusal when the graph has no run by that id. Never another graph's run:
+   * Answers one run of the graph, whole, in a `graph-run-latest` addressed to
+   * the open -- the answer shape the read already has, so the client settles
+   * the frame it filed as pending and files the run under its id the same way
+   * -- or a refusal when the graph has no run by that id. Never another graph's run:
    * the feature checks the pair, so a screen is not handed a run to draw as
    * its own that belongs to something else.
    */
@@ -1730,7 +1731,7 @@ export function serveClientConnection(
         refuse(replyTo, 'refused', 'that graph has no run by that id');
         return;
       }
-      send({ type: 'graph-run-state', ...run });
+      send({ type: 'graph-run-latest', replyTo, nodeId, run });
     } catch (error) {
       logger.error('could not open a run', { problem: String(error) });
       if (state !== 'established') return;

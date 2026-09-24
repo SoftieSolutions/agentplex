@@ -1966,6 +1966,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         return;
       }
       case 'graph-run-latest': {
+        // The answer to a read, and to an open of one run: either way it is
+        // addressed, and the frame that asked is settled here.
         pending.delete(frame.replyTo);
         // A run in the answer is filed like any state, so that a screen
         // reading its graph's newest out of `runs` finds it there too.

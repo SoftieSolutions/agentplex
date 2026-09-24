@@ -589,12 +589,14 @@ describe('a SUB-GRAPH run over the whole path', () => {
     ]);
     expect((await historyOf(client, parent)).map((run) => run.runId)).toEqual([started.runId]);
 
-    // And the child opens whole from the parent's step, as a state of the child graph.
-    await client.say({ type: 'graph-run-open', id: nextId(), nodeId: child, runId: named.runId });
-    expect(runStates(client).at(-1)).toMatchObject({
+    // And the child opens whole from the parent's step, as a run of the child
+    // graph, in an answer addressed to the open.
+    const openId = nextId();
+    await client.say({ type: 'graph-run-open', id: openId, nodeId: child, runId: named.runId });
+    expect(client.reply(openId)).toMatchObject({
+      type: 'graph-run-latest',
       nodeId: child,
-      runId: named.runId,
-      number: 2,
+      run: { nodeId: child, runId: named.runId, number: 2 },
     });
   });
 

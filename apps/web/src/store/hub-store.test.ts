@@ -2540,6 +2540,31 @@ describe('graph runs', () => {
     unsubscribe();
   });
 
+  it('takes an open answered as answered: the run is filed, and nothing is left waiting', async () => {
+    // The hub answers an open in the read's shape, addressed to the open, so
+    // the captured read answer is the open's answer once the ids line up.
+    const h = harness({ frameIds: capturedIds(1, 32) });
+    const { socket, unsubscribe } = await establish(h);
+
+    h.store.sendCommand({
+      type: 'graph-run-open',
+      nodeId: nodeIdSchema.parse('hub-14'),
+      runId: 'hub-15' as never,
+    });
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'graph-run-open',
+      id: 32,
+      nodeId: 'hub-14',
+      runId: 'hub-15',
+    });
+    socket.deliver(hubFrames.graphRunLatestFound);
+
+    expect(h.store.getSnapshot().runs.get('hub-15' as never)).toMatchObject({ number: 1 });
+    socket.drop();
+    expect(h.store.getSnapshot().problem).toBeNull();
+    unsubscribe();
+  });
+
   it('keeps the hub’s yes to a cancel', async () => {
     const h = harness();
     const { socket } = await establish(h);

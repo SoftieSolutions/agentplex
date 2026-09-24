@@ -758,8 +758,10 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
    * Named by the run and by its graph. The run is the address; the graph is
    * what this connection watches from then on, and what the hub checks the
    * run against, so that a screen open on one graph is never handed another
-   * graph's run to draw as its own. Answered by `graph-run-state` -- the one
-   * shape a run arrives in -- or refused when the graph has no such run.
+   * graph's run to draw as its own. Answered by `graph-run-latest`, addressed
+   * to this frame and carrying the run -- the read's answer, reused because an
+   * unaddressed `graph-run-state` would leave the open pending on the client --
+   * or refused when the graph has no such run.
    */
   z.object({
     type: z.literal('graph-run-open'),
@@ -1399,7 +1401,9 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('graph-run-state'), ...graphRunStateSchema.shape }),
   /**
    * The answer to a `graph-run-read`: where the graph's newest run stands,
-   * or `null` when the graph has never run.
+   * or `null` when the graph has never run. It is also the answer to a
+   * `graph-run-open`, carrying the run that was opened, never `null` there:
+   * a graph with no such run is refused instead.
    *
    * Its own frame rather than a `graph-run-state` with an optional `replyTo`,
    * because every frame on this direction is either an answer, whose
