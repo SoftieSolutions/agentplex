@@ -9,7 +9,13 @@ import {
   type NodeId,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { DOC_KIND, FOLDER_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
+import {
+  DOC_KIND,
+  FOLDER_KIND,
+  GRAPH_KIND,
+  PROJECT_KIND,
+  SESSION_KIND,
+} from '../tree/node-kinds.js';
 import {
   CATALOGUE_PAGE_LIMIT,
   countLabel,
@@ -18,6 +24,7 @@ import {
   filterOptions,
   filterTree,
   isNarrowed,
+  leafHref,
   matchWords,
   nameStyleOf,
   NO_PAGES,
@@ -495,6 +502,27 @@ describe('the short machine label', () => {
 });
 
 describe('the kinds a leaf may be', () => {
+  it('gives every leaf this build can open an address, and nothing else one', () => {
+    // Three addressable leaves and one rule, stated here rather than in the
+    // row so a test can reach it without a DOM: a session goes to its pane, a
+    // document to its editor, a graph to its screen. A container and a session
+    // node pointing at nothing have nowhere to send anybody.
+    expect(leafHref(item({ id: id('s'), anchor: anchorOf('session-spike-wasm') }))).toBe(
+      '#/session/store-agentplex/session-spike-wasm',
+    );
+    expect(leafHref(item({ id: id('d'), kind: DOC_KIND }))).toBe('#/doc/d');
+    expect(leafHref(item({ id: id('g'), kind: GRAPH_KIND }))).toBe('#/graph/g');
+    expect(leafHref(item({ id: id('f'), kind: FOLDER_KIND }))).toBeNull();
+    expect(leafHref(item({ id: id('p'), kind: PROJECT_KIND }))).toBeNull();
+    expect(leafHref(item({ id: id('s2'), anchor: null }))).toBeNull();
+  });
+
+  it('draws a graph as a leaf, since a graph holds nothing to expand into', () => {
+    const graph = item({ id: id('g'), kind: GRAPH_KIND });
+    const rows = rowsFor([graph], { view: 'tree', collapsed: new Set() });
+    expect(rows[0]?.kind === 'item' && rows[0].expandable).toBe(false);
+  });
+
   it('draws a doc as a leaf, since a document holds nothing to expand into', () => {
     const doc = item({ id: id('d'), kind: DOC_KIND });
     const rows = rowsFor([doc], { view: 'tree', collapsed: new Set() });

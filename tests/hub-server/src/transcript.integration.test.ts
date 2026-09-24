@@ -50,6 +50,7 @@ import { createFakeApprovalPolicy } from '../../../apps/hub/src/features/approva
 import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
 import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
+import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
 import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake-terminal.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
 import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
@@ -266,6 +267,7 @@ async function start(transcripts: Readonly<Record<string, string>>): Promise<Har
     // not what it is about.
     catalogue: createFakeCatalogue(),
     docs: createFakeDocs(),
+    graphs: createFakeGraphs(),
     terminal: createFakeTerminal(),
   });
 

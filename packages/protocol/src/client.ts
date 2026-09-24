@@ -20,6 +20,7 @@ import {
 import { directoryListingFrameSchema, directorySchema } from './directory.js';
 import { docContentSchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
+import { graphDocumentSchema, graphNameSchema, graphPublishedVersionSchema } from './graph.js';
 import {
   hubIdSchema,
   nodeIdSchema,
@@ -618,6 +619,69 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     nodeId: nodeIdSchema,
   }),
   /**
+   * Makes a graph in a project: a node in the tree, and an empty draft.
+   *
+   * `projectId` is a node id for the reason a document's is: the client names
+   * a row and the hub decides where under it the node goes. There is no
+   * `server` here, unlike a document, because a graph is not a file on any
+   * machine -- the hub holds the document and runs the graph, and which
+   * machine each step lands on is the node's own `placement` to say.
+   *
+   * No document travels with the create. A graph starts empty and the canvas
+   * fills it in with saves, so a create that carried one would be a second
+   * path a document can arrive by.
+   */
+  z.object({
+    type: z.literal('graph-create'),
+    id: frameIdSchema,
+    projectId: nodeIdSchema,
+    name: graphNameSchema,
+  }),
+  /**
+   * Reads a graph back: its name, its draft, and which versions are published.
+   *
+   * The node is the whole address, as it is for a document. What comes back
+   * is the draft and never a published version -- a published version is
+   * immutable, so the canvas has nothing to edit in one, and a runtime that
+   * wants one reads it in the hub, where it lives.
+   */
+  z.object({
+    type: z.literal('graph-open'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
+  /**
+   * Replaces the draft, whole.
+   *
+   * The document is parsed here, at the wire, by the same schema the hub
+   * reads a stored one with: an edge to a node that is not there, a route
+   * whose condition does not parse, a kind this build has never heard of are
+   * all refusals before anything is written. There is no patch form, for the
+   * reason a document has none -- the draft is what the last save put there,
+   * and no version the hub never saw whole can be half-applied.
+   */
+  z.object({
+    type: z.literal('graph-save'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+    document: graphDocumentSchema,
+  }),
+  /**
+   * Stamps the draft as the next published version and opens a new draft
+   * copying it.
+   *
+   * It carries no document: what is published is the draft as the hub holds
+   * it, so a client publishes what it last saved and never something it did
+   * not first write. A draft that cannot run -- no TRIGGER, an ACTION nothing
+   * on this build performs, a SUB-GRAPH pinned to a version nobody published
+   * -- is refused in words, and the draft is left as it was.
+   */
+  z.object({
+    type: z.literal('graph-publish'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
+  /**
    * Answers an approval the agent is blocked on: let it through, or refuse it.
    *
    * The session is named because a client names a session and the hub resolves
@@ -1164,6 +1228,57 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     replyTo: frameIdSchema,
     content: docContentSchema,
     updatedAt: z.int().nonnegative(),
+  }),
+  /**
+   * The graph was made, and this is the node it will be named by.
+   *
+   * The same shape as a document's yes, and for the same reason: every later
+   * frame about this graph names the node. The tree change itself reaches
+   * every client as `catalogue-changed`.
+   */
+  z.object({
+    type: z.literal('graph-created'),
+    replyTo: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
+  /**
+   * A graph, as the canvas needs it: the name, the draft and its number, and
+   * which versions have been published.
+   *
+   * `nodeId` is restated on this reply, unlike a document's content, because
+   * the canvas draws a header out of it and the store files the answer by the
+   * node as well as by the frame -- a graph open is a screen and not a pane,
+   * so there is one of it per node and not one per request. `published` is
+   * the numbers and their dates and never the documents: a published version
+   * is read where it runs, in the hub, and a client that wanted one to look
+   * at would be asking for a screen this ticket does not draw.
+   */
+  z.object({
+    type: z.literal('graph-document'),
+    replyTo: frameIdSchema,
+    nodeId: nodeIdSchema,
+    name: z.string(),
+    draftVersion: z.int().positive(),
+    document: graphDocumentSchema,
+    published: z.array(graphPublishedVersionSchema),
+  }),
+  /**
+   * The draft was replaced. `version` is the draft's number, so a canvas that
+   * published between saves can tell which draft this answer is about, and
+   * `updatedAt` is the hub's clock -- the hub is the machine that holds a
+   * graph, so here its clock is the right one.
+   */
+  z.object({
+    type: z.literal('graph-saved'),
+    replyTo: frameIdSchema,
+    version: z.int().positive(),
+    updatedAt: z.int().nonnegative(),
+  }),
+  /** The draft became this published version, and the next draft is `version + 1`. */
+  z.object({
+    type: z.literal('graph-published'),
+    replyTo: frameIdSchema,
+    version: z.int().positive(),
   }),
   /**
    * What became of the approval this client answered.

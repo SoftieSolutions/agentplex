@@ -11,6 +11,7 @@ import {
   type ClientFrame,
   type DocName,
   type FrameId,
+  type GraphDocument,
   type HubFrame,
   type HubId,
   type CatalogueQuery,
@@ -36,6 +37,7 @@ import type { ApprovalPolicy } from '../approval-policy/approval-policy.js';
 import type { Attention, AttentionOutcome } from '../attention/attention.js';
 import type { CatalogueQueries, TreeChanged, TreeMutations } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
+import type { Graphs } from '../graphs/graphs.js';
 import { newServerRegistrationSchema, type Pairing } from '../pairing/pairing.js';
 import type { Projects } from '../projects/projects.js';
 import type { Sessions } from '../sessions/sessions.js';
@@ -262,6 +264,16 @@ export interface ClientConnectionDependencies {
    */
   readonly docs: Docs;
   /**
+   * Graphs: the hub's own rows, and the four things a client may do to one.
+   *
+   * A seam beside documents rather than a method on them, because the two
+   * are opposite in the way that matters here: a document is an index of a
+   * file on a machine, and a graph is content the hub holds. What this file
+   * does with both is the same -- answer the client that asked, and nobody
+   * else -- and it reaches no row and no rule of either directly.
+   */
+  readonly graphs: Graphs;
+  /**
    * The terminal relay, which this connection is one end of.
    *
    * A seam rather than a set of subscriptions held here, because a subscription
@@ -310,6 +322,7 @@ export function serveClientConnection(
     projects,
     catalogue,
     docs,
+    graphs,
     terminal,
     push,
     onClosed,
@@ -738,6 +751,44 @@ export function serveClientConnection(
           return;
         }
         void answerDocOpen(frame.id, frame.nodeId);
+        return;
+      }
+
+      case 'graph-create': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not awaited, like every other frame that reaches the database: a
+        // write that stalled this socket would stall every frame behind it.
+        void answerGraphCreate(frame.id, frame.projectId, frame.name);
+        return;
+      }
+
+      case 'graph-open': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerGraphOpen(frame.id, frame.nodeId);
+        return;
+      }
+
+      case 'graph-save': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerGraphSave(frame.id, frame.nodeId, frame.document);
+        return;
+      }
+
+      case 'graph-publish': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerGraphPublish(frame.id, frame.nodeId);
         return;
       }
 
@@ -1376,6 +1427,106 @@ export function serveClientConnection(
       logger.error('could not open a document', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not open that document');
+    }
+  }
+
+  /**
+   * Makes a graph and answers the client that asked with the node it will be
+   * named by. The tree change reaches everybody as `catalogue-changed`, so
+   * there is nothing else to say here.
+   */
+  async function answerGraphCreate(
+    replyTo: FrameId,
+    projectId: NodeId,
+    name: string,
+  ): Promise<void> {
+    try {
+      const outcome = await graphs.create(projectId, name);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'graph-created', replyTo, nodeId: outcome.nodeId });
+    } catch (error) {
+      logger.error('could not create a graph', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not create that graph');
+    }
+  }
+
+  /** Reads a graph's draft and version numbers back to the client that asked. */
+  async function answerGraphOpen(replyTo: FrameId, nodeId: NodeId): Promise<void> {
+    try {
+      const outcome = await graphs.open(nodeId);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'graph-document',
+        replyTo,
+        nodeId: outcome.nodeId,
+        name: outcome.name,
+        draftVersion: outcome.draftVersion,
+        document: outcome.document,
+        published: [...outcome.published],
+      });
+    } catch (error) {
+      logger.error('could not open a graph', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not open that graph');
+    }
+  }
+
+  /**
+   * Replaces a graph's draft and answers when. The document arrived parsed by
+   * the frame schema, which is the same schema the rows are read by, so
+   * nothing here or below re-checks its shape.
+   */
+  async function answerGraphSave(
+    replyTo: FrameId,
+    nodeId: NodeId,
+    document: GraphDocument,
+  ): Promise<void> {
+    try {
+      const outcome = await graphs.save(nodeId, document);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'graph-saved',
+        replyTo,
+        version: outcome.version,
+        updatedAt: outcome.updatedAt,
+      });
+    } catch (error) {
+      logger.error('could not save a graph', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not save that graph');
+    }
+  }
+
+  /**
+   * Publishes a graph's draft and answers with the version it became, or with
+   * the feature's sentence about why it cannot run yet.
+   */
+  async function answerGraphPublish(replyTo: FrameId, nodeId: NodeId): Promise<void> {
+    try {
+      const outcome = await graphs.publish(nodeId);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'graph-published', replyTo, version: outcome.version });
+    } catch (error) {
+      logger.error('could not publish a graph', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not publish that graph');
     }
   }
 

@@ -14,6 +14,8 @@ import {
   type ClientTerminalTarget,
   type DirectoryEntry,
   type FrameId,
+  type GraphDocument,
+  type GraphPublishedVersion,
   type HubFrame,
   type HubId,
   type Layout,
@@ -508,6 +510,46 @@ export interface DocSavedView {
 }
 
 /**
+ * The hub's answer to a graph create, kept so the form that asked can act.
+ * The same shape and the same reason as a document's.
+ */
+export interface GraphCreatedView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+}
+
+/**
+ * A graph as the hub answered an open: its name, its draft and the draft's
+ * number, and which versions are published.
+ *
+ * `nodeId` is on the view as well as `replyTo`, and the screen reads it by
+ * the node: a graph is a screen and not a pane, so there is one of it per node
+ * rather than one per request, and a screen that had to hold the frame id it
+ * asked with would be a screen that lost its document across a remount.
+ */
+export interface GraphDocumentView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+  readonly name: string;
+  readonly draftVersion: number;
+  readonly document: GraphDocument;
+  readonly published: readonly GraphPublishedVersion[];
+}
+
+/** The hub's answer to a save: which draft, and when on the hub's clock. */
+export interface GraphSavedView {
+  readonly replyTo: FrameId;
+  readonly version: number;
+  readonly updatedAt: number;
+}
+
+/** The hub's answer to a publish: the version the draft became. */
+export interface GraphPublishedView {
+  readonly replyTo: FrameId;
+  readonly version: number;
+}
+
+/**
  * The hub's yes to a subscribe or an unsubscribe, kept so the control that
  * asked can stop waiting.
  *
@@ -617,6 +659,14 @@ export interface HubSnapshot {
   readonly lastDocSaved: DocSavedView | null;
   /** The most recent document the hub answered with, kept until the next one. */
   readonly lastDocContent: DocContentView | null;
+  /** The hub's most recent yes to a graph create, kept until the next one. */
+  readonly lastGraphCreated: GraphCreatedView | null;
+  /** The most recent graph the hub answered with, kept until the next one. */
+  readonly lastGraphDocument: GraphDocumentView | null;
+  /** The hub's most recent yes to a graph save, kept until the next one. */
+  readonly lastGraphSaved: GraphSavedView | null;
+  /** The hub's most recent yes to a graph publish, kept until the next one. */
+  readonly lastGraphPublished: GraphPublishedView | null;
   /** The hub's most recent yes to a subscribe or an unsubscribe. */
   readonly lastPush: PushView | null;
   /**
@@ -709,6 +759,10 @@ type CommandFrame = Extract<
       | 'doc-create'
       | 'doc-save'
       | 'doc-open'
+      | 'graph-create'
+      | 'graph-open'
+      | 'graph-save'
+      | 'graph-publish'
       | 'push-subscribe'
       | 'push-unsubscribe'
       | 'session-transcript';
@@ -1041,6 +1095,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastDocCreated: null,
     lastDocSaved: null,
     lastDocContent: null,
+    lastGraphCreated: null,
+    lastGraphDocument: null,
+    lastGraphSaved: null,
+    lastGraphPublished: null,
     lastPush: null,
     pushPublicKey: null,
     transcripts: new Map(),
@@ -1722,6 +1780,54 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         });
         return;
       }
+      case 'graph-created': {
+        pending.delete(frame.replyTo);
+        // No re-request, for the reason a document create has none: a graph is
+        // a node, the hub broadcasts `catalogue-changed` after making one, and
+        // this client hears it like every other.
+        update({
+          lastRefusal: null,
+          lastGraphCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
+        });
+        return;
+      }
+      case 'graph-document': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastGraphDocument: {
+            replyTo: frame.replyTo,
+            nodeId: frame.nodeId,
+            name: frame.name,
+            draftVersion: frame.draftVersion,
+            document: frame.document,
+            published: frame.published,
+          },
+        });
+        return;
+      }
+      case 'graph-saved': {
+        pending.delete(frame.replyTo);
+        // A save changes the draft and nothing the tree carries.
+        update({
+          lastRefusal: null,
+          lastGraphSaved: {
+            replyTo: frame.replyTo,
+            version: frame.version,
+            updatedAt: frame.updatedAt,
+          },
+        });
+        return;
+      }
+      case 'graph-published': {
+        pending.delete(frame.replyTo);
+        // A publish changes which versions exist and nothing the tree carries.
+        update({
+          lastRefusal: null,
+          lastGraphPublished: { replyTo: frame.replyTo, version: frame.version },
+        });
+        return;
+      }
       case 'session-transcript-read': {
         pending.delete(frame.replyTo);
         // Filed under the frame that asked, and whole: a transcript is one read
@@ -2065,6 +2171,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // on its own machine while nothing here was connected, so holding the
       // characters would be holding a copy this store cannot vouch for.
       lastDocContent: null,
+      // A graph's draft is the hub's, and another client may have saved it
+      // while nothing here was connected: the same copy this store cannot
+      // vouch for, so the screen asks again when it is looked at.
+      lastGraphDocument: null,
       // And the same again: the transcript file goes on being appended to on
       // its own machine while nothing here is connected.
       transcripts: new Map(),

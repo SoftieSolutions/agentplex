@@ -11,6 +11,8 @@ import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
+import { graphHash } from '../graphs/graph-route.js';
+import { nodeIdSchema } from '@agentplex/protocol';
 import { sessionHash } from '../terminal/session-route.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
@@ -586,6 +588,24 @@ describe('the shell', () => {
     // the page: the chrome is still there, and it is still one of it.
     expect(sidebars()).toHaveLength(1);
     expect(navLinks().map((link) => link.textContent)).toEqual(['Settings']);
+  });
+
+  it('keeps the sidebar when the address names a graph, and draws the graph in the content region', async () => {
+    window.location.hash = graphHash(nodeIdSchema.parse('hub-10'));
+
+    const socket = await mount();
+    await act(() => {
+      socket.deliver(hubFrames.graphDocument);
+    });
+
+    // A graph is a screen and not a pane: it is drawn straight into the
+    // content region rather than through the pane layout, whose persisted
+    // shape knows sessions and documents and is not widened here.
+    expect(sidebars()).toHaveLength(1);
+    const main = container.querySelector('main')?.textContent ?? '';
+    expect(main).toContain('release-pipeline');
+    expect(main).toContain('v2 · draft');
+    expect(main).not.toContain('stored layout');
   });
 
   it('lands on Settings when the chrome’s action is followed from over a session', async () => {

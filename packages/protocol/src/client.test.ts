@@ -1449,3 +1449,85 @@ describe('the pause receipt on the client leg', () => {
     ).toBe(true);
   });
 });
+
+describe('parseClientFrame on the graph frames', () => {
+  const PROJECT = nodeIdSchema.parse('node-1');
+  const GRAPH = nodeIdSchema.parse('node-9');
+  const TRIGGER = {
+    id: 'start',
+    kind: 'trigger',
+    label: 'Start',
+    position: { x: 0, y: 0 },
+    placement: { kind: 'cheapest' },
+    retry: { max: 0, backoff: 1 },
+    source: 'manual',
+  };
+
+  it('takes a create with a project and a name, and no machine: a graph is the hub’s', () => {
+    expect(
+      parseClientFrame({ type: 'graph-create', id: 1, projectId: PROJECT, name: 'release' }).ok,
+    ).toBe(true);
+    expect(
+      parseClientFrame({ type: 'graph-create', id: 1, projectId: PROJECT, name: ' ' }).ok,
+    ).toBe(false);
+  });
+
+  it('parses the document on a save with the same schema the hub stores by', () => {
+    expect(
+      parseClientFrame({
+        type: 'graph-save',
+        id: 2,
+        nodeId: GRAPH,
+        document: { nodes: [TRIGGER], edges: [] },
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseClientFrame({
+        type: 'graph-save',
+        id: 2,
+        nodeId: GRAPH,
+        document: { nodes: [TRIGGER], edges: [{ from: 'start', to: 'nowhere' }] },
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseClientFrame({
+        type: 'graph-save',
+        id: 2,
+        nodeId: GRAPH,
+        document: { nodes: [{ ...TRIGGER, kind: 'webhook' }], edges: [] },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('takes an open and a publish that name the node and nothing else', () => {
+    expect(parseClientFrame({ type: 'graph-open', id: 3, nodeId: GRAPH }).ok).toBe(true);
+    expect(parseClientFrame({ type: 'graph-publish', id: 4, nodeId: GRAPH }).ok).toBe(true);
+    expect(parseClientFrame({ type: 'graph-publish', id: 4 }).ok).toBe(false);
+  });
+});
+
+describe('parseHubFrame on the graph replies', () => {
+  const GRAPH = nodeIdSchema.parse('node-9');
+
+  it('answers an open with the draft, its number and the published numbers', () => {
+    const result = parseHubFrame({
+      type: 'graph-document',
+      replyTo: 3,
+      nodeId: GRAPH,
+      name: 'release',
+      draftVersion: 2,
+      document: { nodes: [], edges: [] },
+      published: [{ version: 1, publishedAt: 1_756_000_000_000 }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('answers a save with the draft number and the hub’s clock, and a publish with the number', () => {
+    expect(
+      parseHubFrame({ type: 'graph-saved', replyTo: 2, version: 1, updatedAt: 1_756_000_000_000 })
+        .ok,
+    ).toBe(true);
+    expect(parseHubFrame({ type: 'graph-published', replyTo: 4, version: 1 }).ok).toBe(true);
+    expect(parseHubFrame({ type: 'graph-published', replyTo: 4, version: 0 }).ok).toBe(false);
+  });
+});

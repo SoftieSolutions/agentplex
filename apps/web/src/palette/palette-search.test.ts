@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { parseHubFrame, parseTextFrame, type CatalogueQuery } from '@agentplex/protocol';
+import {
+  nodeIdSchema,
+  parseHubFrame,
+  parseTextFrame,
+  type CatalogueItem,
+  type CatalogueQuery,
+} from '@agentplex/protocol';
 import { type CataloguePage } from '../catalogue/catalogue-model.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createFakeTimers } from '../store/timers.js';
+import { GRAPH_KIND } from '../tree/node-kinds.js';
 import { PALETTE_KINDS } from './palette-model.js';
 import {
   catalogueResults,
@@ -82,9 +89,9 @@ describe('the question the palette asks', () => {
     // the query names (AGX-261), and a project is one of them.
     expect(query.filter.kinds).toEqual([...PALETTE_KINDS]);
     expect(query.filter.kinds).toContain('project');
-    // And still no graph: the kind is unseeded, and asking for a heading this
-    // build cannot fill would claim the palette searches one.
-    expect(query.filter.kinds).not.toContain('graph');
+    // And a graph, since 0017 seeded the kind and this build opens one: a
+    // heading with no place in the question would be one nothing draws under.
+    expect(query.filter.kinds).toContain('graph');
   });
 
   it('clamps a query longer than the protocol admits rather than being refused for it', () => {
@@ -209,6 +216,39 @@ describe('the answer', () => {
       detail: 'Project',
       href: '#/projects',
     });
+  });
+
+  it('turns a graph into a row that opens it, rather than dropping it as an unknown kind', () => {
+    // A graph is a leaf this build can open, and `resultFor` answers `null`
+    // for a kind it has not got a branch for -- so without this branch every
+    // graph the hub returned under the Graphs heading would vanish silently.
+    const graph: CatalogueItem = {
+      id: nodeIdSchema.parse('hub-10'),
+      parentId: nodeIdSchema.parse('hub-5'),
+      kind: GRAPH_KIND,
+      position: 2,
+      name: 'release-pipeline',
+      named: true,
+      anchor: null,
+      depth: 1,
+      displayName: 'release-pipeline',
+      nameSource: 'node',
+      session: null,
+      directory: null,
+      server: null,
+      group: null,
+      matched: null,
+    };
+
+    expect(catalogueResults([graph])).toEqual([
+      {
+        id: 'graph:hub-10',
+        kind: 'graph',
+        label: 'release-pipeline',
+        detail: 'Graph',
+        href: '#/graph/hub-10',
+      },
+    ]);
   });
 
   it('says there may be more when the hub had more to give', async () => {

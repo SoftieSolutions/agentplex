@@ -2,6 +2,7 @@ import { useSyncExternalStore, type JSX } from 'react';
 
 import type { TokenStore } from './auth/token.js';
 import { useDocRoute } from './docs/doc-route.js';
+import { useGraphRoute } from './graphs/graph-route.js';
 import type { OnboardingDismissal } from './onboarding/dismissal.js';
 import { onboardingVerdict } from './onboarding/onboarding-model.js';
 import { useOnboardingRoute } from './onboarding/onboarding-route.js';
@@ -89,13 +90,16 @@ function OnboardingGate({ hub, tokens, dismissal }: AppProps): JSX.Element {
   const requested = useOnboardingRoute();
   const sessionRef = useSessionRoute();
   const doc = useDocRoute();
+  const graph = useGraphRoute();
   const dismissed = useSyncExternalStore(dismissal.subscribe, dismissal.read);
   const verdict = onboardingVerdict({
     machineState: snapshot.machineState,
     dismissed,
     requested,
   });
-  if (verdict === 'show' && sessionRef === null && doc === null) {
+  // A graph address names a thing too, and yields for the reason the other
+  // two do.
+  if (verdict === 'show' && sessionRef === null && doc === null && graph === null) {
     return <OnboardingScreen store={hub} dismissal={dismissal} />;
   }
   // 'wait' draws the app too: the list already says it is waiting for the hub,

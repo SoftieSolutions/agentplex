@@ -41,6 +41,7 @@ import { createFakeSessions, type FakeSessions } from '../sessions/fake-sessions
 import { createFakeProjects, type FakeProjects } from '../projects/fake-projects.js';
 import { createFakeCatalogue, type FakeCatalogue } from '../catalogue/fake-catalogue.js';
 import { createFakeDocs, type FakeDocs } from '../docs/fake-docs.js';
+import { createFakeGraphs } from '../graphs/fake-graphs.js';
 import { createFakeTerminal, type FakeTerminal } from '../terminal/fake-terminal.js';
 import { createFakePush, FAKE_PUSH_PUBLIC_KEY, type FakePush } from '../push/fake-push.js';
 
@@ -185,6 +186,7 @@ function harness(
     projects,
     catalogue,
     docs,
+    graphs: createFakeGraphs(),
     terminal,
     push,
   });

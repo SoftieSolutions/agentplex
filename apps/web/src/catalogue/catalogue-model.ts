@@ -19,7 +19,10 @@ import {
   type SessionStatus,
   type SortDirection,
 } from '@agentplex/protocol';
-import { DOC_KIND, FOLDER_KIND, PROJECT_KIND } from '../tree/node-kinds.js';
+import { docHash } from '../docs/doc-route.js';
+import { graphHash } from '../graphs/graph-route.js';
+import { sessionHash } from '../terminal/session-route.js';
+import { DOC_KIND, FOLDER_KIND, GRAPH_KIND, PROJECT_KIND } from '../tree/node-kinds.js';
 
 /**
  * Everything the catalogue views derive, as functions of values.
@@ -561,6 +564,27 @@ export function isContainer(kind: string): boolean {
 
 export function isDoc(kind: string): boolean {
   return kind === DOC_KIND;
+}
+
+export function isGraph(kind: string): boolean {
+  return kind === GRAPH_KIND;
+}
+
+/**
+ * Where a row goes when it is followed, or `null` for one that goes nowhere.
+ *
+ * Three addressable leaves and one rule: a node the client can open is a link
+ * to the address that opens it, and everything else is text. A session is
+ * addressed by what it points at rather than by its node, because the node is
+ * the user's arrangement and the session is the thing; a document and a graph
+ * are addressed by the node, because the node is the whole address either has.
+ * Here rather than in the row so a test can reach the rule without a DOM.
+ */
+export function leafHref(item: CatalogueItem): string | null {
+  if (item.anchor !== null) return sessionHash(item.anchor);
+  if (isDoc(item.kind)) return docHash(item.id);
+  if (isGraph(item.kind)) return graphHash(item.id);
+  return null;
 }
 
 /**

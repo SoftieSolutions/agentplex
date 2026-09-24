@@ -157,6 +157,7 @@ describe('the schema, read back', () => {
     expect(result.rows).toEqual([
       { kind: 'doc', container: 0, anchors_session: 0 },
       { kind: 'folder', container: 1, anchors_session: 0 },
+      { kind: 'graph', container: 0, anchors_session: 0 },
       { kind: 'project', container: 1, anchors_session: 0 },
       { kind: 'session', container: 0, anchors_session: 1 },
     ]);
