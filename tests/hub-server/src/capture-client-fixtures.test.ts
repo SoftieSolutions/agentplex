@@ -280,6 +280,8 @@ function labelFor(text: string): string {
     switch (frame.status) {
       case 'running':
         return 'graphRunStateRunning';
+      case 'waiting':
+        return 'graphRunStateWaiting';
       case 'succeeded':
         return 'graphRunStateSucceeded';
       case 'failed':
@@ -1440,8 +1442,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     answering.send({
       type: 'approval-decide',
       id: 2,
-      storeId: 'store-agentplex',
-      sessionId: BLOCKED_SESSION,
+      subject: { kind: 'session', storeId: 'store-agentplex', sessionId: BLOCKED_SESSION },
       approvalId: 'approval-1',
       decision: 'grant',
     });
@@ -2183,6 +2184,102 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       (text) => labelFor(text) === 'graphRunLatestFound',
     );
     if (graphRunLatestFound === undefined) throw new Error('the second read was not answered');
+
+    // A run that waits on a person. A fourth graph -- TRIGGER, then the HUMAN
+    // node mockup 6d draws -- run until the hub raises its own request. The
+    // machine state captured while it waits is what the bell, the Approvals
+    // surfaces and the graph screen read; the run state says `waiting` and
+    // carries no request. Then a grant, through the same frame a session's
+    // approval takes with a run for its subject, and the receipt the hub
+    // answers at once because the run is its own.
+    starter.send({
+      type: 'graph-create',
+      id: 33,
+      projectId: created.value.nodeId,
+      name: 'release-gate',
+    });
+    const answersGateCreate = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-created' && seen.value.replyTo === 33;
+    };
+    await until(() => starter.received.some(answersGateCreate), 'the gated graph to be made');
+    const gateCreated = starter.received.find(answersGateCreate);
+    const gate = gateCreated === undefined ? null : parseTextFrame(parseHubFrame, gateCreated);
+    if (gate === null || !gate.ok || gate.value.type !== 'graph-created') {
+      throw new Error('the gated graph was not made');
+    }
+    starter.send({
+      type: 'graph-save',
+      id: 34,
+      nodeId: gate.value.nodeId,
+      document: {
+        nodes: [
+          { ...graphBase, id: 'start', kind: 'trigger', label: 'PR opened', source: 'manual' },
+          {
+            ...graphBase,
+            id: 'approve',
+            kind: 'human',
+            label: 'Approve merge',
+            position: { x: 500, y: 456 },
+            approvers: ['robert', 'ana'],
+            timeoutMinutes: null,
+          },
+        ],
+        edges: [{ from: 'start', to: 'approve' }],
+      },
+    });
+    starter.send({ type: 'graph-publish', id: 35, nodeId: gate.value.nodeId });
+    const answersGatePublish = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-published' && seen.value.replyTo === 35;
+    };
+    await until(() => starter.received.some(answersGatePublish), 'the gated graph to publish');
+    starter.send({
+      type: 'graph-run',
+      id: 36,
+      nodeId: gate.value.nodeId,
+      input: { language: 'rust' },
+    });
+    const answersGateRun = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-run-started' && seen.value.replyTo === 36;
+    };
+    await until(() => starter.received.some(answersGateRun), 'the gated run to be answered');
+    const graphRunStartedWaiting = starter.received.find(answersGateRun);
+    if (graphRunStartedWaiting === undefined) throw new Error('the gated run was not answered');
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunStateWaiting'),
+      'the gated run to wait on a person',
+    );
+    const graphRunStateWaiting = starter.received.find(
+      (text) => labelFor(text) === 'graphRunStateWaiting',
+    );
+    if (graphRunStateWaiting === undefined) throw new Error('the gated run never waited');
+    await until(
+      () => singleHub.hub.state.published().graphRunApprovals.length === 1,
+      'the request to reach the machine state',
+    );
+    const machineStateGraphRunWaiting = await captureState(singleHub.hub);
+
+    // Read off the state rather than written here, for the reason the
+    // session's rule is: the subject a client sends back is the one the hub
+    // put on the request, byte for byte.
+    const gateWaiting = singleHub.hub.state.published().graphRunApprovals[0];
+    if (gateWaiting === undefined) throw new Error('nothing is waiting on a person');
+    starter.send({
+      type: 'approval-decide',
+      id: 37,
+      subject: gateWaiting.approval.subject,
+      approvalId: gateWaiting.approval.approvalId,
+      decision: 'grant',
+    });
+    const answersGateDecision = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'approval-decided' && seen.value.replyTo === 37;
+    };
+    await until(() => starter.received.some(answersGateDecision), 'the grant to be answered');
+    const approvalDecidedRun = starter.received.find(answersGateDecision);
+    if (approvalDecidedRun === undefined) throw new Error('the grant was not answered');
 
     // The same save once the machine has gone away, which is the refusal the
     // editor is written around: the hub holds no copy of a document, so a
@@ -3155,6 +3252,10 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('graphRunStateSucceeded', graphRunStateSucceeded);
     captured.set('graphRunLatestNone', graphRunLatestNone);
     captured.set('graphRunLatestFound', graphRunLatestFound);
+    captured.set('graphRunStartedWaiting', graphRunStartedWaiting);
+    captured.set('graphRunStateWaiting', graphRunStateWaiting);
+    captured.set('machineStateGraphRunWaiting', machineStateGraphRunWaiting);
+    captured.set('approvalDecidedRun', approvalDecidedRun);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);
     captured.set('nodeMoved', nodeMoved);

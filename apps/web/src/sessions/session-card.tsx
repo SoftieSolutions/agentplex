@@ -138,7 +138,6 @@ export function SessionCard({ item, scheme, now, store, actions }: SessionCardPr
           session is what tells this one apart. Every other request it is
           holding is on the session screen's Approvals tab. */}
       <ApprovalControls
-        sessionRef={item.ref}
         approval={item.approval}
         name={item.name}
         store={store}

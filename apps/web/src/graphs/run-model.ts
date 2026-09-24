@@ -22,30 +22,47 @@ import type { Tone } from '../ui/tokens.js';
  * run is drawn as what it is -- a run being asked about -- and never as live.
  */
 
-/** The word the strip uses for each status. `live` is the mock's word for a run in flight. */
+/**
+ * The word the strip uses for each status. `live` is the mock's word for a
+ * run in flight; a run parked at a HUMAN node says who it is waiting for,
+ * because `live` would promise work that is not happening.
+ */
 export const STATUS_WORDS: Record<RunStatus, string> = {
   running: 'live',
+  waiting: 'waiting on a person',
   succeeded: 'succeeded',
   failed: 'failed',
   cancelled: 'cancelled',
 };
 
-/** `run #38 · live · step 3/9`, as mockup 6d letters the strip; `reconnecting` in place of `live` for a stale run. */
+/** `run #38 · live · step 3/9`, as mockup 6d letters the strip; `reconnecting` in place of the open word for a stale run. */
 export function runStripText(run: GraphRunState, stale = false): string {
-  const word = stale && run.status === 'running' ? 'reconnecting' : STATUS_WORDS[run.status];
+  const word = stale && isRunOpen(run.status) ? 'reconnecting' : STATUS_WORDS[run.status];
   return `run #${String(run.number)} · ${word} · step ${String(run.step)}/${String(run.of)}`;
 }
 
 /**
- * The tone a run's status draws in. A run in flight is `running`; one that
- * failed is `blocked`, because it is the thing on the screen that wants a
- * person; a run that ended any other way is at rest -- and so is a stale run
- * that read `running`, because nothing here can vouch that it still is.
+ * Whether a run is still going: in flight, or parked for a person. The two
+ * open states share everything a screen decides on them -- Cancel is offered,
+ * Run is not -- so the question is asked here once.
+ */
+export function isRunOpen(status: RunStatus): boolean {
+  return status === 'running' || status === 'waiting';
+}
+
+/**
+ * The tone a run's status draws in. A run in flight is `running`; one waiting
+ * on a person is `needs-you`, which is the tone of everything else on the
+ * screen that wants somebody; one that failed is `blocked`, because it is a
+ * thing to go and fix; a run that ended any other way is at rest -- and so is
+ * a stale run that read open, because nothing here can vouch that it still is.
  */
 export function runTone(status: RunStatus, stale = false): Tone {
   switch (status) {
     case 'running':
       return stale ? 'idle' : 'running';
+    case 'waiting':
+      return stale ? 'idle' : 'needs-you';
     case 'failed':
       return 'blocked';
     case 'succeeded':
@@ -54,10 +71,12 @@ export function runTone(status: RunStatus, stale = false): Tone {
   }
 }
 
-/** The node whose step is in flight, or `null` when no step is, or when the run is stale. */
+/** The node whose step is in flight or waiting, or `null` when no step is, or when the run is stale. */
 export function runningNode(run: GraphRunState | null, stale = false): GraphNodeId | null {
-  if (run === null || stale || run.status !== 'running') return null;
-  const inFlight = run.steps.find((step) => step.outcome === 'running');
+  if (run === null || stale || !isRunOpen(run.status)) return null;
+  const inFlight = run.steps.find(
+    (step) => step.outcome === 'running' || step.outcome === 'waiting',
+  );
   return inFlight?.nodeId ?? null;
 }
 

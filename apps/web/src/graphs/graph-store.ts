@@ -21,6 +21,7 @@ import type {
   RunStartedView,
 } from '../store/hub-store.js';
 import type { GraphEdit } from './graph-model.js';
+import { isRunOpen } from './run-model.js';
 
 /**
  * One open graph, as an external store the screen owns.
@@ -515,7 +516,12 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     },
 
     run(input: RouteInput): void {
-      if (state.starting || state.readingRun || state.run?.status === 'running') return;
+      if (
+        state.starting ||
+        state.readingRun ||
+        (state.run !== null && isRunOpen(state.run.status))
+      )
+        return;
       const outcome = hub.sendCommand({ type: 'graph-run', nodeId, input });
       if (!outcome.accepted) {
         moveTo({ problem: outcome.reason });
@@ -529,7 +535,7 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
 
     cancelRun(): void {
       const run = state.run;
-      if (run === null || run.status !== 'running' || state.runStale || state.cancelling) return;
+      if (run === null || !isRunOpen(run.status) || state.runStale || state.cancelling) return;
       const outcome = hub.sendCommand({ type: 'graph-run-cancel', runId: run.runId });
       if (!outcome.accepted) {
         moveTo({ problem: outcome.reason });

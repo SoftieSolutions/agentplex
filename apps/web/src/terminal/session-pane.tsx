@@ -871,13 +871,7 @@ export function SessionPane({
               flexDirection: 'column',
             }}
           >
-            <ApprovalsTab
-              sessionRef={sessionRef}
-              approvals={approvals}
-              project={project}
-              store={hub}
-              scheme={scheme}
-            />
+            <ApprovalsTab approvals={approvals} project={project} store={hub} scheme={scheme} />
           </Box>
         );
       default:

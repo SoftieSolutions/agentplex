@@ -416,7 +416,9 @@ describe('the attention bell', () => {
     // And it is still a link to the same session, through the helper the card
     // uses: closing the panel is something the row does on the way, not
     // instead of going.
-    expect(row.getAttribute('href')).toBe(sessionHash(asking.item.ref));
+    expect(row.getAttribute('href')).toBe(
+      asking.kind === 'session' ? sessionHash(asking.item.ref) : asking.href,
+    );
   });
 
   it('closes the sheet the same way, where it is the whole screen', async () => {
@@ -453,7 +455,9 @@ describe('the attention bell', () => {
         .filter((frame) => frame.type === 'session-acknowledge')
         .map((frame) => `${frame.storeId}/${frame.sessionId}`),
     ).toEqual(
-      twoWaiting.needsYou.map((row) => `${row.item.ref.storeId}/${row.item.ref.sessionId}`),
+      twoWaiting.needsYou.map((row) =>
+        row.kind === 'session' ? `${row.item.ref.storeId}/${row.item.ref.sessionId}` : row.key,
+      ),
     );
     // Muting is a per-session decision, and marking read is not a way to make
     // one: a muted session is not in this list at all.

@@ -153,14 +153,15 @@ describe('approvalSubjectSchema', () => {
 
   it('refuses a kind outside the two, rather than passing the word along', () => {
     expect(
-      approvalSubjectSchema.safeParse({ kind: 'machine', registrationId: 'registration-1' }).success,
+      approvalSubjectSchema.safeParse({ kind: 'machine', registrationId: 'registration-1' })
+        .success,
     ).toBe(false);
   });
 
   it('refuses a session subject missing either id, and a run subject missing either', () => {
-    expect(approvalSubjectSchema.safeParse({ kind: 'session', storeId: 'store-work' }).success).toBe(
-      false,
-    );
+    expect(
+      approvalSubjectSchema.safeParse({ kind: 'session', storeId: 'store-work' }).success,
+    ).toBe(false);
     expect(approvalSubjectSchema.safeParse({ kind: 'graphRun', runId: 'run-38' }).success).toBe(
       false,
     );
@@ -202,8 +203,11 @@ describe('pendingApprovalSchema', () => {
 
   it('refuses an undated one, because a wait with no start is not a wait', () => {
     expect(
-      pendingApprovalSchema.safeParse({ ...A_REQUEST, subject: A_SESSION_SUBJECT, answeredBy: null })
-        .success,
+      pendingApprovalSchema.safeParse({
+        ...A_REQUEST,
+        subject: A_SESSION_SUBJECT,
+        answeredBy: null,
+      }).success,
     ).toBe(false);
   });
 

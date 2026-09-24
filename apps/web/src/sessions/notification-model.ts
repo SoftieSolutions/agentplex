@@ -1,3 +1,5 @@
+import type { GraphRunApproval } from '@agentplex/protocol';
+import { graphHash } from '../graphs/graph-route.js';
 import { sessionHash } from '../terminal/session-route.js';
 import type { HubCommand } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
@@ -27,21 +29,45 @@ import {
  * rather than invented.
  */
 
-/** One row, with everything both presentations draw already worked out. */
-export interface NotificationRow {
-  /** The session this row is about, for the commands a control sends. */
-  readonly item: SessionListItem;
-  /** The list item's stable render key, which is the session's. */
+/** What both presentations draw of a row, whatever it is about. */
+interface RowWords {
+  /** The stable render key: the session's, or the request's for a run. */
   readonly key: string;
-  /** The tone dot: the session's own, never one this list decides. */
+  /** The tone dot: the subject's own, never one this list decides. */
   readonly tone: Tone;
   /** The first line. */
   readonly sentence: string;
   /** The second line: where it lives, which machine, how long ago. */
   readonly place: string;
-  /** Where the row leads, which is where the card leads. */
+  /** Where the row leads, which is where the card or the graph leads. */
   readonly href: string;
 }
+
+/** A session asking for somebody, with the item the commands a control sends are about. */
+export interface SessionNotificationRow extends RowWords {
+  readonly kind: 'session';
+  readonly item: SessionListItem;
+}
+
+/**
+ * A graph run waiting on a person. It is answered where its graph is drawn,
+ * which is where the row leads; no command in this list is about it, since
+ * an approval is answered and not acknowledged.
+ */
+export interface GraphRunNotificationRow extends RowWords {
+  readonly kind: 'graphRun';
+  readonly waiting: GraphRunApproval;
+}
+
+/**
+ * One row, with everything both presentations draw already worked out.
+ *
+ * Two kinds and a discriminator, because the second thing that can want a
+ * person is a graph run and it is not a session: it has no store, no machine
+ * and no acknowledgement. A row that pretended otherwise would be a row with
+ * a null item every consumer had to remember to check.
+ */
+export type NotificationRow = SessionNotificationRow | GraphRunNotificationRow;
 
 /**
  * The two sections, in the order they are drawn.
@@ -86,8 +112,9 @@ export function placeLine(item: SessionListItem, now: number): string {
   return `${placeWords(item)} · ${item.machine} · ${ageLabel(now, item.updatedAt)}`;
 }
 
-function rowFor(item: SessionListItem, now: number): NotificationRow {
+function rowFor(item: SessionListItem, now: number): SessionNotificationRow {
   return {
+    kind: 'session',
     item,
     key: item.key,
     tone: item.tone,
@@ -99,8 +126,34 @@ function rowFor(item: SessionListItem, now: number): NotificationRow {
   };
 }
 
+/** The sentence a run's row leads with: the run number and the node it waits at, and nothing of the request. */
+export function runSentenceFor(waiting: GraphRunApproval): string {
+  return `run #${String(waiting.number)} is waiting at ${waiting.nodeLabel}`;
+}
+
+function runRowFor(waiting: GraphRunApproval, now: number): GraphRunNotificationRow {
+  return {
+    kind: 'graphRun',
+    waiting,
+    key: `graph-run:${waiting.approval.approvalId}`,
+    // The tone of everything on the screen that wants somebody.
+    tone: 'needs-you',
+    sentence: runSentenceFor(waiting),
+    place: `graph run · ${ageLabel(now, waiting.approval.requestedAt)}`,
+    // The graph's own address, the same helper the tree uses, so the row and
+    // the tree cannot open different graphs.
+    href: graphHash(waiting.graph),
+  };
+}
+
+/** When a row last moved: the session's activity, or the moment a run asked. */
+function movedAt(row: NotificationRow): number {
+  return row.kind === 'session' ? row.item.updatedAt : row.waiting.approval.requestedAt;
+}
+
 /**
- * The list, from whatever items the surface chose to speak for.
+ * The list, from whatever items the surface chose to speak for, and every
+ * graph run waiting on a person.
  *
  * `wantsAttention` splits it, which is the same function the bell counts with:
  * the section under the bell holds exactly what the bell's number counted, or
@@ -109,14 +162,26 @@ function rowFor(item: SessionListItem, now: number): NotificationRow {
  * muted session is in neither, because a mute is the standing answer "stop
  * making noise about this" and this list is the noise.
  *
+ * A run waiting on a person is in the first section for as long as it waits:
+ * there is no acknowledging one, because the thing to do about it is answer,
+ * and the request leaves the state the moment somebody does.
+ *
  * Activity order, newest first, inside each section. It narrows nothing
  * itself: whether the bell speaks for a fleet or for one machine is a question
  * about that surface, answered where the items are chosen.
  */
-export function notificationList(items: readonly SessionListItem[], now: number): NotificationList {
+export function notificationList(
+  items: readonly SessionListItem[],
+  now: number,
+  waiting: readonly GraphRunApproval[] = [],
+): NotificationList {
   const ordered = orderByActivity(items);
+  const needsYou: NotificationRow[] = [
+    ...ordered.filter(wantsAttention).map((item) => rowFor(item, now)),
+    ...waiting.map((run) => runRowFor(run, now)),
+  ].sort((left, right) => movedAt(right) - movedAt(left));
   return {
-    needsYou: ordered.filter(wantsAttention).map((item) => rowFor(item, now)),
+    needsYou,
     earlier: ordered
       .filter((item) => item.needsYou && item.acknowledged && !item.muted)
       .map((item) => rowFor(item, now)),
@@ -141,7 +206,7 @@ export function notificationList(items: readonly SessionListItem[], now: number)
  */
 export function markAllRead(rows: readonly NotificationRow[]): readonly HubCommand[] {
   return rows
-    .map((row) => row.item)
+    .flatMap((row) => (row.kind === 'session' ? [row.item] : []))
     .filter(offersAcknowledge)
     .map(acknowledgeCommand);
 }

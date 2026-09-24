@@ -2,8 +2,8 @@ import type {
   ApprovalDecision,
   ApprovalId,
   ApprovalOutcome,
+  ApprovalSubject,
   FrameId,
-  SessionRef,
 } from '@agentplex/protocol';
 import type { ApprovalView, HubCommand, RefusalView } from '../store/hub-store.js';
 
@@ -24,12 +24,15 @@ import type { ApprovalView, HubCommand, RefusalView } from '../store/hub-store.j
  */
 
 /**
- * The decision command: the session, the request, and one of two words.
+ * The decision command: the subject, the request, and one of two words.
  *
- * The approval is named beside the session because a session can hold more
- * than one open at a time, and because the id is what deciding once keys on:
- * two clients tapping at the same moment send the same id, and the second is
- * told what the first one's answer did.
+ * The subject is a session or a graph run, as the hub put it on the request,
+ * and it goes back exactly as it came: the hub routes on it, and a client that
+ * rebuilt it from context would be a client guessing what it answers. The
+ * approval is named beside it because a subject can hold more than one open
+ * at a time, and because the id is what deciding once keys on: two clients
+ * tapping at the same moment send the same id, and the second is told what
+ * the first one's answer did.
  *
  * Nothing of the proposal goes back. The text a card rendered is the hub's to
  * remember, and a frame returning it would be a client choosing what the agent
@@ -37,17 +40,11 @@ import type { ApprovalView, HubCommand, RefusalView } from '../store/hub-store.j
  * by the one path built to carry a command as text.
  */
 export function decideCommand(
-  ref: SessionRef,
+  subject: ApprovalSubject,
   approvalId: ApprovalId,
   decision: ApprovalDecision,
 ): HubCommand {
-  return {
-    type: 'approval-decide',
-    storeId: ref.storeId,
-    sessionId: ref.sessionId,
-    approvalId,
-    decision,
-  };
+  return { type: 'approval-decide', subject, approvalId, decision };
 }
 
 /**

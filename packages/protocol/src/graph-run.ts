@@ -66,13 +66,7 @@ export type RunStatus = z.infer<typeof runStatusSchema>;
  * What one attempt at one node became. `running` and `waiting` are the
  * attempt in flight, and there is at most one of those in a run at a time.
  */
-export const stepOutcomeSchema = z.enum([
-  'running',
-  'waiting',
-  'succeeded',
-  'failed',
-  'cancelled',
-]);
+export const stepOutcomeSchema = z.enum(['running', 'waiting', 'succeeded', 'failed', 'cancelled']);
 export type StepOutcome = z.infer<typeof stepOutcomeSchema>;
 
 /**

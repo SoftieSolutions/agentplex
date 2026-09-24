@@ -1,5 +1,4 @@
 import type { JSX } from 'react';
-import type { SessionRef } from '@agentplex/protocol';
 
 import { ApprovalControls } from '../sessions/approval-controls.js';
 import type { SessionProject } from '../sessions/approval-policy-model.js';
@@ -47,8 +46,6 @@ import type { HubStore } from '../store/hub-store.js';
  */
 
 export interface ApprovalsTabProps {
-  /** The session every request in the list belongs to. */
-  readonly sessionRef: SessionRef;
   /** Oldest first, as `approvalsOldestFirst` orders them. Never empty. */
   readonly approvals: readonly SessionApproval[];
   /**
@@ -62,7 +59,6 @@ export interface ApprovalsTabProps {
 }
 
 export function ApprovalsTab({
-  sessionRef,
   approvals,
   project,
   store,
@@ -103,7 +99,6 @@ export function ApprovalsTab({
           style={{ borderBottom: index === approvals.length - 1 ? undefined : border }}
         >
           <ApprovalControls
-            sessionRef={sessionRef}
             approval={approval}
             // The tool, not the session: every pair on this tab answers for
             // one session, so the session's name would label all of them the

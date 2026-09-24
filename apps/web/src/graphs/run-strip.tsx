@@ -2,7 +2,7 @@ import type { JSX } from 'react';
 import type { GraphRunState } from '@agentplex/protocol';
 import { Button, Group, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
-import { runStripText, runTone } from './run-model.js';
+import { isRunOpen, runStripText, runTone } from './run-model.js';
 
 /**
  * The strip mockup 6d draws under the header while a run is on: the run's
@@ -62,7 +62,7 @@ export function RunStrip({ run, scheme, cancelling, stale, onCancel }: RunStripP
           {run.reason}
         </Text>
       )}
-      {run.status === 'running' && !stale ? (
+      {isRunOpen(run.status) && !stale ? (
         <Button
           variant="default"
           size="compact-xs"

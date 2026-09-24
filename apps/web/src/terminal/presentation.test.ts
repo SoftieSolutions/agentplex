@@ -123,6 +123,7 @@ function stateWith(overrides?: {
     // Nothing heard on the network: this file is about drawing sessions, and
     // a candidate is neither a session nor a machine any of them run on.
     candidates: [],
+    graphRunApprovals: [],
   });
 }
 

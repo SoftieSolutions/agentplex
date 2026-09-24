@@ -505,6 +505,21 @@ describe('commands', () => {
     expect(outcome).toEqual({ accepted: true, id: 1, delivery: 'queued' });
   });
 
+  it('carries the runs waiting on a person off the machine state, whole', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.machineStateGraphRunWaiting);
+
+    const waiting = h.store.getSnapshot().machineState?.graphRunApprovals ?? [];
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({
+      number: 1,
+      nodeLabel: 'Approve merge',
+      approval: { tool: 'HUMAN', subject: { kind: 'graphRun', nodeId: 'approve' } },
+    });
+  });
+
   it('an approval-decided reply says what became of the request, not what the click did', async () => {
     const h = harness();
     const { socket } = await establish(h);
@@ -577,8 +592,7 @@ describe('commands', () => {
     // stopped waiting. Nothing here has to guess which.
     const decide: HubCommand = {
       type: 'approval-decide',
-      storeId: SESSION.storeId,
-      sessionId: SESSION.sessionId,
+      subject: { kind: 'session', storeId: SESSION.storeId, sessionId: SESSION.sessionId },
       approvalId: approvalIdSchema.parse('approval-1'),
       decision: 'grant',
     };
