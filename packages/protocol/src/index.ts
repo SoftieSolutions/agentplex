@@ -156,9 +156,11 @@ export type {
 } from './graph.js';
 
 export {
+  GRAPH_RUN_OUTPUT_MAX_CHARS,
   GRAPH_RUN_STEPS_MAX,
   graphRunIdSchema,
   graphRunStateSchema,
+  graphRunStepOutputSchema,
   graphRunStepSchema,
   runStatusSchema,
   stepOutcomeSchema,
@@ -167,6 +169,7 @@ export type {
   GraphRunId,
   GraphRunState,
   GraphRunStep,
+  GraphRunStepOutput,
   RunStatus,
   StepOutcome,
 } from './graph-run.js';

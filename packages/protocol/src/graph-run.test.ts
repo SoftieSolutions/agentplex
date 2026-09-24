@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { parseClientFrame, parseHubFrame } from './client.js';
 import {
+  GRAPH_RUN_OUTPUT_MAX_CHARS,
   GRAPH_RUN_STEPS_MAX,
   graphRunIdSchema,
   graphRunStateSchema,
+  graphRunStepOutputSchema,
   graphRunStepSchema,
   runStatusSchema,
   stepOutcomeSchema,
@@ -17,7 +19,19 @@ import {
  */
 
 const RUN_ID = 'run-38';
-const STEP = { nodeId: 'start', attempt: 0, outcome: 'succeeded', output: { language: 'rust' } };
+const GRAPH = 'node-9';
+const STEP = {
+  nodeId: 'start',
+  attempt: 0,
+  outcome: 'succeeded',
+  output: { kind: 'text', text: '{"language":"rust"}' },
+};
+const SESSION_OUTPUT = {
+  kind: 'session',
+  storeId: 'store-work',
+  sessionId: 'session-9',
+  status: 'idle',
+};
 
 describe('the run vocabulary', () => {
   it('names four run statuses and nothing else', () => {
@@ -34,15 +48,44 @@ describe('the run vocabulary', () => {
     expect(graphRunIdSchema.safeParse('').success).toBe(false);
   });
 
-  it('bounds a step output the way a route input is bounded, and lets it be absent', () => {
+  it('records a step output as one of three bounded shapes, or nothing', () => {
     expect(graphRunStepSchema.safeParse(STEP).success).toBe(true);
     expect(graphRunStepSchema.safeParse({ ...STEP, output: null }).success).toBe(true);
-    expect(graphRunStepSchema.safeParse({ ...STEP, output: 'words' }).success).toBe(false);
+    expect(
+      graphRunStepOutputSchema.safeParse({ kind: 'route', route: 0, to: 'review' }).success,
+    ).toBe(true);
+    expect(
+      graphRunStepOutputSchema.safeParse({ kind: 'route', route: null, to: 'review' }).success,
+    ).toBe(true);
+    expect(graphRunStepOutputSchema.safeParse(SESSION_OUTPUT).success).toBe(true);
     expect(graphRunStepSchema.safeParse({ ...STEP, attempt: -1 }).success).toBe(false);
+  });
+
+  it('refuses a route input, free words or a session with extra fields as an output', () => {
+    // The old shape: the object handed to the next node. A step no longer
+    // records it, because it is up to 16 000 characters per step and a run
+    // may have hundreds of steps.
+    expect(graphRunStepSchema.safeParse({ ...STEP, output: { language: 'rust' } }).success).toBe(
+      false,
+    );
+    expect(graphRunStepSchema.safeParse({ ...STEP, output: 'words' }).success).toBe(false);
+    expect(graphRunStepOutputSchema.safeParse({ ...SESSION_OUTPUT, transcript: 'x' }).success).toBe(
+      false,
+    );
+    expect(graphRunStepOutputSchema.safeParse({ kind: 'route', route: 0 }).success).toBe(false);
+  });
+
+  it('bounds the one free text a step may record', () => {
+    const text = 'x'.repeat(GRAPH_RUN_OUTPUT_MAX_CHARS);
+    expect(graphRunStepOutputSchema.safeParse({ kind: 'text', text }).success).toBe(true);
+    expect(graphRunStepOutputSchema.safeParse({ kind: 'text', text: `${text}x` }).success).toBe(
+      false,
+    );
   });
 
   it('carries no cost anywhere in a run state', () => {
     const state = graphRunStateSchema.parse({
+      nodeId: GRAPH,
       runId: RUN_ID,
       number: 38,
       status: 'running',
@@ -59,6 +102,7 @@ describe('the run vocabulary', () => {
     const steps = Array.from({ length: GRAPH_RUN_STEPS_MAX + 1 }, () => STEP);
     expect(
       graphRunStateSchema.safeParse({
+        nodeId: GRAPH,
         runId: RUN_ID,
         number: 1,
         status: 'running',
@@ -95,6 +139,12 @@ describe('parseClientFrame on the run frames', () => {
     expect(parseClientFrame({ type: 'graph-run-cancel', id: 2, runId: RUN_ID }).ok).toBe(true);
     expect(parseClientFrame({ type: 'graph-run-cancel', id: 2 }).ok).toBe(false);
   });
+
+  it('takes a read that names the graph and nothing else', () => {
+    expect(parseClientFrame({ type: 'graph-run-read', id: 3, nodeId: GRAPH }).ok).toBe(true);
+    expect(parseClientFrame({ type: 'graph-run-read', id: 3 }).ok).toBe(false);
+    expect(parseClientFrame({ type: 'graph-run-read', id: 3, runId: RUN_ID }).ok).toBe(false);
+  });
 });
 
 describe('parseHubFrame on the run frames', () => {
@@ -110,6 +160,7 @@ describe('parseHubFrame on the run frames', () => {
   it('carries a run state unsolicited, with no replyTo', () => {
     const result = parseHubFrame({
       type: 'graph-run-state',
+      nodeId: GRAPH,
       runId: RUN_ID,
       number: 38,
       status: 'running',
@@ -123,9 +174,30 @@ describe('parseHubFrame on the run frames', () => {
     expect('replyTo' in result.value).toBe(false);
   });
 
+  it('names the graph a state is of, so a client can file it without a replyTo', () => {
+    expect(
+      parseHubFrame({
+        type: 'graph-run-state',
+        runId: RUN_ID,
+        number: 38,
+        status: 'running',
+        reason: null,
+        step: 3,
+        of: 9,
+        steps: [],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('answers a read of a graph with no run by naming the graph and the frame', () => {
+    expect(parseHubFrame({ type: 'graph-run-none', replyTo: 5, nodeId: GRAPH }).ok).toBe(true);
+    expect(parseHubFrame({ type: 'graph-run-none', replyTo: 5 }).ok).toBe(false);
+  });
+
   it('carries the sentence a failed run ended with', () => {
     const result = parseHubFrame({
       type: 'graph-run-state',
+      nodeId: GRAPH,
       runId: RUN_ID,
       number: 38,
       status: 'failed',

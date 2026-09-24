@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GRAPH_NODES_MAX, GRAPH_RETRY_MAX, graphNodeIdSchema } from './graph.js';
-import { routeInputSchema } from './route-condition.js';
+import { nodeIdSchema, sessionIdSchema, storeIdSchema } from './identity.js';
+import { sessionStatusSchema } from './session.js';
 
 /**
  * A run of a graph: what it is called, where it has got to, and what each
@@ -29,7 +30,20 @@ import { routeInputSchema } from './route-condition.js';
  * records with the same `nodeId` and attempts 0, 1 and 2, because what a
  * person reading the strip wants to know is that the node was tried again and
  * what each try said -- collapsing the attempts into one record would lose the
- * first failure's sentence the moment the second try began.
+ * first failure's sentence the moment the second try began. A node a cycle
+ * reaches twice is two runs of records, in the order the walk made them.
+ *
+ * ## What a step records is not what it hands on
+ *
+ * The object one node hands the next -- what a ROUTER's conditions read -- is
+ * a route input of up to `ROUTE_INPUT_MAX_CHARS`, and a run may have hundreds
+ * of steps. Recording it on every step would make one state frame megabytes
+ * wide, sent to every client on every change. So a step records a summary of
+ * a fixed shape per kind of node instead: an AGENT step names the session it
+ * ran and how it stopped, a ROUTER step says which route matched, and a
+ * TRIGGER records the run input as text cut at `GRAPH_RUN_OUTPUT_MAX_CHARS`.
+ * The one free text there is has that bound and the schema enforces it, so no
+ * step can grow a frame past what every client is sent.
  */
 
 /** The hub's name for one run. Opaque, minted by the hub, unique across every graph. */
@@ -56,25 +70,55 @@ export type StepOutcome = z.infer<typeof stepOutcomeSchema>;
  */
 export const GRAPH_RUN_STEPS_MAX = GRAPH_NODES_MAX * (GRAPH_RETRY_MAX + 1);
 
+/** The most characters the one free-text output a step may record can hold. */
+export const GRAPH_RUN_OUTPUT_MAX_CHARS = 1_000;
+
+/**
+ * What one attempt recorded, by the kind of node that made it.
+ *
+ * `text` is a TRIGGER's: the run input as JSON, cut at the bound. `route` is
+ * a ROUTER's: the index of the route that matched, or `null` when it fell to
+ * `otherwise`, and the node it sent the run to. `session` is an AGENT's: the
+ * session it ran and the status it stopped on, and nothing of what the agent
+ * said -- that is the session's transcript, read on demand.
+ */
+export const graphRunStepOutputSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('text'), text: z.string().max(GRAPH_RUN_OUTPUT_MAX_CHARS) }),
+  z.strictObject({
+    kind: z.literal('route'),
+    route: z.int().nonnegative().nullable(),
+    to: graphNodeIdSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('session'),
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    status: sessionStatusSchema,
+  }),
+]);
+export type GraphRunStepOutput = z.infer<typeof graphRunStepOutputSchema>;
+
 /**
  * One attempt at one node.
  *
- * `output` is what the step produced and what the next step is handed: a
- * TRIGGER's is the run input, a ROUTER's is what it was given, an AGENT's
- * names the session it ran. Bounded by the same schema a route input is,
- * because that is what it is -- the object the next ROUTER's conditions read.
- * `null` while the attempt is running and for an attempt that made nothing.
+ * `output` is what the attempt recorded, in the bounded shape above; `null`
+ * while the attempt is running and for an attempt that made nothing.
  */
 export const graphRunStepSchema = z.object({
   nodeId: graphNodeIdSchema,
   attempt: z.int().nonnegative(),
   outcome: stepOutcomeSchema,
-  output: routeInputSchema.nullable(),
+  output: graphRunStepOutputSchema.nullable(),
 });
 export type GraphRunStep = z.infer<typeof graphRunStepSchema>;
 
 /**
- * A run, whole, as every client is told it.
+ * A run, whole, as a client watching its graph is told it.
+ *
+ * `nodeId` is the graph the run is of. It is on the state and not only on the
+ * frame that started the run, because a client that attaches mid-run, or asks
+ * `graph-run-read` after a reconnection, has no started reply to join it to:
+ * the graph it is watching is the whole of what it knows.
  *
  * `step` counts the nodes the run has reached and `of` is how many nodes the
  * document has, which is what the strip's `step 3/9` reads. `of` is a bound
@@ -87,6 +131,7 @@ export type GraphRunStep = z.infer<typeof graphRunStepSchema>;
  * bare `failed` is not.
  */
 export const graphRunStateSchema = z.object({
+  nodeId: nodeIdSchema,
   runId: graphRunIdSchema,
   /** Counts from 1 per graph, so a person can say "run 38 broke". */
   number: z.int().positive(),
