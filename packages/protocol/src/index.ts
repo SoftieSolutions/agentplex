@@ -131,6 +131,7 @@ export type { FrameId, ProtocolErrorFrame, RefusalCode } from './frames.js';
 
 export {
   GRAPH_APPROVERS_MAX,
+  GRAPH_HUMAN_TIMEOUT_MAX_MINUTES,
   GRAPH_LABEL_MAX_CHARS,
   GRAPH_NODES_MAX,
   GRAPH_PROMPT_MAX_CHARS,

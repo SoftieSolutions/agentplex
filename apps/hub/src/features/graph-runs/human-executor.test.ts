@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  GRAPH_HUMAN_TIMEOUT_MAX_MINUTES,
   graphDocumentSchema,
   graphRunIdSchema,
   nodeIdSchema,
@@ -10,7 +11,7 @@ import {
   type GraphRunId,
 } from '@agentplex/protocol';
 import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
-import { createLogger } from '@agentplex/node-shared';
+import { createLogger, systemTimers, type Timers } from '@agentplex/node-shared';
 import type { GraphRunAbout, GraphRunSubject } from '../approvals/approvals.js';
 import { createHumanExecutor, type HumanExecutor } from './human-executor.js';
 import type { Cancellation, StepContext, StepResult } from './walker.js';
@@ -54,6 +55,14 @@ const DOC: GraphDocument = graphDocumentSchema.parse({
       approvers: ['robert'],
       timeoutMinutes: 2,
     },
+    {
+      ...BASE,
+      id: 'longest',
+      kind: 'human',
+      label: 'Sign-off',
+      approvers: ['robert'],
+      timeoutMinutes: GRAPH_HUMAN_TIMEOUT_MAX_MINUTES,
+    },
   ],
   edges: [{ from: 'start', to: 'gate' }],
 });
@@ -74,6 +83,8 @@ interface Raised {
 let raised: Raised[];
 let withdrawnRuns: GraphRunId[];
 let timers: FakeTimers;
+/** What the executor schedules on: the fake timers unless a test hands it the real ones. */
+let scheduleOn: Timers;
 let minted: number;
 let waitingCalls: number;
 let cancellation: Cancellation & { cancel(): void };
@@ -111,7 +122,7 @@ function executor(): HumanExecutor {
       },
     },
     ids: { newId: () => `approval-${String((minted += 1))}` },
-    timers,
+    timers: scheduleOn,
     logger,
   });
 }
@@ -142,10 +153,15 @@ async function settle(): Promise<void> {
 }
 
 describe('the HUMAN executor', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     raised = [];
     withdrawnRuns = [];
     timers = createFakeTimers();
+    scheduleOn = timers;
     minted = 0;
     waitingCalls = 0;
     cancellation = fakeCancellation();
@@ -211,6 +227,24 @@ describe('the HUMAN executor', () => {
       // The node has no label, so its id names it.
       problem: 'timed waited 2 minutes for a person and nobody answered',
     });
+  });
+
+  it('keeps the longest timeout a node may have on a real timer, rather than firing it at once', async () => {
+    // The system timers under vitest's clock: what is under test is the
+    // delay Node's setTimeout is handed, which overflows past 2^31 - 1
+    // milliseconds and fires after one.
+    vi.useFakeTimers();
+    scheduleOn = systemTimers;
+    const result = step('longest');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(withdrawnRuns).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(GRAPH_HUMAN_TIMEOUT_MAX_MINUTES * 60_000 - 2);
+    expect(withdrawnRuns).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(withdrawnRuns).toEqual([RUN]);
+    await expect(result).resolves.toMatchObject({ ok: false });
   });
 
   it('cancels the timeout when a person answers first', async () => {
