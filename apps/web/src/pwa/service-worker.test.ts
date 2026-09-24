@@ -189,7 +189,7 @@ function ref(storeId: string, sessionId: string) {
 function runPayload(graph = 'node-graph-release'): Record<string, unknown> {
   return {
     title: 'graph run',
-    body: 'run #38 is waiting at Approve merge',
+    body: '#38 is waiting at Approve merge',
     data: { graph },
   };
 }
@@ -202,7 +202,7 @@ describe('the service worker on a push about a graph run', () => {
 
     expect(worker.shown).toHaveLength(1);
     expect(worker.shown[0]?.title).toBe('agentplex');
-    expect(worker.shown[0]?.options.body).toBe('graph run run #38 is waiting at Approve merge');
+    expect(worker.shown[0]?.options.body).toBe('graph run #38 is waiting at Approve merge');
     expect(worker.shown[0]?.options.data).toEqual({ graph: 'node-graph-release' });
     expect(worker.shown[0]?.options.tag).toBe('#/graph/node-graph-release');
   });

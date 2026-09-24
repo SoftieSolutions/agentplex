@@ -466,7 +466,7 @@ describe('the fan-out', () => {
 
     expect(JSON.parse(delivered[0]?.payload ?? 'null')).toEqual({
       title: 'graph run',
-      body: 'run #38 is waiting at Ship it',
+      body: '#38 is waiting at Ship it',
       data: { graph: 'node-graph-release' },
     });
   });

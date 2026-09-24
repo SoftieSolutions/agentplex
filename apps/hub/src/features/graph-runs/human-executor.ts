@@ -114,7 +114,10 @@ export function createHumanExecutor(dependencies: HumanExecutorDependencies): Hu
         const word = approvals.requestedByHub(subject, request, {
           graph: run.graph,
           number: run.number,
-          nodeLabel: nameOf(node),
+          // Cleaned here, at the source, because the push body, the bell row
+          // and the approval controls all draw it and none of them should
+          // have to remember to.
+          nodeLabel: displayableApprovalText(nameOf(node)),
         });
         context.waiting();
         logger.info('a graph step is waiting on a person', {

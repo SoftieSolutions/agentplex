@@ -355,9 +355,11 @@ function payloadFor(event: PushEvent): {
         data: { storeId: event.storeId, sessionId: event.sessionId },
       };
     case 'graphRun':
+      // The worker shows title and body as one line, so the body picks up
+      // where the title stops: "graph run #38 is waiting at Ship it".
       return {
         title: 'graph run',
-        body: `run #${String(event.number)} is waiting at ${event.node}`,
+        body: `#${String(event.number)} is waiting at ${event.node}`,
         data: { graph: event.graph },
       };
     default:

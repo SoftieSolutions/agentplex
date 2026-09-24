@@ -57,6 +57,15 @@ const DOC: GraphDocument = graphDocumentSchema.parse({
     },
     {
       ...BASE,
+      id: 'spoofed',
+      kind: 'human',
+      // A label is typed into a canvas: a bell, a push and a row draw it.
+      label: 'Ship\u202e it\u0007',
+      approvers: ['robert'],
+      timeoutMinutes: null,
+    },
+    {
+      ...BASE,
       id: 'longest',
       kind: 'human',
       label: 'Sign-off',
@@ -184,6 +193,14 @@ describe('the HUMAN executor', () => {
     expect(only?.request.suggestions).toEqual([]);
     // And the walk was told the step is waiting, once.
     expect(waitingCalls).toBe(1);
+  });
+
+  it('names the node in displayable text, with no control or direction characters', async () => {
+    void step('spoofed');
+    await settle();
+
+    expect(raised[0]?.about.nodeLabel).toBe('Ship it');
+    expect(raised[0]?.request.proposal).toContain('waiting at Ship it for robert');
   });
 
   it('succeeds and passes the input on when a person grants', async () => {

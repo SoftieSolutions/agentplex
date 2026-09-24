@@ -18,6 +18,7 @@ import {
   listRuns,
   readRun,
   replaceSteps,
+  type RunEnd,
 } from './run-rows.js';
 
 /**
@@ -172,6 +173,19 @@ describe('run rows', () => {
       reason: null,
       endedAt: NOW + 5,
     });
+  });
+
+  it('admits only a final status as an end, so endRun cannot write an open one', () => {
+    const ends: RunEnd[] = [
+      { status: 'succeeded', reason: null, steps: [], endedAt: NOW },
+      { status: 'failed', reason: 'it broke', steps: [], endedAt: NOW },
+      { status: 'cancelled', reason: null, steps: [], endedAt: NOW },
+      // @ts-expect-error -- `running` is open: a run ending in it would never end.
+      { status: 'running', reason: null, steps: [], endedAt: NOW },
+      // @ts-expect-error -- `waiting` is open too, parked on a person.
+      { status: 'waiting', reason: null, steps: [], endedAt: NOW },
+    ];
+    expect(ends).toHaveLength(5);
   });
 
   it('keeps the sentence a failed run ended with', async () => {

@@ -1,17 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   graphDocumentSchema,
+  nodeIdSchema,
   parseHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
   serverIdSchema,
+  serverRegistrationIdSchema,
   storeIdSchema,
   type ClientFrame,
   type GraphDocument,
   type HubFrame,
   type MachineState,
   type NodeId,
-  type ServerRegistrationId,
   type SessionRow,
   type StoreDescriptor,
 } from '@agentplex/protocol';
@@ -91,8 +92,8 @@ const logger = createLogger('error', () => {});
 const START = 1_756_000_000_000;
 const clock = { now: () => START };
 const WORK = storeIdSchema.parse('store-work');
-const ATTIC = 'registration-attic' as ServerRegistrationId;
-const PROJECT = 'project-universe' as NodeId;
+const ATTIC = serverRegistrationIdSchema.parse('registration-attic');
+const PROJECT = nodeIdSchema.parse('project-orchard');
 const PROJECT_DIRECTORY = '/volumes/work/agentplex';
 const PROMPT = 'Review the Rust in this change.';
 
@@ -220,7 +221,7 @@ async function start(): Promise<Harness> {
   // project, and the projects rows are where that becomes a directory.
   await database.query(
     `INSERT INTO nodes (id, parent_id, kind, position, name, name_source, created_at)
-     VALUES (?, NULL, 'project', 0, 'universe', 'user', ?)`,
+     VALUES (?, NULL, 'project', 0, 'orchard', 'user', ?)`,
     [PROJECT, START],
   );
   await database.query('INSERT INTO projects (node_id, directory, created_at) VALUES (?, ?, ?)', [
