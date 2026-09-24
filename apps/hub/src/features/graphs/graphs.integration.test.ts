@@ -8,6 +8,7 @@ import {
 import { createLogger } from '@agentplex/node-shared';
 import type { Database } from '../../db/database.js';
 import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-schema.js';
+import { replaceDraft } from './graph-rows.js';
 import { createGraphs, type Graphs } from './graphs.js';
 
 /**
@@ -34,9 +35,9 @@ function db(): Database {
   return migrated.database;
 }
 
-function graphs(): Graphs {
+function graphs(database: Database = db()): Graphs {
   return createGraphs({
-    database: db(),
+    database,
     ids: { newId: () => `node-${String((minted += 1))}` },
     clock: { now: () => now },
     logger,
@@ -254,6 +255,46 @@ describe('the graphs feature over a real schema', () => {
       expect(refused.problem).toContain('no action of that name exists on this build');
       expect(refused.problem).toContain('merge-and-tag');
       // The draft is left as it was, and nothing was published.
+      const opened = await feature.open(made.nodeId);
+      expect(opened.ok && opened.draftVersion).toBe(1);
+      expect(opened.ok && opened.published).toEqual([]);
+    });
+
+    it('checks the draft it freezes, not the one it read before another save landed', async () => {
+      const feature = graphs();
+      const made = await feature.create(PROJECT, 'release');
+      if (!made.ok) throw new Error('refused');
+      await feature.save(made.nodeId, RUNNABLE);
+      const unrunnable = document({
+        nodes: [
+          TRIGGER,
+          { ...BASE, id: 'merge', kind: 'action', label: 'Merge + tag', name: 'merge-and-tag' },
+        ],
+        edges: [{ from: 'start', to: 'merge' }],
+      });
+
+      // Another client's save lands between whatever this publish read first
+      // and the transaction that freezes the draft. A database that does that
+      // once, at the transaction's door, is the interleaving written down.
+      let landed = false;
+      const racing: Database = {
+        query: (text, values) => db().query(text, values),
+        close: () => db().close(),
+        async transaction(body) {
+          if (!landed) {
+            landed = true;
+            await replaceDraft(db(), made.nodeId, unrunnable, now);
+          }
+          return db().transaction(body);
+        },
+      };
+
+      const refused = await graphs(racing).publish(made.nodeId);
+
+      expect(landed).toBe(true);
+      expect(refused.ok).toBe(false);
+      if (refused.ok) return;
+      expect(refused.problem).toContain('merge-and-tag');
       const opened = await feature.open(made.nodeId);
       expect(opened.ok && opened.draftVersion).toBe(1);
       expect(opened.ok && opened.published).toEqual([]);

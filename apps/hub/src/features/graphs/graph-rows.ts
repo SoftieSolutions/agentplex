@@ -242,39 +242,56 @@ export async function replaceDraft(
 }
 
 /**
- * Stamps the draft as published and opens the next draft as a copy of it.
+ * What a publish came to: the number the draft was frozen as, why the check
+ * refused it, or `null` when that node is not a graph.
+ */
+export type PublishOutcome =
+  | { readonly ok: true; readonly version: number }
+  | { readonly ok: false; readonly problem: string };
+
+/**
+ * Stamps the draft as published and opens the next draft as a copy of it,
+ * once `unpublishable` has found nothing against it.
  *
  * One transaction, because the state between the two statements -- a graph
  * with no draft -- is exactly what the partial unique index exists to make
- * impossible from outside, and it should be impossible from inside too. The
- * new draft's `updated_at` is the publish moment: it was last written then,
- * by the publish that made it.
+ * impossible from outside, and it should be impossible from inside too.
+ *
+ * The check runs inside it, on the draft this transaction read, and is handed
+ * the transaction to read anything else through. A check run before the
+ * transaction judges a document that another client's save may have replaced
+ * by the time the freeze happens, and the row that was frozen is then one
+ * nothing checked. The rows module does not know the rules -- the feature
+ * does -- so the rules arrive as a function and the one thing promised here
+ * is that they are asked about the document that gets published.
+ *
+ * The new draft's `updated_at` is the publish moment: it was last written
+ * then, by the publish that made it. Its document is copied in SQL from the
+ * row just frozen, so what the draft holds is what was published, byte for
+ * byte, and never a second serialisation of it.
  */
 export async function publishDraft(
   database: Database,
   nodeId: NodeId,
   publishedAt: number,
-): Promise<{ readonly version: number } | null> {
+  unpublishable: (tx: Queryable, document: GraphDocument) => Promise<string | null>,
+): Promise<PublishOutcome | null> {
   return database.transaction(async (tx) => {
-    const draft = await tx.query(
-      `SELECT version, document FROM graph_versions
-        WHERE graph_node_id = ? AND published_at IS NULL`,
-      [nodeId],
-    );
-    const row = draft.rows[0];
-    if (row === undefined) return null;
-    const version = z.int().positive().parse(row['version']);
-    const document = z.string().parse(row['document']);
+    const draft = await readDraft(tx, nodeId);
+    if (draft === null) return null;
+    const problem = await unpublishable(tx, draft.document);
+    if (problem !== null) return { ok: false, problem };
 
     await tx.query(
       'UPDATE graph_versions SET published_at = ? WHERE graph_node_id = ? AND version = ?',
-      [publishedAt, nodeId, version],
+      [publishedAt, nodeId, draft.version],
     );
     await tx.query(
       `INSERT INTO graph_versions (graph_node_id, version, document, updated_at, published_at)
-       VALUES (?, ?, ?, ?, NULL)`,
-      [nodeId, version + 1, document, publishedAt],
+       SELECT graph_node_id, version + 1, document, ?, NULL FROM graph_versions
+        WHERE graph_node_id = ? AND version = ?`,
+      [publishedAt, nodeId, draft.version],
     );
-    return { version };
+    return { ok: true, version: draft.version };
   });
 }

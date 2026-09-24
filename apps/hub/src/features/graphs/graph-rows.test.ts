@@ -24,6 +24,8 @@ import {
 
 const NOW = 1_756_000_000_000;
 const clock = { now: () => NOW };
+/** A check with nothing against the draft: what a publish looks like when the rules pass. */
+const publishable = (): Promise<string | null> => Promise.resolve(null);
 const PROJECT = nodeIdSchema.parse('project');
 
 let migrated: MigratedSchema | null = null;
@@ -161,7 +163,10 @@ describe('the graph rows over a real schema', () => {
     if (!made.ok) throw new Error('refused');
     await replaceDraft(db(), made.nodeId, TRIGGER_ONLY, NOW + 5);
 
-    expect(await publishDraft(db(), made.nodeId, NOW + 10)).toEqual({ version: 1 });
+    expect(await publishDraft(db(), made.nodeId, NOW + 10, publishable)).toEqual({
+      ok: true,
+      version: 1,
+    });
 
     expect(await readVersion(db(), made.nodeId, 1)).toEqual({
       version: 1,
@@ -178,11 +183,38 @@ describe('the graph rows over a real schema', () => {
       { version: 1, publishedAt: NOW + 10 },
     ]);
 
-    expect(await publishDraft(db(), made.nodeId, NOW + 20)).toEqual({ version: 2 });
+    expect(await publishDraft(db(), made.nodeId, NOW + 20, publishable)).toEqual({
+      ok: true,
+      version: 2,
+    });
     expect((await listPublishedVersions(db(), made.nodeId)).map((row) => row.version)).toEqual([
       1, 2,
     ]);
-    expect(await publishDraft(db(), PROJECT, NOW)).toBeNull();
+    expect(await publishDraft(db(), PROJECT, NOW, publishable)).toBeNull();
+  });
+
+  it('runs the check on the draft inside the transaction, and publishes nothing when it objects', async () => {
+    const made = await insertGraph(db(), ids, clock, { projectNodeId: PROJECT, name: 'release' });
+    if (!made.ok) throw new Error('refused');
+    await replaceDraft(db(), made.nodeId, TRIGGER_ONLY, NOW + 5);
+    const checked: GraphDocument[] = [];
+
+    const outcome = await publishDraft(db(), made.nodeId, NOW + 10, async (tx, document) => {
+      checked.push(document);
+      // The handle the check is given reads the row the publish is about to
+      // freeze: the same draft, through the same transaction.
+      const seen = await readDraft(tx, made.nodeId);
+      return seen?.version === 1 ? 'not this one' : 'the check read a different draft';
+    });
+
+    expect(outcome).toEqual({ ok: false, problem: 'not this one' });
+    expect(checked).toEqual([TRIGGER_ONLY]);
+    expect(await readDraft(db(), made.nodeId)).toEqual({
+      version: 1,
+      document: TRIGGER_ONLY,
+      updatedAt: NOW + 5,
+    });
+    expect(await listPublishedVersions(db(), made.nodeId)).toEqual([]);
   });
 
   it('keeps one draft per graph as a schema fact', async () => {
@@ -201,7 +233,7 @@ describe('the graph rows over a real schema', () => {
   it('refuses any change to a published row, by trigger', async () => {
     const made = await insertGraph(db(), ids, clock, { projectNodeId: PROJECT, name: 'release' });
     if (!made.ok) throw new Error('refused');
-    await publishDraft(db(), made.nodeId, NOW + 10);
+    await publishDraft(db(), made.nodeId, NOW + 10, publishable);
 
     await expect(
       db().query(
@@ -228,7 +260,7 @@ describe('the graph rows over a real schema', () => {
   it('keeps version numbers unique per graph', async () => {
     const made = await insertGraph(db(), ids, clock, { projectNodeId: PROJECT, name: 'release' });
     if (!made.ok) throw new Error('refused');
-    await publishDraft(db(), made.nodeId, NOW + 10);
+    await publishDraft(db(), made.nodeId, NOW + 10, publishable);
 
     await expect(
       db().query(
@@ -242,7 +274,7 @@ describe('the graph rows over a real schema', () => {
   it('takes every version with the node when the graph is removed', async () => {
     const made = await insertGraph(db(), ids, clock, { projectNodeId: PROJECT, name: 'release' });
     if (!made.ok) throw new Error('refused');
-    await publishDraft(db(), made.nodeId, NOW + 10);
+    await publishDraft(db(), made.nodeId, NOW + 10, publishable);
 
     await db().query('DELETE FROM nodes WHERE id = ?', [made.nodeId]);
 

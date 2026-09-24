@@ -6,7 +6,7 @@ import type {
   RefusalCode,
 } from '@agentplex/protocol';
 import type { Clock, IdGenerator, Logger } from '@agentplex/node-shared';
-import type { Database } from '../../db/database.js';
+import type { Database, Queryable } from '../../db/database.js';
 import {
   insertGraph,
   listPublishedVersions,
@@ -115,8 +115,12 @@ export function createGraphs(dependencies: GraphsDependencies): Graphs {
   const { database, ids, clock, onTreeChanged } = dependencies;
   const logger = dependencies.logger.child({ part: 'graphs' });
 
-  async function publishedVersion(nodeId: NodeId, version: number): Promise<GraphDocument | null> {
-    const row = await readVersion(database, nodeId, version);
+  async function readPublished(
+    queryable: Queryable,
+    nodeId: NodeId,
+    version: number,
+  ): Promise<GraphDocument | null> {
+    const row = await readVersion(queryable, nodeId, version);
     if (row === null || row.publishedAt === null) return null;
     return row.document;
   }
@@ -127,8 +131,12 @@ export function createGraphs(dependencies: GraphsDependencies): Graphs {
    * The checks run in the order a person would fix them: where the graph
    * starts, then each node that cannot run. The first problem is the answer,
    * because a sentence with three problems in it is one nobody acts on.
+   *
+   * Reads through the handle it is given, because `publishDraft` runs it
+   * inside the publish transaction on the draft that transaction is about to
+   * freeze: the version a SUB-GRAPH pins is looked up in the same snapshot.
    */
-  async function unpublishable(document: GraphDocument): Promise<string | null> {
+  async function unpublishable(tx: Queryable, document: GraphDocument): Promise<string | null> {
     const triggers = document.nodes.filter((node) => node.kind === 'trigger');
     if (triggers.length === 0) return 'a graph needs a TRIGGER node to start from';
     if (triggers.length > 1) {
@@ -143,7 +151,7 @@ export function createGraphs(dependencies: GraphsDependencies): Graphs {
             'no action of that name exists on this build'
           );
         case 'subgraph': {
-          const pinned = await publishedVersion(node.graph, node.version);
+          const pinned = await readPublished(tx, node.graph, node.version);
           if (pinned === null) {
             return (
               `the SUB-GRAPH node ${nameOf(node)} pins ${node.graph} at v${String(node.version)}, ` +
@@ -217,21 +225,16 @@ export function createGraphs(dependencies: GraphsDependencies): Graphs {
     },
 
     async publish(nodeId: NodeId): Promise<GraphPublished> {
-      const draft = await readDraft(database, nodeId);
-      if (draft === null) return NO_SUCH_GRAPH;
-
-      const problem = await unpublishable(draft.document);
-      if (problem !== null) {
-        logger.info('graph publish refused', { nodeId, problem });
-        return { ok: false, code: 'refused', problem };
-      }
-
-      const published = await publishDraft(database, nodeId, clock.now());
+      const published = await publishDraft(database, nodeId, clock.now(), unpublishable);
       if (published === null) return NO_SUCH_GRAPH;
+      if (!published.ok) {
+        logger.info('graph publish refused', { nodeId, problem: published.problem });
+        return { ok: false, code: 'refused', problem: published.problem };
+      }
       logger.info('graph published', { nodeId, version: published.version });
       return { ok: true, version: published.version };
     },
 
-    publishedVersion,
+    publishedVersion: (nodeId, version) => readPublished(database, nodeId, version),
   };
 }
