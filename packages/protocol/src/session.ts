@@ -308,10 +308,36 @@ export type SessionDescriptor = z.infer<typeof sessionDescriptorSchema>;
  * re-derived that from a status would be a second copy of the rule to keep in
  * step with the first.
  */
+/**
+ * How paused a held session is.
+ *
+ * A pause never kills anything. It is the server refusing to type into the
+ * PTY from the session's next turn boundary onward, with the process kept
+ * exactly where it is, so that a session can be set down and picked up again
+ * without losing its context. The approval gate is untouched by it: a paused
+ * session that was waiting on a permission still is.
+ *
+ * Three words and not a boolean, because a pause asked for mid-turn is not
+ * yet a pause. Interrupting a turn mid-tool is how a half-applied edit is left
+ * on disk -- the same argument `stoppable` makes -- so the server records the
+ * request and honours it when the turn ends. `requested` is that interval,
+ * told honestly: the session is still working and its input is still open. A
+ * client that showed "paused" for it would be claiming a boundary the agent
+ * has not reached.
+ *
+ * Only the server may promote `requested` to `paused`, and only from a status
+ * it derived and that is not `working`. `unknown` never promotes, because an
+ * adapter that could not tell what the session is doing cannot tell that it
+ * is at a boundary either.
+ */
+export const sessionPauseSchema = z.enum(['none', 'requested', 'paused']);
+export type SessionPause = z.infer<typeof sessionPauseSchema>;
+
 export const sessionHoldSchema = z.object({
   sessionId: sessionIdSchema,
   /** Whether a stop may be offered. False while the agent is mid-turn. */
   stoppable: z.boolean(),
+  pause: sessionPauseSchema,
 });
 export type SessionHold = z.infer<typeof sessionHoldSchema>;
 

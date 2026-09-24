@@ -175,6 +175,19 @@ describe('parseHubToServerFrame on the session instructions', () => {
     if (!named.ok) return;
     expect(named.value).not.toHaveProperty('pid');
   });
+
+  it('takes a pause and a resume addressed like a stop, and drops a terminal handle from either', () => {
+    for (const type of ['session-pause', 'session-resume']) {
+      const frame = { type, id: 3, storeId: 'store-1', sessionId: 'session-1' };
+      expect(parseHubToServerFrame(frame)).toEqual({ ok: true, value: frame });
+      const named = parseHubToServerFrame({ ...frame, terminalId: 'terminal-1', pid: 4321 });
+      expect(named.ok).toBe(true);
+      if (!named.ok) return;
+      expect(named.value).not.toHaveProperty('terminalId');
+      expect(named.value).not.toHaveProperty('pid');
+      expect(parseHubToServerFrame({ type, id: 3, storeId: 'store-1' }).ok).toBe(false);
+    }
+  });
 });
 
 describe('parseHubToServerFrame on the document frames', () => {
@@ -529,7 +542,7 @@ describe('parseServerToHubFrame', () => {
           uncommitted: null,
         },
       ],
-      holding: [{ sessionId: 'session-1', stoppable: false }],
+      holding: [{ sessionId: 'session-1', stoppable: false, pause: 'none' }],
       starts: [],
     });
     expect(result.ok).toBe(true);
@@ -540,12 +553,24 @@ describe('parseServerToHubFrame', () => {
       type: 'store-report',
       storeId: 'store-1',
       sessions: [],
-      holding: [{ sessionId: 'session-1', stoppable: true, pid: 4321, terminalId: 'terminal-1' }],
+      holding: [
+        {
+          sessionId: 'session-1',
+          stoppable: true,
+          pause: 'none',
+          pid: 4321,
+          terminalId: 'terminal-1',
+        },
+      ],
       starts: [],
     });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok || parsed.value.type !== 'store-report') return;
-    expect(parsed.value.holding[0]).toEqual({ sessionId: 'session-1', stoppable: true });
+    expect(parsed.value.holding[0]).toEqual({
+      sessionId: 'session-1',
+      stoppable: true,
+      pause: 'none',
+    });
   });
 
   it('strips a date off a store report: the hub stamps what it receives', () => {
@@ -769,6 +794,18 @@ describe('hub and server round trips', () => {
       sessionId: sessionIdSchema.parse('session-1'),
     },
     {
+      type: 'session-pause',
+      id: 30,
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
+    {
+      type: 'session-resume',
+      id: 31,
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
+    {
       type: 'session-subscribe',
       id: 6,
       target: { by: 'start', startId: A_START_ID },
@@ -855,11 +892,31 @@ describe('hub and server round trips', () => {
       sessionId: sessionIdSchema.parse('session-1'),
     },
     {
+      type: 'session-paused',
+      replyTo: 30,
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      pause: 'requested',
+    },
+    {
+      type: 'session-paused',
+      replyTo: 30,
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      pause: 'paused',
+    },
+    {
+      type: 'session-resumed',
+      replyTo: 31,
+      storeId: storeIdSchema.parse('store-1'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
+    {
       type: 'session-refused',
       replyTo: 4,
       code: 'refused',
       message: 'session-1 is already running here',
-      hold: { sessionId: sessionIdSchema.parse('session-1'), stoppable: false },
+      hold: { sessionId: sessionIdSchema.parse('session-1'), stoppable: false, pause: 'none' },
     },
     {
       type: 'store-report',
@@ -877,7 +934,9 @@ describe('hub and server round trips', () => {
           uncommitted: { files: 1, added: 18, removed: 4, entries: [] },
         },
       ],
-      holding: [{ sessionId: sessionIdSchema.parse('session-1'), stoppable: false }],
+      holding: [
+        { sessionId: sessionIdSchema.parse('session-1'), stoppable: false, pause: 'paused' },
+      ],
       starts: [{ startId: A_START_ID, sessionId: sessionIdSchema.parse('session-1') }],
     },
     {

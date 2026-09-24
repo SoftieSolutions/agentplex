@@ -9,7 +9,7 @@ import {
 } from './identity.js';
 import { pairedServerAddressSchema } from './pairing.js';
 import { providerReadinessSchema } from './readiness.js';
-import { sessionDescriptorSchema } from './session.js';
+import { sessionDescriptorSchema, sessionPauseSchema } from './session.js';
 
 /**
  * The whole of what the hub believes, as a client reads it.
@@ -313,6 +313,8 @@ export type ServerView = z.infer<typeof serverViewSchema>;
 export const sessionHolderSchema = z.object({
   server: serverRegistrationIdSchema,
   stoppable: z.boolean(),
+  /** How paused the session is, as the server that holds it says. See `session.ts`. */
+  pause: sessionPauseSchema,
 });
 export type SessionHolder = z.infer<typeof sessionHolderSchema>;
 

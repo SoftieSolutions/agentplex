@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   sessionDescriptorSchema,
+  sessionHoldSchema,
+  sessionPauseSchema,
   sessionStatusSchema,
   sessionUsageSchema,
   UNCOMMITTED_FILES_LISTED,
@@ -333,5 +335,29 @@ describe('uncommittedDiffSchema', () => {
     // only one of them is safe to draw as an empty cell.
     const { uncommitted: _uncommitted, ...withoutDiff } = descriptor;
     expect(sessionDescriptorSchema.safeParse(withoutDiff).success).toBe(false);
+  });
+});
+
+describe('sessionHoldSchema', () => {
+  it('carries how paused the held session is, in one of three words', () => {
+    for (const pause of ['none', 'requested', 'paused'] as const) {
+      expect(
+        sessionHoldSchema.safeParse({ sessionId: 'session-1', stoppable: true, pause }).success,
+      ).toBe(true);
+    }
+    expect(sessionPauseSchema.options).toEqual(['none', 'requested', 'paused']);
+  });
+
+  it('rejects a hold with no answer about pausing, rather than assuming none', () => {
+    // Absence is not `none`. A server that does not say is a server on another
+    // protocol, and the version check should have refused it; a default here
+    // would let a reader show "running" for a session that is in fact paused.
+    expect(sessionHoldSchema.safeParse({ sessionId: 'session-1', stoppable: true }).success).toBe(
+      false,
+    );
+    expect(
+      sessionHoldSchema.safeParse({ sessionId: 'session-1', stoppable: true, pause: 'pausing' })
+        .success,
+    ).toBe(false);
   });
 });

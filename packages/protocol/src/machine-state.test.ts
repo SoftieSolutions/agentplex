@@ -236,15 +236,35 @@ describe('sessionRowSchema', () => {
   it('accepts a row held by a server, with whether it may be stopped', () => {
     const parsed = sessionRowSchema.safeParse({
       ...A_SESSION_ROW,
-      holder: { server: 'registration-1', stoppable: false },
+      holder: { server: 'registration-1', stoppable: false, pause: 'none' },
     });
     expect(parsed.success).toBe(true);
+  });
+
+  it('accepts a holder that says the session is paused, or pausing', () => {
+    for (const pause of ['requested', 'paused'] as const) {
+      expect(
+        sessionRowSchema.safeParse({
+          ...A_SESSION_ROW,
+          holder: { server: 'registration-1', stoppable: true, pause },
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it('rejects a holder with no answer about pausing: absence is not none', () => {
+    expect(
+      sessionRowSchema.safeParse({
+        ...A_SESSION_ROW,
+        holder: { server: 'registration-1', stoppable: true },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects a holder that inlines a server object where an id belongs', () => {
     const parsed = sessionRowSchema.safeParse({
       ...A_SESSION_ROW,
-      holder: { server: A_SERVER, stoppable: true },
+      holder: { server: A_SERVER, stoppable: true, pause: 'none' },
     });
     expect(parsed.success).toBe(false);
   });
