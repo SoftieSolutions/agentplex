@@ -43,14 +43,28 @@ import type { GraphEdit } from './graph-model.js';
  * it whole, and a save nobody pressed would publish an edit somebody may have
  * been walking away from. Publish therefore saves first when the draft is
  * dirty, so what is published is what is on screen and never a draft the
- * person last saw a minute ago.
+ * person last saw a minute ago -- and it sends the publish only once the hub
+ * has confirmed that save. Sent in the same breath, a refused save and an
+ * accepted publish would stamp the draft the hub already held and quietly
+ * drop the edits; chained, a refused save is the end of it and the refusal
+ * is what the screen shows.
  *
- * ## What it does when the connection comes back
+ * What a landed publish confirms is the document that was sent, never the
+ * one on screen: an edit made while the publish was out is still unsaved
+ * afterwards, and the hub's re-asked answer brings the new draft's number
+ * and the published list without replacing that edit.
  *
- * It asks for the graph again, and only when there is nothing unsaved to
- * lose: another client may have saved the draft while this one was away, and
- * a clean screen showing that copy is the honest one. A dirty screen keeps
- * its edits; the next Save is what settles which copy the hub holds.
+ * ## What it does when the connection goes, and when it comes back
+ *
+ * The hub store forgets every unanswered frame when the socket closes and
+ * sends no refusal for them, so a save, a publish or the open itself would
+ * otherwise stay "out" for ever. Leaving the connected phase is therefore an
+ * edge here: whatever was in flight is dropped, Save and Publish come back,
+ * and the graph is asked for again -- queued by the hub store until the next
+ * welcome -- when there is nothing unsaved to lose: another client may have
+ * saved the draft while this one was away, and a clean screen showing that
+ * copy is the honest one. A dirty screen keeps its edits; the next Save is
+ * what settles which copy the hub holds.
  */
 
 export interface GraphStoreHub {
@@ -126,6 +140,10 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
   let confirmed: GraphDocument | null = null;
   /** The document the save in flight carries, kept until it is answered. */
   let inFlight: GraphDocument | null = null;
+  /** The hub's draft as this store knew it when the publish went out. */
+  let publishedDocument: GraphDocument | null = null;
+  /** A publish is waiting on the save that went out first. */
+  let publishAfterSave = false;
   let openFrame: FrameId | null = null;
   /** The last answer taken, so one answer is applied once however often the snapshot moves. */
   let takenAnswer: GraphDocumentView | null = null;
@@ -172,6 +190,39 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     return true;
   }
 
+  function sendPublish(): void {
+    const outcome = hub.sendCommand({ type: 'graph-publish', nodeId });
+    if (!outcome.accepted) {
+      moveTo({ publishing: false, problem: outcome.reason });
+      return;
+    }
+    publishFrame = outcome.id;
+    publishedDocument = confirmed;
+    moveTo({ publishing: true, problem: null });
+  }
+
+  /**
+   * The connection went with frames out: the hub store has forgotten them
+   * and will answer none of them, so nothing here may wait on one.
+   */
+  function dropInFlight(): void {
+    const waited = saveFrame !== null ? 'save' : publishFrame !== null ? 'publish' : null;
+    openFrame = null;
+    saveFrame = null;
+    inFlight = null;
+    publishFrame = null;
+    publishedDocument = null;
+    publishAfterSave = false;
+    moveTo({
+      saving: false,
+      publishing: false,
+      ...(waited === null
+        ? {}
+        : { problem: `the connection dropped before the hub answered the ${waited}` }),
+    });
+    if (state.document === null || !state.dirty) askForGraph();
+  }
+
   /**
    * The hub's snapshot changed. Every answer is matched on the frame this
    * store is waiting for, or on the node for the open, which is what keeps
@@ -188,14 +239,17 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       takenAnswer = answer;
       openFrame = null;
       confirmed = answer.document;
+      // A dirty screen keeps its document: the hub's copy becomes the baseline
+      // the edits are measured against, and the name, the draft's number and
+      // the published list are the hub's to say either way.
+      const document = state.dirty && state.document !== null ? state.document : answer.document;
       moveTo({
         name: answer.name,
         draftVersion: answer.draftVersion,
         published: answer.published,
-        document: answer.document,
+        document,
         selection:
-          state.selection !== null &&
-          answer.document.nodes.some((node) => node.id === state.selection)
+          state.selection !== null && document.nodes.some((node) => node.id === state.selection)
             ? state.selection
             : null,
         problem: null,
@@ -208,15 +262,21 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       confirmed = inFlight;
       inFlight = null;
       moveTo({ saving: false, savedVersion: saved.version, savedAt: saved.updatedAt });
+      if (publishAfterSave) {
+        publishAfterSave = false;
+        sendPublish();
+      }
     }
 
     const published = snapshot.lastGraphPublished;
     if (published !== null && publishFrame !== null && published.replyTo === publishFrame) {
       publishFrame = null;
-      // The hub opened a new draft copying what it stamped, so the document on
-      // screen is that draft; its number and the published list are the hub's
+      // The hub stamped the draft it held, which is the one this store had
+      // confirmed when the publish went out; an edit made since is still
+      // unsaved. The new draft's number and the published list are the hub's
       // to say, and the re-ask is what brings them.
-      confirmed = state.document;
+      confirmed = publishedDocument ?? confirmed;
+      publishedDocument = null;
       moveTo({ publishing: false });
       askForGraph();
     }
@@ -229,16 +289,22 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       } else if (no.replyTo === saveFrame) {
         saveFrame = null;
         inFlight = null;
-        moveTo({ saving: false, problem: no.message });
+        // A publish waiting on this save goes with it: what it would stamp is
+        // the draft the hub still holds, not what is on screen.
+        publishAfterSave = false;
+        moveTo({ saving: false, publishing: false, problem: no.message });
       } else if (no.replyTo === publishFrame) {
         publishFrame = null;
+        publishedDocument = null;
         moveTo({ publishing: false, problem: no.message });
       }
     }
 
     const phase = snapshot.phase;
+    const dropped = phase !== 'connected' && phaseBefore === 'connected';
     const returned = phase === 'connected' && phaseBefore !== 'connected';
     phaseBefore = phase;
+    if (dropped) dropInFlight();
     if (returned && state.document !== null && !state.dirty && openFrame === null) {
       askForGraph();
     }
@@ -295,15 +361,14 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     },
 
     publish(): void {
-      if (state.document === null) return;
-      if (state.dirty && !sendSave(state.document)) return;
-      const outcome = hub.sendCommand({ type: 'graph-publish', nodeId });
-      if (!outcome.accepted) {
-        moveTo({ problem: outcome.reason });
+      if (state.document === null || state.publishing) return;
+      if (state.dirty) {
+        if (!sendSave(state.document)) return;
+        publishAfterSave = true;
+        moveTo({ publishing: true });
         return;
       }
-      publishFrame = outcome.id;
-      moveTo({ publishing: true, problem: null });
+      sendPublish();
     },
   };
 }

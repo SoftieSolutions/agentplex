@@ -220,15 +220,46 @@ describe('createGraphStore', () => {
     expect(store.getSnapshot().dirty).toBe(true);
   });
 
-  it('publishes what it saved: a dirty draft is saved first, and the publish follows', async () => {
+  it('publishes what it saved: a dirty draft is saved first, and the publish waits for the save to land', async () => {
     const { socket } = await opened();
     store.edit((document) => moveNode(document, START, { x: 40, y: 92 }));
 
     store.publish();
 
-    const types = sent(socket).map((frame) => frame.type);
-    expect(types.slice(-2)).toEqual(['graph-save', 'graph-publish']);
+    // Nothing but the save has gone: a publish sent in the same breath would
+    // stamp whatever draft the hub holds if the save were refused.
+    expect(sent(socket).filter((frame) => frame.type === 'graph-publish')).toEqual([]);
+    expect(store.getSnapshot().saving).toBe(true);
     expect(store.getSnapshot().publishing).toBe(true);
+
+    const save = frameOf(socket, 'graph-save');
+    socket.deliver(
+      JSON.stringify({ type: 'graph-saved', replyTo: save.id, version: 2, updatedAt: 1 }),
+    );
+
+    expect(
+      sent(socket)
+        .map((frame) => frame.type)
+        .slice(-2),
+    ).toEqual(['graph-save', 'graph-publish']);
+    expect(store.getSnapshot().saving).toBe(false);
+    expect(store.getSnapshot().publishing).toBe(true);
+  });
+
+  it('cancels the publish when the save it waited on is refused, and says why', async () => {
+    const { socket } = await opened();
+    store.edit((document) => moveNode(document, START, { x: 40, y: 92 }));
+    store.publish();
+    const save = frameOf(socket, 'graph-save');
+
+    socket.deliver(refusalTo(save.id, 'the draft moved on under you'));
+
+    expect(sent(socket).filter((frame) => frame.type === 'graph-publish')).toEqual([]);
+    const state = store.getSnapshot();
+    expect(state.saving).toBe(false);
+    expect(state.publishing).toBe(false);
+    expect(state.dirty).toBe(true);
+    expect(state.problem).toBe('the draft moved on under you');
   });
 
   it('is clean after a publish lands, and asks for the graph again to learn the new draft', async () => {
@@ -248,6 +279,36 @@ describe('createGraphStore', () => {
     expect(sent(socket).filter((frame) => frame.type === 'graph-open')).toHaveLength(
       opensBefore + 1,
     );
+  });
+
+  it('keeps an edit made while the publish was out, and takes the new draft’s number around it', async () => {
+    const { socket } = await opened();
+    store.publish();
+    const publish = frameOf(socket, 'graph-publish');
+    store.edit((document) => moveNode(document, START, { x: 40, y: 92 }));
+
+    socket.deliver(JSON.stringify({ type: 'graph-published', replyTo: publish.id, version: 2 }));
+
+    // What was published is the draft the hub held, not the edit made since:
+    // the edit is still unsaved and still on screen.
+    expect(store.getSnapshot().dirty).toBe(true);
+    expect(store.getSnapshot().document?.nodes[0]?.position).toEqual({ x: 40, y: 92 });
+
+    // The re-asked answer is the hub's new draft, a copy of what was stamped.
+    socket.deliver(
+      hubFrames.graphDocument
+        .replace('"draftVersion":2', '"draftVersion":3')
+        .replace(
+          '"published":[{"version":1,"publishedAt":1756000000000}]',
+          '"published":[{"version":1,"publishedAt":1756000000000},{"version":2,"publishedAt":1756000600000}]',
+        ),
+    );
+
+    const state = store.getSnapshot();
+    expect(state.draftVersion).toBe(3);
+    expect(state.published.map((row) => row.version)).toEqual([1, 2]);
+    expect(state.dirty).toBe(true);
+    expect(state.document?.nodes[0]?.position).toEqual({ x: 40, y: 92 });
   });
 
   it('shows a refusal to its own frame in the hub’s words, and ignores one to another', async () => {
@@ -307,6 +368,61 @@ describe('createGraphStore', () => {
     expect(sent(second).filter((frame) => frame.type === 'graph-open')).toEqual([]);
     expect(store.getSnapshot().dirty).toBe(true);
     expect(store.getSnapshot().document?.nodes[0]?.position).toEqual({ x: 40, y: 92 });
+  });
+
+  /** Drops the socket and lets the hub store redial; the welcome is the caller's to deliver. */
+  async function dropped(socket: FakeSocket): Promise<FakeSocket> {
+    socket.close();
+    timers.fireAll();
+    await settle();
+    const second = sockets.sockets[1];
+    if (second === undefined) throw new Error('the hub store did not redial');
+    return second;
+  }
+
+  it('lets Save be pressed again when the connection drops with a save out', async () => {
+    const { socket } = await opened();
+    store.edit((document) => moveNode(document, START, { x: 40, y: 92 }));
+    store.save();
+    expect(store.getSnapshot().saving).toBe(true);
+
+    const second = await dropped(socket);
+
+    // The hub store forgot the frame without a refusal; the draft is still
+    // unsaved, so Save has to come back rather than spin for ever.
+    expect(store.getSnapshot().saving).toBe(false);
+    expect(store.getSnapshot().dirty).toBe(true);
+    expect(store.getSnapshot().problem).toMatch(/dropped/);
+
+    second.open();
+    second.deliver(hubFrames.welcome);
+    store.save();
+    expect(sent(second).filter((frame) => frame.type === 'graph-save')).toHaveLength(1);
+  });
+
+  it('stops publishing when the connection drops with a publish out, and asks for the graph again', async () => {
+    const { socket } = await opened();
+    store.publish();
+    expect(store.getSnapshot().publishing).toBe(true);
+
+    const second = await dropped(socket);
+    second.open();
+    second.deliver(hubFrames.welcome);
+
+    expect(store.getSnapshot().publishing).toBe(false);
+    expect(sent(second).filter((frame) => frame.type === 'graph-open')).toHaveLength(1);
+  });
+
+  it('asks again when the connection drops before the first answer', async () => {
+    const { socket } = await open();
+
+    const second = await dropped(socket);
+    second.open();
+    second.deliver(hubFrames.welcome);
+
+    expect(sent(second).filter((frame) => frame.type === 'graph-open')).toHaveLength(1);
+    second.deliver(hubFrames.graphDocument);
+    expect(store.getSnapshot().document).not.toBeNull();
   });
 
   it('holds the selection, which is the inspector’s subject', async () => {
