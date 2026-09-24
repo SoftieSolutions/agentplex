@@ -1,5 +1,6 @@
 import type { SessionRef, StoreId } from '@agentplex/protocol';
 import type {
+  PauseOutcome,
   SessionController,
   SessionOutcome,
   StartSessionRequest,
@@ -26,6 +27,9 @@ export interface FakeSessionController extends SessionController {
   readonly starts: readonly StartSessionRequest[];
   /** Every stop it was asked for, in order. */
   readonly stops: readonly SessionRef[];
+  /** Every pause and every resume it was asked for, in order. */
+  readonly pauses: readonly SessionRef[];
+  readonly resumes: readonly SessionRef[];
   /**
    * Every store scan it was asked for, in order.
    *
@@ -39,6 +43,8 @@ export interface FakeSessionController extends SessionController {
   readonly transcripts: readonly TranscriptSessionRequest[];
   /** What the next start and stop answer with. */
   answerWith(outcome: SessionOutcome): void;
+  /** What the next pause and resume answer with. Its own shape, so its own setter. */
+  answerPauseWith(outcome: PauseOutcome): void;
   /**
    * What the next transcript read answers with.
    *
@@ -62,6 +68,8 @@ export function createFakeSessionController(
 ): FakeSessionController {
   const starts: StartSessionRequest[] = [];
   const stops: SessionRef[] = [];
+  const pauses: SessionRef[] = [];
+  const resumes: SessionRef[] = [];
   const transcripts: TranscriptSessionRequest[] = [];
   const scans: StoreId[] = [];
   const reports = new Map<StoreId, StoreReport>(
@@ -72,6 +80,13 @@ export function createFakeSessionController(
     ok: false,
     code: 'refused',
     problem: 'this fake controller was given no answer',
+    hold: null,
+  };
+
+  let pause: PauseOutcome = {
+    ok: false,
+    code: 'refused',
+    problem: 'this fake controller was given no pause answer',
     hold: null,
   };
 
@@ -92,6 +107,16 @@ export function createFakeSessionController(
       return outcome;
     },
 
+    pause(session: SessionRef): PauseOutcome {
+      pauses.push(session);
+      return pause;
+    },
+
+    resume(session: SessionRef): PauseOutcome {
+      resumes.push(session);
+      return pause;
+    },
+
     async report(storeId: StoreId): Promise<StoreReport | null> {
       scans.push(storeId);
       return reports.get(storeId) ?? null;
@@ -104,6 +129,10 @@ export function createFakeSessionController(
 
     answerWith(next: SessionOutcome): void {
       outcome = next;
+    },
+
+    answerPauseWith(next: PauseOutcome): void {
+      pause = next;
     },
 
     answerTranscriptWith(next: TranscriptOutcome): void {
@@ -120,6 +149,14 @@ export function createFakeSessionController(
 
     get stops(): readonly SessionRef[] {
       return stops;
+    },
+
+    get pauses(): readonly SessionRef[] {
+      return pauses;
+    },
+
+    get resumes(): readonly SessionRef[] {
+      return resumes;
     },
 
     get scans(): readonly StoreId[] {

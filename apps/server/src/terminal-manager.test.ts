@@ -5,6 +5,7 @@ import {
   type SessionId,
 } from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
+import type { SessionRef, SessionStatus } from '@agentplex/protocol';
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor, type PtySupervisor } from '@agentplex/pty';
@@ -554,6 +555,147 @@ describe('createTerminalManager stop', () => {
   });
 });
 
+describe('createTerminalManager pause', () => {
+  /** A held, named session whose status the test picks. */
+  function held(status: SessionStatus): Harness & { terminalId: string; session: SessionRef } {
+    const made = harness();
+    const session = sessionRef('session-a');
+    const started = made.manager.resume(session, launch);
+    if (!started.ok) throw new Error(started.problem);
+    made.manager.observe(session, status);
+    return { ...made, terminalId: started.terminal.terminalId, session };
+  }
+
+  it.each(['idle', 'awaiting-input', 'awaiting-permission'] as const)(
+    'pauses at once a session whose derived status is %s: it is already at a boundary',
+    (status) => {
+      const { manager, terminalId, session, factory } = held(status);
+
+      expect(manager.pause(terminalId)).toEqual({ ok: true, pause: 'paused' });
+      expect(manager.terminal(terminalId)?.pause).toBe('paused');
+      expect(manager.holder(session)?.pause).toBe('paused');
+      // Never a kill. The process is exactly where it was.
+      expect(factory.last?.kills).toBe(0);
+    },
+  );
+
+  it.each(['working', 'unknown'] as const)(
+    'records a request against a session that is %s, and promotes it at the next non-working status',
+    (status) => {
+      // Mid-turn is not a boundary, and a status nobody could derive may be
+      // mid-turn for all anyone knows. Both wait for the turn to end.
+      const { manager, terminalId, session } = held(status);
+
+      expect(manager.pause(terminalId)).toEqual({ ok: true, pause: 'requested' });
+      expect(manager.terminal(terminalId)?.pause).toBe('requested');
+
+      manager.observe(session, 'working');
+      expect(manager.terminal(terminalId)?.pause).toBe('requested');
+      manager.observe(session, 'awaiting-input');
+      expect(manager.terminal(terminalId)?.pause).toBe('paused');
+    },
+  );
+
+  it('never promotes a request on an unknown status: not knowing is not a boundary', () => {
+    const { manager, terminalId, session } = held('working');
+    manager.pause(terminalId);
+
+    manager.observe(session, 'unknown');
+
+    expect(manager.terminal(terminalId)?.pause).toBe('requested');
+  });
+
+  it('leaves a paused session paused whatever status is observed next', () => {
+    const { manager, terminalId, session } = held('idle');
+    manager.pause(terminalId);
+
+    manager.observe(session, 'working');
+
+    expect(manager.terminal(terminalId)?.pause).toBe('paused');
+  });
+
+  it('answers a second pause with where the first one got to, and changes nothing', () => {
+    const { manager, terminalId } = held('working');
+    manager.pause(terminalId);
+
+    expect(manager.pause(terminalId)).toEqual({ ok: true, pause: 'requested' });
+  });
+
+  it('clears a request and a pause alike on unpause', () => {
+    const requested = held('working');
+    requested.manager.pause(requested.terminalId);
+    expect(requested.manager.unpause(requested.terminalId)).toEqual({ ok: true });
+    expect(requested.manager.terminal(requested.terminalId)?.pause).toBe('none');
+
+    const paused = held('idle');
+    paused.manager.pause(paused.terminalId);
+    expect(paused.manager.unpause(paused.terminalId)).toEqual({ ok: true });
+    expect(paused.manager.holder(paused.session)?.pause).toBe('none');
+  });
+
+  it('takes an unpause on a session that was never paused, and changes nothing', () => {
+    const { manager, terminalId } = held('idle');
+
+    expect(manager.unpause(terminalId)).toEqual({ ok: true });
+    expect(manager.terminal(terminalId)?.pause).toBe('none');
+  });
+
+  it('refuses a pause and an unpause on a run that has exited, in a sentence', () => {
+    // `holder()` only finds live runs, so the controller can never reach this
+    // by session; it is reachable by terminal id, which is why it is tested
+    // here rather than one layer up.
+    const { manager, terminalId, factory } = held('idle');
+    factory.last?.close({ exitCode: 0, signal: null });
+
+    const paused = manager.pause(terminalId);
+    const unpaused = manager.unpause(terminalId);
+
+    expect(paused).toEqual({
+      ok: false,
+      problem: `terminal ${terminalId} has exited: there is no turn left to pause`,
+      holder: null,
+    });
+    expect(unpaused).toEqual({
+      ok: false,
+      problem: `terminal ${terminalId} has exited: there is nothing to resume`,
+      holder: null,
+    });
+  });
+
+  it('refuses a pause and an unpause for a terminal it does not have', () => {
+    const { manager } = harness();
+
+    expect(manager.pause('run-nothing')).toEqual({
+      ok: false,
+      problem: 'no terminal run-nothing',
+      holder: null,
+    });
+    expect(manager.unpause('run-nothing')).toEqual({
+      ok: false,
+      problem: 'no terminal run-nothing',
+      holder: null,
+    });
+  });
+
+  it('still stops a paused terminal: a pause withholds input, never the stop', () => {
+    const { manager, terminalId, factory } = held('idle');
+    manager.pause(terminalId);
+
+    expect(manager.stop(terminalId).ok).toBe(true);
+    expect(factory.last?.kills).toBe(1);
+  });
+
+  it('names the pause on the holder and on the terminal view', () => {
+    const { manager, terminalId, session } = held('idle');
+
+    expect(manager.terminal(terminalId)?.pause).toBe('none');
+    expect(manager.holder(session)?.pause).toBe('none');
+    manager.pause(terminalId);
+    expect(manager.terminal(terminalId)?.pause).toBe('paused');
+    expect(manager.holder(session)).toMatchObject({ pause: 'paused', stoppable: true });
+  });
+});
+
 describe('createTerminalManager shutdown', () => {
   it('closes every terminal it is holding, which is the only thing that does', () => {
     const { manager, factory } = harness();
@@ -578,6 +720,7 @@ describe('createTerminalManager shutdown', () => {
       watchers: 0,
       status: 'unknown',
       stoppable: true,
+      pause: 'none',
     });
     expect(manager.holder(sessionRef('session-b'))).toBeUndefined();
   });
