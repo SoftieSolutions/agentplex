@@ -367,7 +367,11 @@ describe('removing a node', () => {
     if (!folder.ok) throw new Error('the folder should have been made');
     await scan(tree, [descriptor('session-one')]);
     await tree.move(await nodeFor('session-one'), { parentId: folder.nodeId, position: 0 });
-    holders.set('session-one', { server: 'registration-mbp' as never, stoppable: true });
+    holders.set('session-one', {
+      server: 'registration-mbp' as never,
+      stoppable: true,
+      pause: 'none',
+    });
 
     const removed = await tree.remove(folder.nodeId);
 
@@ -377,7 +381,7 @@ describe('removing a node', () => {
       problem: 'the session session-one inside is still running; stop it first, and then remove it',
       // Named rather than merely refused: the way out is stopping the holder,
       // and a client cannot offer that without knowing which machine to aim at.
-      holder: { server: 'registration-mbp', stoppable: true },
+      holder: { server: 'registration-mbp', stoppable: true, pause: 'none' },
     });
     expect(await findNode(database(), folder.nodeId)).not.toBeNull();
     expect(await listRemovals(database())).toEqual([]);
@@ -386,7 +390,11 @@ describe('removing a node', () => {
   it('says it of the session itself when the session itself is what was named', async () => {
     const tree = catalogue();
     await scan(tree, [descriptor('session-one')]);
-    holders.set('session-one', { server: 'registration-mbp' as never, stoppable: false });
+    holders.set('session-one', {
+      server: 'registration-mbp' as never,
+      stoppable: false,
+      pause: 'none',
+    });
 
     const removed = await tree.remove(await nodeFor('session-one'));
 
@@ -394,7 +402,7 @@ describe('removing a node', () => {
     expect(removed.problem).toBe(
       'this session is still running; stop it first, and then remove it',
     );
-    expect(removed.holder).toEqual({ server: 'registration-mbp', stoppable: false });
+    expect(removed.holder).toEqual({ server: 'registration-mbp', stoppable: false, pause: 'none' });
   });
 
   it('removes a project, and the projects row goes with the node', async () => {

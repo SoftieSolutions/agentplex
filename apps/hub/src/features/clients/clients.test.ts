@@ -797,7 +797,11 @@ describe('starting and stopping a session', () => {
         ok: false,
         code: 'refused',
         problem: 'that session is already running on workshop',
-        holder: { server: 'registration-workshop' as ServerRegistrationId, stoppable: false },
+        holder: {
+          server: 'registration-workshop' as ServerRegistrationId,
+          stoppable: false,
+          pause: 'none',
+        },
       },
     });
     const { broadcast } = harness(async () => [], sessions);
@@ -822,7 +826,7 @@ describe('starting and stopping a session', () => {
       replyTo: 2,
       code: 'refused',
       message: 'that session is already running on workshop',
-      holder: { server: 'registration-workshop', stoppable: false },
+      holder: { server: 'registration-workshop', stoppable: false, pause: 'none' },
     });
     // Nobody else is told that somebody was refused: their view of the world
     // has not changed, and a refusal is a reply.
@@ -851,6 +855,86 @@ describe('starting and stopping a session', () => {
       replyTo: 2,
       server: 'registration-workshop',
     });
+  });
+
+  it('takes a pause and answers with how far it got, and a resume with a receipt', async () => {
+    const sessions = createFakeSessions();
+    sessions.answerPauseWith({
+      ok: true,
+      storeId: store(STORE),
+      sessionId: sessionIdSchema.parse(SESSION),
+      server: 'registration-workshop' as ServerRegistrationId,
+      pause: 'requested',
+    });
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'session-pause', id: 2, storeId: STORE, sessionId: SESSION });
+    expect(sessions.pauses).toEqual([{ storeId: STORE, sessionId: SESSION }]);
+    expect(client.received.at(-1)).toEqual({
+      type: 'session-paused',
+      replyTo: 2,
+      storeId: STORE,
+      sessionId: SESSION,
+      server: 'registration-workshop',
+      pause: 'requested',
+    });
+
+    sessions.answerPauseWith({
+      ok: true,
+      storeId: store(STORE),
+      sessionId: sessionIdSchema.parse(SESSION),
+      server: 'registration-workshop' as ServerRegistrationId,
+      pause: 'none',
+    });
+    await client.say({ type: 'session-resume', id: 3, storeId: STORE, sessionId: SESSION });
+    expect(sessions.resumes).toEqual([{ storeId: STORE, sessionId: SESSION }]);
+    expect(client.received.at(-1)).toEqual({
+      type: 'session-resumed',
+      replyTo: 3,
+      storeId: STORE,
+      sessionId: SESSION,
+      server: 'registration-workshop',
+    });
+  });
+
+  it('passes a refused pause back as a refusal with the holder on it', async () => {
+    const sessions = createFakeSessions();
+    sessions.answerPauseWith({
+      ok: false,
+      code: 'refused',
+      problem: 'the server running that session is not reachable right now',
+      holder: {
+        server: 'registration-workshop' as ServerRegistrationId,
+        stoppable: true,
+        pause: 'paused',
+      },
+    });
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'session-resume', id: 2, storeId: STORE, sessionId: SESSION });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+      message: 'the server running that session is not reachable right now',
+      holder: { server: 'registration-workshop', stoppable: true, pause: 'paused' },
+    });
+  });
+
+  it('refuses a pause that arrives before hello, and pauses nothing', async () => {
+    const sessions = createFakeSessions();
+    const { broadcast } = harness(async () => [], sessions);
+    const client = attach(broadcast);
+
+    await client.say({ type: 'session-pause', id: 1, storeId: STORE, sessionId: SESSION });
+
+    expect(sessions.pauses).toEqual([]);
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
   });
 
   it('refuses a start that arrives before hello, and starts nothing', async () => {
@@ -1200,7 +1284,11 @@ describe('editing the tree', () => {
       ok: false,
       code: 'refused',
       problem: 'this session is still running; stop it first, and then remove it',
-      holder: { server: 'registration-workshop' as ServerRegistrationId, stoppable: true },
+      holder: {
+        server: 'registration-workshop' as ServerRegistrationId,
+        stoppable: true,
+        pause: 'none',
+      },
     });
 
     await client.say({ type: 'node-remove', id: 2, nodeId: 'node-1' });
@@ -1210,7 +1298,7 @@ describe('editing the tree', () => {
       replyTo: 2,
       code: 'refused',
       message: 'this session is still running; stop it first, and then remove it',
-      holder: { server: 'registration-workshop', stoppable: true },
+      holder: { server: 'registration-workshop', stoppable: true, pause: 'none' },
     });
     // A refusal is a reply. The other client did not ask, and nothing about
     // the world changed because this one was told no.

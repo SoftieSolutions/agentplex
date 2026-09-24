@@ -255,6 +255,44 @@ export function routeStop(
 }
 
 /**
+ * Which server to tell to pause or resume a session.
+ *
+ * Resolved like a stop -- from the session alone, to the holder the hub can
+ * reach -- and deliberately without the stop's one extra rule. A stop is
+ * refused mid-turn because it kills the process and a half-applied edit is
+ * what that leaves behind. A pause kills nothing: asked mid-turn, the server
+ * records it and takes it at the boundary, so a busy holder is exactly who a
+ * pause is for. `stoppable` is not consulted.
+ */
+export function routePause(
+  state: HubStateSnapshot,
+  session: { readonly storeId: StoreId; readonly sessionId: SessionId },
+): Routing {
+  const store = state.stores.find((view) => view.storeId === session.storeId);
+  const holder = store === undefined ? null : holderOf(store, session.sessionId);
+  if (store === undefined || holder === null) {
+    return {
+      ok: false,
+      code: 'refused',
+      problem: 'nothing the hub can see is running that session',
+      holder: null,
+    };
+  }
+
+  const server = store.servers.find((candidate) => candidate.registrationId === holder.server);
+  if (server === undefined || !countsTowardAttention(server)) {
+    return {
+      ok: false,
+      code: 'refused',
+      problem: 'the server running that session is not reachable right now',
+      holder,
+    };
+  }
+
+  return { ok: true, server };
+}
+
+/**
  * Which server to ask for a session's transcript, and what it is.
  *
  * Routed by session like a stop, and deliberately not *as* a stop. A stop needs

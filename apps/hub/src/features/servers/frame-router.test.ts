@@ -62,6 +62,27 @@ function route(frame: ServerToHubFrame): Routed {
 }
 
 describe('an answer to an instruction', () => {
+  it('routes a pause and a resume answer to whoever asked, as answers', () => {
+    const paused: ServerToHubFrame = {
+      type: 'session-paused',
+      replyTo: 8,
+      storeId: STORE,
+      sessionId: SESSION,
+      pause: 'requested',
+    };
+    const resumed: ServerToHubFrame = {
+      type: 'session-resumed',
+      replyTo: 9,
+      storeId: STORE,
+      sessionId: SESSION,
+    };
+
+    expect(route(paused).answers).toEqual([{ replyTo: 8, outcome: { ok: true, answer: paused } }]);
+    expect(route(resumed).answers).toEqual([
+      { replyTo: 9, outcome: { ok: true, answer: resumed } },
+    ]);
+  });
+
   it('reaches whoever asked, addressed by the frame it replies to', () => {
     const routed = route({
       type: 'session-started',
@@ -83,7 +104,7 @@ describe('an answer to an instruction', () => {
   });
 
   it('carries a refusal back as a value, with the hold the server named on it', () => {
-    const hold = { sessionId: SESSION, stoppable: true };
+    const hold = { sessionId: SESSION, stoppable: true, pause: 'none' as const };
     const routed = route({
       type: 'session-refused',
       replyTo: 5,

@@ -118,7 +118,7 @@ describe('list_sessions', () => {
             branch: 'agx-43',
             updatedAt: START + 500,
           }),
-          { holder: { server: ATTIC, stoppable: false }, reachable: true },
+          { holder: { server: ATTIC, stoppable: false, pause: 'none' }, reachable: true },
         ),
       ]),
     ]);
@@ -165,7 +165,7 @@ describe('list_sessions', () => {
       storeOf(WORK, [
         rowOf(descriptorOf('shared'), {
           reportedBy: [ATTIC, WORKSHOP],
-          holder: { server: ATTIC, stoppable: true },
+          holder: { server: ATTIC, stoppable: true, pause: 'none' },
         }),
         rowOf(descriptorOf('attic-only'), { reportedBy: [ATTIC] }),
       ]),
