@@ -5,6 +5,7 @@ import type {
   SessionDescriptor,
   SessionHold,
   SessionId,
+  SessionPause,
   SessionRef,
   StoreDescriptor,
   StoreId,
@@ -146,6 +147,26 @@ export type SessionOutcome =
       readonly hold: SessionHold | null;
     };
 
+/**
+ * What became of a pause or a resume: the pause the session is now under, or a
+ * refusal in the shape a start's has. Both instructions answer with this one
+ * type because both leave the session under some pause -- `none` after a
+ * resume -- and the connection reads that word to know what it is confirming.
+ */
+export type PauseOutcome =
+  | {
+      readonly ok: true;
+      readonly storeId: StoreId;
+      readonly sessionId: SessionId;
+      readonly pause: SessionPause;
+    }
+  | {
+      readonly ok: false;
+      readonly code: RefusalCode;
+      readonly problem: string;
+      readonly hold: SessionHold | null;
+    };
+
 export interface TranscriptSessionRequest {
   readonly storeId: StoreId;
   readonly sessionId: SessionId;
@@ -195,6 +216,10 @@ export interface StoreReport {
 export interface SessionController {
   start(request: StartSessionRequest): Promise<SessionOutcome>;
   stop(session: SessionRef): SessionOutcome;
+  /** Withholds a session's input from its next turn boundary. Kills nothing. */
+  pause(session: SessionRef): PauseOutcome;
+  /** Lifts the pause. The process was never touched, so there is nothing to restart. */
+  resume(session: SessionRef): PauseOutcome;
   /**
    * Everything this server can see in one store, and what it is running there.
    *
@@ -274,9 +299,20 @@ export function createSessionController(
       hold:
         outcome.holder === null || outcome.holder.sessionId === null
           ? null
-          : { sessionId: outcome.holder.sessionId, stoppable: outcome.holder.stoppable },
+          : {
+              sessionId: outcome.holder.sessionId,
+              stoppable: outcome.holder.stoppable,
+              pause: outcome.holder.pause,
+            },
     };
   };
+
+  const notRunning = (): PauseOutcome => ({
+    ok: false,
+    code: 'refused',
+    problem: 'this server is not running that session',
+    hold: null,
+  });
 
   return {
     async start(request: StartSessionRequest): Promise<SessionOutcome> {
@@ -403,7 +439,7 @@ export function createSessionController(
           ok: false,
           code: 'refused',
           problem: stopped.problem,
-          hold: { sessionId: session.sessionId, stoppable: holder.stoppable },
+          hold: { sessionId: session.sessionId, stoppable: holder.stoppable, pause: holder.pause },
         };
       }
 
@@ -414,6 +450,45 @@ export function createSessionController(
         sessionId: session.sessionId,
         terminalId: holder.terminalId,
       };
+    },
+
+    pause(session: SessionRef): PauseOutcome {
+      const holder = terminals.holder(session);
+      if (holder === undefined) return notRunning();
+
+      const paused = terminals.pause(holder.terminalId);
+      if (!paused.ok) {
+        return {
+          ok: false,
+          code: 'refused',
+          problem: paused.problem,
+          hold: { sessionId: session.sessionId, stoppable: holder.stoppable, pause: holder.pause },
+        };
+      }
+      logger.info('session pause', { ...session, pause: paused.pause });
+      return {
+        ok: true,
+        storeId: session.storeId,
+        sessionId: session.sessionId,
+        pause: paused.pause,
+      };
+    },
+
+    resume(session: SessionRef): PauseOutcome {
+      const holder = terminals.holder(session);
+      if (holder === undefined) return notRunning();
+
+      const resumed = terminals.unpause(holder.terminalId);
+      if (!resumed.ok) {
+        return {
+          ok: false,
+          code: 'refused',
+          problem: resumed.problem,
+          hold: { sessionId: session.sessionId, stoppable: holder.stoppable, pause: holder.pause },
+        };
+      }
+      logger.info('session resumed', { ...session });
+      return { ok: true, storeId: session.storeId, sessionId: session.sessionId, pause: 'none' };
     },
 
     async report(storeId: StoreId): Promise<StoreReport | null> {
@@ -587,7 +662,11 @@ export function createSessionController(
     for (const terminal of liveIn(storeId)) {
       const session = terminal.session;
       if (session === null) continue;
-      holds.push({ sessionId: session.sessionId, stoppable: terminal.stoppable });
+      holds.push({
+        sessionId: session.sessionId,
+        stoppable: terminal.stoppable,
+        pause: terminal.pause,
+      });
     }
     return holds;
   }

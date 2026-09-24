@@ -172,6 +172,33 @@ describe('storeId stamping', () => {
   });
 });
 
+describe('a holder', () => {
+  it('carries the pause the server reported, and moves the version when only that changes', () => {
+    const reducer = reduce();
+    reducer.applyConnection(connection('laptop', 'connected', ['store-work']));
+    const report = (pause: 'none' | 'requested' | 'paused') => ({
+      holding: [{ sessionId: sessionIdSchema.parse('session-1'), stoppable: true, pause }],
+      registrationId: 'registration-laptop' as ServerRegistrationId,
+      storeId: store('store-work'),
+      sessions: [session('session-1')],
+      reportedAt: START,
+    });
+
+    reducer.applySessions(report('none'));
+    const before = reducer.snapshot();
+    expect(only(before.stores).sessions[0]?.holder).toEqual({
+      server: 'registration-laptop',
+      stoppable: true,
+      pause: 'none',
+    });
+
+    reducer.applySessions(report('paused'));
+    const after = reducer.snapshot();
+    expect(only(after.stores).sessions[0]?.holder?.pause).toBe('paused');
+    expect(after.version).toBeGreaterThan(before.version);
+  });
+});
+
 describe('two servers on one volume', () => {
   function twoServers(): FleetState {
     const reducer = reduce();

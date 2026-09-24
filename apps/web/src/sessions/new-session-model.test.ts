@@ -432,7 +432,7 @@ describe('the follow-up to a start', () => {
       kind: 'refused',
       words: 'that session is already running on mbp-robert',
       held: {
-        holder: { server: 'registration-mbp-robert', stoppable: true },
+        holder: { server: 'registration-mbp-robert', stoppable: true, pause: 'none' },
         machine: 'mbp-robert',
         session: null,
       },

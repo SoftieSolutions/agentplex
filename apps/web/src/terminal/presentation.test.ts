@@ -2,13 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   machineStateSchema,
   sessionRefSchema,
-  sessionStatusSchema,
   subscriptionEndReasonSchema,
   type MachineState,
   type ServerView,
   type SessionRow,
 } from '@agentplex/protocol';
-import { statusWords } from '../sessions/session-list-model.js';
 import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import { createTerminalFeed } from './chunk-feed.js';
 import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
@@ -22,12 +20,10 @@ import {
   metadataSegments,
   paneAttachment,
   searchScopeNotice,
-  statusWord,
   terminalFeedNotice,
   terminalInputNotice,
   terminalIsPartial,
   terminalScopeNotice,
-  toneForStatus,
 } from './presentation.js';
 
 /**
@@ -39,7 +35,7 @@ import {
 const ref = sessionRefSchema.parse({ storeId: 'store-a', sessionId: 'sess-1' });
 
 function stateWith(overrides?: {
-  holder?: { server: string; stoppable: boolean } | null;
+  holder?: { server: string; stoppable: boolean; pause: 'none' | 'requested' | 'paused' } | null;
   /** What that machine's connectivity is, for the panes that read it. */
   server?: Record<string, unknown>;
   /** Descriptor fields the header reads: the title, the model, the cwd. */
@@ -76,7 +72,7 @@ function stateWith(overrides?: {
             reachable: true,
             holder:
               overrides?.holder === undefined
-                ? { server: 'reg-1', stoppable: true }
+                ? { server: 'reg-1', stoppable: true, pause: 'none' }
                 : overrides.holder,
             acknowledgedThrough: null,
             mutedAt: null,
@@ -145,6 +141,8 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastStarted: null,
     starts: new Map(),
     lastStopped: null,
+    lastPaused: null,
+    lastResumed: null,
     lastAttention: null,
     lastApproval: null,
     approvalPolicies: new Map(),
@@ -183,21 +181,6 @@ function terminalWith(overrides: Partial<TerminalWatchView> = {}): TerminalWatch
     ...overrides,
   };
 }
-
-describe('toneForStatus', () => {
-  it('maps every status the wire can carry, both awaiting states loudly', () => {
-    const tones = Object.fromEntries(
-      sessionStatusSchema.options.map((status) => [status, toneForStatus(status)]),
-    );
-    expect(tones).toEqual({
-      working: 'running',
-      'awaiting-permission': 'needs-you',
-      'awaiting-input': 'needs-you',
-      idle: 'idle',
-      unknown: 'idle',
-    });
-  });
-});
 
 describe('findSessionRow', () => {
   it('finds the routed session', () => {
@@ -598,25 +581,6 @@ describe('breadcrumb', () => {
         }
       }
     }
-  });
-});
-
-describe('statusWord', () => {
-  it('says what the list says, for every status the wire can carry', () => {
-    // Against `statusWords` itself rather than a second table written here:
-    // the point of the reuse is that the header and the list cannot come to
-    // two words for one status, and a copy of the mapping in this file would
-    // be the drift it exists to prevent.
-    for (const status of sessionStatusSchema.options) {
-      const row = rowIn(stateWith({ descriptor: { status } }));
-      expect(statusWord(row)).toBe(statusWords(status));
-    }
-  });
-
-  it('says nothing has reported when the state holds no such row', () => {
-    // Not 'unknown', which is a reading an adapter took and could not resolve.
-    // Nobody has said anything about this session at all yet.
-    expect(statusWord(null)).toBe('not reported');
   });
 });
 

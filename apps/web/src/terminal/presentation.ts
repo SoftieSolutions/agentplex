@@ -3,38 +3,23 @@ import type {
   ServerView,
   SessionRef,
   SessionRow,
-  SessionStatus,
   StaleReason,
   SubscriptionEndReason,
 } from '@agentplex/protocol';
-import { serverLabel, statusWords } from '../sessions/session-list-model.js';
+import { serverLabel } from '../sessions/session-list-model.js';
 import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
 import type { Tone } from '../ui/tokens.js';
 import { EMULATOR_SCROLLBACK_LINES, type SearchResults } from './emulator.js';
 
 /**
  * Pure derivations the session pane renders: which row a route names, what
- * tone a status takes, and the one sentence shown while keystrokes go
- * nowhere. Kept out of the components so the wording and the mappings are
- * testable without a DOM.
+ * the header says about the machine, and the one sentence shown while
+ * keystrokes go nowhere. Kept out of the components so the wording and the
+ * mappings are testable without a DOM. The status dot's tone and word are
+ * not here: `toneForSession` and `wordsForSession` in the list model are the
+ * one rule for both, pause included, and a copy that read the status alone
+ * would draw a paused session as idle.
  */
-
-/** The status vocabulary as tones. Both awaiting states want a human, loudly. */
-export function toneForStatus(status: SessionStatus): Tone {
-  switch (status) {
-    case 'working':
-      return 'running';
-    case 'awaiting-permission':
-    case 'awaiting-input':
-      return 'needs-you';
-    case 'idle':
-      return 'idle';
-    case 'unknown':
-      // The adapter said it could not tell; the muted marker over-claims
-      // least. The word beside the dot still says 'unknown'.
-      return 'idle';
-  }
-}
 
 /** Finds the routed session in the published state, or `null` honestly. */
 export function findSessionRow(state: MachineState | null, ref: SessionRef): SessionRow | null {
@@ -88,23 +73,6 @@ export function breadcrumb(row: SessionRow | null, ref: SessionRef): readonly Br
     { text: row?.project?.name ?? ref.storeId, role: 'muted' },
     { text: row?.descriptor.title ?? ref.sessionId, role: 'emphatic' },
   ];
-}
-
-/**
- * The one word beside the status dot.
- *
- * `statusWords` and not a switch here: the list and this header answer the same
- * question about the same field, and a second mapping is how one screen comes
- * to say "awaiting input" while another says "awaiting-input" about the same
- * session. The exhaustiveness lives there too, so a sixth status is a
- * compile error in one place rather than a silent fall-through in two.
- *
- * `not reported` for a row the state does not hold, which is deliberately not
- * `unknown`: `unknown` is an adapter saying it looked and could not tell, and
- * this is nobody having said anything about this session at all.
- */
-export function statusWord(row: SessionRow | null): string {
-  return row === null ? 'not reported' : statusWords(row.descriptor.status);
 }
 
 /**

@@ -416,6 +416,53 @@ describe('commands', () => {
     });
   });
 
+  it('a session-paused reply is kept whole, with the server\u2019s own pause word on it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    // Captured from a real pause on a working session: the server recorded
+    // the request for the next boundary, and the word travelled as it said it.
+    socket.deliver(hubFrames.sessionPaused);
+    expect(h.store.getSnapshot().lastPaused).toEqual({
+      replyTo: 7,
+      storeId: 'store-agentplex',
+      sessionId: 'session-fix-auth',
+      server: 'registration-mbp-robert',
+      pause: 'requested',
+    });
+    expect(h.store.getSnapshot().lastResumed).toBeNull();
+  });
+
+  it('a session-resumed reply is kept as a receipt, and clears a refusal before it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.refusalHeldBusy);
+    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
+    socket.deliver(hubFrames.sessionResumed);
+    expect(h.store.getSnapshot().lastResumed).toEqual({
+      replyTo: 8,
+      storeId: 'store-agentplex',
+      sessionId: 'session-fix-auth',
+      server: 'registration-mbp-robert',
+    });
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('queues a pause and a resume as commands, shaped exactly as the frame is', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    h.store.sendCommand({ type: 'session-pause', ...SESSION });
+    h.store.sendCommand({ type: 'session-resume', ...SESSION });
+
+    const sent = socket.sent.slice(-2).map((text) => JSON.parse(text) as Record<string, unknown>);
+    expect(sent).toEqual([
+      { type: 'session-pause', id: sent[0]?.id, ...SESSION },
+      { type: 'session-resume', id: sent[1]?.id, ...SESSION },
+    ]);
+  });
+
   it('a session-attention reply carries the whole row the hub now holds', async () => {
     const h = harness();
     const { socket } = await establish(h);
@@ -561,6 +608,7 @@ describe('commands', () => {
     expect(h.store.getSnapshot().lastRefusal?.holder).toEqual({
       server: 'registration-mbp-robert',
       stoppable: true,
+      pause: 'none',
     });
   });
 
@@ -1363,7 +1411,7 @@ describe('projects and the tree', () => {
       replyTo: 10,
       code: 'refused',
       message: 'this session is still running; stop it first, and then remove it',
-      holder: { server: 'registration-mbp-robert', stoppable: false },
+      holder: { server: 'registration-mbp-robert', stoppable: false, pause: 'none' },
     });
 
     // A later yes clears it: the last thing the hub said is no longer a no.

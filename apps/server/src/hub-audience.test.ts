@@ -31,6 +31,7 @@ function sessions(sessionIds: readonly string[] = []) {
         holding: sessionIds.map((sessionId) => ({
           sessionId: sessionId as never,
           stoppable: true,
+          pause: 'none' as const,
         })),
       },
     ],

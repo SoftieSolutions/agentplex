@@ -197,6 +197,8 @@ export type ServerInstruction = WithoutFrameId<
       type:
         | 'session-start'
         | 'session-stop'
+        | 'session-pause'
+        | 'session-resume'
         | 'session-transcript'
         | 'directory-list'
         | 'doc-write'
@@ -213,6 +215,8 @@ export type ServerAnswer = Extract<
     type:
       | 'session-started'
       | 'session-stopped'
+      | 'session-paused'
+      | 'session-resumed'
       | 'session-transcript-read'
       | 'directory-listing'
       | 'doc-written'

@@ -714,6 +714,7 @@ describe('a client-initiated session start', () => {
     expect(client.row('session-quiet')?.holder).toEqual({
       server: answer.server,
       stoppable: true,
+      pause: 'none',
     });
   });
 
@@ -747,6 +748,7 @@ describe('a client-initiated session start', () => {
     expect(client.row('session-fresh')?.holder).toEqual({
       server: registrationOf('workshop'),
       stoppable: true,
+      pause: 'none',
     });
   });
 
@@ -849,7 +851,7 @@ describe('a client-initiated session start', () => {
     expect(refused).toMatchObject({
       type: 'refusal',
       code: 'refused',
-      holder: { server: registrationOf('attic'), stoppable: true },
+      holder: { server: registrationOf('attic'), stoppable: true, pause: 'none' },
     });
     expect(launches(machine('workshop'))).toEqual([]);
     // One process, still the first one.
@@ -921,6 +923,7 @@ describe('a client-initiated session start', () => {
     expect(client.row('session-busy')?.holder).toEqual({
       server: registrationOf('workshop'),
       stoppable: false,
+      pause: 'none',
     });
 
     // And the rule behind it, for every client that asks anyway.
@@ -934,7 +937,7 @@ describe('a client-initiated session start', () => {
     expect(client.reply(3)).toMatchObject({
       type: 'refusal',
       code: 'refused',
-      holder: { server: registrationOf('workshop'), stoppable: false },
+      holder: { server: registrationOf('workshop'), stoppable: false, pause: 'none' },
     });
     expect(machine('workshop').ptys.ptys[0]?.kills).toBe(0);
   });
@@ -1373,7 +1376,7 @@ describe('a hub that reconnects to a machine holding a live session', () => {
     // The hold is on the report the fresh handshake produced, which is the only
     // place it could come from.
     expect(storeReports(attic).at(-1)?.holding).toEqual([
-      { sessionId: 'session-quiet', stoppable: true },
+      { sessionId: 'session-quiet', stoppable: true, pause: 'none' },
     ]);
 
     await until(
@@ -1382,7 +1385,7 @@ describe('a hub that reconnects to a machine holding a live session', () => {
     );
     expect(client.row('session-quiet')).toMatchObject({
       reachable: true,
-      holder: { server: registrationOf('attic'), stoppable: true },
+      holder: { server: registrationOf('attic'), stoppable: true, pause: 'none' },
     });
   });
 
@@ -1413,7 +1416,7 @@ describe('a hub that reconnects to a machine holding a live session', () => {
     expect(client.reply(3)).toMatchObject({
       type: 'refusal',
       code: 'refused',
-      holder: { server: registrationOf('attic'), stoppable: true },
+      holder: { server: registrationOf('attic'), stoppable: true, pause: 'none' },
     });
     expect(launches(machine('workshop'))).toEqual([]);
     expect(machine('attic').ptys.ptys).toHaveLength(1);
@@ -1689,6 +1692,7 @@ describe('a machine that goes away with a start in flight', () => {
     expect(client.row('session-quiet')?.holder).toEqual({
       server: registrationOf('attic'),
       stoppable: true,
+      pause: 'none',
     });
   });
 });

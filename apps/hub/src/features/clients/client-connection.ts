@@ -514,6 +514,19 @@ export function serveClientConnection(
         return;
       }
 
+      case 'session-pause':
+      case 'session-resume': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerPause(frame.id, frame.type, {
+          storeId: frame.storeId,
+          sessionId: frame.sessionId,
+        });
+        return;
+      }
+
       case 'session-transcript': {
         if (state !== 'established') {
           helloFirst(frame.id);
@@ -1427,6 +1440,62 @@ export function serveClientConnection(
       logger.error('could not stop a session', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not stop that session');
+    }
+  }
+
+  /**
+   * Pauses or resumes a session and answers the client that asked.
+   *
+   * The receipt carries the server's own pause word for a pause, because the
+   * asker needs to know whether to say "pausing" or "paused" now; a resume's
+   * receipt carries nothing but the fact, since the only word it could carry
+   * is `none`.
+   */
+  async function answerPause(
+    replyTo: FrameId,
+    instruction: 'session-pause' | 'session-resume',
+    request: Parameters<Sessions['pause']>[0],
+  ): Promise<void> {
+    const verb = instruction === 'session-pause' ? 'pause' : 'resume';
+    try {
+      // Two awaits rather than one behind a ternary: the outcomes are
+      // different shapes -- only a pause's carries the word -- and a union
+      // of the two would have the receipt below read a field the resume's
+      // does not have.
+      if (instruction === 'session-pause') {
+        const outcome = await sessions.pause(request);
+        if (state !== 'established') return;
+        if (!outcome.ok) {
+          refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
+          return;
+        }
+        send({
+          type: 'session-paused',
+          replyTo,
+          storeId: outcome.storeId,
+          sessionId: outcome.sessionId,
+          server: outcome.server,
+          pause: outcome.pause,
+        });
+        return;
+      }
+      const outcome = await sessions.resume(request);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
+        return;
+      }
+      send({
+        type: 'session-resumed',
+        replyTo,
+        storeId: outcome.storeId,
+        sessionId: outcome.sessionId,
+        server: outcome.server,
+      });
+    } catch (error) {
+      logger.error(`could not ${verb} a session`, { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', `the hub could not ${verb} that session`);
     }
   }
 

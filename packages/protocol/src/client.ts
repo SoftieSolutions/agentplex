@@ -30,6 +30,7 @@ import {
 } from './identity.js';
 import { layoutSchema, nodeNameTextSchema } from './layout.js';
 import { machineStateSchema, sessionHolderSchema } from './machine-state.js';
+import { pauseTakenSchema } from './session.js';
 import {
   SERVER_ADDRESS_MAX_CHARS,
   SERVER_LABEL_MAX_CHARS,
@@ -207,6 +208,23 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
    */
   z.object({
     type: z.literal('session-stop'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+  }),
+  /**
+   * Asks the hub to pause a session at its next turn boundary, or to resume
+   * one it paused. Neither kills anything; `session.ts` carries the argument.
+   * Addressed like a stop, routed like a stop, and answered by the holder.
+   */
+  z.object({
+    type: z.literal('session-pause'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+  }),
+  z.object({
+    type: z.literal('session-resume'),
     id: frameIdSchema,
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
@@ -848,6 +866,28 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
     /** Which server it was resolved to, hub-side. The client never named it. */
+    server: serverRegistrationIdSchema,
+  }),
+  /**
+   * The pause was taken, and how far it got -- `paused` at once, or `requested`
+   * until the turn ends. A receipt to the asker; every other client learns it
+   * from the holder on the next machine state, which is the one place any of
+   * them reads a pause from.
+   */
+  z.object({
+    type: z.literal('session-paused'),
+    replyTo: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    server: serverRegistrationIdSchema,
+    pause: pauseTakenSchema,
+  }),
+  /** The session takes input again. */
+  z.object({
+    type: z.literal('session-resumed'),
+    replyTo: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
     server: serverRegistrationIdSchema,
   }),
   /**

@@ -147,7 +147,10 @@ export function sameHolds(left: readonly SessionHold[], right: readonly SessionH
     return (
       other !== undefined &&
       hold.sessionId === other.sessionId &&
-      hold.stoppable === other.stoppable
+      hold.stoppable === other.stoppable &&
+      // A pause moves nothing on disk and nothing about the stop, so this is
+      // the only line that lets a client ever learn a session was paused.
+      hold.pause === other.pause
     );
   });
 }

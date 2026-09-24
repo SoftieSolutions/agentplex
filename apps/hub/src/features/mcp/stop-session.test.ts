@@ -63,7 +63,7 @@ describe('stop_session', () => {
         ok: false,
         code: 'refused',
         problem: 'that session is mid-turn; stopping it now could leave an edit half applied',
-        holder: { server: ATTIC, stoppable: false },
+        holder: { server: ATTIC, stoppable: false, pause: 'none' },
       },
     });
 

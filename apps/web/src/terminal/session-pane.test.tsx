@@ -18,6 +18,7 @@ import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
+import { colorForTone } from '../ui/tokens.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { NO_CLIPBOARD_HERE, type Clipboard } from './clipboard.js';
 import { createFakeClipboard, createRefusingClipboard } from './fake-clipboard.js';
@@ -762,6 +763,78 @@ describe('the stop in a session pane header', () => {
 });
 
 /**
+ * The pause in the pane's header, off a captured state with one session set
+ * down in it: `docs-index` is `awaiting-input` on disk and `paused` on its
+ * holder. The header has to read the holder over the status, or a paused
+ * session would sit there in the needs-you tone asking for a person who
+ * already answered.
+ */
+describe('the pause in a session pane header', () => {
+  async function mountPaneOn(
+    sessionId: string,
+    state: string = hubFrames.machineStatePaused,
+  ): Promise<void> {
+    const hub = buildStore();
+    await mount(
+      <SessionPane
+        sessionRef={sessionRefSchema.parse({ storeId: 'store-agentplex', sessionId })}
+        store={hub.store}
+        emulators={emulators}
+      />,
+    );
+    const socket = hub.socket();
+    await act(async () => {
+      socket.open();
+      socket.deliver(hubFrames.welcome);
+      socket.deliver(state);
+    });
+  }
+
+  function pauseButton(): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>(
+      'button[aria-label^="pause "], button[aria-label^="resume "]',
+    );
+  }
+
+  function statusText(): string {
+    const dot = container.querySelector('[data-live], span[aria-hidden]');
+    return dot?.parentElement?.textContent ?? '';
+  }
+
+  it('offers a pause to a held session that is mid-turn, which a stop is refused', async () => {
+    await mountPaneOn('session-fix-auth');
+
+    expect(pauseButton()?.getAttribute('aria-label')).toBe('pause session-fix-auth');
+    expect(pauseButton()?.textContent).toBe('Pause');
+    expect(container.querySelector('button[aria-label^="stop "]')).toBeNull();
+  });
+
+  it('draws a paused session in the paused tone and word, and offers Resume', async () => {
+    await mountPaneOn('session-docs-index');
+
+    expect(pauseButton()?.getAttribute('aria-label')).toBe('resume session-docs-index');
+    expect(pauseButton()?.textContent).toBe('Resume');
+    expect(statusText()).toContain('paused');
+    expect(statusText()).not.toContain('awaiting input');
+    const dot = container.querySelector<HTMLElement>('span[aria-hidden]');
+    expect(dot?.style.background).toBe(rgb(colorForTone('paused', 'dark')));
+    expect(dot?.hasAttribute('data-live')).toBe(false);
+  });
+
+  it('offers none for a session nothing is running', async () => {
+    await mountPaneOn('session-spike-wasm', hubFrames.machineStatePopulated);
+
+    expect(pauseButton()).toBeNull();
+  });
+});
+
+/** jsdom normalises an inline hex colour to this form. */
+function rgb(hex: string): string {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${String(value >> 16)}, ${String((value >> 8) & 255)}, ${String(value & 255)})`;
+}
+
+/**
  * Copy and paste, through the two seams that make them testable at all.
  *
  * The clipboard is injected because no suite can grant a clipboard permission
@@ -1357,13 +1430,13 @@ describe('the header above a session', () => {
   it('draws nothing it cannot do, and nothing it cannot know', async () => {
     await mountHeaderOn('store-universe', 'session-bench-tokenizer');
 
-    // Pause and hand off are each their own milestone, and a button that
-    // cannot do its job must not be drawn. Replay is built (AGX-143) and is
-    // drawn whatever the session's state, because pressing it is what reads
-    // the transcript it walks through. The multiplexer segment the mockup
+    // Hand off is its own milestone, and a button that cannot do its job must
+    // not be drawn. Replay is built (AGX-143) and is drawn whatever the
+    // session's state, because pressing it is what reads the transcript it
+    // walks through; Pause is built (AGX-141) and is drawn off the holder,
+    // which its own suite above covers. The multiplexer segment the mockup
     // shows is not built at all: no frame says whether a session runs under
     // one, so the bar says nothing rather than guessing.
-    expect(container.textContent).not.toContain('Pause');
     expect(container.textContent).not.toContain('Hand off');
     expect(container.textContent).not.toContain('tmux');
   });

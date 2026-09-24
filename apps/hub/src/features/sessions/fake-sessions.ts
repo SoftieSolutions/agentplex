@@ -1,4 +1,7 @@
 import type {
+  PauseOutcome,
+  PauseSessionRequest,
+  ResumeOutcome,
   Sessions,
   SessionOutcome,
   StartOutcome,
@@ -23,6 +26,13 @@ import type {
 export interface FakeSessions extends Sessions {
   readonly starts: readonly StartSessionRequest[];
   readonly stops: readonly StopSessionRequest[];
+  /** Every pause and every resume it was asked for, in order. */
+  readonly pauses: readonly PauseSessionRequest[];
+  readonly resumes: readonly PauseSessionRequest[];
+  /** What every later pause answers with. Its own shape, so its own setter. */
+  answerPauseWith(outcome: PauseOutcome): void;
+  /** What every later resume answers with: a receipt with no pause word, or a refusal. */
+  answerResumeWith(outcome: ResumeOutcome): void;
   /**
    * What every later start and stop answers with.
    *
@@ -52,7 +62,23 @@ export interface FakeSessionsOptions {
 export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessions {
   const starts: StartSessionRequest[] = [];
   const stops: StopSessionRequest[] = [];
+  const pauses: PauseSessionRequest[] = [];
+  const resumes: PauseSessionRequest[] = [];
   const transcripts: TranscriptRequest[] = [];
+
+  let pause: PauseOutcome = {
+    ok: false,
+    code: 'refused',
+    problem: 'this fake control was given no pause answer',
+    holder: null,
+  };
+
+  let resume: ResumeOutcome = {
+    ok: false,
+    code: 'refused',
+    problem: 'this fake control was given no resume answer',
+    holder: null,
+  };
 
   let outcome: StartOutcome = options.outcome ?? {
     ok: false,
@@ -78,6 +104,24 @@ export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessi
       return outcome;
     },
 
+    async pause(request: PauseSessionRequest): Promise<PauseOutcome> {
+      pauses.push(request);
+      return pause;
+    },
+
+    async resume(request: PauseSessionRequest): Promise<ResumeOutcome> {
+      resumes.push(request);
+      return resume;
+    },
+
+    answerPauseWith(next: PauseOutcome): void {
+      pause = next;
+    },
+
+    answerResumeWith(next: ResumeOutcome): void {
+      resume = next;
+    },
+
     async transcript(request: TranscriptRequest): Promise<TranscriptOutcome> {
       transcripts.push(request);
       return transcript;
@@ -97,6 +141,14 @@ export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessi
 
     get stops(): readonly StopSessionRequest[] {
       return stops;
+    },
+
+    get pauses(): readonly PauseSessionRequest[] {
+      return pauses;
+    },
+
+    get resumes(): readonly PauseSessionRequest[] {
+      return resumes;
     },
 
     get transcripts(): readonly TranscriptRequest[] {

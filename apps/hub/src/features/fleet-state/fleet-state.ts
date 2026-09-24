@@ -868,6 +868,7 @@ function buildSessionRows(
         holders.set(hold.sessionId, {
           server: server.registrationId,
           stoppable: hold.stoppable,
+          pause: hold.pause,
         });
       }
     }

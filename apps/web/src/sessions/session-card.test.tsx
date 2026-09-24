@@ -10,6 +10,7 @@ import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
+import { colorForTone } from '../ui/tokens.js';
 import { SessionCard } from './session-card.js';
 import { listSessions, type SessionListItem } from './session-list-model.js';
 
@@ -66,6 +67,12 @@ function stateFrom(text: string): MachineState {
 }
 
 const populated = stateFrom(hubFrames.machineStatePopulated);
+
+/** jsdom normalises an inline hex colour to this form. */
+function rgb(hex: string): string {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${String(value >> 16)}, ${String((value >> 8) & 255)}, ${String(value & 255)})`;
+}
 
 function item(name: string): SessionListItem {
   const found = listSessions(populated).find((candidate) => candidate.name === name);
@@ -282,6 +289,29 @@ describe('a session card holding an open request', () => {
     });
 
     expect(window.location.hash).toBe('');
+  });
+
+  it('draws a paused session in the paused tone, with Resume beside the stop', async () => {
+    // Captured off a hub whose machine held `docs-index` at a boundary under a
+    // pause: the status on disk still says awaiting input, and the card must
+    // not ask for a person a pause already answered.
+    await fleet(hubFrames.machineStatePaused);
+    const row = items().find((candidate) => candidate.name === 'docs-index');
+    if (row === undefined) throw new Error('the captured state holds no docs-index');
+    expect(row.tone).toBe('paused');
+
+    await mountCard(row);
+
+    const dot = container.querySelector<HTMLElement>('article span[aria-hidden], article div');
+    const dots = [...container.querySelectorAll<HTMLElement>('article *')].filter(
+      (element) => element.style.borderRadius === '50%',
+    );
+    expect(dot).not.toBeNull();
+    expect(dots[0]?.style.background).toBe(rgb(colorForTone('paused', 'dark')));
+    expect(
+      container.querySelector('button[aria-label="resume session-docs-index"]')?.textContent,
+    ).toBe('Resume');
+    expect(container.querySelector('button[aria-label="stop session-docs-index"]')).not.toBeNull();
   });
 
   it('counts the waiting clock from the moment the hub heard the request', async () => {

@@ -30,8 +30,11 @@ import {
   placeLabel,
   projectOptions,
   providerOptions,
+  statusWords,
   storeOptions,
+  toneForSession,
   toneForStatus,
+  wordsForSession,
   unseenPrompt,
   visibleSessions,
   wantsAttention,
@@ -345,6 +348,52 @@ describe('tones', () => {
     expect(toneForStatus('awaiting-input')).toBe('needs-you');
     expect(toneForStatus('idle')).toBe('idle');
     expect(toneForStatus('unknown')).toBe('idle');
+  });
+});
+
+describe('the tone and the word of a whole row', () => {
+  /**
+   * A fleet with one session set down: `docs-index` is `awaiting-input` on
+   * disk and `paused` on its holder, captured off a hub whose machine said so.
+   */
+  const withPaused = stateFrom(hubFrames.machineStatePaused);
+  const rowNamed = (state: MachineState, sessionId: string) =>
+    state.stores
+      .flatMap((store) => store.sessions)
+      .find((row) => row.descriptor.sessionId === sessionId) ?? null;
+
+  it('draws a paused holder in the paused tone, whatever the status says', () => {
+    const row = rowNamed(withPaused, 'session-docs-index');
+    expect(row?.descriptor.status).toBe('awaiting-input');
+    expect(row?.holder?.pause).toBe('paused');
+
+    expect(toneForSession(row)).toBe('paused');
+    expect(wordsForSession(row)).toBe('paused');
+    expect(item(withPaused, 'docs-index').tone).toBe('paused');
+  });
+
+  it('leaves the tone alone while a pause is only requested, and says pausing', () => {
+    const row = rowNamed(withPaused, 'session-fix-auth');
+    if (row === null || row.holder === null) throw new Error('fix-auth is not held');
+    const requested = { ...row, holder: { ...row.holder, pause: 'requested' as const } };
+
+    expect(toneForSession(requested)).toBe(toneForStatus(row.descriptor.status));
+    expect(toneForSession(requested)).toBe('running');
+    expect(wordsForSession(requested)).toBe('pausing');
+  });
+
+  it('is the status alone for every row without a pause on it', () => {
+    for (const store of populated.stores) {
+      for (const row of store.sessions) {
+        expect(toneForSession(row)).toBe(toneForStatus(row.descriptor.status));
+        expect(wordsForSession(row)).toBe(statusWords(row.descriptor.status));
+      }
+    }
+  });
+
+  it('draws a row the state does not hold quietly, and says nobody reported it', () => {
+    expect(toneForSession(null)).toBe('idle');
+    expect(wordsForSession(null)).toBe('not reported');
   });
 });
 

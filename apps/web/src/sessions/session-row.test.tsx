@@ -207,6 +207,7 @@ describe('a session row', () => {
       'acknowledge migrate-db-v9',
       'mute migrate-db-v9',
       'node menu migrate-db-v9',
+      'pause session-migrate-db',
       'stop session-migrate-db',
     ]);
   });

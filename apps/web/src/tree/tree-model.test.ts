@@ -167,7 +167,7 @@ describe('what to do with the hub answer', () => {
     expect(followUp).toEqual({
       kind: 'refused',
       words: 'this session is still running; stop it first, and then remove it',
-      holder: { server: 'registration-mbp-robert', stoppable: false },
+      holder: { server: 'registration-mbp-robert', stoppable: false, pause: 'none' },
     });
     // The captured hold says this one is mid-turn, so no stop is offered: a
     // server refuses to interrupt a turn, and a button that cannot work is
@@ -177,9 +177,9 @@ describe('what to do with the hub answer', () => {
       stopOffer({
         kind: 'refused',
         words: followUp.kind === 'refused' ? followUp.words : '',
-        holder: { server: 'registration-mbp-robert' as never, stoppable: true },
+        holder: { server: 'registration-mbp-robert' as never, stoppable: true, pause: 'none' },
       }),
-    ).toEqual({ server: 'registration-mbp-robert', stoppable: true });
+    ).toEqual({ server: 'registration-mbp-robert', stoppable: true, pause: 'none' });
   });
 
   it('offers no stop for a refusal that names no machine', () => {

@@ -23,6 +23,7 @@ import {
   type ServerRegistrationId,
   type SessionHolder,
   type SessionId,
+  type SessionPause,
   type SessionRef,
   type StoreId,
   type SubscriptionEndReason,
@@ -277,6 +278,32 @@ export interface StoppedView {
   readonly storeId: StoreId;
   readonly sessionId: SessionId;
   /** The machine the hub resolved the session to, hub-side. */
+  readonly server: ServerRegistrationId;
+}
+
+/**
+ * The hub's answer to a pause: the receipt, and how far the pause got.
+ *
+ * `pause` is the server's word, relayed. `paused` means the session was at a
+ * turn boundary and its keyboard is withheld now; `requested` means it is
+ * mid-turn and the server will finish the pause when the turn ends. The
+ * button that asked reads it to say "pausing" or nothing; what the screen
+ * draws for the session comes from the holder on the next machine state,
+ * exactly as it does for a stop.
+ */
+export interface PausedView {
+  readonly replyTo: FrameId;
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  readonly server: ServerRegistrationId;
+  readonly pause: SessionPause;
+}
+
+/** The hub's answer to a resume: a receipt and nothing more, since the only word it could carry is `none`. */
+export interface ResumedView {
+  readonly replyTo: FrameId;
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
   readonly server: ServerRegistrationId;
 }
 
@@ -559,6 +586,9 @@ export interface HubSnapshot {
   readonly starts: ReadonlyMap<FrameId, StartView>;
   /** The hub's most recent yes to a stop, kept until the next one. */
   readonly lastStopped: StoppedView | null;
+  /** The hub's most recent yes to a pause, and to a resume, each kept until the next. */
+  readonly lastPaused: PausedView | null;
+  readonly lastResumed: ResumedView | null;
   /** The hub's most recent yes to an acknowledgement or a mute. */
   readonly lastAttention: AttentionView | null;
   /** What the hub last said became of an approval this client answered. */
@@ -660,6 +690,8 @@ type CommandFrame = Extract<
     type:
       | 'session-start'
       | 'session-stop'
+      | 'session-pause'
+      | 'session-resume'
       | 'session-acknowledge'
       | 'session-mute'
       | 'approval-decide'
@@ -997,6 +1029,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastStarted: null,
     starts: new Map(),
     lastStopped: null,
+    lastPaused: null,
+    lastResumed: null,
     lastAttention: null,
     lastApproval: null,
     approvalPolicies: new Map(),
@@ -1518,6 +1552,33 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({
           lastRefusal: null,
           lastStopped: {
+            replyTo: frame.replyTo,
+            storeId: frame.storeId,
+            sessionId: frame.sessionId,
+            server: frame.server,
+          },
+        });
+        return;
+      }
+      case 'session-paused': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastPaused: {
+            replyTo: frame.replyTo,
+            storeId: frame.storeId,
+            sessionId: frame.sessionId,
+            server: frame.server,
+            pause: frame.pause,
+          },
+        });
+        return;
+      }
+      case 'session-resumed': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastResumed: {
             replyTo: frame.replyTo,
             storeId: frame.storeId,
             sessionId: frame.sessionId,

@@ -25,7 +25,12 @@ import {
 import { machineLoadSchema } from './machine-state.js';
 import { frameParser } from './parse.js';
 import { providerReadinessSchema } from './readiness.js';
-import { sessionDescriptorSchema, sessionHoldSchema, sessionStartTagSchema } from './session.js';
+import {
+  sessionDescriptorSchema,
+  sessionHoldSchema,
+  pauseTakenSchema,
+  sessionStartTagSchema,
+} from './session.js';
 import { serverTerminalFrames } from './terminal.js';
 import { transcriptActivitiesSchema, transcriptCountSchema } from './transcript.js';
 
@@ -134,6 +139,27 @@ export const hubToServerFrameSchema = z.discriminatedUnion('type', [
    */
   z.object({
     type: z.literal('session-stop'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+  }),
+  /**
+   * Set this session down at its next turn boundary, and pick it up again.
+   *
+   * Neither touches the process. A pause is the server refusing PTY input
+   * from the boundary onward; a resume lifts the refusal. Both address the
+   * session the way a stop does, and for the same reason: the terminal handle
+   * stays on the machine that owns it. `session.ts` argues the three words
+   * the answer comes back in.
+   */
+  z.object({
+    type: z.literal('session-pause'),
+    id: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+  }),
+  z.object({
+    type: z.literal('session-resume'),
     id: frameIdSchema,
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
@@ -348,6 +374,27 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('session-stopped'),
+    replyTo: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+  }),
+  /**
+   * The pause was taken, and how far it got: `paused` when the session was
+   * already at a boundary, `requested` when it is mid-turn and the server will
+   * finish the pause when the turn ends. Never `none`, and the parser holds
+   * that line: a pause undone before the server could answer is a refusal,
+   * and refusals have their own frame.
+   */
+  z.object({
+    type: z.literal('session-paused'),
+    replyTo: frameIdSchema,
+    storeId: storeIdSchema,
+    sessionId: sessionIdSchema,
+    pause: pauseTakenSchema,
+  }),
+  /** The session takes input again. Its process was never touched. */
+  z.object({
+    type: z.literal('session-resumed'),
     replyTo: frameIdSchema,
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,

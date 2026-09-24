@@ -498,6 +498,16 @@ export function serveHubConnection(
         return;
       }
 
+      case 'session-pause':
+      case 'session-resume': {
+        if (state !== 'established') {
+          handshakeFirst();
+          return;
+        }
+        void runPause(frame.id, frame.type, { storeId: frame.storeId, sessionId: frame.sessionId });
+        return;
+      }
+
       case 'session-transcript': {
         if (state !== 'established') {
           handshakeFirst();
@@ -945,6 +955,88 @@ export function serveHubConnection(
 
     send({
       type: 'session-stopped',
+      replyTo,
+      storeId: session.storeId,
+      sessionId: session.sessionId,
+    });
+  }
+
+  /**
+   * Pauses or resumes a session and answers the hub that asked.
+   *
+   * One function for both, because they differ in one word each way: which
+   * controller method, and which frame confirms it. The report is awaited
+   * before the answer for the reason a stop's is -- the hub reads the pause
+   * off the holder, and an answer sent before the holder has moved would tell
+   * the client something the next machine-state contradicts.
+   */
+  async function runPause(
+    replyTo: FrameId,
+    instruction: 'session-pause' | 'session-resume',
+    session: { readonly storeId: StoreId; readonly sessionId: SessionId },
+  ): Promise<void> {
+    const verb = instruction === 'session-pause' ? 'pause' : 'resume';
+    let outcome;
+    try {
+      outcome =
+        instruction === 'session-pause' ? sessions.pause(session) : sessions.resume(session);
+    } catch (error) {
+      logger.error(`could not ${verb} a session`, { problem: String(error) });
+      answerFailure(replyTo, `this server could not ${verb} that session`);
+      return;
+    }
+
+    await reportStore(session.storeId);
+    if (state !== 'established') return;
+
+    if (!outcome.ok) {
+      send({
+        type: 'session-refused',
+        replyTo,
+        code: outcome.code,
+        message: outcome.problem,
+        hold: outcome.hold,
+      });
+      return;
+    }
+
+    if (instruction === 'session-pause') {
+      // Read again after the report rather than echoing the outcome. The scan
+      // the report ran may have seen the turn end and promoted the request,
+      // and the receipt has to say what the holder the hub was just sent
+      // says -- a receipt that lagged its own machine-state would have the
+      // asking client's button and its status dot disagree.
+      const holder = terminals.holder(session);
+      const pause = holder?.pause ?? outcome.pause;
+      if (pause === 'none') {
+        // A resume landed while the report was awaited. The receipt may not
+        // carry `none` -- the wire refuses it -- and a receipt would in any
+        // case tell the asker its pause held when the holder says it did
+        // not. A refusal naming the hold is what the next machine-state will
+        // agree with.
+        send({
+          type: 'session-refused',
+          replyTo,
+          code: 'refused',
+          message: 'that session was resumed before its pause could be confirmed',
+          hold:
+            holder === undefined
+              ? null
+              : { sessionId: session.sessionId, stoppable: holder.stoppable, pause: holder.pause },
+        });
+        return;
+      }
+      send({
+        type: 'session-paused',
+        replyTo,
+        storeId: session.storeId,
+        sessionId: session.sessionId,
+        pause,
+      });
+      return;
+    }
+    send({
+      type: 'session-resumed',
       replyTo,
       storeId: session.storeId,
       sessionId: session.sessionId,

@@ -8,6 +8,7 @@ import type {
   ServerRegistrationId,
   SessionHolder,
   SessionRef,
+  SessionRow,
   SessionStatus,
   StoreId,
 } from '@agentplex/protocol';
@@ -283,6 +284,46 @@ export function toneForStatus(status: SessionStatus): Tone {
   }
 }
 
+/**
+ * The tone of a whole row: the holder's pause first, then the status.
+ *
+ * `toneForStatus` stays pure and stays the rule for a status, because six
+ * callers have a status and no holder in hand. This is the one rule above it:
+ * a holder that says `paused` is drawn paused whatever the transcript last
+ * said, because the holder is the server's word on the keyboard -- it is
+ * refusing input right now -- and a dot drawn off the status alone would
+ * show a paused session as idle. The server keeps the word honest: a paused
+ * session seen working again (an approval answered through the gate, a pause
+ * taken on a stale status) drops back to `requested` on the next report, so
+ * this never draws `paused` over a turn for longer than one scan. A pause
+ * that is merely requested changes nothing here -- the agent is still
+ * mid-turn and the tone says so; the word beside the dot carries the request.
+ *
+ * `null` is a row the state does not hold, drawn in the quiet tone the pane
+ * always drew for it.
+ */
+export function toneForSession(row: SessionRow | null): Tone {
+  if (row === null) return 'idle';
+  if (row.holder?.pause === 'paused') return 'paused';
+  return toneForStatus(row.descriptor.status);
+}
+
+/**
+ * The word beside the dot, for a whole row.
+ *
+ * `paused` and `pausing` are the holder's facts and come first, for the reason
+ * the tone does. Everything else is `statusWords`, so the pane, the list and
+ * the notification keep saying the same word about the same status. `not
+ * reported` for a row the state does not hold, which is deliberately not
+ * `unknown`: `unknown` is an adapter that looked and could not tell.
+ */
+export function wordsForSession(row: SessionRow | null): string {
+  if (row === null) return 'not reported';
+  if (row.holder?.pause === 'paused') return 'paused';
+  if (row.holder?.pause === 'requested') return 'pausing';
+  return statusWords(row.descriptor.status);
+}
+
 /** The two statuses that want a human. The hub partitions on these; so do we. */
 export function wantsHuman(status: SessionStatus): boolean {
   return status === 'awaiting-permission' || status === 'awaiting-input';
@@ -420,7 +461,7 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         name: descriptor.title ?? descriptor.sessionId,
         provider: descriptor.provider,
         status: descriptor.status,
-        tone: toneForStatus(descriptor.status),
+        tone: toneForSession(row),
         needsYou: wantsHuman(descriptor.status) && row.reachable,
         acknowledged: acknowledgementHolds(row.acknowledgedThrough, descriptor.updatedAt),
         muted: row.mutedAt !== null,
@@ -429,7 +470,7 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
         server: row.source,
         cwd: descriptor.cwd,
         model: descriptor.model ?? null,
-        summary: descriptor.cwd ?? statusWords(descriptor.status),
+        summary: descriptor.cwd ?? wordsForSession(row),
         activity: descriptor.activity ?? null,
         updatedAt: descriptor.updatedAt,
         storeId: descriptor.storeId,

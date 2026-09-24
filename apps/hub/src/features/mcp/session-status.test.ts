@@ -89,7 +89,7 @@ describe('session_status', () => {
           outputTokens: 800,
         },
       }),
-      { server: ATTIC, stoppable: true },
+      { server: ATTIC, stoppable: true, pause: 'none' },
     );
 
     const result = await status(state, { storeId: WORK, sessionId: 'a' });

@@ -6,15 +6,16 @@ import {
   type RefusalCode,
   type ServerRegistrationId,
   type SessionHolder,
+  type PauseTaken,
   type SessionId,
   type StartId,
   type StoreId,
 } from '@agentplex/protocol';
 import type { IdGenerator, Logger } from '@agentplex/node-shared';
 import type { Projects } from '../projects/projects.js';
-import type { InstructionOutcome, ServerInstruction } from '../servers/servers.js';
+import type { InstructionOutcome, ServerAnswer, ServerInstruction } from '../servers/servers.js';
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
-import { routeSessionRead, routeStart, routeStop } from './session-routing.js';
+import { routePause, routeSessionRead, routeStart, routeStop } from './session-routing.js';
 
 /**
  * Starting sessions, stopping them, and reading one's transcript, from the
@@ -128,6 +129,9 @@ export interface StopSessionRequest {
   readonly sessionId: SessionId;
 }
 
+/** A pause and a resume address a session exactly as a stop does. */
+export type PauseSessionRequest = StopSessionRequest;
+
 export interface TranscriptRequest {
   readonly storeId: StoreId;
   readonly sessionId: SessionId;
@@ -203,9 +207,46 @@ export interface SessionStarted extends SessionRan {
 export type StartOutcome = SessionStarted | SessionRefused;
 export type SessionOutcome = SessionRan | SessionRefused;
 
+/**
+ * A pause was taken, and how far it got.
+ *
+ * `pause` is the server's word and is relayed, never restated: `requested`
+ * when the pause is recorded for the next boundary, `paused` when it was at
+ * one. Never `none`: the wire refuses a receipt saying so, and a server whose
+ * pause was undone before it could answer sends a refusal instead. The client
+ * that asked reads the word to know whether to say "pausing" or "paused";
+ * every other client reads the same word off the holder on the next machine
+ * state.
+ */
+export interface SessionPaused {
+  readonly ok: true;
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  readonly server: ServerRegistrationId;
+  readonly pause: PauseTaken;
+}
+
+/**
+ * A resume was taken. No pause word, because the only one it could carry is
+ * `none`, and a field that is never anything else is a field nobody reads.
+ */
+export interface SessionResumed {
+  readonly ok: true;
+  readonly storeId: StoreId;
+  readonly sessionId: SessionId;
+  readonly server: ServerRegistrationId;
+}
+
+export type PauseOutcome = SessionPaused | SessionRefused;
+export type ResumeOutcome = SessionResumed | SessionRefused;
+
 export interface Sessions {
   start(request: StartSessionRequest): Promise<StartOutcome>;
   stop(request: StopSessionRequest): Promise<SessionOutcome>;
+  /** Sets a session down at its next turn boundary. Routed like a stop; kills nothing. */
+  pause(request: PauseSessionRequest): Promise<PauseOutcome>;
+  /** Picks a paused session up again. A server that cannot answers with a refusal. */
+  resume(request: PauseSessionRequest): Promise<ResumeOutcome>;
   /**
    * The tail of one session's work, read on the machine that has the file.
    *
@@ -222,6 +263,62 @@ export interface Sessions {
 export function createSessions(dependencies: SessionsDependencies): Sessions {
   const { state, projects, connections, ids, onStarted } = dependencies;
   const logger = dependencies.logger.child({ part: 'sessions' });
+
+  /**
+   * The half a pause and a resume share: the routing, the question put to
+   * the server, and the refusal. One function so that the routing and the
+   * refusal cannot drift between them; what each makes of the answer is its
+   * own, because the two receipts are different shapes.
+   */
+  async function askPause(
+    request: PauseSessionRequest,
+    instruction: 'session-pause' | 'session-resume',
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly registrationId: ServerRegistrationId;
+        readonly answer: ServerAnswer;
+      }
+    | SessionRefused
+  > {
+    const verb = instruction === 'session-pause' ? 'pause' : 'resume';
+    const routed = routePause(state.snapshot(), request);
+    if (!routed.ok) {
+      logger.info(`${verb} refused`, { ...request, problem: routed.problem });
+      return routed;
+    }
+
+    const { registrationId } = routed.server;
+    const answered = await connections.ask(registrationId, {
+      type: instruction,
+      storeId: request.storeId,
+      sessionId: request.sessionId,
+    });
+
+    if (!answered.ok) {
+      logger.info(`the server refused a ${verb}`, { registrationId, problem: answered.problem });
+      return refusal(answered, registrationId);
+    }
+    return { ok: true, registrationId, answer: answered.answer };
+  }
+
+  /** The server answered the instruction with a frame that is not its receipt. */
+  function answeredWithSomethingElse(
+    verb: 'pause' | 'resume',
+    registrationId: ServerRegistrationId,
+    answered: ServerAnswer['type'],
+  ): SessionRefused {
+    logger.error(`the server answered a ${verb} with something else`, {
+      registrationId,
+      answered,
+    });
+    return {
+      ok: false,
+      code: 'internal',
+      problem: `the server answered a ${verb} with something else`,
+      holder: null,
+    };
+  }
 
   return {
     async start(request: StartSessionRequest): Promise<StartOutcome> {
@@ -392,6 +489,39 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
       };
     },
 
+    async pause(request: PauseSessionRequest): Promise<PauseOutcome> {
+      const asked = await askPause(request, 'session-pause');
+      if (!asked.ok) return asked;
+      const { registrationId, answer } = asked;
+      if (answer.type !== 'session-paused') {
+        return answeredWithSomethingElse('pause', registrationId, answer.type);
+      }
+      logger.info('session pause', { registrationId, ...request, pause: answer.pause });
+      return {
+        ok: true,
+        storeId: answer.storeId,
+        sessionId: answer.sessionId,
+        server: registrationId,
+        pause: answer.pause,
+      };
+    },
+
+    async resume(request: PauseSessionRequest): Promise<ResumeOutcome> {
+      const asked = await askPause(request, 'session-resume');
+      if (!asked.ok) return asked;
+      const { registrationId, answer } = asked;
+      if (answer.type !== 'session-resumed') {
+        return answeredWithSomethingElse('resume', registrationId, answer.type);
+      }
+      logger.info('session resume', { registrationId, ...request });
+      return {
+        ok: true,
+        storeId: answer.storeId,
+        sessionId: answer.sessionId,
+        server: registrationId,
+      };
+    },
+
     async transcript(request: TranscriptRequest): Promise<TranscriptOutcome> {
       // Resolve, check reachable, ask, check the answer's type, return: the
       // shape `docs.open` has, routed by session rather than by directory. The
@@ -472,6 +602,8 @@ function refusal(
     code: outcome.code,
     problem: outcome.problem,
     holder:
-      outcome.hold === null ? null : { server: registrationId, stoppable: outcome.hold.stoppable },
+      outcome.hold === null
+        ? null
+        : { server: registrationId, stoppable: outcome.hold.stoppable, pause: outcome.hold.pause },
   };
 }

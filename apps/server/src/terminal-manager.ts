@@ -1,5 +1,6 @@
 import type {
   SessionId,
+  SessionPause,
   SessionRef,
   SessionStatus,
   StartId,
@@ -172,6 +173,8 @@ export interface Terminal {
   readonly unwatchedSince: number | null;
   /** Whether a stop may be offered. False while the agent is mid-turn. */
   readonly stoppable: boolean;
+  /** How paused this terminal's session is. `paused` withholds its input. */
+  readonly pause: SessionPause;
   /**
    * Attaches a watcher: it receives output, and it holds the terminal against
    * eviction until it detaches. Returns the detach, which is idempotent —
@@ -202,6 +205,7 @@ export interface TerminalHolder {
   /** How many distinct connections are watching, not how many times they attached. */
   readonly watchers: number;
   readonly stoppable: boolean;
+  readonly pause: SessionPause;
 }
 
 /**
@@ -222,6 +226,19 @@ export type TerminalOutcome =
 
 export type StopOutcome =
   | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly problem: string;
+      readonly holder: TerminalHolder | null;
+    };
+
+/**
+ * A pause that was taken says how far it got. `paused` is at once; `requested`
+ * is recorded and honoured when the turn ends. Never `none`: a refusal is the
+ * other arm.
+ */
+export type PauseOutcome =
+  | { readonly ok: true; readonly pause: Exclude<SessionPause, 'none'> }
   | {
       readonly ok: false;
       readonly problem: string;
@@ -282,6 +299,27 @@ export interface TerminalManager extends SessionLiveness {
   /** Kills the process. The terminal stays, because its output is what to read next. */
   stop(terminalId: string): StopOutcome;
   /**
+   * Withholds the terminal's input from its next turn boundary, killing nothing.
+   *
+   * At once when the last derived status is a boundary -- anything derived
+   * that is not `working` -- and otherwise recorded, to be taken by `observe`
+   * when a boundary is derived. `unknown` is not a boundary: an adapter that
+   * could not tell what the session is doing cannot tell that it is between
+   * turns either, so a request against it waits for a status somebody could
+   * read. Idempotent: a second pause answers with where the first got to.
+   *
+   * Not a one-way door. A `paused` session observed `working` again drops
+   * back to `requested`, and the pause is taken at the next boundary.
+   */
+  pause(terminalId: string): PauseOutcome;
+  /**
+   * Lifts a pause or a pending request. `unpause` rather than `resume` because
+   * `resume` on this manager already means reattaching to a session, and the
+   * two are different acts on different things: one opens a process, this
+   * opens a keyboard. Idempotent on a terminal that was never paused.
+   */
+  unpause(terminalId: string): StopOutcome;
+  /**
    * Refuses every new terminal from here on, and touches none of the live ones.
    *
    * The first step of a draining shutdown, and separate from `closeAll` because
@@ -300,6 +338,7 @@ interface TerminalRecord {
   readonly run: PtyRun;
   sessionId: SessionId | null;
   status: SessionStatus;
+  pause: SessionPause;
   /** Watcher to how many times it attached: one hub may open two tabs on one terminal. */
   readonly watchers: Map<WatcherId, number>;
   unwatchedSince: number | null;
@@ -441,6 +480,7 @@ export function createTerminalManager({
       // transcript by an adapter, and guessing it here would put an
       // unverifiable claim in front of a user and a stop button behind it.
       status: 'unknown',
+      pause: 'none',
       watchers: new Map(),
       unwatchedSince: openedAt,
     };
@@ -497,7 +537,20 @@ export function createTerminalManager({
 
     observe(session: SessionRef, status: SessionStatus): void {
       const record = liveHolderOf(session);
-      if (record !== undefined) record.status = status;
+      if (record === undefined) return;
+      record.status = status;
+      // The one place a request becomes a pause, and the one place a pause
+      // becomes a request again. The scan that derived this status is what
+      // says the turn ended, and nothing else may say so; the same scan is
+      // what says a paused session has started a turn after all -- an
+      // approval answered through the gate lets the agent go on, and a pause
+      // taken on a stale status can land mid-turn -- and then the boundary
+      // the pause claimed is gone. Dropping back to `requested` keeps the
+      // keyboard open for the turn and takes the pause at the next boundary,
+      // where `paused` left standing would refuse input to a session that
+      // is working. Only `working` re-arms: `unknown` is no evidence either way.
+      if (record.pause === 'requested' && atBoundary(status)) record.pause = 'paused';
+      else if (record.pause === 'paused' && status === 'working') record.pause = 'requested';
     },
 
     terminal(terminalId: string): Terminal | undefined {
@@ -547,6 +600,40 @@ export function createTerminalManager({
       return { ok: true };
     },
 
+    pause(terminalId: string): PauseOutcome {
+      const record = terminals.get(terminalId)?.record;
+      if (record === undefined) {
+        return { ok: false, problem: `no terminal ${terminalId}`, holder: null };
+      }
+      if (record.run.exit !== null) {
+        return {
+          ok: false,
+          problem: `terminal ${terminalId} has exited: there is no turn left to pause`,
+          holder: null,
+        };
+      }
+      if (record.pause === 'none') {
+        record.pause = atBoundary(record.status) ? 'paused' : 'requested';
+      }
+      return { ok: true, pause: record.pause };
+    },
+
+    unpause(terminalId: string): StopOutcome {
+      const record = terminals.get(terminalId)?.record;
+      if (record === undefined) {
+        return { ok: false, problem: `no terminal ${terminalId}`, holder: null };
+      }
+      if (record.run.exit !== null) {
+        return {
+          ok: false,
+          problem: `terminal ${terminalId} has exited: there is nothing to resume`,
+          holder: null,
+        };
+      }
+      record.pause = 'none';
+      return { ok: true };
+    },
+
     seal(): void {
       sealed = true;
     },
@@ -577,6 +664,18 @@ function rank(record: TerminalRecord): number {
  */
 function stoppable(status: SessionStatus): boolean {
   return status !== 'working';
+}
+
+/**
+ * A turn boundary: a status somebody derived that is not mid-turn.
+ *
+ * Stricter than `stoppable` on exactly one value. A stop lets `unknown`
+ * through because the alternative is an unkillable session; a pause holds
+ * `unknown` back because the alternative is claiming a session is set down
+ * between turns when nobody could read whether it is between turns at all.
+ */
+function atBoundary(status: SessionStatus): boolean {
+  return status !== 'working' && status !== 'unknown';
 }
 
 function attach(record: TerminalRecord, watcher: WatcherId): void {
@@ -612,6 +711,7 @@ function holderOf(record: TerminalRecord): TerminalHolder {
     status: record.status,
     watchers: record.watchers.size,
     stoppable: stoppable(record.status),
+    pause: record.pause,
   };
 }
 
@@ -641,6 +741,10 @@ function viewOf(record: TerminalRecord, clock: Clock): Terminal {
 
     get stoppable(): boolean {
       return stoppable(record.status);
+    },
+
+    get pause(): SessionPause {
+      return record.pause;
     },
 
     watch(watcher: WatcherId, listener: (chunk: Uint8Array) => void): () => void {

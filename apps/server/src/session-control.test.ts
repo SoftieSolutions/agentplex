@@ -381,7 +381,7 @@ describe('a start this server runs', () => {
     expect(second).toMatchObject({
       ok: false,
       code: 'refused',
-      hold: { sessionId: 'session-1', stoppable: true },
+      hold: { sessionId: 'session-1', stoppable: true, pause: 'none' },
     });
     expect(ptys.opened).toHaveLength(1);
   });
@@ -405,7 +405,7 @@ describe('a report', () => {
       'session-busy',
       'session-homeless',
     ]);
-    expect(report?.holding).toEqual([{ sessionId: 'session-1', stoppable: true }]);
+    expect(report?.holding).toEqual([{ sessionId: 'session-1', stoppable: true, pause: 'none' }]);
   });
 
   it('withholds the stop from a session that is mid-turn', async () => {
@@ -422,7 +422,9 @@ describe('a report', () => {
     // it is what the hold is answered with. Nothing above the adapter decides
     // what mid-turn means for a provider.
     const report = await sessions.report(WORK);
-    expect(report?.holding).toEqual([{ sessionId: 'session-busy', stoppable: false }]);
+    expect(report?.holding).toEqual([
+      { sessionId: 'session-busy', stoppable: false, pause: 'none' },
+    ]);
   });
 
   it('answers nothing for a store this server does not have', async () => {
@@ -542,9 +544,69 @@ describe('a stop', () => {
     expect(outcome).toMatchObject({
       ok: false,
       code: 'refused',
-      hold: { sessionId: 'session-1', stoppable: false },
+      hold: { sessionId: 'session-1', stoppable: false, pause: 'none' },
     });
     expect(ptys.last?.kills).toBe(0);
+  });
+});
+
+describe('a pause and a resume', () => {
+  const SESSION_1 = { storeId: WORK, sessionId: session('session-1') };
+
+  async function running() {
+    const made = machine();
+    await made.sessions.start({ ...SESSION_1, provider: 'claude', prompt: null, directory: null });
+    return made;
+  }
+
+  it('resolves the terminal from the session and pauses it, killing nothing', async () => {
+    const { sessions, terminals, ptys } = await running();
+    terminals.observe(SESSION_1, 'awaiting-input');
+
+    const outcome = sessions.pause(SESSION_1);
+
+    expect(outcome).toEqual({ ok: true, ...SESSION_1, pause: 'paused' });
+    expect(ptys.last?.kills).toBe(0);
+    expect(terminals.holder(SESSION_1)?.pause).toBe('paused');
+  });
+
+  it('records a request against a session that is mid-turn, and says so', async () => {
+    const { sessions, terminals } = await running();
+    terminals.observe(SESSION_1, 'working');
+
+    expect(sessions.pause(SESSION_1)).toEqual({ ok: true, ...SESSION_1, pause: 'requested' });
+  });
+
+  it('reports the pause on the hold, so the hub publishes it', async () => {
+    const { sessions, terminals } = await running();
+    terminals.observe(SESSION_1, 'idle');
+    sessions.pause(SESSION_1);
+
+    const report = await sessions.report(WORK);
+
+    // The scan re-derives the status from disk, and `session-1` is recorded
+    // as awaiting input there, which is a boundary: the pause holds.
+    expect(report?.holding).toEqual([{ sessionId: 'session-1', stoppable: true, pause: 'paused' }]);
+  });
+
+  it('resumes a paused session, and answers with no pause left', async () => {
+    const { sessions, terminals } = await running();
+    terminals.observe(SESSION_1, 'idle');
+    sessions.pause(SESSION_1);
+
+    expect(sessions.resume(SESSION_1)).toEqual({ ok: true, ...SESSION_1, pause: 'none' });
+    expect(terminals.holder(SESSION_1)?.pause).toBe('none');
+  });
+
+  it('refuses a pause and a resume for a session it is not running', () => {
+    const { sessions } = machine();
+
+    const refusal = { ok: false, code: 'refused', hold: null };
+    expect(sessions.pause(SESSION_1)).toMatchObject(refusal);
+    expect(sessions.resume(SESSION_1)).toMatchObject(refusal);
+    expect(sessions.pause(SESSION_1)).toMatchObject({
+      problem: 'this server is not running that session',
+    });
   });
 });
 

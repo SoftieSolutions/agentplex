@@ -190,7 +190,7 @@ describe('start_session', () => {
         ok: false,
         code: 'refused',
         problem: 'that session is already running on attic',
-        holder: { server: ATTIC, stoppable: true },
+        holder: { server: ATTIC, stoppable: true, pause: 'none' },
       },
     });
 

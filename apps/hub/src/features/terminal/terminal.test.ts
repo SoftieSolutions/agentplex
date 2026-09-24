@@ -212,7 +212,10 @@ function harness(state: HubStateSnapshot): Harness {
 /** The ordinary case: one connected machine holding the session. */
 function oneMachine(): Harness {
   return harness(
-    fleet([server(ATTIC, 'attic')], [row({ server: ATTIC, stoppable: true }, [ATTIC])]),
+    fleet(
+      [server(ATTIC, 'attic')],
+      [row({ server: ATTIC, stoppable: true, pause: 'none' }, [ATTIC])],
+    ),
   );
 }
 

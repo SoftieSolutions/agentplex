@@ -277,6 +277,12 @@ describe('a store that changes while it is being scanned', () => {
       stop: () => {
         throw new Error('this controller stops nothing');
       },
+      pause: () => {
+        throw new Error('this controller pauses nothing');
+      },
+      resume: () => {
+        throw new Error('this controller resumes nothing');
+      },
       transcript: () => {
         throw new Error('this controller reads no transcript');
       },

@@ -119,6 +119,18 @@ describe('parseClientFrame on the session frames', () => {
   it('rejects a stop with no session: a stop addresses one session, never a store', () => {
     expect(parseClientFrame({ type: 'session-stop', id: 2, storeId: 'store-work' }).ok).toBe(false);
   });
+
+  it('takes a pause and a resume shaped exactly like a stop', () => {
+    for (const type of ['session-pause', 'session-resume']) {
+      const frame = { type, id: 2, storeId: 'store-work', sessionId: 'session-1' };
+      expect(parseClientFrame(frame)).toEqual({ ok: true, value: frame });
+      expect(parseClientFrame({ type, id: 2, storeId: 'store-work' }).ok).toBe(false);
+      const named = parseClientFrame({ ...frame, terminalId: 'terminal-1' });
+      expect(named.ok).toBe(true);
+      if (!named.ok) return;
+      expect(named.value).not.toHaveProperty('terminalId');
+    }
+  });
 });
 
 describe('parseClientFrame on the pane layout frames', () => {
@@ -520,6 +532,18 @@ describe('client and hub round trips', () => {
       storeId: storeIdSchema.parse('store-work'),
       sessionId: sessionIdSchema.parse('session-1'),
     },
+    {
+      type: 'session-pause',
+      id: 40,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
+    {
+      type: 'session-resume',
+      id: 41,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
     { type: 'pane-layout-request', id: 7 },
     { type: 'pane-layout-save', id: 8, layout: '{"v":1,"root":{"kind":"pane"}}' },
     {
@@ -693,6 +717,7 @@ describe('client and hub round trips', () => {
       holder: {
         server: serverRegistrationIdSchema.parse('registration-1'),
         stoppable: false,
+        pause: 'none',
       },
     },
     {
@@ -705,6 +730,21 @@ describe('client and hub round trips', () => {
     {
       type: 'session-stopped',
       replyTo: 6,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      server: serverRegistrationIdSchema.parse('registration-1'),
+    },
+    {
+      type: 'session-paused',
+      replyTo: 40,
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+      server: serverRegistrationIdSchema.parse('registration-1'),
+      pause: 'requested',
+    },
+    {
+      type: 'session-resumed',
+      replyTo: 41,
       storeId: storeIdSchema.parse('store-work'),
       sessionId: sessionIdSchema.parse('session-1'),
       server: serverRegistrationIdSchema.parse('registration-1'),
@@ -781,6 +821,7 @@ describe('client and hub round trips', () => {
                 holder: {
                   server: serverRegistrationIdSchema.parse('registration-1'),
                   stoppable: true,
+                  pause: 'none',
                 },
                 acknowledgedThrough: 900,
                 mutedAt: null,
@@ -1374,5 +1415,37 @@ describe('the transcript frames', () => {
         olderExist: false,
       }).ok,
     ).toBe(false);
+  });
+});
+
+describe('the pause receipt on the client leg', () => {
+  it('refuses a receipt that says none, as the server leg does', () => {
+    // The hub relays the server's word and adds the server's id. It may not
+    // relay a word the server leg could not have carried, so the same
+    // exclusion applies here rather than a wider schema the hub would have to
+    // re-check by hand.
+    expect(
+      parseHubFrame({
+        type: 'session-paused',
+        replyTo: 40,
+        storeId: 'store-work',
+        sessionId: 'session-1',
+        server: 'registration-1',
+        pause: 'none',
+      }).ok,
+    ).toBe(false);
+  });
+
+  it.each(['requested', 'paused'] as const)('takes a receipt reading %s', (pause) => {
+    expect(
+      parseHubFrame({
+        type: 'session-paused',
+        replyTo: 40,
+        storeId: 'store-work',
+        sessionId: 'session-1',
+        server: 'registration-1',
+        pause,
+      }).ok,
+    ).toBe(true);
   });
 });

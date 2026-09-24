@@ -438,6 +438,74 @@ describe('createTerminalStreams input and resize', () => {
     expect(streams.write(bySession(SESSION_A), 'ls\r').ok).toBe(false);
   });
 
+  it('refuses input for a paused session in a sentence, and writes nothing', () => {
+    // The whole of what a pause is on this machine: the process is untouched
+    // and its keyboard is withheld. The words are what the client shows.
+    const { terminals, streams, factory } = harness();
+    const terminalId = spawn(terminals);
+    terminals.bind(terminalId, SESSION_A);
+    terminals.observe({ storeId: STORE.storeId, sessionId: SESSION_A }, 'idle');
+    terminals.pause(terminalId);
+
+    expect(streams.write(bySession(SESSION_A), 'ls\r')).toEqual({
+      ok: false,
+      problem: 'that session is paused; resume it to type into it',
+    });
+    expect(factory.last?.written).toEqual([]);
+  });
+
+  it('still takes input while a pause is only requested: the turn has not ended', () => {
+    const { terminals, streams, factory } = harness();
+    const terminalId = spawn(terminals);
+    terminals.bind(terminalId, SESSION_A);
+    terminals.observe({ storeId: STORE.storeId, sessionId: SESSION_A }, 'working');
+    terminals.pause(terminalId);
+
+    expect(streams.write(bySession(SESSION_A), 'y\r').ok).toBe(true);
+    expect(factory.last?.written).toEqual(['y\r']);
+  });
+
+  it('still resizes a paused session: the screen is the viewer\u2019s, not the agent\u2019s', () => {
+    const { terminals, streams, factory } = harness();
+    const terminalId = spawn(terminals);
+    terminals.bind(terminalId, SESSION_A);
+    terminals.observe({ storeId: STORE.storeId, sessionId: SESSION_A }, 'idle');
+    terminals.pause(terminalId);
+
+    expect(streams.resize(bySession(SESSION_A), { cols: 80, rows: 24 }).ok).toBe(true);
+    expect(factory.last?.resizes).toEqual([{ cols: 80, rows: 24 }]);
+  });
+
+  it('takes input again while a re-armed pause waits for the next boundary', () => {
+    // A paused session seen working again is mid-turn, and mid-turn the
+    // keyboard is the one control the user has: the pause is back to a
+    // request, and only `paused` withholds the keyboard.
+    const { terminals, streams, factory } = harness();
+    const terminalId = spawn(terminals);
+    terminals.bind(terminalId, SESSION_A);
+    terminals.observe({ storeId: STORE.storeId, sessionId: SESSION_A }, 'idle');
+    terminals.pause(terminalId);
+    expect(streams.write(bySession(SESSION_A), 'ls\r').ok).toBe(false);
+
+    terminals.observe({ storeId: STORE.storeId, sessionId: SESSION_A }, 'working');
+
+    expect(terminals.terminal(terminalId)?.pause).toBe('requested');
+    expect(streams.write(bySession(SESSION_A), 'y\r').ok).toBe(true);
+    expect(factory.last?.written).toEqual(['y\r']);
+  });
+
+  it('takes input again once the session is unpaused', () => {
+    const { terminals, streams, factory } = harness();
+    const terminalId = spawn(terminals);
+    terminals.bind(terminalId, SESSION_A);
+    terminals.observe({ storeId: STORE.storeId, sessionId: SESSION_A }, 'idle');
+    terminals.pause(terminalId);
+    terminals.unpause(terminalId);
+
+    expect(streams.write(bySession(SESSION_A), 'ls\r').ok).toBe(true);
+    expect(factory.last?.written).toEqual(['ls\r']);
+  });
+
   it('resizes the pty to the size the viewer actually has', () => {
     const { terminals, streams, factory } = harness();
     const terminalId = spawn(terminals);

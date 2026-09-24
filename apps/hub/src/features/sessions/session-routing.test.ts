@@ -15,7 +15,7 @@ import { missingProvider, readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type HubStateSnapshot } from '../fleet-state/fleet-state.js';
-import { routeSessionRead, routeStart, routeStop } from './session-routing.js';
+import { routePause, routeSessionRead, routeStart, routeStop } from './session-routing.js';
 
 /**
  * The scheduling decision, against real reduced state.
@@ -267,7 +267,7 @@ describe('routeStart', () => {
           {
             storeId: WORK,
             sessions: [session('session-1')],
-            holding: [{ sessionId: sessionId('session-1'), stoppable: true }],
+            holding: [{ sessionId: sessionId('session-1'), stoppable: true, pause: 'none' }],
           },
         ],
       },
@@ -462,7 +462,7 @@ describe('routeStart', () => {
           {
             storeId: WORK,
             sessions: [session('session-1')],
-            holding: [{ sessionId: sessionId('session-1'), stoppable: true }],
+            holding: [{ sessionId: sessionId('session-1'), stoppable: true, pause: 'none' }],
           },
         ],
       },
@@ -547,8 +547,8 @@ describe('routeStart', () => {
             storeId: WORK,
             sessions,
             holding: [
-              { sessionId: sessionId('session-1'), stoppable: true },
-              { sessionId: sessionId('session-2'), stoppable: true },
+              { sessionId: sessionId('session-1'), stoppable: true, pause: 'none' },
+              { sessionId: sessionId('session-2'), stoppable: true, pause: 'none' },
             ],
           },
         ],
@@ -585,7 +585,7 @@ describe('routeStart', () => {
           {
             storeId: SPARE,
             sessions: [session('session-9', SPARE)],
-            holding: [{ sessionId: sessionId('session-9'), stoppable: true }],
+            holding: [{ sessionId: sessionId('session-9'), stoppable: true, pause: 'none' }],
           },
         ],
       },
@@ -630,7 +630,7 @@ describe('routeStart', () => {
           {
             storeId: WORK,
             sessions: [session('session-1')],
-            holding: [{ sessionId: sessionId('session-1'), stoppable: true }],
+            holding: [{ sessionId: sessionId('session-1'), stoppable: true, pause: 'none' }],
           },
         ],
       },
@@ -645,7 +645,11 @@ describe('routeStart', () => {
 
     expect(routed.ok).toBe(false);
     if (routed.ok) return;
-    expect(routed.holder).toEqual({ server: registration('workshop'), stoppable: true });
+    expect(routed.holder).toEqual({
+      server: registration('workshop'),
+      stoppable: true,
+      pause: 'none',
+    });
     expect(routed.problem).toContain('workshop');
   });
 
@@ -663,7 +667,7 @@ describe('routeStart', () => {
           {
             storeId: WORK,
             sessions: [session('session-1')],
-            holding: [{ sessionId: sessionId('session-1'), stoppable: false }],
+            holding: [{ sessionId: sessionId('session-1'), stoppable: false, pause: 'none' }],
           },
         ],
       },
@@ -678,7 +682,11 @@ describe('routeStart', () => {
 
     expect(routed.ok).toBe(false);
     if (routed.ok) return;
-    expect(routed.holder).toEqual({ server: registration('workshop'), stoppable: false });
+    expect(routed.holder).toEqual({
+      server: registration('workshop'),
+      stoppable: false,
+      pause: 'none',
+    });
   });
 
   it('lets a session nobody is running be resumed', () => {
@@ -714,7 +722,7 @@ describe('routeStop', () => {
           {
             storeId: WORK,
             sessions: [session('session-1')],
-            holding: [{ sessionId: sessionId('session-1'), stoppable }],
+            holding: [{ sessionId: sessionId('session-1'), stoppable, pause: 'none' }],
           },
         ],
       },
@@ -733,7 +741,11 @@ describe('routeStop', () => {
 
     expect(routed.ok).toBe(false);
     if (routed.ok) return;
-    expect(routed.holder).toEqual({ server: registration('workshop'), stoppable: false });
+    expect(routed.holder).toEqual({
+      server: registration('workshop'),
+      stoppable: false,
+      pause: 'none',
+    });
   });
 
   it('refuses to stop a session nothing is running', () => {
@@ -760,6 +772,90 @@ describe('routeStop', () => {
   });
 });
 
+describe('routePause', () => {
+  const held = (stoppable: boolean, phase: 'connected' | 'stale' = 'connected'): HubStateSnapshot =>
+    fleet([
+      { label: 'attic', phase: 'connected', stores: [WORK] },
+      {
+        label: 'workshop',
+        phase,
+        stores: [WORK],
+        reports: [
+          {
+            storeId: WORK,
+            sessions: [session('session-1')],
+            holding: [{ sessionId: sessionId('session-1'), stoppable, pause: 'none' }],
+          },
+        ],
+      },
+    ]);
+
+  it('resolves the owner from the session alone, like a stop', () => {
+    const routed = routePause(held(true), { storeId: WORK, sessionId: sessionId('session-1') });
+
+    expect(routed.ok).toBe(true);
+    if (!routed.ok) return;
+    expect(routed.server.label).toBe('workshop');
+  });
+
+  it('does not consult stoppable: a pause mid-turn is the case the request exists for', () => {
+    // A stop is refused mid-turn because it would kill the process. A pause
+    // kills nothing; it is recorded and taken at the boundary, so a busy
+    // holder is exactly who a pause is aimed at.
+    const routed = routePause(held(false), { storeId: WORK, sessionId: sessionId('session-1') });
+
+    expect(routed.ok).toBe(true);
+    if (!routed.ok) return;
+    expect(routed.server.label).toBe('workshop');
+  });
+
+  it('refuses a session nothing is running, in the words a stop uses', () => {
+    const state = fleet([
+      {
+        label: 'workshop',
+        phase: 'connected',
+        stores: [WORK],
+        reports: [{ storeId: WORK, sessions: [session('session-1')] }],
+      },
+    ]);
+
+    const routed = routePause(state, { storeId: WORK, sessionId: sessionId('session-1') });
+
+    expect(routed).toEqual({
+      ok: false,
+      code: 'refused',
+      problem: 'nothing the hub can see is running that session',
+      holder: null,
+    });
+  });
+
+  it('refuses a session whose holder is not reachable, in the words a stop uses', () => {
+    // A stale machine's holds are claims about a process nobody can reach, and
+    // the reducer publishes no holder for them; the routing sees the same
+    // absence a stop would and says the same thing about it.
+    const paused = routePause(held(true, 'stale'), {
+      storeId: WORK,
+      sessionId: sessionId('session-1'),
+    });
+    const stopped = routeStop(held(true, 'stale'), {
+      storeId: WORK,
+      sessionId: sessionId('session-1'),
+    });
+
+    expect(paused.ok).toBe(false);
+    expect(paused).toEqual(stopped);
+  });
+
+  it('refuses a session in a store the hub knows nothing about', () => {
+    const state = fleet([{ label: 'workshop', phase: 'connected', stores: [WORK] }]);
+
+    expect(routePause(state, { storeId: SPARE, sessionId: sessionId('session-1') })).toMatchObject({
+      ok: false,
+      code: 'refused',
+    });
+  });
+});
+
 describe('routeSessionRead', () => {
   it('sends a read to the machine holding the session', () => {
     // Preferred, not required. The holder has the file open and is the machine
@@ -779,7 +875,7 @@ describe('routeSessionRead', () => {
           {
             storeId: WORK,
             sessions: [session('session-1')],
-            holding: [{ sessionId: sessionId('session-1'), stoppable: true }],
+            holding: [{ sessionId: sessionId('session-1'), stoppable: true, pause: 'none' }],
           },
         ],
       },

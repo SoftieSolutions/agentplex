@@ -366,6 +366,12 @@ export function createTerminalStreams({
         // the wrong thing to leave a user guessing about.
         return { ok: false, problem: 'that session has ended and cannot be typed into' };
       }
+      if (terminal.pause === 'paused') {
+        // The whole of a pause on this machine. Only `paused` withholds the
+        // keyboard: while a pause is merely requested the turn is still
+        // running and typing is the one control the user has left over it.
+        return { ok: false, problem: 'that session is paused; resume it to type into it' };
+      }
       terminal.run.write(data);
       return { ok: true };
     },
