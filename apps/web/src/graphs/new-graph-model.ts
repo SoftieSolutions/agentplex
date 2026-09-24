@@ -28,6 +28,13 @@ import type {
  * graph is handed in with the submit rather than at construction, so it is
  * the one from the render that pressed the button and no stale closure has
  * to be worked around.
+ *
+ * The wait ends in one of three ways, never in none: the hub's answer, the
+ * hub's refusal, or the connection going. The hub store forgets an unanswered
+ * frame when the socket closes and sends no refusal for it, and this store
+ * lives as long as the shell does, so a create caught by a drop would
+ * otherwise disable the form until the page reloaded. Whether that create
+ * landed is the tree's to show; the form only stops claiming it will hear.
  */
 
 export type GraphNameVerdict =
@@ -125,6 +132,14 @@ export function createGraphCreation({ hub }: GraphCreationDependencies): GraphCr
   function onHubChange(): void {
     if (pending === null) return;
     const snapshot = hub.getSnapshot();
+    if (snapshot.phase !== 'connected') {
+      pending = null;
+      moveTo({
+        waiting: false,
+        refused: 'the connection dropped before the hub answered; check the tree before trying again',
+      });
+      return;
+    }
     const made = snapshot.lastGraphCreated;
     if (made !== null && made.replyTo === pending.id) {
       const { onMade } = pending;
@@ -182,7 +197,10 @@ export function createGraphCreation({ hub }: GraphCreationDependencies): GraphCr
     },
 
     reset() {
-      moveTo({ waiting: state.waiting, refused: null });
+      // A form closed or typed into again has moved on from the create it
+      // sent: an answer that still arrives opens nothing.
+      pending = null;
+      moveTo(IDLE);
     },
   };
 }

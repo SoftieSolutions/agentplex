@@ -166,6 +166,38 @@ describe('createGraphCreation', () => {
     expect(creation.getSnapshot().refused).toMatch(/not connected|queued|connection/);
   });
 
+  it('stops waiting when the connection drops with the create out, and says so', async () => {
+    const socket = await connected();
+    const made: NodeId[] = [];
+    creation.submit(PROJECT, 'release-pipeline', (nodeId) => made.push(nodeId));
+    expect(creation.getSnapshot().waiting).toBe(true);
+
+    socket.close();
+
+    // The hub store forgets the frame without a refusal, so the form would
+    // otherwise be disabled until the page reloads. Whether the create landed
+    // is the tree's to show; the form only stops claiming it will hear back.
+    expect(creation.getSnapshot().waiting).toBe(false);
+    expect(creation.getSnapshot().refused).toMatch(/dropped/);
+    expect(made).toEqual([]);
+  });
+
+  it('stops waiting when asked to start over', async () => {
+    const socket = await connected();
+    const made: NodeId[] = [];
+    creation.submit(PROJECT, 'release-pipeline', (nodeId) => made.push(nodeId));
+    const create = sent(socket).at(-1);
+    if (create === undefined || create.type !== 'graph-create') throw new Error('no create');
+
+    creation.reset();
+    expect(creation.getSnapshot()).toEqual({ waiting: false, refused: null });
+
+    // The answer to the abandoned create opens nothing: the form that asked
+    // has moved on, and a navigation nobody is expecting is the surprise.
+    socket.deliver(JSON.stringify({ type: 'graph-created', replyTo: create.id, nodeId: 'hub-10' }));
+    expect(made).toEqual([]);
+  });
+
   it('forgets a refusal when asked to start over', async () => {
     const socket = await connected();
     creation.submit(PROJECT, 'release-pipeline', () => {});
