@@ -22,7 +22,12 @@ import { directoryListingFrameSchema, directorySchema } from './directory.js';
 import { docContentSchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import { graphDocumentSchema, graphNameSchema, graphPublishedVersionSchema } from './graph.js';
-import { graphRunIdSchema, graphRunStateSchema } from './graph-run.js';
+import {
+  GRAPH_RUN_HISTORY_MAX,
+  graphRunIdSchema,
+  graphRunStateSchema,
+  graphRunSummarySchema,
+} from './graph-run.js';
 import {
   hubIdSchema,
   nodeIdSchema,
@@ -732,6 +737,37 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     nodeId: nodeIdSchema,
   }),
   /**
+   * Asks for the graph's runs, newest first, as the history list draws them.
+   *
+   * A reply to the asking client alone, like `layout-request`: a list is what
+   * one screen asked to look at, and a new run reaches every watching screen
+   * as a state already. The answer is summaries only and at most
+   * `GRAPH_RUN_HISTORY_MAX` of them. Sending it marks this connection as
+   * watching the graph, as `graph-run-read` does, so the screen that asked is
+   * told when a run moves and knows to ask again when one ends.
+   */
+  z.object({
+    type: z.literal('graph-run-history-request'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
+  /**
+   * Asks for one run of the graph, whole: the row a person picked in the
+   * history list, for the strip and LAST OUTPUT to read.
+   *
+   * Named by the run and by its graph. The run is the address; the graph is
+   * what this connection watches from then on, and what the hub checks the
+   * run against, so that a screen open on one graph is never handed another
+   * graph's run to draw as its own. Answered by `graph-run-state` -- the one
+   * shape a run arrives in -- or refused when the graph has no such run.
+   */
+  z.object({
+    type: z.literal('graph-run-open'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+    runId: graphRunIdSchema,
+  }),
+  /**
    * Answers an approval: let it through, or refuse it.
    *
    * The subject is named because a client names what it answers and the hub
@@ -1380,6 +1416,21 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     replyTo: frameIdSchema,
     nodeId: nodeIdSchema,
     run: graphRunStateSchema.nullable(),
+  }),
+  /**
+   * The graph's runs, newest first, answered to the client that asked.
+   *
+   * Summaries, never steps, and at most `GRAPH_RUN_HISTORY_MAX`: the newest
+   * that many, so a graph run for a year answers in one frame the size of one
+   * run's state. It names the graph so a screen files it by the graph, and an
+   * empty list is the answer for a graph that has never run -- there is no
+   * separate "none" here, because an empty list is already that sentence.
+   */
+  z.object({
+    type: z.literal('graph-run-history'),
+    replyTo: frameIdSchema,
+    nodeId: nodeIdSchema,
+    runs: z.array(graphRunSummarySchema).max(GRAPH_RUN_HISTORY_MAX),
   }),
   /**
    * The cancel was taken. The run's end arrives as `graph-run-state` with

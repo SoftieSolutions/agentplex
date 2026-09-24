@@ -163,18 +163,23 @@ export type {
 } from './graph.js';
 
 export {
+  GRAPH_RUN_HISTORY_MAX,
   GRAPH_RUN_OUTPUT_MAX_CHARS,
   GRAPH_RUN_STEPS_MAX,
+  graphRunChildSchema,
   graphRunIdSchema,
   graphRunStateSchema,
+  graphRunSummarySchema,
   graphRunStepOutputSchema,
   graphRunStepSchema,
   runStatusSchema,
   stepOutcomeSchema,
 } from './graph-run.js';
 export type {
+  GraphRunChild,
   GraphRunId,
   GraphRunState,
+  GraphRunSummary,
   GraphRunStep,
   GraphRunStepOutput,
   RunStatus,
