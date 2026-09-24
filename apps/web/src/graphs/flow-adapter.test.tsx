@@ -76,6 +76,14 @@ describe('toFlow', () => {
     expect(nodes.map((node) => node.selected)).toEqual([false, true, false]);
   });
 
+  it('marks the node whose run step is in flight, and none when no step is', () => {
+    const { nodes } = toFlow(fixtureDocument(), null, LABELS, 'dark', id('review'));
+    expect(nodes.map((node) => node.data.running)).toEqual([false, false, true]);
+
+    const idle = toFlow(fixtureDocument(), null, LABELS, 'dark', null);
+    expect(idle.nodes.map((node) => node.data.running)).toEqual([false, false, false]);
+  });
+
   it('yields one edge per document edge plus one per router route, labelled by its condition', () => {
     const { edges } = toFlow(fixtureDocument(), null, LABELS);
 

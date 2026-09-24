@@ -18,6 +18,7 @@ import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { addNode, setNodeField, type GraphEdit } from './graph-model.js';
 import { NodeInspector, type InspectorMachine } from './node-inspector.js';
+import type { LastOutput } from './run-model.js';
 
 /**
  * The inspector: the selected node's fields, one control each, every change
@@ -121,13 +122,21 @@ describe('NodeInspector', () => {
     );
   }
 
-  async function mount(node: GraphNode | null, document = fixtureDocument()): Promise<void> {
+  async function mount(
+    node: GraphNode | null,
+    document = fixtureDocument(),
+    lastOutput: LastOutput | null = null,
+  ): Promise<void> {
     root = createRoot(container);
-    await show(node, document);
+    await show(node, document, lastOutput);
   }
 
   /** Renders into the root that is already there: the same inspector, another node. */
-  async function show(node: GraphNode | null, document = fixtureDocument()): Promise<void> {
+  async function show(
+    node: GraphNode | null,
+    document = fixtureDocument(),
+    lastOutput: LastOutput | null = null,
+  ): Promise<void> {
     await act(async () => {
       root?.render(
         withProvider(
@@ -137,6 +146,7 @@ describe('NodeInspector', () => {
             machines={MACHINES}
             stores={STORES}
             scheme="dark"
+            lastOutput={lastOutput}
             onEdit={(edit) => edits.push(edit)}
           />,
         ),
@@ -221,12 +231,44 @@ describe('NodeInspector', () => {
     expect(container.querySelector('[aria-label="Prompt"]')).toBeNull();
   });
 
-  it('keeps a LAST OUTPUT slot that is empty until a run has happened', async () => {
+  it('keeps a LAST OUTPUT slot that is empty until a run has reached the node', async () => {
     await mount(nodeNamed(fixtureDocument(), 'classify'));
     expect(container.textContent).toContain('LAST OUTPUT');
+    expect(container.textContent).not.toContain('LAST OUTPUT · run');
     const slot = container.querySelector('[data-last-output]');
     expect(slot).not.toBeNull();
     expect(slot?.textContent).toBe('');
+  });
+
+  it('draws the node’s last step in the run: the run number, and the output as JSON', async () => {
+    await mount(nodeNamed(fixtureDocument(), 'classify'), fixtureDocument(), {
+      number: 38,
+      step: {
+        nodeId: graphNodeIdSchema.parse('classify'),
+        attempt: 0,
+        outcome: 'succeeded',
+        output: { language: 'rust' },
+      },
+    });
+
+    expect(container.textContent).toContain('LAST OUTPUT · run #38');
+    expect(container.querySelector('[data-last-output]')?.textContent).toBe(
+      JSON.stringify({ language: 'rust' }, null, 2),
+    );
+  });
+
+  it('draws the outcome when the step made no output', async () => {
+    await mount(nodeNamed(fixtureDocument(), 'review'), fixtureDocument(), {
+      number: 38,
+      step: {
+        nodeId: graphNodeIdSchema.parse('review'),
+        attempt: 1,
+        outcome: 'failed',
+        output: null,
+      },
+    });
+
+    expect(container.querySelector('[data-last-output]')?.textContent).toBe('failed');
   });
 
   it('adds a route through the model when the add affordance is pressed', async () => {

@@ -2388,3 +2388,103 @@ describe('graphs', () => {
     expect(h.store.getSnapshot().lastGraphDocument).toBeNull();
   });
 });
+
+/**
+ * The run frames: two commands out, and three kinds of frame back -- the
+ * hub's yes to a run, its yes to a cancel, and the run itself, unsolicited and
+ * whole, filed by the run and never by the frame that asked.
+ */
+describe('graph runs', () => {
+  const GRAPH = nodeIdSchema.parse('hub-10');
+
+  it('sends a run and a cancel as commands', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    h.store.sendCommand({ type: 'graph-run', nodeId: GRAPH, input: { language: 'rust' } });
+    h.store.sendCommand({ type: 'graph-run-cancel', runId: 'hub-11' as never });
+
+    expect(sentFrames(socket).slice(-2)).toEqual([
+      { type: 'graph-run', id: 2, nodeId: 'hub-10', input: { language: 'rust' } },
+      { type: 'graph-run-cancel', id: 3, runId: 'hub-11' },
+    ]);
+  });
+
+  it('keeps the hub’s yes to a run: the id every state names, and the number a person says', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphRunStarted);
+
+    expect(h.store.getSnapshot().lastRunStarted).toEqual({
+      replyTo: 24,
+      runId: 'hub-11',
+      number: 1,
+    });
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('files each run state by its run, whole, replacing the one before', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphRunStateRunning);
+    const live = h.store.getSnapshot().runs.get('hub-11' as never);
+    expect(live).toMatchObject({ number: 1, status: 'running', step: 3, of: 3 });
+    expect(live?.steps.map((step) => `${step.nodeId}:${step.outcome}`)).toEqual([
+      'start:succeeded',
+      'classify:succeeded',
+      'review:running',
+    ]);
+
+    socket.deliver(hubFrames.graphRunStateCancelled);
+    expect(h.store.getSnapshot().runs.get('hub-11' as never)).toMatchObject({
+      status: 'cancelled',
+      steps: [
+        expect.anything(),
+        expect.anything(),
+        { nodeId: 'review', attempt: 0, outcome: 'cancelled', output: null },
+      ],
+    });
+    expect(h.store.getSnapshot().runs.size).toBe(1);
+  });
+
+  it('keeps two runs apart, and a failed run’s sentence', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphRunStateRunning);
+    socket.deliver(hubFrames.graphRunStateFailed);
+    socket.deliver(hubFrames.graphRunStateSucceeded);
+
+    const runs = h.store.getSnapshot().runs;
+    expect([...runs.keys()]).toEqual(['hub-11', 'hub-13', 'hub-15']);
+    expect(runs.get('hub-13' as never)?.reason).toBe(
+      'the ROUTER node Classify diff failed: no route on Classify diff matched and it has no otherwise',
+    );
+    expect(runs.get('hub-15' as never)?.steps[0]?.output).toEqual({
+      suite: 'nightly',
+      language: 'rust',
+    });
+  });
+
+  it('keeps the hub’s yes to a cancel', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphRunCancelled);
+
+    expect(h.store.getSnapshot().lastRunCancelled).toEqual({ replyTo: 25, runId: 'hub-11' });
+  });
+
+  it('forgets the runs it holds when the connection goes: the next state is whole', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.graphRunStateRunning);
+    expect(h.store.getSnapshot().runs.size).toBe(1);
+
+    unsubscribe();
+
+    expect(h.store.getSnapshot().runs.size).toBe(0);
+  });
+});

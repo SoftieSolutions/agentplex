@@ -31,6 +31,7 @@ import {
   setRoute,
   type GraphEdit,
 } from './graph-model.js';
+import { lastOutputText, type LastOutput } from './run-model.js';
 
 /**
  * The inspector: the selected node's fields, one control each, as mockup 6d
@@ -44,9 +45,11 @@ import {
  * fields are drawn is the one thing decided here, by a switch on the kind
  * that the closed enum keeps exhaustive.
  *
- * The LAST OUTPUT slot is drawn and empty. A run's output is AGX-146's, and
- * the slot is here so that the aside already has the shape the mock gives it
- * and that ticket fills a region rather than inventing one.
+ * The LAST OUTPUT slot reads the selected node's last step in the run this
+ * screen started -- `LAST OUTPUT · run #38`, then the step's output as JSON
+ * or its outcome when it made none -- and is empty until a run has reached
+ * the node. It reads the run and never a history: the history list is
+ * AGX-265's, and until then what the aside knows is what the strip knows.
  */
 
 /** A machine the Pin control offers: the id it pins, worded by its label. */
@@ -66,6 +69,8 @@ export interface NodeInspectorProps {
   /** Every store the fleet reports, for an AGENT to start in. */
   readonly stores: readonly StoreId[];
   readonly scheme: Scheme;
+  /** The selected node's last step in this screen's run, or `null` when no run has reached it. */
+  readonly lastOutput: LastOutput | null;
   readonly onEdit: (edit: Edit) => void;
 }
 
@@ -88,6 +93,7 @@ export function NodeInspector({
   machines,
   stores,
   scheme,
+  lastOutput,
   onEdit,
 }: NodeInspectorProps): JSX.Element {
   const border = `1px solid ${colorForRole('border', scheme)}`;
@@ -142,11 +148,23 @@ export function NodeInspector({
         </Button>
       </Stack>
       <Box px={16} py={12} style={{ borderTop: border }}>
-        <Text style={eyebrowStyle(scheme, false)}>LAST OUTPUT</Text>
+        <Text style={eyebrowStyle(scheme, false)}>
+          {lastOutput === null ? 'LAST OUTPUT' : `LAST OUTPUT · run #${String(lastOutput.number)}`}
+        </Text>
         <pre
           data-last-output
-          style={{ ...MONO, margin: 0, fontSize: 11, lineHeight: 1.5, minHeight: 18 }}
-        />
+          style={{
+            ...MONO,
+            margin: 0,
+            fontSize: 11,
+            lineHeight: 1.5,
+            minHeight: 18,
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+          }}
+        >
+          {lastOutput === null ? null : lastOutputText(lastOutput)}
+        </pre>
       </Box>
     </Stack>
   );

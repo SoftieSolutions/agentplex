@@ -3,7 +3,10 @@ import type {
   GraphDocument,
   GraphNodeId,
   GraphPublishedVersion,
+  GraphRunId,
+  GraphRunState,
   NodeId,
+  RouteInput,
 } from '@agentplex/protocol';
 import type {
   CommandOutcome,
@@ -13,6 +16,8 @@ import type {
   GraphSavedView,
   HubCommand,
   RefusalView,
+  RunCancelledView,
+  RunStartedView,
 } from '../store/hub-store.js';
 import type { GraphEdit } from './graph-model.js';
 
@@ -74,6 +79,9 @@ export interface GraphStoreHub {
     readonly lastGraphDocument: GraphDocumentView | null;
     readonly lastGraphSaved: GraphSavedView | null;
     readonly lastGraphPublished: GraphPublishedView | null;
+    readonly lastRunStarted: RunStartedView | null;
+    readonly lastRunCancelled: RunCancelledView | null;
+    readonly runs: ReadonlyMap<GraphRunId, GraphRunState>;
     readonly lastRefusal: RefusalView | null;
   };
   sendCommand(command: HubCommand): CommandOutcome;
@@ -98,6 +106,16 @@ export interface GraphState {
   readonly saving: boolean;
   /** A publish is out and unanswered. */
   readonly publishing: boolean;
+  /**
+   * The run this screen started, as the hub last said it stood, or `null`
+   * before the first Run. One run, and this screen's: a state carries no
+   * graph, so a run somebody else started is theirs to watch.
+   */
+  readonly run: GraphRunState | null;
+  /** A run is out and unanswered. */
+  readonly starting: boolean;
+  /** A cancel is out and unanswered. */
+  readonly cancelling: boolean;
   /** The last thing the hub or the model said no to, in its words, or `null`. */
   readonly problem: string | null;
 }
@@ -112,6 +130,10 @@ export interface GraphStore {
   save(): void;
   /** Saves first when dirty, then asks the hub to stamp the draft. */
   publish(): void;
+  /** Runs the newest published version with this input. Does nothing while a run of this screen's is in flight. */
+  run(input: RouteInput): void;
+  /** Asks the hub to stop this screen's run before its next step. */
+  cancelRun(): void;
 }
 
 export interface GraphStoreDependencies {
@@ -130,6 +152,9 @@ const EMPTY: GraphState = {
   savedAt: null,
   saving: false,
   publishing: false,
+  run: null,
+  starting: false,
+  cancelling: false,
   problem: null,
 };
 
@@ -149,6 +174,10 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
   let takenAnswer: GraphDocumentView | null = null;
   let saveFrame: FrameId | null = null;
   let publishFrame: FrameId | null = null;
+  let runFrame: FrameId | null = null;
+  let cancelFrame: FrameId | null = null;
+  /** The run this screen started, once the hub has named it. */
+  let runId: GraphRunId | null = null;
   let detachHub: (() => void) | null = null;
   /** The phase at the last notification, so a reconnection is an edge. */
   let phaseBefore: ConnectionPhase = 'idle';
@@ -281,9 +310,32 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       askForGraph();
     }
 
+    const runStarted = snapshot.lastRunStarted;
+    if (runStarted !== null && runFrame !== null && runStarted.replyTo === runFrame) {
+      runFrame = null;
+      runId = runStarted.runId;
+      moveTo({ starting: false });
+    }
+    if (runId !== null) {
+      const run = snapshot.runs.get(runId) ?? null;
+      if (run !== null && run !== state.run) moveTo({ run });
+    }
+
+    const cancelled = snapshot.lastRunCancelled;
+    if (cancelled !== null && cancelFrame !== null && cancelled.replyTo === cancelFrame) {
+      cancelFrame = null;
+      moveTo({ cancelling: false });
+    }
+
     const no = snapshot.lastRefusal;
     if (no !== null) {
-      if (no.replyTo === openFrame) {
+      if (no.replyTo === runFrame) {
+        runFrame = null;
+        moveTo({ starting: false, problem: no.message });
+      } else if (no.replyTo === cancelFrame) {
+        cancelFrame = null;
+        moveTo({ cancelling: false, problem: no.message });
+      } else if (no.replyTo === openFrame) {
         openFrame = null;
         moveTo({ problem: no.message });
       } else if (no.replyTo === saveFrame) {
@@ -370,6 +422,30 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       }
       sendPublish();
     },
+
+    run(input: RouteInput): void {
+      if (state.starting || state.run?.status === 'running') return;
+      const outcome = hub.sendCommand({ type: 'graph-run', nodeId, input });
+      if (!outcome.accepted) {
+        moveTo({ problem: outcome.reason });
+        return;
+      }
+      runFrame = outcome.id;
+      // The previous run's strip stays until the hub names the new one, so
+      // the screen never flashes empty between two runs.
+      moveTo({ starting: true, problem: null });
+    },
+
+    cancelRun(): void {
+      if (runId === null || state.run?.status !== 'running' || state.cancelling) return;
+      const outcome = hub.sendCommand({ type: 'graph-run-cancel', runId });
+      if (!outcome.accepted) {
+        moveTo({ problem: outcome.reason });
+        return;
+      }
+      cancelFrame = outcome.id;
+      moveTo({ cancelling: true, problem: null });
+    },
   };
 }
 
@@ -385,6 +461,9 @@ function sameState(a: GraphState, b: GraphState): boolean {
     a.savedAt === b.savedAt &&
     a.saving === b.saving &&
     a.publishing === b.publishing &&
+    a.run === b.run &&
+    a.starting === b.starting &&
+    a.cancelling === b.cancelling &&
     a.problem === b.problem
   );
 }

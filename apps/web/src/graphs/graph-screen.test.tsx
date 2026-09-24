@@ -217,7 +217,7 @@ describe('GraphScreen', () => {
     expect(container.textContent).toContain('opening');
   });
 
-  it('draws the header the mock draws: the name, the draft chip, Publish, and the two buttons not built yet', async () => {
+  it('draws the header the mock draws: the name, the draft chip, Publish, Run, and Simulate not built yet', async () => {
     await opened();
 
     const header = container.querySelector('[data-graph-header]');
@@ -230,10 +230,74 @@ describe('GraphScreen', () => {
     expect(simulate.disabled).toBe(true);
     expect(simulate.title).toContain('not available yet');
     expect(simulate.title).not.toMatch(/AGX-/);
-    const run = button('Run');
-    expect(run.disabled).toBe(true);
-    expect(run.title).toContain('not available yet');
-    expect(run.title).not.toMatch(/AGX-/);
+    // The fixture's graph has v1 published, which is what Run runs.
+    expect(button('Run').disabled).toBe(false);
+    expect(container.querySelector('[data-run-strip]')).toBeNull();
+  });
+
+  it('keeps Run disabled, and says why, while nothing is published', async () => {
+    const socket = await mount();
+    const answer = JSON.parse(hubFrames.graphDocument) as { published: unknown[] };
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...answer, published: [] }));
+    });
+    await act(settle);
+
+    expect(button('Run').disabled).toBe(true);
+    expect(button('Run').title).toContain('Publish');
+  });
+
+  it('runs the graph: the strip reads the run live, the executing card is drawn running, and Cancel ends it', async () => {
+    const socket = await opened();
+
+    await act(() => {
+      button('Run').click();
+    });
+    const run = sent(socket).find((each) => each.type === 'graph-run');
+    if (run === undefined || run.type !== 'graph-run') throw new Error('no run was sent');
+    expect(run).toMatchObject({ nodeId: 'hub-10', input: {} });
+    expect(button('Run').disabled).toBe(true);
+
+    // The hub's yes, addressed to this screen's frame, then the run as the
+    // hub captured it parked at the AGENT step.
+    const started = JSON.parse(hubFrames.graphRunStarted) as { replyTo: number };
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...started, replyTo: run.id }));
+      socket.deliver(hubFrames.graphRunStateRunning);
+    });
+    await act(settle);
+
+    const strip = container.querySelector('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · live · step 3/3');
+    expect(card('review').dataset['running']).toBe('true');
+    expect(card('classify').dataset['running']).toBeUndefined();
+    expect(button('Run').disabled).toBe(true);
+
+    // The inspector reads the selected node's step out of the same run.
+    await act(() => {
+      card('classify').click();
+    });
+    await act(settle);
+    expect(container.textContent).toContain('LAST OUTPUT · run #1');
+    expect(container.querySelector('[data-last-output]')?.textContent).toContain(
+      '"language": "rust"',
+    );
+
+    await act(() => {
+      button('Cancel').click();
+    });
+    const cancel = sent(socket).find((each) => each.type === 'graph-run-cancel');
+    expect(cancel).toMatchObject({ runId: 'hub-11' });
+    await act(() => {
+      socket.deliver(hubFrames.graphRunStateCancelled);
+    });
+    await act(settle);
+
+    expect(container.querySelector('[data-run-strip]')?.textContent).toContain(
+      'run #1 · cancelled · step 3/3',
+    );
+    expect(card('review').dataset['running']).toBeUndefined();
+    expect(button('Run').disabled).toBe(false);
   });
 
   it('draws the canvas with a card per node and the zoom controls', async () => {

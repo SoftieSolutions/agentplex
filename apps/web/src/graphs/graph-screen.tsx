@@ -17,6 +17,8 @@ import { GraphCanvas } from './flow-adapter.js';
 import { addNode, connect, KIND_WORDS, KINDS, type NodeSeed } from './graph-model.js';
 import { createGraphStore } from './graph-store.js';
 import { NodeInspector, type InspectorMachine } from './node-inspector.js';
+import { lastOutputFor, runningNode } from './run-model.js';
+import { RunStrip } from './run-strip.js';
 
 /**
  * The graph screen mockup 6d draws: a header naming the project and the
@@ -39,14 +41,21 @@ import { NodeInspector, type InspectorMachine } from './node-inspector.js';
  * catalogue change has not reached -- draws the name alone rather than a
  * project guessed at.
  *
- * Simulate and Run are drawn because the mock draws them and disabled
- * because nothing is behind them yet: the simulation and the runtime are
- * later tickets, and each button's title says only that it is not available
- * yet, because a ticket key is a fact about this repository and not one the
- * person at the screen can act on. This is the opposite choice from the New
- * menu, which leaves an unbuilt kind out, and it is made for a different
- * control: a menu row is a promise to make something, while these two are
- * the shape of a header the next two tickets fill in place.
+ * Run runs the newest published version, so it is enabled exactly when one
+ * exists and no run of this screen's is in flight. The input it sends is the
+ * empty object: the mock has no input form, and the simulate panel of a later
+ * ticket is where a typed input arrives. Simulate is drawn because the mock
+ * draws it and disabled because nothing is behind it yet; its title says only
+ * that it is not available yet, because a ticket key is a fact about this
+ * repository and not one the person at the screen can act on.
+ *
+ * ## The run
+ *
+ * The strip under the header and the running tone on a card both read one
+ * `GraphRunState`, the one the hub last sent for the run this screen
+ * started. The state arrives whole on every change, so nothing here keeps a
+ * step of its own: `run-model.ts` derives the sentence, the node in flight
+ * and the inspector's LAST OUTPUT from the same frame each render.
  *
  * ## What is derived once per source, not once per frame
  *
@@ -140,6 +149,12 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
   const muted = colorForRole('textMuted', scheme);
   const document = state.document;
   const selected = document?.nodes.find((node) => node.id === state.selection) ?? null;
+  const running = runningNode(state.run);
+  const canRun =
+    document !== null &&
+    state.published.length > 0 &&
+    !state.starting &&
+    state.run?.status !== 'running';
 
   return (
     <Stack gap={0} data-graph-screen={nodeId} style={{ height: '100%' }}>
@@ -210,11 +225,28 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           <Button variant="default" size="xs" disabled title="Simulate is not available yet">
             Simulate
           </Button>
-          <Button size="xs" disabled title="Run is not available yet">
+          <Button
+            size="xs"
+            disabled={!canRun}
+            title={
+              state.published.length === 0 && document !== null
+                ? 'Publish a version first: a run is of a published version, never the draft'
+                : undefined
+            }
+            onClick={() => graph.run({})}
+          >
             Run
           </Button>
         </Group>
       </Group>
+      {state.run === null ? null : (
+        <RunStrip
+          run={state.run}
+          scheme={scheme}
+          cancelling={state.cancelling}
+          onCancel={() => graph.cancelRun()}
+        />
+      )}
       <Box style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Box style={{ flex: 1, minWidth: 0, position: 'relative' }}>
           {document === null ? (
@@ -229,6 +261,7 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
               selection={state.selection}
               labels={fleet.labels}
               scheme={scheme}
+              running={running}
               onSelect={(id) => graph.select(id)}
               onEdit={(edit) => graph.edit(edit)}
               onConnect={(from, to) => graph.edit((current) => connect(current, from, to))}
@@ -260,6 +293,7 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
               machines={fleet.machines}
               stores={fleet.stores}
               scheme={scheme}
+              lastOutput={selected === null ? null : lastOutputFor(state.run, selected.id)}
               onEdit={(edit) => graph.edit(edit)}
             />
           )}

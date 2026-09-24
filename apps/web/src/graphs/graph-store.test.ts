@@ -458,4 +458,101 @@ describe('createGraphStore', () => {
     expect(sent(socket).filter((frame) => frame.type === 'graph-save')).toEqual([]);
     expect(store.getSnapshot().dirty).toBe(true);
   });
+
+  describe('run', () => {
+    /** The hub's yes to a run, addressed to the frame this store sent. */
+    function startedFor(frameId: number): string {
+      const captured = JSON.parse(hubFrames.graphRunStarted) as { replyTo: number };
+      return JSON.stringify({ ...captured, replyTo: frameId });
+    }
+
+    it('sends the run with the input, and holds the run once the hub names it and reports it', async () => {
+      const { socket } = await opened();
+
+      store.run({ language: 'rust' });
+
+      const run = frameOf(socket, 'graph-run');
+      expect(run).toMatchObject({ nodeId: 'hub-10', input: { language: 'rust' } });
+      expect(store.getSnapshot().starting).toBe(true);
+      expect(store.getSnapshot().run).toBeNull();
+
+      socket.deliver(startedFor(run.id));
+      expect(store.getSnapshot().starting).toBe(false);
+
+      socket.deliver(hubFrames.graphRunStateRunning);
+      expect(store.getSnapshot().run).toMatchObject({
+        runId: 'hub-11',
+        number: 1,
+        status: 'running',
+        step: 3,
+      });
+    });
+
+    it('ignores a run this screen did not start', async () => {
+      const { socket } = await opened();
+      store.run({});
+      socket.deliver(startedFor(frameOf(socket, 'graph-run').id));
+
+      socket.deliver(hubFrames.graphRunStateFailed);
+
+      expect(store.getSnapshot().run).toBeNull();
+    });
+
+    it('does not send a second run while one of its own is in flight', async () => {
+      const { socket } = await opened();
+      store.run({});
+      const first = frameOf(socket, 'graph-run');
+      socket.deliver(startedFor(first.id));
+      socket.deliver(hubFrames.graphRunStateRunning);
+      const before = sent(socket).length;
+
+      store.run({});
+
+      expect(sent(socket).length).toBe(before);
+    });
+
+    it('cancels its run and clears the cancelling flag on the hub’s yes', async () => {
+      const { socket } = await opened();
+      store.run({});
+      socket.deliver(startedFor(frameOf(socket, 'graph-run').id));
+      socket.deliver(hubFrames.graphRunStateRunning);
+
+      store.cancelRun();
+
+      const cancel = frameOf(socket, 'graph-run-cancel');
+      expect(cancel).toMatchObject({ runId: 'hub-11' });
+      expect(store.getSnapshot().cancelling).toBe(true);
+
+      const captured = JSON.parse(hubFrames.graphRunCancelled) as { replyTo: number };
+      socket.deliver(JSON.stringify({ ...captured, replyTo: cancel.id }));
+      socket.deliver(hubFrames.graphRunStateCancelled);
+
+      expect(store.getSnapshot().cancelling).toBe(false);
+      expect(store.getSnapshot().run?.status).toBe('cancelled');
+    });
+
+    it('does nothing on a cancel with no run of its own in flight', async () => {
+      const { socket } = await opened();
+      const before = sent(socket).length;
+
+      store.cancelRun();
+
+      expect(sent(socket).length).toBe(before);
+    });
+
+    it('takes the hub’s refusal of a run as the problem and stops starting', async () => {
+      const { socket } = await opened();
+      store.run({});
+      const run = frameOf(socket, 'graph-run');
+
+      socket.deliver(
+        refusalTo(run.id, 'this graph has no published version to run; publish it first'),
+      );
+
+      expect(store.getSnapshot().starting).toBe(false);
+      expect(store.getSnapshot().problem).toBe(
+        'this graph has no published version to run; publish it first',
+      );
+    });
+  });
 });
