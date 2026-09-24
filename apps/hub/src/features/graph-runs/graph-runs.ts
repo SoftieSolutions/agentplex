@@ -5,6 +5,7 @@ import {
   type GraphRunState,
   type GraphRunStep,
   type GraphRunSummary,
+  type GraphSimulatedStep,
   type NodeId,
   type RefusalCode,
   type RouteInput,
@@ -33,6 +34,7 @@ import {
   type ChildLaunched,
   type LineageEntry,
 } from './subgraph-executor.js';
+import { simulate } from './simulate.js';
 import { routerExecutor, triggerExecutor, walk, type Walk } from './walker.js';
 
 /**
@@ -111,6 +113,14 @@ import { routerExecutor, triggerExecutor, walk, type Walk } from './walker.js';
  * than acknowledged into a row that is about to say `succeeded`. Until the
  * write lands, the ended state is held in `ending` so a read in the same gap
  * is answered from memory and not from a row still marked running.
+ *
+ * ## Simulate
+ *
+ * `simulate` answers from `simulate.ts` over the draft, read through
+ * `Graphs.open`. It shares the walk and the AGENT's placement with a run and
+ * nothing else: it takes no place under the caps, numbers nothing, writes no
+ * row and publishes no state, so a simulation of a graph with a run in
+ * flight is answered like any other and leaves no trace for a watcher.
  */
 
 /** The most runs this hub walks at once, across every graph. */
@@ -147,6 +157,15 @@ export type RunStarted =
 
 export type RunCancelled = { readonly ok: true } | GraphRunRefusal;
 
+/** What a run of the draft would do, step by step, or why the graph cannot be simulated. */
+export type Simulated =
+  | {
+      readonly ok: true;
+      readonly path: readonly GraphSimulatedStep[];
+      readonly reason: string | null;
+    }
+  | GraphRunRefusal;
+
 export interface GraphRuns {
   /**
    * Ends every run left running by the previous process. Called once, at
@@ -157,6 +176,11 @@ export interface GraphRuns {
   start(nodeId: NodeId, input: RouteInput): Promise<RunStarted>;
   /** Stops a run in flight before its next step. */
   cancel(runId: GraphRunId): Promise<RunCancelled>;
+  /**
+   * Walks the graph's draft with this input and says what a run would do at
+   * each node, doing none of it: no row, no session, no request, no state.
+   */
+  simulate(nodeId: NodeId, input: RouteInput): Promise<Simulated>;
   /** The graph's newest run as it stands -- in flight, or as its row says -- or `null` when it has never run. */
   latest(nodeId: NodeId): Promise<GraphRunState | null>;
   /** The graph's runs, newest first, at most `GRAPH_RUN_HISTORY_MAX`; empty for a graph never run. */
@@ -598,6 +622,27 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
       });
       if (!begun.ok) return begun;
       return { ok: true, runId: begun.run.runId, number: begun.run.number };
+    },
+
+    async simulate(nodeId: NodeId, input: RouteInput): Promise<Simulated> {
+      // The draft, through the one read the canvas opens it with: what is
+      // being checked is the graph as drawn, before anybody publishes it.
+      const opened = await graphs.open(nodeId);
+      if (!opened.ok) return { ok: false, code: opened.code, problem: opened.problem };
+      // Nothing here reaches `begin`, the caps, the rows, `onState` or an
+      // executor that acts: the simulation is handed placement, a read of a
+      // published version and a graph's name, and nothing else.
+      const simulated = await simulate(
+        { graph: nodeId, name: opened.name },
+        opened.document,
+        input,
+        {
+          place: (node) => agent.place(node),
+          publishedVersion: (graph, version) => graphs.publishedVersion(graph, version),
+          nameOf,
+        },
+      );
+      return { ok: true, path: simulated.path, reason: simulated.reason };
     },
 
     async cancel(runId: GraphRunId): Promise<RunCancelled> {

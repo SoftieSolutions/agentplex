@@ -8,7 +8,13 @@ import {
   type SessionStartTag,
   type StoreId,
 } from '@agentplex/protocol';
-import type { GraphRunRefusal, GraphRuns, RunCancelled, RunStarted } from './graph-runs.js';
+import type {
+  GraphRunRefusal,
+  GraphRuns,
+  RunCancelled,
+  RunStarted,
+  Simulated,
+} from './graph-runs.js';
 
 /**
  * The runtime, driven by hand, for the tests whose subject is the socket.
@@ -31,6 +37,10 @@ export interface FakeGraphRuns extends GraphRuns {
   readonly histories: readonly NodeId[];
   /** Every open of one run asked for, in order. */
   readonly opens: readonly { nodeId: NodeId; runId: GraphRunId }[];
+  /** Every simulation asked for, in order. */
+  readonly simulations: readonly { nodeId: NodeId; input: RouteInput }[];
+  /** What every later simulation answers with. The default is an empty path that reached its end. */
+  answerSimulationsWith(simulated: Simulated): void;
   /** What every later start and cancel answers with, in place of the default yes. */
   refuseWith(refusal: Omit<GraphRunRefusal, 'ok'> | null): void;
   /** What every later read answers with. `null`, the default, is a graph that has never run. */
@@ -53,6 +63,8 @@ export function createFakeGraphRuns(options: FakeGraphRunsOptions = {}): FakeGra
   const reads: NodeId[] = [];
   const histories: NodeId[] = [];
   const opens: { nodeId: NodeId; runId: GraphRunId }[] = [];
+  const simulations: { nodeId: NodeId; input: RouteInput }[] = [];
+  let simulation: Simulated = { ok: true, path: [], reason: null };
   let history: readonly GraphRunSummary[] = [];
   let opened: GraphRunState | null = null;
   let refusal: Omit<GraphRunRefusal, 'ok'> | null = null;
@@ -88,6 +100,15 @@ export function createFakeGraphRuns(options: FakeGraphRunsOptions = {}): FakeGra
     async open(nodeId: NodeId, runId: GraphRunId): Promise<GraphRunState | null> {
       opens.push({ nodeId, runId });
       return opened;
+    },
+
+    async simulate(nodeId: NodeId, input: RouteInput): Promise<Simulated> {
+      simulations.push({ nodeId, input });
+      return simulation;
+    },
+
+    answerSimulationsWith(next: Simulated): void {
+      simulation = next;
     },
 
     noteStarts(_storeId: StoreId, _starts: readonly SessionStartTag[]): void {},
@@ -128,6 +149,9 @@ export function createFakeGraphRuns(options: FakeGraphRunsOptions = {}): FakeGra
     },
     get opens() {
       return opens;
+    },
+    get simulations() {
+      return simulations;
     },
   };
 }

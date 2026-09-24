@@ -24,9 +24,12 @@ import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './fr
 import { graphDocumentSchema, graphNameSchema, graphPublishedVersionSchema } from './graph.js';
 import {
   GRAPH_RUN_HISTORY_MAX,
+  GRAPH_RUN_OUTPUT_MAX_CHARS,
+  GRAPH_RUN_STEPS_MAX,
   graphRunIdSchema,
   graphRunStateSchema,
   graphRunSummarySchema,
+  graphSimulatedStepSchema,
 } from './graph-run.js';
 import {
   hubIdSchema,
@@ -770,6 +773,23 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     runId: graphRunIdSchema,
   }),
   /**
+   * Walks the graph's draft without doing anything, and asks what a run of
+   * it would do.
+   *
+   * The draft and not a published version, because the point is to check a
+   * graph before it is published: the routes, the placement, the waits. The
+   * input is what a run would be started with, parsed by the same bounded
+   * schema, and the answer is `graph-simulated` to this client alone. No run
+   * is numbered, no session starts and nothing is written, so there is
+   * nothing to watch: sending this does not mark the graph watched.
+   */
+  z.object({
+    type: z.literal('graph-simulate'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+    input: routeInputSchema,
+  }),
+  /**
    * Answers an approval: let it through, or refuse it.
    *
    * The subject is named because a client names what it answers and the hub
@@ -1435,6 +1455,23 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     replyTo: frameIdSchema,
     nodeId: nodeIdSchema,
     runs: z.array(graphRunSummarySchema).max(GRAPH_RUN_HISTORY_MAX),
+  }),
+  /**
+   * What a run of the graph's draft would do, node by node, with why.
+   *
+   * `path` is the walk in order, a SUB-GRAPH's child steps directly after it
+   * one depth down, bounded by `GRAPH_RUN_STEPS_MAX` as a run's steps are.
+   * `reason` is the sentence the walk stopped on -- a run that would stop at a
+   * node, a node with two outgoing edges, a draft with no TRIGGER -- and
+   * `null` when it reached a node with nowhere to go, which is where a run
+   * would succeed. It names the graph so a screen files it by the graph.
+   */
+  z.object({
+    type: z.literal('graph-simulated'),
+    replyTo: frameIdSchema,
+    nodeId: nodeIdSchema,
+    path: z.array(graphSimulatedStepSchema).max(GRAPH_RUN_STEPS_MAX),
+    reason: z.string().max(GRAPH_RUN_OUTPUT_MAX_CHARS).nullable(),
   }),
   /**
    * The cancel was taken. The run's end arrives as `graph-run-state` with

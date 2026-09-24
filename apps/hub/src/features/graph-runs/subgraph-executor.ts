@@ -1,5 +1,6 @@
 import {
   assertNever,
+  GRAPH_SUBGRAPH_DEPTH_MAX,
   type GraphDocument,
   type GraphNodeId,
   type GraphRunId,
@@ -71,12 +72,33 @@ import type { Executor, WalkOutcome } from './walker.js';
  */
 
 /** How deep a chain of SUB-GRAPH nodes may go below the run a person started. */
-export const SUBGRAPH_DEPTH_LIMIT = 8;
+export const SUBGRAPH_DEPTH_LIMIT = GRAPH_SUBGRAPH_DEPTH_MAX;
 
 /** One graph on the stack: the node the cycle check compares, and the name the sentence uses. */
 export interface LineageEntry {
   readonly graph: NodeId;
   readonly name: string;
+}
+
+/**
+ * Why a SUB-GRAPH step under `lineage` may not run `graph`, or `null` when it
+ * may: the graph is already on the stack, or the chain would go deeper than
+ * `SUBGRAPH_DEPTH_LIMIT`. Pure, and shared with the simulation, so a
+ * simulated chain is refused where and in the words a run's would be.
+ */
+export function chainRefusal(lineage: readonly LineageEntry[], graph: NodeId): string | null {
+  const above = lineage.findIndex((entry) => entry.graph === graph);
+  if (above !== -1) {
+    const chain = [...lineage.slice(above), lineage[above]]
+      .map((entry) => entry?.name ?? graph)
+      .join(' → ');
+    return `it would run ${lineage[above]?.name ?? graph}, which is already running above it in this chain: ${chain}`;
+  }
+  const depth = lineage.length;
+  if (depth > SUBGRAPH_DEPTH_LIMIT) {
+    return `it would start a run ${String(depth)} graphs deep, and a chain of SUB-GRAPH nodes goes at most ${String(SUBGRAPH_DEPTH_LIMIT)}`;
+  }
+  return null;
 }
 
 /** The run a SUB-GRAPH step belongs to, as this executor needs it. */
@@ -134,23 +156,8 @@ export function createSubgraphExecutor(
   return {
     forRun(run: SubgraphRun): Executor<'subgraph'> {
       return async (node, input, context) => {
-        const above = run.lineage.findIndex((entry) => entry.graph === node.graph);
-        if (above !== -1) {
-          const chain = [...run.lineage.slice(above), run.lineage[above]]
-            .map((entry) => entry?.name ?? node.graph)
-            .join(' → ');
-          return {
-            ok: false,
-            problem: `it would run ${run.lineage[above]?.name ?? node.graph}, which is already running above it in this chain: ${chain}`,
-          };
-        }
-        const depth = run.lineage.length;
-        if (depth > SUBGRAPH_DEPTH_LIMIT) {
-          return {
-            ok: false,
-            problem: `it would start a run ${String(depth)} graphs deep, and a chain of SUB-GRAPH nodes goes at most ${String(SUBGRAPH_DEPTH_LIMIT)}`,
-          };
-        }
+        const refusal = chainRefusal(run.lineage, node.graph);
+        if (refusal !== null) return { ok: false, problem: refusal };
 
         const document = await graphs.publishedVersion(node.graph, node.version);
         if (document === null) {

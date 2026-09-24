@@ -34,7 +34,9 @@ import type { Timers } from '@agentplex/node-shared';
  * an ACTION node, since no build performs one, so a run reaching one is a
  * document that bypassed publish; it fails with a sentence naming the node,
  * from a switch that ends in `assertNever` -- so a seventh kind added to the
- * protocol is a type error here and not a silent fall through.
+ * protocol is a type error here and not a silent fall through. The one table
+ * that answers ACTION is a simulation's (`simulate.ts`), which walks the same
+ * traversal with executors that report and do nothing.
  *
  * A SUB-GRAPH is an executor like any other: it runs a whole walk of another
  * graph and answers when that walk ends. The walk here knows nothing of
@@ -143,6 +145,15 @@ export type ExecutableKind = Exclude<GraphNodeKind, 'action'>;
 export type ExecutorTable = { readonly [K in ExecutableKind]: Executor<K> };
 
 /**
+ * A table that may also answer for ACTION. Only a simulation passes one: it
+ * walks every kind, ACTION included, by reporting what the node would do and
+ * doing nothing, and it reuses this walk rather than keeping a second
+ * traversal that could come to disagree with the one a run takes. A run's
+ * table has no ACTION entry, and the walk then fails the node as before.
+ */
+export type WalkTable = ExecutorTable & { readonly action?: Executor<'action'> };
+
+/**
  * How a walk ended. A failure carries `retryable: false` when the node that
  * ended it failed on a decision rather than a fault, so a SUB-GRAPH step whose
  * child this walk is passes the same answer up instead of retrying it.
@@ -153,7 +164,7 @@ export type WalkOutcome =
   | { readonly status: 'cancelled' };
 
 export interface WalkDependencies {
-  readonly executors: ExecutorTable;
+  readonly executors: WalkTable;
   /** What a backoff waits on. Injected so a retry schedule is a value a test reads. */
   readonly timers: Timers;
   /**
@@ -180,7 +191,7 @@ export function nameOf(node: GraphNode): string {
 }
 
 /** The kind in the capitals the canvas letters it in. */
-const KIND_WORDS: Record<GraphNodeKind, string> = {
+export const KIND_WORDS: Record<GraphNodeKind, string> = {
   trigger: 'TRIGGER',
   router: 'ROUTER',
   agent: 'AGENT',
@@ -237,13 +248,14 @@ export const routerExecutor: Executor<'router'> = async (node, input) => {
 };
 
 /**
- * The executor for a node, or `null` for a kind this runtime does not run.
+ * The executor for a node, or `null` for a kind this runtime does not run:
+ * ACTION, unless the table is a simulation's.
  *
  * A switch and not an index, so that the kinds with no executor are named
  * here and a kind nobody has heard of is a type error at the `assertNever`.
  */
 function executorFor(
-  table: ExecutorTable,
+  table: WalkTable,
   node: GraphNode,
 ): ((input: RouteInput, context: StepContext) => Promise<StepResult>) | null {
   switch (node.kind) {
@@ -257,8 +269,10 @@ function executorFor(
       return (input, context) => table.human(node, input, context);
     case 'subgraph':
       return (input, context) => table.subgraph(node, input, context);
-    case 'action':
-      return null;
+    case 'action': {
+      const action = table.action;
+      return action === undefined ? null : (input, context) => action(node, input, context);
+    }
     default:
       return assertNever(node, 'graph node kind');
   }

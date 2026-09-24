@@ -902,6 +902,18 @@ export function serveClientConnection(
         return;
       }
 
+      case 'graph-simulate': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        // Not marked watched: a simulation numbers no run and publishes no
+        // state, so there is nothing about it to follow, and a watched place
+        // spent on it would push out a graph this client does follow.
+        void answerGraphSimulate(frame.id, frame.nodeId, frame.input);
+        return;
+      }
+
       case 'session-subscribe': {
         if (state !== 'established') {
           helloFirst(frame.id);
@@ -1736,6 +1748,37 @@ export function serveClientConnection(
       logger.error('could not open a run', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not read that run');
+    }
+  }
+
+  /**
+   * Answers what a run of the graph's draft would do, to this client alone:
+   * the path with a reason per step, and the sentence it stopped on. A
+   * refusal is the feature's sentence -- no graph by that id.
+   */
+  async function answerGraphSimulate(
+    replyTo: FrameId,
+    nodeId: NodeId,
+    input: RouteInput,
+  ): Promise<void> {
+    try {
+      const outcome = await graphRuns.simulate(nodeId, input);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({
+        type: 'graph-simulated',
+        replyTo,
+        nodeId,
+        path: [...outcome.path],
+        reason: outcome.reason,
+      });
+    } catch (error) {
+      logger.error('could not simulate a graph', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not simulate that graph');
     }
   }
 

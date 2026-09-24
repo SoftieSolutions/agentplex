@@ -4,6 +4,7 @@ import {
   graphNodeIdSchema,
   graphRunIdSchema,
   nodeIdSchema,
+  serverRegistrationIdSchema,
   sessionIdSchema,
   type GraphDocument,
   type GraphRunState,
@@ -135,6 +136,8 @@ const CYCLIC: GraphDocument = graphDocumentSchema.parse({
 /** An AGENT executor whose answer the suite chooses, and that records the project it was built for. */
 interface ScriptedAgent extends AgentExecutor {
   readonly projects: (NodeId | null)[];
+  /** The AGENT nodes a simulation asked where they would be placed. */
+  readonly placed: string[];
   readonly noted: number;
   /** How many steps have been asked of it, over every run. */
   readonly calls: number;
@@ -145,12 +148,14 @@ interface ScriptedAgent extends AgentExecutor {
 
 function scriptedAgent(): ScriptedAgent {
   const projects: (NodeId | null)[] = [];
+  const placed: string[] = [];
   let answer: 'succeed' | 'fail' | 'hang' = 'succeed';
   let statuses: SessionStatus[] = [];
   let noted = 0;
   let calls = 0;
   return {
     projects,
+    placed,
     get noted() {
       return noted;
     },
@@ -162,6 +167,14 @@ function scriptedAgent(): ScriptedAgent {
     },
     stopOn(next) {
       statuses = [...next];
+    },
+    place(node) {
+      placed.push(node.id);
+      return {
+        ok: true,
+        server: serverRegistrationIdSchema.parse('registration-attic'),
+        label: 'attic',
+      };
     },
     forProject(project) {
       projects.push(project);
@@ -288,6 +301,73 @@ describe('graph runs', () => {
     now = 1_756_000_000_000;
     minted = 0;
     await makeProject();
+  });
+
+  describe('simulate', () => {
+    it('walks the draft, never published, and starts, numbers and writes nothing', async () => {
+      const h = build();
+      const made = await h.graphs.create(PROJECT, 'draft-only');
+      if (!made.ok) throw new Error(made.problem);
+      await h.graphs.save(made.nodeId, RUNNABLE);
+
+      const simulated = await h.runs.simulate(made.nodeId, { language: 'rust' });
+
+      expect(simulated).toEqual({
+        ok: true,
+        path: [
+          expect.objectContaining({ nodeId: 'start', outcome: 'would-run' }),
+          expect.objectContaining({
+            nodeId: 'classify',
+            outcome: 'would-run',
+            why: 'route 1, language == rust, would send it to Rust reviewer: language is "rust"',
+          }),
+          {
+            nodeId: 'review',
+            kind: 'agent',
+            depth: 0,
+            outcome: 'would-run',
+            why: 'would run claude on attic',
+          },
+        ],
+        reason: null,
+      });
+      // Placement was asked; no executor was built, so nothing could start.
+      expect(h.agent.placed).toEqual(['review']);
+      expect(h.agent.projects).toEqual([]);
+      expect(h.agent.calls).toBe(0);
+      expect(h.human.runs).toEqual([]);
+      expect(h.published).toEqual([]);
+      expect(h.timers.pending).toBe(0);
+      expect((await db().query('SELECT id FROM graph_runs')).rows).toEqual([]);
+      expect(await h.runs.latest(made.nodeId)).toBeNull();
+    });
+
+    it('reads the draft, not the newest published version', async () => {
+      const h = build();
+      const nodeId = await publishedGraph(h, RUNNABLE);
+      await h.graphs.save(nodeId, GATED);
+
+      const simulated = await h.runs.simulate(nodeId, {});
+      if (!simulated.ok) throw new Error(simulated.problem);
+      expect(simulated.path.map((step) => step.nodeId)).toEqual(['start', 'gate', 'review']);
+      expect(simulated.path[1]).toEqual({
+        nodeId: 'gate',
+        kind: 'human',
+        depth: 0,
+        outcome: 'would-wait',
+        why: 'would wait on a person for as long as it takes, for robert',
+      });
+      expect(h.human.runs).toEqual([]);
+    });
+
+    it('refuses a node that is no graph', async () => {
+      const h = build();
+      expect(await h.runs.simulate(PROJECT, {})).toEqual({
+        ok: false,
+        code: 'refused',
+        problem: 'this hub has no graph by that id',
+      });
+    });
   });
 
   it('refuses a node that is no graph, and a graph nothing has been published of', async () => {
