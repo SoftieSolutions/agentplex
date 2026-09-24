@@ -85,7 +85,7 @@ describe('graphHeading', () => {
   const project = node({
     id: nodeIdSchema.parse('hub-5'),
     kind: PROJECT_KIND,
-    name: 'universe',
+    name: 'orchard',
     named: true,
   });
   const graph = node({
@@ -98,7 +98,7 @@ describe('graphHeading', () => {
 
   it('names the project the graph sits under, and the graph', () => {
     expect(graphHeading([project, graph], GRAPH, 'release-pipeline')).toEqual({
-      project: 'universe',
+      project: 'orchard',
       name: 'release-pipeline',
     });
   });
@@ -118,7 +118,7 @@ describe('graphHeading', () => {
       parentId: project.id,
     });
     const nested = { ...graph, parentId: folder.id };
-    expect(graphHeading([project, folder, nested], GRAPH, 'x').project).toBe('universe');
+    expect(graphHeading([project, folder, nested], GRAPH, 'x').project).toBe('orchard');
   });
 
   it('offers another graph in the tree for a SUB-GRAPH to pin, and none when this is the only one', () => {
