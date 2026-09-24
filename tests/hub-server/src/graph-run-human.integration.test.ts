@@ -682,14 +682,21 @@ describe('a graph run that waits on a person, over the whole path', () => {
     const back = await attach();
     expect(runStates(back)).toEqual([]);
     await back.say({ type: 'graph-run-read', id: 2, nodeId: waiting.graph });
-    expect(runStates(back).at(-1)).toMatchObject({
+    // The answer is addressed to the read and carries the run whole, with
+    // the word a watcher was sent: waiting, not running.
+    expect(back.reply(2)).toMatchObject({
+      type: 'graph-run-latest',
+      replyTo: 2,
       nodeId: waiting.graph,
-      runId,
-      status: 'waiting',
-      steps: [
-        { nodeId: 'start', outcome: 'succeeded' },
-        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
-      ],
+      run: {
+        nodeId: waiting.graph,
+        runId,
+        status: 'waiting',
+        steps: [
+          { nodeId: 'start', outcome: 'succeeded' },
+          { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+        ],
+      },
     });
     // The request is not on the run state; it is in the machine state every
     // socket is sent whole, so the socket that came back holds it too.
