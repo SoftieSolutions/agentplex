@@ -185,6 +185,48 @@ function ref(storeId: string, sessionId: string) {
   });
 }
 
+/** The payload `push.ts` sends for a graph run waiting on a person, verbatim. */
+function runPayload(graph = 'node-graph-release'): Record<string, unknown> {
+  return {
+    title: 'graph run',
+    body: '#38 is waiting at Approve merge',
+    data: { graph },
+  };
+}
+
+describe('the service worker on a push about a graph run', () => {
+  it('shows the run and the node, and carries the graph to tap on', async () => {
+    const worker = await loadServiceWorker();
+
+    await worker.dispatch('push', pushEventFor(runPayload()));
+
+    expect(worker.shown).toHaveLength(1);
+    expect(worker.shown[0]?.title).toBe('agentplex');
+    expect(worker.shown[0]?.options.body).toBe('graph run #38 is waiting at Approve merge');
+    expect(worker.shown[0]?.options.data).toEqual({ graph: 'node-graph-release' });
+    expect(worker.shown[0]?.options.tag).toBe('#/graph/node-graph-release');
+  });
+
+  it('opens the graph on a tap, at the address the app parses', async () => {
+    const worker = await loadServiceWorker([]);
+
+    await worker.dispatch('notificationclick', {
+      notification: { data: { graph: 'node/graph 1' }, close: () => {} },
+    });
+
+    expect(worker.opened).toEqual(['/#/graph/node%2Fgraph%201']);
+  });
+
+  it('shows the generic notification for a graph payload with no id', async () => {
+    const worker = await loadServiceWorker();
+
+    await worker.dispatch('push', pushEventFor({ ...runPayload(), data: { graph: '' } }));
+
+    expect(worker.shown[0]?.options.body).toBe('a session wants you');
+    expect(worker.shown[0]?.options.data).toBeNull();
+  });
+});
+
 describe('the service worker on a push', () => {
   it('shows one notification: the app above, the hub words below', async () => {
     const worker = await loadServiceWorker();

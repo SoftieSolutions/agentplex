@@ -1,11 +1,5 @@
 import { useState, type JSX, type MouseEvent } from 'react';
-import type {
-  ApprovalDecision,
-  ApprovalId,
-  ApprovalOutcome,
-  FrameId,
-  SessionRef,
-} from '@agentplex/protocol';
+import type { ApprovalDecision, ApprovalId, ApprovalOutcome, FrameId } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Text } from '../ui/components.js';
@@ -50,11 +44,10 @@ import type { SessionApproval } from './session-list-model.js';
  * Approvals tab (AGX-129) reuse it whole rather than grow a second pair of
  * buttons beside the card's: a card draws the oldest request on a session, the
  * tab draws every request on one session, and both are this component handed
- * one narrowed request and told which session it belongs to.
+ * one narrowed request. The request carries its own subject, so the graph
+ * screen hands it a run's request the same way, and nothing here knows which.
  */
 export interface ApprovalControlsProps {
-  /** The session the decision names. A decision is about a request on a row. */
-  readonly sessionRef: SessionRef;
   /**
    * The one request this pair answers, already narrowed by
    * `approvalsOldestFirst` -- so the suggestions are not here to be read, and
@@ -155,7 +148,6 @@ interface ApprovalAnswer {
 }
 
 export function ApprovalControls({
-  sessionRef,
   approval,
   name,
   store,
@@ -170,7 +162,7 @@ export function ApprovalControls({
   if (approval === null) return null;
   // Read out here rather than inside the handler: a function declaration is
   // hoisted above the guard, so the narrowing does not reach it.
-  const { approvalId } = approval;
+  const { approvalId, subject } = approval;
   // The two fields a rule is made of, read out here for the same reason: a
   // function declaration is hoisted above the guard, so the narrowing does not
   // reach it. Copied rather than passed whole, so that nothing a rule is made
@@ -230,7 +222,7 @@ export function ApprovalControls({
     // a navigation, and a person aiming at Allow meant Allow.
     event.preventDefault();
     event.stopPropagation();
-    const outcome = store.sendCommand(decideCommand(sessionRef, approvalId, decision));
+    const outcome = store.sendCommand(decideCommand(subject, approvalId, decision));
     setAnswer(
       outcome.accepted
         ? { approvalId, frameId: outcome.id, refusal: null }

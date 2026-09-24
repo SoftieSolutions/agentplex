@@ -1,17 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   graphDocumentSchema,
+  nodeIdSchema,
   parseHubFrame,
   parseTextFrame,
   PROTOCOL_VERSION,
   serverIdSchema,
+  serverRegistrationIdSchema,
   storeIdSchema,
   type ClientFrame,
   type GraphDocument,
   type HubFrame,
   type MachineState,
   type NodeId,
-  type ServerRegistrationId,
   type SessionRow,
   type StoreDescriptor,
 } from '@agentplex/protocol';
@@ -44,7 +45,7 @@ import {
 } from '../../../apps/server/src/terminal-manager.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
 import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
-import { createFakeApprovals } from '../../../apps/hub/src/features/approvals/fake-approvals.js';
+import { createApprovals } from '../../../apps/hub/src/features/approvals/approvals.js';
 import { createFakeApprovalPolicy } from '../../../apps/hub/src/features/approval-policy/fake-approval-policy.js';
 import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
@@ -75,29 +76,24 @@ import { createHumanExecutor } from '../../../apps/hub/src/features/graph-runs/h
 import { createGraphRuns } from '../../../apps/hub/src/features/graph-runs/graph-runs.js';
 
 /**
- * A run, from a client's frame to a process on another machine and back to
- * every client as the run moves.
+ * A run that reaches a HUMAN node, over the whole path: the hub's own
+ * request in the machine state every client reads, a client's Allow or Deny
+ * through the same frame a session's approval takes, and the run moving on
+ * or ending because of it.
  *
- * Everything but the wire and the pty is the shipped code: a paired server
- * with a real handshake, both parsers, the real reducer, the real broadcast,
- * the real graphs feature over a real schema, and the real runtime whose
- * AGENT step goes through the same `Sessions.start` a client's start takes.
- * What is faked is what a test cannot supply -- a socket, a forked process,
- * a provider's files on disk.
- *
- * The questions here are the ones that only appear once the whole path is
- * joined: does the run's session appear as an ordinary row with its TASK set
- * to the node's prompt, does the AGENT step end when that row says the agent
- * is waiting, does every client hear the run move, and does no frame on the
- * way carry a key the wire forbids.
+ * The harness is `graph-run.integration.test.ts`'s with one difference: the
+ * approvals feature is the real one, wired as `hub.ts` wires it, because the
+ * question here is whether a request the hub raised itself is drawn, answered
+ * and ended through the same feature a machine's request is. The AGENT node
+ * after the gate is what proves Allow continued the run rather than ended it.
  */
 
 const logger = createLogger('error', () => {});
 const START = 1_756_000_000_000;
 const clock = { now: () => START };
 const WORK = storeIdSchema.parse('store-work');
-const ATTIC = 'registration-attic' as ServerRegistrationId;
-const PROJECT = 'project-universe' as NodeId;
+const ATTIC = serverRegistrationIdSchema.parse('registration-attic');
+const PROJECT = nodeIdSchema.parse('project-orchard');
 const PROJECT_DIRECTORY = '/volumes/work/agentplex';
 const PROMPT = 'Review the Rust in this change.';
 
@@ -206,7 +202,7 @@ function serveMachine(machine: Machine): DialResult {
 
 async function start(): Promise<Harness> {
   suite += 1;
-  migrated = await openMigratedSchema(`graph-run-${suite}`);
+  migrated = await openMigratedSchema(`graph-run-human-${suite}`);
   const database = migrated.database;
 
   const machine = buildMachine();
@@ -225,7 +221,7 @@ async function start(): Promise<Harness> {
   // project, and the projects rows are where that becomes a directory.
   await database.query(
     `INSERT INTO nodes (id, parent_id, kind, position, name, name_source, created_at)
-     VALUES (?, NULL, 'project', 0, 'universe', 'user', ?)`,
+     VALUES (?, NULL, 'project', 0, 'orchard', 'user', ?)`,
     [PROJECT, START],
   );
   await database.query('INSERT INTO projects (node_id, directory, created_at) VALUES (?, ?, ?)', [
@@ -326,9 +322,28 @@ async function start(): Promise<Harness> {
   // and every state goes to every client through the broadcast built below.
   let clients: Clients | null = null;
   const agent = createAgentExecutor({ sessions, state, timers, logger });
-  // No graph here reaches a HUMAN node; the executor is built over the fake
-  // approvals the connection is given so the table is whole.
-  const approvals = createFakeApprovals();
+  // The real approvals feature, wired as `hub.ts` wires it: a session's list
+  // to its row, the runs waiting on a person beside the stores, a decision
+  // for a machine's request over the connection, and no standing policy.
+  const approvals = createApprovals({
+    clock,
+    logger,
+    onChanged: (ref, pending) => state.applyApprovals(ref, pending),
+    onGraphRunChanged: (waiting) => state.applyGraphRunApprovals(waiting),
+    dispatch: (instruction) =>
+      new Promise((resolve) => {
+        connections.decide(
+          instruction.registrationId,
+          {
+            type: 'approval-decide',
+            approvalId: instruction.approvalId,
+            decision: instruction.decision,
+          },
+          (refusal) => resolve({ ok: false, code: refusal.code, problem: refusal.problem }),
+        );
+      }),
+    policy: async () => null,
+  });
   const human = createHumanExecutor({ approvals, ids, timers, logger });
   const graphRuns = createGraphRuns({
     database,
@@ -439,34 +454,57 @@ const BASE = {
   placement: { kind: 'cheapest' },
   retry: { max: 0, backoff: 1 },
 };
-const RUNNABLE: GraphDocument = graphDocumentSchema.parse({
+const TRIGGER = { ...BASE, id: 'start', kind: 'trigger', label: 'PR opened', source: 'manual' };
+const REVIEW = {
+  ...BASE,
+  id: 'review',
+  kind: 'agent',
+  label: 'Rust reviewer',
+  prompt: PROMPT,
+  provider: 'claude',
+  storeId: WORK,
+};
+const EDGES = [
+  { from: 'start', to: 'gate' },
+  { from: 'gate', to: 'review' },
+];
+
+/** TRIGGER, a HUMAN gate that waits as long as it takes, then an AGENT. */
+const GATED: GraphDocument = graphDocumentSchema.parse({
   nodes: [
-    { ...BASE, id: 'start', kind: 'trigger', label: 'PR opened', source: 'manual' },
+    TRIGGER,
     {
       ...BASE,
-      id: 'classify',
-      kind: 'router',
-      label: 'Classify diff',
-      model: 'haiku',
-      routes: [{ condition: 'language == rust', to: 'review' }],
-      otherwise: null,
+      id: 'gate',
+      kind: 'human',
+      label: 'Ship it',
+      approvers: ['robert', 'ana'],
+      timeoutMinutes: null,
     },
-    {
-      ...BASE,
-      id: 'review',
-      kind: 'agent',
-      label: 'Rust reviewer',
-      prompt: PROMPT,
-      provider: 'claude',
-      storeId: WORK,
-    },
+    REVIEW,
   ],
-  edges: [{ from: 'start', to: 'classify' }],
+  edges: EDGES,
 });
 
-/** A published graph of the document above, made through the frames a client sends. */
-async function publishedGraph(client: Client, document: GraphDocument = RUNNABLE): Promise<NodeId> {
-  await client.say({ type: 'graph-create', id: 2, projectId: PROJECT, name: 'release-pipeline' });
+/** The same, with a gate that gives up after five minutes. */
+const TIMED: GraphDocument = graphDocumentSchema.parse({
+  nodes: [
+    TRIGGER,
+    {
+      ...BASE,
+      id: 'gate',
+      kind: 'human',
+      label: 'Ship it',
+      approvers: ['robert'],
+      timeoutMinutes: 5,
+    },
+    REVIEW,
+  ],
+  edges: EDGES,
+});
+
+async function publishedGraph(client: Client, document: GraphDocument): Promise<NodeId> {
+  await client.say({ type: 'graph-create', id: 2, projectId: PROJECT, name: 'release' });
   const created = client.reply(2);
   if (created.type !== 'graph-created') throw new Error('the graph was refused');
   await client.say({ type: 'graph-save', id: 3, nodeId: created.nodeId, document });
@@ -479,7 +517,66 @@ function runStates(client: Client): Extract<HubFrame, { type: 'graph-run-state' 
   return client.frames().filter((frame) => frame.type === 'graph-run-state');
 }
 
-describe('a graph run over the whole path', () => {
+/** The runs waiting on a person, as the last machine state this client was sent lists them. */
+function waitingOn(client: Client): MachineState['graphRunApprovals'] {
+  const states = client.frames().filter((frame) => frame.type === 'machine-state');
+  const last = states.at(-1);
+  if (last === undefined || last.type !== 'machine-state') return [];
+  return last.state.graphRunApprovals;
+}
+
+/** The same list as the hub itself publishes it, before any broadcast has flushed. */
+function waitingAtTheHub(): MachineState['graphRunApprovals'] {
+  return held().state.published().graphRunApprovals;
+}
+
+/**
+ * Lets the coalesced broadcast go out. The broadcast flushes on the injected
+ * timers, so a frame carrying a state change reaches no client until they
+ * fire -- and firing them fires every pending timer, a HUMAN node's deadline
+ * included. Called only where nothing but the flush is scheduled.
+ */
+async function flushed(): Promise<void> {
+  held().timers.fireAll();
+  for (let turn = 0; turn < 40; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Runs a published graph until it is waiting at the gate; answers the run id and the request. */
+async function runToTheGate(
+  client: Client,
+  document: GraphDocument,
+): Promise<{
+  readonly runId: string;
+  readonly waiting: MachineState['graphRunApprovals'][number];
+}> {
+  const nodeId = await publishedGraph(client, document);
+  await client.say({ type: 'graph-run', id: 5, nodeId, input: { language: 'rust' } });
+  const started = client.reply(5);
+  if (started.type !== 'graph-run-started') throw new Error('the run was refused');
+
+  await until(
+    () => runStates(client).some((state) => state.status === 'waiting'),
+    'the run to wait at the gate',
+  );
+  await until(() => waitingAtTheHub().length === 1, 'the request to reach the machine state');
+  const [waiting] = waitingAtTheHub();
+  if (waiting === undefined) throw new Error('nothing is waiting');
+  expect(waiting).toMatchObject({
+    graph: nodeId,
+    number: 1,
+    nodeLabel: 'Ship it',
+    approval: {
+      subject: { kind: 'graphRun', runId: started.runId, nodeId: 'gate' },
+      tool: 'HUMAN',
+      truncated: false,
+      suggestions: [],
+      answeredBy: null,
+    },
+  });
+  return { runId: started.runId, waiting };
+}
+
+describe('a graph run that waits on a person, over the whole path', () => {
   beforeEach(async () => {
     harness = await start();
     await until(
@@ -503,159 +600,231 @@ describe('a graph run over the whole path', () => {
     migrated = null;
   });
 
-  it('runs a published graph: started, then every state until succeeded, with the session an ordinary row', async () => {
+  it('shows the request in every client’s machine state, with the graph, the number and the words', async () => {
     const client = await attach();
     const watcher = await attach();
-    const nodeId = await publishedGraph(client);
+    const { waiting } = await runToTheGate(client, GATED);
+    await flushed();
+
+    // The words name the graph, the node and who was asked; the run state
+    // says waiting and carries no request of its own.
+    expect(waiting.approval.proposal).toContain('release');
+    expect(waiting.approval.proposal).toContain('Ship it');
+    expect(waiting.approval.proposal).toContain('robert, ana');
+    expect(runStates(client).at(-1)).toMatchObject({
+      status: 'waiting',
+      step: 2,
+      of: 3,
+      steps: [
+        { nodeId: 'start', outcome: 'succeeded' },
+        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+      ],
+    });
+    // Both clients read the same list off the same state frame.
+    expect(waitingOn(client)).toEqual([waiting]);
+    expect(waitingOn(watcher)).toEqual([waiting]);
+    // And nothing was put on any session row, and no session was started.
+    expect(
+      held()
+        .state.published()
+        .stores.some((store) => store.sessions.some((row) => row.approvals.length > 0)),
+    ).toBe(false);
+    expect(held().machine.ptys.opened).toEqual([]);
+  });
+
+  it('Allow continues the run: the request leaves the state and the AGENT after the gate runs', async () => {
+    const client = await attach();
+    const { waiting } = await runToTheGate(client, GATED);
     providerWrites('session-fresh', PROJECT_DIRECTORY);
 
-    await client.say({ type: 'graph-run', id: 5, nodeId, input: { language: 'rust' } });
+    await client.say({
+      type: 'approval-decide',
+      id: 6,
+      subject: waiting.approval.subject,
+      approvalId: waiting.approval.approvalId,
+      decision: 'grant',
+    });
 
-    const started = client.reply(5);
-    expect(started).toMatchObject({ type: 'graph-run-started', replyTo: 5, number: 1 });
-    if (started.type !== 'graph-run-started') return;
-
+    // The receipt arrives at once: the hub is the authority on its own run.
+    expect(client.reply(6)).toEqual({
+      type: 'approval-decided',
+      replyTo: 6,
+      outcome: 'granted',
+      answeredBy: null,
+    });
+    await until(() => waitingAtTheHub().length === 0, 'the request to leave the state');
     await until(
       () => runStates(client).some((state) => state.status === 'succeeded'),
       'the run to succeed',
     );
-    const states = runStates(client);
-    // The first frame already has the TRIGGER running: the start and the
-    // first step are one change, published once.
-    expect(states[0]).toMatchObject({
-      nodeId,
-      runId: started.runId,
-      number: 1,
-      status: 'running',
-      step: 1,
-      of: 3,
-    });
-    expect(states.at(-1)).toMatchObject({
-      nodeId,
-      runId: started.runId,
-      number: 1,
+    expect(runStates(client).at(-1)).toMatchObject({
       status: 'succeeded',
-      reason: null,
-      step: 3,
-      of: 3,
       steps: [
-        {
-          nodeId: 'start',
-          attempt: 0,
-          outcome: 'succeeded',
-          output: { kind: 'text', text: '{"language":"rust"}' },
-        },
-        {
-          nodeId: 'classify',
-          attempt: 0,
-          outcome: 'succeeded',
-          output: { kind: 'route', route: 0, to: 'review' },
-        },
-        {
-          nodeId: 'review',
-          attempt: 0,
-          outcome: 'succeeded',
-          output: {
-            kind: 'session',
-            storeId: WORK,
-            sessionId: 'session-fresh',
-            status: 'awaiting-input',
-          },
-        },
+        { nodeId: 'start', outcome: 'succeeded' },
+        { nodeId: 'gate', outcome: 'succeeded', output: null },
+        { nodeId: 'review', outcome: 'succeeded' },
       ],
     });
-    // The strip's live reading existed on the way: the agent was running at step 3.
-    expect(
-      states.some(
-        (state) =>
-          state.status === 'running' &&
-          state.step === 3 &&
-          state.steps.at(-1)?.nodeId === 'review' &&
-          state.steps.at(-1)?.outcome === 'running',
-      ),
-    ).toBe(true);
-
-    // The other client asked about nothing: it heard nothing of this run.
-    expect(runStates(watcher)).toEqual([]);
-    // One that asks afterwards is told where the run stands, whole, in an
-    // answer to the frame that asked.
-    await watcher.say({ type: 'graph-run-read', id: 2, nodeId });
-    const ended = states.at(-1);
-    if (ended === undefined) throw new Error('the run published no state');
-    const { type: _type, ...run } = ended;
-    expect(watcher.reply(2)).toEqual({ type: 'graph-run-latest', replyTo: 2, nodeId, run });
-
-    // The machine forked the prompt as one argv element, in the project's directory.
+    // Continued, not ended: the AGENT after the gate forked its prompt.
     expect(held().machine.ptys.opened.map((request) => request.args)).toEqual([[PROMPT]]);
-    expect(held().machine.ptys.opened[0]?.cwd).toBe(PROJECT_DIRECTORY);
-
-    // And the session is an ordinary row: held by the machine, with its TASK
-    // set to the node's prompt, which is what `tasks.ts` does for any start.
-    await until(() => client.row('session-fresh')?.task === PROMPT, 'the task to be filed');
-    expect(client.row('session-fresh')).toMatchObject({
-      holder: { server: ATTIC, stoppable: true },
-      task: PROMPT,
-    });
+    // Nothing went to the machine about the decision: it was the hub's to make.
+    expect(held().machine.sentToServer.some((text) => text.includes('approval-decide'))).toBe(
+      false,
+    );
   });
 
-  it('fails a run whose router matches nothing, naming the node, and starts no session', async () => {
+  it('a client that comes back mid-wait reads the run as waiting, finds the request, and its Allow continues the run', async () => {
     const client = await attach();
-    const nodeId = await publishedGraph(client);
+    const { runId, waiting } = await runToTheGate(client, GATED);
+    providerWrites('session-fresh', PROJECT_DIRECTORY);
 
-    await client.say({ type: 'graph-run', id: 5, nodeId, input: { language: 'go' } });
+    // A reconnection is a new socket that was sent no run state: it asks.
+    const back = await attach();
+    expect(runStates(back)).toEqual([]);
+    await back.say({ type: 'graph-run-read', id: 2, nodeId: waiting.graph });
+    // The answer is addressed to the read and carries the run whole, with
+    // the word a watcher was sent: waiting, not running.
+    expect(back.reply(2)).toMatchObject({
+      type: 'graph-run-latest',
+      replyTo: 2,
+      nodeId: waiting.graph,
+      run: {
+        nodeId: waiting.graph,
+        runId,
+        status: 'waiting',
+        steps: [
+          { nodeId: 'start', outcome: 'succeeded' },
+          { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+        ],
+      },
+    });
+    // The request is not on the run state; it is in the machine state every
+    // socket is sent whole, so the socket that came back holds it too.
+    await flushed();
+    expect(waitingOn(back)).toEqual([waiting]);
 
-    expect(client.reply(5).type).toBe('graph-run-started');
+    await back.say({
+      type: 'approval-decide',
+      id: 3,
+      subject: waiting.approval.subject,
+      approvalId: waiting.approval.approvalId,
+      decision: 'grant',
+    });
+
+    expect(back.reply(3)).toMatchObject({ type: 'approval-decided', outcome: 'granted' });
+    // The read made it a watcher, so the run's end reaches it unasked.
+    await until(
+      () => runStates(back).some((state) => state.status === 'succeeded'),
+      'the run to succeed on the socket that came back',
+    );
+    expect(waitingAtTheHub()).toEqual([]);
+  });
+
+  it('Deny fails the run naming the node, and starts nothing', async () => {
+    const client = await attach();
+    const { waiting } = await runToTheGate(client, GATED);
+
+    await client.say({
+      type: 'approval-decide',
+      id: 6,
+      subject: waiting.approval.subject,
+      approvalId: waiting.approval.approvalId,
+      decision: 'deny',
+    });
+
+    expect(client.reply(6)).toMatchObject({ type: 'approval-decided', outcome: 'denied' });
     await until(
       () => runStates(client).some((state) => state.status === 'failed'),
       'the run to fail',
     );
     expect(runStates(client).at(-1)).toMatchObject({
       status: 'failed',
-      reason:
-        'the ROUTER node Classify diff failed: no route on Classify diff matched and it has no otherwise',
+      reason: 'the HUMAN node Ship it failed: a person denied Ship it',
       step: 2,
     });
+    expect(waitingAtTheHub()).toEqual([]);
     expect(held().machine.ptys.opened).toEqual([]);
   });
 
-  it('refuses a run of a graph nothing has been published of, and a cancel of no run', async () => {
+  it('tells a second answer what the first one did', async () => {
     const client = await attach();
-    await client.say({ type: 'graph-create', id: 2, projectId: PROJECT, name: 'draft-only' });
-    const created = client.reply(2);
-    if (created.type !== 'graph-created') throw new Error('the graph was refused');
+    const second = await attach();
+    const { waiting } = await runToTheGate(client, GATED);
 
-    await client.say({ type: 'graph-run', id: 3, nodeId: created.nodeId, input: {} });
-    await client.say({ type: 'graph-run-cancel', id: 4, runId: 'run-nowhere' as never });
-    await client.say({ type: 'graph-run-read', id: 5, nodeId: created.nodeId });
+    await client.say({
+      type: 'approval-decide',
+      id: 6,
+      subject: waiting.approval.subject,
+      approvalId: waiting.approval.approvalId,
+      decision: 'deny',
+    });
+    await second.say({
+      type: 'approval-decide',
+      id: 2,
+      subject: waiting.approval.subject,
+      approvalId: waiting.approval.approvalId,
+      decision: 'grant',
+    });
 
-    expect(client.reply(3)).toMatchObject({
-      type: 'refusal',
-      replyTo: 3,
-      code: 'refused',
-      message: 'this graph has no published version to run; publish it first',
+    expect(second.reply(2)).toMatchObject({ type: 'approval-decided', outcome: 'denied' });
+  });
+
+  it('a timeout fails the run naming the node and the minutes, and withdraws the request', async () => {
+    const client = await attach();
+    const { waiting } = await runToTheGate(client, TIMED);
+    expect(held().timers.delays).toContain(5 * 60_000);
+
+    held().timers.fireAll();
+
+    await until(
+      () => runStates(client).some((state) => state.status === 'failed'),
+      'the run to fail at the deadline',
+    );
+    expect(runStates(client).at(-1)).toMatchObject({
+      status: 'failed',
+      reason:
+        'the HUMAN node Ship it failed: Ship it waited 5 minutes for a person and nobody answered',
     });
-    expect(client.reply(4)).toMatchObject({
-      type: 'refusal',
-      replyTo: 4,
-      code: 'refused',
-      message: 'no run by that id is in flight',
+    await until(() => waitingAtTheHub().length === 0, 'the request to leave the state');
+
+    // A late tap is told the word rather than that nothing existed.
+    await client.say({
+      type: 'approval-decide',
+      id: 6,
+      subject: waiting.approval.subject,
+      approvalId: waiting.approval.approvalId,
+      decision: 'grant',
     });
-    expect(client.reply(5)).toEqual({
-      type: 'graph-run-latest',
-      replyTo: 5,
-      nodeId: created.nodeId,
-      run: null,
-    });
+    expect(client.reply(6)).toMatchObject({ type: 'approval-decided', outcome: 'withdrawn' });
+  });
+
+  it('a cancel withdraws the request and ends the run cancelled', async () => {
+    const client = await attach();
+    const { runId } = await runToTheGate(client, GATED);
+
+    await client.say({ type: 'graph-run-cancel', id: 6, runId: runId as never });
+
+    expect(client.reply(6)).toMatchObject({ type: 'graph-run-cancelled' });
+    await until(
+      () => runStates(client).some((state) => state.status === 'cancelled'),
+      'the run to be cancelled',
+    );
+    expect(waitingAtTheHub()).toEqual([]);
   });
 
   it('carries no forbidden key on any frame in any direction', async () => {
     const client = await attach();
-    const nodeId = await publishedGraph(client);
-    providerWrites('session-fresh', PROJECT_DIRECTORY);
-    await client.say({ type: 'graph-run', id: 5, nodeId, input: { language: 'rust' } });
+    const { waiting } = await runToTheGate(client, GATED);
+    await client.say({
+      type: 'approval-decide',
+      id: 6,
+      subject: waiting.approval.subject,
+      approvalId: waiting.approval.approvalId,
+      decision: 'deny',
+    });
     await until(
-      () => runStates(client).some((state) => state.status === 'succeeded'),
-      'the run to succeed',
+      () => runStates(client).some((state) => state.status === 'failed'),
+      'the run to fail',
     );
 
     for (const frame of client.frames()) expect(forbiddenKeysIn(frame)).toEqual([]);

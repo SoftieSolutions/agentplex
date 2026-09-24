@@ -1,4 +1,5 @@
 import type {
+  GraphRunApproval,
   MachineState,
   NodeId,
   PendingApproval,
@@ -10,7 +11,7 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
-import { NOTHING_PENDING } from '../approvals/approvals.js';
+import { NO_RUN_WAITING, NOTHING_PENDING } from '../approvals/approvals.js';
 import { UNATTENDED, type SessionAttention } from '../attention/attention.js';
 import { countsTowardAttention, type ServerConnectionReport } from '../servers/servers.js';
 import type { DiscoveredServer } from '../discovery/discovery.js';
@@ -269,6 +270,16 @@ export interface HubStateSnapshot {
    * cites it, and neither `applyConnection` nor `applySessions` can reach it.
    */
   readonly candidates: readonly DiscoveredServer[];
+  /**
+   * Every graph run waiting on a person, oldest request first.
+   *
+   * Beside the stores and inside none of them: a run is not a session and
+   * sits in no store, so there is no row for its request to ride. It is held
+   * here, under the one `version`, for the reason `candidates` is -- a client
+   * holding this version holds the whole state, and a request published on a
+   * channel of its own would be one a reconnecting client never sees.
+   */
+  readonly graphRunApprovals: readonly GraphRunApproval[];
 }
 
 export interface FleetStateDependencies {
@@ -358,6 +369,15 @@ export interface FleetState {
    * person unable to answer a question the hub had already been told about.
    */
   applyApprovals(ref: SessionRef, approvals: readonly PendingApproval[]): void;
+  /**
+   * Takes every graph run presently waiting on a person, as a whole list.
+   *
+   * The seam the approvals feature's `onGraphRunChanged` is wired to, and a
+   * whole list for the reason `applyApprovals` takes one: that feature knows
+   * what is open, and a reducer applying "one ended" would be a second copy of
+   * the answer. A list that says what the last one said changes nothing.
+   */
+  applyGraphRunApprovals(waiting: readonly GraphRunApproval[]): void;
   /**
    * Takes what one session was started to do.
    *
@@ -528,6 +548,8 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
    * server list: the two are never in the same map to be confused.
    */
   let candidates: readonly DiscoveredServer[] = [];
+  /** The runs waiting on a person, whole, as the approvals feature last said. */
+  let graphRunApprovals: readonly GraphRunApproval[] = NO_RUN_WAITING;
 
   const build = (): HubStateSnapshot => {
     const stores = buildStoreViews(connections, reports, attention, projects, approvals, tasks);
@@ -536,6 +558,7 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
       stores,
       servers: [...connections.values()].sort(byLabel),
       candidates,
+      graphRunApprovals,
     };
   };
 
@@ -687,6 +710,23 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
       if (sameApprovals(previous, next)) return;
       if (next.length === 0) approvals.delete(key);
       else approvals.set(key, next);
+      changed();
+    },
+
+    applyGraphRunApprovals(next: readonly GraphRunApproval[]): void {
+      // The same rule every list here follows: the approvals feature announces
+      // its whole list on every change to any run, and most of those changes
+      // are to a different run's request than the one a client is looking at
+      // -- but a list identical to the last is no change at all.
+      if (
+        sameApprovals(
+          graphRunApprovals.map((entry) => entry.approval),
+          next.map((entry) => entry.approval),
+        )
+      ) {
+        return;
+      }
+      graphRunApprovals = next.length === 0 ? NO_RUN_WAITING : [...next];
       changed();
     },
 

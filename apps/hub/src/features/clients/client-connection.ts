@@ -925,15 +925,26 @@ export function serveClientConnection(
           return;
         }
         // Not awaited, for the reason no other handler here awaits: the answer
-        // arrives when the machine holding the blocked process says what
-        // happened, which may be a minute from now, and a socket that stalled
-        // its next frame behind that would stop being a screen.
-        void answerApproval(frame.id, {
-          ref: { storeId: frame.storeId, sessionId: frame.sessionId },
-          approvalId: frame.approvalId,
-          decision: frame.decision,
-        });
-        return;
+        // arrives when whoever holds the blocked thing says what happened --
+        // a machine, which may take a minute, or this hub's own run, at once
+        // -- and a socket that stalled its next frame behind that would stop
+        // being a screen.
+        //
+        // Both kinds take the one decide path; the switch is here so that a
+        // third subject is a type error at this parser rather than a frame
+        // the approvals feature is handed with a kind it never routes.
+        switch (frame.subject.kind) {
+          case 'session':
+          case 'graphRun':
+            void answerApproval(frame.id, {
+              subject: frame.subject,
+              approvalId: frame.approvalId,
+              decision: frame.decision,
+            });
+            return;
+          default:
+            return assertNever(frame.subject, 'approval subject');
+        }
       }
 
       case 'push-subscribe': {

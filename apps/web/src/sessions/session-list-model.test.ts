@@ -212,6 +212,11 @@ describe('the request on a card', () => {
     // exact match is what keeps it from arriving by accident.
     expect(item(asked, 'migrate-db').approval).toEqual({
       approvalId: 'approval-1',
+      subject: {
+        kind: 'session',
+        storeId: 'store-agentplex',
+        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+      },
       tool: 'Bash',
       proposal:
         'command: prisma migrate deploy --schema ./db\ndescription: Apply pending Prisma migrations',
@@ -310,6 +315,7 @@ describe('listing every open request', () => {
     expect(approvalsOldestFirst([capturedApproval])).toEqual([
       {
         approvalId: capturedApproval.approvalId,
+        subject: capturedApproval.subject,
         tool: capturedApproval.tool,
         proposal: capturedApproval.proposal,
         truncated: capturedApproval.truncated,

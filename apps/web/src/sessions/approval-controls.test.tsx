@@ -155,7 +155,6 @@ describe('the Allow and Deny a blocked agent is waiting on', () => {
           // tab's to supply, and a surface that cannot name one -- the card in
           // a list -- passes nothing and gets the pair it always had.
           <ApprovalControls
-            sessionRef={item.ref}
             approval={item.approval}
             name={item.name}
             store={store}
@@ -301,8 +300,11 @@ describe('the Allow and Deny a blocked agent is waiting on', () => {
       {
         type: 'approval-decide',
         id: 2,
-        storeId: 'store-agentplex',
-        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        subject: {
+          kind: 'session',
+          storeId: 'store-agentplex',
+          sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        },
         approvalId: 'approval-1',
         decision: 'grant',
       },
@@ -320,8 +322,11 @@ describe('the Allow and Deny a blocked agent is waiting on', () => {
       {
         type: 'approval-decide',
         id: 2,
-        storeId: 'store-agentplex',
-        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        subject: {
+          kind: 'session',
+          storeId: 'store-agentplex',
+          sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        },
         approvalId: 'approval-1',
         decision: 'deny',
       },
@@ -453,16 +458,22 @@ describe('the Allow and Deny a blocked agent is waiting on', () => {
       {
         type: 'approval-decide',
         id: 2,
-        storeId: 'store-agentplex',
-        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        subject: {
+          kind: 'session',
+          storeId: 'store-agentplex',
+          sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        },
         approvalId: 'approval-1',
         decision: 'grant',
       },
       {
         type: 'approval-decide',
         id: 3,
-        storeId: 'store-agentplex',
-        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        subject: {
+          kind: 'session',
+          storeId: 'store-agentplex',
+          sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        },
         approvalId: 'approval-2',
         decision: 'deny',
       },
@@ -578,7 +589,6 @@ describe('always allowing the request in front of you', () => {
       root.render(
         withProvider(
           <ApprovalControls
-            sessionRef={item.ref}
             approval={item.approval}
             name={item.name}
             store={store}
@@ -719,8 +729,11 @@ describe('always allowing the request in front of you', () => {
       {
         type: 'approval-decide',
         id: 2,
-        storeId: 'store-agentplex',
-        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        subject: {
+          kind: 'session',
+          storeId: 'store-agentplex',
+          sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        },
         approvalId: 'approval-1',
         decision: 'grant',
       },

@@ -17,8 +17,14 @@ import { GraphCanvas } from './flow-adapter.js';
 import { addNode, connect, KIND_WORDS, KINDS, type NodeSeed } from './graph-model.js';
 import { createGraphStore } from './graph-store.js';
 import { NodeInspector, type InspectorMachine } from './node-inspector.js';
-import { lastOutputFor, runningNode } from './run-model.js';
+import { isRunOpen, lastOutputFor, runningNode } from './run-model.js';
 import { RunStrip } from './run-strip.js';
+import { ApprovalControls } from '../sessions/approval-controls.js';
+import type { SessionProject } from '../sessions/approval-policy-model.js';
+import { approvalsOldestFirst } from '../sessions/session-list-model.js';
+
+/** A HUMAN node's request is handed no project: a standing rule is about a tool call, and this is not one. */
+const NO_PROJECT: SessionProject = { kind: 'unplaced' };
 
 /**
  * The graph screen mockup 6d draws: a header naming the project and the
@@ -61,6 +67,18 @@ import { RunStrip } from './run-strip.js';
  * LAST OUTPUT from the same frame each render. While the connection is being
  * remade the store marks the run stale, and the strip and the cards draw it
  * at rest rather than live.
+ *
+ * ## A run waiting on a person
+ *
+ * A run parked at a HUMAN node is a request the hub raised for itself, and
+ * it rides the machine state beside the stores rather than the run state --
+ * the run state says `waiting`, and the request is what a person answers.
+ * The screen finds the request for its own run in that list and draws the
+ * same Allow and Deny a session's request gets, under the strip: one pair of
+ * buttons for every request in this app, whatever it is about. A graph is
+ * filed under a project, but a standing rule is a project's decision about a
+ * tool call and a HUMAN node is not one, so the pair is handed no project
+ * and offers no rule.
  *
  * ## What is derived once per source, not once per frame
  *
@@ -160,7 +178,18 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
     state.published.length > 0 &&
     !state.starting &&
     !state.readingRun &&
-    state.run?.status !== 'running';
+    (state.run === null || !isRunOpen(state.run.status));
+  // The request this screen's run is waiting on, if it is. A find over a list
+  // that is almost always empty, off the state the screen already subscribes
+  // to; nothing is remembered, so a request that ends leaves on the next frame.
+  // None for a stale run: the person may have answered while the socket was
+  // down, and the pair returns once the read says the run still waits.
+  const waitingOn =
+    state.run === null || state.runStale || state.run.status !== 'waiting'
+      ? null
+      : (machineState?.graphRunApprovals.find(
+          (waiting) => waiting.approval.subject.runId === state.run?.runId,
+        ) ?? null);
 
   return (
     <Stack gap={0} data-graph-screen={nodeId} style={{ height: '100%' }}>
@@ -253,6 +282,24 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           stale={state.runStale}
           onCancel={() => graph.cancelRun()}
         />
+      )}
+      {waitingOn === null ? null : (
+        <Box
+          data-run-approval={waitingOn.approval.approvalId}
+          px={18}
+          py={12}
+          style={{ borderBottom: border }}
+        >
+          <ApprovalControls
+            approval={approvalsOldestFirst([waitingOn.approval])[0] ?? null}
+            // The node, because that is what varies between two runs of one
+            // graph waiting at once, and what the bell's row named.
+            name={waitingOn.nodeLabel}
+            project={NO_PROJECT}
+            store={hub}
+            scheme={scheme}
+          />
+        </Box>
       )}
       <Box style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Box style={{ flex: 1, minWidth: 0, position: 'relative' }}>

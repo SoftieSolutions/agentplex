@@ -301,7 +301,13 @@ describe('a client that has just said hello', () => {
     await client.hello();
 
     expect(client.received.map((frame) => frame.type)).toEqual(['welcome', 'machine-state']);
-    expect(latest(client)).toEqual({ version: 0, stores: [], servers: [], candidates: [] });
+    expect(latest(client)).toEqual({
+      version: 0,
+      stores: [],
+      servers: [],
+      candidates: [],
+      graphRunApprovals: [],
+    });
   });
 
   it('is sent the state as it is now, not as it was when the hub started', async () => {
@@ -1979,8 +1985,7 @@ describe('a client answering an approval', () => {
   const decide = {
     type: 'approval-decide',
     id: 2,
-    storeId: STORE,
-    sessionId: SESSION,
+    subject: { kind: 'session', storeId: STORE, sessionId: SESSION },
     approvalId: 'approval-1',
     decision: 'grant',
   };
@@ -1996,7 +2001,11 @@ describe('a client answering an approval', () => {
     // written here would be this hub reporting a grant it cannot see the end
     // of: the hook it released may run for ten minutes.
     expect(approvals.decided).toEqual([
-      { ref: { storeId: STORE, sessionId: SESSION }, approvalId: 'approval-1', decision: 'grant' },
+      {
+        subject: { kind: 'session', storeId: STORE, sessionId: SESSION },
+        approvalId: 'approval-1',
+        decision: 'grant',
+      },
     ]);
     expect(client.received.some((frame) => frame.type === 'approval-decided')).toBe(false);
 

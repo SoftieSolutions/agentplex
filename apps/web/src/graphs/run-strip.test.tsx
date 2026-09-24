@@ -122,6 +122,16 @@ describe('RunStrip', () => {
     expect(cancel()).toBeUndefined();
   });
 
+  it('reads a parked run as waiting on a person, in the needs-you tone, and still offers Cancel', async () => {
+    await mount(state(hubFrames.graphRunStateWaiting));
+
+    const strip = container.querySelector<HTMLElement>('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · waiting on a person · step 2/2');
+    expect(strip?.dataset['runStatus']).toBe('waiting');
+    expect(strip?.dataset['runTone']).toBe('needs-you');
+    expect(cancel()?.disabled).toBe(false);
+  });
+
   it('disables Cancel while the cancel is out', async () => {
     await mount(state(hubFrames.graphRunStateRunning), true);
     expect(cancel()?.disabled).toBe(true);

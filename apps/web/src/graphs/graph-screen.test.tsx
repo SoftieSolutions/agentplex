@@ -343,6 +343,75 @@ describe('GraphScreen', () => {
     expect(button('Run').disabled).toBe(false);
   });
 
+  it('takes Allow and Deny away while a waiting run is stale: the person may have answered meanwhile', async () => {
+    const socket = await opened();
+    const waiting = JSON.parse(hubFrames.graphRunStateWaiting) as { nodeId: string };
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...waiting, nodeId: GRAPH }));
+      socket.deliver(hubFrames.machineStateGraphRunWaiting);
+    });
+    await act(settle);
+    expect(container.querySelector('[data-run-approval]')).not.toBeNull();
+
+    await act(() => {
+      socket.close();
+    });
+    await act(settle);
+
+    const strip = container.querySelector<HTMLElement>('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · reconnecting · step 2/2');
+    expect(strip?.dataset['runTone']).toBe('idle');
+    expect(container.querySelector('[data-run-approval]')).toBeNull();
+  });
+
+  it('draws Allow and Deny under the strip while the run waits on a person, and answers for the run', async () => {
+    const socket = await opened();
+    await act(() => {
+      button('Run').click();
+    });
+    const run = sent(socket).find((each) => each.type === 'graph-run');
+    if (run === undefined || run.type !== 'graph-run') throw new Error('no run was sent');
+
+    // The hub's yes, addressed to this screen's frame; the run as the hub
+    // captured it parked at the HUMAN node, filed under this screen's graph;
+    // and the state carrying the request the hub raised for it, which is what
+    // the pair of buttons reads.
+    const started = JSON.parse(hubFrames.graphRunStartedWaiting) as { replyTo: number };
+    const waiting = JSON.parse(hubFrames.graphRunStateWaiting) as { nodeId: string };
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...started, replyTo: run.id }));
+      socket.deliver(JSON.stringify({ ...waiting, nodeId: GRAPH }));
+      socket.deliver(hubFrames.machineStateGraphRunWaiting);
+    });
+    await act(settle);
+
+    expect(container.querySelector('[data-run-strip]')?.textContent).toContain(
+      'run #1 · waiting on a person · step 2/2',
+    );
+    expect(button('Run').disabled).toBe(true);
+    const block = container.querySelector<HTMLElement>('[data-run-approval]');
+    expect(block).not.toBeNull();
+    // The request's words, and nothing a person would need to open elsewhere.
+    expect(block?.textContent).toContain('Approve merge');
+    expect(block?.textContent).toContain('robert, ana');
+
+    const allow = container.querySelector<HTMLButtonElement>('[aria-label="allow Approve merge"]');
+    if (allow === null) throw new Error('no Allow for the waiting node');
+    await act(() => {
+      allow.click();
+    });
+
+    const decided = sent(socket).find((each) => each.type === 'approval-decide');
+    expect(decided).toMatchObject({
+      type: 'approval-decide',
+      subject: { kind: 'graphRun', nodeId: 'approve' },
+      decision: 'grant',
+    });
+    // Nothing of the request goes back, and no rule is offered for a run.
+    expect(decided).not.toHaveProperty('proposal');
+    expect(container.querySelector('[aria-label^="always allow"]')).toBeNull();
+  });
+
   it('draws the canvas with a card per node and the zoom controls', async () => {
     await opened();
 

@@ -83,10 +83,12 @@ async function shellNetworkFirst(request) {
  * The hub decides when (apps/hub/src/features/push/attention-edge.ts) and what
  * may be said (features/push/push.ts). What arrives here is
  * `{ title, body, data: { storeId, sessionId } }`, where `title` is the
- * provider and `body` is the status in words. Nothing else is in it by design:
- * a session's title, its working directory and its branch are the fields that
- * would put a proposal or a path on a screen somebody else can read, and the
- * hub never sends them.
+ * provider and `body` is the status in words -- or, for a graph run waiting
+ * on a person, `{ title, body, data: { graph } }`, where `body` names the run
+ * and the node and `graph` is the graph's tree node. Nothing else is in either
+ * by design: a session's title, its working directory and its branch, and a
+ * run's request text, are the fields that would put a proposal or a path on a
+ * screen somebody else can read, and the hub never sends them.
  *
  * What this file decides is only how those words are shown. The notification's
  * own title is the app, not the provider, because a notification arrives with
@@ -119,6 +121,8 @@ const GENERIC_TAG = APP_NAME;
 
 /** The app's session address, spelled exactly as `src/terminal/session-route.ts` spells it. */
 const SESSION_PREFIX = '#/session/';
+/** Restated from `src/graphs/graph-route.ts`, for the same reason. */
+const GRAPH_PREFIX = '#/graph/';
 
 self.addEventListener('push', (event) => {
   // Nothing in this path is allowed to throw or to reject: every payload,
@@ -131,7 +135,7 @@ self.addEventListener('notificationclick', (event) => {
   // Closed first and unconditionally. A notification the browser leaves up
   // after a tap is one the person taps again.
   event.notification.close();
-  event.waitUntil(openApp(addressFor(sessionRefIn(event.notification.data))));
+  event.waitUntil(openApp(addressFor(targetIn(event.notification.data))));
 });
 
 /** The payload as JSON, or `null` for anything that is not readable as such. */
@@ -154,23 +158,50 @@ function readPayload(data) {
  */
 function notificationFor(payload) {
   const words = displayWords(payload);
-  const ref = sessionRefIn(payload === null || typeof payload !== 'object' ? null : payload.data);
-  if (words === null || ref === null) {
+  const target = targetIn(payload === null || typeof payload !== 'object' ? null : payload.data);
+  if (words === null || target === null) {
     return { title: APP_NAME, options: { body: GENERIC_BODY, tag: GENERIC_TAG, data: null } };
   }
   return {
     title: APP_NAME,
     options: {
       body: words,
-      // Tagged per session, so the second prompt from one session replaces the
-      // first instead of stacking. The address is already one string per
-      // session and already unique, so it is the tag rather than a second
-      // spelling of the same fact.
-      tag: sessionHashFor(ref),
+      // Tagged per subject, so the second prompt from one session -- or the
+      // second request from one graph -- replaces the first instead of
+      // stacking. The address is already one string per subject and already
+      // unique, so it is the tag rather than a second spelling of the same fact.
+      tag: hashFor(target),
       // Carried so the tap knows where to go: the ids and nothing else.
-      data: ref,
+      data: target.data,
     },
   };
+}
+
+/**
+ * What a payload or a notification is about: a session, a graph, or nothing
+ * this worker can address. Parsed and never assumed, for the reason
+ * `sessionRefIn` gives; the graph's id is one non-empty string.
+ */
+function targetIn(data) {
+  const ref = sessionRefIn(data);
+  if (ref !== null) {
+    return { kind: 'session', data: ref };
+  }
+  if (data === null || typeof data !== 'object') {
+    return null;
+  }
+  const { graph } = data;
+  if (typeof graph !== 'string' || graph === '') {
+    return null;
+  }
+  return { kind: 'graph', data: { graph } };
+}
+
+/** The app's address for whatever a notification is about. */
+function hashFor(target) {
+  return target.kind === 'session'
+    ? sessionHashFor(target.data)
+    : `${GRAPH_PREFIX}${encodeURIComponent(target.data.graph)}`;
 }
 
 /** The hub's two display fields as one line, or `null` if either is missing. */
@@ -220,9 +251,9 @@ function sessionHashFor(ref) {
   return `${SESSION_PREFIX}${encodeURIComponent(ref.storeId)}/${encodeURIComponent(ref.sessionId)}`;
 }
 
-/** Where a tap goes: the session, or the app's front door when there is none. */
-function addressFor(ref) {
-  return ref === null ? '/' : `/${sessionHashFor(ref)}`;
+/** Where a tap goes: the session or the graph, or the app's front door when there is neither. */
+function addressFor(target) {
+  return target === null ? '/' : `/${hashFor(target)}`;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { wantsAttention, type StoreId } from '@agentplex/protocol';
+import { wantsAttention, type ApprovalId, type StoreId } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
 import type { HubStateSnapshot, SessionRow } from '../fleet-state/fleet-state.js';
 import type { PushEvent } from './push.js';
@@ -61,6 +61,16 @@ import type { PushEvent } from './push.js';
  * waiting. That is a silence where a notification might have been welcome, and
  * it is the direction to be wrong in -- the in-page floor still shows it, and
  * the alternative is a hub that shouts every time it starts.
+ *
+ * ## The other edge: a run waiting on a person
+ *
+ * A graph run reaching a HUMAN node is the second thing worth a lock screen,
+ * and it is read off `graphRunApprovals` rather than any row. Its rule is
+ * simpler. A request is news exactly once, when its id first appears, and
+ * there is no seeding: a hub restart ends every run it had, so nothing can be
+ * waiting before the detector watches, and the first list that carries a
+ * request carries a new one. What leaves is the run number and the node's
+ * label; the request's proposal, which names who was asked, stays here.
  */
 export interface AttentionEdgeDependencies {
   /**
@@ -97,11 +107,36 @@ export function createAttentionEdge({
    * snapshot that seeded the store.
    */
   const spokenFor = new Map<string, number>();
+  /** The requests runs have raised that this hub has already said something about. */
+  const runsSpokenFor = new Set<ApprovalId>();
 
   return {
     observe(snapshot: HubStateSnapshot): void {
       const present = new Set<string>();
       const stores = new Set<StoreId>();
+
+      const waitingNow = new Set<ApprovalId>();
+      for (const waiting of snapshot.graphRunApprovals) {
+        const approvalId = waiting.approval.approvalId;
+        waitingNow.add(approvalId);
+        if (runsSpokenFor.has(approvalId)) continue;
+        runsSpokenFor.add(approvalId);
+        logger.debug('a run newly waits on a human', {
+          graph: waiting.graph,
+          number: waiting.number,
+        });
+        // The number and the label, assembled here: the proposal names the
+        // approvers and may quote more, and this is the boundary it stops at.
+        notify({
+          kind: 'graphRun',
+          graph: waiting.graph,
+          number: waiting.number,
+          node: waiting.nodeLabel,
+        });
+      }
+      for (const approvalId of runsSpokenFor) {
+        if (!waitingNow.has(approvalId)) runsSpokenFor.delete(approvalId);
+      }
 
       for (const store of snapshot.stores) {
         stores.add(store.storeId);
@@ -146,6 +181,7 @@ export function createAttentionEdge({
           // this is the boundary past which none of them may travel: what
           // leaves here is what a lock screen may show.
           notify({
+            kind: 'session',
             storeId: row.ref.storeId,
             sessionId: row.ref.sessionId,
             provider: row.descriptor.provider,

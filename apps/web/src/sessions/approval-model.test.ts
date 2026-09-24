@@ -4,7 +4,6 @@ import {
   parseTextFrame,
   type MachineState,
   type PendingApproval,
-  type SessionRef,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import type { ApprovalView, RefusalView } from '../store/hub-store.js';
@@ -37,43 +36,72 @@ function approvalFrom(text: string): ApprovalView {
 }
 
 /** The one session in the captured state that has a request open on it. */
-function blocked(state: MachineState): { ref: SessionRef; approval: PendingApproval } {
+function blocked(state: MachineState): PendingApproval {
   for (const store of state.stores) {
     for (const row of store.sessions) {
       const [approval] = row.approvals;
-      if (approval !== undefined) {
-        const { storeId, sessionId } = row.descriptor;
-        return { ref: { storeId, sessionId }, approval };
-      }
+      if (approval !== undefined) return approval;
     }
   }
   throw new Error('the fixture has no session with a pending approval');
 }
 
+/** The one run in the captured state that is waiting on a person. */
+function waiting(state: MachineState): PendingApproval {
+  const [first] = state.graphRunApprovals;
+  if (first === undefined) throw new Error('the fixture has no run waiting on a person');
+  return first.approval;
+}
+
 const pending = blocked(stateFrom(hubFrames.machineStateApproval));
+const parked = waiting(stateFrom(hubFrames.machineStateGraphRunWaiting));
 
 describe('the frame an answer sends', () => {
   it('names the session, the request and one of two words', () => {
     // The id is the server's name for one blocked tool call, read back off the
-    // row it arrived on. Nothing of the proposal goes back: a client returning
-    // it would be a client choosing what the agent runs.
-    expect(decideCommand(pending.ref, pending.approval.approvalId, 'grant')).toEqual({
+    // row it arrived on, and the subject goes back as the hub put it there.
+    // Nothing of the proposal goes back: a client returning it would be a
+    // client choosing what the agent runs.
+    expect(decideCommand(pending.subject, pending.approvalId, 'grant')).toEqual({
       type: 'approval-decide',
-      storeId: 'store-agentplex',
-      sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+      subject: {
+        kind: 'session',
+        storeId: 'store-agentplex',
+        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+      },
       approvalId: 'approval-1',
       decision: 'grant',
     });
   });
 
   it('denies the same request the same way, by the word and not by a second frame', () => {
-    expect(decideCommand(pending.ref, pending.approval.approvalId, 'deny')).toEqual({
+    expect(decideCommand(pending.subject, pending.approvalId, 'deny')).toEqual({
       type: 'approval-decide',
-      storeId: 'store-agentplex',
-      sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+      subject: {
+        kind: 'session',
+        storeId: 'store-agentplex',
+        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+      },
       approvalId: 'approval-1',
       decision: 'deny',
     });
+  });
+
+  it('answers a run waiting on a person with the same frame, the run for its subject', () => {
+    // The subject is a claim the hub made and the client repeats: which run,
+    // which node. The client adds nothing -- not the graph, not the number --
+    // because the hub would have to trust whatever it added.
+    expect(decideCommand(parked.subject, parked.approvalId, 'grant')).toEqual({
+      type: 'approval-decide',
+      subject: {
+        kind: 'graphRun',
+        runId: parked.subject.kind === 'graphRun' ? parked.subject.runId : '',
+        nodeId: 'approve',
+      },
+      approvalId: parked.approvalId,
+      decision: 'grant',
+    });
+    expect(parked.tool).toBe('HUMAN');
   });
 });
 

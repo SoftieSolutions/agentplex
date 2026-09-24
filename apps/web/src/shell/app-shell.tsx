@@ -212,7 +212,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
    * an age is a reading a test has to be able to pin.
    */
   const sessions = state === null ? [] : listSessions(state);
-  const notifications = notificationList(sessions, now());
+  const notifications = notificationList(sessions, now(), state?.graphRunApprovals ?? []);
   const bell = <AttentionBell list={notifications} store={hub} form={form} scheme={scheme} />;
   /**
    * The palette, built here for the reason the bell is, and handed the whole

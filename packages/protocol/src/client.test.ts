@@ -663,8 +663,11 @@ describe('client and hub round trips', () => {
     {
       type: 'approval-decide',
       id: 26,
-      storeId: storeIdSchema.parse('store-work'),
-      sessionId: sessionIdSchema.parse('session-1'),
+      subject: {
+        kind: 'session',
+        storeId: storeIdSchema.parse('store-work'),
+        sessionId: sessionIdSchema.parse('session-1'),
+      },
       approvalId: approvalIdSchema.parse('approval-7f21'),
       decision: 'grant',
     },
@@ -832,6 +835,11 @@ describe('client and hub round trips', () => {
                 approvals: [
                   {
                     approvalId: approvalIdSchema.parse('approval-7f21'),
+                    subject: {
+                      kind: 'session',
+                      storeId: storeIdSchema.parse('store-work'),
+                      sessionId: sessionIdSchema.parse('session-1'),
+                    },
                     tool: 'Bash',
                     proposal: 'command: prisma migrate deploy --schema ./db',
                     truncated: false,
@@ -917,6 +925,7 @@ describe('client and hub round trips', () => {
             protocolVersion: 6,
           },
         ],
+        graphRunApprovals: [],
       },
     },
     {
@@ -1185,8 +1194,11 @@ describe('the approval frames on the client leg', () => {
   const A_DECISION = {
     type: 'approval-decide',
     id: 30,
-    storeId: storeIdSchema.parse('store-work'),
-    sessionId: sessionIdSchema.parse('session-1'),
+    subject: {
+      kind: 'session',
+      storeId: storeIdSchema.parse('store-work'),
+      sessionId: sessionIdSchema.parse('session-1'),
+    },
     approvalId: approvalIdSchema.parse('approval-7f21'),
     decision: 'deny',
   };
@@ -1195,12 +1207,29 @@ describe('the approval frames on the client leg', () => {
     expect(parseClientFrame(A_DECISION).ok).toBe(true);
   });
 
-  it('refuses an answer that names no session', () => {
-    // A client names a session, and the hub resolves which machine holds it.
-    // An approval id alone would have the hub searching every server it has
-    // for a request a client is only guessing still exists.
-    const { storeId: _store, ...withoutStore } = A_DECISION;
-    expect(parseClientFrame(withoutStore).ok).toBe(false);
+  it('accepts an answer naming a graph run and the node it waits at', () => {
+    expect(
+      parseClientFrame({
+        ...A_DECISION,
+        subject: { kind: 'graphRun', runId: 'run-38', nodeId: 'gate' },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('refuses an answer that names no subject', () => {
+    // A client names what it answers, and the hub resolves which machine --
+    // or which run of its own -- holds it. An approval id alone would have the
+    // hub searching everything it has for a request a client is only guessing
+    // still exists.
+    const { subject: _subject, ...withoutSubject } = A_DECISION;
+    expect(parseClientFrame(withoutSubject).ok).toBe(false);
+  });
+
+  it('refuses the old spelling, with the session ids flat on the frame', () => {
+    const { subject, ...flat } = A_DECISION;
+    expect(
+      parseClientFrame({ ...flat, storeId: subject.storeId, sessionId: subject.sessionId }).ok,
+    ).toBe(false);
   });
 
   it('carries no message, no argv and no proposal back toward the agent', () => {

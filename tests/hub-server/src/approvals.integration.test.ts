@@ -413,8 +413,7 @@ describe('an approval, over a hub and a server', () => {
 
     const answered = await client.ask({
       type: 'approval-decide',
-      storeId: WORK,
-      sessionId: BLOCKED,
+      subject: { kind: 'session', storeId: WORK, sessionId: BLOCKED },
       approvalId: pending?.approvalId,
       decision: 'grant',
     });
@@ -438,8 +437,7 @@ describe('an approval, over a hub and a server', () => {
 
     const answered = await client.ask({
       type: 'approval-decide',
-      storeId: WORK,
-      sessionId: BLOCKED,
+      subject: { kind: 'session', storeId: WORK, sessionId: BLOCKED },
       approvalId: pending?.approvalId,
       decision: 'deny',
     });
@@ -463,15 +461,13 @@ describe('an approval, over a hub and a server', () => {
     // produces with two phones and one question.
     const granting = client.asking({
       type: 'approval-decide',
-      storeId: WORK,
-      sessionId: BLOCKED,
+      subject: { kind: 'session', storeId: WORK, sessionId: BLOCKED },
       approvalId: pending?.approvalId,
       decision: 'grant',
     });
     const denying = second.asking({
       type: 'approval-decide',
-      storeId: WORK,
-      sessionId: BLOCKED,
+      subject: { kind: 'session', storeId: WORK, sessionId: BLOCKED },
       approvalId: pending?.approvalId,
       decision: 'deny',
     });
@@ -508,8 +504,7 @@ describe('an approval, over a hub and a server', () => {
     // told the ending rather than that the hub never heard of it.
     const answered = await late.ask({
       type: 'approval-decide',
-      storeId: WORK,
-      sessionId: BLOCKED,
+      subject: { kind: 'session', storeId: WORK, sessionId: BLOCKED },
       approvalId: pending?.approvalId,
       decision: 'grant',
     });
@@ -539,8 +534,7 @@ describe('an approval, over a hub and a server', () => {
 
     const answered = await client.ask({
       type: 'approval-decide',
-      storeId: WORK,
-      sessionId: BLOCKED,
+      subject: { kind: 'session', storeId: WORK, sessionId: BLOCKED },
       approvalId: 'approval-nobody-minted',
       decision: 'grant',
     });
@@ -555,8 +549,7 @@ describe('an approval, over a hub and a server', () => {
     const [pending] = await seen(client, 'the request to reach the client');
     const granted = await client.ask({
       type: 'approval-decide',
-      storeId: WORK,
-      sessionId: BLOCKED,
+      subject: { kind: 'session', storeId: WORK, sessionId: BLOCKED },
       approvalId: pending?.approvalId,
       decision: 'grant',
     });
@@ -628,8 +621,7 @@ describe('a standing policy, over a hub and a server', () => {
     const proposal = pending.proposal;
     await client.ask({
       type: 'approval-decide',
-      storeId: WORK,
-      sessionId: BLOCKED,
+      subject: { kind: 'session', storeId: WORK, sessionId: BLOCKED },
       approvalId: pending.approvalId,
       decision: 'deny',
     });
@@ -750,8 +742,7 @@ describe('a standing policy, over a hub and a server', () => {
 
     await client.ask({
       type: 'approval-decide',
-      storeId: WORK,
-      sessionId: BLOCKED,
+      subject: { kind: 'session', storeId: WORK, sessionId: BLOCKED },
       approvalId: first.approvalId,
       decision: 'grant',
     });

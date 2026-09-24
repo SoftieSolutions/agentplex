@@ -138,6 +138,7 @@ function fleet(readings: readonly Reading[]): MachineState {
       },
     ],
     candidates: [],
+    graphRunApprovals: [],
     stores: [
       {
         storeId: STORE,

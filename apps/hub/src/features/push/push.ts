@@ -9,6 +9,7 @@ import {
   type SessionId,
   type SessionStatus,
   type StoreId,
+  type NodeId,
 } from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
 import type { Database } from '../../db/database.js';
@@ -128,12 +129,26 @@ export type VapidKeyGenerator = () => { readonly publicKey: string; readonly pri
  * the vocabulary they come from, and because a status is what a client would
  * have to re-derive if this ever needed to say anything else about it.
  */
-export interface PushEvent {
-  readonly storeId: StoreId;
-  readonly sessionId: SessionId;
-  readonly provider: Provider;
-  readonly status: SessionStatus;
-}
+export type PushEvent =
+  | {
+      readonly kind: 'session';
+      readonly storeId: StoreId;
+      readonly sessionId: SessionId;
+      readonly provider: Provider;
+      readonly status: SessionStatus;
+    }
+  /**
+   * A graph run newly waiting on a person. The graph's node is where the tap
+   * goes; the number and the node's label are the two words a lock screen may
+   * show. The request's proposal -- which names who was asked and, for a run
+   * that failed, may quote a sentence -- stops at the detector.
+   */
+  | {
+      readonly kind: 'graphRun';
+      readonly graph: NodeId;
+      readonly number: number;
+      readonly node: string;
+    };
 
 /** The pair, as the one thing allowed to hold it briefly: a sender, mid-send. */
 export interface VapidCredentials {
@@ -320,6 +335,38 @@ export interface Push {
  * notification, because an exhaustive switch is what makes a status added to
  * the protocol fail here rather than arrive on somebody's phone as `undefined`.
  */
+/**
+ * The three fields a notification is: a title, a body, and where the tap
+ * goes. One function per event kind, ending in `assertNever`, so a third
+ * kind of edge is a type error here rather than a lock screen saying
+ * `undefined`. The ids and nothing else in `data`: they name a session or a
+ * graph to whoever already holds this hub's token and nothing to anybody else.
+ */
+function payloadFor(event: PushEvent): {
+  readonly title: string;
+  readonly body: string;
+  readonly data: Record<string, string>;
+} {
+  switch (event.kind) {
+    case 'session':
+      return {
+        title: event.provider,
+        body: statusWords(event.status),
+        data: { storeId: event.storeId, sessionId: event.sessionId },
+      };
+    case 'graphRun':
+      // The worker shows title and body as one line, so the body picks up
+      // where the title stops: "graph run #38 is waiting at Ship it".
+      return {
+        title: 'graph run',
+        body: `#${String(event.number)} is waiting at ${event.node}`,
+        data: { graph: event.graph },
+      };
+    default:
+      return assertNever(event, 'push event');
+  }
+}
+
 function statusWords(status: SessionStatus): string {
   switch (status) {
     case 'working':
@@ -498,14 +545,7 @@ export function createPush({
     // Built once for the fan-out, because it is the same notification to
     // everybody: there is one client token and no user identity, so every
     // browser that subscribed gets every edge.
-    const payload = JSON.stringify({
-      title: event.provider,
-      body: statusWords(event.status),
-      // The ids and nothing else, so the service worker has somewhere to
-      // send the tap. They name a session to whoever already holds this
-      // hub's token and nothing to anybody else.
-      data: { storeId: event.storeId, sessionId: event.sessionId },
-    });
+    const payload = JSON.stringify(payloadFor(event));
 
     // Bounded, and in parallel within that bound: one browser whose push
     // service has stopped answering holds a slot for its timeout and nothing

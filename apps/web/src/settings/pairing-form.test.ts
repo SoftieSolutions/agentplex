@@ -34,6 +34,7 @@ function stateAnnouncing(address: string): MachineState {
     version: 1,
     stores: [],
     servers: [],
+    graphRunApprovals: [],
     candidates: [
       { serverId: 'server-odd', address, port: 8443, protocolVersion: PROTOCOL_VERSION },
     ],

@@ -11,6 +11,7 @@ import type {
   SessionRow,
   SessionStatus,
   StoreId,
+  ApprovalSubject,
 } from '@agentplex/protocol';
 import { activityWordsText } from '../activity/activity-words.js';
 import { destinationHash } from '../shell/destinations.js';
@@ -43,6 +44,15 @@ import type { Tone } from '../ui/tokens.js';
  */
 export interface SessionApproval {
   readonly approvalId: ApprovalId;
+  /**
+   * What the request is about, which is what a decision sends back.
+   *
+   * Narrowed through rather than re-derived from the row, so that the one
+   * pair of buttons answers a request wherever it was drawn: on a session's
+   * card, on its Approvals tab, or under a graph run's strip -- the last of
+   * which has no session to derive one from.
+   */
+  readonly subject: ApprovalSubject;
   /** The tool's name as the provider spells it: `Bash`, `Edit`, `WebFetch`. */
   readonly tool: string;
   readonly proposal: string;
@@ -99,6 +109,7 @@ export function approvalsOldestFirst(
     .sort((left, right) => left.requestedAt - right.requestedAt)
     .map((approval) => ({
       approvalId: approval.approvalId,
+      subject: approval.subject,
       tool: approval.tool,
       proposal: approval.proposal,
       truncated: approval.truncated,

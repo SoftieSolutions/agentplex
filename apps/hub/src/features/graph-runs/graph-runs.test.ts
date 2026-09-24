@@ -16,6 +16,7 @@ import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-
 import { createGraphs, type Graphs } from '../graphs/graphs.js';
 import type { AgentExecutor } from './agent-executor.js';
 import { createGraphRuns, GRAPH_RUNS_MAX_ACTIVE, type GraphRuns } from './graph-runs.js';
+import type { HumanExecutor, HumanRun } from './human-executor.js';
 import { readRun } from './run-rows.js';
 
 /**
@@ -70,6 +71,24 @@ const AGENT = {
   provider: 'claude',
   storeId: 'store-work',
 };
+const GATED: GraphDocument = graphDocumentSchema.parse({
+  nodes: [
+    TRIGGER,
+    {
+      ...BASE,
+      id: 'gate',
+      kind: 'human',
+      label: 'Ship it',
+      approvers: ['robert'],
+      timeoutMinutes: null,
+    },
+    AGENT,
+  ],
+  edges: [
+    { from: 'start', to: 'gate' },
+    { from: 'gate', to: 'review' },
+  ],
+});
 const RUNNABLE: GraphDocument = graphDocumentSchema.parse({
   nodes: [
     TRIGGER,
@@ -172,10 +191,41 @@ function scriptedAgent(): ScriptedAgent {
   };
 }
 
+/** A HUMAN executor the suite answers by hand, recording what it was built for. */
+interface ScriptedHuman extends HumanExecutor {
+  readonly runs: HumanRun[];
+  grant(): void;
+  deny(): void;
+}
+
+function scriptedHuman(): ScriptedHuman {
+  const runs: HumanRun[] = [];
+  let answer: ((granted: boolean) => void) | null = null;
+  return {
+    runs,
+    grant: () => answer?.(true),
+    deny: () => answer?.(false),
+    forRun(run) {
+      runs.push(run);
+      return (node, input, context) =>
+        new Promise((resolve) => {
+          context.waiting();
+          answer = (granted) =>
+            resolve(
+              granted
+                ? { ok: true, carried: input, output: null, next: null }
+                : { ok: false, problem: `a person denied ${node.label}` },
+            );
+        });
+    },
+  };
+}
+
 interface Harness {
   readonly graphs: Graphs;
   readonly runs: GraphRuns;
   readonly agent: ScriptedAgent;
+  readonly human: ScriptedHuman;
   readonly timers: FakeTimers;
   /** Every state published through `onState`, in order. */
   readonly published: GraphRunState[];
@@ -184,6 +234,7 @@ interface Harness {
 function build(): Harness {
   const graphs = createGraphs({ database: db(), ids, clock, logger, onTreeChanged: () => {} });
   const agent = scriptedAgent();
+  const human = scriptedHuman();
   const timers = createFakeTimers();
   const published: GraphRunState[] = [];
   const runs = createGraphRuns({
@@ -194,9 +245,10 @@ function build(): Harness {
     logger,
     graphs,
     agent,
+    human,
     onState: (state) => published.push(state),
   });
-  return { graphs, runs, agent, timers, published };
+  return { graphs, runs, agent, human, timers, published };
 }
 
 async function publishedGraph(
@@ -649,6 +701,71 @@ describe('graph runs', () => {
       await settle();
       expect(h.published).toEqual([]);
       expect(await h.runs.latest(graph)).toBeNull();
+    });
+  });
+
+  it('publishes waiting while a HUMAN node waits, and running again once a person allows', async () => {
+    const h = build();
+    const nodeId = await publishedGraph(h, GATED);
+    const started = await h.runs.start(nodeId, { language: 'rust' });
+    if (!started.ok) throw new Error(started.problem);
+    await settle();
+
+    // The executor was built for this run, with the graph's name for the words.
+    expect(h.human.runs).toEqual([
+      { runId: started.runId, number: 1, graph: nodeId, graphName: 'release-pipeline' },
+    ]);
+    expect(h.published.at(-1)).toMatchObject({
+      status: 'waiting',
+      step: 2,
+      steps: [
+        { nodeId: 'start', outcome: 'succeeded' },
+        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+      ],
+    });
+
+    h.human.grant();
+    await settle();
+
+    expect(h.published.map((state) => state.status)).toEqual(
+      expect.arrayContaining(['waiting', 'running', 'succeeded']),
+    );
+    expect(h.published.at(-1)).toMatchObject({ status: 'succeeded' });
+    expect((await readRun(db(), started.runId))?.status).toBe('succeeded');
+  });
+
+  it('answers a read of a run parked at a HUMAN node with waiting, not running', async () => {
+    const h = build();
+    const nodeId = await publishedGraph(h, GATED);
+    const started = await h.runs.start(nodeId, {});
+    if (!started.ok) throw new Error(started.problem);
+    await settle();
+
+    // A screen that reconnects mid-wait reads the run rather than being sent
+    // it, and must be told the same word a watcher was.
+    expect(await h.runs.latest(nodeId)).toMatchObject({
+      runId: started.runId,
+      status: 'waiting',
+      steps: [
+        { nodeId: 'start', outcome: 'succeeded' },
+        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+      ],
+    });
+  });
+
+  it('ends a run failed naming the node when a person denies', async () => {
+    const h = build();
+    const nodeId = await publishedGraph(h, GATED);
+    const started = await h.runs.start(nodeId, {});
+    if (!started.ok) throw new Error(started.problem);
+    await settle();
+
+    h.human.deny();
+    await settle();
+
+    expect(h.published.at(-1)).toMatchObject({
+      status: 'failed',
+      reason: 'the HUMAN node Ship it failed: a person denied Ship it',
     });
   });
 

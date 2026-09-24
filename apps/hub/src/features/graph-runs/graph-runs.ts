@@ -12,6 +12,7 @@ import type { Clock, IdGenerator, Logger, Timers } from '@agentplex/node-shared'
 import type { Database } from '../../db/database.js';
 import type { Graphs } from '../graphs/graphs.js';
 import type { AgentExecutor } from './agent-executor.js';
+import type { HumanExecutor } from './human-executor.js';
 import {
   endRun,
   failRunningRuns,
@@ -88,10 +89,12 @@ export interface GraphRunsDependencies {
   /** What a retry's backoff waits on. */
   readonly timers: Timers;
   readonly logger: Logger;
-  /** Where a run's document and project come from. Three reads and nothing else of that feature. */
-  readonly graphs: Pick<Graphs, 'projectOf' | 'latestPublished' | 'publishedVersion'>;
+  /** Where a run's document, project and name come from. Four reads and nothing else of that feature. */
+  readonly graphs: Pick<Graphs, 'projectOf' | 'latestPublished' | 'publishedVersion' | 'open'>;
   /** The one executor that reaches a machine, built where its seams are. */
   readonly agent: AgentExecutor;
+  /** The one executor that asks a person, built where the approvals seam is. */
+  readonly human: HumanExecutor;
   /**
    * Called with a run's whole state on every change, the way approvals'
    * `onChanged` is. Wired to the client fan-out by the composition root.
@@ -165,7 +168,7 @@ function fromRow(row: RunRow, of: number): GraphRunState {
 }
 
 export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns {
-  const { database, ids, clock, timers, graphs, agent, onState } = dependencies;
+  const { database, ids, clock, timers, graphs, agent, human, onState } = dependencies;
   const logger = dependencies.logger.child({ part: 'graph-runs' });
 
   const active = new Map<GraphRunId, ActiveRun>();
@@ -211,6 +214,15 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
       });
   };
 
+  /**
+   * The open state a run is in, read off its own steps: `waiting` while the
+   * one attempt in flight is waiting on a person, else `running`. Off the
+   * list rather than a flag beside it, so the status and the strip's step
+   * records can never say two things.
+   */
+  const openStatus = (run: ActiveRun): GraphRunState['status'] =>
+    run.steps.some((step) => step.outcome === 'waiting') ? 'waiting' : 'running';
+
   const stateOf = (
     run: ActiveRun,
     status: GraphRunState['status'],
@@ -227,16 +239,17 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
   });
 
   /**
-   * Replaces the running record this outcome is of, or appends. The walker
-   * reports an attempt's outcome directly after its running record, so the
-   * record to replace is always the last one -- and a node a cycle reaches
-   * again gets a new record rather than overwriting its earlier visit.
+   * Replaces the open record this outcome is of, or appends. The walker
+   * reports an attempt's outcome directly after its running record -- or its
+   * waiting one, when the attempt stopped to ask a person -- so the record to
+   * replace is always the last one, and a node a cycle reaches again gets a
+   * new record rather than overwriting its earlier visit.
    */
   const record = (run: ActiveRun, step: GraphRunStep): void => {
     const last = run.steps.at(-1);
     if (
       last !== undefined &&
-      last.outcome === 'running' &&
+      (last.outcome === 'running' || last.outcome === 'waiting') &&
       last.nodeId === step.nodeId &&
       last.attempt === step.attempt
     ) {
@@ -276,6 +289,7 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
       let run: ActiveRun;
       let document;
       let project: NodeId | null;
+      let graphName: string;
       try {
         project = await graphs.projectOf(nodeId);
         if (project === null) {
@@ -287,6 +301,12 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
           byGraph.delete(nodeId);
           return refused('this graph has no published version to run; publish it first');
         }
+        // Read for the one thing a person is shown beside a HUMAN request:
+        // what the graph is called. A graph that has a published version has
+        // a node, so a refusal here is the tree changing under this call, and
+        // the id is then what names it.
+        const opened = await graphs.open(nodeId);
+        graphName = opened.ok ? opened.name : nodeId;
         // Checked again after every await: stop() cancels the runs it finds
         // in `active`, and a run that joined after it looked would be walked
         // by nobody's stop into a database being closed.
@@ -332,6 +352,12 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
           trigger: triggerExecutor,
           router: routerExecutor,
           agent: agent.forProject(project),
+          human: human.forRun({
+            runId: run.runId,
+            number: run.number,
+            graph: nodeId,
+            graphName,
+          }),
         },
         timers,
         onStep: (step, reached) => {
@@ -339,7 +365,7 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
           run.step = reached;
           const steps = [...run.steps];
           write(run, 'steps', () => replaceSteps(database, run.runId, steps));
-          publish(run, stateOf(run, 'running', null));
+          publish(run, stateOf(run, openStatus(run), null));
         },
         onEnd: (outcome) => {
           const reason = outcome.status === 'failed' ? outcome.reason : null;
@@ -396,7 +422,7 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
 
     async latest(nodeId: NodeId): Promise<GraphRunState | null> {
       const held = byGraph.get(nodeId);
-      if (held !== undefined && held !== null) return stateOf(held, 'running', null);
+      if (held !== undefined && held !== null) return stateOf(held, openStatus(held), null);
       const ended = ending.get(nodeId);
       if (ended !== undefined) return ended;
       const row = await latestRun(database, nodeId);

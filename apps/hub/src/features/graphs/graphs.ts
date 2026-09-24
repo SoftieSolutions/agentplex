@@ -184,10 +184,20 @@ export function createGraphs(dependencies: GraphsDependencies): Graphs {
           }
           break;
         }
+        case 'human':
+          // A Deny is an answer and a timeout is the node's own limit on
+          // waiting for one; the runtime never retries either, so a policy
+          // that says it would is refused rather than silently ignored.
+          if (node.retry.max > 0) {
+            return (
+              `the HUMAN node ${nameOf(node)} retries ${String(node.retry.max)} times, ` +
+              "and a person's answer is not retried"
+            );
+          }
+          break;
         case 'trigger':
         case 'router':
         case 'agent':
-        case 'human':
           break;
       }
     }

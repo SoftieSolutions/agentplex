@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import { nodeIdSchema } from './identity.js';
+import { graphNodeIdSchema } from './graph.js';
+import { graphRunIdSchema } from './graph-run.js';
+import { displayableApprovalText } from './displayable-text.js';
+import { nodeIdSchema, sessionIdSchema, storeIdSchema } from './identity.js';
 
 /**
  * An approval: an agent asking a person for something, and what became of it.
@@ -124,46 +127,6 @@ export const approvalRuleSchema = z.object({
   content: z.string().max(2_000),
 });
 export type ApprovalRule = z.infer<typeof approvalRuleSchema>;
-
-/**
- * Text an agent wrote, with the parts of it that are not text removed.
- *
- * It lives here rather than beside the provider that first needed it because
- * two things now depend on it agreeing with itself: the proposal a person is
- * shown, and the standing policy's rule that is compared against that proposal.
- * A second copy of this function at the edge would be a second alphabet, and
- * the day the two drifted apart would be the day a rule matched something a
- * person would have read differently. One function, in the package both ends
- * already agree on.
- *
- * Two classes, removed together because they are the same claim. A tool input
- * can carry an escape sequence -- a `Bash` command that clears the screen, a
- * file with a bell in it -- and a proposal is rendered wherever an approval is
- * shown, including a log an operator is reading in a terminal. Tabs and
- * newlines survive because they are layout; the rest are removed rather than
- * escaped, because a person deciding on a command is not helped by seeing
- * `\u001b` and a person is who this string is for.
- *
- * The bidirectional controls are the ones that cost something to see. Every
- * string this function guards is written by the agent that is asking, drawn
- * directly above the button that answers, and a right-to-left override in it
- * makes the line render in an order other than the one that runs: `rm -rf /x`
- * with a comment after it can be painted as a comment with a harmless-looking
- * command after that. Nothing downstream can undo it either -- by the time the
- * text is a DOM node the reordering is the browser doing its job correctly, and
- * `dir` on the element bounds the damage without removing it. So the marks, the
- * embeddings, the overrides, the pop and the isolates all go here, at the edge,
- * where the text stops being the provider's and starts being something a person
- * is asked to read.
- */
-export function displayableApprovalText(text: string): string {
-  return (
-    text
-      // eslint-disable-next-line no-control-regex -- the point is the control characters.
-      .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
-      .replace(/[؜‎‏‪-‮⁦-⁩]/g, '')
-  );
-}
 
 /** A remembered answer the provider would accept for requests like this one. */
 export const approvalSuggestionSchema = z.object({
@@ -460,7 +423,48 @@ export const approvalAnsweredBySchema = z.object({
 export type ApprovalAnsweredBy = z.infer<typeof approvalAnsweredBySchema>;
 
 /**
- * A request the hub is holding open, as a client reads it off a session row.
+ * What an approval is about: the thing whose progress waits on the answer.
+ *
+ * Two kinds and a discriminator, because there are two things in this system
+ * that stop and ask. A session's agent blocks on a tool call, and the machine
+ * running it minted the request; a graph run reaches a HUMAN node, and the hub
+ * itself minted the request with nobody's machine behind it. Deciding one is
+ * the same tap, and the same decide-once rule, so the two share a request
+ * shape and a decision frame -- and differ in this one field, which is what
+ * the hub routes on: a session subject goes back to the machine that asked,
+ * a run subject is answered by the hub to itself.
+ *
+ * `kind` is on the wire rather than inferred from which ids are present, so
+ * that a switch on it can end in `assertNever` at every reader: a third thing
+ * that asks is then a type error in each of them and not a request nobody
+ * routes.
+ *
+ * A run subject names the run and the node it is waiting at, and no more. The
+ * run number and the graph's name are what a person reads and travel where a
+ * client reads them; here is identity, which is what a client sends back and
+ * what the hub may only key on -- a field a client could send that the hub
+ * then trusted for display would be a claim crossing in the wrong direction.
+ */
+export const sessionApprovalSubjectSchema = z.object({
+  kind: z.literal('session'),
+  storeId: storeIdSchema,
+  sessionId: sessionIdSchema,
+});
+export const graphRunApprovalSubjectSchema = z.object({
+  kind: z.literal('graphRun'),
+  runId: graphRunIdSchema,
+  nodeId: graphNodeIdSchema,
+});
+export const approvalSubjectSchema = z.discriminatedUnion('kind', [
+  sessionApprovalSubjectSchema,
+  graphRunApprovalSubjectSchema,
+]);
+export type ApprovalSubject = z.infer<typeof approvalSubjectSchema>;
+export type GraphRunApprovalSubject = z.infer<typeof graphRunApprovalSubjectSchema>;
+
+/**
+ * A request the hub is holding open, as a client reads it off a session row
+ * or off the hub's own list of runs waiting on a person.
  *
  * The request plus the one thing the hub is entitled to add: when it heard.
  * That is the hub's own clock, deliberately -- a client showing "waiting four
@@ -475,6 +479,20 @@ export type ApprovalAnsweredBy = z.infer<typeof approvalAnsweredBySchema>;
  * and no fetch to be half way through while the state says something else.
  */
 export const pendingApprovalSchema = approvalRequestSchema.extend({
+  /**
+   * What this request is about, so a client can answer it without knowing
+   * where it read it.
+   *
+   * On a session row this restates the row's own ids, and that redundancy is
+   * accepted on purpose: a pending approval is drawn by one control wherever
+   * it came from -- a session's card, its Approvals tab, the hub-wide list of
+   * runs -- and the control builds one decide frame from the object in front
+   * of it. A control that had to be told the subject separately would be two
+   * controls, or one that guessed from context; the row and the subject can
+   * only disagree if the hub that wrote both did, and it writes both from one
+   * value.
+   */
+  subject: approvalSubjectSchema,
   /** When the hub was told, by the hub's clock. */
   requestedAt: z.int().nonnegative(),
   /**

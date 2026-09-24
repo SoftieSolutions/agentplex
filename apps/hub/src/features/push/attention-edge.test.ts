@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  approvalIdSchema,
+  nodeIdSchema,
   serverAddressSchema,
   sessionIdSchema,
   storeIdSchema,
+  type GraphRunApproval,
   type ServerRegistrationId,
   type SessionDescriptor,
   type StoreId,
@@ -159,6 +162,7 @@ describe('the needs-you edge', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0]).toEqual({
+      kind: 'session',
       storeId: STORE,
       sessionId: sessionIdSchema.parse('session-a'),
       provider: 'claude',
@@ -242,5 +246,94 @@ describe('the needs-you edge', () => {
     report('spare', [session('session-b', { storeId: OTHER_STORE })], OTHER_STORE);
 
     expect(sent).toEqual([]);
+  });
+});
+
+/**
+ * The other edge: a graph run newly waiting on a person.
+ *
+ * Off the reducer's `graphRunApprovals` rather than any session row, because
+ * a run is not a session. The rule is simpler than a session's -- a request
+ * is news exactly once, when it first appears, and a run that asks a second
+ * time at another node is a second request with its own id -- so what is
+ * remembered is the approval id and nothing else.
+ */
+describe('the needs-you edge, for a run waiting on a person', () => {
+  const RELEASE = nodeIdSchema.parse('node-graph-release');
+  const PROMPT = 'Review the Rust in this change.';
+
+  function waiting(id: string, number: number, label = 'Ship it'): GraphRunApproval {
+    return {
+      graph: RELEASE,
+      number,
+      nodeLabel: label,
+      approval: {
+        approvalId: approvalIdSchema.parse(id),
+        subject: {
+          kind: 'graphRun',
+          runId: `run-${String(number)}` as never,
+          nodeId: 'gate' as never,
+        },
+        tool: 'HUMAN',
+        // The words a client draws. The prompt is here to prove it never
+        // leaves: a notification names the run and the node, and nothing
+        // an agent was asked to do.
+        proposal: `run #${String(number)} of release is waiting at ${label} for robert; ${PROMPT}`,
+        truncated: false,
+        suggestions: [],
+        requestedAt: START,
+        answeredBy: null,
+      },
+    };
+  }
+
+  beforeEach(() => {
+    state = createFleetState({ logger });
+    sent = [];
+  });
+
+  it('sends exactly one push when a run starts waiting, naming the run number and the node', () => {
+    watch();
+    state.applyGraphRunApprovals([waiting('approval-1', 38)]);
+
+    expect(sent).toEqual([{ kind: 'graphRun', graph: RELEASE, number: 38, node: 'Ship it' }]);
+  });
+
+  it('does not say it again while the same request is still waiting', () => {
+    watch();
+    state.applyGraphRunApprovals([waiting('approval-1', 38)]);
+    // Something else moves the state; the list is republished unchanged.
+    state.applyConnection(connection('workshop', 'connected', [STORE]));
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('says it again for a second request, whether from another run or the same one later', () => {
+    watch();
+    state.applyGraphRunApprovals([waiting('approval-1', 38)]);
+    state.applyGraphRunApprovals([waiting('approval-1', 38), waiting('approval-2', 39)]);
+    state.applyGraphRunApprovals([]);
+    state.applyGraphRunApprovals([waiting('approval-3', 38, 'Deploy')]);
+
+    expect(sent.map((event) => (event.kind === 'graphRun' ? event.node : null))).toEqual([
+      'Ship it',
+      'Ship it',
+      'Deploy',
+    ]);
+  });
+
+  it('carries nothing of the proposal past the node label', () => {
+    watch();
+    state.applyGraphRunApprovals([waiting('approval-1', 38)]);
+    expect(JSON.stringify(sent)).not.toContain(PROMPT);
+    expect(JSON.stringify(sent)).not.toContain('robert');
+  });
+
+  it('does not seed: a run already waiting when the hub comes up is one nobody was told about', () => {
+    // A hub restart ends every run, so there is no run to have been waiting
+    // before the detector watched. A request in the first snapshot is news.
+    watch();
+    state.applyGraphRunApprovals([waiting('approval-1', 38)]);
+    expect(sent).toHaveLength(1);
   });
 });

@@ -1,4 +1,5 @@
 import type {
+  GraphRunApproval,
   MachineState,
   ServerCandidate,
   ServerView,
@@ -44,6 +45,20 @@ export function toMachineState(snapshot: HubStateSnapshot): MachineState {
     // Its own field, from its own collection, through its own projection. There
     // is no line in this file along which a candidate could arrive in `servers`.
     candidates: snapshot.candidates.map(toServerCandidate),
+    // Copied, not passed through, for the reason a row's approvals are: the
+    // protocol's `graphRunApprovalSchema` is the same shape the reducer holds,
+    // so there is nothing to project, and nothing a client is sent may share
+    // an array with the reducer's own.
+    graphRunApprovals: snapshot.graphRunApprovals.map(toGraphRunApproval),
+  };
+}
+
+function toGraphRunApproval(entry: GraphRunApproval): GraphRunApproval {
+  return {
+    graph: entry.graph,
+    number: entry.number,
+    nodeLabel: entry.nodeLabel,
+    approval: entry.approval,
   };
 }
 

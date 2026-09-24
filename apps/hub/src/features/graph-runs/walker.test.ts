@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   GRAPH_RUN_OUTPUT_MAX_CHARS,
   graphDocumentSchema,
+  graphRunIdSchema,
+  nodeIdSchema,
+  type ApprovalOutcome,
   sessionIdSchema,
   type GraphDocument,
   type GraphRunStep,
   type RouteInput,
 } from '@agentplex/protocol';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
+import { createLogger } from '@agentplex/node-shared';
+import { createHumanExecutor } from './human-executor.js';
 import {
   routerExecutor,
   triggerExecutor,
@@ -41,6 +46,14 @@ const AGENT = {
   storeId: 'store-work',
 };
 const DOCS_AGENT = { ...AGENT, id: 'docs', label: 'Docs reviewer' };
+const GATE = {
+  ...BASE,
+  id: 'gate',
+  kind: 'human',
+  label: 'Ana approves',
+  approvers: ['ana'],
+  timeoutMinutes: null,
+};
 
 function document(value: unknown): GraphDocument {
   return graphDocumentSchema.parse(value);
@@ -67,8 +80,40 @@ function agent(
   };
 }
 
-function table(execute: Executor<'agent'>): ExecutorTable {
-  return { trigger: triggerExecutor, router: routerExecutor, agent: execute };
+/** A HUMAN executor a test answers by hand, after saying it is waiting. */
+function person(): {
+  execute: Executor<'human'>;
+  grant(): void;
+  deny(): void;
+  readonly cancelled: boolean;
+} {
+  let answer: ((result: { ok: true } | { ok: false; problem: string }) => void) | null = null;
+  let cancelled = false;
+  return {
+    get cancelled() {
+      return cancelled;
+    },
+    grant: () => answer?.({ ok: true }),
+    deny: () => answer?.({ ok: false, problem: 'a person denied Ana approves' }),
+    execute: (node, input, context) =>
+      new Promise((resolve) => {
+        context.waiting();
+        answer = (result) => {
+          if (result.ok) resolve({ ok: true, carried: input, output: null, next: null });
+          else resolve(result);
+        };
+        context.cancellation.onCancel(() => {
+          cancelled = true;
+          resolve({ ok: false, problem: `the run was cancelled while ${node.label} was waiting` });
+        });
+      }),
+  };
+}
+
+const NOBODY: Executor<'human'> = () => Promise.reject(new Error('no HUMAN node here'));
+
+function table(execute: Executor<'agent'>, human: Executor<'human'> = NOBODY): ExecutorTable {
+  return { trigger: triggerExecutor, router: routerExecutor, agent: execute, human };
 }
 
 interface Driven {
@@ -175,6 +220,7 @@ describe('walk', () => {
         seen.push(input);
         return { ok: true, carried: input, output: null, next: null };
       },
+      human: NOBODY,
     };
     const input = { body: 'x'.repeat(GRAPH_RUN_OUTPUT_MAX_CHARS + 500) };
 
@@ -210,6 +256,7 @@ describe('walk', () => {
     const executors: ExecutorTable = {
       trigger: triggerExecutor,
       router: routerExecutor,
+      human: NOBODY,
       agent: async (node, input) => {
         seen.push(input);
         return { ok: true, carried: { ran: node.id }, output: null, next: null };
@@ -371,6 +418,23 @@ describe('walk', () => {
       expect(reviewer.calls).toHaveLength(3);
     });
 
+    it('fails at once on a failure its executor says is final, without consulting retry', async () => {
+      const reviewer = agent(async () => ({ ok: false, problem: 'refused for good' }));
+      const final: Executor<'agent'> = async (node, input, context) => {
+        const result = await reviewer.execute(node, input, context);
+        return result.ok ? result : { ...result, retryable: false };
+      };
+      const run = drive(retried, {}, table(final));
+      await settle();
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason: 'the AGENT node Rust reviewer failed: refused for good',
+      });
+      expect(reviewer.calls).toHaveLength(1);
+      expect(run.timers.pending).toBe(0);
+    });
+
     it('treats an executor that throws as a failed attempt rather than a crashed run', async () => {
       const reviewer = agent(async () => {
         throw new Error('the seam exploded');
@@ -447,6 +511,7 @@ describe('walk', () => {
       const executors: ExecutorTable = {
         trigger: triggerExecutor,
         router: routerExecutor,
+        human: NOBODY,
         agent: (_node, _input, context) =>
           new Promise((resolve) => {
             context.cancellation.onCancel(() => {
@@ -475,27 +540,129 @@ describe('walk', () => {
     });
   });
 
+  describe('a HUMAN node', () => {
+    const GATED = document({
+      nodes: [TRIGGER, GATE, AGENT],
+      edges: [
+        { from: 'start', to: 'gate' },
+        { from: 'gate', to: 'review' },
+      ],
+    });
+
+    it('records the step as waiting while a person is asked, then succeeded when they allow', async () => {
+      const ana = person();
+      const reviewer = agent(async () => ({ ok: true }));
+      const run = drive(GATED, { language: 'rust' }, table(reviewer.execute, ana.execute));
+      await settle();
+
+      // `running` when the attempt begins, `waiting` the moment the executor
+      // says so: the same nodeId and attempt, so the record is replaced.
+      expect(run.steps.filter((step) => step.nodeId === 'gate')).toEqual([
+        { nodeId: 'gate', attempt: 0, outcome: 'running', output: null },
+        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+      ]);
+      expect(reviewer.calls).toEqual([]);
+
+      ana.grant();
+      await expect(run.done).resolves.toMatchObject({ status: 'succeeded' });
+      expect(run.steps.filter((step) => step.nodeId === 'gate').at(-1)).toEqual({
+        nodeId: 'gate',
+        attempt: 0,
+        outcome: 'succeeded',
+        output: null,
+      });
+      // The run went on to the node after the gate.
+      expect(reviewer.calls).toHaveLength(1);
+    });
+
+    it('fails the run naming the node when a person denies', async () => {
+      const ana = person();
+      const run = drive(GATED, {}, table(agent(async () => ({ ok: true })).execute, ana.execute));
+      await settle();
+
+      ana.deny();
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason: 'the HUMAN node Ana approves failed: a person denied Ana approves',
+      });
+    });
+
+    it("fails at once on a person's answer, even with retries left, and asks nobody twice", async () => {
+      // The real HUMAN executor over a hand-written approvals seam: every
+      // request raised is one approval id minted and one push sent, so the
+      // count of requests is the count of both.
+      const requested: string[] = [];
+      const answers: ((outcome: ApprovalOutcome) => void)[] = [];
+      let minted = 0;
+      const human = createHumanExecutor({
+        approvals: {
+          requestedByHub: (_subject, request) =>
+            new Promise((resolve) => {
+              requested.push(request.approvalId);
+              answers.push(resolve);
+            }),
+          withdrawnByHub: () => {},
+        },
+        ids: { newId: () => `approval-${String((minted += 1))}` },
+        timers: createFakeTimers(),
+        logger: createLogger('error', () => {}),
+      }).forRun({
+        runId: graphRunIdSchema.parse('run-38'),
+        number: 38,
+        graph: nodeIdSchema.parse('node-graph-release'),
+        graphName: 'release',
+      });
+      const patient = document({
+        nodes: [TRIGGER, { ...GATE, retry: { max: 2, backoff: 30 } }],
+        edges: [{ from: 'start', to: 'gate' }],
+      });
+      const run = drive(patient, {}, table(agent(async () => ({ ok: true })).execute, human));
+      await settle();
+
+      answers[0]?.('denied');
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason: 'the HUMAN node Ana approves failed: a person denied Ana approves',
+      });
+      expect(requested).toEqual(['approval-1']);
+      expect(minted).toBe(1);
+      expect(run.timers.pending).toBe(0);
+      expect(
+        run.steps.filter((step) => step.nodeId === 'gate').map((step) => step.attempt),
+      ).toEqual([0, 0, 0]);
+    });
+
+    it('ends cancelled while waiting, telling the executor so it can take the request back', async () => {
+      const ana = person();
+      const run = drive(GATED, {}, table(agent(async () => ({ ok: true })).execute, ana.execute));
+      await settle();
+
+      run.cancel();
+
+      await expect(run.done).resolves.toEqual({ status: 'cancelled' });
+      expect(ana.cancelled).toBe(true);
+      expect(run.steps.at(-1)).toEqual({
+        nodeId: 'gate',
+        attempt: 0,
+        outcome: 'cancelled',
+        output: null,
+      });
+    });
+  });
+
   describe('the shape of the document', () => {
     it('fails a node whose kind the table has no executor for, naming it', async () => {
       const doc = document({
-        nodes: [
-          TRIGGER,
-          {
-            ...BASE,
-            id: 'gate',
-            kind: 'human',
-            label: 'Ana approves',
-            approvers: ['ana'],
-            timeoutMinutes: null,
-          },
-        ],
-        edges: [{ from: 'start', to: 'gate' }],
+        nodes: [TRIGGER, { ...BASE, id: 'ship', kind: 'action', label: 'Ship it', name: 'ship' }],
+        edges: [{ from: 'start', to: 'ship' }],
       });
       const run = drive(doc, {}, table(agent(async () => ({ ok: true })).execute));
 
       await expect(run.done).resolves.toEqual({
         status: 'failed',
-        reason: 'the HUMAN node Ana approves is a kind this runtime cannot execute yet',
+        reason: 'the ACTION node Ship it is a kind this runtime cannot execute yet',
       });
     });
 

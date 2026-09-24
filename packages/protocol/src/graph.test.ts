@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GRAPH_HUMAN_TIMEOUT_MAX_MINUTES,
+  GRAPH_LABEL_MAX_CHARS,
   GRAPH_NODES_MAX,
   GRAPH_PROMPT_MAX_CHARS,
   GRAPH_RETRY_BACKOFF_MAX_SECONDS,
@@ -259,6 +261,39 @@ describe('graphDocumentSchema', () => {
     expect(graphDocumentSchema.safeParse(draft).success).toBe(false);
     const half = { nodes: [{ ...NODES.subgraph, version: 1.5 }], edges: [] };
     expect(graphDocumentSchema.safeParse(half).success).toBe(false);
+  });
+
+  it("bounds a human node's timeout at fourteen days, so the wait is one a timer can keep", () => {
+    const longest = {
+      nodes: [{ ...NODES.human, timeoutMinutes: GRAPH_HUMAN_TIMEOUT_MAX_MINUTES }],
+      edges: [],
+    };
+    expect(graphDocumentSchema.safeParse(longest).success).toBe(true);
+    const past = {
+      nodes: [{ ...NODES.human, timeoutMinutes: GRAPH_HUMAN_TIMEOUT_MAX_MINUTES + 1 }],
+      edges: [],
+    };
+    expect(graphDocumentSchema.safeParse(past).success).toBe(false);
+    // 35792 minutes is the first value whose milliseconds overflow a 32-bit
+    // timer, which Node then fires after one millisecond.
+    const overflowing = { nodes: [{ ...NODES.human, timeoutMinutes: 35_792 }], edges: [] };
+    expect(graphDocumentSchema.safeParse(overflowing).success).toBe(false);
+    expect(GRAPH_HUMAN_TIMEOUT_MAX_MINUTES).toBe(14 * 24 * 60);
+    expect(GRAPH_HUMAN_TIMEOUT_MAX_MINUTES * 60_000).toBeLessThan(2 ** 31);
+  });
+
+  it('bounds a node label, since the label is what a push and the bell say', () => {
+    const longest = {
+      nodes: [{ ...NODES.human, label: 'x'.repeat(GRAPH_LABEL_MAX_CHARS) }],
+      edges: [],
+    };
+    expect(graphDocumentSchema.safeParse(longest).success).toBe(true);
+    const past = {
+      nodes: [{ ...NODES.human, label: 'x'.repeat(GRAPH_LABEL_MAX_CHARS + 1) }],
+      edges: [],
+    };
+    expect(graphDocumentSchema.safeParse(past).success).toBe(false);
+    expect(GRAPH_LABEL_MAX_CHARS).toBe(120);
   });
 
   it('takes a human node with no timeout as null', () => {

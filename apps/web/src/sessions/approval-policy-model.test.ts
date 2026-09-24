@@ -51,6 +51,10 @@ function policy(...rules: readonly ApprovalPolicyRecord[]): ApprovalPolicyView {
 function pending(tool: string, proposal: string): PendingApproval {
   return {
     approvalId: approvalIdSchema.parse('approval-1'),
+    subject: {
+      kind: 'session',
+      ...sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-1' }),
+    },
     tool,
     proposal,
     truncated: false,

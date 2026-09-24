@@ -29,13 +29,12 @@ import type { Timers } from '@agentplex/node-shared';
  *
  * ## The table is typed by kind, minus the kinds nothing runs yet
  *
- * `ExecutorTable` is `Record` over every kind but `action`, `human` and
- * `subgraph`. Publish already refuses an ACTION node; HUMAN and SUB-GRAPH are
- * the next two tickets, and each adds its key to `ExecutableKind` when it
- * adds its executor. Until then a run that reaches one fails with a sentence
- * naming the node, from a switch that ends in `assertNever` -- so a seventh
- * kind added to the protocol is a type error here and not a silent fall
- * through.
+ * `ExecutorTable` is `Record` over every kind but `action` and `subgraph`.
+ * Publish already refuses an ACTION node; SUB-GRAPH is the next ticket, and
+ * it adds its key to `ExecutableKind` when it adds its executor. Until then a
+ * run that reaches one fails with a sentence naming the node, from a switch
+ * that ends in `assertNever` -- so a seventh kind added to the protocol is a
+ * type error here and not a silent fall through.
  *
  * ## A step is one attempt
  *
@@ -58,6 +57,12 @@ import type { Timers } from '@agentplex/node-shared';
  * publishes the steps can fold the end into the same change as the last
  * step's outcome instead of sending the list twice.
  *
+ * A step that stops to ask a person is reported a third time, as `waiting`,
+ * between those two. The executor says when, through `StepContext.waiting`,
+ * because only it knows the moment the request left; the walk records it, so
+ * that the run's status can say `waiting` off the same list everything else
+ * is read from rather than off a second flag.
+ *
  * ## Cancel stops before the next step
  *
  * A cancel does not interrupt the step in flight. An agent mid-turn is the
@@ -76,6 +81,12 @@ import type { Timers } from '@agentplex/node-shared';
  * goes to, or `null` to follow the node's one outgoing edge. Only a ROUTER
  * ever names one: its routes are the choice, and the walk following an edge
  * on its behalf would be a second reading of the same decision.
+ *
+ * A failure is retried by the node's policy unless it says `retryable:
+ * false`: a failure that is a decision rather than a fault -- a person's Deny,
+ * a timeout nobody answered -- ends the run at that node, because asking
+ * again is overruling the answer. Absent means retryable, which is what every
+ * fault an executor meets is.
  */
 export type StepResult =
   | {
@@ -84,7 +95,7 @@ export type StepResult =
       readonly output: GraphRunStepOutput | null;
       readonly next: GraphNodeId | null;
     }
-  | { readonly ok: false; readonly problem: string };
+  | { readonly ok: false; readonly problem: string; readonly retryable?: false };
 
 /** How a step learns that the run was cancelled under it. */
 export interface Cancellation {
@@ -98,6 +109,12 @@ export interface StepContext {
   /** Counts from 0: the first try of a node is attempt 0. */
   readonly attempt: number;
   readonly cancellation: Cancellation;
+  /**
+   * Says this attempt is now waiting on a person. The walk records a
+   * `waiting` step for it; calling it twice records it twice, which whoever
+   * keeps the list collapses.
+   */
+  waiting(): void;
 }
 
 export type Executor<K extends GraphNodeKind> = (
@@ -106,8 +123,8 @@ export type Executor<K extends GraphNodeKind> = (
   context: StepContext,
 ) => Promise<StepResult>;
 
-/** The kinds this runtime executes. AGX-264 adds `human`; AGX-265 adds `subgraph`. */
-export type ExecutableKind = Exclude<GraphNodeKind, 'action' | 'human' | 'subgraph'>;
+/** The kinds this runtime executes. AGX-265 adds `subgraph`. */
+export type ExecutableKind = Exclude<GraphNodeKind, 'action' | 'subgraph'>;
 
 export type ExecutorTable = { readonly [K in ExecutableKind]: Executor<K> };
 
@@ -217,8 +234,9 @@ function executorFor(
       return (input, context) => table.router(node, input, context);
     case 'agent':
       return (input, context) => table.agent(node, input, context);
-    case 'action':
     case 'human':
+      return (input, context) => table.human(node, input, context);
+    case 'action':
     case 'subgraph':
       return null;
     default:
@@ -336,7 +354,13 @@ export function walk(
         onStep({ nodeId: node.id, attempt, outcome: 'running', output: null }, reached);
         let attempted: StepResult;
         try {
-          attempted = await execute(carried, { document, attempt, cancellation });
+          attempted = await execute(carried, {
+            document,
+            attempt,
+            cancellation,
+            waiting: () =>
+              onStep({ nodeId: node.id, attempt, outcome: 'waiting', output: null }, reached),
+          });
         } catch (error) {
           attempted = { ok: false, problem: String(error) };
         }
@@ -359,15 +383,15 @@ export function walk(
         }
 
         onStep({ nodeId: node.id, attempt, outcome: 'failed', output: null }, reached);
-        if (attempt === node.retry.max) {
-          const tries = node.retry.max + 1;
-          return end({
-            status: 'failed',
-            reason:
-              tries === 1
-                ? `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} failed: ${attempted.problem}`
-                : `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} failed on all ${String(tries)} attempts; the last said: ${attempted.problem}`,
-          });
+        if (attempt === node.retry.max || attempted.retryable === false) {
+          const named = `the ${KIND_WORDS[node.kind]} node ${nameOf(node)}`;
+          let reason: string;
+          if (attempt === 0) reason = `${named} failed: ${attempted.problem}`;
+          else if (attempted.retryable === false)
+            reason = `${named} failed on attempt ${String(attempt + 1)}, and not for a reason another try changes: ${attempted.problem}`;
+          else
+            reason = `${named} failed on all ${String(attempt + 1)} attempts; the last said: ${attempted.problem}`;
+          return end({ status: 'failed', reason });
         }
         const waited = await wait(node.retry.backoff * 1_000);
         if (!waited) return end({ status: 'cancelled' });

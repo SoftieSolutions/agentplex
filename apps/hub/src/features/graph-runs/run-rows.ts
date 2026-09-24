@@ -90,9 +90,9 @@ export interface NewRun {
   readonly input: RouteInput;
 }
 
-/** What a run ends with: its final status, the sentence if any, and the steps as they stand. */
+/** What a run ends with: its final status (never one of the two open ones), the sentence if any, and the steps as they stand. */
 export interface RunEnd {
-  readonly status: Exclude<RunStatus, 'running'>;
+  readonly status: Exclude<RunStatus, 'running' | 'waiting'>;
   readonly reason: string | null;
   readonly steps: readonly GraphRunStep[];
   readonly endedAt: number;

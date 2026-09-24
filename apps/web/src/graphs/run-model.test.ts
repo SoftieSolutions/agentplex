@@ -8,7 +8,14 @@ import {
   type GraphRunState,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { lastOutputFor, lastOutputText, runningNode, runStripText, runTone } from './run-model.js';
+import {
+  isRunOpen,
+  lastOutputFor,
+  lastOutputText,
+  runningNode,
+  runStripText,
+  runTone,
+} from './run-model.js';
 
 /**
  * What the screen reads off a run, against the states a real hub sent: a
@@ -51,6 +58,18 @@ describe('runStripText', () => {
     );
   });
 
+  it('reads a stale parked run as reconnecting too: the person it waited on may have answered', () => {
+    expect(runStripText(state(hubFrames.graphRunStateWaiting), true)).toBe(
+      'run #1 · reconnecting · step 2/2',
+    );
+  });
+
+  it('says who a parked run is waiting on, rather than calling it live', () => {
+    expect(runStripText(state(hubFrames.graphRunStateWaiting))).toBe(
+      'run #1 · waiting on a person · step 2/2',
+    );
+  });
+
   it('reads the mock’s example when given its numbers', () => {
     const mock: GraphRunState = {
       ...state(hubFrames.graphRunStateRunning),
@@ -65,6 +84,7 @@ describe('runStripText', () => {
 describe('runTone', () => {
   it('draws a run in flight as running, a failed one as blocked, and the rest at rest', () => {
     expect(runTone('running')).toBe('running');
+    expect(runTone('waiting')).toBe('needs-you');
     expect(runTone('failed')).toBe('blocked');
     expect(runTone('succeeded')).toBe('idle');
     expect(runTone('cancelled')).toBe('idle');
@@ -72,7 +92,18 @@ describe('runTone', () => {
 
   it('draws a stale run at rest: nothing here can vouch that it is still running', () => {
     expect(runTone('running', true)).toBe('idle');
+    expect(runTone('waiting', true)).toBe('idle');
     expect(runTone('failed', true)).toBe('blocked');
+  });
+});
+
+describe('isRunOpen', () => {
+  it('is true for the two states a run can still move from', () => {
+    expect(isRunOpen('running')).toBe(true);
+    expect(isRunOpen('waiting')).toBe(true);
+    expect(isRunOpen('succeeded')).toBe(false);
+    expect(isRunOpen('failed')).toBe(false);
+    expect(isRunOpen('cancelled')).toBe(false);
   });
 });
 
@@ -83,6 +114,10 @@ describe('runningNode', () => {
 
   it('names nothing for a stale run', () => {
     expect(runningNode(state(hubFrames.graphRunStateRunning), true)).toBeNull();
+  });
+
+  it('names the node a run is waiting at, so the canvas marks the gate', () => {
+    expect(runningNode(state(hubFrames.graphRunStateWaiting))).toBe('approve');
   });
 
   it('names nothing for a run that has ended, or no run', () => {

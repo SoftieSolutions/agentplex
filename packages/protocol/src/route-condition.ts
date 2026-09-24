@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { displayableApprovalText } from './approval.js';
+import { displayableApprovalText } from './displayable-text.js';
 
 /**
  * The one sentence a ROUTER node decides by, and how it is read.

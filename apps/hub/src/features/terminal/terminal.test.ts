@@ -193,7 +193,7 @@ function fleet(
     lastReachableAt: 1,
     sessions,
   };
-  return { version: 1, stores: [store], servers, candidates: [] };
+  return { version: 1, stores: [store], servers, candidates: [], graphRunApprovals: [] };
 }
 
 interface Harness {

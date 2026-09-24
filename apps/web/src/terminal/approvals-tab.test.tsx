@@ -4,7 +4,6 @@ import {
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
-  sessionRefSchema,
   type ClientFrame,
   type PendingApproval,
 } from '@agentplex/protocol';
@@ -62,12 +61,6 @@ function installMatchMedia(): void {
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
-
-/** The session the captured approval state is about. */
-const SESSION = sessionRefSchema.parse({
-  storeId: 'store-agentplex',
-  sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
-});
 
 /** The one request a real `PermissionRequest` hook made, off the captured state. */
 const captured: PendingApproval = (() => {
@@ -171,7 +164,6 @@ describe('the Approvals tab', () => {
       root.render(
         withProvider(
           <ApprovalsTab
-            sessionRef={SESSION}
             approvals={approvals}
             // The tab under test is the queue, not the policy: these cases are
             // about three requests being three independent answers, so the
@@ -259,8 +251,11 @@ describe('the Approvals tab', () => {
       {
         type: 'approval-decide',
         id: 2,
-        storeId: 'store-agentplex',
-        sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        subject: {
+          kind: 'session',
+          storeId: 'store-agentplex',
+          sessionId: '10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde',
+        },
         approvalId: 'approval-2',
         decision: 'grant',
       },

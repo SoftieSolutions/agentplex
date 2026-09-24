@@ -34,13 +34,28 @@ const SESSION_OUTPUT = {
 };
 
 describe('the run vocabulary', () => {
-  it('names four run statuses and nothing else', () => {
-    expect(runStatusSchema.options).toEqual(['running', 'succeeded', 'failed', 'cancelled']);
+  it('names five run statuses and nothing else', () => {
+    // `waiting` is the second open state: a run parked at a HUMAN node for a
+    // person. It is not `running`, because a strip that read `live` for a run
+    // nothing is doing would be a strip claiming work that is not happening.
+    expect(runStatusSchema.options).toEqual([
+      'running',
+      'waiting',
+      'succeeded',
+      'failed',
+      'cancelled',
+    ]);
     expect(runStatusSchema.safeParse('paused').success).toBe(false);
   });
 
-  it('names what one attempt of one step became', () => {
-    expect(stepOutcomeSchema.options).toEqual(['running', 'succeeded', 'failed', 'cancelled']);
+  it('names what one attempt of one step became, waiting included', () => {
+    expect(stepOutcomeSchema.options).toEqual([
+      'running',
+      'waiting',
+      'succeeded',
+      'failed',
+      'cancelled',
+    ]);
   });
 
   it('takes a run id as an opaque string and refuses an empty one', () => {

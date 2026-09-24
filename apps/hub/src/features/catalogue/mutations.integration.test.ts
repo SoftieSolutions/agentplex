@@ -63,7 +63,13 @@ function catalogue(): Catalogue {
       findByDirectory: async (directory) => projectDirectories.get(directory) ?? null,
       directories: async () => new Map(),
     },
-    readFleet: () => ({ version: 0, stores: [], servers: [], candidates: [] }),
+    readFleet: () => ({
+      version: 0,
+      stores: [],
+      servers: [],
+      candidates: [],
+      graphRunApprovals: [],
+    }),
     readHolder: (ref) => holders.get(ref.sessionId) ?? null,
   });
 }

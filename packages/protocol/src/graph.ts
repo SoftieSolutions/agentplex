@@ -117,6 +117,17 @@ export type GraphPlacement = z.infer<typeof graphPlacementSchema>;
 export const GRAPH_RETRY_BACKOFF_MAX_SECONDS = 3600;
 
 /**
+ * The longest a HUMAN node waits for a person: fourteen days.
+ *
+ * Bounded for the reason the backoff is: the wait is handed to a timer, and
+ * past 2^31 - 1 milliseconds (35792 minutes) Node fires it after one
+ * millisecond, so an unbounded timeout fails the run at once as "nobody
+ * answered". Two weeks keeps the delay well under that and is longer than any
+ * sign-off anybody means to wait on.
+ */
+export const GRAPH_HUMAN_TIMEOUT_MAX_MINUTES = 14 * 24 * 60;
+
+/**
  * How many more times a failed step is tried, and how long to wait first.
  *
  * `max` is bounded because a step that fails ten times in a row is failing for
@@ -191,7 +202,7 @@ export const graphNodeSchema = z.discriminatedUnion('kind', [
     ...baseNode,
     kind: z.literal('human'),
     approvers: z.array(z.string().min(1).max(64)).min(1).max(GRAPH_APPROVERS_MAX),
-    timeoutMinutes: z.int().positive().nullable(),
+    timeoutMinutes: z.int().positive().max(GRAPH_HUMAN_TIMEOUT_MAX_MINUTES).nullable(),
   }),
   /** Names an action this build would perform. No build performs one yet, so publishing a graph with one is refused. */
   z.object({ ...baseNode, kind: z.literal('action'), name: z.string().min(1).max(64) }),
