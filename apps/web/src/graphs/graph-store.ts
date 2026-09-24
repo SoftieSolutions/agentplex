@@ -6,6 +6,7 @@ import type {
   GraphRunId,
   GraphRunState,
   GraphRunSummary,
+  GraphSimulatedStep,
   NodeId,
   RouteInput,
 } from '@agentplex/protocol';
@@ -21,6 +22,7 @@ import type {
   RunHistoryView,
   RunLatestView,
   RunStartedView,
+  SimulatedView,
 } from '../store/hub-store.js';
 import type { GraphEdit } from './graph-model.js';
 import { historyIsBehind } from './run-history-model.js';
@@ -118,6 +120,15 @@ import { isRunOpen } from './run-model.js';
  * again on the drop -- queued until the next welcome -- and drawn stale,
  * with no Cancel, until the answer lands. A pick whose first open was still
  * out is let go of instead: there is nothing on the strip to keep.
+ *
+ * ## A simulation is of the saved draft
+ *
+ * The hub simulates the draft it holds, so Simulate sends nothing while the
+ * screen has unsaved edits -- the path would be of a document the person is
+ * not looking at -- and a held path is let go of on the next edit, for the
+ * same reason. The answer is matched on the frame that asked, like a save,
+ * and a refusal to it is the screen's problem; a simulate out when the
+ * connection goes is dropped with the rest, since nothing will answer it.
  */
 
 export interface GraphStoreHub {
@@ -130,6 +141,7 @@ export interface GraphStoreHub {
     readonly lastRunStarted: RunStartedView | null;
     readonly lastRunCancelled: RunCancelledView | null;
     readonly lastRunLatest: RunLatestView | null;
+    readonly lastSimulated: SimulatedView | null;
     readonly runs: ReadonlyMap<GraphRunId, GraphRunState>;
     readonly runHistories: ReadonlyMap<NodeId, RunHistoryView>;
     readonly lastRefusal: RefusalView | null;
@@ -189,6 +201,16 @@ export interface GraphState {
    * refused.
    */
   readonly shownRunStale: boolean;
+  /** A simulate is out and unanswered. */
+  readonly simulating: boolean;
+  /**
+   * The path the hub answered the last simulate with, and the sentence it
+   * stopped on, or `null` before one has been answered or after an edit.
+   */
+  readonly simulation: {
+    readonly path: readonly GraphSimulatedStep[];
+    readonly reason: string | null;
+  } | null;
   /** The last thing the hub or the model said no to, in its words, or `null`. */
   readonly problem: string | null;
 }
@@ -209,6 +231,8 @@ export interface GraphStore {
   cancelRun(): void;
   /** Shows this run on the strip and in LAST OUTPUT, opening it from the hub if need be; `null` follows the newest again. */
   selectRun(runId: GraphRunId | null): void;
+  /** Asks what a run of the saved draft would do with this input. Does nothing while dirty or while one is out. */
+  simulate(input: RouteInput): void;
 }
 
 export interface GraphStoreDependencies {
@@ -236,6 +260,8 @@ const EMPTY: GraphState = {
   selectedRun: null,
   shownRun: null,
   shownRunStale: false,
+  simulating: false,
+  simulation: null,
   problem: null,
 };
 
@@ -257,6 +283,8 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
   let publishFrame: FrameId | null = null;
   let runFrame: FrameId | null = null;
   let cancelFrame: FrameId | null = null;
+  /** The simulate that is out, or `null`. */
+  let simulateFrame: FrameId | null = null;
   /** The read of the graph's run that is out, or `null`. */
   let readFrame: FrameId | null = null;
   /** The history request that is out, or `null`. */
@@ -378,7 +406,9 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
             ? 'run'
             : cancelFrame !== null
               ? 'cancel'
-              : null;
+              : simulateFrame !== null
+                ? 'simulate'
+                : null;
     openFrame = null;
     saveFrame = null;
     inFlight = null;
@@ -390,6 +420,7 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     // store holds stays, stale, until the read below is answered.
     runFrame = null;
     cancelFrame = null;
+    simulateFrame = null;
     readFrame = null;
     historyFrame = null;
     // A picked run whose first open was out: the pick goes with the frame
@@ -403,6 +434,7 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       publishing: false,
       starting: false,
       cancelling: false,
+      simulating: false,
       ...(waited === null
         ? {}
         : { problem: `the connection dropped before the hub answered the ${waited}` }),
@@ -550,6 +582,15 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       });
     }
 
+    const simulated = snapshot.lastSimulated;
+    if (simulated !== null && simulateFrame !== null && simulated.replyTo === simulateFrame) {
+      simulateFrame = null;
+      moveTo({
+        simulating: false,
+        simulation: { path: simulated.path, reason: simulated.reason },
+      });
+    }
+
     const cancelled = snapshot.lastRunCancelled;
     if (cancelled !== null && cancelFrame !== null && cancelled.replyTo === cancelFrame) {
       cancelFrame = null;
@@ -561,6 +602,9 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       if (no.replyTo === runFrame) {
         runFrame = null;
         moveTo({ starting: false, problem: no.message });
+      } else if (no.replyTo === simulateFrame) {
+        simulateFrame = null;
+        moveTo({ simulating: false, problem: no.message });
       } else if (no.replyTo === cancelFrame) {
         cancelFrame = null;
         moveTo({ cancelling: false, problem: no.message });
@@ -643,7 +687,8 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
         state.selection !== null && edit.document.nodes.some((node) => node.id === state.selection)
           ? state.selection
           : null;
-      moveTo({ document: edit.document, selection, problem: null });
+      // A path held is of the draft before this edit, and no longer this one's.
+      moveTo({ document: edit.document, selection, simulation: null, problem: null });
     },
 
     select(id): void {
@@ -697,6 +742,17 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       moveTo({ cancelling: true, problem: null });
     },
 
+    simulate(input: RouteInput): void {
+      if (state.document === null || state.dirty || state.simulating) return;
+      const outcome = hub.sendCommand({ type: 'graph-simulate', nodeId, input });
+      if (!outcome.accepted) {
+        moveTo({ problem: outcome.reason });
+        return;
+      }
+      simulateFrame = outcome.id;
+      moveTo({ simulating: true, problem: null });
+    },
+
     selectRun(runId: GraphRunId | null): void {
       if (runId === state.selectedRun) return;
       openRunFrame = null;
@@ -744,6 +800,8 @@ function sameState(a: GraphState, b: GraphState): boolean {
     a.selectedRun === b.selectedRun &&
     a.shownRun === b.shownRun &&
     a.shownRunStale === b.shownRunStale &&
+    a.simulating === b.simulating &&
+    a.simulation === b.simulation &&
     a.problem === b.problem
   );
 }

@@ -19,6 +19,7 @@ import {
   type GraphRunId,
   type GraphRunState,
   type GraphRunSummary,
+  type GraphSimulatedStep,
   type HubFrame,
   type HubId,
   type Layout,
@@ -587,6 +588,22 @@ export interface RunLatestView {
 }
 
 /**
+ * The hub's answer to a simulate: what a run of the graph's draft would do,
+ * step by step with why, and the sentence the walk stopped on or `null`.
+ *
+ * Kept by the frame it answers, like a save or a publish, so the screen that
+ * pressed Simulate matches it to its own request and a second screen's
+ * answer is not drawn as this one's. Nothing in it is a run: no run id, no
+ * number, and nothing filed in `runs`.
+ */
+export interface SimulatedView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+  readonly path: readonly GraphSimulatedStep[];
+  readonly reason: string | null;
+}
+
+/**
  * The hub's answer to a history request: one graph's runs, newest first, at
  * most the protocol's bound, as summaries without steps. Filed by the graph
  * it names, so two screens open on two graphs each find their own list.
@@ -721,6 +738,8 @@ export interface HubSnapshot {
   readonly lastRunCancelled: RunCancelledView | null;
   /** The hub's most recent answer to a read of a graph's run. */
   readonly lastRunLatest: RunLatestView | null;
+  /** The hub's most recent answer to a simulate, kept until the next one or a drop. */
+  readonly lastSimulated: SimulatedView | null;
   /**
    * Every run the hub has told this client about, by run id, each as the
    * whole state last sent.
@@ -842,6 +861,7 @@ type CommandFrame = Extract<
       | 'graph-run-read'
       | 'graph-run-history-request'
       | 'graph-run-open'
+      | 'graph-simulate'
       | 'push-subscribe'
       | 'push-unsubscribe'
       | 'session-transcript';
@@ -1183,6 +1203,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastRunStarted: null,
     lastRunCancelled: null,
     lastRunLatest: null,
+    lastSimulated: null,
     runs: new Map(),
     runHistories: new Map(),
     lastPush: null,
@@ -1979,6 +2000,19 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         });
         return;
       }
+      case 'graph-simulated': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastSimulated: {
+            replyTo: frame.replyTo,
+            nodeId: frame.nodeId,
+            path: frame.path,
+            reason: frame.reason,
+          },
+        });
+        return;
+      }
       case 'graph-run-history': {
         pending.delete(frame.replyTo);
         // Filed by the graph and replacing the list held for it: the answer
@@ -2345,6 +2379,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // A run may have started or ended meanwhile, so a list held from then
       // is a list nobody can vouch for; the screen asks again.
       runHistories: new Map(),
+      // A path is a reading of a draft and of the fleet's placement, and
+      // either may have moved while nothing here was connected.
+      lastSimulated: null,
       // And the same again: the transcript file goes on being appended to on
       // its own machine while nothing here is connected.
       transcripts: new Map(),

@@ -161,6 +161,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastRunStarted: null,
     lastRunCancelled: null,
     lastRunLatest: null,
+    lastSimulated: null,
     runs: new Map(),
     runHistories: new Map(),
     lastPush: null,

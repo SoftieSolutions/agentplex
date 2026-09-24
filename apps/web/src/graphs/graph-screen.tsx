@@ -20,6 +20,8 @@ import { NodeInspector, type InspectorMachine } from './node-inspector.js';
 import { RunHistory } from './run-history.js';
 import { isRunOpen, lastOutputFor, runningNode } from './run-model.js';
 import { RunStrip } from './run-strip.js';
+import { SimulatePanel } from './simulate-panel.js';
+import { sampleInput } from './simulate-model.js';
 import { ApprovalControls } from '../sessions/approval-controls.js';
 import type { SessionProject } from '../sessions/approval-policy-model.js';
 import { approvalsOldestFirst } from '../sessions/session-list-model.js';
@@ -53,11 +55,19 @@ const NO_PROJECT: SessionProject = { kind: 'unplaced' };
  * the graph's run stands -- asked on open and on every reconnection, because
  * a run somebody started from another tab, or that this tab started just as
  * its socket went, is a run and not a reason for a second. The input it sends is the
- * empty object: the mock has no input form, and the simulate panel of a later
- * ticket is where a typed input arrives. Simulate is drawn because the mock
- * draws it and disabled because nothing is behind it yet; its title says only
- * that it is not available yet, because a ticket key is a fact about this
- * repository and not one the person at the screen can act on.
+ * empty object: the mock has no input form for a run.
+ *
+ * ## Simulate
+ *
+ * Simulate is Run's peer, not a mode of it, and it needs no published
+ * version: it asks what a run of the saved draft would do. Pressing it opens
+ * the panel under the strip and sends the sample the draft's routes read at
+ * once, so the first press answers something; the panel's box is where
+ * another input is tried. It is held while the draft has unsaved edits,
+ * because the hub walks the draft it holds and a path of a document the
+ * person is not looking at would be a path of the wrong graph. Whether the
+ * panel is open is the one piece of screen state here, and it is a view
+ * choice rather than a fact any store owns.
  *
  * ## The run
  *
@@ -172,6 +182,8 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
   // A screen-lifetime collaborator, not render data: one graph store per
   // mounted screen. The shell keys the screen on the node.
   const [graph] = useState(() => createGraphStore({ hub, nodeId }));
+  // A view choice, not data: whether the simulate panel is drawn.
+  const [simulateOpen, setSimulateOpen] = useState(false);
   const state = useSyncExternalStore(graph.subscribe, graph.getSnapshot);
   const snapshot = useHubSnapshot(hub);
   const layout = useHubLayout(hub);
@@ -185,6 +197,9 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
   const document = state.document;
   const selected = document?.nodes.find((node) => node.id === state.selection) ?? null;
   const running = runningNode(state.run, state.runStale);
+  const simulateBlocked = state.dirty
+    ? 'Save the draft first: a simulation walks the draft the hub holds'
+    : null;
   const canRun =
     document !== null &&
     state.published.length > 0 &&
@@ -269,7 +284,21 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           >
             {state.draftVersion === null ? 'Publish' : `Publish v${String(state.draftVersion)}`}
           </Button>
-          <Button variant="default" size="xs" disabled title="Simulate is not available yet">
+          <Button
+            variant="default"
+            size="xs"
+            aria-pressed={simulateOpen}
+            disabled={document === null || (!simulateOpen && simulateBlocked !== null)}
+            title={simulateBlocked ?? undefined}
+            onClick={() => {
+              if (simulateOpen || document === null) {
+                setSimulateOpen(false);
+                return;
+              }
+              setSimulateOpen(true);
+              graph.simulate(sampleInput(document));
+            }}
+          >
             Simulate
           </Button>
           <Button
@@ -297,6 +326,17 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           onCancel={() => graph.cancelRun()}
         />
       )}
+      {simulateOpen && document !== null ? (
+        <SimulatePanel
+          document={document}
+          simulation={state.simulation}
+          simulating={state.simulating}
+          blocked={simulateBlocked}
+          scheme={scheme}
+          onSimulate={(input) => graph.simulate(input)}
+          onClose={() => setSimulateOpen(false)}
+        />
+      ) : null}
       {waitingOn === null ? null : (
         <Box
           data-run-approval={waitingOn.approval.approvalId}

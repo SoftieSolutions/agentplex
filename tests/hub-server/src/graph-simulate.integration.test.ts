@@ -93,7 +93,7 @@ const START = 1_756_000_000_000;
 const clock = { now: () => START };
 const WORK = storeIdSchema.parse('store-work');
 const ATTIC = 'registration-attic' as ServerRegistrationId;
-const PROJECT = 'project-universe' as NodeId;
+const PROJECT = 'project-agentplex' as NodeId;
 const PROJECT_DIRECTORY = '/volumes/work/agentplex';
 const PROMPT = 'Review the Rust in this change.';
 
@@ -212,7 +212,7 @@ async function start(): Promise<Harness> {
   // project, and the projects rows are where that becomes a directory.
   await database.query(
     `INSERT INTO nodes (id, parent_id, kind, position, name, name_source, created_at)
-     VALUES (?, NULL, 'project', 0, 'universe', 'user', ?)`,
+     VALUES (?, NULL, 'project', 0, 'agentplex', 'user', ?)`,
     [PROJECT, START],
   );
   await database.query('INSERT INTO projects (node_id, directory, created_at) VALUES (?, ?, ?)', [
