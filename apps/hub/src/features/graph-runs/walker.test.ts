@@ -466,9 +466,12 @@ describe('walk', () => {
       const run = drive(retried, {}, table(final));
       await settle();
 
+      // The run's end says so as well, so a SUB-GRAPH step whose child this
+      // run is can pass the same answer up rather than retry it.
       await expect(run.done).resolves.toEqual({
         status: 'failed',
         reason: 'the AGENT node Rust reviewer failed: refused for good',
+        retryable: false,
       });
       expect(reviewer.calls).toHaveLength(1);
       expect(run.timers.pending).toBe(0);
@@ -667,6 +670,7 @@ describe('walk', () => {
       await expect(run.done).resolves.toEqual({
         status: 'failed',
         reason: 'the HUMAN node Ana approves failed: a person denied Ana approves',
+        retryable: false,
       });
       expect(requested).toEqual(['approval-1']);
       expect(minted).toBe(1);

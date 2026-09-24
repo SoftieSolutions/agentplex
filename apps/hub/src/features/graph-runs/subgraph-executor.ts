@@ -58,7 +58,9 @@ import type { Executor, WalkOutcome } from './walker.js';
  * walk above reads its own cancellation and ends the run `cancelled`. A
  * child cancelled on its own, from its graph's screen, is a child that did
  * not succeed: the step fails, and the node's retry policy decides whether
- * another child is started.
+ * another child is started -- unless the child failed on a decision, a HUMAN
+ * node's Deny or timeout, which the step passes up as final rather than ask
+ * the same person again through a new child.
  */
 
 /** How deep a chain of SUB-GRAPH nodes may go below the run a person started. */
@@ -188,8 +190,14 @@ export function createSubgraphExecutor(
             // SUB-GRAPH is one node from the outside, and its output is the
             // last thing its own walk carried.
             return { ok: true, carried: outcome.output, output: null, next: null };
-          case 'failed':
-            return { ok: false, problem: `${named} failed: ${outcome.reason}` };
+          case 'failed': {
+            const problem = `${named} failed: ${outcome.reason}`;
+            // A child that ended on a decision -- a Deny, a timeout nobody
+            // answered -- would be asked the same question by another child.
+            return outcome.retryable === false
+              ? { ok: false, problem, retryable: false }
+              : { ok: false, problem };
+          }
           case 'cancelled':
             return { ok: false, problem: `${named} was cancelled` };
           default:

@@ -142,9 +142,14 @@ export type ExecutableKind = Exclude<GraphNodeKind, 'action'>;
 
 export type ExecutorTable = { readonly [K in ExecutableKind]: Executor<K> };
 
+/**
+ * How a walk ended. A failure carries `retryable: false` when the node that
+ * ended it failed on a decision rather than a fault, so a SUB-GRAPH step whose
+ * child this walk is passes the same answer up instead of retrying it.
+ */
 export type WalkOutcome =
   | { readonly status: 'succeeded'; readonly output: RouteInput }
-  | { readonly status: 'failed'; readonly reason: string }
+  | { readonly status: 'failed'; readonly reason: string; readonly retryable?: false }
   | { readonly status: 'cancelled' };
 
 export interface WalkDependencies {
@@ -410,7 +415,11 @@ export function walk(
             reason = `${named} failed on attempt ${String(attempt + 1)}, and not for a reason another try changes: ${attempted.problem}`;
           else
             reason = `${named} failed on all ${String(attempt + 1)} attempts; the last said: ${attempted.problem}`;
-          return end({ status: 'failed', reason });
+          return end(
+            attempted.retryable === false
+              ? { status: 'failed', reason, retryable: false }
+              : { status: 'failed', reason },
+          );
         }
         const waited = await wait(node.retry.backoff * 1_000);
         if (!waited) return end({ status: 'cancelled' });

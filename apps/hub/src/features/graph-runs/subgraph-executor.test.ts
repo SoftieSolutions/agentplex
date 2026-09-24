@@ -278,6 +278,30 @@ describe('the SUB-GRAPH executor', () => {
     });
   });
 
+  it('passes on a child failure that was a decision, so the parent does not retry it', async () => {
+    const step = executor().forRun({ runId: PARENT_RUN, lineage: ROOT })(
+      subgraphNode('lint'),
+      {},
+      context(),
+    );
+    await settle();
+
+    // A Deny inside the child is the same answer one level up: retrying the
+    // step would start another child only to ask the person again.
+    launched[0]?.end({
+      status: 'failed',
+      reason: 'the HUMAN node Approve merge failed: a person denied Approve merge',
+      retryable: false,
+    });
+
+    await expect(step).resolves.toEqual({
+      ok: false,
+      problem:
+        'run #41 of lint-suite failed: the HUMAN node Approve merge failed: a person denied Approve merge',
+      retryable: false,
+    });
+  });
+
   it('says the launch’s refusal, and names no child, when the child cannot start', async () => {
     refuseLaunchWith =
       'this hub is running 8 graphs at once, the most it runs; wait for one to end';
