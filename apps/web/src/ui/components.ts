@@ -22,6 +22,7 @@ export {
   MantineProvider,
   Menu,
   Modal,
+  NumberInput,
   Paper,
   PasswordInput,
   Popover,

@@ -4,17 +4,17 @@ import { ONBOARDING_HASH } from '../onboarding/onboarding-route.js';
  * What the New button offers, and whether it is a menu at all.
  *
  * The mockup draws five things a person can make -- Session, Project, Graph,
- * Agent, and Enroll machine -- and three of them exist. A kind with nothing
+ * Agent, and Enroll machine -- and four of them exist. A kind with nothing
  * behind it is absent from the menu, not drawn greyed with a tooltip promising
  * it later: a disabled row is a promise the app cannot keep, and there is no
  * date behind it. That is the rule the sidebar's nav already follows
  * (`destinations.ts`) and the same one here.
  *
- * `NEW_NODE_KINDS` is the one place that says which is which. The unbuilt kinds
- * stay in the table with `built: false` rather than being deleted, so the epic
- * that builds one (AGX-145 for Graph, AGX-149 for Agent) flips a flag beside
- * the wording the mockup already decided, instead of re-inventing an entry from
- * the mockup a second time.
+ * `NEW_NODE_KINDS` is the one place that says which is which. The unbuilt kind
+ * stays in the table with `built: false` rather than being deleted, so the epic
+ * that builds it (AGX-149 for Agent) flips a flag beside the wording the
+ * mockup already decided, instead of re-inventing an entry from the mockup a
+ * second time -- which is what AGX-145 did for Graph.
  *
  * The menu decides its own shape from that table. With one kind built there is
  * nothing to choose between, so the mode is `direct` and the button does the
@@ -67,9 +67,9 @@ export interface NewNodeRow extends NewMenuEntry {
 /**
  * The built-or-not table: every kind the mockup draws, in the mockup's order.
  *
- * Session, Project and Enroll machine are built today. Graph and Agent are
- * listed with their wording so that the epic behind each has one line to change
- * and nowhere else to look.
+ * Session, Project, Graph and Enroll machine are built today. Agent is listed
+ * with its wording so that the epic behind it has one line to change and
+ * nowhere else to look.
  */
 export const NEW_NODE_KINDS: readonly NewNodeRow[] = [
   {
@@ -90,7 +90,7 @@ export const NEW_NODE_KINDS: readonly NewNodeRow[] = [
     label: 'Graph',
     description: 'Wire agents into a workflow',
     hint: { text: '⌘G', bound: false },
-    built: false,
+    built: true,
   },
   {
     kind: 'agent',
