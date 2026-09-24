@@ -123,8 +123,9 @@ export const GRAPH_RETRY_BACKOFF_MAX_SECONDS = 3600;
  * a reason, and `backoff` is in seconds and at least one because a retry with
  * no wait is a tight loop against whatever just refused.
  */
+export const GRAPH_RETRY_MAX = 10;
 export const graphRetrySchema = z.object({
-  max: z.int().min(0).max(10),
+  max: z.int().min(0).max(GRAPH_RETRY_MAX),
   backoff: z.int().min(1).max(GRAPH_RETRY_BACKOFF_MAX_SECONDS),
 });
 export type GraphRetry = z.infer<typeof graphRetrySchema>;

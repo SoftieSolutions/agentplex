@@ -21,6 +21,7 @@ import { directoryListingFrameSchema, directorySchema } from './directory.js';
 import { docContentSchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import { graphDocumentSchema, graphNameSchema, graphPublishedVersionSchema } from './graph.js';
+import { graphRunIdSchema, graphRunStateSchema } from './graph-run.js';
 import {
   hubIdSchema,
   nodeIdSchema,
@@ -39,6 +40,7 @@ import {
 } from './pairing.js';
 import { frameParser } from './parse.js';
 import { pushEndpointSchema, pushKeySchema, pushSubscriptionSchema } from './push.js';
+import { routeInputSchema } from './route-condition.js';
 import { clientTerminalFrames, subscriptionEndedFrameSchema } from './terminal.js';
 import { transcriptActivitiesSchema, transcriptCountSchema } from './transcript.js';
 
@@ -682,6 +684,37 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     nodeId: nodeIdSchema,
   }),
   /**
+   * Runs the graph's latest published version with this input.
+   *
+   * The node is the whole address and the version is not named: what runs is
+   * the newest thing that was published, because a run is a person pressing
+   * Run on the screen they are looking at, and the draft is the one thing
+   * that may never run. The input is the object the first ROUTER's conditions
+   * read, bounded by the same schema those conditions evaluate against, and
+   * it is the run's whole payload -- no frame here names a store, a machine or
+   * a directory, because every one of those is the graph's own to decide, per
+   * node, at the step that needs it.
+   */
+  z.object({
+    type: z.literal('graph-run'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+    input: routeInputSchema,
+  }),
+  /**
+   * Stops a run before its next step.
+   *
+   * Named by the run and not by the graph, because two runs of one graph can
+   * be in flight and a cancel that named the graph would be a coin toss. The
+   * step in flight is left to end on its own: an agent mid-turn is not
+   * interrupted, for the reason a stop refuses a busy holder.
+   */
+  z.object({
+    type: z.literal('graph-run-cancel'),
+    id: frameIdSchema,
+    runId: graphRunIdSchema,
+  }),
+  /**
    * Answers an approval the agent is blocked on: let it through, or refuse it.
    *
    * The session is named because a client names a session and the hub resolves
@@ -1279,6 +1312,43 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('graph-published'),
     replyTo: frameIdSchema,
     version: z.int().positive(),
+  }),
+  /**
+   * The run began, and this is what it is called.
+   *
+   * Two names, because they answer different questions: `runId` is what every
+   * later frame and a cancel file under, and `number` is what a person says --
+   * "run 38 broke" -- counted from 1 per graph. The state itself follows as
+   * `graph-run-state`, unsolicited, and this reply carries none of it so that
+   * there is one shape a run's progress arrives in.
+   */
+  z.object({
+    type: z.literal('graph-run-started'),
+    replyTo: frameIdSchema,
+    runId: graphRunIdSchema,
+    number: z.int().positive(),
+  }),
+  /**
+   * A run, whole, as it stands now.
+   *
+   * Unsolicited and sent to every client, like the machine state, and for the
+   * same reason: a run is one fact about the hub, and two tabs open on the
+   * graph must read the same step. It has no `replyTo` because nobody asked
+   * for this particular frame -- the client that pressed Run was answered by
+   * `graph-run-started`, and everything after that is the run moving. The
+   * fields are `graphRunStateSchema`'s, spread here rather than nested so
+   * the frame reads like every other frame on this direction.
+   */
+  z.object({ type: z.literal('graph-run-state'), ...graphRunStateSchema.shape }),
+  /**
+   * The cancel was taken. The run's end arrives as `graph-run-state` with
+   * `cancelled` on it, after whatever step was in flight has ended; this says
+   * only that the request reached a run that was still going.
+   */
+  z.object({
+    type: z.literal('graph-run-cancelled'),
+    replyTo: frameIdSchema,
+    runId: graphRunIdSchema,
   }),
   /**
    * What became of the approval this client answered.

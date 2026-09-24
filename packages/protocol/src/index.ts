@@ -129,6 +129,7 @@ export {
   GRAPH_NODES_MAX,
   GRAPH_PROMPT_MAX_CHARS,
   GRAPH_RETRY_BACKOFF_MAX_SECONDS,
+  GRAPH_RETRY_MAX,
   GRAPH_ROUTES_MAX,
   emptyGraphDocument,
   graphDocumentSchema,
@@ -153,6 +154,22 @@ export type {
   GraphRetry,
   GraphRoute,
 } from './graph.js';
+
+export {
+  GRAPH_RUN_STEPS_MAX,
+  graphRunIdSchema,
+  graphRunStateSchema,
+  graphRunStepSchema,
+  runStatusSchema,
+  stepOutcomeSchema,
+} from './graph-run.js';
+export type {
+  GraphRunId,
+  GraphRunState,
+  GraphRunStep,
+  RunStatus,
+  StepOutcome,
+} from './graph-run.js';
 
 export {
   ROUTE_CONDITION_MAX_CHARS,
