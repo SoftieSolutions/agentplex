@@ -11,7 +11,7 @@ import {
 } from './tokens.js';
 
 const schemes: Scheme[] = ['dark', 'light'];
-const tones: Tone[] = ['running', 'needs-you', 'blocked', 'idle'];
+const tones: Tone[] = ['running', 'needs-you', 'blocked', 'idle', 'paused'];
 
 describe('hues', () => {
   it('are lowercase six-digit hex, so downstream consumers never re-parse formats', () => {
@@ -38,6 +38,12 @@ describe('colorForTone', () => {
   it('gives needs-you the accent hue in both schemes: what the app points at is what wants a human', () => {
     for (const scheme of schemes) {
       expect(colorForTone('needs-you', scheme)).toBe(colorForRole('accent', scheme));
+    }
+  });
+
+  it('names every tone in both schemes, so a fifth tone cannot be half-coloured', () => {
+    for (const scheme of schemes) {
+      expect(Object.keys(toneHues[scheme]).sort()).toEqual([...tones].sort());
     }
   });
 

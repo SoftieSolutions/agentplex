@@ -45,17 +45,20 @@ import {
   findSessionRow,
   metadataSegments,
   paneAttachment,
-  statusWord,
   terminalInputNotice,
   terminalIsPartial,
   machineFor,
   terminalFeedNotice,
   terminalScopeNotice,
-  toneForStatus,
   type CrumbRole,
 } from './presentation.js';
 import { projectForSession, type SessionProject } from '../sessions/approval-policy-model.js';
-import { approvalsOldestFirst } from '../sessions/session-list-model.js';
+import {
+  approvalsOldestFirst,
+  toneForSession,
+  wordsForSession,
+} from '../sessions/session-list-model.js';
+import { PauseButton } from '../sessions/pause-button.js';
 import { StopButton } from '../sessions/stop-button.js';
 import { ToneDot } from '../ui/tone-dot.js';
 import { useShellForm } from '../shell/shell-form.js';
@@ -648,8 +651,11 @@ export function SessionPane({
 
   const state = snapshot.machineState;
   const row = findSessionRow(state, sessionRef);
-  const tone = row === null ? 'idle' : toneForStatus(row.descriptor.status);
-  const word = statusWord(row);
+  // The whole row and not the status alone: a session set down at a boundary
+  // is drawn paused whatever its transcript last said, and the word beside the
+  // dot says pausing for the interval before the boundary is reached.
+  const tone = toneForSession(row);
+  const word = wordsForSession(row);
   const crumbs = breadcrumb(row, sessionRef);
   // The one tone that means something is happening as you look at it, which is
   // the whole of what the mockup animates. Read off the tone rather than off
@@ -986,6 +992,16 @@ export function SessionPane({
           {/* The same button the card carries, off the same published fact.
               Nothing is drawn for a session nobody is running, or for a holder
               mid-turn. */}
+          {/* Pause is the header action the mockup draws first. Offered to any
+              held session, mid-turn included -- that is what a pause is for --
+              and it reads Resume once the holder says the session is paused. */}
+          <PauseButton
+            store={hub}
+            sessionRef={sessionRef}
+            holder={row?.holder ?? null}
+            scheme={scheme}
+            size="xs"
+          />
           <StopButton
             store={hub}
             sessionRef={sessionRef}

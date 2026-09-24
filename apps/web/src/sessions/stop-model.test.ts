@@ -140,7 +140,11 @@ describe('what the hub said about the stop this screen asked for', () => {
   it('a refusal that names a holder still carries one for the screen to draw', () => {
     // Not this function's output -- it says what happened to this stop -- but
     // the field the new-session form reads off the same snapshot.
-    expect(heldElsewhere.holder).toEqual({ server: 'registration-mbp-robert', stoppable: true });
+    expect(heldElsewhere.holder).toEqual({
+      server: 'registration-mbp-robert',
+      stoppable: true,
+      pause: 'none',
+    });
   });
 });
 

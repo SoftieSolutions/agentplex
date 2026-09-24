@@ -10,6 +10,16 @@ import type { ProviderRowView } from '../ui/provider-line.js';
 import type { Tone } from '../ui/tokens.js';
 
 /**
+ * The tones a machine can be drawn in.
+ *
+ * Narrower than `Tone` on purpose: `paused` is a fact about a session, and a
+ * server row that could carry it would be a row a switch has to have an arm
+ * for -- `pairProgress` ends in `assertNever` over this -- with nothing that
+ * arm could honestly say. A server is never paused.
+ */
+export type ServerTone = Exclude<Tone, 'paused'>;
+
+/**
  * The paired-server list, projected from the machine state into exactly what
  * the settings screen draws. The projection is pure and lives outside any
  * component so the mapping from wire fact to screen word is testable without
@@ -35,7 +45,7 @@ export interface ServerRowView {
   /** Where this hub dials it. Never a credential: the parser forbids one. */
   readonly address: string;
   /** The connectivity, as the tone dot beside the row. */
-  readonly tone: Tone;
+  readonly tone: ServerTone;
   /** The connectivity, as a word beside the dot. */
   readonly phase: string;
   /** What is wrong, in the hub's words, or `null` while nothing is. */
@@ -97,7 +107,7 @@ export interface ServerRowView {
  * `needs-you` — nothing is wrong, and everything on that box is about to stop,
  * which is the one row on this screen somebody should look at.
  */
-function toneFor(view: ServerView): Tone {
+function toneFor(view: ServerView): ServerTone {
   switch (view.phase) {
     case 'connected':
       return view.draining === null ? 'running' : 'needs-you';
@@ -148,7 +158,7 @@ function drainingWords(draining: ServerDraining): string {
  * `running` either, because something there is worth a look -- which is exactly
  * what `needs-you` says.
  */
-function toneForProvider(readiness: ProviderReadiness): Tone {
+function toneForProvider(readiness: ProviderReadiness): ServerTone {
   switch (readiness.state) {
     case 'ready':
       return 'running';

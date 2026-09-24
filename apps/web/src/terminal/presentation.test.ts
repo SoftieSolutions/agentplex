@@ -39,7 +39,7 @@ import {
 const ref = sessionRefSchema.parse({ storeId: 'store-a', sessionId: 'sess-1' });
 
 function stateWith(overrides?: {
-  holder?: { server: string; stoppable: boolean } | null;
+  holder?: { server: string; stoppable: boolean; pause: 'none' | 'requested' | 'paused' } | null;
   /** What that machine's connectivity is, for the panes that read it. */
   server?: Record<string, unknown>;
   /** Descriptor fields the header reads: the title, the model, the cwd. */
@@ -76,7 +76,7 @@ function stateWith(overrides?: {
             reachable: true,
             holder:
               overrides?.holder === undefined
-                ? { server: 'reg-1', stoppable: true }
+                ? { server: 'reg-1', stoppable: true, pause: 'none' }
                 : overrides.holder,
             acknowledgedThrough: null,
             mutedAt: null,
@@ -145,6 +145,8 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastStarted: null,
     starts: new Map(),
     lastStopped: null,
+    lastPaused: null,
+    lastResumed: null,
     lastAttention: null,
     lastApproval: null,
     approvalPolicies: new Map(),

@@ -16,6 +16,7 @@ import {
   type ProviderReadiness,
   type SessionDescriptor,
   type SessionHold,
+  type SessionPause,
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
@@ -203,6 +204,12 @@ function labelFor(text: string): string {
     // Labelled by what the state holds, so the web tests get a captured state
     // with a paired server in it as well as the empty one.
     if (frame.state.candidates.length > 0) return 'machineStateDiscovered';
+    // A holder under a pause is the one fact about a session that reaches a
+    // client nowhere but here, so the state carrying one is its own capture.
+    const paused = frame.state.stores.some((store) =>
+      store.sessions.some((row) => row.holder !== null && row.holder.pause !== 'none'),
+    );
+    if (paused) return 'machineStatePaused';
     return frame.state.servers.length > 0 ? 'machineStateWithServer' : 'machineState';
   }
   if (frame.type === 'session-attention') {
@@ -592,8 +599,8 @@ const CAPTURED_USAGE = {
   outputTokens: 1347,
 };
 
-function hold(sessionId: string, stoppable: boolean): SessionHold {
-  return { sessionId: sessionIdSchema.parse(sessionId), stoppable, pause: 'none' };
+function hold(sessionId: string, stoppable: boolean, pause: SessionPause = 'none'): SessionHold {
+  return { sessionId: sessionIdSchema.parse(sessionId), stoppable, pause };
 }
 
 /** The store the terminal captures run in, and the session they watch. */
@@ -2000,8 +2007,26 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
                   '/Users/robert/code/agentplex/db',
                   'migrate-db-v9',
                 ),
+                // Set down at a turn boundary and held there: the process is
+                // alive, its keyboard is withheld, and the row is the one a
+                // client draws in the paused tone. The status is the one the
+                // adapter derived and the pause is the holder's, which is the
+                // pair the client has to read together.
+                descriptor(
+                  'store-agentplex',
+                  'session-docs-index',
+                  'claude',
+                  'awaiting-input',
+                  START - 40 * MINUTE,
+                  '/Users/robert/code/agentplex/docs',
+                  'docs-index',
+                ),
               ],
-              holding: [hold('session-fix-auth', false), hold('session-migrate-db', true)],
+              holding: [
+                hold('session-fix-auth', false),
+                hold('session-migrate-db', true),
+                hold('session-docs-index', true, 'paused'),
+              ],
             },
           ],
           // The controller answers both a start and a stop with this, and only
@@ -2033,7 +2058,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     await until(
       () =>
         heldHub.hub.connections.snapshot().every((report) => report.phase === 'connected') &&
-        sessionCount(heldHub.hub) === 2,
+        sessionCount(heldHub.hub) === 3,
       'the holding machine to connect and report',
     );
     const stopper = await openClient(heldHub.hub);
@@ -2133,6 +2158,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const sessionStopped = fromStopper('sessionStopped');
     const sessionPaused = fromStopper('sessionPaused');
     const sessionResumed = fromStopper('sessionResumed');
+    const machineStatePaused = fromStopper('machineStatePaused');
     await heldHub.cleanup();
     // A machine that says it is going down, captured while it still is. The
     // real server end sends the real `server-draining` frame, so this is the
@@ -2845,6 +2871,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('sessionStopped', sessionStopped);
     captured.set('sessionPaused', sessionPaused);
     captured.set('sessionResumed', sessionResumed);
+    captured.set('machineStatePaused', machineStatePaused);
     captured.set('refusalHeldBusy', refusalHeldBusy);
     captured.set('refusalHeldStoppable', refusalHeldStoppable);
     captured.set('directoryRoots', directoryRoots);

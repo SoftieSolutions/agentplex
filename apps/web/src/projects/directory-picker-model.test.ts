@@ -40,6 +40,8 @@ function snapshot(over: Partial<HubSnapshot> = {}): HubSnapshot {
     lastStarted: null,
     starts: new Map(),
     lastStopped: null,
+    lastPaused: null,
+    lastResumed: null,
     lastAttention: null,
     lastApproval: null,
     approvalPolicies: new Map(),

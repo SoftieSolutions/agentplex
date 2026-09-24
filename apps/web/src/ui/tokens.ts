@@ -47,6 +47,8 @@ export const hues = {
   lichen: '#5fd08a',
   /** Dark blocked/error marker. */
   ember: '#e0605a',
+  /** Dark paused marker: a session set down on purpose, alive and waiting. */
+  slate: '#7d93b8',
 
   // Light scheme, back to front.
   /** Light app background. */
@@ -73,6 +75,8 @@ export const hues = {
   fir: '#2fa866',
   /** Light blocked/error marker. */
   brick: '#d9463f',
+  /** Light paused marker. */
+  denim: '#4a6fa5',
   /** Light idle marker. */
   pumice: '#cfcbc0',
 } as const;
@@ -181,8 +185,14 @@ export function colorForRole(role: Role, scheme: Scheme): string {
  * The vocabulary is the mockup's: a session is running, needs you, blocked,
  * or idle. "Needs you" deliberately shares the accent hue — the thing the app
  * points at is the thing that wants a human.
+ *
+ * The fifth tone is `paused`: a session somebody set down on purpose, whose
+ * process is alive and whose keyboard is withheld until they pick it up. It
+ * is neither idle (nothing is wrong and nothing is missing) nor needs-you
+ * (nobody is waiting on a person), so it gets a cool hue of its own rather
+ * than borrowing one and being misread as either.
  */
-export type Tone = 'running' | 'needs-you' | 'blocked' | 'idle';
+export type Tone = 'running' | 'needs-you' | 'blocked' | 'idle' | 'paused';
 
 export const toneHues = {
   dark: {
@@ -190,12 +200,14 @@ export const toneHues = {
     'needs-you': 'amber',
     blocked: 'ember',
     idle: 'ash',
+    paused: 'slate',
   },
   light: {
     running: 'fir',
     'needs-you': 'ochre',
     blocked: 'brick',
     idle: 'pumice',
+    paused: 'denim',
   },
 } as const satisfies Record<Scheme, Record<Tone, HueName>>;
 

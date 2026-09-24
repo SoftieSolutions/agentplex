@@ -7,6 +7,7 @@ import { AttentionControls } from './attention-controls.js';
 import { placeLabel, unseenPrompt, type SessionListItem } from './session-list-model.js';
 import { SessionMetaLine } from './session-meta-line.js';
 import { SessionSummaryLine } from './session-summary-line.js';
+import { PauseButton } from './pause-button.js';
 import { StopButton } from './stop-button.js';
 
 /**
@@ -116,6 +117,7 @@ export function SessionRow({ item, scheme, now, store, actions }: SessionRowProp
       <Box style={{ position: 'relative', flexShrink: 0, display: 'flex', gap: 6 }}>
         {actions}
         <AttentionControls item={item} store={store} scheme={scheme} />
+        <PauseButton store={store} sessionRef={item.ref} holder={item.holder} scheme={scheme} />
         <StopButton store={store} sessionRef={item.ref} holder={item.holder} scheme={scheme} />
       </Box>
     </Box>
