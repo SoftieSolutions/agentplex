@@ -57,6 +57,7 @@ import { createDirectoryBrowser } from '../../../apps/server/src/directory-brows
 import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
 import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
 import type {
+  PauseOutcome,
   SessionController,
   SessionOutcome,
   StoreReport,
@@ -268,6 +269,8 @@ function labelFor(text: string): string {
     ['pane-layout-saved', 'paneLayoutSaved'],
     ['session-started', 'sessionStarted'],
     ['session-stopped', 'sessionStopped'],
+    ['session-paused', 'sessionPaused'],
+    ['session-resumed', 'sessionResumed'],
     ['server-paired', 'serverPaired'],
     ['server-unpaired', 'serverUnpaired'],
     ['project-created', 'projectCreated'],
@@ -308,6 +311,8 @@ interface Machine {
   readonly providers: readonly ProviderReadiness[];
   /** What this machine's controller answers a start with. Default: a refusal. */
   readonly startOutcome?: SessionOutcome;
+  /** What it answers a pause and a resume with. Default: a refusal. */
+  readonly pauseOutcome?: PauseOutcome;
   /**
    * What a client may browse on this machine, and what is under it.
    *
@@ -400,13 +405,13 @@ function fleetDialer(
       const machine = machines.get(host);
       if (machine === undefined) return { ok: false, problem: 'connection refused' };
       const { hubEnd, serverEnd } = createSocketPair();
-      const controller =
-        machine.live?.sessions ??
-        createFakeSessionController(
-          machine.startOutcome === undefined
-            ? { reports: machine.reports }
-            : { reports: machine.reports, outcome: machine.startOutcome },
-        );
+      const fake = createFakeSessionController(
+        machine.startOutcome === undefined
+          ? { reports: machine.reports }
+          : { reports: machine.reports, outcome: machine.startOutcome },
+      );
+      if (machine.pauseOutcome !== undefined) fake.answerPauseWith(machine.pauseOutcome);
+      const controller = machine.live?.sessions ?? fake;
       // A real scan reads a disk and takes event-loop turns; a fake that
       // resolved in the same microtask as the handshake would race its report
       // past the hub attaching its listener, an ordering no real store scan can
@@ -588,7 +593,7 @@ const CAPTURED_USAGE = {
 };
 
 function hold(sessionId: string, stoppable: boolean): SessionHold {
-  return { sessionId: sessionIdSchema.parse(sessionId), stoppable };
+  return { sessionId: sessionIdSchema.parse(sessionId), stoppable, pause: 'none' };
 }
 
 /** The store the terminal captures run in, and the session they watch. */
@@ -2008,6 +2013,15 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
             sessionId: null,
             terminalId: 'terminal-mbp-2',
           },
+          // And a pause, answered as a mid-turn one is: recorded for the next
+          // boundary. The word is the server's and travels as it was said,
+          // which is what the client's fixture has to show a store reading.
+          pauseOutcome: {
+            ok: true,
+            storeId: storeIdSchema.parse('store-agentplex'),
+            sessionId: sessionIdSchema.parse('session-fix-auth'),
+            pause: 'requested',
+          },
         },
       ],
     ]);
@@ -2084,6 +2098,31 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       () => stopper.received.some((text) => labelFor(text) === 'sessionStopped'),
       'the stop to land',
     );
+    // The pause conversation, beside the stop's: a pause on the working
+    // session, which a stop was refused on and a pause is exactly for, and
+    // the resume after it. The controller here is the fake one, so the pause
+    // word is what the machine above was told to say; what is captured is the
+    // frame the hub sends a client for it, which is what the web reads.
+    stopper.send({
+      type: 'session-pause',
+      id: 7,
+      storeId: 'store-agentplex',
+      sessionId: 'session-fix-auth',
+    });
+    await until(
+      () => stopper.received.some((text) => labelFor(text) === 'sessionPaused'),
+      'the pause to be taken',
+    );
+    stopper.send({
+      type: 'session-resume',
+      id: 8,
+      storeId: 'store-agentplex',
+      sessionId: 'session-fix-auth',
+    });
+    await until(
+      () => stopper.received.some((text) => labelFor(text) === 'sessionResumed'),
+      'the resume to be taken',
+    );
     const fromStopper = (label: string): string => {
       const text = stopper.received.find((candidate) => labelFor(candidate) === label);
       if (text === undefined) throw new Error(`the hub never sent a ${label}`);
@@ -2092,6 +2131,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const refusalHeldBusy = fromStopper('refusalHeldBusy');
     const refusalHeldStoppable = fromStopper('refusalHeldStoppable');
     const sessionStopped = fromStopper('sessionStopped');
+    const sessionPaused = fromStopper('sessionPaused');
+    const sessionResumed = fromStopper('sessionResumed');
     await heldHub.cleanup();
     // A machine that says it is going down, captured while it still is. The
     // real server end sends the real `server-draining` frame, so this is the
@@ -2802,6 +2843,8 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('machineStateDraining', machineStateDraining);
     captured.set('sessionStarted', sessionStarted);
     captured.set('sessionStopped', sessionStopped);
+    captured.set('sessionPaused', sessionPaused);
+    captured.set('sessionResumed', sessionResumed);
     captured.set('refusalHeldBusy', refusalHeldBusy);
     captured.set('refusalHeldStoppable', refusalHeldStoppable);
     captured.set('directoryRoots', directoryRoots);

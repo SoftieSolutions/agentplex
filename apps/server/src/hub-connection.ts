@@ -1001,12 +1001,18 @@ export function serveHubConnection(
     }
 
     if (instruction === 'session-pause') {
+      // Read again after the report rather than echoing the outcome. The scan
+      // the report ran may have seen the turn end and promoted the request,
+      // and the receipt has to say what the holder the hub was just sent
+      // says -- a receipt that lagged its own machine-state would have the
+      // asking client's button and its status dot disagree.
+      const pause = terminals.holder(session)?.pause ?? outcome.pause;
       send({
         type: 'session-paused',
         replyTo,
         storeId: session.storeId,
         sessionId: session.sessionId,
-        pause: outcome.pause,
+        pause,
       });
       return;
     }

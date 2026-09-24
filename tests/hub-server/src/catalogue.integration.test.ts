@@ -490,7 +490,9 @@ describe('taking a session out of the tree', () => {
     laptop.controller.setReport({
       storeId: AGENTPLEX,
       sessions: [descriptor(AGENTPLEX, 'session-fix-auth', 'fix-auth-refresh')],
-      holding: [{ sessionId: sessionIdSchema.parse('session-fix-auth'), stoppable: true }],
+      holding: [
+        { sessionId: sessionIdSchema.parse('session-fix-auth'), stoppable: true, pause: 'none' },
+      ],
     });
     fleet = await startFleetHub([laptop]);
     const client = await openClient(fleet.hub);
@@ -506,7 +508,7 @@ describe('taking a session out of the tree', () => {
       // The hold came off this machine's own account of what it is running,
       // which is the only source that can answer it -- and the client is given
       // it so it can offer the stop rather than only the sentence.
-      holder: { server: 'registration-mbp-robert', stoppable: true },
+      holder: { server: 'registration-mbp-robert', stoppable: true, pause: 'none' },
     });
     expect(await client.layout()).toHaveLength(1);
 

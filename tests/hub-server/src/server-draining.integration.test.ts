@@ -377,7 +377,7 @@ describe('a server that says it is shutting down', () => {
     // of those it is belongs to the server row that named it.
     expect(sessionRow('session-busy')).toMatchObject({
       reachable: true,
-      holder: { server: ATTIC, stoppable: false },
+      holder: { server: ATTIC, stoppable: false, pause: 'none' },
     });
   });
 
