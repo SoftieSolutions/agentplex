@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   GRAPH_RUN_OUTPUT_MAX_CHARS,
   graphDocumentSchema,
+  graphRunIdSchema,
+  nodeIdSchema,
+  type ApprovalOutcome,
   sessionIdSchema,
   type GraphDocument,
   type GraphRunStep,
   type RouteInput,
 } from '@agentplex/protocol';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
+import { createLogger } from '@agentplex/node-shared';
+import { createHumanExecutor } from './human-executor.js';
 import {
   routerExecutor,
   triggerExecutor,
@@ -413,6 +418,23 @@ describe('walk', () => {
       expect(reviewer.calls).toHaveLength(3);
     });
 
+    it('fails at once on a failure its executor says is final, without consulting retry', async () => {
+      const reviewer = agent(async () => ({ ok: false, problem: 'refused for good' }));
+      const final: Executor<'agent'> = async (node, input, context) => {
+        const result = await reviewer.execute(node, input, context);
+        return result.ok ? result : { ...result, retryable: false };
+      };
+      const run = drive(retried, {}, table(final));
+      await settle();
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason: 'the AGENT node Rust reviewer failed: refused for good',
+      });
+      expect(reviewer.calls).toHaveLength(1);
+      expect(run.timers.pending).toBe(0);
+    });
+
     it('treats an executor that throws as a failed attempt rather than a crashed run', async () => {
       const reviewer = agent(async () => {
         throw new Error('the seam exploded');
@@ -564,6 +586,52 @@ describe('walk', () => {
         status: 'failed',
         reason: 'the HUMAN node Ana approves failed: a person denied Ana approves',
       });
+    });
+
+    it("fails at once on a person's answer, even with retries left, and asks nobody twice", async () => {
+      // The real HUMAN executor over a hand-written approvals seam: every
+      // request raised is one approval id minted and one push sent, so the
+      // count of requests is the count of both.
+      const requested: string[] = [];
+      const answers: ((outcome: ApprovalOutcome) => void)[] = [];
+      let minted = 0;
+      const human = createHumanExecutor({
+        approvals: {
+          requestedByHub: (_subject, request) =>
+            new Promise((resolve) => {
+              requested.push(request.approvalId);
+              answers.push(resolve);
+            }),
+          withdrawnByHub: () => {},
+        },
+        ids: { newId: () => `approval-${String((minted += 1))}` },
+        timers: createFakeTimers(),
+        logger: createLogger('error', () => {}),
+      }).forRun({
+        runId: graphRunIdSchema.parse('run-38'),
+        number: 38,
+        graph: nodeIdSchema.parse('node-graph-release'),
+        graphName: 'release',
+      });
+      const patient = document({
+        nodes: [TRIGGER, { ...GATE, retry: { max: 2, backoff: 30 } }],
+        edges: [{ from: 'start', to: 'gate' }],
+      });
+      const run = drive(patient, {}, table(agent(async () => ({ ok: true })).execute, human));
+      await settle();
+
+      answers[0]?.('denied');
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason: 'the HUMAN node Ana approves failed: a person denied Ana approves',
+      });
+      expect(requested).toEqual(['approval-1']);
+      expect(minted).toBe(1);
+      expect(run.timers.pending).toBe(0);
+      expect(
+        run.steps.filter((step) => step.nodeId === 'gate').map((step) => step.attempt),
+      ).toEqual([0, 0, 0]);
     });
 
     it('ends cancelled while waiting, telling the executor so it can take the request back', async () => {

@@ -38,14 +38,16 @@ import { nameOf, type Executor, type StepResult } from './walker.js';
  *
  * The approvals feature has no id source: every id it ever held was minted
  * where the blocked hook was. The run is what is blocked at a HUMAN node, so
- * the id is minted here, per wait, and a retry of the node is a new request
- * with a new id rather than the old one re-asked.
+ * the id is minted here, per wait.
  *
  * ## The timeout fails the run
  *
  * A node with `timeoutMinutes` waits that long through injected timers and
  * then takes its request back and fails with a sentence naming the node and
- * the minutes -- reported like a denial, which is the decision. A run that
+ * the minutes -- reported like a denial, which is the decision. Both are
+ * `retryable: false`: a Deny is an answer, and a timeout is the node's own
+ * word on how long an answer may take, so asking again would overrule either.
+ * Publish refuses a HUMAN node with retries for the same reason. A run that
  * waited unbounded for a person who never came would be a run nobody could
  * tell apart from one still worth waiting on. `null` waits as long as it
  * takes.
@@ -159,13 +161,14 @@ function resultFor(
       // decides whether, not what.
       return { ok: true, carried: input, output: null, next: null };
     case 'denied':
-      return { ok: false, problem: `a person denied ${nameOf(node)}` };
+      return { ok: false, problem: `a person denied ${nameOf(node)}`, retryable: false };
     case 'withdrawn':
       switch (endedBy) {
         case 'timeout':
           return {
             ok: false,
             problem: `${nameOf(node)} waited ${String(node.timeoutMinutes ?? 0)} minutes for a person and nobody answered`,
+            retryable: false,
           };
         case 'cancel':
           return {

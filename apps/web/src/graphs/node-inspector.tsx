@@ -1,5 +1,6 @@
 import { useState, type CSSProperties, type JSX, type KeyboardEvent, type ReactNode } from 'react';
 import {
+  GRAPH_HUMAN_TIMEOUT_MAX_MINUTES,
   providerSchema,
   type GraphDocument,
   type GraphNode,
@@ -138,7 +139,8 @@ export function NodeInspector({
           onEdit={onEdit}
         />
         <PlacementFields node={node} machines={machines} set={set} />
-        <RetryFields node={node} set={set} />
+        {/* A HUMAN node's answer is final: the runtime never retries it and publish refuses a policy that would. */}
+        {node.kind === 'human' ? null : <RetryFields node={node} set={set} />}
         <Button
           variant="default"
           size="xs"
@@ -295,6 +297,7 @@ function KindFields({ node, document, stores, scheme, set, onEdit }: KindFieldsP
             <NumberInput
               aria-label="Timeout"
               min={1}
+              max={GRAPH_HUMAN_TIMEOUT_MAX_MINUTES}
               placeholder="waits as long as it takes"
               value={node.timeoutMinutes ?? ''}
               onChange={(value) => set('timeoutMinutes', value === '' ? null : value)}

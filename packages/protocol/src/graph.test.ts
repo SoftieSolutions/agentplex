@@ -263,7 +263,7 @@ describe('graphDocumentSchema', () => {
     expect(graphDocumentSchema.safeParse(half).success).toBe(false);
   });
 
-  it('bounds a human node\'s timeout at fourteen days, so the wait is one a timer can keep', () => {
+  it("bounds a human node's timeout at fourteen days, so the wait is one a timer can keep", () => {
     const longest = {
       nodes: [{ ...NODES.human, timeoutMinutes: GRAPH_HUMAN_TIMEOUT_MAX_MINUTES }],
       edges: [],

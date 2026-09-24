@@ -81,6 +81,12 @@ import type { Timers } from '@agentplex/node-shared';
  * goes to, or `null` to follow the node's one outgoing edge. Only a ROUTER
  * ever names one: its routes are the choice, and the walk following an edge
  * on its behalf would be a second reading of the same decision.
+ *
+ * A failure is retried by the node's policy unless it says `retryable:
+ * false`: a failure that is a decision rather than a fault -- a person's Deny,
+ * a timeout nobody answered -- ends the run at that node, because asking
+ * again is overruling the answer. Absent means retryable, which is what every
+ * fault an executor meets is.
  */
 export type StepResult =
   | {
@@ -89,7 +95,7 @@ export type StepResult =
       readonly output: GraphRunStepOutput | null;
       readonly next: GraphNodeId | null;
     }
-  | { readonly ok: false; readonly problem: string };
+  | { readonly ok: false; readonly problem: string; readonly retryable?: false };
 
 /** How a step learns that the run was cancelled under it. */
 export interface Cancellation {
@@ -377,15 +383,15 @@ export function walk(
         }
 
         onStep({ nodeId: node.id, attempt, outcome: 'failed', output: null }, reached);
-        if (attempt === node.retry.max) {
-          const tries = node.retry.max + 1;
-          return end({
-            status: 'failed',
-            reason:
-              tries === 1
-                ? `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} failed: ${attempted.problem}`
-                : `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} failed on all ${String(tries)} attempts; the last said: ${attempted.problem}`,
-          });
+        if (attempt === node.retry.max || attempted.retryable === false) {
+          const named = `the ${KIND_WORDS[node.kind]} node ${nameOf(node)}`;
+          let reason: string;
+          if (attempt === 0) reason = `${named} failed: ${attempted.problem}`;
+          else if (attempted.retryable === false)
+            reason = `${named} failed on attempt ${String(attempt + 1)}, and not for a reason another try changes: ${attempted.problem}`;
+          else
+            reason = `${named} failed on all ${String(attempt + 1)} attempts; the last said: ${attempted.problem}`;
+          return end({ status: 'failed', reason });
         }
         const waited = await wait(node.retry.backoff * 1_000);
         if (!waited) return end({ status: 'cancelled' });

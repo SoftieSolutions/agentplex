@@ -223,6 +223,28 @@ describe('NodeInspector', () => {
     expect(input('Retry backoff').value).toBe('30');
   });
 
+  it('draws a HUMAN with approvers and a timeout and no Retry, since an answer is not asked twice', async () => {
+    const added = addNode(
+      fixtureDocument(),
+      'human',
+      { x: 0, y: 0 },
+      {
+        storeId: null,
+        graph: nodeIdSchema.parse('hub-11'),
+      },
+    );
+    if (!added.ok) throw new Error(added.problem);
+    const human = added.document.nodes.at(-1);
+    if (human === undefined) throw new Error('nothing was added');
+    await mount(human, added.document);
+
+    expect(container.textContent).toContain('HUMAN · SELECTED');
+    expect(input('Approvers').value).toBe('approver');
+    expect(container.querySelector('[aria-label="Timeout"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Retry max"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Retry backoff"]')).toBeNull();
+  });
+
   it('draws a TRIGGER with its source and no fields that are not its own', async () => {
     await mount(nodeNamed(fixtureDocument(), 'start'));
     expect(container.textContent).toContain('TRIGGER · SELECTED');

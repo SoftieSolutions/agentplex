@@ -205,7 +205,12 @@ describe('the HUMAN executor', () => {
     await settle();
     raised[0]?.resolve('denied');
 
-    await expect(result).resolves.toEqual({ ok: false, problem: 'a person denied Ship it' });
+    await expect(result).resolves.toEqual({
+      ok: false,
+      problem: 'a person denied Ship it',
+      // A person's answer is final: the walk does not ask them again.
+      retryable: false,
+    });
   });
 
   it('waits as long as it takes when the node has no timeout', async () => {
@@ -226,6 +231,7 @@ describe('the HUMAN executor', () => {
       ok: false,
       // The node has no label, so its id names it.
       problem: 'timed waited 2 minutes for a person and nobody answered',
+      retryable: false,
     });
   });
 

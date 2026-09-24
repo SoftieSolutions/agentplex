@@ -260,6 +260,41 @@ describe('the graphs feature over a real schema', () => {
       expect(opened.ok && opened.published).toEqual([]);
     });
 
+    it("refuses a HUMAN node that retries, since a person's answer is not asked twice", async () => {
+      const feature = graphs();
+      const made = await feature.create(PROJECT, 'release');
+      if (!made.ok) throw new Error('refused');
+      await feature.save(
+        made.nodeId,
+        document({
+          nodes: [
+            TRIGGER,
+            {
+              ...BASE,
+              id: 'gate',
+              kind: 'human',
+              label: 'Sign-off',
+              approvers: ['ana'],
+              timeoutMinutes: null,
+              retry: { max: 2, backoff: 30 },
+            },
+          ],
+          edges: [{ from: 'start', to: 'gate' }],
+        }),
+      );
+
+      const refused = await feature.publish(made.nodeId);
+
+      expect(refused.ok).toBe(false);
+      if (refused.ok) return;
+      expect(refused.code).toBe('refused');
+      expect(refused.problem).toBe(
+        "the HUMAN node Sign-off retries 2 times, and a person's answer is not retried",
+      );
+      const opened = await feature.open(made.nodeId);
+      expect(opened.ok && opened.published).toEqual([]);
+    });
+
     it('checks the draft it freezes, not the one it read before another save landed', async () => {
       const feature = graphs();
       const made = await feature.create(PROJECT, 'release');
