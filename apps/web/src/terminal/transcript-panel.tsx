@@ -35,6 +35,14 @@ export interface TranscriptPanelProps {
   readonly panelId: string;
   /** The tab that controls this panel, for a screen reader reading backwards. */
   readonly labelledBy: string;
+  /**
+   * What sits between the status row and the feed, or `null` for nothing.
+   *
+   * A slot and not a flag, so this panel knows no more about replay than
+   * that something may be drawn above its list. The pane decides what, and
+   * hands it the activities already windowed to match.
+   */
+  readonly bar?: JSX.Element | null;
 }
 
 export function TranscriptPanel({
@@ -43,6 +51,7 @@ export function TranscriptPanel({
   scheme,
   panelId,
   labelledBy,
+  bar = null,
 }: TranscriptPanelProps): JSX.Element {
   return (
     <Stack
@@ -91,6 +100,8 @@ export function TranscriptPanel({
           Refresh
         </Button>
       </Group>
+
+      {bar}
 
       <Stack gap={10} px={18} py={12} data-transcript-feed>
         {state.activities.map((activity, index) => (

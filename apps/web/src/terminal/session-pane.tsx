@@ -63,6 +63,8 @@ import { createShortcutRegistry, type ShortcutRegistry } from './shortcuts.js';
 import { TabStrip } from './tab-strip.js';
 import { activeTab, type SessionTab } from './tab-strip-model.js';
 import { TaskBlock } from './task-block.js';
+import { LAST_STEP, replayOffered, replayState } from './replay-model.js';
+import { ReplayBar } from './replay-bar.js';
 import { transcriptState, TRANSCRIPT_COUNT, type TranscriptAsks } from './transcript-model.js';
 import { TranscriptPanel } from './transcript-panel.js';
 import { chunkTerminalInput } from './terminal-input.js';
@@ -361,6 +363,17 @@ export function SessionPane({
    */
   const [transcriptAsks, setTranscriptAsks] = useState<TranscriptAsks | null>(null);
   /**
+   * The step replay stands on, as a request, or `null` while the tab is live.
+   *
+   * A request and not a resolved index, which is what lets it be plain state
+   * with nothing watching it: Replay presses it before the transcript has
+   * necessarily been read, and a refresh can answer with fewer steps than the
+   * one somebody is standing on. Both are settled at render by `replayState`,
+   * which clamps against the list as it stands now -- see `replay-model.ts`
+   * for why the clamp lives there and not in an effect here.
+   */
+  const [replayPosition, setReplayPosition] = useState<number | null>(null);
+  /**
    * The last thing the clipboard would not do, or `null` while it has done
    * everything asked of it.
    *
@@ -615,6 +628,24 @@ export function SessionPane({
     [readTranscript, transcriptAsks],
   );
 
+  /**
+   * Replay, from the header: the Transcript tab, and the last step of it.
+   *
+   * Through `selectTab` rather than beside it, so the read that showing the
+   * tab implies is issued the one way it ever is. The position asked for is
+   * "the last step" and not a number, because at this moment the list may
+   * not have arrived -- the clamp in `replayState` lands it on the end once it
+   * has, and leaves the tab live until then.
+   */
+  const startReplay = useCallback((): void => {
+    selectTab(TRANSCRIPT_TAB);
+    setReplayPosition(LAST_STEP);
+  }, [selectTab]);
+
+  const exitReplay = useCallback((): void => {
+    setReplayPosition(null);
+  }, []);
+
   const state = snapshot.machineState;
   const row = findSessionRow(state, sessionRef);
   const tone = row === null ? 'idle' : toneForStatus(row.descriptor.status);
@@ -661,6 +692,24 @@ export function SessionPane({
   const shown: ShownTab =
     shownTab === TRANSCRIPT_TAB || shownTab === APPROVALS_TAB ? shownTab : TERMINAL_TAB;
   const transcript = transcriptState(transcriptAsks, snapshot.transcripts, snapshot.lastRefusal);
+  /**
+   * The replay window over that list, resolved at render against the count
+   * as it stands now. `null` for the position means live, which it also is on
+   * an empty list whatever was asked for -- so the bar only ever stands on a
+   * step that exists.
+   */
+  const replay = replayState(transcript.activities, replayPosition);
+  const replayBar =
+    replayOffered(transcript) && replay.position !== null && replay.status !== null ? (
+      <ReplayBar
+        position={replay.position}
+        count={transcript.activities.length}
+        status={replay.status}
+        onSeek={setReplayPosition}
+        onExit={exitReplay}
+        scheme={scheme}
+      />
+    ) : null;
   /**
    * What the panel has to say about this session.
    *
@@ -787,7 +836,11 @@ export function SessionPane({
       case TRANSCRIPT_TAB:
         return (
           <TranscriptPanel
-            state={transcript}
+            // The transcript's own sentence stays; only the list is windowed.
+            // The bar carries the replay sentence, so the two cannot be read
+            // as one status contradicting itself.
+            state={{ ...transcript, activities: replay.activities }}
+            bar={replayBar}
             onRefresh={readTranscript}
             scheme={scheme}
             panelId={`${paneId}-transcript`}
@@ -917,6 +970,19 @@ export function SessionPane({
               Paste
             </Button>
           )}
+          {/* Drawn whether or not the transcript has been read, because the
+              press is what reads it: gating it on an answer would make it
+              unreachable from the Terminal tab, which is where somebody is
+              when they want to see how the session got here. Labelled for the
+              reason the paste control is: the word on it is one word. */}
+          <Button
+            size="compact-xs"
+            variant="default"
+            onClick={startReplay}
+            aria-label="replay this session’s transcript"
+          >
+            Replay
+          </Button>
           {/* The same button the card carries, off the same published fact.
               Nothing is drawn for a session nobody is running, or for a holder
               mid-turn. */}
