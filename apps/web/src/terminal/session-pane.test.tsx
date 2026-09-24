@@ -1357,13 +1357,14 @@ describe('the header above a session', () => {
   it('draws nothing it cannot do, and nothing it cannot know', async () => {
     await mountHeaderOn('store-universe', 'session-bench-tokenizer');
 
-    // Pause, hand off and replay are each their own milestone, and a button
-    // that cannot do its job must not be drawn. The multiplexer segment the
-    // mockup shows is not built at all: no frame says whether a session runs
-    // under one, so the bar says nothing rather than guessing.
+    // Pause and hand off are each their own milestone, and a button that
+    // cannot do its job must not be drawn. Replay is built (AGX-143) and is
+    // drawn whatever the session's state, because pressing it is what reads
+    // the transcript it walks through. The multiplexer segment the mockup
+    // shows is not built at all: no frame says whether a session runs under
+    // one, so the bar says nothing rather than guessing.
     expect(container.textContent).not.toContain('Pause');
     expect(container.textContent).not.toContain('Hand off');
-    expect(container.textContent).not.toContain('Replay');
     expect(container.textContent).not.toContain('tmux');
   });
 });
@@ -1957,5 +1958,188 @@ describe('the transcript tab', () => {
     expect(container.querySelector('[data-transcript-status]')?.getAttribute('role')).toBe(
       'status',
     );
+  });
+});
+
+/**
+ * Replay, as a person meets it: press Replay in the header, the pane opens
+ * the Transcript tab and asks for the transcript the way the tab would, and
+ * once the answer lands the scrubber stands on the last step. Nothing new
+ * crosses the wire -- replay is a window onto what AGX-82 read.
+ */
+describe('replaying a session', () => {
+  async function mountOn(hub: StoreHarness): Promise<void> {
+    await mount(<SessionPane sessionRef={SESSION} store={hub.store} emulators={emulators} />);
+  }
+
+  function tab(label: string): HTMLElement {
+    const found = [...container.querySelectorAll('[role="tab"]')].find(
+      (element) => element.textContent === label,
+    );
+    if (found === undefined) throw new Error(`no ${label} tab is drawn`);
+    return found as HTMLElement;
+  }
+
+  function button(prefix: string): HTMLElement {
+    const found = container.querySelector(`button[aria-label^="${prefix}"]`);
+    if (found === null) throw new Error(`no button labelled ${prefix}`);
+    return found as HTMLElement;
+  }
+
+  async function press(element: HTMLElement): Promise<void> {
+    await act(async () => {
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(settle);
+  }
+
+  function shown(): number {
+    return container.querySelectorAll('[data-transcript-feed] [data-activity]').length;
+  }
+
+  function bar(): Element | null {
+    return container.querySelector('[data-replay-bar]');
+  }
+
+  function replayStatus(): string {
+    return container.querySelector('[data-replay-status]')?.textContent ?? '';
+  }
+
+  function sliderValue(): string | null {
+    return container.querySelector('[role="slider"]')?.getAttribute('aria-valuenow') ?? null;
+  }
+
+  it('opens the Transcript tab and asks for the transcript, with no bar until it lands', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+
+    await press(button('replay this session'));
+
+    expect(tab('Transcript').getAttribute('aria-selected')).toBe('true');
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-transcript')).toHaveLength(
+      1,
+    );
+    // There is no step to stand on yet, so the bar is not drawn and the tab
+    // says what it always says while a read is out.
+    expect(bar()).toBeNull();
+    expect(container.querySelector('[data-transcript-status]')?.textContent).toContain(
+      'Reading this session',
+    );
+  });
+
+  it('stands on the last step once the activities land, showing all of them', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(button('replay this session'));
+
+    await deliver(socket, hubFrames.sessionTranscript);
+
+    expect(bar()).not.toBeNull();
+    expect(sliderValue()).toBe('3');
+    expect(replayStatus()).toBe('Replaying step 4 of 4');
+    expect(shown()).toBe(4);
+  });
+
+  it('shows exactly the activities up to the step when stepping back', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(button('replay this session'));
+    await deliver(socket, hubFrames.sessionTranscript);
+
+    await press(button('back one step'));
+    expect(shown()).toBe(3);
+    expect(replayStatus()).toBe('Replaying step 3 of 4');
+
+    await press(button('back one step'));
+    await press(button('back one step'));
+    expect(shown()).toBe(1);
+    expect(replayStatus()).toBe('Replaying step 1 of 4');
+  });
+
+  it('enters replay on the list already drawn when the tab was open first', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(tab('Transcript'));
+    await deliver(socket, hubFrames.sessionTranscript);
+
+    await press(button('replay this session'));
+
+    // The tab had asked already; Replay does not ask again.
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-transcript')).toHaveLength(
+      1,
+    );
+    expect(sliderValue()).toBe('3');
+    expect(shown()).toBe(4);
+  });
+
+  it('keeps Refresh working and re-clamps the step to the fresh answer', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(button('replay this session'));
+    await deliver(socket, hubFrames.sessionTranscript);
+
+    await press(button('read this session'));
+
+    // The read went out and the kept list is still what replay stands on.
+    const asked = sentFrames(socket).filter((frame) => frame.type === 'session-transcript');
+    expect(asked).toHaveLength(2);
+    expect(shown()).toBe(4);
+    expect(replayStatus()).toBe('Replaying step 4 of 4');
+
+    const again = asked.at(-1);
+    if (again === undefined) throw new Error('the pane asked for no transcript');
+    await deliver(
+      socket,
+      JSON.stringify({
+        type: 'session-transcript-read',
+        replyTo: again.id,
+        activities: [{ kind: 'command', text: 'pnpm lint', exitStatus: 0 }],
+        olderExist: false,
+      }),
+    );
+
+    // Fewer steps than the one stood on: the last there is, not a blank feed.
+    expect(shown()).toBe(1);
+    expect(sliderValue()).toBe('0');
+    expect(replayStatus()).toBe('Replaying step 1 of 1');
+  });
+
+  it('restores the full live list on Exit', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    await press(button('replay this session'));
+    await deliver(socket, hubFrames.sessionTranscript);
+    await press(button('back one step'));
+    expect(shown()).toBe(3);
+
+    await press(button('leave replay'));
+
+    expect(bar()).toBeNull();
+    expect(shown()).toBe(4);
+    expect(tab('Transcript').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('sends nothing but the transcript read the tab already sends', async () => {
+    const hub = buildStore();
+    await mountOn(hub);
+    const socket = await connect(hub);
+    const before = socket.sent.length;
+
+    await press(button('replay this session'));
+    await deliver(socket, hubFrames.sessionTranscript);
+    await press(button('back one step'));
+    await press(button('forward one step'));
+    await press(button('read this session'));
+    await press(button('leave replay'));
+
+    const since = sentFrames(socket).slice(before);
+    expect(since.length).toBeGreaterThan(0);
+    expect(new Set(since.map((frame) => frame.type))).toEqual(new Set(['session-transcript']));
   });
 });
