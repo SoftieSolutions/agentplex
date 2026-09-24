@@ -111,9 +111,41 @@ function person(): {
 }
 
 const NOBODY: Executor<'human'> = () => Promise.reject(new Error('no HUMAN node here'));
+const NO_CHILD: Executor<'subgraph'> = () => Promise.reject(new Error('no SUB-GRAPH node here'));
 
-function table(execute: Executor<'agent'>, human: Executor<'human'> = NOBODY): ExecutorTable {
-  return { trigger: triggerExecutor, router: routerExecutor, agent: execute, human };
+function table(
+  execute: Executor<'agent'>,
+  human: Executor<'human'> = NOBODY,
+  subgraph: Executor<'subgraph'> = NO_CHILD,
+): ExecutorTable {
+  return { trigger: triggerExecutor, router: routerExecutor, agent: execute, human, subgraph };
+}
+
+const LINT = {
+  ...BASE,
+  id: 'lint',
+  kind: 'subgraph',
+  label: 'Lint suite',
+  graph: 'graph-lint',
+  version: 3,
+};
+
+/**
+ * A SUB-GRAPH executor that names a child per attempt and answers what the
+ * test says: the child's run id is `child-<attempt>`, numbered from 7.
+ */
+function subgraph(
+  answer: (attempt: number) => { ok: true } | { ok: false; problem: string },
+): Executor<'subgraph'> {
+  return async (_node, input, context) => {
+    context.child({
+      runId: graphRunIdSchema.parse(`child-${String(context.attempt)}`),
+      number: 7 + context.attempt,
+    });
+    const answered = answer(context.attempt);
+    if (!answered.ok) return answered;
+    return { ok: true, carried: { ...input, linted: true }, output: null, next: null };
+  };
 }
 
 interface Driven {
@@ -176,19 +208,21 @@ describe('walk', () => {
       output: { storeId: 'store-work', sessionId: 'session-0', status: 'idle' },
     });
     expect(run.steps).toEqual([
-      { nodeId: 'start', attempt: 0, outcome: 'running', output: null },
+      { nodeId: 'start', attempt: 0, outcome: 'running', output: null, child: null },
       {
         nodeId: 'start',
         attempt: 0,
         outcome: 'succeeded',
         output: { kind: 'text', text: '{"language":"rust"}' },
+        child: null,
       },
-      { nodeId: 'review', attempt: 0, outcome: 'running', output: null },
+      { nodeId: 'review', attempt: 0, outcome: 'running', output: null, child: null },
       {
         nodeId: 'review',
         attempt: 0,
         outcome: 'succeeded',
         output: { kind: 'session', storeId: 'store-work', sessionId: 'session-0', status: 'idle' },
+        child: null,
       },
     ]);
     // The step count is the nodes reached: 1 at the trigger, 2 at the agent.
@@ -216,6 +250,7 @@ describe('walk', () => {
     const executors: ExecutorTable = {
       trigger: triggerExecutor,
       router: routerExecutor,
+      subgraph: NO_CHILD,
       agent: async (_node, input) => {
         seen.push(input);
         return { ok: true, carried: input, output: null, next: null };
@@ -257,6 +292,7 @@ describe('walk', () => {
       trigger: triggerExecutor,
       router: routerExecutor,
       human: NOBODY,
+      subgraph: NO_CHILD,
       agent: async (node, input) => {
         seen.push(input);
         return { ok: true, carried: { ran: node.id }, output: null, next: null };
@@ -311,6 +347,7 @@ describe('walk', () => {
         attempt: 0,
         outcome: 'succeeded',
         output: { kind: 'route', route: 0, to: 'review' },
+        child: null,
       });
     });
 
@@ -353,6 +390,7 @@ describe('walk', () => {
         attempt: 0,
         outcome: 'failed',
         output: null,
+        child: null,
       });
       expect(reviewer.calls).toEqual([]);
     });
@@ -380,11 +418,11 @@ describe('walk', () => {
 
       await expect(run.done).resolves.toMatchObject({ status: 'succeeded' });
       expect(run.steps.filter((step) => step.nodeId === 'review')).toEqual([
-        { nodeId: 'review', attempt: 0, outcome: 'running', output: null },
-        { nodeId: 'review', attempt: 0, outcome: 'failed', output: null },
-        { nodeId: 'review', attempt: 1, outcome: 'running', output: null },
-        { nodeId: 'review', attempt: 1, outcome: 'failed', output: null },
-        { nodeId: 'review', attempt: 2, outcome: 'running', output: null },
+        { nodeId: 'review', attempt: 0, outcome: 'running', output: null, child: null },
+        { nodeId: 'review', attempt: 0, outcome: 'failed', output: null, child: null },
+        { nodeId: 'review', attempt: 1, outcome: 'running', output: null, child: null },
+        { nodeId: 'review', attempt: 1, outcome: 'failed', output: null, child: null },
+        { nodeId: 'review', attempt: 2, outcome: 'running', output: null, child: null },
         {
           nodeId: 'review',
           attempt: 2,
@@ -395,6 +433,7 @@ describe('walk', () => {
             sessionId: 'session-2',
             status: 'idle',
           },
+          child: null,
         },
       ]);
     });
@@ -512,6 +551,7 @@ describe('walk', () => {
         trigger: triggerExecutor,
         router: routerExecutor,
         human: NOBODY,
+        subgraph: NO_CHILD,
         agent: (_node, _input, context) =>
           new Promise((resolve) => {
             context.cancellation.onCancel(() => {
@@ -536,6 +576,7 @@ describe('walk', () => {
         attempt: 0,
         outcome: 'cancelled',
         output: null,
+        child: null,
       });
     });
   });
@@ -558,8 +599,8 @@ describe('walk', () => {
       // `running` when the attempt begins, `waiting` the moment the executor
       // says so: the same nodeId and attempt, so the record is replaced.
       expect(run.steps.filter((step) => step.nodeId === 'gate')).toEqual([
-        { nodeId: 'gate', attempt: 0, outcome: 'running', output: null },
-        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+        { nodeId: 'gate', attempt: 0, outcome: 'running', output: null, child: null },
+        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null, child: null },
       ]);
       expect(reviewer.calls).toEqual([]);
 
@@ -570,6 +611,7 @@ describe('walk', () => {
         attempt: 0,
         outcome: 'succeeded',
         output: null,
+        child: null,
       });
       // The run went on to the node after the gate.
       expect(reviewer.calls).toHaveLength(1);
@@ -648,6 +690,106 @@ describe('walk', () => {
         attempt: 0,
         outcome: 'cancelled',
         output: null,
+        child: null,
+      });
+    });
+  });
+
+  describe('SUB-GRAPH', () => {
+    it('names the child on the running record and on the outcome, and hands its output on', async () => {
+      const doc = document({
+        nodes: [TRIGGER, LINT, AGENT],
+        edges: [
+          { from: 'start', to: 'lint' },
+          { from: 'lint', to: 'review' },
+        ],
+      });
+      const reviewer = agent(async () => ({ ok: true }));
+      const seen: RouteInput[] = [];
+      const run = drive(
+        doc,
+        { language: 'rust' },
+        table(
+          async (node, input, context) => {
+            seen.push(input);
+            return reviewer.execute(node, input, context);
+          },
+          NOBODY,
+          subgraph(() => ({ ok: true })),
+        ),
+      );
+
+      await expect(run.done).resolves.toMatchObject({ status: 'succeeded' });
+      expect(run.steps.filter((step) => step.nodeId === 'lint')).toEqual([
+        { nodeId: 'lint', attempt: 0, outcome: 'running', output: null, child: null },
+        {
+          nodeId: 'lint',
+          attempt: 0,
+          outcome: 'running',
+          output: null,
+          child: { runId: 'child-0', number: 7 },
+        },
+        {
+          nodeId: 'lint',
+          attempt: 0,
+          outcome: 'succeeded',
+          output: null,
+          child: { runId: 'child-0', number: 7 },
+        },
+      ]);
+      // Every other step names no child.
+      expect(
+        run.steps.filter((step) => step.nodeId !== 'lint').every((s) => s.child === null),
+      ).toBe(true);
+      expect(seen).toEqual([{ language: 'rust', linted: true }]);
+    });
+
+    it('retries a failed child under the node’s policy, a new child per attempt', async () => {
+      const doc = document({
+        nodes: [TRIGGER, { ...LINT, retry: { max: 1, backoff: 5 } }],
+        edges: [{ from: 'start', to: 'lint' }],
+      });
+      const run = drive(
+        doc,
+        {},
+        table(
+          agent(async () => ({ ok: true })).execute,
+          NOBODY,
+          subgraph((attempt) =>
+            attempt === 0
+              ? { ok: false, problem: 'child run #7 of graph-lint failed: the lint said no' }
+              : { ok: true },
+          ),
+        ),
+      );
+
+      await settle();
+      expect(run.timers.delays).toEqual([5_000]);
+      run.timers.fireAll();
+
+      await expect(run.done).resolves.toMatchObject({ status: 'succeeded' });
+      expect(
+        run.steps
+          .filter((step) => step.nodeId === 'lint' && step.child !== null)
+          .map((step) => `${String(step.attempt)} ${step.outcome} #${String(step.child?.number)}`),
+      ).toEqual(['0 running #7', '0 failed #7', '1 running #8', '1 succeeded #8']);
+    });
+
+    it('fails the run naming the node when the child fails on every attempt', async () => {
+      const doc = document({ nodes: [TRIGGER, LINT], edges: [{ from: 'start', to: 'lint' }] });
+      const run = drive(
+        doc,
+        {},
+        table(
+          agent(async () => ({ ok: true })).execute,
+          NOBODY,
+          subgraph(() => ({ ok: false, problem: 'child run #7 of graph-lint failed' })),
+        ),
+      );
+
+      await expect(run.done).resolves.toEqual({
+        status: 'failed',
+        reason: 'the SUB-GRAPH node Lint suite failed: child run #7 of graph-lint failed',
       });
     });
   });

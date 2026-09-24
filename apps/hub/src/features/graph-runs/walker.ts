@@ -8,6 +8,7 @@ import {
   type GraphNode,
   type GraphNodeId,
   type GraphNodeKind,
+  type GraphRunChild,
   type GraphRunStep,
   type GraphRunStepOutput,
   type RouteInput,
@@ -27,14 +28,21 @@ import type { Timers } from '@agentplex/node-shared';
  * starts a session is `agent-executor.ts`, tested against its own seams, and
  * the walk is tested with one that answers what it is told.
  *
- * ## The table is typed by kind, minus the kinds nothing runs yet
+ * ## The table is typed by kind, minus the one kind nothing runs
  *
- * `ExecutorTable` is `Record` over every kind but `action` and `subgraph`.
- * Publish already refuses an ACTION node; SUB-GRAPH is the next ticket, and
- * it adds its key to `ExecutableKind` when it adds its executor. Until then a
- * run that reaches one fails with a sentence naming the node, from a switch
- * that ends in `assertNever` -- so a seventh kind added to the protocol is a
- * type error here and not a silent fall through.
+ * `ExecutorTable` is `Record` over every kind but `action`. Publish refuses
+ * an ACTION node, since no build performs one, so a run reaching one is a
+ * document that bypassed publish; it fails with a sentence naming the node,
+ * from a switch that ends in `assertNever` -- so a seventh kind added to the
+ * protocol is a type error here and not a silent fall through.
+ *
+ * A SUB-GRAPH is an executor like any other: it runs a whole walk of another
+ * graph and answers when that walk ends. The walk here knows nothing of
+ * that except the child's name, which the executor hands over through
+ * `StepContext.child` the moment the child is numbered, and which every
+ * record of that attempt then carries -- the running one re-reported with it,
+ * and the outcome. A retry is a new attempt and so a new child, which is what
+ * lets a person see which try of the lint suite broke and open that one.
  *
  * ## A step is one attempt
  *
@@ -115,6 +123,12 @@ export interface StepContext {
    * keeps the list collapses.
    */
   waiting(): void;
+  /**
+   * Names the run this attempt started, for a SUB-GRAPH. The walk records
+   * the running step again with the child on it, and every later record of
+   * this attempt carries it too.
+   */
+  child(child: GraphRunChild): void;
 }
 
 export type Executor<K extends GraphNodeKind> = (
@@ -123,8 +137,8 @@ export type Executor<K extends GraphNodeKind> = (
   context: StepContext,
 ) => Promise<StepResult>;
 
-/** The kinds this runtime executes. AGX-265 adds `subgraph`. */
-export type ExecutableKind = Exclude<GraphNodeKind, 'action' | 'subgraph'>;
+/** The kinds this runtime executes: every one but ACTION, which publish refuses. */
+export type ExecutableKind = Exclude<GraphNodeKind, 'action'>;
 
 export type ExecutorTable = { readonly [K in ExecutableKind]: Executor<K> };
 
@@ -236,8 +250,9 @@ function executorFor(
       return (input, context) => table.agent(node, input, context);
     case 'human':
       return (input, context) => table.human(node, input, context);
-    case 'action':
     case 'subgraph':
+      return (input, context) => table.subgraph(node, input, context);
+    case 'action':
       return null;
     default:
       return assertNever(node, 'graph node kind');
@@ -351,25 +366,29 @@ export function walk(
 
       let result: StepResult | null = null;
       for (let attempt = 0; attempt <= node.retry.max; attempt += 1) {
-        onStep({ nodeId: node.id, attempt, outcome: 'running', output: null }, reached);
+        // The child this attempt started, once the executor names one.
+        let child: GraphRunChild | null = null;
+        const record = (outcome: GraphRunStep['outcome'], output: GraphRunStepOutput | null) =>
+          onStep({ nodeId: node.id, attempt, outcome, output, child }, reached);
+        record('running', null);
         let attempted: StepResult;
         try {
           attempted = await execute(carried, {
             document,
             attempt,
             cancellation,
-            waiting: () =>
-              onStep({ nodeId: node.id, attempt, outcome: 'waiting', output: null }, reached),
+            waiting: () => record('waiting', null),
+            child: (named) => {
+              child = named;
+              record('running', null);
+            },
           });
         } catch (error) {
           attempted = { ok: false, problem: String(error) };
         }
 
         if (attempted.ok) {
-          onStep(
-            { nodeId: node.id, attempt, outcome: 'succeeded', output: attempted.output },
-            reached,
-          );
+          record('succeeded', attempted.output);
           result = attempted;
           break;
         }
@@ -378,11 +397,11 @@ export function walk(
         // failing: the step is marked as what happened to it, and the run
         // ends without another try.
         if (cancellation.cancelled) {
-          onStep({ nodeId: node.id, attempt, outcome: 'cancelled', output: null }, reached);
+          record('cancelled', null);
           return end({ status: 'cancelled' });
         }
 
-        onStep({ nodeId: node.id, attempt, outcome: 'failed', output: null }, reached);
+        record('failed', null);
         if (attempt === node.retry.max || attempted.retryable === false) {
           const named = `the ${KIND_WORDS[node.kind]} node ${nameOf(node)}`;
           let reason: string;

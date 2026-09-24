@@ -186,6 +186,7 @@ describe('the AGENT executor', () => {
     context = {
       document: { nodes: [NODE], edges: [] },
       waiting: () => {},
+      child: () => {},
       attempt: 0,
       cancellation: {
         get cancelled() {

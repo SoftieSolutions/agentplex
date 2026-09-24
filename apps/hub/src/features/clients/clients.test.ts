@@ -2621,4 +2621,91 @@ describe('a graph run', () => {
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
     expect(graphRuns.reads).toEqual([]);
   });
+
+  const SUMMARY = {
+    runId: 'run-2' as never,
+    number: 2,
+    status: 'failed' as const,
+    startedAt: 1_756_000_000_000,
+    endedAt: 1_756_000_060_000,
+    reason: 'the AGENT node Rust reviewer failed: the box said no',
+  };
+
+  it('answers a history request to the client that asked alone, naming the graph', async () => {
+    const { broadcast, graphRuns } = harness();
+    const asker = attach(broadcast);
+    const other = attach(broadcast);
+    await asker.hello();
+    await other.hello();
+    graphRuns.answerHistoryWith([SUMMARY]);
+    const otherSaw = other.received.length;
+
+    await asker.say({ type: 'graph-run-history-request', id: 2, nodeId: GRAPH });
+
+    expect(graphRuns.histories).toEqual([GRAPH]);
+    expect(asker.received.at(-1)).toEqual({
+      type: 'graph-run-history',
+      replyTo: 2,
+      nodeId: GRAPH,
+      runs: [SUMMARY],
+    });
+    expect(other.received.length).toBe(otherSaw);
+  });
+
+  it('marks the asker as watching the graph, so its runs reach it after a history request', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    await client.say({ type: 'graph-run-history-request', id: 2, nodeId: GRAPH });
+
+    graphRuns.emit(runState(GRAPH));
+    await Promise.resolve();
+
+    expect(client.received.at(-1)).toEqual({ type: 'graph-run-state', ...runState(GRAPH) });
+  });
+
+  it('refuses a history request before hello, and reads nothing', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+
+    await client.say({ type: 'graph-run-history-request', id: 1, nodeId: GRAPH });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
+    expect(graphRuns.histories).toEqual([]);
+  });
+
+  it('answers an open of one run as a state, and refuses a run the graph does not have', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    graphRuns.answerOpensWith(runState(GRAPH, 'succeeded'));
+
+    await client.say({ type: 'graph-run-open', id: 2, nodeId: GRAPH, runId: 'run-1' });
+
+    expect(graphRuns.opens).toEqual([{ nodeId: GRAPH, runId: 'run-1' }]);
+    expect(client.received.at(-1)).toEqual({
+      type: 'graph-run-state',
+      ...runState(GRAPH, 'succeeded'),
+    });
+
+    graphRuns.answerOpensWith(null);
+    await client.say({ type: 'graph-run-open', id: 3, nodeId: OTHER, runId: 'run-1' });
+
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'refusal',
+      replyTo: 3,
+      code: 'refused',
+      message: 'that graph has no run by that id',
+    });
+  });
+
+  it('refuses an open before hello, and opens nothing', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+
+    await client.say({ type: 'graph-run-open', id: 1, nodeId: GRAPH, runId: 'run-1' });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
+    expect(graphRuns.opens).toEqual([]);
+  });
 });

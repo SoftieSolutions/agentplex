@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   graphDocumentSchema,
+  graphNodeIdSchema,
   graphRunIdSchema,
   nodeIdSchema,
   sessionIdSchema,
@@ -17,7 +18,7 @@ import { createGraphs, type Graphs } from '../graphs/graphs.js';
 import type { AgentExecutor } from './agent-executor.js';
 import { createGraphRuns, GRAPH_RUNS_MAX_ACTIVE, type GraphRuns } from './graph-runs.js';
 import type { HumanExecutor, HumanRun } from './human-executor.js';
-import { readRun } from './run-rows.js';
+import { childrenOf, readRun } from './run-rows.js';
 
 /**
  * The runtime's entry: a run from the frame's two fields to a row and a
@@ -328,18 +329,21 @@ describe('graph runs', () => {
         attempt: 0,
         outcome: 'succeeded',
         output: { kind: 'text', text: '{"language":"rust"}' },
+        child: null,
       },
       {
         nodeId: 'classify',
         attempt: 0,
         outcome: 'succeeded',
         output: { kind: 'route', route: 0, to: 'review' },
+        child: null,
       },
       {
         nodeId: 'review',
         attempt: 0,
         outcome: 'succeeded',
         output: { kind: 'session', storeId: 'store-work', sessionId: 'session-9', status: 'idle' },
+        child: null,
       },
     ]);
     expect(last?.reason).toBeNull();
@@ -426,6 +430,7 @@ describe('graph runs', () => {
       attempt: 0,
       outcome: 'failed',
       output: null,
+      child: null,
     });
     expect(await readRun(db(), started.runId)).toMatchObject({
       status: 'failed',
@@ -465,6 +470,7 @@ describe('graph runs', () => {
       attempt: 0,
       outcome: 'cancelled',
       output: null,
+      child: null,
     });
     expect(await readRun(db(), started.runId)).toMatchObject({ status: 'cancelled', endedAt: now });
   });
@@ -720,7 +726,7 @@ describe('graph runs', () => {
       step: 2,
       steps: [
         { nodeId: 'start', outcome: 'succeeded' },
-        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null, child: null },
       ],
     });
 
@@ -748,7 +754,7 @@ describe('graph runs', () => {
       status: 'waiting',
       steps: [
         { nodeId: 'start', outcome: 'succeeded' },
-        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null, child: null },
       ],
     });
   });
@@ -766,6 +772,228 @@ describe('graph runs', () => {
     expect(h.published.at(-1)).toMatchObject({
       status: 'failed',
       reason: 'the HUMAN node Ship it failed: a person denied Ship it',
+    });
+  });
+
+  describe('SUB-GRAPH', () => {
+    const AGENT_ONLY: GraphDocument = graphDocumentSchema.parse({
+      nodes: [TRIGGER, AGENT],
+      edges: [{ from: 'start', to: 'review' }],
+    });
+    const TRIGGER_ONLY: GraphDocument = graphDocumentSchema.parse({
+      nodes: [TRIGGER],
+      edges: [],
+    });
+
+    function pinning(
+      graph: NodeId,
+      version: number,
+      retry = { max: 0, backoff: 1 },
+    ): GraphDocument {
+      return graphDocumentSchema.parse({
+        nodes: [
+          TRIGGER,
+          { ...BASE, retry, id: 'lint', kind: 'subgraph', label: 'Lint suite', graph, version },
+        ],
+        edges: [{ from: 'start', to: 'lint' }],
+      });
+    }
+
+    /** A child graph published twice: v1 runs an AGENT, v2 is the TRIGGER alone. */
+    async function childGraph(h: Harness): Promise<NodeId> {
+      const child = await publishedGraph(h, AGENT_ONLY, 'lint-suite');
+      await h.graphs.save(child, TRIGGER_ONLY);
+      const second = await h.graphs.publish(child);
+      if (!second.ok) throw new Error(second.problem);
+      return child;
+    }
+
+    it('runs the child at the pinned version, numbered in its own graph, named on the parent step', async () => {
+      const h = build();
+      const child = await childGraph(h);
+      const parent = await publishedGraph(h, pinning(child, 1), 'release-pipeline');
+
+      const started = await h.runs.start(parent, { language: 'rust' });
+      if (!started.ok) throw new Error(started.problem);
+      await settle();
+
+      const parentEnd = h.published.filter((state) => state.nodeId === parent).at(-1);
+      expect(parentEnd).toMatchObject({ status: 'succeeded', number: 1 });
+      const lintSteps = parentEnd?.steps.filter((step) => step.nodeId === 'lint') ?? [];
+      const named = lintSteps.at(-1)?.child;
+      expect(named).toMatchObject({ number: 1 });
+      if (named === null || named === undefined) throw new Error('the step named no child');
+
+      // The child is a run of the child graph: its states go to that graph's
+      // watchers, and it ran v1 -- the AGENT -- not the newer v2.
+      const childEnd = h.published.filter((state) => state.nodeId === child).at(-1);
+      expect(childEnd).toMatchObject({
+        runId: named.runId,
+        number: 1,
+        status: 'succeeded',
+        of: 2,
+      });
+      expect(childEnd?.steps.map((step) => step.nodeId)).toEqual(['start', 'review']);
+      expect(await readRun(db(), named.runId)).toMatchObject({
+        graphNodeId: child,
+        version: 1,
+        number: 1,
+        status: 'succeeded',
+        parentRunId: started.runId,
+        parentNodeId: 'lint',
+      });
+      expect((await childrenOf(db(), started.runId, graphNodeIdSchema.parse('lint'))).length).toBe(
+        1,
+      );
+      // One AGENT executor per run, the parent's and the child's, each built
+      // for its own graph's project -- here both are under the one project.
+      expect(h.agent.projects).toEqual([PROJECT, PROJECT]);
+      // And the child is in its own graph's history, where its number is.
+      expect(await h.runs.history(child)).toMatchObject([{ runId: named.runId, number: 1 }]);
+      expect((await h.runs.history(parent)).map((run) => run.runId)).toEqual([started.runId]);
+    });
+
+    it('fails a chain that reaches its own graph, naming the node', async () => {
+      const h = build();
+      const graph = await publishedGraph(h, TRIGGER_ONLY, 'release-pipeline');
+      // v2 of the graph pins v1 of itself: publish allows it, the run refuses it.
+      await h.graphs.save(graph, pinning(graph, 1));
+      const second = await h.graphs.publish(graph);
+      if (!second.ok) throw new Error(second.problem);
+
+      const started = await h.runs.start(graph, {});
+      if (!started.ok) throw new Error(started.problem);
+      await settle();
+
+      expect(h.published.at(-1)).toMatchObject({
+        runId: started.runId,
+        status: 'failed',
+        reason:
+          'the SUB-GRAPH node Lint suite failed: it would run release-pipeline, which is already running above it in this chain: release-pipeline → release-pipeline',
+      });
+      // No child was numbered for it.
+      expect(await h.runs.history(graph)).toHaveLength(1);
+    });
+
+    it('cascades a cancel of the parent to the child, and both end cancelled', async () => {
+      const h = build();
+      const child = await childGraph(h);
+      const parent = await publishedGraph(h, pinning(child, 1));
+      h.agent.answerWith('hang');
+      const started = await h.runs.start(parent, {});
+      if (!started.ok) throw new Error(started.problem);
+      await settle();
+      const running = await h.runs.latest(child);
+      expect(running).toMatchObject({ status: 'running' });
+
+      expect(await h.runs.cancel(started.runId)).toEqual({ ok: true });
+      await settle();
+
+      expect(h.published.filter((state) => state.nodeId === child).at(-1)).toMatchObject({
+        status: 'cancelled',
+      });
+      expect(h.published.filter((state) => state.nodeId === parent).at(-1)).toMatchObject({
+        status: 'cancelled',
+      });
+      expect(await readRun(db(), running?.runId ?? started.runId)).toMatchObject({
+        status: 'cancelled',
+      });
+    });
+
+    it('counts a child toward the one-run-per-graph cap, and retries under the node’s policy', async () => {
+      const h = build();
+      const child = await publishedGraph(h, AGENT_ONLY, 'lint-suite');
+      const parent = await publishedGraph(h, pinning(child, 1, { max: 1, backoff: 5 }));
+      h.agent.answerWith('hang');
+      const own = await h.runs.start(child, {});
+      if (!own.ok) throw new Error(own.problem);
+      await settle();
+
+      const started = await h.runs.start(parent, {});
+      if (!started.ok) throw new Error(started.problem);
+      await settle();
+      // The child graph's own run is in flight, so the first try is refused.
+      expect(h.timers.delays).toEqual([5_000]);
+
+      await h.runs.cancel(own.runId);
+      await settle();
+      h.agent.answerWith('succeed');
+      h.timers.fireAll();
+      await settle();
+
+      const parentEnd = h.published.filter((state) => state.nodeId === parent).at(-1);
+      expect(parentEnd).toMatchObject({ status: 'succeeded' });
+      expect(
+        parentEnd?.steps
+          .filter((step) => step.nodeId === 'lint')
+          .map((step) => `${String(step.attempt)} ${step.outcome} ${String(step.child?.number)}`),
+      ).toEqual(['0 failed undefined', '1 succeeded 2']);
+    });
+  });
+
+  describe('history and open', () => {
+    it('lists a graph’s runs newest first, an in-flight one with its live status', async () => {
+      const h = build();
+      const graph = await publishedGraph(h, GATED);
+      const first = await h.runs.start(graph, {});
+      if (!first.ok) throw new Error(first.problem);
+      await settle();
+      h.human.deny();
+      await settle();
+      now += 1_000;
+      const second = await h.runs.start(graph, {});
+      if (!second.ok) throw new Error(second.problem);
+      await settle();
+
+      expect(await h.runs.history(graph)).toEqual([
+        {
+          runId: second.runId,
+          number: 2,
+          // The row says running; the run is parked at a person.
+          status: 'waiting',
+          startedAt: now,
+          endedAt: null,
+          reason: null,
+        },
+        {
+          runId: first.runId,
+          number: 1,
+          status: 'failed',
+          startedAt: now - 1_000,
+          endedAt: now - 1_000,
+          reason: 'the HUMAN node Ship it failed: a person denied Ship it',
+        },
+      ]);
+    });
+
+    it('is an empty list for a graph never run, and for a node that is no graph', async () => {
+      const h = build();
+      const graph = await publishedGraph(h);
+
+      expect(await h.runs.history(graph)).toEqual([]);
+      expect(await h.runs.history(PROJECT)).toEqual([]);
+    });
+
+    it('opens one run of the graph whole, in flight or ended, and nothing of another graph', async () => {
+      const h = build();
+      const graph = await publishedGraph(h);
+      const other = await publishedGraph(h, RUNNABLE, 'other');
+      const first = await h.runs.start(graph, { language: 'rust' });
+      if (!first.ok) throw new Error(first.problem);
+      await settle();
+      const firstEnd = h.published.at(-1);
+      h.agent.answerWith('hang');
+      const second = await h.runs.start(graph, { language: 'rust' });
+      if (!second.ok) throw new Error(second.problem);
+      await settle();
+
+      expect(await h.runs.open(graph, first.runId)).toEqual(firstEnd);
+      expect(await h.runs.open(graph, second.runId)).toMatchObject({
+        runId: second.runId,
+        status: 'running',
+      });
+      expect(await h.runs.open(other, first.runId)).toBeNull();
+      expect(await h.runs.open(graph, graphRunIdSchema.parse('nowhere'))).toBeNull();
     });
   });
 

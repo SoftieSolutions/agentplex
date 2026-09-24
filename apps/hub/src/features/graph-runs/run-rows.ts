@@ -1,12 +1,16 @@
 import { z } from 'zod';
 import {
+  graphNodeIdSchema,
   graphRunIdSchema,
   graphRunStepSchema,
+  graphRunSummarySchema,
   nodeIdSchema,
   routeInputSchema,
   runStatusSchema,
+  type GraphNodeId,
   type GraphRunId,
   type GraphRunStep,
+  type GraphRunSummary,
   type NodeId,
   type RouteInput,
   type RunStatus,
@@ -37,6 +41,15 @@ import type { Database, Queryable } from '../../db/database.js';
  * gives: the hub wrote them out of parsed values, so a row that fails to
  * read back is a bug or a damaged database, and either is something to stop
  * on rather than a run to draw.
+ *
+ * ## A child is a row like any other
+ *
+ * A run a SUB-GRAPH step started is inserted here the way a run a person
+ * started is, numbered in its own graph inside the same transaction, and
+ * differs only in naming its parent: the run and the step node that started
+ * it. The history of a graph is every run of that graph, whoever started it,
+ * so a child is listed where its number is -- in its own graph's list -- and
+ * never in its parent's.
  */
 
 /** JSON text to a value, refused in words rather than thrown as a syntax error. */
@@ -66,6 +79,8 @@ const runRowSchema = z
     reason: z.string().nullable(),
     started_at: z.int(),
     ended_at: z.int().nullable(),
+    parent_run_id: graphRunIdSchema.nullable(),
+    parent_node_id: graphNodeIdSchema.nullable(),
   })
   .transform((row) => ({
     runId: row.id,
@@ -78,6 +93,8 @@ const runRowSchema = z
     reason: row.reason,
     startedAt: row.started_at,
     endedAt: row.ended_at,
+    parentRunId: row.parent_run_id,
+    parentNodeId: row.parent_node_id,
   }));
 
 /** One run, whole, as the table holds it. */
@@ -88,6 +105,8 @@ export interface NewRun {
   /** The published version being run. A version the graph never had is refused by the schema. */
   readonly version: number;
   readonly input: RouteInput;
+  /** The run and the SUB-GRAPH node that started this one, or absent for a run a person started. */
+  readonly parent?: { readonly runId: GraphRunId; readonly nodeId: GraphNodeId };
 }
 
 /** What a run ends with: its final status (never one of the two open ones), the sentence if any, and the steps as they stand. */
@@ -99,7 +118,7 @@ export interface RunEnd {
 }
 
 const COLUMNS =
-  'id, graph_node_id, version, number, input, steps, status, reason, started_at, ended_at';
+  'id, graph_node_id, version, number, input, steps, status, reason, started_at, ended_at, parent_run_id, parent_node_id';
 
 /**
  * Makes a run row, numbered next for its graph, in one transaction.
@@ -113,7 +132,7 @@ export async function insertRun(
   ids: IdGenerator,
   clock: Clock,
   run: NewRun,
-): Promise<{ readonly runId: GraphRunId; readonly number: number }> {
+): Promise<{ readonly runId: GraphRunId; readonly number: number; readonly startedAt: number }> {
   return database.transaction(async (tx) => {
     const highest = await tx.query(
       'SELECT coalesce(max(number), 0) AS highest FROM graph_runs WHERE graph_node_id = ?',
@@ -121,12 +140,22 @@ export async function insertRun(
     );
     const number = z.int().nonnegative().parse(highest.rows[0]?.['highest']) + 1;
     const runId = graphRunIdSchema.parse(ids.newId());
+    const startedAt = clock.now();
     await tx.query(
       `INSERT INTO graph_runs (${COLUMNS})
-       VALUES (?, ?, ?, ?, ?, '[]', 'running', NULL, ?, NULL)`,
-      [runId, run.graphNodeId, run.version, number, JSON.stringify(run.input), clock.now()],
+       VALUES (?, ?, ?, ?, ?, '[]', 'running', NULL, ?, NULL, ?, ?)`,
+      [
+        runId,
+        run.graphNodeId,
+        run.version,
+        number,
+        JSON.stringify(run.input),
+        startedAt,
+        run.parent?.runId ?? null,
+        run.parent?.nodeId ?? null,
+      ],
     );
-    return { runId, number };
+    return { runId, number, startedAt };
   });
 }
 
@@ -175,6 +204,61 @@ export async function listRuns(
   const result = await database.query(
     `SELECT ${COLUMNS} FROM graph_runs WHERE graph_node_id = ? ORDER BY number DESC`,
     [graphNodeId],
+  );
+  return result.rows.map((row) => runRowSchema.parse(row));
+}
+
+const summaryRowSchema = z
+  .object({
+    id: z.unknown(),
+    number: z.unknown(),
+    status: z.unknown(),
+    started_at: z.unknown(),
+    ended_at: z.unknown(),
+    reason: z.unknown(),
+  })
+  .transform((row) => ({
+    runId: row.id,
+    number: row.number,
+    status: row.status,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    reason: row.reason,
+  }))
+  .pipe(graphRunSummarySchema);
+
+/**
+ * One graph's runs as the history list draws them: newest first, at most
+ * `limit`, summaries without their steps.
+ *
+ * Every run of the graph, a person's or a parent step's alike -- a child is a
+ * run of this graph with its own number here -- and never a run of another
+ * graph, which is where the children this graph's own steps started are
+ * listed. An empty list for a graph that has never run.
+ */
+export async function runHistory(
+  database: Queryable,
+  graphNodeId: NodeId,
+  limit: number,
+): Promise<readonly GraphRunSummary[]> {
+  const result = await database.query(
+    `SELECT id, number, status, started_at, ended_at, reason
+       FROM graph_runs WHERE graph_node_id = ? ORDER BY number DESC LIMIT ?`,
+    [graphNodeId, limit],
+  );
+  return result.rows.map((row) => summaryRowSchema.parse(row));
+}
+
+/** The runs one step of one run started, oldest first: one per attempt of a SUB-GRAPH node. */
+export async function childrenOf(
+  database: Queryable,
+  parentRunId: GraphRunId,
+  parentNodeId: GraphNodeId,
+): Promise<readonly RunRow[]> {
+  const result = await database.query(
+    `SELECT ${COLUMNS} FROM graph_runs
+      WHERE parent_run_id = ? AND parent_node_id = ? ORDER BY number`,
+    [parentRunId, parentNodeId],
   );
   return result.rows.map((row) => runRowSchema.parse(row));
 }

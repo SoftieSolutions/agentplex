@@ -1,12 +1,15 @@
-import type {
-  GraphRunId,
-  GraphRunState,
-  GraphRunStep,
-  NodeId,
-  RefusalCode,
-  RouteInput,
-  SessionStartTag,
-  StoreId,
+import {
+  GRAPH_RUN_HISTORY_MAX,
+  type GraphDocument,
+  type GraphRunId,
+  type GraphRunState,
+  type GraphRunStep,
+  type GraphRunSummary,
+  type NodeId,
+  type RefusalCode,
+  type RouteInput,
+  type SessionStartTag,
+  type StoreId,
 } from '@agentplex/protocol';
 import type { Clock, IdGenerator, Logger, Timers } from '@agentplex/node-shared';
 import type { Database } from '../../db/database.js';
@@ -18,9 +21,18 @@ import {
   failRunningRuns,
   insertRun,
   latestRun,
+  readRun,
   replaceSteps,
+  runHistory,
+  type NewRun,
   type RunRow,
 } from './run-rows.js';
+import {
+  createSubgraphExecutor,
+  type ChildLaunch,
+  type ChildLaunched,
+  type LineageEntry,
+} from './subgraph-executor.js';
 import { routerExecutor, triggerExecutor, walk, type Walk } from './walker.js';
 
 /**
@@ -69,6 +81,28 @@ import { routerExecutor, triggerExecutor, walk, type Walk } from './walker.js';
  * naming the restart. `stop` is the other half of that bargain: it cancels
  * every walk and then neither publishes nor writes, because the database is
  * closed behind it, and a row left `running` is exactly what the sweep is for.
+ *
+ * ## A SUB-GRAPH child is a run started here too
+ *
+ * A SUB-GRAPH step does not walk its child itself. It asks `launch` here,
+ * which starts the child the way `start` starts a run -- a row numbered in
+ * the child's own graph, the same executor table, states published to the
+ * child graph's watchers -- with the parent run and step on the row and the
+ * stack of graphs above it carried along for the cycle check. So a child is
+ * counted by both caps like any run: it is one more run in flight across the
+ * hub, and one run of its graph. A child whose graph is already on the stack
+ * never reaches the per-graph cap, because the executor refuses it first as
+ * the cycle it is. A cap that refuses a child fails the step, and the node's
+ * retry policy decides whether another child is tried.
+ *
+ * ## History, and one run opened
+ *
+ * `history` lists a graph's runs newest first as summaries, bounded, off the
+ * rows -- every run of that graph, a child's included, since a child is a run
+ * of its own graph -- with a run still in memory said as it stands: a row
+ * holds `running` for a run waiting on a person, and holds `running` for the
+ * moment between a run's end and the write of it. `open` answers one of those
+ * runs whole, so a screen can put a picked row on its strip.
  *
  * ## The end has a gap
  *
@@ -125,6 +159,10 @@ export interface GraphRuns {
   cancel(runId: GraphRunId): Promise<RunCancelled>;
   /** The graph's newest run as it stands -- in flight, or as its row says -- or `null` when it has never run. */
   latest(nodeId: NodeId): Promise<GraphRunState | null>;
+  /** The graph's runs, newest first, at most `GRAPH_RUN_HISTORY_MAX`; empty for a graph never run. */
+  history(nodeId: NodeId): Promise<readonly GraphRunSummary[]>;
+  /** One run of the graph, whole, or `null` when the graph has no run by that id. */
+  open(nodeId: NodeId, runId: GraphRunId): Promise<GraphRunState | null>;
   /** The start tags one server reported, which is how a spawned step learns its session. */
   noteStarts(storeId: StoreId, starts: readonly SessionStartTag[]): void;
   /** Cancels every walk in flight and publishes and writes nothing more. Called once, at shutdown. */
@@ -139,7 +177,10 @@ interface ActiveRun {
   readonly nodeId: NodeId;
   readonly runId: GraphRunId;
   readonly number: number;
+  readonly startedAt: number;
   readonly of: number;
+  /** Every graph above and including this run's own, root first. */
+  readonly lineage: readonly LineageEntry[];
   step: number;
   steps: GraphRunStep[];
   walk: Walk | null;
@@ -151,6 +192,22 @@ interface ActiveRun {
 
 function refused(problem: string): GraphRunRefusal {
   return { ok: false, code: 'refused', problem };
+}
+
+/** A run that has ended and whose end is still being written: the state, and when it ended. */
+interface Ending {
+  readonly state: GraphRunState;
+  readonly startedAt: number;
+  readonly endedAt: number;
+}
+
+/** How a start is refused while a run of the same graph holds its place. */
+function heldRefusal(held: ActiveRun | null, graph: string): GraphRunRefusal {
+  return refused(
+    held === null
+      ? `a run of ${graph} is already starting`
+      : `run #${String(held.number)} of ${graph} is still in flight; cancel it or wait for it to end`,
+  );
 }
 
 /** A row as a state: `step` is the visits made, which is one attempt 0 per node reached. */
@@ -175,7 +232,7 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
   /** The run in flight per graph, or `null` while one is being started. */
   const byGraph = new Map<NodeId, ActiveRun | null>();
   /** Runs that have ended and whose end is still being written, by graph. */
-  const ending = new Map<NodeId, GraphRunState>();
+  const ending = new Map<NodeId, Ending>();
   let stopped = false;
 
   const deliver = (state: GraphRunState): void => {
@@ -259,6 +316,239 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
     }
   };
 
+  /**
+   * Checks the caps and holds this graph's place, synchronously, before the
+   * caller's first await -- so two starts in one tick see each other. `graph`
+   * is how a refusal names the graph: "this graph" to the person who pressed
+   * Run, "the graph it pins" in a SUB-GRAPH step's sentence.
+   */
+  const reserve = (nodeId: NodeId, graph: string): GraphRunRefusal | null => {
+    if (stopped) return refused('the hub is stopping');
+    const held = byGraph.get(nodeId);
+    if (held !== undefined) return heldRefusal(held, graph);
+    if (byGraph.size >= GRAPH_RUNS_MAX_ACTIVE) {
+      return refused(
+        `this hub is running ${String(GRAPH_RUNS_MAX_ACTIVE)} graphs at once, the most it runs; wait for one to end`,
+      );
+    }
+    byGraph.set(nodeId, null);
+    return null;
+  };
+
+  const subgraph = createSubgraphExecutor({
+    graphs,
+    launch: (request) => launchChild(request),
+    logger: dependencies.logger,
+  });
+
+  interface Begin {
+    readonly nodeId: NodeId;
+    readonly project: NodeId | null;
+    readonly graphName: string;
+    readonly version: number;
+    readonly document: GraphDocument;
+    readonly input: RouteInput;
+    readonly parent: NewRun['parent'];
+    /** The graphs above this run, root first; this run's own is added here. */
+    readonly above: readonly LineageEntry[];
+  }
+
+  /**
+   * Numbers the run, publishes it and starts its walk. The caller has
+   * reserved the graph's place; a throw before the walk starts gives it back.
+   */
+  async function begin(
+    what: Begin,
+  ): Promise<{ readonly ok: true; run: ActiveRun; walk: Walk } | GraphRunRefusal> {
+    const { nodeId, document, input } = what;
+    let run: ActiveRun;
+    try {
+      // Checked again after every await: stop() cancels the runs it finds
+      // in `active`, and a run that joined after it looked would be walked
+      // by nobody's stop into a database being closed.
+      if (stopped) {
+        byGraph.delete(nodeId);
+        return refused('the hub is stopping');
+      }
+      const { runId, number, startedAt } = await insertRun(database, ids, clock, {
+        graphNodeId: nodeId,
+        version: what.version,
+        input,
+        ...(what.parent === undefined ? {} : { parent: what.parent }),
+      });
+      if (stopped) {
+        byGraph.delete(nodeId);
+        logger.info('a run was numbered as the hub stopped; the next boot sweeps its row', {
+          runId,
+        });
+        return refused('the hub is stopping');
+      }
+      run = {
+        nodeId,
+        runId,
+        number,
+        startedAt,
+        of: document.nodes.length,
+        lineage: [...what.above, { graph: nodeId, name: what.graphName }],
+        step: 0,
+        steps: [],
+        walk: null,
+        pending: null,
+        writes: Promise.resolve(),
+      };
+      logger.info('run started', {
+        nodeId,
+        runId,
+        number,
+        version: what.version,
+        parent: what.parent?.runId ?? null,
+      });
+    } catch (error) {
+      byGraph.delete(nodeId);
+      throw error;
+    }
+    active.set(run.runId, run);
+    byGraph.set(nodeId, run);
+    publish(run, stateOf(run, 'running', null));
+
+    const walking = walk(document, input, {
+      executors: {
+        trigger: triggerExecutor,
+        router: routerExecutor,
+        agent: agent.forProject(what.project),
+        human: human.forRun({
+          runId: run.runId,
+          number: run.number,
+          graph: nodeId,
+          graphName: what.graphName,
+        }),
+        subgraph: subgraph.forRun({ runId: run.runId, lineage: run.lineage }),
+      },
+      timers,
+      onStep: (step, reached) => {
+        record(run, step);
+        run.step = reached;
+        const steps = [...run.steps];
+        write(run, 'steps', () => replaceSteps(database, run.runId, steps));
+        publish(run, stateOf(run, openStatus(run), null));
+      },
+      onEnd: (outcome) => {
+        const reason = outcome.status === 'failed' ? outcome.reason : null;
+        active.delete(run.runId);
+        byGraph.delete(nodeId);
+        const final = stateOf(run, outcome.status, reason);
+        publish(run, final);
+        if (stopped) {
+          logger.info('run ended after the stop; the next boot sweeps its row', {
+            runId: run.runId,
+          });
+          return;
+        }
+        const endedAt = clock.now();
+        const ended: Ending = { state: final, startedAt: run.startedAt, endedAt };
+        ending.set(nodeId, ended);
+        write(run, 'end', () =>
+          endRun(database, run.runId, {
+            status: outcome.status,
+            reason,
+            steps: final.steps,
+            endedAt,
+          }),
+        );
+        void run.writes.then(() => {
+          if (ending.get(nodeId) === ended) ending.delete(nodeId);
+          logger.info('run ended', {
+            runId: run.runId,
+            number: run.number,
+            status: outcome.status,
+            reason,
+          });
+        });
+      },
+    });
+    run.walk = walking;
+    return { ok: true, run, walk: walking };
+  }
+
+  /** What the graph is called, for the words a person reads; its id when the tree no longer has it. */
+  async function nameOf(nodeId: NodeId): Promise<string> {
+    const opened = await graphs.open(nodeId);
+    return opened.ok ? opened.name : nodeId;
+  }
+
+  /** Starts a SUB-GRAPH step's child: the same caps, the same row, the parent named on it. */
+  async function launchChild(request: ChildLaunch): Promise<ChildLaunched> {
+    const refusal = reserve(request.graph, 'the graph it pins');
+    if (refusal !== null) return { ok: false, problem: refusal.problem };
+    let project: NodeId | null;
+    let graphName: string;
+    try {
+      project = await graphs.projectOf(request.graph);
+      graphName = await nameOf(request.graph);
+    } catch (error) {
+      byGraph.delete(request.graph);
+      throw error;
+    }
+    const begun = await begin({
+      nodeId: request.graph,
+      project,
+      graphName,
+      version: request.version,
+      document: request.document,
+      input: request.input,
+      parent: request.parent,
+      above: request.lineage,
+    });
+    if (!begun.ok) return { ok: false, problem: begun.problem };
+    const { run, walk: walking } = begun;
+    return {
+      ok: true,
+      child: {
+        runId: run.runId,
+        number: run.number,
+        name: graphName,
+        done: walking.done,
+        cancel: () => walking.cancel(),
+      },
+    };
+  }
+
+  /**
+   * A row as a state. `of` is the version's node count, and the version may
+   * not be the newest one any more: read the one the run was of.
+   */
+  async function stateFromRow(row: RunRow): Promise<GraphRunState> {
+    const document = await graphs.publishedVersion(row.graphNodeId, row.version);
+    return fromRow(row, document?.nodes.length ?? 0);
+  }
+
+  /** A run's summary as it stands in memory, or `null` when only the row can say. */
+  const summaryInMemory = (nodeId: NodeId, runId: GraphRunId): GraphRunSummary | null => {
+    const run = active.get(runId);
+    if (run !== undefined && run.nodeId === nodeId) {
+      return {
+        runId,
+        number: run.number,
+        status: openStatus(run),
+        startedAt: run.startedAt,
+        endedAt: null,
+        reason: null,
+      };
+    }
+    const ended = ending.get(nodeId);
+    if (ended !== undefined && ended.state.runId === runId) {
+      return {
+        runId,
+        number: ended.state.number,
+        status: ended.state.status,
+        startedAt: ended.startedAt,
+        endedAt: ended.endedAt,
+        reason: ended.state.reason,
+      };
+    }
+    return null;
+  };
+
   return {
     async load(): Promise<void> {
       const swept = await failRunningRuns(database, clock.now(), RESTART_REASON);
@@ -268,27 +558,13 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
     },
 
     async start(nodeId: NodeId, input: RouteInput): Promise<RunStarted> {
-      if (stopped) return refused('the hub is stopping');
-      const held = byGraph.get(nodeId);
-      if (held !== undefined) {
-        return refused(
-          held === null
-            ? 'a run of this graph is already starting'
-            : `run #${String(held.number)} of this graph is still in flight; cancel it or wait for it to end`,
-        );
-      }
-      if (byGraph.size >= GRAPH_RUNS_MAX_ACTIVE) {
-        return refused(
-          `this hub is running ${String(GRAPH_RUNS_MAX_ACTIVE)} graphs at once, the most it runs; wait for one to end`,
-        );
-      }
       // Reserved before the first await, so a second start of this graph in
-      // the same tick is refused above rather than numbered beside this one.
-      byGraph.set(nodeId, null);
+      // the same tick is refused here rather than numbered beside this one.
+      const refusal = reserve(nodeId, 'this graph');
+      if (refusal !== null) return refusal;
 
-      let run: ActiveRun;
-      let document;
       let project: NodeId | null;
+      let published;
       let graphName: string;
       try {
         project = await graphs.projectOf(nodeId);
@@ -296,7 +572,7 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
           byGraph.delete(nodeId);
           return refused('this hub has no graph by that id');
         }
-        const published = await graphs.latestPublished(nodeId);
+        published = await graphs.latestPublished(nodeId);
         if (published === null) {
           byGraph.delete(nodeId);
           return refused('this graph has no published version to run; publish it first');
@@ -305,104 +581,23 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
         // what the graph is called. A graph that has a published version has
         // a node, so a refusal here is the tree changing under this call, and
         // the id is then what names it.
-        const opened = await graphs.open(nodeId);
-        graphName = opened.ok ? opened.name : nodeId;
-        // Checked again after every await: stop() cancels the runs it finds
-        // in `active`, and a run that joined after it looked would be walked
-        // by nobody's stop into a database being closed.
-        if (stopped) {
-          byGraph.delete(nodeId);
-          return refused('the hub is stopping');
-        }
-        const { runId, number } = await insertRun(database, ids, clock, {
-          graphNodeId: nodeId,
-          version: published.version,
-          input,
-        });
-        if (stopped) {
-          byGraph.delete(nodeId);
-          logger.info('a run was numbered as the hub stopped; the next boot sweeps its row', {
-            runId,
-          });
-          return refused('the hub is stopping');
-        }
-        document = published.document;
-        run = {
-          nodeId,
-          runId,
-          number,
-          of: document.nodes.length,
-          step: 0,
-          steps: [],
-          walk: null,
-          pending: null,
-          writes: Promise.resolve(),
-        };
-        logger.info('run started', { nodeId, runId, number, version: published.version });
+        graphName = await nameOf(nodeId);
       } catch (error) {
         byGraph.delete(nodeId);
         throw error;
       }
-      active.set(run.runId, run);
-      byGraph.set(nodeId, run);
-      publish(run, stateOf(run, 'running', null));
-
-      const walking = walk(document, input, {
-        executors: {
-          trigger: triggerExecutor,
-          router: routerExecutor,
-          agent: agent.forProject(project),
-          human: human.forRun({
-            runId: run.runId,
-            number: run.number,
-            graph: nodeId,
-            graphName,
-          }),
-        },
-        timers,
-        onStep: (step, reached) => {
-          record(run, step);
-          run.step = reached;
-          const steps = [...run.steps];
-          write(run, 'steps', () => replaceSteps(database, run.runId, steps));
-          publish(run, stateOf(run, openStatus(run), null));
-        },
-        onEnd: (outcome) => {
-          const reason = outcome.status === 'failed' ? outcome.reason : null;
-          active.delete(run.runId);
-          byGraph.delete(nodeId);
-          const final = stateOf(run, outcome.status, reason);
-          publish(run, final);
-          if (stopped) {
-            logger.info('run ended after the stop; the next boot sweeps its row', {
-              runId: run.runId,
-            });
-            return;
-          }
-          ending.set(nodeId, final);
-          const endedAt = clock.now();
-          write(run, 'end', () =>
-            endRun(database, run.runId, {
-              status: outcome.status,
-              reason,
-              steps: final.steps,
-              endedAt,
-            }),
-          );
-          void run.writes.then(() => {
-            if (ending.get(nodeId) === final) ending.delete(nodeId);
-            logger.info('run ended', {
-              runId: run.runId,
-              number: run.number,
-              status: outcome.status,
-              reason,
-            });
-          });
-        },
+      const begun = await begin({
+        nodeId,
+        project,
+        graphName,
+        version: published.version,
+        document: published.document,
+        input,
+        parent: undefined,
+        above: [],
       });
-      run.walk = walking;
-
-      return { ok: true, runId: run.runId, number: run.number };
+      if (!begun.ok) return begun;
+      return { ok: true, runId: begun.run.runId, number: begun.run.number };
     },
 
     async cancel(runId: GraphRunId): Promise<RunCancelled> {
@@ -412,7 +607,7 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
         run.walk.cancel();
         return { ok: true };
       }
-      for (const ended of ending.values()) {
+      for (const { state: ended } of ending.values()) {
         if (ended.runId === runId) {
           return refused(`run #${String(ended.number)} has already ended`);
         }
@@ -424,13 +619,30 @@ export function createGraphRuns(dependencies: GraphRunsDependencies): GraphRuns 
       const held = byGraph.get(nodeId);
       if (held !== undefined && held !== null) return stateOf(held, openStatus(held), null);
       const ended = ending.get(nodeId);
-      if (ended !== undefined) return ended;
+      if (ended !== undefined) return ended.state;
       const row = await latestRun(database, nodeId);
       if (row === null) return null;
-      // `of` is the version's node count, and the version may not be the
-      // newest one any more: read the one the run was of.
-      const document = await graphs.publishedVersion(nodeId, row.version);
-      return fromRow(row, document?.nodes.length ?? 0);
+      return stateFromRow(row);
+    },
+
+    async history(nodeId: NodeId): Promise<readonly GraphRunSummary[]> {
+      const rows = await runHistory(database, nodeId, GRAPH_RUN_HISTORY_MAX);
+      // A run in flight is its row plus what only memory knows: `waiting`,
+      // and an end not yet written. A run started after the read is not in
+      // the list; its first state reaches the screen, which asks again.
+      return rows.map((row) => summaryInMemory(nodeId, row.runId) ?? row);
+    },
+
+    async open(nodeId: NodeId, runId: GraphRunId): Promise<GraphRunState | null> {
+      const run = active.get(runId);
+      if (run !== undefined) {
+        return run.nodeId === nodeId ? stateOf(run, openStatus(run), null) : null;
+      }
+      const ended = ending.get(nodeId);
+      if (ended !== undefined && ended.state.runId === runId) return ended.state;
+      const row = await readRun(database, runId);
+      if (row === null || row.graphNodeId !== nodeId) return null;
+      return stateFromRow(row);
     },
 
     noteStarts(storeId: StoreId, starts: readonly SessionStartTag[]): void {

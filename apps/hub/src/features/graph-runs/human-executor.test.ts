@@ -144,6 +144,7 @@ function context(): StepContext {
     waiting: () => {
       waitingCalls += 1;
     },
+    child: () => {},
   };
 }
 
