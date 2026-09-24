@@ -307,6 +307,9 @@ export interface TerminalManager extends SessionLiveness {
    * could not tell what the session is doing cannot tell that it is between
    * turns either, so a request against it waits for a status somebody could
    * read. Idempotent: a second pause answers with where the first got to.
+   *
+   * Not a one-way door. A `paused` session observed `working` again drops
+   * back to `requested`, and the pause is taken at the next boundary.
    */
   pause(terminalId: string): PauseOutcome;
   /**
@@ -536,9 +539,18 @@ export function createTerminalManager({
       const record = liveHolderOf(session);
       if (record === undefined) return;
       record.status = status;
-      // The one place a request becomes a pause. The scan that derived this
-      // status is what says the turn ended, and nothing else may say so.
+      // The one place a request becomes a pause, and the one place a pause
+      // becomes a request again. The scan that derived this status is what
+      // says the turn ended, and nothing else may say so; the same scan is
+      // what says a paused session has started a turn after all -- an
+      // approval answered through the gate lets the agent go on, and a pause
+      // taken on a stale status can land mid-turn -- and then the boundary
+      // the pause claimed is gone. Dropping back to `requested` keeps the
+      // keyboard open for the turn and takes the pause at the next boundary,
+      // where `paused` left standing would refuse input to a session that
+      // is working. Only `working` re-arms: `unknown` is no evidence either way.
       if (record.pause === 'requested' && atBoundary(status)) record.pause = 'paused';
+      else if (record.pause === 'paused' && status === 'working') record.pause = 'requested';
     },
 
     terminal(terminalId: string): Terminal | undefined {

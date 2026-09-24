@@ -605,14 +605,38 @@ describe('createTerminalManager pause', () => {
     expect(manager.terminal(terminalId)?.pause).toBe('requested');
   });
 
-  it('leaves a paused session paused whatever status is observed next', () => {
+  it('re-arms a pause whose session is seen working again: paused -> requested -> paused', () => {
+    // A paused session can still start a turn: an approval answered through
+    // the gate lets the agent go on, and a pause taken on a stale status can
+    // land mid-turn. Either way the boundary the pause claimed is gone, so the
+    // pause drops back to a request and is taken again at the next boundary,
+    // rather than a `paused` word standing over a session that is working.
     const { manager, terminalId, session } = held('idle');
     manager.pause(terminalId);
+    expect(manager.terminal(terminalId)?.pause).toBe('paused');
 
     manager.observe(session, 'working');
+    expect(manager.terminal(terminalId)?.pause).toBe('requested');
+    expect(manager.holder(session)?.pause).toBe('requested');
 
+    manager.observe(session, 'idle');
     expect(manager.terminal(terminalId)?.pause).toBe('paused');
+    expect(manager.holder(session)?.pause).toBe('paused');
   });
+
+  it.each(['idle', 'awaiting-input', 'awaiting-permission', 'unknown'] as const)(
+    'leaves a paused session paused when %s is observed: only working re-arms it',
+    (status) => {
+      // `unknown` re-arms nothing, for the reason it promotes nothing: not
+      // knowing what the session is doing is not evidence that it is working.
+      const { manager, terminalId, session } = held('idle');
+      manager.pause(terminalId);
+
+      manager.observe(session, status);
+
+      expect(manager.terminal(terminalId)?.pause).toBe('paused');
+    },
+  );
 
   it('answers a second pause with where the first one got to, and changes nothing', () => {
     const { manager, terminalId } = held('working');
