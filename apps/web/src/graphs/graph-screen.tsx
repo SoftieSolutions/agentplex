@@ -228,7 +228,10 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           )}
         </Box>
         <Box
-          component="aside"
+          // A section and not an aside: the page has one aside, the shell's
+          // sidebar, and the shell's own suite counts on that being true.
+          component="section"
+          aria-label="Inspector"
           w={280}
           style={{
             flexShrink: 0,

@@ -10,8 +10,9 @@ import type { TokenStore } from '../auth/token.js';
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogue-store.js';
 import { useDocRoute } from '../docs/doc-route.js';
-import { GraphPane } from '../graphs/graph-pane.js';
 import { useGraphRoute } from '../graphs/graph-route.js';
+import { GraphScreen } from '../graphs/graph-screen.js';
+import { NewGraphForm } from '../graphs/new-graph-form.js';
 import { appLayoutStore } from '../layout/app-layout.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
@@ -128,6 +129,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
   const [paletteSearch] = useState<PaletteSearch>(() => createPaletteSearch({ hub }));
   const [starting, setStarting] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
+  const [creatingGraph, setCreatingGraph] = useState(false);
 
   /**
    * The one place the selection moves from. Two things read it -- the cards
@@ -155,6 +157,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
   function startKind(kind: NewNodeKind): void {
     if (kind === 'session') setStarting(true);
     if (kind === 'project') setCreatingProject(true);
+    if (kind === 'graph') setCreatingGraph(true);
   }
 
   const state = snapshot.machineState;
@@ -360,14 +363,20 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
           {region}
         </Box>
       </Box>
-      {/* Both forms the New menu opens. They are the chrome's here and the
+      {/* The forms the New menu opens. They are the chrome's here and the
           menu is the only thing that opens them, so the screen underneath
-          draws neither control and holds neither copy. */}
+          draws none of the controls and holds none of the copies. */}
       {startForm}
       <NewProjectForm
         store={hub}
         opened={creatingProject}
         onClose={() => setCreatingProject(false)}
+        scheme={scheme}
+      />
+      <NewGraphForm
+        store={hub}
+        opened={creatingGraph}
+        onClose={() => setCreatingGraph(false)}
         scheme={scheme}
       />
     </Box>
@@ -433,8 +442,8 @@ function content({
 }: ContentProps): JSX.Element {
   if (graph !== null) {
     // Keyed on the node, so following a link from one graph to another mounts
-    // a fresh pane that asks for its own document.
-    return <GraphPane key={graph} nodeId={graph} store={hub} />;
+    // a fresh screen that asks for its own document.
+    return <GraphScreen key={graph} nodeId={graph} store={hub} />;
   }
   if (sessionRef !== null || doc !== null) {
     return <LayoutScreen session={sessionRef} doc={doc} store={hub} />;

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, type JSX } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sessionRefSchema } from '@agentplex/protocol';
 import { fakeStorage } from '../auth/fake-storage.js';
 import { createTokenStore, type TokenStore } from '../auth/token.js';
@@ -11,6 +11,7 @@ import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type HubStore } from '../store/hub-store.js';
 import { createFakeTimers } from '../store/timers.js';
+import { installFlowMocks } from '../graphs/flow-test-setup.js';
 import { graphHash } from '../graphs/graph-route.js';
 import { nodeIdSchema } from '@agentplex/protocol';
 import { sessionHash } from '../terminal/session-route.js';
@@ -138,6 +139,11 @@ describe('the shell', () => {
   let store: HubStore;
   let tokens: TokenStore;
   let sockets: ReturnType<typeof createFakeSocketFactory>;
+
+  beforeAll(() => {
+    // The graph screen mounts the canvas, which measures with what jsdom lacks.
+    installFlowMocks();
+  });
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -518,6 +524,15 @@ describe('the shell', () => {
     await pickNew('project');
 
     expect(buttonWords().filter((word) => word === 'Create project')).toHaveLength(1);
+  });
+
+  it('opens the graph form when the menu’s Graph row is chosen', async () => {
+    await mount();
+    expect(buttonWords()).not.toContain('Create graph');
+
+    await pickNew('graph');
+
+    expect(buttonWords().filter((word) => word === 'Create graph')).toHaveLength(1);
   });
 
   it('sends Enroll machine to onboarding, as an address and not a form', async () => {

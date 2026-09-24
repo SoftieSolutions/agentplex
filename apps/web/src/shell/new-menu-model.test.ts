@@ -14,23 +14,24 @@ function kindsOf(rows: readonly { readonly kind: string }[]): readonly string[] 
 
 describe('the table of node kinds', () => {
   it('lists every kind the mock draws, built or not', () => {
-    // The unbuilt kinds are rows here and absent from the menu. Keeping them
-    // in the table is what makes AGX-145 (Graph) and AGX-149 (Agent) a flag
-    // flip in one file rather than a new entry invented from the mock again.
+    // The unbuilt kind is a row here and absent from the menu. Keeping it in
+    // the table is what made AGX-145 (Graph) a flag flip in one file rather
+    // than a new entry invented from the mock again, and what makes AGX-149
+    // (Agent) the same.
     expect(kindsOf(NEW_NODE_KINDS)).toEqual(['session', 'project', 'graph', 'agent', 'machine']);
   });
 
-  it('has nothing behind Graph and Agent yet', () => {
+  it('has nothing behind Agent yet', () => {
     const unbuilt = NEW_NODE_KINDS.filter((row) => !row.built);
-    expect(kindsOf(unbuilt)).toEqual(['graph', 'agent']);
+    expect(kindsOf(unbuilt)).toEqual(['agent']);
   });
 });
 
 describe('the menu the New button offers', () => {
-  it('offers Session, Project and Enroll machine, and nothing else', () => {
+  it('offers Session, Project, Graph and Enroll machine, and nothing else', () => {
     // Absent, not disabled: a greyed row with a tooltip is a promise the app
     // cannot keep, and there is no date behind it.
-    expect(kindsOf(newMenu().entries)).toEqual(['session', 'project', 'machine']);
+    expect(kindsOf(newMenu().entries)).toEqual(['session', 'project', 'graph', 'machine']);
   });
 
   it('words every entry as the mock words it', () => {
@@ -39,12 +40,14 @@ describe('the menu the New button offers', () => {
     ).toEqual([
       { label: 'Session', description: 'Start an agent in a repo' },
       { label: 'Project', description: 'Group repos and sessions' },
+      { label: 'Graph', description: 'Wire agents into a workflow' },
       { label: 'Enroll machine', description: 'One command, adopts running sessions' },
     ]);
   });
 
   it('sends Enroll machine to the wizard, which is the only entry that is an address', () => {
     expect(newMenu().entries.map((entry) => entry.href)).toEqual([
+      undefined,
       undefined,
       undefined,
       ONBOARDING_HASH,
