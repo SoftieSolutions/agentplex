@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore, type JSX } from 'react';
 import type { FrameId, NodeId } from '@agentplex/protocol';
-import type { GraphDocumentView, HubStore } from '../store/hub-store.js';
+import type { ConnectionPhase, GraphDocumentView, HubStore } from '../store/hub-store.js';
 import { Box, Stack, Text, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 
@@ -21,6 +21,12 @@ import { colorForRole, type Scheme } from '../ui/tokens.js';
  * answer is read off the hub's snapshot by node. By node and not by frame,
  * because a graph is a screen and there is one of it per node -- so a remount
  * finds the document already held and asks again only if it is not.
+ *
+ * It asks again when the connection comes back, the way the document editor
+ * does. The draft is the hub's and another client may have saved it while
+ * this one was away, so the copy on screen is one this pane can no longer
+ * vouch for; it stays up until the answer replaces it rather than blinking to
+ * a placeholder. AGX-145's store inherits this rule with the rest.
  */
 
 const MONO = { fontFamily: 'var(--mantine-font-family-monospace)' } as const;
@@ -63,9 +69,35 @@ function createGraphOpener(hub: HubStore, nodeId: NodeId) {
   let state: GraphPaneState = WAITING;
   let openFrame: FrameId | null = null;
   let detach: (() => void) | null = null;
+  /** The phase at the last notification, so a reconnection is an edge. */
+  let phaseBefore: ConnectionPhase = 'idle';
+  /**
+   * Whether the last ask is still in the store's queue. A pane mounted before
+   * the first welcome asks into the queue, and the queue goes out on the
+   * connection that arrives -- so that first edge carries the ask already and
+   * a second one would be the same question twice.
+   */
+  let queued = false;
+
+  function ask(): void {
+    const outcome = hub.sendCommand({ type: 'graph-open', nodeId });
+    if (outcome.accepted) {
+      openFrame = outcome.id;
+      queued = outcome.delivery === 'queued';
+    } else {
+      state = { view: state.view, problem: outcome.reason };
+    }
+  }
 
   function project(): void {
     const snapshot = hub.getSnapshot();
+    const returned = snapshot.phase === 'connected' && phaseBefore !== 'connected';
+    phaseBefore = snapshot.phase;
+    if (returned && openFrame !== null) {
+      if (queued) queued = false;
+      else ask();
+    }
+
     const answer = snapshot.lastGraphDocument;
     const view = answer !== null && answer.nodeId === nodeId ? answer : state.view;
     const refusal = snapshot.lastRefusal;
@@ -82,10 +114,9 @@ function createGraphOpener(hub: HubStore, nodeId: NodeId) {
     subscribe(listener: () => void): () => void {
       listeners.add(listener);
       if (listeners.size === 1) {
+        phaseBefore = hub.getSnapshot().phase;
         detach = hub.subscribe(project);
-        const outcome = hub.sendCommand({ type: 'graph-open', nodeId });
-        if (outcome.accepted) openFrame = outcome.id;
-        else state = { view: state.view, problem: outcome.reason };
+        ask();
         project();
       }
       return () => {

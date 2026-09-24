@@ -13,7 +13,7 @@ import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.j
 import { createFrameIdCounter } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { createHubStore, type GraphDocumentView, type HubStore } from '../store/hub-store.js';
-import { createFakeTimers } from '../store/timers.js';
+import { createFakeTimers, type FakeTimers } from '../store/timers.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
 import { GraphPane, graphPaneWords } from './graph-pane.js';
@@ -99,6 +99,7 @@ describe('GraphPane', () => {
   let root: Root | null = null;
   let store: HubStore;
   let sockets: ReturnType<typeof createFakeSocketFactory>;
+  let timers: FakeTimers;
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -106,10 +107,11 @@ describe('GraphPane', () => {
     container = document.createElement('div');
     document.body.append(container);
     sockets = createFakeSocketFactory();
+    timers = createFakeTimers();
     store = createHubStore({
       fetchTicket: () => Promise.resolve('ticket-1'),
       createSocket: (ticket) => sockets.create(ticket),
-      timers: createFakeTimers(),
+      timers,
       frameIds: createFrameIdCounter(),
     });
   });
@@ -175,6 +177,36 @@ describe('GraphPane', () => {
     expect(text).toContain('v1 published');
     expect(text).toContain('3 nodes · 2 edges');
     expect(text).not.toContain('opening');
+  });
+
+  it('asks again when the connection comes back, and keeps what it had until the answer', async () => {
+    const socket = await mount();
+    await act(() => {
+      socket.deliver(hubFrames.graphDocument);
+    });
+
+    // The hub went away and came back. The draft is the hub's, and another
+    // client may have saved it in between, so what this pane shows is a copy
+    // it can no longer vouch for until it has asked again.
+    await act(() => {
+      socket.drop();
+    });
+    await act(() => {
+      timers.fireAll();
+    });
+    await act(settle);
+    const second = sockets.sockets[1];
+    if (second === undefined) throw new Error('the store did not redial');
+    await act(() => {
+      second.open();
+      second.deliver(hubFrames.welcome);
+    });
+
+    expect(sent(second).filter((frame) => frame.type === 'graph-open')).toEqual([
+      { type: 'graph-open', id: expect.any(Number), nodeId: 'hub-10' },
+    ]);
+    expect(container.textContent).toContain('release-pipeline');
+    expect(container.textContent).not.toContain('opening');
   });
 
   it('draws a refusal to the open in the hub’s words', async () => {
