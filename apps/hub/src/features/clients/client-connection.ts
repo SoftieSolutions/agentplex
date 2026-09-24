@@ -12,6 +12,8 @@ import {
   type DocName,
   type FrameId,
   type GraphDocument,
+  type GraphRunId,
+  type GraphRunState,
   type HubFrame,
   type HubId,
   type CatalogueQuery,
@@ -20,6 +22,7 @@ import {
   type PushEndpoint,
   type PushSubscription,
   type RefusalCode,
+  type RouteInput,
   type ServerRegistrationId,
   type SessionHolder,
   type SessionRef,
@@ -37,6 +40,7 @@ import type { ApprovalPolicy } from '../approval-policy/approval-policy.js';
 import type { Attention, AttentionOutcome } from '../attention/attention.js';
 import type { CatalogueQueries, TreeChanged, TreeMutations } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
+import type { GraphRuns } from '../graph-runs/graph-runs.js';
 import type { Graphs } from '../graphs/graphs.js';
 import { newServerRegistrationSchema, type Pairing } from '../pairing/pairing.js';
 import type { Projects } from '../projects/projects.js';
@@ -101,6 +105,16 @@ export interface ClientConnection {
    * is no disagreeing about "it changed, and it is now at 7".
    */
   catalogueChanged(version: number): void;
+  /**
+   * Tells this client where a run is, if it is established.
+   *
+   * Unsolicited and sent to every client, like the tree change above it and
+   * for the same reason: a run is one fact about the hub, and two tabs open
+   * on the graph must read the same step. Not encoded once for everybody
+   * either -- a run state is a few hundred characters at most, and the rule
+   * about identical characters protects a state clients could disagree about.
+   */
+  graphRunState(state: GraphRunState): void;
   /**
    * Sends the state, unless this client is not established or already has this
    * version.
@@ -274,6 +288,12 @@ export interface ClientConnectionDependencies {
    */
   readonly graphs: Graphs;
   /**
+   * Runs: start one, cancel one. The states come back the other way, through
+   * `graphRunState` on the connection, because a run moves on its own clock
+   * and not in answer to a frame.
+   */
+  readonly graphRuns: GraphRuns;
+  /**
    * The terminal relay, which this connection is one end of.
    *
    * A seam rather than a set of subscriptions held here, because a subscription
@@ -323,6 +343,7 @@ export function serveClientConnection(
     catalogue,
     docs,
     graphs,
+    graphRuns,
     terminal,
     push,
     onClosed,
@@ -789,6 +810,24 @@ export function serveClientConnection(
           return;
         }
         void answerGraphPublish(frame.id, frame.nodeId);
+        return;
+      }
+
+      case 'graph-run': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerGraphRun(frame.id, frame.nodeId, frame.input);
+        return;
+      }
+
+      case 'graph-run-cancel': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerGraphRunCancel(frame.id, frame.runId);
         return;
       }
 
@@ -1531,6 +1570,49 @@ export function serveClientConnection(
   }
 
   /**
+   * Starts a run and answers with its name and number. The run itself
+   * arrives as `graph-run-state`, unsolicited, on every client; this reply
+   * says only that it began. A refusal is the feature's sentence: no such
+   * graph, or nothing published to run.
+   */
+  async function answerGraphRun(
+    replyTo: FrameId,
+    nodeId: NodeId,
+    input: RouteInput,
+  ): Promise<void> {
+    try {
+      const outcome = await graphRuns.start(nodeId, input);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'graph-run-started', replyTo, runId: outcome.runId, number: outcome.number });
+    } catch (error) {
+      logger.error('could not start a run', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not start that run');
+    }
+  }
+
+  /** Asks a run to stop before its next step, and says the ask was taken. */
+  async function answerGraphRunCancel(replyTo: FrameId, runId: GraphRunId): Promise<void> {
+    try {
+      const outcome = await graphRuns.cancel(runId);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'graph-run-cancelled', replyTo, runId });
+    } catch (error) {
+      logger.error('could not cancel a run', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not cancel that run');
+    }
+  }
+
+  /**
    * Reads one session's transcript and answers the client that asked.
    *
    * The same shape a document open has, and nothing is stored on the way
@@ -1844,6 +1926,10 @@ export function serveClientConnection(
     catalogueChanged(version: number): void {
       if (state !== 'established') return;
       send({ type: 'catalogue-changed', version });
+    },
+    graphRunState(run: GraphRunState): void {
+      if (state !== 'established') return;
+      send({ type: 'graph-run-state', ...run });
     },
     close: end,
   };

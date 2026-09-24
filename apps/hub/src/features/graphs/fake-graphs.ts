@@ -5,7 +5,14 @@ import {
   type GraphPublishedVersion,
   type NodeId,
 } from '@agentplex/protocol';
-import type { GraphCreated, GraphOpened, GraphPublished, Graphs, GraphSaved } from './graphs.js';
+import type {
+  GraphCreated,
+  GraphOpened,
+  GraphPublished,
+  GraphPublishedDocument,
+  Graphs,
+  GraphSaved,
+} from './graphs.js';
 
 /**
  * The hub's graphs, driven by hand.
@@ -124,6 +131,15 @@ export function createFakeGraphs(options: FakeGraphsOptions = {}): FakeGraphs {
     async publishedVersion(nodeId: NodeId, version: number): Promise<GraphDocument | null> {
       const graph = held.get(nodeId);
       return graph?.published.find((row) => row.version === version)?.document ?? null;
+    },
+
+    async projectOf(nodeId: NodeId): Promise<NodeId | null> {
+      return held.get(nodeId)?.projectId ?? null;
+    },
+
+    async latestPublished(nodeId: NodeId): Promise<GraphPublishedDocument | null> {
+      const newest = held.get(nodeId)?.published.at(-1);
+      return newest === undefined ? null : { version: newest.version, document: newest.document };
     },
 
     refuseWith(next: { code: 'refused' | 'internal'; problem: string } | null): void {

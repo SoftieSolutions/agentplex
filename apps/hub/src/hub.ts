@@ -35,6 +35,8 @@ import { createPush, type PushSender, type VapidKeyGenerator } from './features/
 import { createAttentionEdge } from './features/push/attention-edge.js';
 import { createDocs } from './features/docs/docs.js';
 import { createGraphs } from './features/graphs/graphs.js';
+import { createAgentExecutor } from './features/graph-runs/agent-executor.js';
+import { createGraphRuns } from './features/graph-runs/graph-runs.js';
 import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
@@ -404,6 +406,10 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // the fleet state and the broadcast, and a row that failed to write
       // costs one label, logged where it happened.
       void tasks.noteStarts(report.storeId, report.starts);
+      // And to the third reader of the same tags: an AGENT step of a graph
+      // run waits under its start handle for the session the provider named,
+      // exactly as a task does, and this is the only path the naming takes.
+      graphRuns.noteStarts(report.storeId, report.starts);
     },
     onStream: (registrationId, output) => terminal.deliver(registrationId, output),
     // What a machine says about its own approvals, already told apart by the
@@ -605,6 +611,34 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     onTreeChanged: () => catalogue.changed(),
   });
 
+  // The runtime. Its one executor that reaches a machine starts sessions
+  // through the same `sessions` a client's start goes through -- so a
+  // graph-spawned session is an ordinary row with its task set -- and watches
+  // the same reducer every client reads for the step to end. Named in the
+  // servers' report closure above before it is built, on the same knot the
+  // relay is: nothing reports until `sync` below dials a server.
+  const agentExecutor = createAgentExecutor({ sessions, state, timers, logger });
+  const graphRuns = createGraphRuns({
+    database,
+    ids,
+    clock,
+    timers,
+    logger,
+    graphs,
+    agent: agentExecutor,
+    // Every state to every client, unsolicited, the way a tree change goes.
+    // `clients` is built below; a run cannot move before a client can ask
+    // for one, so the closure never runs before it exists.
+    onState: (run) => clients.runStateChanged(run),
+  });
+
+  // Before the first client is served: a run left running by the previous
+  // process is ended failed with a reason naming the restart. Nothing resumes
+  // a run -- a wait on a machine or a person does not survive a restart, by
+  // decision -- and a client shown a running strip for a dead walk would be
+  // the over-claim this whole path is shaped against.
+  await graphRuns.load();
+
   // Read per request for the reason the tree above is, and durable for the
   // same one: an arrangement of panes outlives the process that was told it.
   const paneLayout = createPaneLayout({ database, clock });
@@ -639,6 +673,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     catalogue,
     docs,
     graphs,
+    graphRuns,
     terminal,
     // The whole feature, narrowed by the seam a connection takes: a socket may
     // say whether it wants to be told, and may not tell anybody. `null` is a

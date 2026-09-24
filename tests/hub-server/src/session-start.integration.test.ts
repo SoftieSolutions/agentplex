@@ -84,6 +84,7 @@ import {
 } from '../../../apps/hub/src/features/catalogue/catalogue.js';
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
 import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
 import { createProjects, type Projects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 import { createTasks } from '../../../apps/hub/src/features/tasks/tasks.js';
@@ -533,6 +534,7 @@ async function start(
     // a suite stands on when a seam is not its subject.
     docs: createFakeDocs(),
     graphs: createFakeGraphs(),
+    graphRuns: createFakeGraphRuns(),
     terminal,
     // No push: none of these suites is about it, and a broadcast whose push
     // seam is absent is not the broadcast the hub builds.

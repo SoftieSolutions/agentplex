@@ -311,11 +311,13 @@ describe('walk', () => {
 
   describe('cancel', () => {
     it('stops before the next step and ends cancelled, leaving the step in flight to finish', async () => {
-      let release: (() => void) | null = null;
+      // Held on an object, because an assignment inside the promise callback
+      // is one the type checker cannot see at the call below.
+      const gate: { release: (() => void) | null } = { release: null };
       const reviewer = agent(
         () =>
           new Promise((resolve) => {
-            release = () => resolve({ ok: true });
+            gate.release = () => resolve({ ok: true });
           }),
       );
       const doc = document({
@@ -334,7 +336,7 @@ describe('walk', () => {
       // The step in flight is not interrupted: nothing has ended yet.
       expect(run.steps.at(-1)?.outcome).toBe('running');
 
-      release?.();
+      gate.release?.();
       await expect(run.done).resolves.toEqual({ status: 'cancelled' });
       // The reviewer's step kept its outcome; the docs agent was never started.
       expect(run.steps.at(-1)).toMatchObject({ nodeId: 'review', outcome: 'succeeded' });

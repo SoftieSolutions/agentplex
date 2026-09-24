@@ -13,6 +13,7 @@ import {
   publishDraft,
   readDraft,
   readGraph,
+  readLatestPublished,
   readVersion,
   replaceDraft,
 } from './graph-rows.js';
@@ -98,6 +99,29 @@ export interface Graphs {
   publish(nodeId: NodeId): Promise<GraphPublished>;
   /** A published version's document, or `null` for the draft, an unreached number or a node that is no graph. */
   publishedVersion(nodeId: NodeId, version: number): Promise<GraphDocument | null>;
+  /**
+   * The project the graph belongs to, or `null` for a node that is no graph.
+   *
+   * What a run starts its sessions in: the runtime passes it to every start
+   * so the directory comes out of the projects rows, the way a client's start
+   * in a project does. It is a project id and never a path, for the reason
+   * `StartSessionRequest.project` gives.
+   */
+  projectOf(nodeId: NodeId): Promise<NodeId | null>;
+  /**
+   * The newest published version and its document, or `null` when nothing
+   * has been published or that node is no graph.
+   *
+   * What Run runs. Never the draft: a run names a version that can be read
+   * back exactly, and the draft is the one version that changes.
+   */
+  latestPublished(nodeId: NodeId): Promise<GraphPublishedDocument | null>;
+}
+
+/** One published version, with its document: what a run is of. */
+export interface GraphPublishedDocument {
+  readonly version: number;
+  readonly document: GraphDocument;
 }
 
 const NO_SUCH_GRAPH: GraphRefusal = {
@@ -236,5 +260,15 @@ export function createGraphs(dependencies: GraphsDependencies): Graphs {
     },
 
     publishedVersion: (nodeId, version) => readPublished(database, nodeId, version),
+
+    async projectOf(nodeId: NodeId): Promise<NodeId | null> {
+      const graph = await readGraph(database, nodeId);
+      return graph === null ? null : graph.projectNodeId;
+    },
+
+    async latestPublished(nodeId: NodeId): Promise<GraphPublishedDocument | null> {
+      const row = await readLatestPublished(database, nodeId);
+      return row === null ? null : { version: row.version, document: row.document };
+    },
   };
 }

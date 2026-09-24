@@ -207,6 +207,21 @@ export async function readVersion(
   return row === undefined ? null : versionRowSchema.parse(row);
 }
 
+/** The newest published version of that graph, or `null` when nothing is published or that node is no graph. */
+export async function readLatestPublished(
+  database: Queryable,
+  nodeId: NodeId,
+): Promise<VersionRow | null> {
+  const result = await database.query(
+    `SELECT version, document, updated_at, published_at FROM graph_versions
+      WHERE graph_node_id = ? AND published_at IS NOT NULL
+      ORDER BY version DESC LIMIT 1`,
+    [nodeId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : versionRowSchema.parse(row);
+}
+
 /** Every published version of that graph, oldest first. */
 export async function listPublishedVersions(
   database: Queryable,

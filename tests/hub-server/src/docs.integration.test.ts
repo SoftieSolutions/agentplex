@@ -55,6 +55,7 @@ import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake
 import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
 import { createDocs } from '../../../apps/hub/src/features/docs/docs.js';
 import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
 import { createProjects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 
@@ -247,6 +248,7 @@ async function start(): Promise<Harness> {
     projects,
     docs,
     graphs: createFakeGraphs(),
+    graphRuns: createFakeGraphRuns(),
     // Nothing here subscribes to a terminal; the relay is here because a
     // broadcast without one is not the broadcast the hub builds.
     terminal: createFakeTerminal(),

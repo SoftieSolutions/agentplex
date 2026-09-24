@@ -51,6 +51,7 @@ import { createFakeAttention } from '../../../apps/hub/src/features/attention/fa
 import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
 import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
 import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake-terminal.js';
 import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
 import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
@@ -268,6 +269,7 @@ async function start(transcripts: Readonly<Record<string, string>>): Promise<Har
     catalogue: createFakeCatalogue(),
     docs: createFakeDocs(),
     graphs: createFakeGraphs(),
+    graphRuns: createFakeGraphRuns(),
     terminal: createFakeTerminal(),
   });
 
