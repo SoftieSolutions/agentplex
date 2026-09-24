@@ -7,6 +7,7 @@ import {
   approvalPolicyRuleMatches,
   approvalRequestSchema,
   approvalSettlementSchema,
+  approvalSubjectSchema,
   approvalSuggestionSchema,
   parseApprovalPolicyRule,
   pendingApprovalSchema,
@@ -20,6 +21,9 @@ import {
  * shapes here are the ones `packages/providers` produces from a real captured
  * payload, restated as the wire's own claim about what it accepts.
  */
+const A_SESSION_SUBJECT = { kind: 'session', storeId: 'store-work', sessionId: 'session-1' };
+const A_RUN_SUBJECT = { kind: 'graphRun', runId: 'run-38', nodeId: 'gate' };
+
 const A_REQUEST = {
   approvalId: 'approval-7f21',
   tool: 'Bash',
@@ -127,25 +131,86 @@ describe('approvalSuggestionSchema', () => {
   });
 });
 
+describe('approvalSubjectSchema', () => {
+  it('names a session by store and session id', () => {
+    const parsed = approvalSubjectSchema.safeParse(A_SESSION_SUBJECT);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.kind).toBe('session');
+  });
+
+  it('names a graph run by run and the node it is waiting at', () => {
+    const parsed = approvalSubjectSchema.safeParse(A_RUN_SUBJECT);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.kind).toBe('graphRun');
+  });
+
+  it('refuses a subject with no kind, because the kind is what a decision is routed on', () => {
+    const { kind: _kind, ...bare } = A_SESSION_SUBJECT;
+    expect(approvalSubjectSchema.safeParse(bare).success).toBe(false);
+  });
+
+  it('refuses a kind outside the two, rather than passing the word along', () => {
+    expect(
+      approvalSubjectSchema.safeParse({ kind: 'machine', registrationId: 'registration-1' }).success,
+    ).toBe(false);
+  });
+
+  it('refuses a session subject missing either id, and a run subject missing either', () => {
+    expect(approvalSubjectSchema.safeParse({ kind: 'session', storeId: 'store-work' }).success).toBe(
+      false,
+    );
+    expect(approvalSubjectSchema.safeParse({ kind: 'graphRun', runId: 'run-38' }).success).toBe(
+      false,
+    );
+  });
+});
+
 describe('pendingApprovalSchema', () => {
   it('dates the request with the moment it arrived', () => {
     expect(
       pendingApprovalSchema.safeParse({
         ...A_REQUEST,
+        subject: A_SESSION_SUBJECT,
         requestedAt: 1_756_000_000_000,
         answeredBy: null,
       }).success,
     ).toBe(true);
   });
 
+  it('carries the subject it is about, and a run is as good a subject as a session', () => {
+    expect(
+      pendingApprovalSchema.safeParse({
+        ...A_REQUEST,
+        subject: A_RUN_SUBJECT,
+        requestedAt: 1_756_000_000_000,
+        answeredBy: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('refuses one with no subject, because a decision has to name what it answers', () => {
+    expect(
+      pendingApprovalSchema.safeParse({
+        ...A_REQUEST,
+        requestedAt: 1_756_000_000_000,
+        answeredBy: null,
+      }).success,
+    ).toBe(false);
+  });
+
   it('refuses an undated one, because a wait with no start is not a wait', () => {
-    expect(pendingApprovalSchema.safeParse({ ...A_REQUEST, answeredBy: null }).success).toBe(false);
+    expect(
+      pendingApprovalSchema.safeParse({ ...A_REQUEST, subject: A_SESSION_SUBJECT, answeredBy: null })
+        .success,
+    ).toBe(false);
   });
 
   it('says whether a standing rule answered it, on every one', () => {
     // Present and null rather than absent: "nobody has answered" and "this
     // build cannot tell you" would otherwise be one value.
-    const dated = { ...A_REQUEST, requestedAt: 1_756_000_000_000 };
+    const dated = { ...A_REQUEST, subject: A_SESSION_SUBJECT, requestedAt: 1_756_000_000_000 };
     expect(pendingApprovalSchema.safeParse(dated).success).toBe(false);
     expect(
       pendingApprovalSchema.safeParse({
@@ -163,6 +228,7 @@ describe('pendingApprovalSchema', () => {
     expect(
       pendingApprovalSchema.safeParse({
         ...A_REQUEST,
+        subject: A_SESSION_SUBJECT,
         requestedAt: 1_756_000_000_000,
         answeredBy: {
           project: 'node-project-work',

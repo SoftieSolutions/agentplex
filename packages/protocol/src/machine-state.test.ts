@@ -72,6 +72,7 @@ const A_SESSION_ROW = {
 
 const A_PENDING_APPROVAL = {
   approvalId: 'approval-7f21',
+  subject: { kind: 'session', storeId: 'store-work', sessionId: 'session-1' },
   tool: 'Bash',
   proposal: 'command: prisma migrate deploy --schema ./db',
   truncated: false,
@@ -472,8 +473,59 @@ describe('serverCandidateSchema', () => {
 describe('machineStateSchema', () => {
   it('accepts the empty state a hub with no pairings publishes', () => {
     expect(
-      machineStateSchema.safeParse({ version: 0, stores: [], servers: [], candidates: [] }).success,
+      machineStateSchema.safeParse({
+        version: 0,
+        stores: [],
+        servers: [],
+        candidates: [],
+        graphRunApprovals: [],
+      }).success,
     ).toBe(true);
+  });
+
+  it('rejects a state with no graphRunApprovals field: nobody waiting is a list, not an absence', () => {
+    // The same argument `candidates` makes. A hub always knows which runs are
+    // parked on a person; an optional field would let a client too old to read
+    // it and a hub with nothing waiting draw the same screen off two facts.
+    expect(
+      machineStateSchema.safeParse({ version: 0, stores: [], servers: [], candidates: [] }).success,
+    ).toBe(false);
+  });
+
+  it('carries a run waiting on a person beside the stores, with the graph, the number and the request', () => {
+    const parsed = machineStateSchema.safeParse({
+      version: 3,
+      stores: [],
+      servers: [],
+      candidates: [],
+      graphRunApprovals: [
+        {
+          graph: 'node-graph-release',
+          number: 38,
+          approval: {
+            ...A_PENDING_APPROVAL,
+            subject: { kind: 'graphRun', runId: 'run-38', nodeId: 'gate' },
+            tool: 'HUMAN',
+            proposal: 'run #38 of release is waiting at Ship it for robert',
+          },
+        },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.graphRunApprovals[0]?.approval.subject.kind).toBe('graphRun');
+  });
+
+  it('refuses a graph-run approval whose request names a session, because the list is for runs', () => {
+    expect(
+      machineStateSchema.safeParse({
+        version: 3,
+        stores: [],
+        servers: [],
+        candidates: [],
+        graphRunApprovals: [{ graph: 'node-graph-release', number: 38, approval: A_PENDING_APPROVAL }],
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects a state with no candidates field: heard-nothing is a list, not an absence', () => {
@@ -492,6 +544,7 @@ describe('machineStateSchema', () => {
       stores: [],
       servers: [A_SERVER],
       candidates: [A_CANDIDATE],
+      graphRunApprovals: [],
     });
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
@@ -514,6 +567,7 @@ describe('machineStateSchema', () => {
       version: 4,
       servers: [A_SERVER],
       candidates: [],
+      graphRunApprovals: [],
       stores: [
         {
           storeId: 'store-work',

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { pendingApprovalSchema } from './approval.js';
+import { approvalSubjectSchema, pendingApprovalSchema } from './approval.js';
 import {
   nodeIdSchema,
   serverIdSchema,
@@ -545,6 +545,40 @@ export const serverCandidateSchema = z.object({
 });
 export type ServerCandidate = z.infer<typeof serverCandidateSchema>;
 
+/**
+ * One graph run parked at a HUMAN node, as every client is told it.
+ *
+ * Beside the stores rather than inside any of them, and this is where the
+ * no-second-copy rule decides the placement. A run is not a session and sits
+ * in no store, so there is no row to put it on; the run's own state frame
+ * (`graph-run-state`) says `waiting` but is sent to whoever is watching and
+ * not held for a client that connects later, and a request kept only there
+ * would be one a reconnecting client never sees. The machine state is the one
+ * thing every client is sent whole on connect, so the one copy of "who is
+ * waiting on a person" lives here -- the same argument that puts a session's
+ * approvals on its row -- and the run state carries the word and never the
+ * request.
+ *
+ * The graph and the number are here rather than in the subject because they
+ * are what a person reads: the bell says "run #38 is waiting at Ship it" and
+ * a tap opens the graph. The subject inside `approval` is what the tap's
+ * decision sends back, and identity and display stay two fields so that a
+ * client can never send the hub a number to trust.
+ */
+export const graphRunApprovalSchema = z.object({
+  /** The graph's tree node, which is what a link to the run opens. */
+  graph: nodeIdSchema,
+  /** The run's number within its graph, the `#38` a person says. */
+  number: z.int().positive(),
+  approval: pendingApprovalSchema.extend({
+    subject: approvalSubjectSchema.refine(
+      (subject) => subject.kind === 'graphRun',
+      'a graph-run approval is about a run',
+    ),
+  }),
+});
+export type GraphRunApproval = z.infer<typeof graphRunApprovalSchema>;
+
 export const machineStateSchema = z.object({
   /**
    * Bumped once per change that actually changed something.
@@ -575,5 +609,13 @@ export const machineStateSchema = z.object({
    * that, never because it was heard.
    */
   candidates: z.array(serverCandidateSchema),
+  /**
+   * Every graph run presently waiting on a person, oldest request first.
+   *
+   * Required and usually empty, for the reason `candidates` is: a hub always
+   * knows the answer, and an absent field would let a hub with nothing waiting
+   * and a client too old to read the field draw one screen off two facts.
+   */
+  graphRunApprovals: z.array(graphRunApprovalSchema),
 });
 export type MachineState = z.infer<typeof machineStateSchema>;

@@ -66,8 +66,8 @@ export {
   approvalRequestSchema,
   approvalRuleSchema,
   approvalSettlementSchema,
+  approvalSubjectSchema,
   approvalSuggestionSchema,
-  displayableApprovalText,
   parseApprovalPolicyRule,
   pendingApprovalSchema,
 } from './approval.js';
@@ -83,9 +83,12 @@ export type {
   ApprovalRequest,
   ApprovalRule,
   ApprovalSettlement,
+  ApprovalSubject,
   ApprovalSuggestion,
   PendingApproval,
 } from './approval.js';
+
+export { displayableApprovalText } from './displayable-text.js';
 
 export {
   BEACON_ANNOUNCE_INTERVAL_MS,
@@ -233,6 +236,7 @@ export type { Layout, LayoutNode } from './layout.js';
 export {
   SESSION_TASK_MAX_CHARS,
   cpuSampleSchema,
+  graphRunApprovalSchema,
   machineLoadSchema,
   machineStateSchema,
   serverCandidateSchema,
@@ -247,6 +251,7 @@ export {
 } from './machine-state.js';
 export type {
   CpuSample,
+  GraphRunApproval,
   MachineLoad,
   MachineState,
   ServerCandidate,

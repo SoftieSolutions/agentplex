@@ -8,6 +8,7 @@ import {
   approvalPolicyRecordSchema,
   approvalPolicyRuleIdSchema,
   approvalPolicyRuleSchema,
+  approvalSubjectSchema,
 } from './approval.js';
 import {
   catalogueCursorSchema,
@@ -731,14 +732,16 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     nodeId: nodeIdSchema,
   }),
   /**
-   * Answers an approval the agent is blocked on: let it through, or refuse it.
+   * Answers an approval: let it through, or refuse it.
    *
-   * The session is named because a client names a session and the hub resolves
-   * which machine holds it -- the rule a stop follows. The approval is named
-   * beside it because a session can have more than one open at a time, and
-   * because the id is what deciding once keys on: two clients tapping at the
-   * same moment send the same id, and the second one is told what the first
-   * one's answer did rather than being applied on top of it.
+   * The subject is named because a client names what it answers and the hub
+   * resolves who holds it -- for a session, which machine, the rule a stop
+   * follows; for a graph run, the hub itself, which minted the request when
+   * the run reached a HUMAN node. The approval is named beside it because a
+   * subject can have more than one open at a time, and because the id is what
+   * deciding once keys on: two clients tapping at the same moment send the
+   * same id, and the second one is told what the first one's answer did
+   * rather than being applied on top of it.
    *
    * `decision` is two words and there is nowhere to put a third thing. No
    * proposal comes back -- the text a client rendered is the hub's to
@@ -749,8 +752,7 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('approval-decide'),
     id: frameIdSchema,
-    storeId: storeIdSchema,
-    sessionId: sessionIdSchema,
+    subject: approvalSubjectSchema,
     approvalId: approvalIdSchema,
     decision: approvalDecisionSchema,
   }),

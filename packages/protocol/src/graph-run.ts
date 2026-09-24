@@ -51,17 +51,28 @@ export const graphRunIdSchema = z.string().min(1).max(200).brand<'GraphRunId'>()
 export type GraphRunId = z.infer<typeof graphRunIdSchema>;
 
 /**
- * Where a run is. `running` is the only open state; the other three are
- * final, and a run in one of them never moves again.
+ * Where a run is. `running` and `waiting` are the two open states; the other
+ * three are final, and a run in one of them never moves again.
+ *
+ * `waiting` is a run parked at a HUMAN node until a person answers. Its own
+ * word rather than a `running` the strip reads as `live`, because nothing is
+ * running: no session is working, no machine is busy, and a person looking at
+ * `live` would wait for something that is waiting for them.
  */
-export const runStatusSchema = z.enum(['running', 'succeeded', 'failed', 'cancelled']);
+export const runStatusSchema = z.enum(['running', 'waiting', 'succeeded', 'failed', 'cancelled']);
 export type RunStatus = z.infer<typeof runStatusSchema>;
 
 /**
- * What one attempt at one node became. `running` is the attempt in flight,
- * and there is at most one of those in a run at a time.
+ * What one attempt at one node became. `running` and `waiting` are the
+ * attempt in flight, and there is at most one of those in a run at a time.
  */
-export const stepOutcomeSchema = z.enum(['running', 'succeeded', 'failed', 'cancelled']);
+export const stepOutcomeSchema = z.enum([
+  'running',
+  'waiting',
+  'succeeded',
+  'failed',
+  'cancelled',
+]);
 export type StepOutcome = z.infer<typeof stepOutcomeSchema>;
 
 /**
