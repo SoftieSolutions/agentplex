@@ -539,6 +539,31 @@ export default tseslint.config(
     },
   },
   {
+    // The canvas seam (AGX-145). React Flow enters the app through one
+    // adapter file and nowhere else, for the reason Mantine has one
+    // directory: the library draws nodes and edges, the app decides what a
+    // node is, and a second file reaching for the library is the first step
+    // towards a canvas nobody can swap. The adapter is the one exception,
+    // and it is a file rather than a directory because one file is all the
+    // seam should ever need.
+    files: ['apps/web/src/**/*.{ts,tsx}'],
+    ignores: ['apps/web/src/graphs/flow-adapter.tsx'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': restrictedImports([
+        {
+          group: ['@mantine/*'],
+          message:
+            'Mantine is behind the pass-through in apps/web/src/ui/. Import from there, adding a re-export if the component is new to the app.',
+        },
+        {
+          group: ['@xyflow/*'],
+          message:
+            'React Flow is behind the adapter in apps/web/src/graphs/flow-adapter.tsx. Import from there, adding to the adapter if the canvas needs something new.',
+        },
+      ]),
+    },
+  },
+  {
     // Hues are named once, in src/ui/tokens.ts (AGX-30). A color literal
     // anywhere else is a second place a hue lives, which is how palettes
     // drift. Status is expressed as a semantic tone through colorForTone.
