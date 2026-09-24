@@ -385,4 +385,37 @@ describe('the graphs feature over a real schema', () => {
       });
     });
   });
+
+  describe('what a run reads', () => {
+    it('names the project a graph belongs to, and null for a node that is no graph', async () => {
+      const feature = graphs();
+      const made = await feature.create(PROJECT, 'release-pipeline');
+      if (!made.ok) return;
+
+      expect(await feature.projectOf(made.nodeId)).toBe(PROJECT);
+      expect(await feature.projectOf(PROJECT)).toBeNull();
+    });
+
+    it('answers the newest published version and never the draft', async () => {
+      const feature = graphs();
+      const made = await feature.create(PROJECT, 'release-pipeline');
+      if (!made.ok) return;
+
+      expect(await feature.latestPublished(made.nodeId)).toBeNull();
+
+      await feature.save(made.nodeId, RUNNABLE);
+      await feature.publish(made.nodeId);
+      const edited = document({ nodes: [TRIGGER], edges: [] });
+      await feature.save(made.nodeId, edited);
+
+      expect(await feature.latestPublished(made.nodeId)).toEqual({
+        version: 1,
+        document: RUNNABLE,
+      });
+
+      await feature.publish(made.nodeId);
+      expect(await feature.latestPublished(made.nodeId)).toEqual({ version: 2, document: edited });
+      expect(await feature.latestPublished(PROJECT)).toBeNull();
+    });
+  });
 });

@@ -186,12 +186,19 @@ describe('GraphScreen', () => {
     return socket;
   }
 
+  /** Opened, and told the graph has never run, which is what frees Run. */
   async function opened(): Promise<FakeSocket> {
     const socket = await mount();
     await act(() => {
       socket.deliver(hubFrames.graphDocument);
     });
     await act(settle);
+    const read = sent(socket).find((each) => each.type === 'graph-run-read');
+    if (read === undefined || read.type !== 'graph-run-read') throw new Error('no read was sent');
+    const none = JSON.parse(hubFrames.graphRunLatestNone) as object;
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...none, replyTo: read.id, nodeId: 'hub-10' }));
+    });
     await act(settle);
     return socket;
   }
@@ -217,7 +224,7 @@ describe('GraphScreen', () => {
     expect(container.textContent).toContain('opening');
   });
 
-  it('draws the header the mock draws: the name, the draft chip, Publish, and the two buttons not built yet', async () => {
+  it('draws the header the mock draws: the name, the draft chip, Publish, Run, and Simulate not built yet', async () => {
     await opened();
 
     const header = container.querySelector('[data-graph-header]');
@@ -230,10 +237,110 @@ describe('GraphScreen', () => {
     expect(simulate.disabled).toBe(true);
     expect(simulate.title).toContain('not available yet');
     expect(simulate.title).not.toMatch(/AGX-/);
-    const run = button('Run');
-    expect(run.disabled).toBe(true);
-    expect(run.title).toContain('not available yet');
-    expect(run.title).not.toMatch(/AGX-/);
+    // The fixture's graph has v1 published, which is what Run runs.
+    expect(button('Run').disabled).toBe(false);
+    expect(container.querySelector('[data-run-strip]')).toBeNull();
+  });
+
+  it('holds Run until the hub has said where the graph’s run stands', async () => {
+    const socket = await mount();
+    await act(() => {
+      socket.deliver(hubFrames.graphDocument);
+    });
+    await act(settle);
+
+    // Published, but the read is out: the hub may be running this graph now.
+    expect(button('Run').disabled).toBe(true);
+    expect(sent(socket).filter((each) => each.type === 'graph-run-read')).toHaveLength(1);
+  });
+
+  it('draws a run the hub reports as stale while the connection is being remade, and not live', async () => {
+    const socket = await opened();
+    await act(() => {
+      socket.deliver(hubFrames.graphRunStateRunning);
+    });
+    await act(settle);
+    expect(container.querySelector('[data-run-strip]')?.textContent).toContain('live');
+    expect(card('review').dataset['running']).toBe('true');
+
+    await act(() => {
+      socket.close();
+    });
+    await act(settle);
+
+    const strip = container.querySelector<HTMLElement>('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · reconnecting · step 3/3');
+    expect(strip?.dataset['runTone']).toBe('idle');
+    expect(card('review').dataset['running']).toBeUndefined();
+    expect(button('Run').disabled).toBe(true);
+    expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Cancel')).toBe(
+      false,
+    );
+  });
+
+  it('keeps Run disabled, and says why, while nothing is published', async () => {
+    const socket = await mount();
+    const answer = JSON.parse(hubFrames.graphDocument) as { published: unknown[] };
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...answer, published: [] }));
+    });
+    await act(settle);
+
+    expect(button('Run').disabled).toBe(true);
+    expect(button('Run').title).toContain('Publish');
+  });
+
+  it('runs the graph: the strip reads the run live, the executing card is drawn running, and Cancel ends it', async () => {
+    const socket = await opened();
+
+    await act(() => {
+      button('Run').click();
+    });
+    const run = sent(socket).find((each) => each.type === 'graph-run');
+    if (run === undefined || run.type !== 'graph-run') throw new Error('no run was sent');
+    expect(run).toMatchObject({ nodeId: 'hub-10', input: {} });
+    expect(button('Run').disabled).toBe(true);
+
+    // The hub's yes, addressed to this screen's frame, then the run as the
+    // hub captured it parked at the AGENT step.
+    const started = JSON.parse(hubFrames.graphRunStarted) as { replyTo: number };
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...started, replyTo: run.id }));
+      socket.deliver(hubFrames.graphRunStateRunning);
+    });
+    await act(settle);
+
+    const strip = container.querySelector('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · live · step 3/3');
+    expect(card('review').dataset['running']).toBe('true');
+    expect(card('classify').dataset['running']).toBeUndefined();
+    expect(button('Run').disabled).toBe(true);
+
+    // The inspector reads the selected node's step out of the same run.
+    await act(() => {
+      card('classify').click();
+    });
+    await act(settle);
+    expect(container.textContent).toContain('LAST OUTPUT · run #1');
+    expect(container.querySelector('[data-last-output]')?.textContent).toContain(
+      'route 1 to review',
+    );
+
+    await act(() => {
+      button('Cancel').click();
+    });
+    const cancel = sent(socket).find((each) => each.type === 'graph-run-cancel');
+    expect(cancel).toMatchObject({ runId: 'hub-11' });
+    await act(() => {
+      socket.deliver(hubFrames.graphRunStateCancelled);
+    });
+    await act(settle);
+
+    expect(container.querySelector('[data-run-strip]')?.textContent).toContain(
+      'run #1 · cancelled · step 3/3',
+    );
+    expect(card('review').dataset['running']).toBeUndefined();
+    expect(button('Run').disabled).toBe(false);
   });
 
   it('draws the canvas with a card per node and the zoom controls', async () => {

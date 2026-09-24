@@ -50,6 +50,7 @@ import {
 } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
 import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
 import { createProjects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 
@@ -244,6 +245,7 @@ async function start(roots: readonly string[]): Promise<Harness> {
     // `docs.integration.test.ts`.
     docs: createFakeDocs(),
     graphs: createFakeGraphs(),
+    graphRuns: createFakeGraphRuns(),
     // Nothing in this file subscribes to a terminal; the relay is here because
     // a broadcast without one is not the broadcast the hub builds.
     terminal: createFakeTerminal(),

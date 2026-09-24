@@ -269,6 +269,25 @@ function labelFor(text: string): string {
     // front of them, and bytes that did not.
     return frame.droppedChunks > 0 ? 'terminalOutputDropped' : 'terminalOutput';
   }
+  if (frame.type === 'graph-run-latest') {
+    // Labelled by whether the graph has run, because those are the two answers
+    // a screen takes apart: drop the run it held, or hold this one.
+    return frame.run === null ? 'graphRunLatestNone' : 'graphRunLatestFound';
+  }
+  if (frame.type === 'graph-run-state') {
+    // Labelled by where the run is, because those are the readings the strip
+    // has to draw apart: live, and each of the three ways a run ends.
+    switch (frame.status) {
+      case 'running':
+        return 'graphRunStateRunning';
+      case 'succeeded':
+        return 'graphRunStateSucceeded';
+      case 'failed':
+        return 'graphRunStateFailed';
+      case 'cancelled':
+        return 'graphRunStateCancelled';
+    }
+  }
   const labels = new Map<string, string>([
     ['welcome', 'welcome'],
     ['pong', 'pong'],
@@ -294,6 +313,8 @@ function labelFor(text: string): string {
     ['graph-document', 'graphDocument'],
     ['graph-saved', 'graphSaved'],
     ['graph-published', 'graphPublished'],
+    ['graph-run-started', 'graphRunStarted'],
+    ['graph-run-cancelled', 'graphRunCancelled'],
     ['approval-decided', 'approvalDecided'],
     ['push-subscribed', 'pushSubscribed'],
     ['push-unsubscribed', 'pushUnsubscribed'],
@@ -2016,6 +2037,153 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const graphDocument = starter.received.find((text) => labelFor(text) === 'graphDocument');
     if (graphDocument === undefined) throw new Error('the graph open was not answered');
 
+    // A run of that graph. The whole real runtime: the row numbered on the
+    // hub's own database, the walk, the ROUTER matching `language == rust`,
+    // and the AGENT step starting a session through the same path a client's
+    // start takes -- which this machine's controller answers the way a real
+    // spawn does, ok with no session id yet. Nothing here ever names the
+    // session, and the hub's timers are fake, so the run parks at the AGENT
+    // step: that parked state is the strip's `live · step 3/3`, captured
+    // rather than imagined, and the cancel that follows is how it ends.
+    starter.send({
+      type: 'graph-run',
+      id: 24,
+      nodeId: madeGraph.value.nodeId,
+      input: { language: 'rust' },
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunStarted'),
+      'the run to be answered',
+    );
+    const graphRunStarted = starter.received.find((text) => labelFor(text) === 'graphRunStarted');
+    if (graphRunStarted === undefined) throw new Error('the run was not answered');
+    const startedRun = parseTextFrame(parseHubFrame, graphRunStarted);
+    if (!startedRun.ok || startedRun.value.type !== 'graph-run-started') {
+      throw new Error('the run was answered with something else');
+    }
+    const firstRunId = startedRun.value.runId;
+    const liveAtReview = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return (
+        seen.ok &&
+        seen.value.type === 'graph-run-state' &&
+        seen.value.runId === firstRunId &&
+        seen.value.status === 'running' &&
+        seen.value.steps.at(-1)?.nodeId === 'review' &&
+        seen.value.steps.at(-1)?.outcome === 'running'
+      );
+    };
+    await until(() => starter.received.some(liveAtReview), 'the run to reach the AGENT step');
+    const graphRunStateRunning = starter.received.find(liveAtReview);
+    if (graphRunStateRunning === undefined) throw new Error('the run never reached the agent');
+
+    starter.send({ type: 'graph-run-cancel', id: 25, runId: firstRunId });
+    await until(
+      () =>
+        starter.received.some((text) => labelFor(text) === 'graphRunCancelled') &&
+        starter.received.some((text) => labelFor(text) === 'graphRunStateCancelled'),
+      'the cancel to be answered and the run to end cancelled',
+    );
+    const graphRunCancelled = starter.received.find(
+      (text) => labelFor(text) === 'graphRunCancelled',
+    );
+    const graphRunStateCancelled = starter.received.find(
+      (text) => labelFor(text) === 'graphRunStateCancelled',
+    );
+    if (graphRunCancelled === undefined || graphRunStateCancelled === undefined) {
+      throw new Error('the cancel left no frames');
+    }
+
+    // The same graph with an input no route matches and no otherwise to fall
+    // to: the run fails at the ROUTER, and the sentence names it.
+    starter.send({
+      type: 'graph-run',
+      id: 26,
+      nodeId: madeGraph.value.nodeId,
+      input: { language: 'go' },
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunStateFailed'),
+      'the second run to fail at the router',
+    );
+    const graphRunStateFailed = starter.received.find(
+      (text) => labelFor(text) === 'graphRunStateFailed',
+    );
+    if (graphRunStateFailed === undefined) throw new Error('the second run did not fail');
+
+    // And a graph that runs to the end without reaching a machine, for the
+    // succeeded state and the output the inspector reads: one TRIGGER, whose
+    // output is the input it was given.
+    starter.send({
+      type: 'graph-create',
+      id: 27,
+      projectId: created.value.nodeId,
+      name: 'smoke-test',
+    });
+    const answersSmokeCreate = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-created' && seen.value.replyTo === 27;
+    };
+    await until(() => starter.received.some(answersSmokeCreate), 'the second graph to be made');
+    const smokeCreated = starter.received.find(answersSmokeCreate);
+    const smoke = smokeCreated === undefined ? null : parseTextFrame(parseHubFrame, smokeCreated);
+    if (smoke === null || !smoke.ok || smoke.value.type !== 'graph-created') {
+      throw new Error('the second graph was not made');
+    }
+    starter.send({
+      type: 'graph-save',
+      id: 28,
+      nodeId: smoke.value.nodeId,
+      document: {
+        nodes: [{ ...graphBase, id: 'start', kind: 'trigger', label: 'Nightly', source: 'manual' }],
+        edges: [],
+      },
+    });
+    starter.send({ type: 'graph-publish', id: 29, nodeId: smoke.value.nodeId });
+    const answersSmokePublish = (text: string): boolean => {
+      const seen = parseTextFrame(parseHubFrame, text);
+      return seen.ok && seen.value.type === 'graph-published' && seen.value.replyTo === 29;
+    };
+    await until(() => starter.received.some(answersSmokePublish), 'the second graph to publish');
+    // A read of a graph that has never run, which is what a screen asks on
+    // open and on every reconnection: the answer says so, and the store reads
+    // it to drop a run it may be holding from before.
+    starter.send({ type: 'graph-run-read', id: 30, nodeId: smoke.value.nodeId });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunLatestNone'),
+      'the read of a graph never run to be answered',
+    );
+    const graphRunLatestNone = starter.received.find(
+      (text) => labelFor(text) === 'graphRunLatestNone',
+    );
+    if (graphRunLatestNone === undefined) throw new Error('the read was not answered');
+    starter.send({
+      type: 'graph-run',
+      id: 31,
+      nodeId: smoke.value.nodeId,
+      input: { suite: 'nightly', language: 'rust' },
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunStateSucceeded'),
+      'the third run to succeed',
+    );
+    const graphRunStateSucceeded = starter.received.find(
+      (text) => labelFor(text) === 'graphRunStateSucceeded',
+    );
+    if (graphRunStateSucceeded === undefined) throw new Error('the third run did not succeed');
+    // And the same read once it has run: the answer carries the run whole,
+    // addressed to the frame that asked, which is what lets the store stop
+    // waiting on it.
+    starter.send({ type: 'graph-run-read', id: 32, nodeId: smoke.value.nodeId });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunLatestFound'),
+      'the read of a graph that has run to be answered',
+    );
+    const graphRunLatestFound = starter.received.find(
+      (text) => labelFor(text) === 'graphRunLatestFound',
+    );
+    if (graphRunLatestFound === undefined) throw new Error('the second read was not answered');
+
     // The same save once the machine has gone away, which is the refusal the
     // editor is written around: the hub holds no copy of a document, so a
     // write it cannot deliver is a no with the machine named in it, and what
@@ -2979,6 +3147,14 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('graphSaved', graphSaved);
     captured.set('graphPublished', graphPublished);
     captured.set('graphDocument', graphDocument);
+    captured.set('graphRunStarted', graphRunStarted);
+    captured.set('graphRunStateRunning', graphRunStateRunning);
+    captured.set('graphRunCancelled', graphRunCancelled);
+    captured.set('graphRunStateCancelled', graphRunStateCancelled);
+    captured.set('graphRunStateFailed', graphRunStateFailed);
+    captured.set('graphRunStateSucceeded', graphRunStateSucceeded);
+    captured.set('graphRunLatestNone', graphRunLatestNone);
+    captured.set('graphRunLatestFound', graphRunLatestFound);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);
     captured.set('nodeMoved', nodeMoved);

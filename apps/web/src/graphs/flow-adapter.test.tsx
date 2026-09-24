@@ -76,6 +76,14 @@ describe('toFlow', () => {
     expect(nodes.map((node) => node.selected)).toEqual([false, true, false]);
   });
 
+  it('marks the node whose run step is in flight, and none when no step is', () => {
+    const { nodes } = toFlow(fixtureDocument(), null, LABELS, 'dark', id('review'));
+    expect(nodes.map((node) => node.data.running)).toEqual([false, false, true]);
+
+    const idle = toFlow(fixtureDocument(), null, LABELS, 'dark', null);
+    expect(idle.nodes.map((node) => node.data.running)).toEqual([false, false, false]);
+  });
+
   it('yields one edge per document edge plus one per router route, labelled by its condition', () => {
     const { edges } = toFlow(fixtureDocument(), null, LABELS);
 
@@ -159,7 +167,7 @@ describe('deriveNodes', () => {
       node.id === 'start' ? { ...node, measured: { width: 170, height: 64 } } : node,
     );
 
-    const nodes = deriveNodes(document, id('start'), LABELS, 'dark', previous);
+    const nodes = deriveNodes(document, id('start'), LABELS, 'dark', null, previous);
 
     expect(nodes[0]?.measured).toEqual({ width: 170, height: 64 });
     expect(nodes[0]?.selected).toBe(true);
@@ -172,7 +180,7 @@ describe('deriveNodes', () => {
       node.id === 'classify' ? { ...node, dragging: true, position: { x: 999, y: 333 } } : node,
     );
 
-    const nodes = deriveNodes(document, null, LABELS, 'dark', previous);
+    const nodes = deriveNodes(document, null, LABELS, 'dark', null, previous);
 
     // The document says 250, 84; the drop is what will tell it otherwise, and
     // until then a frame from the hub must not snap the card back.

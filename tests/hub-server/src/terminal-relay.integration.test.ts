@@ -67,6 +67,7 @@ import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake
 import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
 import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
 
 /**
  * A terminal, from a pty on one machine to the clients watching it, and back.
@@ -372,6 +373,7 @@ async function start(
     catalogue: createFakeCatalogue(),
     docs: createFakeDocs(),
     graphs: createFakeGraphs(),
+    graphRuns: createFakeGraphRuns(),
     terminal,
     // No push: none of these suites is about it, and a broadcast whose push
     // seam is absent is not the broadcast the hub builds.

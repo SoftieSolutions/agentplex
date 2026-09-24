@@ -21,6 +21,7 @@ import { directoryListingFrameSchema, directorySchema } from './directory.js';
 import { docContentSchema, docNameSchema } from './doc.js';
 import { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './frames.js';
 import { graphDocumentSchema, graphNameSchema, graphPublishedVersionSchema } from './graph.js';
+import { graphRunIdSchema, graphRunStateSchema } from './graph-run.js';
 import {
   hubIdSchema,
   nodeIdSchema,
@@ -39,6 +40,7 @@ import {
 } from './pairing.js';
 import { frameParser } from './parse.js';
 import { pushEndpointSchema, pushKeySchema, pushSubscriptionSchema } from './push.js';
+import { routeInputSchema } from './route-condition.js';
 import { clientTerminalFrames, subscriptionEndedFrameSchema } from './terminal.js';
 import { transcriptActivitiesSchema, transcriptCountSchema } from './transcript.js';
 
@@ -682,6 +684,53 @@ export const clientFrameSchema = z.discriminatedUnion('type', [
     nodeId: nodeIdSchema,
   }),
   /**
+   * Runs the graph's latest published version with this input.
+   *
+   * The node is the whole address and the version is not named: what runs is
+   * the newest thing that was published, because a run is a person pressing
+   * Run on the screen they are looking at, and the draft is the one thing
+   * that may never run. The input is the object the first ROUTER's conditions
+   * read, bounded by the same schema those conditions evaluate against, and
+   * it is the run's whole payload -- no frame here names a store, a machine or
+   * a directory, because every one of those is the graph's own to decide, per
+   * node, at the step that needs it.
+   */
+  z.object({
+    type: z.literal('graph-run'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+    input: routeInputSchema,
+  }),
+  /**
+   * Stops a run before its next step.
+   *
+   * Named by the run and not by the graph, because two runs of one graph can
+   * be in flight and a cancel that named the graph would be a coin toss. The
+   * step in flight is left to end on its own: an agent mid-turn is not
+   * interrupted, for the reason a stop refuses a busy holder.
+   */
+  z.object({
+    type: z.literal('graph-run-cancel'),
+    id: frameIdSchema,
+    runId: graphRunIdSchema,
+  }),
+  /**
+   * Asks where the graph's latest run stands.
+   *
+   * A run's states arrive unsolicited only while a socket is up; a screen
+   * whose socket dropped holds the run where it was when the connection went,
+   * and the hub sends nothing about a run that ended meanwhile. So a screen
+   * asks, on open and on every reconnection, and is answered with
+   * `graph-run-latest`: the newest run of that graph, or `null` when the
+   * graph has never run. Sending it also marks this connection as watching
+   * that graph, which is what run states are fanned out by.
+   */
+  z.object({
+    type: z.literal('graph-run-read'),
+    id: frameIdSchema,
+    nodeId: nodeIdSchema,
+  }),
+  /**
    * Answers an approval the agent is blocked on: let it through, or refuse it.
    *
    * The session is named because a client names a session and the hub resolves
@@ -1279,6 +1328,66 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     type: z.literal('graph-published'),
     replyTo: frameIdSchema,
     version: z.int().positive(),
+  }),
+  /**
+   * The run began, and this is what it is called.
+   *
+   * Two names, because they answer different questions: `runId` is what every
+   * later frame and a cancel file under, and `number` is what a person says --
+   * "run 38 broke" -- counted from 1 per graph. The state itself follows as
+   * `graph-run-state`, unsolicited, and this reply carries none of it so that
+   * there is one shape a run's progress arrives in.
+   */
+  z.object({
+    type: z.literal('graph-run-started'),
+    replyTo: frameIdSchema,
+    runId: graphRunIdSchema,
+    number: z.int().positive(),
+  }),
+  /**
+   * A run, whole, as it stands now.
+   *
+   * Unsolicited, and sent to every client that has asked about its graph on
+   * this connection -- opened it, run it, or read its run -- because a run is
+   * one fact about the hub and two tabs open on the graph must read the same
+   * step, while a tab open on something else has no use for hundreds of step
+   * records. It has no `replyTo` because nobody asked for this particular
+   * frame: the client that pressed Run was answered by `graph-run-started`, a
+   * `graph-run-read` by `graph-run-latest`, and everything else is the run
+   * moving. The fields are `graphRunStateSchema`'s,
+   * spread here rather than nested so the frame reads like every other frame
+   * on this direction.
+   */
+  z.object({ type: z.literal('graph-run-state'), ...graphRunStateSchema.shape }),
+  /**
+   * The answer to a `graph-run-read`: where the graph's newest run stands,
+   * or `null` when the graph has never run.
+   *
+   * Its own frame rather than a `graph-run-state` with an optional `replyTo`,
+   * because every frame on this direction is either an answer, whose
+   * `replyTo` is required, or unsolicited, and has none. A state that is
+   * sometimes an answer would be the one frame a client has to inspect a
+   * field of to know which, and a client that forgot to would leave the read
+   * waiting for an answer that had already come -- which is what the first
+   * shape of this did. The run is nested rather than spread because it may be
+   * absent, and it names the graph again beside it so that the no-run answer
+   * still says which graph a screen filing runs by graph should drop.
+   */
+  z.object({
+    type: z.literal('graph-run-latest'),
+    replyTo: frameIdSchema,
+    nodeId: nodeIdSchema,
+    run: graphRunStateSchema.nullable(),
+  }),
+  /**
+   * The cancel was taken. The run's end arrives as `graph-run-state` with
+   * `cancelled` on it, after whatever step was in flight has ended; this says
+   * only that the request reached a run that was still going.
+   */
+  z.object({
+    type: z.literal('graph-run-cancelled'),
+    replyTo: frameIdSchema,
+    runId: graphRunIdSchema,
   }),
   /**
    * What became of the approval this client answered.

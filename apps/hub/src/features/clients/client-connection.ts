@@ -12,6 +12,8 @@ import {
   type DocName,
   type FrameId,
   type GraphDocument,
+  type GraphRunId,
+  type GraphRunState,
   type HubFrame,
   type HubId,
   type CatalogueQuery,
@@ -20,6 +22,7 @@ import {
   type PushEndpoint,
   type PushSubscription,
   type RefusalCode,
+  type RouteInput,
   type ServerRegistrationId,
   type SessionHolder,
   type SessionRef,
@@ -37,6 +40,7 @@ import type { ApprovalPolicy } from '../approval-policy/approval-policy.js';
 import type { Attention, AttentionOutcome } from '../attention/attention.js';
 import type { CatalogueQueries, TreeChanged, TreeMutations } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
+import type { GraphRuns } from '../graph-runs/graph-runs.js';
 import type { Graphs } from '../graphs/graphs.js';
 import { newServerRegistrationSchema, type Pairing } from '../pairing/pairing.js';
 import type { Projects } from '../projects/projects.js';
@@ -80,6 +84,19 @@ import type { Terminal, TerminalClient } from '../terminal/terminal.js';
 export type ClientConnectionState = 'awaiting-hello' | 'established' | 'closed';
 
 /**
+ * The most graphs one connection is sent run states for.
+ *
+ * A connection is marked as watching a graph when it opens, runs or reads
+ * one, and a tab left open for a week on a big project would otherwise
+ * collect every graph in it and be sent every run on the hub, hundreds of
+ * step records a frame. Sixteen is more graphs than a person has open in
+ * tabs; the one asked about longest ago is forgotten first, and asking about
+ * a graph again moves it to the front. A screen that has been forgotten asks
+ * again when it next opens or reconnects, which is what marks it again.
+ */
+export const WATCHED_GRAPHS_MAX = 16;
+
+/**
  * A machine-state frame, encoded once for everybody, with the version it
  * carries kept alongside so a connection can tell whether it already has it.
  */
@@ -101,6 +118,22 @@ export interface ClientConnection {
    * is no disagreeing about "it changed, and it is now at 7".
    */
   catalogueChanged(version: number): void;
+  /**
+   * Tells this client where a run is, if it is established and has asked
+   * about that run's graph on this connection: opened it, run it, or read
+   * its run.
+   *
+   * Unsolicited, like the tree change above it, but not to every client: a
+   * run is one fact about the hub and two tabs open on the graph must read
+   * the same step, while a tab open on something else has no use for it. It
+   * is not small, either -- a state carries every step record so far, up to
+   * `GRAPH_RUN_STEPS_MAX` of them with a bounded output each, so a run in a
+   * large graph is tens of kilobytes on every change. Not encoded once for
+   * everybody, because the rule about identical characters protects a state
+   * clients could disagree about, and a client that missed a frame here is
+   * told everything by the next one.
+   */
+  graphRunState(state: GraphRunState): void;
   /**
    * Sends the state, unless this client is not established or already has this
    * version.
@@ -274,6 +307,12 @@ export interface ClientConnectionDependencies {
    */
   readonly graphs: Graphs;
   /**
+   * Runs: start one, cancel one. The states come back the other way, through
+   * `graphRunState` on the connection, because a run moves on its own clock
+   * and not in answer to a frame.
+   */
+  readonly graphRuns: GraphRuns;
+  /**
    * The terminal relay, which this connection is one end of.
    *
    * A seam rather than a set of subscriptions held here, because a subscription
@@ -323,6 +362,7 @@ export function serveClientConnection(
     catalogue,
     docs,
     graphs,
+    graphRuns,
     terminal,
     push,
     onClosed,
@@ -330,6 +370,23 @@ export function serveClientConnection(
 ): ClientConnection {
   let state: ClientConnectionState = 'awaiting-hello';
   let lastVersion: number | null = null;
+  /**
+   * The graphs this client has asked about, which is what run states are
+   * fanned out by. In the order they were last asked about, oldest first, and
+   * bounded by `WATCHED_GRAPHS_MAX`.
+   */
+  const watchedGraphs = new Set<NodeId>();
+
+  function watch(nodeId: NodeId): void {
+    // Deleted first so that a graph asked about again moves to the end.
+    watchedGraphs.delete(nodeId);
+    watchedGraphs.add(nodeId);
+    while (watchedGraphs.size > WATCHED_GRAPHS_MAX) {
+      const oldest = watchedGraphs.values().next().value;
+      if (oldest === undefined) break;
+      watchedGraphs.delete(oldest);
+    }
+  }
 
   const send = (frame: HubFrame): void => void socket.send(encodeHubFrame(frame));
 
@@ -770,6 +827,7 @@ export function serveClientConnection(
           helloFirst(frame.id);
           return;
         }
+        watch(frame.nodeId);
         void answerGraphOpen(frame.id, frame.nodeId);
         return;
       }
@@ -789,6 +847,35 @@ export function serveClientConnection(
           return;
         }
         void answerGraphPublish(frame.id, frame.nodeId);
+        return;
+      }
+
+      case 'graph-run': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        watch(frame.nodeId);
+        void answerGraphRun(frame.id, frame.nodeId, frame.input);
+        return;
+      }
+
+      case 'graph-run-cancel': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        void answerGraphRunCancel(frame.id, frame.runId);
+        return;
+      }
+
+      case 'graph-run-read': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        watch(frame.nodeId);
+        void answerGraphRunRead(frame.id, frame.nodeId);
         return;
       }
 
@@ -1531,6 +1618,66 @@ export function serveClientConnection(
   }
 
   /**
+   * Starts a run and answers with its name and number. The run itself
+   * arrives as `graph-run-state`, unsolicited, on every client watching the
+   * graph; this reply says only that it began. A refusal is the feature's
+   * sentence: no such graph, nothing published to run, or a run of it
+   * already in flight.
+   */
+  async function answerGraphRun(
+    replyTo: FrameId,
+    nodeId: NodeId,
+    input: RouteInput,
+  ): Promise<void> {
+    try {
+      const outcome = await graphRuns.start(nodeId, input);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'graph-run-started', replyTo, runId: outcome.runId, number: outcome.number });
+    } catch (error) {
+      logger.error('could not start a run', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not start that run');
+    }
+  }
+
+  /**
+   * Answers where the graph's newest run stands, addressed to the read that
+   * asked: the run whole, or `null` for a graph that has never run.
+   */
+  async function answerGraphRunRead(replyTo: FrameId, nodeId: NodeId): Promise<void> {
+    try {
+      const latest = await graphRuns.latest(nodeId);
+      if (state !== 'established') return;
+      send({ type: 'graph-run-latest', replyTo, nodeId, run: latest });
+    } catch (error) {
+      logger.error('could not read a run', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not read that graph’s runs');
+    }
+  }
+
+  /** Asks a run to stop before its next step, and says the ask was taken. */
+  async function answerGraphRunCancel(replyTo: FrameId, runId: GraphRunId): Promise<void> {
+    try {
+      const outcome = await graphRuns.cancel(runId);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem);
+        return;
+      }
+      send({ type: 'graph-run-cancelled', replyTo, runId });
+    } catch (error) {
+      logger.error('could not cancel a run', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not cancel that run');
+    }
+  }
+
+  /**
    * Reads one session's transcript and answers the client that asked.
    *
    * The same shape a document open has, and nothing is stored on the way
@@ -1844,6 +1991,10 @@ export function serveClientConnection(
     catalogueChanged(version: number): void {
       if (state !== 'established') return;
       send({ type: 'catalogue-changed', version });
+    },
+    graphRunState(run: GraphRunState): void {
+      if (state !== 'established' || !watchedGraphs.has(run.nodeId)) return;
+      send({ type: 'graph-run-state', ...run });
     },
     close: end,
   };

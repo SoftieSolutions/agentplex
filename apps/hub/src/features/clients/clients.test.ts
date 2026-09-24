@@ -30,6 +30,7 @@ import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
 import { createClients, type Clients } from './clients.js';
+import { WATCHED_GRAPHS_MAX } from './client-connection.js';
 import { createFakeApprovals, type FakeApprovals } from '../approvals/fake-approvals.js';
 import {
   createFakeApprovalPolicy,
@@ -42,6 +43,7 @@ import { createFakeProjects, type FakeProjects } from '../projects/fake-projects
 import { createFakeCatalogue, type FakeCatalogue } from '../catalogue/fake-catalogue.js';
 import { createFakeDocs, type FakeDocs } from '../docs/fake-docs.js';
 import { createFakeGraphs } from '../graphs/fake-graphs.js';
+import { createFakeGraphRuns, type FakeGraphRuns } from '../graph-runs/fake-graph-runs.js';
 import { createFakeTerminal, type FakeTerminal } from '../terminal/fake-terminal.js';
 import { createFakePush, FAKE_PUSH_PUBLIC_KEY, type FakePush } from '../push/fake-push.js';
 
@@ -138,6 +140,8 @@ interface Harness {
   /** The subscriptions this broadcast writes through, or `null` for no push. */
   readonly push: FakePush | null;
   readonly approvalPolicy: FakeApprovalPolicy;
+  /** The runtime this broadcast answers run frames through, its states wired back into it. */
+  readonly graphRuns: FakeGraphRuns;
 }
 
 /**
@@ -167,6 +171,10 @@ function harness(
   const timers = createFakeTimers();
   let syncs = 0;
   const terminal = createFakeTerminal();
+  // Wired the way the composition root wires the real feature: a state the
+  // runtime publishes goes back into this broadcast. `broadcast` is assigned
+  // below and nothing emits before then.
+  const graphRuns = createFakeGraphRuns({ onState: (run) => broadcast.runStateChanged(run) });
   const broadcast = createClients({
     hubId: HUB_ID,
     state,
@@ -187,6 +195,7 @@ function harness(
     catalogue,
     docs,
     graphs: createFakeGraphs(),
+    graphRuns,
     terminal,
     push,
   });
@@ -205,6 +214,7 @@ function harness(
     docs,
     terminal,
     push,
+    graphRuns,
   };
 }
 
@@ -2473,5 +2483,133 @@ describe('reading one session’s transcript', () => {
     });
 
     expect(sessions.transcripts).toEqual([]);
+  });
+});
+
+describe('a graph run', () => {
+  const GRAPH = nodeIdSchema.parse('node-graph');
+  const OTHER = nodeIdSchema.parse('node-other-graph');
+  const runState = (nodeId: typeof GRAPH, status: 'running' | 'succeeded' = 'running') => ({
+    nodeId,
+    runId: 'run-1' as never,
+    number: 1,
+    status,
+    reason: null,
+    step: 1,
+    of: 3,
+    steps: [],
+  });
+
+  /**
+   * A run's states are one fact about the hub, but they are hundreds of step
+   * records wide and they move on every step: a client looking at something
+   * else has no use for them. So they go to the connections that asked about
+   * the graph -- opened it, ran it, or read its run -- and to no other.
+   */
+  it('sends a state to the clients that asked about its graph, and to no other', async () => {
+    const { broadcast, graphRuns } = harness();
+    const opener = attach(broadcast);
+    const runner = attach(broadcast);
+    const reader = attach(broadcast);
+    const bystander = attach(broadcast);
+    const elsewhere = attach(broadcast);
+    for (const client of [opener, runner, reader, bystander, elsewhere]) await client.hello();
+    await opener.say({ type: 'graph-open', id: 2, nodeId: GRAPH });
+    await runner.say({ type: 'graph-run', id: 2, nodeId: GRAPH, input: {} });
+    await reader.say({ type: 'graph-run-read', id: 2, nodeId: GRAPH });
+    await elsewhere.say({ type: 'graph-open', id: 2, nodeId: OTHER });
+    const bystanderSaw = bystander.received.length;
+    const elsewhereSaw = elsewhere.received.length;
+
+    graphRuns.emit(runState(GRAPH));
+    await Promise.resolve();
+
+    for (const client of [opener, runner, reader]) {
+      expect(client.received.filter((frame) => frame.type === 'graph-run-state')).toEqual([
+        { type: 'graph-run-state', ...runState(GRAPH) },
+      ]);
+    }
+    expect(bystander.received.length).toBe(bystanderSaw);
+    expect(elsewhere.received.length).toBe(elsewhereSaw);
+  });
+
+  it('answers a read with the graph’s latest run, addressed to the frame that asked', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    graphRuns.answerReadsWith(runState(GRAPH, 'succeeded'));
+
+    await client.say({ type: 'graph-run-read', id: 2, nodeId: GRAPH });
+
+    expect(graphRuns.reads).toEqual([GRAPH]);
+    expect(client.received.at(-1)).toEqual({
+      type: 'graph-run-latest',
+      replyTo: 2,
+      nodeId: GRAPH,
+      run: runState(GRAPH, 'succeeded'),
+    });
+  });
+
+  it('answers a read of a graph that has never run with no run, naming the graph', async () => {
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'graph-run-read', id: 2, nodeId: GRAPH });
+
+    expect(client.received.at(-1)).toEqual({
+      type: 'graph-run-latest',
+      replyTo: 2,
+      nodeId: GRAPH,
+      run: null,
+    });
+  });
+
+  /**
+   * A connection that has been open all week and looked at every graph in a
+   * big project would otherwise be sent every run on the hub. The watched set
+   * is the most recent graphs asked about, and asking again moves a graph to
+   * the front.
+   */
+  it('watches only the graphs most recently asked about, the oldest forgotten first', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    const graphs = Array.from({ length: WATCHED_GRAPHS_MAX + 1 }, (_, index) =>
+      nodeIdSchema.parse(`node-graph-${String(index)}`),
+    );
+    const [first, second] = graphs;
+    if (first === undefined || second === undefined) throw new Error('no graphs');
+    await client.say({ type: 'graph-run-read', id: 2, nodeId: first });
+    await client.say({ type: 'graph-run-read', id: 3, nodeId: second });
+    // The first is asked about again, so the second is now the oldest.
+    await client.say({ type: 'graph-run-read', id: 4, nodeId: first });
+    let id = 5;
+    for (const graph of graphs.slice(2)) {
+      await client.say({ type: 'graph-run-read', id, nodeId: graph });
+      id += 1;
+    }
+    const saw = client.received.length;
+
+    for (const graph of graphs) graphRuns.emit(runState(graph));
+    await Promise.resolve();
+
+    const heard = client.received
+      .slice(saw)
+      .flatMap((frame) => (frame.type === 'graph-run-state' ? [frame.nodeId] : []));
+    expect(heard).toHaveLength(WATCHED_GRAPHS_MAX);
+    expect(heard).toContain(first);
+    expect(heard).not.toContain(second);
+    expect(heard).toContain(graphs.at(-1));
+  });
+
+  it('refuses a read before hello, and reads nothing', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+
+    await client.say({ type: 'graph-run-read', id: 1, nodeId: GRAPH });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
+    expect(graphRuns.reads).toEqual([]);
   });
 });

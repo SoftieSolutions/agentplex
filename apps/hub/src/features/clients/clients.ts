@@ -1,4 +1,4 @@
-import type { HubId, Layout } from '@agentplex/protocol';
+import type { GraphRunState, HubId, Layout } from '@agentplex/protocol';
 import {
   type Logger,
   closure,
@@ -9,6 +9,7 @@ import {
 import type { Pairing } from '../pairing/pairing.js';
 import type { ClientCatalogue } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
+import type { GraphRuns } from '../graph-runs/graph-runs.js';
 import type { Graphs } from '../graphs/graphs.js';
 import type { Projects } from '../projects/projects.js';
 import type { Approvals } from '../approvals/approvals.js';
@@ -147,6 +148,12 @@ export interface ClientsDependencies {
   /** Graphs, handed to every client this serves. One instance, for the reason `docs` is. */
   readonly graphs: Graphs;
   /**
+   * Runs, handed to every client this serves. One instance, and here that is
+   * not a preference: a run is numbered once per graph and cancelled once,
+   * and a per-socket copy would be two answers to which run is 38.
+   */
+  readonly graphRuns: GraphRuns;
+  /**
    * The terminal relay every client this serves is one end of.
    *
    * One instance for the whole broadcast, like the session control above it and
@@ -201,6 +208,17 @@ export interface Clients {
   /** How many sockets are being served, established or not. */
   readonly attached: number;
   /**
+   * Tells every established client watching the run's graph where it is, now.
+   *
+   * The seam the runtime's `onState` is wired to. Not coalesced and not
+   * scheduled here, for the reason the tree change is not: the runtime
+   * already publishes once per change and the frame carries the run whole,
+   * so waiting a turn would buy nothing and cost the strip the promptness it
+   * exists for. Each connection decides whether it is watching that graph;
+   * a send that throws costs itself.
+   */
+  runStateChanged(state: GraphRunState): void;
+  /**
    * Stops publishing and closes every client.
    *
    * Synchronous: there is no loop to wind down and no dial in flight. Closing a
@@ -229,6 +247,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
     catalogue,
     docs,
     graphs,
+    graphRuns,
     terminal,
     push,
   } = dependencies;
@@ -331,6 +350,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         catalogue,
         docs,
         graphs,
+        graphRuns,
         terminal,
         push,
         onClosed: () => {
@@ -354,6 +374,17 @@ export function createClients(dependencies: ClientsDependencies): Clients {
 
     get attached(): number {
       return connections.size;
+    },
+
+    runStateChanged(state: GraphRunState): void {
+      if (stopped) return;
+      for (const connection of connections) {
+        try {
+          connection.graphRunState(state);
+        } catch (error) {
+          logger.warn('a client could not be told where a run is', { problem: String(error) });
+        }
+      }
     },
 
     stop(): void {

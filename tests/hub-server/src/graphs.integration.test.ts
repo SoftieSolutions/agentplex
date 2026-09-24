@@ -23,6 +23,7 @@ import { createFakeSessions } from '../../../apps/hub/src/features/sessions/fake
 import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake-terminal.js';
 import { createFleetState } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
 import { createGraphs } from '../../../apps/hub/src/features/graphs/graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
@@ -99,6 +100,7 @@ async function start(): Promise<Clients> {
     catalogue: createFakeCatalogue(),
     docs: createFakeDocs(),
     graphs,
+    graphRuns: createFakeGraphRuns(),
     terminal: createFakeTerminal(),
     push: null,
   });

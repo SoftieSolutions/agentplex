@@ -16,6 +16,8 @@ import {
   type FrameId,
   type GraphDocument,
   type GraphPublishedVersion,
+  type GraphRunId,
+  type GraphRunState,
   type HubFrame,
   type HubId,
   type Layout,
@@ -550,6 +552,40 @@ export interface GraphPublishedView {
 }
 
 /**
+ * The hub's answer to a run: what the run is called, and its number.
+ *
+ * `replyTo` is what joins it to the screen that pressed Run, and `runId` is
+ * what that screen then reads the run's states by -- a state carries no
+ * `replyTo`, because it is not an answer to anything.
+ */
+export interface RunStartedView {
+  readonly replyTo: FrameId;
+  readonly runId: GraphRunId;
+  readonly number: number;
+}
+
+/** The hub's yes to a cancel. The run's end arrives as a state, not here. */
+export interface RunCancelledView {
+  readonly replyTo: FrameId;
+  readonly runId: GraphRunId;
+}
+
+/**
+ * The hub's answer to a read of a graph's run: the newest run, or `null`
+ * when the graph has never run.
+ *
+ * Kept so the screen that asked can match it to its read, and name the graph
+ * so a screen can drop a run it was holding when the answer is `null`. A run
+ * in the answer is also filed in `runs`, like any state, so a screen reading
+ * the graph's newest there sees it either way.
+ */
+export interface RunLatestView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+  readonly run: GraphRunState | null;
+}
+
+/**
  * The hub's yes to a subscribe or an unsubscribe, kept so the control that
  * asked can stop waiting.
  *
@@ -667,6 +703,24 @@ export interface HubSnapshot {
   readonly lastGraphSaved: GraphSavedView | null;
   /** The hub's most recent yes to a graph publish, kept until the next one. */
   readonly lastGraphPublished: GraphPublishedView | null;
+  /** The hub's most recent yes to a run, kept until the next one. */
+  readonly lastRunStarted: RunStartedView | null;
+  /** The hub's most recent yes to a run cancel, kept until the next one. */
+  readonly lastRunCancelled: RunCancelledView | null;
+  /** The hub's most recent answer to a read of a graph's run. */
+  readonly lastRunLatest: RunLatestView | null;
+  /**
+   * Every run the hub has told this client about, by run id, each as the
+   * whole state last sent.
+   *
+   * By run, because the frame names the run and one graph's earlier runs
+   * are still worth reading; a screen picks its graph's newest by the
+   * `nodeId` each state carries. Replaced whole on every frame, since a state
+   * is whole. Bounded by `MAX_REMEMBERED_RUNS`, oldest first, and emptied
+   * when the socket drops: a state held across a drop is where the run was
+   * when the connection went, and nothing on this socket will move it.
+   */
+  readonly runs: ReadonlyMap<GraphRunId, GraphRunState>;
   /** The hub's most recent yes to a subscribe or an unsubscribe. */
   readonly lastPush: PushView | null;
   /**
@@ -763,6 +817,9 @@ type CommandFrame = Extract<
       | 'graph-open'
       | 'graph-save'
       | 'graph-publish'
+      | 'graph-run'
+      | 'graph-run-cancel'
+      | 'graph-run-read'
       | 'push-subscribe'
       | 'push-unsubscribe'
       | 'session-transcript';
@@ -987,6 +1044,8 @@ const MAX_REMEMBERED_STARTS = 64;
  * evicting from the old end takes the stale ones first.
  */
 export const MAX_REMEMBERED_TRANSCRIPTS = 16;
+/** How many runs the store remembers, oldest first. Far above any screen's interest. */
+export const MAX_REMEMBERED_RUNS = 64;
 
 export function terminalKey(target: ClientTerminalTarget): string {
   return target.by === 'start'
@@ -1099,6 +1158,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastGraphDocument: null,
     lastGraphSaved: null,
     lastGraphPublished: null,
+    lastRunStarted: null,
+    lastRunCancelled: null,
+    lastRunLatest: null,
+    runs: new Map(),
     lastPush: null,
     pushPublicKey: null,
     transcripts: new Map(),
@@ -1139,6 +1202,13 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
    * empty entry would tell it that it does not hold itself.
    */
   const transcripts = new Map<FrameId, TranscriptView>();
+  /**
+   * Every run this client has been told about, by run id: what `runs` on
+   * the snapshot is a copy of. Bounded, oldest first, for the reason the
+   * starts are: a tab watching a graph all day would otherwise keep one
+   * entry per run for as long as it is open.
+   */
+  const runs = new Map<GraphRunId, GraphRunState>();
   /**
    * Requests whose caller is waiting, by the id the answer will name.
    *
@@ -1490,11 +1560,21 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       settleWaiting('the connection dropped before the hub answered');
       abandonQueries('the connection dropped before the hub answered this catalogue query');
       detachTerminals();
-      if (unanswered > 0) {
+      // A run held across a drop is where it was when the socket went, and
+      // nothing on the next one moves it until a state or a read's answer
+      // arrives: a screen mounted meanwhile must not draw it live.
+      const heldRuns = runs.size > 0;
+      runs.clear();
+      if (unanswered > 0 || heldRuns) {
         update({
-          problem: `the connection dropped before the hub answered ${String(unanswered)} command${
-            unanswered === 1 ? '' : 's'
-          }`,
+          ...(heldRuns ? { runs: new Map() } : {}),
+          ...(unanswered > 0
+            ? {
+                problem: `the connection dropped before the hub answered ${String(unanswered)} command${
+                  unanswered === 1 ? '' : 's'
+                }`,
+              }
+            : {}),
         });
       }
       scheduleRetry();
@@ -1521,6 +1601,16 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     attempt += 1;
     update({ phase: 'reconnecting' });
     cancelRetry = timers.schedule(delay, connect);
+  }
+
+  /** Files a run whole under its id, the oldest forgotten past the bound. */
+  function fileRun(state: GraphRunState): void {
+    runs.set(state.runId, state);
+    while (runs.size > MAX_REMEMBERED_RUNS) {
+      const oldest = runs.keys().next().value;
+      if (oldest === undefined) break;
+      runs.delete(oldest);
+    }
   }
 
   function receive(text: string): void {
@@ -1825,6 +1915,42 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({
           lastRefusal: null,
           lastGraphPublished: { replyTo: frame.replyTo, version: frame.version },
+        });
+        return;
+      }
+      case 'graph-run-started': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastRunStarted: { replyTo: frame.replyTo, runId: frame.runId, number: frame.number },
+        });
+        return;
+      }
+      case 'graph-run-state': {
+        // Unsolicited and whole: filed by the run, replacing what was there.
+        // Nothing is pending for it, because nobody asked for this frame.
+        const { type: _type, ...state } = frame;
+        fileRun(state);
+        update({ runs: new Map(runs) });
+        return;
+      }
+      case 'graph-run-cancelled': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastRunCancelled: { replyTo: frame.replyTo, runId: frame.runId },
+        });
+        return;
+      }
+      case 'graph-run-latest': {
+        pending.delete(frame.replyTo);
+        // A run in the answer is filed like any state, so that a screen
+        // reading its graph's newest out of `runs` finds it there too.
+        if (frame.run !== null) fileRun(frame.run);
+        update({
+          lastRefusal: null,
+          lastRunLatest: { replyTo: frame.replyTo, nodeId: frame.nodeId, run: frame.run },
+          ...(frame.run === null ? {} : { runs: new Map(runs) }),
         });
         return;
       }
@@ -2175,11 +2301,15 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // while nothing here was connected: the same copy this store cannot
       // vouch for, so the screen asks again when it is looked at.
       lastGraphDocument: null,
+      // A run moves on the hub's own clock. What this store held is where a
+      // run was when the socket went, and the next state to arrive is whole.
+      runs: new Map(),
       // And the same again: the transcript file goes on being appended to on
       // its own machine while nothing here is connected.
       transcripts: new Map(),
     });
     transcripts.clear();
+    runs.clear();
   }
 
   /**

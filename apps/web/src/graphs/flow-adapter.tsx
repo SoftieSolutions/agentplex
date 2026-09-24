@@ -25,7 +25,7 @@ import {
   type GraphNodeKind,
   type ServerRegistrationId,
 } from '@agentplex/protocol';
-import { colorForRole, type Scheme } from '../ui/tokens.js';
+import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import { KIND_WORDS, moveNode, nodeSubtitle, zoomLabel, type GraphEdit } from './graph-model.js';
 
 /**
@@ -76,6 +76,8 @@ export interface CardData extends Record<string, unknown> {
   readonly label: string;
   /** The third line: `nodeSubtitle`'s answer. */
   readonly subtitle: string;
+  /** Whether a run's step is in flight on this node right now. */
+  readonly running: boolean;
   readonly scheme: Scheme;
 }
 
@@ -93,6 +95,7 @@ export function toFlow(
   selection: GraphNodeId | null,
   labels: ReadonlyMap<ServerRegistrationId, string>,
   scheme: Scheme = 'dark',
+  running: GraphNodeId | null = null,
 ): Flow {
   const nodes: CardNode[] = document.nodes.map((node) => ({
     id: node.id,
@@ -103,6 +106,7 @@ export function toFlow(
       kind: node.kind,
       label: node.label,
       subtitle: nodeSubtitle(node, labels),
+      running: node.id === running,
       scheme,
     },
   }));
@@ -172,7 +176,13 @@ const MONO = "'Fira Code', var(--mantine-font-family-monospace, monospace)";
  */
 function CardNodeView({ id, data, selected }: NodeProps<CardNode>): JSX.Element {
   const scheme = data.scheme;
-  const edge = selected ? colorForRole('accent', scheme) : colorForRole('borderStrong', scheme);
+  // A running node is drawn in the running tone, and that wins over the
+  // selection ring: the mock marks the executing card whatever is selected.
+  const edge = data.running
+    ? colorForTone('running', scheme)
+    : selected
+      ? colorForRole('accent', scheme)
+      : colorForRole('borderStrong', scheme);
   const style: CSSProperties = {
     width: CARD_WIDTH,
     background: colorForRole('surface', scheme),
@@ -184,10 +194,16 @@ function CardNodeView({ id, data, selected }: NodeProps<CardNode>): JSX.Element 
     boxShadow: selected ? `0 0 0 4px color-mix(in srgb, ${edge} 15%, transparent)` : undefined,
   };
   return (
-    <div data-node-card={id} data-kind={data.kind} style={style}>
+    <div
+      data-node-card={id}
+      data-kind={data.kind}
+      data-running={data.running ? 'true' : undefined}
+      style={style}
+    >
       <Handle type="target" position={Position.Left} />
       <div
         style={{
+          display: 'flex',
           fontFamily: MONO,
           fontSize: 9,
           fontWeight: 600,
@@ -196,6 +212,19 @@ function CardNodeView({ id, data, selected }: NodeProps<CardNode>): JSX.Element 
         }}
       >
         {KIND_WORDS[data.kind]}
+        {data.running ? (
+          <span
+            style={{
+              marginLeft: 'auto',
+              fontSize: 10,
+              letterSpacing: 0,
+              fontWeight: 500,
+              color: colorForTone('running', scheme),
+            }}
+          >
+            running
+          </span>
+        ) : null}
       </div>
       <div style={{ fontWeight: 700, marginTop: 2 }}>{data.label}</div>
       <div style={{ fontSize: 11, color: colorForRole('textMuted', scheme) }}>{data.subtitle}</div>
@@ -322,6 +351,8 @@ export interface GraphCanvasProps {
    * pointer and the library's drag handling has nothing to bind to.
    */
   readonly interactive?: boolean;
+  /** The node whose run step is in flight, drawn in the running tone, or `null`. */
+  readonly running?: GraphNodeId | null;
   readonly onSelect: (id: GraphNodeId | null) => void;
   /** An edit the canvas asks of the document: a card dropped where it was dragged to. */
   readonly onEdit: (edit: (document: GraphDocument) => GraphEdit) => void;
@@ -333,6 +364,7 @@ interface Held {
   readonly selection: GraphNodeId | null;
   readonly labels: ReadonlyMap<ServerRegistrationId, string>;
   readonly scheme: Scheme;
+  readonly running: GraphNodeId | null;
   readonly nodes: CardNode[];
 }
 
@@ -348,10 +380,11 @@ export function deriveNodes(
   selection: GraphNodeId | null,
   labels: ReadonlyMap<ServerRegistrationId, string>,
   scheme: Scheme,
+  running: GraphNodeId | null,
   previous: readonly CardNode[],
 ): CardNode[] {
   const held = new Map(previous.map((node) => [node.id, node]));
-  return toFlow(document, selection, labels, scheme).nodes.map((node) => {
+  return toFlow(document, selection, labels, scheme, running).nodes.map((node) => {
     const before = held.get(node.id);
     if (before === undefined) return node;
     const kept: CardNode = { ...node };
@@ -387,6 +420,7 @@ function Canvas({
   labels,
   scheme,
   interactive = true,
+  running = null,
   onSelect,
   onEdit,
   onConnect,
@@ -396,7 +430,8 @@ function Canvas({
     selection,
     labels,
     scheme,
-    nodes: toFlow(document, selection, labels, scheme).nodes,
+    running,
+    nodes: toFlow(document, selection, labels, scheme, running).nodes,
   }));
 
   // State that follows a prop, adjusted during render by React's own rule for
@@ -407,10 +442,11 @@ function Canvas({
     held.document !== document ||
     held.selection !== selection ||
     held.labels !== labels ||
-    held.scheme !== scheme
+    held.scheme !== scheme ||
+    held.running !== running
   ) {
-    nodes = deriveNodes(document, selection, labels, scheme, held.nodes);
-    setHeld({ document, selection, labels, scheme, nodes });
+    nodes = deriveNodes(document, selection, labels, scheme, running, held.nodes);
+    setHeld({ document, selection, labels, scheme, running, nodes });
   }
 
   const edges = toFlow(document, selection, labels, scheme).edges;
