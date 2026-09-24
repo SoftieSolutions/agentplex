@@ -37,6 +37,7 @@ import { createDocs } from './features/docs/docs.js';
 import { createGraphs } from './features/graphs/graphs.js';
 import { createAgentExecutor } from './features/graph-runs/agent-executor.js';
 import { createGraphRuns } from './features/graph-runs/graph-runs.js';
+import { createHumanExecutor } from './features/graph-runs/human-executor.js';
 import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
@@ -457,6 +458,9 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     // which is what puts it in front of every attached client rather than in a
     // broadcast cache.
     onChanged: (ref, pending) => state.applyApprovals(ref, pending),
+    // The runs waiting on a person, on their own seam of the same reducer: a
+    // run sits on no session row, so its list goes beside the stores.
+    onGraphRunChanged: (waiting) => state.applyGraphRunApprovals(waiting),
     // One decision to one machine, and no round trip held open for it. The
     // server acknowledges nothing when it works -- a granted command may run
     // for ten minutes -- so only a refusal comes back here, and what the hook
@@ -618,6 +622,12 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
   // servers' report closure above before it is built, on the same knot the
   // relay is: nothing reports until `sync` below dials a server.
   const agentExecutor = createAgentExecutor({ sessions, state, timers, logger });
+  // The one executor that asks a person, through the same approvals feature a
+  // blocked agent asks through -- so a run waiting at a HUMAN node is drawn
+  // and answered where a session waiting on a tool call is. The approval id
+  // is minted here rather than in approvals, where every id has come from
+  // the machine holding the blocked hook; the run is what is blocked.
+  const humanExecutor = createHumanExecutor({ approvals, ids, timers, logger });
   const graphRuns = createGraphRuns({
     database,
     ids,
@@ -626,6 +636,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     logger,
     graphs,
     agent: agentExecutor,
+    human: humanExecutor,
     // Every state to every client watching its graph, unsolicited, the way a
     // tree change goes. `clients` is built below; a run cannot move before a
     // client can ask for one, so the closure never runs before it exists.

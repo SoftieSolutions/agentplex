@@ -3,6 +3,7 @@ import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-schema.js';
 import {
   pushEndpointSchema,
+  nodeIdSchema,
   serverAddressSchema,
   sessionIdSchema,
   storeIdSchema,
@@ -138,7 +139,8 @@ function subscription(endpoint: string): PushSubscription {
 }
 
 /** One needs-you edge, in the four fields the detector is allowed to pass on. */
-const EDGE: PushEvent = {
+const EDGE: Extract<PushEvent, { kind: 'session' }> = {
+  kind: 'session',
   storeId: storeIdSchema.parse('store-work'),
   sessionId: sessionIdSchema.parse('session-a'),
   provider: 'claude',
@@ -449,6 +451,23 @@ describe('the fan-out', () => {
       title: 'claude',
       body: 'awaiting permission',
       data: { storeId: 'store-work', sessionId: 'session-a' },
+    });
+  });
+
+  it('says which run is waiting at which node, and carries the graph to tap on', async () => {
+    const push = await loadedWithTwoBrowsers();
+
+    await push.notify({
+      kind: 'graphRun',
+      graph: nodeIdSchema.parse('node-graph-release'),
+      number: 38,
+      node: 'Ship it',
+    });
+
+    expect(JSON.parse(delivered[0]?.payload ?? 'null')).toEqual({
+      title: 'graph run',
+      body: 'run #38 is waiting at Ship it',
+      data: { graph: 'node-graph-release' },
     });
   });
 

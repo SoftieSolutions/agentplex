@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { approvalSubjectSchema, pendingApprovalSchema } from './approval.js';
+import { graphRunApprovalSubjectSchema, pendingApprovalSchema } from './approval.js';
+import { GRAPH_LABEL_MAX_CHARS } from './graph.js';
 import {
   nodeIdSchema,
   serverIdSchema,
@@ -570,12 +571,16 @@ export const graphRunApprovalSchema = z.object({
   graph: nodeIdSchema,
   /** The run's number within its graph, the `#38` a person says. */
   number: z.int().positive(),
-  approval: pendingApprovalSchema.extend({
-    subject: approvalSubjectSchema.refine(
-      (subject) => subject.kind === 'graphRun',
-      'a graph-run approval is about a run',
-    ),
-  }),
+  /**
+   * What the node the run is waiting at is called, as the canvas letters it.
+   *
+   * Data beside the request rather than a word to be read back out of the
+   * proposal: the proposal is display text and nothing downstream may parse
+   * it, and the one thing a notification says about a run is this label.
+   */
+  nodeLabel: z.string().max(GRAPH_LABEL_MAX_CHARS),
+  /** The request, whose subject is a run and not a session: the list is for runs. */
+  approval: pendingApprovalSchema.extend({ subject: graphRunApprovalSubjectSchema }),
 });
 export type GraphRunApproval = z.infer<typeof graphRunApprovalSchema>;
 

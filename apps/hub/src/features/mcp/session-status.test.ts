@@ -69,7 +69,7 @@ function fleetWith(
       },
     ],
   };
-  return { version: 1, stores: [store], servers: [], candidates: [] };
+  return { version: 1, stores: [store], servers: [], candidates: [], graphRunApprovals: [] };
 }
 
 function status(state: MachineState, args: Record<string, unknown>): ReturnType<typeof callTool> {

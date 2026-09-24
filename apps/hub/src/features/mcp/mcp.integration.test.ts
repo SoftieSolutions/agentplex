@@ -58,7 +58,9 @@ afterEach(async () => {
  * no tool at all: a hub with parts being taken down underneath it is exactly
  * when nothing should be asking a feature anything.
  */
-const emptyFleet = { published: () => ({ version: 0, stores: [], servers: [], candidates: [] }) };
+const emptyFleet = {
+  published: () => ({ version: 0, stores: [], servers: [], candidates: [], graphRunApprovals: [] }),
+};
 const noTerminal = { subscribe: () => {}, input: () => {}, forget: () => {} };
 const noSessions = createFakeSessions();
 const noDocs = createFakeDocs();

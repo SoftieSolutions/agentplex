@@ -342,6 +342,11 @@ describe('toMachineState', () => {
     });
     const waiting = {
       approvalId: approvalIdSchema.parse('approval-7f21'),
+      subject: {
+        kind: 'session' as const,
+        storeId: store('store-work'),
+        sessionId: sessionIdSchema.parse('session-1'),
+      },
       tool: 'Bash',
       proposal: 'prisma migrate deploy --schema ./db',
       truncated: false,
@@ -391,6 +396,32 @@ describe('toMachineState', () => {
     expect(published().stores[0]?.sessions[0]?.task).toBeNull();
   });
 
+  it('publishes the runs waiting on a person beside the stores, through the wire’s parser', () => {
+    const state = createFleetState({ logger });
+    const waiting = {
+      graph: nodeIdSchema.parse('node-graph-release'),
+      number: 38,
+      nodeLabel: 'Ship it',
+      approval: {
+        approvalId: approvalIdSchema.parse('approval-1'),
+        subject: { kind: 'graphRun' as const, runId: 'run-38' as never, nodeId: 'gate' as never },
+        tool: 'HUMAN',
+        proposal: 'run #38 of release is waiting at Ship it for robert',
+        truncated: false,
+        suggestions: [],
+        requestedAt: START + 500,
+        answeredBy: null,
+      },
+    };
+    state.applyGraphRunApprovals([waiting]);
+
+    const sent = toMachineState(state.snapshot());
+    expect(sent.graphRunApprovals).toEqual([waiting]);
+    // Copied, not shared: nothing a client is sent is the reducer's own array.
+    expect(sent.graphRunApprovals).not.toBe(state.snapshot().graphRunApprovals);
+    expect(machineStateSchema.safeParse(sent).success).toBe(true);
+  });
+
   it('publishes an empty list for a session with nothing open', () => {
     // Empty is the true value and not a placeholder. A codex session has no
     // hook to ask through and will always publish this, so "nothing is
@@ -400,7 +431,13 @@ describe('toMachineState', () => {
 
   it('publishes the empty state a hub with no pairings has', () => {
     const state = toMachineState(createFleetState({ logger }).snapshot());
-    expect(state).toEqual({ version: 0, stores: [], servers: [], candidates: [] });
+    expect(state).toEqual({
+      version: 0,
+      stores: [],
+      servers: [],
+      candidates: [],
+      graphRunApprovals: [],
+    });
     expect(machineStateSchema.safeParse(state).success).toBe(true);
   });
 });

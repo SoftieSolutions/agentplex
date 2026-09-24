@@ -72,7 +72,7 @@ function storeOf(storeId: StoreView['storeId'], sessions: readonly SessionRow[])
 }
 
 function fleetOf(stores: readonly StoreView[]): MachineState {
-  return { version: 3, stores: [...stores], servers: [], candidates: [] };
+  return { version: 3, stores: [...stores], servers: [], candidates: [], graphRunApprovals: [] };
 }
 
 function listing(

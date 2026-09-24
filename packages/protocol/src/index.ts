@@ -68,6 +68,8 @@ export {
   approvalSettlementSchema,
   approvalSubjectSchema,
   approvalSuggestionSchema,
+  graphRunApprovalSubjectSchema,
+  sessionApprovalSubjectSchema,
   parseApprovalPolicyRule,
   pendingApprovalSchema,
 } from './approval.js';
@@ -85,6 +87,7 @@ export type {
   ApprovalSettlement,
   ApprovalSubject,
   ApprovalSuggestion,
+  GraphRunApprovalSubject,
   PendingApproval,
 } from './approval.js';
 

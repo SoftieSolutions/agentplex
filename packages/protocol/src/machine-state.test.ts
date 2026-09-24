@@ -502,6 +502,7 @@ describe('machineStateSchema', () => {
         {
           graph: 'node-graph-release',
           number: 38,
+          nodeLabel: 'Ship it',
           approval: {
             ...A_PENDING_APPROVAL,
             subject: { kind: 'graphRun', runId: 'run-38', nodeId: 'gate' },
@@ -523,7 +524,14 @@ describe('machineStateSchema', () => {
         stores: [],
         servers: [],
         candidates: [],
-        graphRunApprovals: [{ graph: 'node-graph-release', number: 38, approval: A_PENDING_APPROVAL }],
+        graphRunApprovals: [
+          {
+            graph: 'node-graph-release',
+            number: 38,
+            nodeLabel: 'Ship it',
+            approval: A_PENDING_APPROVAL,
+          },
+        ],
       }).success,
     ).toBe(false);
   });

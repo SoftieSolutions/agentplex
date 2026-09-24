@@ -2,9 +2,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   approvalIdSchema,
   approvalPolicyRuleIdSchema,
+  graphNodeIdSchema,
+  graphRunIdSchema,
   sessionRefSchema,
   type ApprovalId,
   type ApprovalRequest,
+  type ApprovalSubject,
+  type GraphRunApproval,
   type PendingApproval,
   nodeIdSchema,
   type ServerRegistrationId,
@@ -51,8 +55,21 @@ const FIXING = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'sessi
 const FIRST = approvalIdSchema.parse('approval-7f21');
 const SECOND = approvalIdSchema.parse('approval-91c4');
 
+/** The subject a client names when it answers for a session. */
+function subjectOf(ref: SessionRef): ApprovalSubject {
+  return { kind: 'session', storeId: ref.storeId, sessionId: ref.sessionId };
+}
+
+const RELEASE = nodeIdSchema.parse('node-graph-release');
+const RUN_38 = graphRunIdSchema.parse('run-38');
+const RUN_39 = graphRunIdSchema.parse('run-39');
+const GATE = graphNodeIdSchema.parse('gate');
+const A_RUN: ApprovalSubject = { kind: 'graphRun', runId: RUN_38, nodeId: GATE };
+
 let now = START;
 let changes: { ref: SessionRef; approvals: readonly PendingApproval[] }[] = [];
+/** Every whole list of runs waiting on a person, in order. */
+let runChanges: (readonly GraphRunApproval[])[] = [];
 let dispatched: ApprovalInstruction[] = [];
 /** What the connection seam answers with. `ok` is a server that said nothing. */
 let dispatchAnswer: ApprovalDispatch = { ok: true };
@@ -73,6 +90,7 @@ function feature(): Approvals {
     clock: { now: () => now },
     logger,
     onChanged: (ref, approvals) => changes.push({ ref, approvals }),
+    onGraphRunChanged: (waiting) => runChanges.push(waiting),
     dispatch: async (instruction) => {
       dispatched.push(instruction);
       return dispatchAnswer;
@@ -164,6 +182,7 @@ describe('the approvals the hub is holding', () => {
   beforeEach(() => {
     now = START;
     changes = [];
+    runChanges = [];
     dispatched = [];
     dispatchAnswer = { ok: true };
     consulted = [];
@@ -179,7 +198,12 @@ describe('the approvals the hub is holding', () => {
     // clocks disagree, and how long somebody has been waiting is a fact the
     // receiver can state honestly and the sender cannot.
     expect(lastChange(MIGRATING)).toEqual([
-      { ...request(FIRST), requestedAt: START + 4_000, answeredBy: null },
+      {
+        ...request(FIRST),
+        subject: subjectOf(MIGRATING),
+        requestedAt: START + 4_000,
+        answeredBy: null,
+      },
     ]);
   });
 
@@ -201,7 +225,7 @@ describe('the approvals the hub is holding', () => {
   it('sends a decision to the machine that reported the request, and to nobody else', async () => {
     const approvals = feature();
     approvals.requested(DESKTOP, requested(MIGRATING, FIRST));
-    void approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' });
+    void approvals.decide({ subject: subjectOf(MIGRATING), approvalId: FIRST, decision: 'grant' });
     await settle();
 
     expect(dispatched).toEqual([{ registrationId: DESKTOP, approvalId: FIRST, decision: 'grant' }]);
@@ -210,7 +234,9 @@ describe('the approvals the hub is holding', () => {
   it('answers on the settlement rather than on a reply, because the tool may run for minutes', async () => {
     const approvals = feature();
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
-    const held = watch(approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' }));
+    const held = watch(
+      approvals.decide({ subject: subjectOf(MIGRATING), approvalId: FIRST, decision: 'grant' }),
+    );
     await settle();
 
     // The frame has gone and the server has said nothing, which is what a
@@ -228,7 +254,9 @@ describe('the approvals the hub is holding', () => {
   it('tells the client the truth when the hook stopped waiting before the answer reached it', async () => {
     const approvals = feature();
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
-    const held = watch(approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' }));
+    const held = watch(
+      approvals.decide({ subject: subjectOf(MIGRATING), approvalId: FIRST, decision: 'grant' }),
+    );
     await settle();
 
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'expired'));
@@ -245,9 +273,11 @@ describe('the approvals the hub is holding', () => {
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
 
     const winner = watch(
-      approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' }),
+      approvals.decide({ subject: subjectOf(MIGRATING), approvalId: FIRST, decision: 'grant' }),
     );
-    const loser = watch(approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'deny' }));
+    const loser = watch(
+      approvals.decide({ subject: subjectOf(MIGRATING), approvalId: FIRST, decision: 'deny' }),
+    );
     await settle();
 
     // The second answer reached a request that was already claimed, so it never
@@ -270,7 +300,7 @@ describe('the approvals the hub is holding', () => {
     approvals.withdrawn(LAPTOP, withdrawn(MIGRATING, FIRST));
 
     const answer = await approvals.decide({
-      ref: MIGRATING,
+      subject: subjectOf(MIGRATING),
       approvalId: FIRST,
       decision: 'grant',
     });
@@ -286,7 +316,7 @@ describe('the approvals the hub is holding', () => {
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'denied'));
 
     const answer = await approvals.decide({
-      ref: MIGRATING,
+      subject: subjectOf(MIGRATING),
       approvalId: FIRST,
       decision: 'grant',
     });
@@ -301,7 +331,11 @@ describe('the approvals the hub is holding', () => {
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'expired'));
 
-    const answer = await approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'deny' });
+    const answer = await approvals.decide({
+      subject: subjectOf(MIGRATING),
+      approvalId: FIRST,
+      decision: 'deny',
+    });
 
     expect(answer.ok).toBe(false);
     expect(answer.outcome).toBe('expired');
@@ -312,7 +346,7 @@ describe('the approvals the hub is holding', () => {
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
 
     const answer = await approvals.decide({
-      ref: MIGRATING,
+      subject: subjectOf(MIGRATING),
       approvalId: SECOND,
       decision: 'grant',
     });
@@ -333,7 +367,11 @@ describe('the approvals the hub is holding', () => {
     const approvals = feature();
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
 
-    const answer = await approvals.decide({ ref: FIXING, approvalId: FIRST, decision: 'grant' });
+    const answer = await approvals.decide({
+      subject: subjectOf(FIXING),
+      approvalId: FIRST,
+      decision: 'grant',
+    });
 
     expect(answer.outcome).toBeNull();
     expect(dispatched).toEqual([]);
@@ -381,7 +419,9 @@ describe('the approvals the hub is holding', () => {
     const approvals = feature();
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
     approvals.requested(DESKTOP, requested(FIXING, SECOND));
-    const held = watch(approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' }));
+    const held = watch(
+      approvals.decide({ subject: subjectOf(MIGRATING), approvalId: FIRST, decision: 'grant' }),
+    );
     await settle();
 
     approvals.serverGone(LAPTOP);
@@ -401,7 +441,11 @@ describe('the approvals the hub is holding', () => {
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
     dispatchAnswer = { ok: false, code: 'refused', problem: 'that approval is unknown' };
 
-    const first = await approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' });
+    const first = await approvals.decide({
+      subject: subjectOf(MIGRATING),
+      approvalId: FIRST,
+      decision: 'grant',
+    });
     expect(first).toEqual({
       ok: false,
       outcome: null,
@@ -413,7 +457,7 @@ describe('the approvals the hub is holding', () => {
     // Nothing was applied, so nothing was decided: the claim is released rather
     // than leaving a request on the row that no second tap can ever reach.
     dispatchAnswer = { ok: true };
-    void approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'deny' });
+    void approvals.decide({ subject: subjectOf(MIGRATING), approvalId: FIRST, decision: 'deny' });
     await settle();
     expect(dispatched).toHaveLength(2);
   });
@@ -486,7 +530,11 @@ describe('a request the standing policy already answered', () => {
     // A person who tapped Allow a moment after a rule did would read a bare
     // `granted` as their own tap having done something. The rule is what tells
     // them otherwise, and it travels on the same receipt as the word.
-    const late = approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' });
+    const late = approvals.decide({
+      subject: subjectOf(MIGRATING),
+      approvalId: FIRST,
+      decision: 'grant',
+    });
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
 
     expect(await late).toEqual({
@@ -533,7 +581,11 @@ describe('a request the standing policy already answered', () => {
     approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
     await settle();
 
-    const person = approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'deny' });
+    const person = approvals.decide({
+      subject: subjectOf(MIGRATING),
+      approvalId: FIRST,
+      decision: 'deny',
+    });
     release();
     await settle();
 
@@ -590,7 +642,11 @@ describe('a request the standing policy already answered', () => {
 
     // And the person's own answer is theirs: the receipt carries no rule.
     dispatchAnswer = { ok: true };
-    const person = approvals.decide({ ref: MIGRATING, approvalId: FIRST, decision: 'grant' });
+    const person = approvals.decide({
+      subject: subjectOf(MIGRATING),
+      approvalId: FIRST,
+      decision: 'grant',
+    });
     await settle();
     approvals.settled(LAPTOP, settled(MIGRATING, FIRST, 'granted'));
 
@@ -630,5 +686,181 @@ describe('a request the standing policy already answered', () => {
     await settle();
 
     expect(dispatched).toEqual([]);
+  });
+});
+
+/**
+ * A request the hub raised itself: a graph run parked at a HUMAN node.
+ *
+ * There is no machine behind one of these, and everything that follows from
+ * that is what this block asserts. No instruction leaves the hub; a decision
+ * ends the request here and now, because no settlement is ever coming; a
+ * machine going away takes nothing of the hub's with it; and the standing
+ * policy, which is a rule about a session's project, is never asked about a
+ * run. What is the same is the decide-once rule and the receipt a client gets.
+ */
+describe('a request the hub raised for a graph run', () => {
+  beforeEach(() => {
+    now = START;
+    changes = [];
+    runChanges = [];
+    dispatched = [];
+    dispatchAnswer = { ok: true };
+    consulted = [];
+    policyAnswer = () => Promise.resolve(null);
+  });
+
+  function human(approvalId: ApprovalId): ApprovalRequest {
+    return {
+      approvalId,
+      tool: 'HUMAN',
+      proposal: 'run #38 of release is waiting at Ship it for robert',
+      truncated: false,
+      suggestions: [],
+    };
+  }
+
+  const last = (): readonly GraphRunApproval[] | undefined => runChanges.at(-1);
+
+  it('holds it in the list of runs waiting on a person, with the graph and the number, stamped', async () => {
+    const approvals = feature();
+    now = START + 4_000;
+    void approvals.requestedByHub(A_RUN, human(FIRST), {
+      graph: RELEASE,
+      number: 38,
+      nodeLabel: 'Ship it',
+    });
+    await settle();
+
+    expect(last()).toEqual([
+      {
+        graph: RELEASE,
+        number: 38,
+        nodeLabel: 'Ship it',
+        approval: { ...human(FIRST), subject: A_RUN, requestedAt: START + 4_000, answeredBy: null },
+      },
+    ]);
+    // Nothing on any session row: a run is not a session.
+    expect(changes).toEqual([]);
+    // And nobody's policy was asked about it.
+    expect(consulted).toEqual([]);
+  });
+
+  it('answers a grant to itself: no instruction leaves, the run is told, the list empties', async () => {
+    const approvals = feature();
+    const decision = approvals.requestedByHub(A_RUN, human(FIRST), {
+      graph: RELEASE,
+      number: 38,
+      nodeLabel: 'Ship it',
+    });
+
+    const answer = await approvals.decide({ subject: A_RUN, approvalId: FIRST, decision: 'grant' });
+
+    expect(dispatched).toEqual([]);
+    expect(answer).toEqual({ ok: true, outcome: 'granted', answeredBy: null });
+    await expect(decision).resolves.toBe('granted');
+    expect(last()).toEqual([]);
+  });
+
+  it('answers a denial the same way, with the other word', async () => {
+    const approvals = feature();
+    const decision = approvals.requestedByHub(A_RUN, human(FIRST), {
+      graph: RELEASE,
+      number: 38,
+      nodeLabel: 'Ship it',
+    });
+
+    const answer = await approvals.decide({ subject: A_RUN, approvalId: FIRST, decision: 'deny' });
+
+    expect(answer).toEqual({ ok: true, outcome: 'denied', answeredBy: null });
+    await expect(decision).resolves.toBe('denied');
+  });
+
+  it('decides once: the second client is told what the first one did', async () => {
+    const approvals = feature();
+    void approvals.requestedByHub(A_RUN, human(FIRST), {
+      graph: RELEASE,
+      number: 38,
+      nodeLabel: 'Ship it',
+    });
+
+    const first = await approvals.decide({ subject: A_RUN, approvalId: FIRST, decision: 'grant' });
+    const second = await approvals.decide({ subject: A_RUN, approvalId: FIRST, decision: 'deny' });
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    expect(second.outcome).toBe('granted');
+  });
+
+  it('refuses an answer that names a run for a request a session holds, and the other way round', async () => {
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    void approvals.requestedByHub(A_RUN, human(SECOND), {
+      graph: RELEASE,
+      number: 38,
+      nodeLabel: 'Ship it',
+    });
+
+    const crossed = await approvals.decide({
+      subject: A_RUN,
+      approvalId: FIRST,
+      decision: 'grant',
+    });
+    const back = await approvals.decide({
+      subject: subjectOf(MIGRATING),
+      approvalId: SECOND,
+      decision: 'grant',
+    });
+
+    expect(crossed.outcome).toBeNull();
+    expect(back.outcome).toBeNull();
+    expect(dispatched).toEqual([]);
+  });
+
+  it('keeps it when a machine goes away, because no machine was holding it', async () => {
+    const approvals = feature();
+    approvals.requested(LAPTOP, requested(MIGRATING, FIRST));
+    void approvals.requestedByHub(A_RUN, human(SECOND), {
+      graph: RELEASE,
+      number: 38,
+      nodeLabel: 'Ship it',
+    });
+    await settle();
+
+    approvals.serverGone(LAPTOP);
+    await settle();
+
+    expect(lastChange(MIGRATING)).toEqual([]);
+    expect(last()?.map((waiting) => waiting.approval.approvalId)).toEqual([SECOND]);
+  });
+
+  it('withdraws every request a run raised when the run stops asking', async () => {
+    const approvals = feature();
+    const decision = approvals.requestedByHub(A_RUN, human(FIRST), {
+      graph: RELEASE,
+      number: 38,
+      nodeLabel: 'Ship it',
+    });
+    void approvals.requestedByHub(
+      { kind: 'graphRun', runId: RUN_39, nodeId: GATE },
+      human(SECOND),
+      { graph: RELEASE, number: 39, nodeLabel: 'Ship it' },
+    );
+    await settle();
+
+    approvals.withdrawnByHub(RUN_38);
+
+    await expect(decision).resolves.toBe('withdrawn');
+    expect(last()?.map((waiting) => waiting.approval.approvalId)).toEqual([SECOND]);
+    // A late tap is told the word, as it is for a session's request.
+    const late = await approvals.decide({ subject: A_RUN, approvalId: FIRST, decision: 'grant' });
+    expect(late.ok).toBe(false);
+    expect(late.outcome).toBe('withdrawn');
+  });
+
+  it('withdraws nothing and says nothing for a run holding no request', () => {
+    const approvals = feature();
+    approvals.withdrawnByHub(RUN_38);
+    expect(runChanges).toEqual([]);
   });
 });

@@ -1,4 +1,13 @@
-import type { PendingApproval, ServerRegistrationId, SessionRef } from '@agentplex/protocol';
+import type {
+  ApprovalOutcome,
+  ApprovalRequest,
+  ApprovalSubject,
+  GraphRunApproval,
+  GraphRunId,
+  PendingApproval,
+  ServerRegistrationId,
+  SessionRef,
+} from '@agentplex/protocol';
 import type {
   ApprovalAnswer,
   ApprovalRequestedFrame,
@@ -6,6 +15,8 @@ import type {
   ApprovalWithdrawnFrame,
   Approvals,
   DecideRequest,
+  GraphRunAbout,
+  GraphRunSubject,
 } from './approvals.js';
 
 /**
@@ -28,6 +39,8 @@ export interface FakeApprovals extends Approvals {
   readonly decided: readonly DecideRequest[];
   /** Every ref this fake announced through `onChanged`, in order. */
   readonly announced: readonly SessionRef[];
+  /** Every request a run raised through `requestedByHub`, in order, still open or not. */
+  readonly raised: readonly GraphRunApproval[];
   /**
    * Answers the decision still waiting, as the machine holding it would.
    *
@@ -44,6 +57,7 @@ export interface FakeApprovalsOptions {
    */
   readonly answer?: ApprovalAnswer;
   readonly onChanged?: (ref: SessionRef, approvals: readonly PendingApproval[]) => void;
+  readonly onGraphRunChanged?: (waiting: readonly GraphRunApproval[]) => void;
 }
 
 export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApprovals {
@@ -51,8 +65,24 @@ export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApp
   const decided: DecideRequest[] = [];
   const announced: SessionRef[] = [];
   const waiting: ((answer: ApprovalAnswer) => void)[] = [];
+  const raised: GraphRunApproval[] = [];
+  /** Runs waiting on a person, with what to tell each when it ends. */
+  const runs = new Map<
+    string,
+    { entry: GraphRunApproval; resolve: (o: ApprovalOutcome) => void }
+  >();
 
   const keyOf = (ref: SessionRef): string => JSON.stringify([ref.storeId, ref.sessionId]);
+  const subjectOf = (ref: SessionRef): ApprovalSubject => ({
+    kind: 'session',
+    storeId: ref.storeId,
+    sessionId: ref.sessionId,
+  });
+  const runKey = (subject: GraphRunSubject, approvalId: string): string =>
+    JSON.stringify([subject.runId, subject.nodeId, approvalId]);
+  const announceRuns = (): void => {
+    options.onGraphRunChanged?.([...runs.values()].map((held) => held.entry));
+  };
 
   const announce = (ref: SessionRef): void => {
     announced.push(ref);
@@ -75,7 +105,7 @@ export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApp
       const held = open.get(keyOf(ref)) ?? [];
       // A fixed stamp, because a fake that read a clock would be a second
       // opinion about the one number the real feature is the source of.
-      held.push({ ...frame.approval, requestedAt: 0, answeredBy: null });
+      held.push({ ...frame.approval, subject: subjectOf(ref), requestedAt: 0, answeredBy: null });
       open.set(keyOf(ref), held);
       announce(ref);
     },
@@ -113,8 +143,40 @@ export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApp
       resolve(answer);
     },
 
+    requestedByHub(
+      subject: GraphRunSubject,
+      request: ApprovalRequest,
+      about: GraphRunAbout,
+    ): Promise<ApprovalOutcome> {
+      const entry: GraphRunApproval = {
+        graph: about.graph,
+        number: about.number,
+        nodeLabel: about.nodeLabel,
+        approval: { ...request, subject, requestedAt: 0, answeredBy: null },
+      };
+      raised.push(entry);
+      return new Promise<ApprovalOutcome>((resolve) => {
+        runs.set(runKey(subject, request.approvalId), { entry, resolve });
+        announceRuns();
+      });
+    },
+
+    withdrawnByHub(runId: GraphRunId): void {
+      for (const [key, held] of [...runs]) {
+        if (held.entry.approval.subject.kind !== 'graphRun') continue;
+        if (held.entry.approval.subject.runId !== runId) continue;
+        runs.delete(key);
+        held.resolve('withdrawn');
+      }
+      announceRuns();
+    },
+
     get decided(): readonly DecideRequest[] {
       return decided;
+    },
+
+    get raised(): readonly GraphRunApproval[] {
+      return raised;
     },
 
     get announced(): readonly SessionRef[] {

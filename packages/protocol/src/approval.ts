@@ -445,11 +445,22 @@ export type ApprovalAnsweredBy = z.infer<typeof approvalAnsweredBySchema>;
  * what the hub may only key on -- a field a client could send that the hub
  * then trusted for display would be a claim crossing in the wrong direction.
  */
+export const sessionApprovalSubjectSchema = z.object({
+  kind: z.literal('session'),
+  storeId: storeIdSchema,
+  sessionId: sessionIdSchema,
+});
+export const graphRunApprovalSubjectSchema = z.object({
+  kind: z.literal('graphRun'),
+  runId: graphRunIdSchema,
+  nodeId: graphNodeIdSchema,
+});
 export const approvalSubjectSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('session'), storeId: storeIdSchema, sessionId: sessionIdSchema }),
-  z.object({ kind: z.literal('graphRun'), runId: graphRunIdSchema, nodeId: graphNodeIdSchema }),
+  sessionApprovalSubjectSchema,
+  graphRunApprovalSubjectSchema,
 ]);
 export type ApprovalSubject = z.infer<typeof approvalSubjectSchema>;
+export type GraphRunApprovalSubject = z.infer<typeof graphRunApprovalSubjectSchema>;
 
 /**
  * A request the hub is holding open, as a client reads it off a session row

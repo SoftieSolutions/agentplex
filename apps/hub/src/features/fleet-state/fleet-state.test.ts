@@ -7,6 +7,7 @@ import {
   serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
+  type GraphRunApproval,
   type PendingApproval,
   type ServerRegistrationId,
   type SessionDescriptor,
@@ -985,6 +986,7 @@ describe('what an agent is waiting on', () => {
   function pending(id: string, requestedAt = START): PendingApproval {
     return {
       approvalId: approvalIdSchema.parse(id),
+      subject: { kind: 'session', storeId: ref.storeId, sessionId: ref.sessionId },
       tool: 'Bash',
       proposal: 'prisma migrate deploy --schema ./db',
       truncated: false,
@@ -1151,5 +1153,73 @@ describe('what a session was started to do', () => {
     });
 
     expect(only(reducer.snapshot().stores).sessions[0]?.task).toBe(TASK);
+  });
+});
+
+/**
+ * The runs waiting on a person, which sit beside the stores and in none of
+ * them. The seam is the one the approvals feature's `onGraphRunChanged` is
+ * wired to, and what is asserted is the same pair the session lists get:
+ * the whole list is what is published, and a list that says what the last
+ * one said moves nothing.
+ */
+describe('applyGraphRunApprovals', () => {
+  function waiting(id: string, number: number, requestedAt = START): GraphRunApproval {
+    return {
+      graph: nodeIdSchema.parse('node-graph-release'),
+      number,
+      nodeLabel: 'Ship it',
+      approval: {
+        approvalId: approvalIdSchema.parse(id),
+        subject: {
+          kind: 'graphRun',
+          runId: `run-${String(number)}` as never,
+          nodeId: 'gate' as never,
+        },
+        tool: 'HUMAN',
+        proposal: `run #${String(number)} of release is waiting at Ship it for robert`,
+        truncated: false,
+        suggestions: [],
+        requestedAt,
+        answeredBy: null,
+      },
+    };
+  }
+
+  it('publishes nothing waiting on a hub nobody has asked', () => {
+    const reducer = createFleetState({ logger });
+    expect(reducer.snapshot().graphRunApprovals).toEqual([]);
+  });
+
+  it('publishes the whole list it was handed, and moves the version for it', () => {
+    const reducer = createFleetState({ logger });
+    const before = reducer.snapshot().version;
+    reducer.applyGraphRunApprovals([waiting('approval-1', 38)]);
+
+    expect(reducer.snapshot().version).toBe(before + 1);
+    expect(reducer.snapshot().graphRunApprovals).toEqual([waiting('approval-1', 38)]);
+  });
+
+  it('moves nothing for a list that says what the last one said', () => {
+    const reducer = createFleetState({ logger });
+    reducer.applyGraphRunApprovals([waiting('approval-1', 38)]);
+    const version = reducer.snapshot().version;
+    reducer.applyGraphRunApprovals([waiting('approval-1', 38)]);
+    expect(reducer.snapshot().version).toBe(version);
+  });
+
+  it('replaces the list rather than merging it, so an ended request leaves', () => {
+    const reducer = createFleetState({ logger });
+    reducer.applyGraphRunApprovals([waiting('approval-1', 38), waiting('approval-2', 39)]);
+    reducer.applyGraphRunApprovals([waiting('approval-2', 39)]);
+    expect(reducer.snapshot().graphRunApprovals.map((entry) => entry.number)).toEqual([39]);
+    reducer.applyGraphRunApprovals([]);
+    expect(reducer.snapshot().graphRunApprovals).toEqual([]);
+  });
+
+  it('carries the list onto the wire beside the stores', () => {
+    const reducer = createFleetState({ logger });
+    reducer.applyGraphRunApprovals([waiting('approval-1', 38)]);
+    expect(reducer.published().graphRunApprovals).toEqual([waiting('approval-1', 38)]);
   });
 });

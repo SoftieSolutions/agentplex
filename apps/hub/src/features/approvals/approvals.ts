@@ -1,12 +1,19 @@
-import type {
-  ApprovalDecision,
-  ApprovalId,
-  ApprovalOutcome,
-  PendingApproval,
-  RefusalCode,
-  ServerRegistrationId,
-  ServerToHubFrame,
-  SessionRef,
+import {
+  assertNever,
+  type ApprovalDecision,
+  type ApprovalId,
+  type ApprovalOutcome,
+  type ApprovalRequest,
+  type ApprovalSubject,
+  type GraphRunApproval,
+  type GraphRunApprovalSubject,
+  type GraphRunId,
+  type NodeId,
+  type PendingApproval,
+  type RefusalCode,
+  type ServerRegistrationId,
+  type ServerToHubFrame,
+  type SessionRef,
 } from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
 import type { ApprovalPolicyGrant } from '../approval-policy/approval-policy.js';
@@ -18,6 +25,19 @@ import type { ApprovalPolicyGrant } from '../approval-policy/approval-policy.js'
  * attached client can answer. This is the one place that says which requests
  * are open, which machine each belongs to, and what became of the ones that are
  * not open any more.
+ *
+ * ## Two origins, one feature
+ *
+ * A graph run reaching a HUMAN node also stops and asks, and it asks through
+ * this file rather than through a second one. The request is the same shape,
+ * the tap that answers it is the same tap, and deciding once is the same rule
+ * -- two clients answering a run's question at one moment is the race this
+ * file already resolves. What differs is who holds the blocked thing, and that
+ * is one field on the entry: a machine, which is told the decision and later
+ * says what it did with it, or the hub itself, which is the authority on its
+ * own run and so ends the request the moment it is decided. Everything below
+ * that switches on the origin ends in `assertNever`, so a third thing that
+ * asks is a type error here and not a request nobody routes.
  *
  * ## No database, deliberately
  *
@@ -75,6 +95,36 @@ const ENDINGS_REMEMBERED = 256;
 /** Nothing open for a session, which is what most sessions have. */
 export const NOTHING_PENDING: readonly PendingApproval[] = [];
 
+/** No run waiting on a person, which is what a hub usually has. */
+export const NO_RUN_WAITING: readonly GraphRunApproval[] = [];
+
+/** The subject of a request a run raised: the one kind `requestedByHub` takes. */
+export type GraphRunSubject = GraphRunApprovalSubject;
+
+/** What a person reads beside a run's request: which graph, which number, which node. */
+export interface GraphRunAbout {
+  readonly graph: NodeId;
+  readonly number: number;
+  readonly nodeLabel: string;
+}
+
+/**
+ * Who is holding the blocked thing a request is about.
+ *
+ * A machine, which reported the request and is the only one that can apply an
+ * answer to it; or this hub, whose run raised it and is waiting on `resolve`.
+ * The hub origin carries what a client is shown beside the request -- the
+ * graph and the run number -- because that is display and travels with the
+ * list, where the subject inside the request is identity and travels back.
+ */
+export type ApprovalOrigin =
+  | { readonly kind: 'machine'; readonly registrationId: ServerRegistrationId }
+  | {
+      readonly kind: 'hub';
+      readonly about: GraphRunAbout;
+      readonly resolve: (outcome: ApprovalOutcome) => void;
+    };
+
 /**
  * What one server says about an approval, typed by the frames themselves.
  *
@@ -115,9 +165,9 @@ export type ApprovalDispatch =
   | { readonly ok: true }
   | { readonly ok: false; readonly code: RefusalCode; readonly problem: string };
 
-/** What a client asked for: this session's request, answered this way. */
+/** What a client asked for: this subject's request, answered this way. */
 export interface DecideRequest {
-  readonly ref: SessionRef;
+  readonly subject: ApprovalSubject;
   readonly approvalId: ApprovalId;
   readonly decision: ApprovalDecision;
 }
@@ -168,6 +218,16 @@ export interface ApprovalsDependencies {
    */
   readonly onChanged: (ref: SessionRef, approvals: readonly PendingApproval[]) => void;
   /**
+   * Called with every change to the runs waiting on a person, as the whole
+   * list, oldest request first.
+   *
+   * Its own channel rather than `onChanged` with a run where the session
+   * goes, because the reducer files those under a session row and a run has
+   * none. The composition root wires it to `FleetState.applyGraphRunApprovals`,
+   * which publishes it beside the stores.
+   */
+  readonly onGraphRunChanged: (waiting: readonly GraphRunApproval[]) => void;
+  /**
    * Puts one decision to one machine, and answers with the refusal or with
    * silence.
    *
@@ -217,43 +277,87 @@ export interface Approvals {
    */
   serverGone(registrationId: ServerRegistrationId): void;
   /**
-   * Answers one open request, once, and resolves when the machine holding it
-   * says what happened.
+   * Answers one open request, once, and resolves when whoever holds it says
+   * what happened: the machine, on its settlement, or this hub, at once.
    *
    * Never on the instruction being accepted: see the note at the top on why
    * thirty seconds is the wrong deadline for a ten-minute tool call.
    */
   decide(request: DecideRequest): Promise<ApprovalAnswer>;
+  /**
+   * A run of this hub's own is waiting on a person. Held like a machine's
+   * request, answered by the same tap, and resolved with what became of it.
+   *
+   * The approval id is the caller's to mint. This feature has no id source --
+   * every id it has ever held was minted where the blocked hook was -- and
+   * the run is the thing holding the blocked step, so the rule that the id is
+   * minted at the block still holds.
+   *
+   * Resolves `granted` or `denied` on a decision, `withdrawn` when
+   * `withdrawnByHub` takes it back, and never rejects: a run waiting on this
+   * has nothing to do with an exception but fail, and the word is the answer.
+   */
+  requestedByHub(
+    subject: GraphRunSubject,
+    request: ApprovalRequest,
+    about: GraphRunAbout,
+  ): Promise<ApprovalOutcome>;
+  /**
+   * A run is not asking any more -- it was cancelled, or its wait ran out --
+   * so every request it raised ends `withdrawn`, and the promise each returned
+   * resolves with that word.
+   */
+  withdrawnByHub(runId: GraphRunId): void;
 }
 
 /**
- * The key a session's open requests are filed under.
+ * The key a subject's open requests are filed under.
  *
  * JSON rather than a joined string, for the reason the attention table's key is
- * JSON: a store id and a session id are opaque, either may contain whatever
- * separator was chosen, and two sessions colliding on one key would put one
- * session's pending approval on another.
+ * JSON: every id here is opaque, any may contain whatever separator was
+ * chosen, and two subjects colliding on one key would put one's pending
+ * approval on another. The kind leads the tuple so a session and a run whose
+ * ids happened to agree could never share one.
  */
-function keyOf(ref: SessionRef): string {
-  return JSON.stringify([ref.storeId, ref.sessionId]);
+function keyOf(subject: ApprovalSubject): string {
+  switch (subject.kind) {
+    case 'session':
+      return JSON.stringify(['session', subject.storeId, subject.sessionId]);
+    case 'graphRun':
+      return JSON.stringify(['graphRun', subject.runId, subject.nodeId]);
+    default:
+      return assertNever(subject, 'approval subject');
+  }
 }
 
-/** The key one ended request is remembered under, session and all. */
-function endingKey(ref: SessionRef, approvalId: ApprovalId): string {
-  return JSON.stringify([ref.storeId, ref.sessionId, approvalId]);
+/** The key one ended request is remembered under, subject and all. */
+function endingKey(subject: ApprovalSubject, approvalId: ApprovalId): string {
+  return JSON.stringify([keyOf(subject), approvalId]);
 }
 
-/** One open request, with the two things only this hub knows about it. */
+/** The words for a subject in a refusal a person reads. */
+function wordsFor(subject: ApprovalSubject): string {
+  switch (subject.kind) {
+    case 'session':
+      return 'that session';
+    case 'graphRun':
+      return 'that run';
+    default:
+      return assertNever(subject, 'approval subject');
+  }
+}
+
+/** One open request, with the things only this hub knows about it. */
 interface OpenApproval {
-  readonly ref: SessionRef;
+  readonly subject: ApprovalSubject;
   /**
    * The row as every client reads it, replaced rather than mutated when a rule
    * answers: the list handed to `onChanged` is what a client is sent, so the
    * mark saying nobody was asked has to be on the object that travels.
    */
   pending: PendingApproval;
-  /** The machine that reported it, which is the only one that can answer it. */
-  readonly source: ServerRegistrationId;
+  /** Who holds the blocked thing, and so who applies an answer to it. */
+  readonly origin: ApprovalOrigin;
   /**
    * Whether a decision has been sent for it, and everybody waiting on what
    * became of it.
@@ -283,26 +387,61 @@ export function createApprovals({
   clock,
   logger: parent,
   onChanged,
+  onGraphRunChanged,
   dispatch,
   policy,
 }: ApprovalsDependencies): Approvals {
   const logger = parent.child({ part: 'approvals' });
 
-  /** Open requests, by session and then by id. A session usually has none. */
+  /** Open requests, by subject and then by id. A subject usually has none. */
   const open = new Map<string, Map<ApprovalId, OpenApproval>>();
   /** What became of the requests that are not open any more. Bounded. */
   const endings = new Map<string, ApprovalOutcome>();
 
-  const announce = (ref: SessionRef): void => {
-    const held = open.get(keyOf(ref));
-    onChanged(
-      ref,
-      held === undefined ? NOTHING_PENDING : [...held.values()].map((entry) => entry.pending),
-    );
+  /** Every request a run raised, as the wire lists them: oldest first. */
+  const runsWaiting = (): readonly GraphRunApproval[] => {
+    const waiting: GraphRunApproval[] = [];
+    for (const held of open.values()) {
+      for (const entry of held.values()) {
+        if (entry.origin.kind !== 'hub' || entry.subject.kind !== 'graphRun') continue;
+        waiting.push({
+          ...entry.origin.about,
+          approval: { ...entry.pending, subject: entry.subject },
+        });
+      }
+    }
+    waiting.sort((a, b) => a.approval.requestedAt - b.approval.requestedAt);
+    return waiting.length === 0 ? NO_RUN_WAITING : waiting;
   };
 
-  const remember = (ref: SessionRef, approvalId: ApprovalId, outcome: ApprovalOutcome): void => {
-    endings.set(endingKey(ref, approvalId), outcome);
+  /**
+   * Tells the reducer what changed, on the channel the subject's kind takes:
+   * a session's whole list to its row, or the whole list of waiting runs.
+   */
+  const announce = (subject: ApprovalSubject): void => {
+    switch (subject.kind) {
+      case 'session': {
+        const held = open.get(keyOf(subject));
+        onChanged(
+          { storeId: subject.storeId, sessionId: subject.sessionId },
+          held === undefined ? NOTHING_PENDING : [...held.values()].map((entry) => entry.pending),
+        );
+        return;
+      }
+      case 'graphRun':
+        onGraphRunChanged(runsWaiting());
+        return;
+      default:
+        assertNever(subject, 'approval subject');
+    }
+  };
+
+  const remember = (
+    subject: ApprovalSubject,
+    approvalId: ApprovalId,
+    outcome: ApprovalOutcome,
+  ): void => {
+    endings.set(endingKey(subject, approvalId), outcome);
     while (endings.size > ENDINGS_REMEMBERED) {
       const oldest = endings.keys().next();
       if (oldest.done === true) break;
@@ -320,11 +459,23 @@ export function createApprovals({
    * once" a property of this file and not of its callers.
    */
   const end = (entry: OpenApproval, outcome: ApprovalOutcome): void => {
-    const key = keyOf(entry.ref);
+    const key = keyOf(entry.subject);
     const held = open.get(key);
     held?.delete(entry.pending.approvalId);
     if (held !== undefined && held.size === 0) open.delete(key);
-    remember(entry.ref, entry.pending.approvalId, outcome);
+    remember(entry.subject, entry.pending.approvalId, outcome);
+
+    // The run that asked is told the word first, before any client is: it is
+    // the thing that was blocked, and the clients are told about it.
+    switch (entry.origin.kind) {
+      case 'hub':
+        entry.origin.resolve(outcome);
+        break;
+      case 'machine':
+        break;
+      default:
+        assertNever(entry.origin, 'approval origin');
+    }
 
     const waiting = entry.waiting.splice(0);
     for (const [index, answer] of waiting.entries()) {
@@ -352,11 +503,17 @@ export function createApprovals({
       );
     }
 
-    announce(entry.ref);
+    announce(entry.subject);
   };
 
-  const lookup = (ref: SessionRef, approvalId: ApprovalId): OpenApproval | undefined =>
-    open.get(keyOf(ref))?.get(approvalId);
+  const lookup = (subject: ApprovalSubject, approvalId: ApprovalId): OpenApproval | undefined =>
+    open.get(keyOf(subject))?.get(approvalId);
+
+  const sessionSubject = (ref: SessionRef): ApprovalSubject => ({
+    kind: 'session',
+    storeId: ref.storeId,
+    sessionId: ref.sessionId,
+  });
 
   /**
    * The request a server frame names, when that server is the one holding it.
@@ -372,7 +529,7 @@ export function createApprovals({
     approvalId: ApprovalId,
     what: string,
   ): OpenApproval | undefined => {
-    const entry = lookup(ref, approvalId);
+    const entry = lookup(sessionSubject(ref), approvalId);
     if (entry === undefined) {
       // Not a warning: a withdrawal chasing a settlement across the wire is
       // ordinary, and so is either arriving for a request a redial already
@@ -384,23 +541,38 @@ export function createApprovals({
       });
       return undefined;
     }
-    if (entry.source !== source) {
-      logger.warn('a server spoke about an approval another machine is holding', {
-        ...ref,
-        approvalId,
-        what,
-        source,
-        holder: entry.source,
-      });
-      return undefined;
+    // A session's request only ever has a machine behind it, so the hub
+    // origin here is unreachable by construction; it is still a case rather
+    // than a cast, so that the switch says so.
+    switch (entry.origin.kind) {
+      case 'machine':
+        if (entry.origin.registrationId === source) return entry;
+        logger.warn('a server spoke about an approval another machine is holding', {
+          ...ref,
+          approvalId,
+          what,
+          source,
+          holder: entry.origin.registrationId,
+        });
+        return undefined;
+      case 'hub':
+        logger.warn('a server spoke about an approval this hub raised itself', {
+          ...ref,
+          approvalId,
+          what,
+          source,
+        });
+        return undefined;
+      default:
+        return assertNever(entry.origin, 'approval origin');
     }
-    return entry;
   };
 
   return {
     requested(source: ServerRegistrationId, frame: ApprovalRequestedFrame): void {
       const ref: SessionRef = { storeId: frame.storeId, sessionId: frame.sessionId };
-      const key = keyOf(ref);
+      const subject = sessionSubject(ref);
+      const key = keyOf(subject);
       const held = open.get(key) ?? new Map<ApprovalId, OpenApproval>();
       open.set(key, held);
 
@@ -416,12 +588,12 @@ export function createApprovals({
       }
 
       held.set(frame.approval.approvalId, {
-        ref,
+        subject,
         // The hub's own clock, because the frame carries no date: two machines'
         // clocks disagree, and a client rendering "waiting four minutes" is
         // comparing this with its own notion of now.
-        pending: { ...frame.approval, requestedAt: clock.now(), answeredBy: null },
-        source,
+        pending: { ...frame.approval, subject, requestedAt: clock.now(), answeredBy: null },
+        origin: { kind: 'machine', registrationId: source },
         claimed: false,
         waiting: [],
         grantedByPolicy: null,
@@ -440,7 +612,11 @@ export function createApprovals({
       // sitting between a blocked agent and the screen that shows it, so a
       // database that had gone slow would look like an agent that had gone
       // quiet.
-      announce(ref);
+      announce(subject);
+      // Consulted for a session and never for a run: a standing rule is a
+      // project's decision about a tool call, and a run's question is not one.
+      // There is no branch for the other kind here because a machine frame
+      // is always about a session; `requestedByHub` is the other path.
       void consult(ref, frame.approval.approvalId);
     },
 
@@ -478,9 +654,12 @@ export function createApprovals({
     serverGone(registrationId: ServerRegistrationId): void {
       for (const held of [...open.values()]) {
         for (const entry of [...held.values()]) {
-          if (entry.source !== registrationId) continue;
+          // A request the hub raised has no machine to lose: a run waiting on
+          // a person goes on waiting whatever the fleet does.
+          if (entry.origin.kind !== 'machine') continue;
+          if (entry.origin.registrationId !== registrationId) continue;
           logger.info('approval withdrawn: its machine is gone', {
-            ...entry.ref,
+            ...entry.subject,
             approvalId: entry.pending.approvalId,
             source: registrationId,
           });
@@ -490,6 +669,60 @@ export function createApprovals({
     },
 
     decide,
+
+    requestedByHub(
+      subject: GraphRunSubject,
+      request: ApprovalRequest,
+      about: GraphRunAbout,
+    ): Promise<ApprovalOutcome> {
+      const key = keyOf(subject);
+      const held = open.get(key) ?? new Map<ApprovalId, OpenApproval>();
+      open.set(key, held);
+
+      const existing = held.get(request.approvalId);
+      if (existing !== undefined) {
+        // The caller mints the id per wait, so a repeat is a bug on its side.
+        // Said in words to the run rather than thrown at it, because a run
+        // that ends failed with a sentence is still a run somebody can read.
+        logger.warn('a run asked twice under one approval id', {
+          ...subject,
+          approvalId: request.approvalId,
+        });
+        return Promise.resolve('withdrawn');
+      }
+
+      return new Promise<ApprovalOutcome>((resolve) => {
+        held.set(request.approvalId, {
+          subject,
+          pending: { ...request, subject, requestedAt: clock.now(), answeredBy: null },
+          origin: { kind: 'hub', about, resolve },
+          claimed: false,
+          waiting: [],
+          grantedByPolicy: null,
+        });
+        logger.info('approval requested by a run', {
+          ...subject,
+          approvalId: request.approvalId,
+          graph: about.graph,
+          number: about.number,
+        });
+        announce(subject);
+      });
+    },
+
+    withdrawnByHub(runId: GraphRunId): void {
+      for (const held of [...open.values()]) {
+        for (const entry of [...held.values()]) {
+          if (entry.origin.kind !== 'hub') continue;
+          if (entry.subject.kind !== 'graphRun' || entry.subject.runId !== runId) continue;
+          logger.info('approval withdrawn: its run stopped asking', {
+            ...entry.subject,
+            approvalId: entry.pending.approvalId,
+          });
+          end(entry, 'withdrawn');
+        }
+      }
+    },
   };
 
   /**
@@ -504,12 +737,12 @@ export function createApprovals({
    * skipped.
    */
   function decide(request: DecideRequest): Promise<ApprovalAnswer> {
-    const entry = lookup(request.ref, request.approvalId);
+    const entry = lookup(request.subject, request.approvalId);
     if (entry === undefined) {
-      const remembered = endings.get(endingKey(request.ref, request.approvalId));
+      const remembered = endings.get(endingKey(request.subject, request.approvalId));
       if (remembered === undefined) {
         logger.info('approval decision refused', {
-          ...request.ref,
+          ...request.subject,
           approvalId: request.approvalId,
           problem: 'no such approval',
         });
@@ -518,7 +751,7 @@ export function createApprovals({
           outcome: null,
           answeredBy: null,
           code: 'refused',
-          problem: 'this hub is holding no approval by that id for that session',
+          problem: `this hub is holding no approval by that id for ${wordsFor(request.subject)}`,
         });
       }
       return Promise.resolve({
@@ -540,6 +773,24 @@ export function createApprovals({
     if (entry.claimed) return answered;
     entry.claimed = true;
 
+    switch (entry.origin.kind) {
+      case 'hub':
+        // The hub is the authority on its own run, so there is no machine to
+        // ask and no settlement to wait for: the decision is the ending, and
+        // it is applied here in the same tick that took the claim.
+        logger.info('approval decided for a run', {
+          ...request.subject,
+          approvalId: request.approvalId,
+          decision: request.decision,
+        });
+        end(entry, request.decision === 'grant' ? 'granted' : 'denied');
+        return answered;
+      case 'machine':
+        break;
+      default:
+        return assertNever(entry.origin, 'approval origin');
+    }
+
     // Watched rather than awaited, and that is what this function returning
     // here rather than below buys. The seam answers with a refusal or with
     // silence, and silence is only known to be silence once a deadline has
@@ -547,7 +798,7 @@ export function createApprovals({
     // every *working* decision open for it, although the settlement it is
     // really waiting for may already have arrived on the same socket.
     void dispatch({
-      registrationId: entry.source,
+      registrationId: entry.origin.registrationId,
       approvalId: request.approvalId,
       decision: request.decision,
     }).then(
@@ -593,7 +844,8 @@ export function createApprovals({
    * no rule covers does.
    */
   async function consult(ref: SessionRef, approvalId: ApprovalId): Promise<void> {
-    const pending = lookup(ref, approvalId);
+    const subject = sessionSubject(ref);
+    const pending = lookup(subject, approvalId);
     if (pending === undefined) return;
     if (pending.pending.truncated) {
       logger.info('a request too long to be shown whole is never matched, so somebody is asked', {
@@ -620,7 +872,7 @@ export function createApprovals({
     // Read again rather than trusting the entry from before the await: the
     // agent may have taken the request back, or its machine may have gone,
     // while this hub was reading its own disk.
-    const entry = lookup(ref, approvalId);
+    const entry = lookup(subject, approvalId);
     if (entry === undefined || entry !== pending) return;
     if (entry.claimed) {
       // A person got there first, in the window the policy read opened. Their
@@ -644,7 +896,7 @@ export function createApprovals({
     // frame of its own, broadcast -- would be a second channel saying something
     // about a request the row is already carrying.
     entry.pending = { ...entry.pending, answeredBy: grant };
-    announce(ref);
+    announce(subject);
     logger.info('approval granted by a standing rule, with nobody asked', {
       ...ref,
       approvalId,
@@ -653,7 +905,7 @@ export function createApprovals({
       ruleId: grant.ruleId,
       rule: `${grant.rule.tool} ${grant.rule.proposal}`,
     });
-    void decide({ ref, approvalId, decision: 'grant' });
+    void decide({ subject, approvalId, decision: 'grant' });
   }
 
   /**
@@ -681,7 +933,7 @@ export function createApprovals({
     code: RefusalCode,
     problem: string,
   ): void {
-    const stillOpen = lookup(request.ref, request.approvalId) === entry;
+    const stillOpen = lookup(request.subject, request.approvalId) === entry;
     if (stillOpen) entry.claimed = false;
     if (entry.grantedByPolicy !== null) {
       entry.grantedByPolicy = null;
@@ -690,10 +942,10 @@ export function createApprovals({
       // client on its own broadcast, so the retraction needs one too. Only
       // while the request is still this hub's to talk about -- one that ended
       // in the meantime has already been announced without it.
-      if (stillOpen) announce(entry.ref);
+      if (stillOpen) announce(entry.subject);
     }
     logger.info('a server refused a decision', {
-      ...request.ref,
+      ...request.subject,
       approvalId: request.approvalId,
       problem,
     });

@@ -46,7 +46,7 @@ function machine(
 }
 
 function fleetOf(servers: readonly ServerView[]): MachineState {
-  return { version: 7, stores: [], servers: [...servers], candidates: [] };
+  return { version: 7, stores: [], servers: [...servers], candidates: [], graphRunApprovals: [] };
 }
 
 function listing(state: MachineState): ReturnType<typeof callTool> {
