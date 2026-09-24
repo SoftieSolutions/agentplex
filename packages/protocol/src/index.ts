@@ -124,6 +124,46 @@ export { frameIdSchema, protocolErrorFrameSchema, refusalCodeSchema } from './fr
 export type { FrameId, ProtocolErrorFrame, RefusalCode } from './frames.js';
 
 export {
+  GRAPH_APPROVERS_MAX,
+  GRAPH_LABEL_MAX_CHARS,
+  GRAPH_NODES_MAX,
+  GRAPH_PROMPT_MAX_CHARS,
+  GRAPH_ROUTES_MAX,
+  emptyGraphDocument,
+  graphDocumentSchema,
+  graphEdgeSchema,
+  graphNameSchema,
+  graphNodeIdSchema,
+  graphNodeKindSchema,
+  graphNodeSchema,
+  graphPlacementSchema,
+  graphPublishedVersionSchema,
+  graphRetrySchema,
+  graphRouteSchema,
+} from './graph.js';
+export type {
+  GraphDocument,
+  GraphEdge,
+  GraphNode,
+  GraphNodeId,
+  GraphNodeKind,
+  GraphPlacement,
+  GraphPublishedVersion,
+  GraphRetry,
+  GraphRoute,
+} from './graph.js';
+
+export {
+  ROUTE_CONDITION_MAX_CHARS,
+  ROUTE_INPUT_MAX_CHARS,
+  evaluateRouteCondition,
+  parseRouteCondition,
+  routeConditionTextSchema,
+  routeInputSchema,
+} from './route-condition.js';
+export type { RouteCondition, RouteConditionParse, RouteInput } from './route-condition.js';
+
+export {
   hubIdSchema,
   nodeIdSchema,
   nodeKindSchema,
