@@ -887,7 +887,7 @@ export function serveClientConnection(
         // A reply to the asking client alone, like the node tree's. It also
         // marks the graph watched, as a read does: the list is drawn beside
         // the run, and the run's states are how the screen knows to ask again.
-        watchedGraphs.add(frame.nodeId);
+        watch(frame.nodeId);
         void answerGraphRunHistory(frame.id, frame.nodeId);
         return;
       }
@@ -897,7 +897,7 @@ export function serveClientConnection(
           helloFirst(frame.id);
           return;
         }
-        watchedGraphs.add(frame.nodeId);
+        watch(frame.nodeId);
         void answerGraphRunOpen(frame.id, frame.nodeId, frame.runId);
         return;
       }

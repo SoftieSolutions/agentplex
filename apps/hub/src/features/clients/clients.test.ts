@@ -2664,6 +2664,49 @@ describe('a graph run', () => {
     expect(client.received.at(-1)).toEqual({ type: 'graph-run-state', ...runState(GRAPH) });
   });
 
+  /**
+   * A history request or an open watches the graph the same way a read does,
+   * so it is bounded the same way: a client that pages through every graph's
+   * history cannot grow the set, and a graph asked about again through its
+   * history is the newest, not the next to be forgotten.
+   */
+  it('bounds the graphs watched through history and opens, and a re-asked graph keeps its watch', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    const graphs = Array.from({ length: WATCHED_GRAPHS_MAX + 1 }, (_, index) =>
+      nodeIdSchema.parse(`node-graph-${String(index)}`),
+    );
+    const [first, second] = graphs;
+    if (first === undefined || second === undefined) throw new Error('no graphs');
+    await client.say({ type: 'graph-run-history-request', id: 2, nodeId: first });
+    await client.say({ type: 'graph-run-history-request', id: 3, nodeId: second });
+    // The first is asked about again through its history, so the second is
+    // now the oldest.
+    await client.say({ type: 'graph-run-history-request', id: 4, nodeId: first });
+    let id = 5;
+    for (const [index, graph] of graphs.slice(2).entries()) {
+      if (index % 2 === 0) {
+        await client.say({ type: 'graph-run-history-request', id, nodeId: graph });
+      } else {
+        await client.say({ type: 'graph-run-open', id, nodeId: graph, runId: 'run-1' });
+      }
+      id += 1;
+    }
+    const saw = client.received.length;
+
+    for (const graph of graphs) graphRuns.emit(runState(graph));
+    await Promise.resolve();
+
+    const heard = client.received
+      .slice(saw)
+      .flatMap((frame) => (frame.type === 'graph-run-state' ? [frame.nodeId] : []));
+    expect(heard).toHaveLength(WATCHED_GRAPHS_MAX);
+    expect(heard).toContain(first);
+    expect(heard).not.toContain(second);
+    expect(heard).toContain(graphs.at(-1));
+  });
+
   it('refuses a history request before hello, and reads nothing', async () => {
     const { broadcast, graphRuns } = harness();
     const client = attach(broadcast);
