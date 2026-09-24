@@ -205,6 +205,24 @@ export interface SessionStarted extends SessionRan {
 }
 
 export type StartOutcome = SessionStarted | SessionRefused;
+
+/** What a start would be routed with: a store, a provider, and the override if there is one. */
+export interface StartPlacementRequest {
+  readonly storeId: StoreId;
+  readonly provider: Provider;
+  /** The pinned machine, or `null` to let the hub schedule it. */
+  readonly server: ServerRegistrationId | null;
+}
+
+/** The machine a start would land on, named, or why no machine would take it. */
+export type StartPlacement =
+  | {
+      readonly ok: true;
+      readonly server: ServerRegistrationId;
+      /** What the machine is called, for a sentence a person reads. */
+      readonly label: string;
+    }
+  | { readonly ok: false; readonly problem: string };
 export type SessionOutcome = SessionRan | SessionRefused;
 
 /**
@@ -242,6 +260,14 @@ export type ResumeOutcome = SessionResumed | SessionRefused;
 
 export interface Sessions {
   start(request: StartSessionRequest): Promise<StartOutcome>;
+  /**
+   * Where a new session would start, asked of the same routing a start takes
+   * and without starting anything: no id is minted, no machine is asked and
+   * nothing is recorded. A simulated AGENT step is what asks, so that the
+   * machine it names is the machine a run would have used, by the one
+   * scheduler this hub has rather than a second reading of it.
+   */
+  placeStart(request: StartPlacementRequest): StartPlacement;
   stop(request: StopSessionRequest): Promise<SessionOutcome>;
   /** Sets a session down at its next turn boundary. Routed like a stop; kills nothing. */
   pause(request: PauseSessionRequest): Promise<PauseOutcome>;
@@ -321,6 +347,16 @@ export function createSessions(dependencies: SessionsDependencies): Sessions {
   }
 
   return {
+    placeStart(request: StartPlacementRequest): StartPlacement {
+      const routed = routeStart(state.snapshot(), { ...request, sessionId: null });
+      if (!routed.ok) return { ok: false, problem: routed.problem };
+      return {
+        ok: true,
+        server: routed.server.registrationId,
+        label: routed.server.label,
+      };
+    },
+
     async start(request: StartSessionRequest): Promise<StartOutcome> {
       // Resolved before the routing, because a project nobody has is not a
       // placement problem: there is no machine that would make it right, and

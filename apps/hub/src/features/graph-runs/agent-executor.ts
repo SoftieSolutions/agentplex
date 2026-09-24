@@ -9,7 +9,7 @@ import type {
 } from '@agentplex/protocol';
 import type { Logger, Timers } from '@agentplex/node-shared';
 import type { FleetState, HubStateSnapshot, SessionRow } from '../fleet-state/fleet-state.js';
-import type { Sessions } from '../sessions/sessions.js';
+import type { Sessions, StartPlacement } from '../sessions/sessions.js';
 import { placeNode } from './placement.js';
 import { nameOf, type Executor, type StepResult } from './walker.js';
 
@@ -92,7 +92,7 @@ import { nameOf, type Executor, type StepResult } from './walker.js';
  */
 
 export interface AgentExecutorDependencies {
-  readonly sessions: Pick<Sessions, 'start' | 'stop'>;
+  readonly sessions: Pick<Sessions, 'start' | 'stop' | 'placeStart'>;
   readonly state: Pick<FleetState, 'snapshot' | 'subscribe'>;
   readonly timers: Timers;
   readonly logger: Logger;
@@ -106,6 +106,13 @@ export interface AgentExecutor {
    * in, so the walker's table is built per run.
    */
   forProject(project: NodeId | null): Executor<'agent'>;
+  /**
+   * Where this node's session would start, answered without starting it: the
+   * node's pin checked the way a step checks it, then the hub's one start
+   * routing asked. What a simulation reports for an AGENT, so the machine it
+   * names is the machine a run would have used.
+   */
+  place(node: Extract<GraphNode, { kind: 'agent' }>): StartPlacement;
   /**
    * Takes the start tags one server reported for one store, which is how a
    * spawn's session id reaches this feature. Wired beside `tasks.noteStarts`.
@@ -293,6 +300,16 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
   }
 
   return {
+    place(node: Extract<GraphNode, { kind: 'agent' }>): StartPlacement {
+      const placed = placeNode(state.snapshot(), node);
+      if (!placed.ok) return { ok: false, problem: placed.problem };
+      return sessions.placeStart({
+        storeId: node.storeId,
+        provider: node.provider,
+        server: placed.server,
+      });
+    },
+
     forProject(project: NodeId | null): Executor<'agent'> {
       return async (node, _input, context) => {
         const placed = placeNode(state.snapshot(), node);

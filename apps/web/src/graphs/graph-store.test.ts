@@ -1022,4 +1022,106 @@ describe('createGraphStore', () => {
       expect(store.getSnapshot().selectedRun).toBeNull();
     });
   });
+
+  describe('simulate', () => {
+    /** The captured simulation, addressed to the simulate this store sent. */
+    function simulatedFor(frameId: number): string {
+      const captured = JSON.parse(hubFrames.graphSimulated) as object;
+      return JSON.stringify({ ...captured, replyTo: frameId });
+    }
+
+    it('sends the draft’s graph with the input, and holds the path the hub answers to it', async () => {
+      const { socket } = await opened();
+
+      store.simulate({ language: 'rust' });
+
+      const frame = frameOf(socket, 'graph-simulate');
+      expect(frame).toEqual({
+        type: 'graph-simulate',
+        id: expect.any(Number),
+        nodeId: 'hub-10',
+        input: { language: 'rust' },
+      });
+      expect(store.getSnapshot().simulating).toBe(true);
+      expect(store.getSnapshot().simulation).toBeNull();
+
+      socket.deliver(simulatedFor(frame.id));
+
+      const state = store.getSnapshot();
+      expect(state.simulating).toBe(false);
+      expect(state.simulation?.reason).toBeNull();
+      expect(state.simulation?.path.map((step) => step.nodeId)).toEqual([
+        'start',
+        'classify',
+        'review',
+      ]);
+      // Nothing ran: the store holds no run for it.
+      expect(state.run).toBeNull();
+    });
+
+    it('takes no simulation answered to another frame', async () => {
+      const { socket } = await opened();
+      store.simulate({});
+      socket.deliver(simulatedFor(9_999));
+
+      expect(store.getSnapshot().simulating).toBe(true);
+      expect(store.getSnapshot().simulation).toBeNull();
+    });
+
+    it('shows a refusal to its own simulate in the hub’s words', async () => {
+      const { socket } = await opened();
+      store.simulate({});
+      socket.deliver(
+        refusalTo(frameOf(socket, 'graph-simulate').id, 'this hub has no graph by that id'),
+      );
+
+      expect(store.getSnapshot().simulating).toBe(false);
+      expect(store.getSnapshot().problem).toBe('this hub has no graph by that id');
+    });
+
+    it('sends nothing while the draft is unsaved, or while one is out', async () => {
+      const { socket } = await opened();
+      store.edit((document) => moveNode(document, START, { x: 40, y: 92 }));
+      store.simulate({});
+      expect(sent(socket).filter((frame) => frame.type === 'graph-simulate')).toEqual([]);
+
+      store.save();
+      socket.deliver(
+        JSON.stringify({
+          ...(JSON.parse(hubFrames.graphSaved) as object),
+          replyTo: frameOf(socket, 'graph-save').id,
+        }),
+      );
+      store.simulate({});
+      store.simulate({});
+      expect(sent(socket).filter((frame) => frame.type === 'graph-simulate')).toHaveLength(1);
+    });
+
+    it('lets go of a path once the draft is edited, since it is no longer this draft’s', async () => {
+      const { socket } = await opened();
+      store.simulate({});
+      socket.deliver(simulatedFor(frameOf(socket, 'graph-simulate').id));
+      expect(store.getSnapshot().simulation).not.toBeNull();
+
+      store.edit((document) => moveNode(document, START, { x: 40, y: 92 }));
+
+      expect(store.getSnapshot().simulation).toBeNull();
+    });
+
+    it('stops simulating when the connection drops with one out', async () => {
+      const { socket } = await opened();
+      store.simulate({});
+      expect(store.getSnapshot().simulating).toBe(true);
+
+      const second = await dropped(socket);
+
+      // The hub store forgot the frame without a refusal, so Simulate has to
+      // come back rather than spin for ever.
+      expect(store.getSnapshot().simulating).toBe(false);
+      second.open();
+      second.deliver(hubFrames.welcome);
+      store.simulate({});
+      expect(sent(second).filter((frame) => frame.type === 'graph-simulate')).toHaveLength(1);
+    });
+  });
 });

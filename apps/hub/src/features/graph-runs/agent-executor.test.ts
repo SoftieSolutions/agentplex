@@ -20,6 +20,8 @@ import type { ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
 import type {
   StartOutcome,
+  StartPlacement,
+  StartPlacementRequest,
   StartSessionRequest,
   SessionOutcome,
   StopSessionRequest,
@@ -97,6 +99,10 @@ function descriptor(sessionId: string, status: SessionStatus): SessionDescriptor
  */
 interface DeferredSessions {
   start(request: StartSessionRequest): Promise<StartOutcome>;
+  placeStart(request: StartPlacementRequest): StartPlacement;
+  readonly placements: StartPlacementRequest[];
+  /** What every later placement answers with. */
+  placeWith(placement: StartPlacement): void;
   stop(request: StopSessionRequest): Promise<SessionOutcome>;
   readonly requests: StartSessionRequest[];
   readonly stops: StopSessionRequest[];
@@ -108,11 +114,21 @@ interface DeferredSessions {
 function deferredSessions(): DeferredSessions {
   const requests: StartSessionRequest[] = [];
   const stops: StopSessionRequest[] = [];
+  const placements: StartPlacementRequest[] = [];
+  let placement: StartPlacement = { ok: true, server: ATTIC, label: 'attic' };
   const stopAnswers: ((outcome: SessionOutcome) => void)[] = [];
   let release: ((outcome: StartOutcome) => void) | null = null;
   return {
     requests,
     stops,
+    placements,
+    placeStart(request) {
+      placements.push(request);
+      return placement;
+    },
+    placeWith(next) {
+      placement = next;
+    },
     start(request) {
       requests.push(request);
       return new Promise((resolve) => {
@@ -207,6 +223,48 @@ describe('the AGENT executor', () => {
   function run(node: GraphNode = NODE, project: NodeId | null = PROJECT): Promise<StepResult> {
     return executor.forProject(project)(node as Extract<GraphNode, { kind: 'agent' }>, {}, context);
   }
+
+  describe('placing a node without starting it', () => {
+    it('asks the one start routing where a cheapest node would go, and starts nothing', () => {
+      expect(executor.place(NODE as Extract<GraphNode, { kind: 'agent' }>)).toEqual({
+        ok: true,
+        server: ATTIC,
+        label: 'attic',
+      });
+      expect(sessions.placements).toEqual([{ storeId: WORK, provider: 'claude', server: null }]);
+      expect(sessions.requests).toEqual([]);
+      expect(timers.pending).toBe(0);
+    });
+
+    it('asks it for the pinned machine when the node is pinned to one that is connected', () => {
+      const pinned = { ...NODE, placement: { kind: 'pin', server: ATTIC } } as Extract<
+        GraphNode,
+        { kind: 'agent' }
+      >;
+      executor.place(pinned);
+      expect(sessions.placements).toEqual([{ storeId: WORK, provider: 'claude', server: ATTIC }]);
+    });
+
+    it('says why no machine would take it, in the routing’s words or the pin’s', () => {
+      sessions.placeWith({ ok: false, problem: 'attic does not run claude' });
+      expect(executor.place(NODE as Extract<GraphNode, { kind: 'agent' }>)).toEqual({
+        ok: false,
+        problem: 'attic does not run claude',
+      });
+
+      const elsewhere = {
+        ...NODE,
+        placement: { kind: 'pin', server: 'registration-gone' },
+      } as Extract<GraphNode, { kind: 'agent' }>;
+      expect(executor.place(elsewhere)).toEqual({
+        ok: false,
+        problem: 'Rust reviewer is pinned to a server this hub is not paired with',
+      });
+      // Refused by the pin before the routing was asked.
+      expect(sessions.placements).toHaveLength(1);
+      expect(sessions.requests).toEqual([]);
+    });
+  });
 
   it('starts a session through the one start path, with the prompt, the store, the provider and the project', async () => {
     const pending = run();

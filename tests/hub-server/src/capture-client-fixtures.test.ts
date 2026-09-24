@@ -323,6 +323,7 @@ function labelFor(text: string): string {
     ['graph-run-started', 'graphRunStarted'],
     ['graph-run-cancelled', 'graphRunCancelled'],
     ['graph-run-history', 'graphRunHistory'],
+    ['graph-simulated', 'graphSimulated'],
     ['approval-decided', 'approvalDecided'],
     ['push-subscribed', 'pushSubscribed'],
     ['push-unsubscribed', 'pushUnsubscribed'],
@@ -2357,6 +2358,24 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     const graphRunHistory = starter.received.find((text) => labelFor(text) === 'graphRunHistory');
     if (graphRunHistory === undefined) throw new Error('the history was not answered');
 
+    // A simulation of the release pipeline's draft, which publishing left as
+    // a copy of v1: the ROUTER's route that held and why, and the AGENT's
+    // pinned machine named by the hub's own start routing -- connected here,
+    // so the answer is the machine and not a refusal. Nothing is started and
+    // nothing is numbered, so no frame but the answer comes of it.
+    starter.send({
+      type: 'graph-simulate',
+      id: 43,
+      nodeId: madeGraph.value.nodeId,
+      input: { language: 'rust' },
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphSimulated'),
+      'the simulation to be answered',
+    );
+    const graphSimulated = starter.received.find((text) => labelFor(text) === 'graphSimulated');
+    if (graphSimulated === undefined) throw new Error('the simulation was not answered');
+
     // The same save once the machine has gone away, which is the refusal the
     // editor is written around: the hub holds no copy of a document, so a
     // write it cannot deliver is a no with the machine named in it, and what
@@ -3334,6 +3353,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('approvalDecidedRun', approvalDecidedRun);
     captured.set('graphRunStateSubgraph', graphRunStateSubgraph);
     captured.set('graphRunHistory', graphRunHistory);
+    captured.set('graphSimulated', graphSimulated);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);
     captured.set('nodeMoved', nodeMoved);

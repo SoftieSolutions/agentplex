@@ -7,11 +7,11 @@
  * and these exist to test that it can read what the hub actually sends.
  * Re-capture after any change to the hub-to-client frames.
  *
- * Captured at protocol version 38.
+ * Captured at protocol version 39.
  */
 export const hubFrames = {
   welcome:
-    '{"type":"welcome","replyTo":1,"protocolVersion":38,"hubId":"hub-1","pushPublicKey":null}',
+    '{"type":"welcome","replyTo":1,"protocolVersion":39,"hubId":"hub-1","pushPublicKey":null}',
   machineState:
     '{"type":"machine-state","state":{"version":0,"stores":[],"servers":[],"candidates":[],"graphRunApprovals":[]}}',
   pong: '{"type":"pong","replyTo":2}',
@@ -23,7 +23,7 @@ export const hubFrames = {
   protocolError:
     '{"type":"protocol-error","code":"bad-request","message":"frame is not valid JSON"}',
   refusalProtocolVersion:
-    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 38, not 39","holder":null}',
+    '{"type":"refusal","replyTo":1,"code":"protocol-version","message":"this hub speaks protocol 39, not 40","holder":null}',
   machineStateWithServer:
     '{"type":"machine-state","state":{"version":1,"stores":[],"servers":[{"registrationId":"pairing-1","label":"gpu-box-01","address":"wss://gpu-box-01.example:8443","serverId":null,"phase":"stale","stores":[],"providers":[],"connectedSince":null,"staleSince":1756000000000,"lastConnectedAt":null,"staleReason":"unreachable","draining":null,"problem":"connection refused"}],"candidates":[],"graphRunApprovals":[]}}',
   paneLayout:
@@ -102,6 +102,8 @@ export const hubFrames = {
     '{"type":"graph-run-state","nodeId":"hub-19","runId":"hub-20","number":1,"status":"succeeded","reason":null,"step":2,"of":2,"steps":[{"nodeId":"start","attempt":0,"outcome":"succeeded","output":{"kind":"text","text":"{\\"tag\\":\\"v2.1.0\\"}"},"child":null},{"nodeId":"smoke","attempt":0,"outcome":"succeeded","output":null,"child":{"runId":"hub-21","number":2}}]}',
   graphRunHistory:
     '{"type":"graph-run-history","replyTo":42,"nodeId":"hub-14","runs":[{"runId":"hub-21","number":2,"status":"succeeded","startedAt":1756000000000,"endedAt":1756000000000,"reason":null},{"runId":"hub-15","number":1,"status":"succeeded","startedAt":1756000000000,"endedAt":1756000000000,"reason":null}]}',
+  graphSimulated:
+    '{"type":"graph-simulated","replyTo":43,"nodeId":"hub-10","path":[{"nodeId":"start","kind":"trigger","depth":0,"outcome":"would-run","why":"would start the run with {\\"language\\":\\"rust\\"}"},{"nodeId":"classify","kind":"router","depth":0,"outcome":"would-run","why":"route 1, language == rust, would send it to Rust reviewer: language is \\"rust\\""},{"nodeId":"review","kind":"agent","depth":0,"outcome":"would-run","why":"would run claude on mbp-robert; a failure would be tried again up to 2 more times, 30 s apart"}],"reason":null}',
   layoutWithProject:
     '{"type":"layout","replyTo":13,"nodes":[{"id":"hub-2","parentId":null,"kind":"session","position":0,"name":"fix-auth-refresh","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-fix-auth"}},{"id":"hub-3","parentId":null,"kind":"session","position":1,"name":"spike-wasm","named":false,"anchor":{"storeId":"store-agentplex","sessionId":"session-spike-wasm"}},{"id":"hub-5","parentId":null,"kind":"project","position":2,"name":"agentplex (main checkout)","named":true,"anchor":null},{"id":"hub-6","parentId":"hub-5","kind":"doc","position":0,"name":"plan.md","named":true,"anchor":null}]}',
   nodeCreated: '{"type":"node-created","replyTo":8,"nodeId":"hub-7"}',
@@ -130,7 +132,7 @@ export const hubFrames = {
   machineStateProviders:
     '{"type":"machine-state","state":{"version":8,"stores":[{"storeId":"store-mixed","servers":["registration-gpu-box-01","registration-mbp-robert","registration-mini-01","registration-old-box-01"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-mixed","sessionId":"session-mixed-notes","provider":"claude","status":"idle","updatedAt":1755998200000,"cwd":"/mnt/volumes/mixed/notes","branch":null,"title":"mixed-notes","uncommitted":null},"source":"registration-gpu-box-01","reportedBy":["registration-gpu-box-01","registration-mbp-robert","registration-mini-01","registration-old-box-01"],"reportedAt":1756000000000,"reachable":true,"holder":null,"acknowledgedThrough":null,"mutedAt":null,"project":null,"approvals":[],"task":null}]}],"servers":[{"registrationId":"registration-gpu-box-01","label":"gpu-box-01","address":"wss://gpu-box.example:8443","serverId":"server-gpu","phase":"connected","stores":["store-mixed"],"providers":[{"provider":"claude","state":"unknown","version":null,"directory":"/home/robert/.agentplex/bin","problem":"claude could not report its version: it exited 1"},{"provider":"codex","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null},{"registrationId":"registration-mbp-robert","label":"mbp-robert","address":"wss://mbp-robert.example:8443","serverId":"server-mbp","phase":"connected","stores":["store-mixed"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"unauthenticated","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":"codex is installed and logged out; run its login on that machine"}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null},{"registrationId":"registration-mini-01","label":"mini-01","address":"wss://mini.example:8443","serverId":"server-mini","phase":"connected","stores":["store-mixed"],"providers":[],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null},{"registrationId":"registration-old-box-01","label":"old-box-01","address":"wss://old-box.example:8443","serverId":"server-old","phase":"connected","stores":["store-mixed"],"providers":[{"provider":"claude","state":"missing","version":null,"directory":null,"problem":"no directory this server searches holds claude"},{"provider":"codex","state":"unauthenticated","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":"codex is installed and logged out; run its login on that machine"}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null}],"candidates":[],"graphRunApprovals":[]}}',
   machineStateDiscovered:
-    '{"type":"machine-state","state":{"version":2,"stores":[],"servers":[],"candidates":[{"serverId":"server-mbp","address":"192.168.1.24","port":8443,"protocolVersion":38},{"serverId":"server-old-build","address":"192.168.1.31","port":8443,"protocolVersion":37}],"graphRunApprovals":[]}}',
+    '{"type":"machine-state","state":{"version":2,"stores":[],"servers":[],"candidates":[{"serverId":"server-mbp","address":"192.168.1.24","port":8443,"protocolVersion":39},{"serverId":"server-old-build","address":"192.168.1.31","port":8443,"protocolVersion":38}],"graphRunApprovals":[]}}',
   refusalPairing:
     '{"type":"refusal","replyTo":2,"code":"bad-request","message":"expected a wss:// address, not the scheme \\"ws:\\"","holder":null}',
   serverPaired: '{"type":"server-paired","replyTo":3,"registrationId":"registration-1"}',
@@ -164,7 +166,7 @@ export const hubFrames = {
     '{"type":"machine-state","state":{"version":3,"stores":[{"storeId":"store-agentplex","servers":["registration-mbp-robert"],"reachable":true,"unreachableSince":null,"lastReachableAt":1756000000000,"sessions":[{"descriptor":{"storeId":"store-agentplex","sessionId":"10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde","provider":"claude","status":"awaiting-permission","updatedAt":1755999820000,"cwd":"/Users/robert/code/agentplex","branch":null,"title":"migrate-db","uncommitted":null},"source":"registration-mbp-robert","reportedBy":["registration-mbp-robert"],"reportedAt":1756000000000,"reachable":true,"holder":{"server":"registration-mbp-robert","stoppable":true,"pause":"none"},"acknowledgedThrough":null,"mutedAt":null,"project":null,"approvals":[{"approvalId":"approval-1","tool":"Bash","proposal":"command: prisma migrate deploy --schema ./db\\ndescription: Apply pending Prisma migrations","truncated":false,"suggestions":[{"behavior":"allow","destination":"localSettings","rules":[{"tool":"Bash","content":"prisma migrate *"}]}],"subject":{"kind":"session","storeId":"store-agentplex","sessionId":"10e6c58c-3fc6-4519-8bb4-1c3f7eef0bde"},"requestedAt":1756000000000,"answeredBy":null}],"task":null}]}],"servers":[{"registrationId":"registration-mbp-robert","label":"mbp-robert","address":"wss://mbp-robert.example:8443","serverId":"server-mbp","phase":"connected","stores":["store-agentplex"],"providers":[{"provider":"claude","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null},{"provider":"codex","state":"ready","version":"9.9.9","directory":"/home/robert/.agentplex/bin","problem":null}],"connectedSince":1756000000000,"staleSince":null,"lastConnectedAt":1756000000000,"staleReason":null,"draining":null,"problem":null}],"candidates":[],"graphRunApprovals":[]}}',
   approvalDecided: '{"type":"approval-decided","replyTo":2,"outcome":"granted","answeredBy":null}',
   welcomeWithPush:
-    '{"type":"welcome","replyTo":1,"protocolVersion":38,"hubId":"hub-1","pushPublicKey":"BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM"}',
+    '{"type":"welcome","replyTo":1,"protocolVersion":39,"hubId":"hub-1","pushPublicKey":"BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM"}',
   pushSubscribed: '{"type":"push-subscribed","replyTo":2}',
   pushUnsubscribed: '{"type":"push-unsubscribed","replyTo":3}',
   refusalNoPush:

@@ -224,7 +224,7 @@ describe('GraphScreen', () => {
     expect(container.textContent).toContain('opening');
   });
 
-  it('draws the header the mock draws: the name, the draft chip, Publish, Run, and Simulate not built yet', async () => {
+  it('draws the header the mock draws: the name, the draft chip, Publish, Run and Simulate', async () => {
     await opened();
 
     const header = container.querySelector('[data-graph-header]');
@@ -233,10 +233,8 @@ describe('GraphScreen', () => {
     expect(button('Publish v2').disabled).toBe(false);
     expect(button('Save').disabled).toBe(true);
 
-    const simulate = button('Simulate');
-    expect(simulate.disabled).toBe(true);
-    expect(simulate.title).toContain('not available yet');
-    expect(simulate.title).not.toMatch(/AGX-/);
+    // A simulation walks the draft, so it needs no published version.
+    expect(button('Simulate').disabled).toBe(false);
     // The fixture's graph has v1 published, which is what Run runs.
     expect(button('Run').disabled).toBe(false);
     expect(container.querySelector('[data-run-strip]')).toBeNull();
@@ -600,6 +598,70 @@ describe('GraphScreen', () => {
       );
     });
     expect(container.textContent).not.toContain('unsaved');
+  });
+
+  it('opens the simulate panel under the strip, sends the sample, and draws the path the hub answers', async () => {
+    const socket = await opened();
+    expect(container.querySelector('[data-simulate-panel]')).toBeNull();
+
+    await act(() => {
+      button('Simulate').click();
+    });
+
+    const panel = container.querySelector('[data-simulate-panel]');
+    expect(panel).not.toBeNull();
+    // Beside the canvas row, not inside the inspector's column.
+    expect(
+      container.querySelector('section[aria-label="Inspector"] [data-simulate-panel]'),
+    ).toBeNull();
+    const simulate = sent(socket).find((each) => each.type === 'graph-simulate');
+    if (simulate === undefined || simulate.type !== 'graph-simulate') {
+      throw new Error('no simulate was sent');
+    }
+    // The sample the draft's route reads: its first route holds against it.
+    expect(simulate).toEqual({
+      type: 'graph-simulate',
+      id: expect.any(Number),
+      nodeId: 'hub-10',
+      input: { language: 'rust' },
+    });
+    // Nothing that starts anything went with it.
+    expect(sent(socket).some((each) => each.type === 'graph-run')).toBe(false);
+
+    const captured = JSON.parse(hubFrames.graphSimulated) as object;
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...captured, replyTo: simulate.id }));
+    });
+
+    const steps = [...container.querySelectorAll<HTMLElement>('[data-simulated-step]')];
+    expect(steps.map((step) => step.dataset['simulatedStep'])).toEqual([
+      'start',
+      'classify',
+      'review',
+    ]);
+    expect(steps[2]?.textContent).toContain('would run claude on mbp-robert');
+    expect(container.querySelector('[data-run-strip]')).toBeNull();
+
+    await act(() => {
+      button('Simulate').click();
+    });
+    expect(container.querySelector('[data-simulate-panel]')).toBeNull();
+  });
+
+  it('holds Simulate while the draft is unsaved, and says why', async () => {
+    await opened();
+    await act(() => {
+      card('classify').click();
+    });
+    await act(settle);
+    const pin = container.querySelector<HTMLInputElement>('input[type="radio"][value="pin"]');
+    if (pin === null) throw new Error('no Pin machine segment');
+    await act(() => {
+      pin.click();
+    });
+
+    expect(button('Simulate').disabled).toBe(true);
+    expect(button('Simulate').title).toContain('Save the draft first');
   });
 
   it('sends a publish for the draft', async () => {

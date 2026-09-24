@@ -20,6 +20,7 @@ import {
   type Executor,
   type ExecutorTable,
   type WalkOutcome,
+  type WalkTable,
 } from './walker.js';
 
 /**
@@ -160,7 +161,7 @@ interface Driven {
   cancel(): void;
 }
 
-function drive(doc: GraphDocument, input: RouteInput, executors: ExecutorTable): Driven {
+function drive(doc: GraphDocument, input: RouteInput, executors: WalkTable): Driven {
   const steps: GraphRunStep[] = [];
   const reached: number[] = [];
   const ended: { outcome: WalkOutcome; stepsThen: number }[] = [];
@@ -810,6 +811,28 @@ describe('walk', () => {
         status: 'failed',
         reason: 'the ACTION node Ship it is a kind this runtime cannot execute yet',
       });
+    });
+
+    it('runs an ACTION through the table only when the table has one, as a simulation does', async () => {
+      const doc = document({
+        nodes: [TRIGGER, { ...BASE, id: 'ship', kind: 'action', label: 'Ship it', name: 'ship' }],
+        edges: [{ from: 'start', to: 'ship' }],
+      });
+      const named: string[] = [];
+      const run = drive(
+        doc,
+        {},
+        {
+          ...table(agent(async () => ({ ok: true })).execute),
+          action: async (node, input) => {
+            named.push(node.name);
+            return { ok: true, carried: input, output: null, next: null };
+          },
+        },
+      );
+
+      await expect(run.done).resolves.toEqual({ status: 'succeeded', output: {} });
+      expect(named).toEqual(['ship']);
     });
 
     it('fails a document with no TRIGGER, or two, before any step', async () => {

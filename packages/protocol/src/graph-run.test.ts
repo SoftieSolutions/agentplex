@@ -4,13 +4,16 @@ import {
   GRAPH_RUN_HISTORY_MAX,
   GRAPH_RUN_OUTPUT_MAX_CHARS,
   GRAPH_RUN_STEPS_MAX,
+  GRAPH_SUBGRAPH_DEPTH_MAX,
   graphRunChildSchema,
+  graphSimulatedStepSchema,
   graphRunIdSchema,
   graphRunSummarySchema,
   graphRunStateSchema,
   graphRunStepOutputSchema,
   graphRunStepSchema,
   runStatusSchema,
+  simulatedOutcomeSchema,
   stepOutcomeSchema,
 } from './graph-run.js';
 
@@ -361,5 +364,147 @@ describe('parseHubFrame on the run frames', () => {
 
   it('answers a cancel with the run it cancelled', () => {
     expect(parseHubFrame({ type: 'graph-run-cancelled', replyTo: 2, runId: RUN_ID }).ok).toBe(true);
+  });
+});
+
+describe('the simulate frames', () => {
+  const SIMULATED = {
+    nodeId: 'classify',
+    kind: 'router',
+    depth: 0,
+    outcome: 'would-run',
+    why: 'route 1, language == rust, would send it to Rust reviewer: language is "rust"',
+  };
+
+  it('names three things a simulated step would do and nothing else', () => {
+    // No `succeeded` and no `failed`: nothing ran, so nothing succeeded, and
+    // a simulated step that says it would stop is a prediction, not a failure.
+    expect(simulatedOutcomeSchema.options).toEqual(['would-run', 'would-wait', 'would-stop']);
+    expect(simulatedOutcomeSchema.safeParse('succeeded').success).toBe(false);
+  });
+
+  it('takes a simulate that names the graph and carries a bounded input', () => {
+    expect(
+      parseClientFrame({
+        type: 'graph-simulate',
+        id: 6,
+        nodeId: GRAPH,
+        input: { language: 'rust' },
+      }).ok,
+    ).toBe(true);
+    expect(parseClientFrame({ type: 'graph-simulate', id: 6, nodeId: GRAPH, input: {} }).ok).toBe(
+      true,
+    );
+    expect(parseClientFrame({ type: 'graph-simulate', id: 6, nodeId: GRAPH }).ok).toBe(false);
+    expect(
+      parseClientFrame({ type: 'graph-simulate', id: 6, nodeId: GRAPH, input: 'rust' }).ok,
+    ).toBe(false);
+    expect(
+      parseClientFrame({
+        type: 'graph-simulate',
+        id: 6,
+        nodeId: GRAPH,
+        input: { files: 'x'.repeat(20_000) },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('answers a simulate with the graph, the path and the sentence it stopped on', () => {
+    const result = parseHubFrame({
+      type: 'graph-simulated',
+      replyTo: 6,
+      nodeId: GRAPH,
+      path: [
+        {
+          ...SIMULATED,
+          nodeId: 'start',
+          kind: 'trigger',
+          why: 'would start with {"language":"rust"}',
+        },
+        SIMULATED,
+        {
+          nodeId: 'review',
+          kind: 'agent',
+          depth: 0,
+          outcome: 'would-run',
+          why: 'would run claude on gpu-box-01',
+        },
+        {
+          nodeId: 'sign-off',
+          kind: 'human',
+          depth: 0,
+          outcome: 'would-wait',
+          why: 'would wait on a person up to 60 minutes for robert',
+        },
+      ],
+      reason: null,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.type !== 'graph-simulated') return;
+    expect(result.value.path.map((step) => step.outcome)).toEqual([
+      'would-run',
+      'would-run',
+      'would-run',
+      'would-wait',
+    ]);
+    expect(
+      parseHubFrame({
+        type: 'graph-simulated',
+        replyTo: 6,
+        nodeId: GRAPH,
+        path: [],
+        reason: 'a run starts at the one TRIGGER node, and this document has 0',
+      }).ok,
+    ).toBe(true);
+    // Every answer names the frame it answers, and says whether it stopped.
+    expect(
+      parseHubFrame({ type: 'graph-simulated', nodeId: GRAPH, path: [], reason: null }).ok,
+    ).toBe(false);
+    expect(parseHubFrame({ type: 'graph-simulated', replyTo: 6, nodeId: GRAPH, path: [] }).ok).toBe(
+      false,
+    );
+  });
+
+  it('nests a child graph by depth, bounded by how deep a chain of SUB-GRAPH nodes goes', () => {
+    expect(graphSimulatedStepSchema.safeParse({ ...SIMULATED, depth: 1 }).success).toBe(true);
+    expect(
+      graphSimulatedStepSchema.safeParse({ ...SIMULATED, depth: GRAPH_SUBGRAPH_DEPTH_MAX }).success,
+    ).toBe(true);
+    expect(
+      graphSimulatedStepSchema.safeParse({ ...SIMULATED, depth: GRAPH_SUBGRAPH_DEPTH_MAX + 1 })
+        .success,
+    ).toBe(false);
+    expect(graphSimulatedStepSchema.safeParse({ ...SIMULATED, depth: -1 }).success).toBe(false);
+  });
+
+  it('bounds the why and the path the way a run bounds its output and its steps', () => {
+    expect(
+      graphSimulatedStepSchema.safeParse({
+        ...SIMULATED,
+        why: 'x'.repeat(GRAPH_RUN_OUTPUT_MAX_CHARS),
+      }).success,
+    ).toBe(true);
+    expect(
+      graphSimulatedStepSchema.safeParse({
+        ...SIMULATED,
+        why: 'x'.repeat(GRAPH_RUN_OUTPUT_MAX_CHARS + 1),
+      }).success,
+    ).toBe(false);
+    expect(graphSimulatedStepSchema.safeParse({ ...SIMULATED, why: '' }).success).toBe(false);
+    expect(graphSimulatedStepSchema.safeParse({ ...SIMULATED, kind: 'loop' }).success).toBe(false);
+    expect(graphSimulatedStepSchema.safeParse({ ...SIMULATED, output: null }).success).toBe(false);
+    const path = Array.from({ length: GRAPH_RUN_STEPS_MAX + 1 }, () => SIMULATED);
+    expect(
+      parseHubFrame({ type: 'graph-simulated', replyTo: 6, nodeId: GRAPH, path, reason: null }).ok,
+    ).toBe(false);
+    expect(
+      parseHubFrame({
+        type: 'graph-simulated',
+        replyTo: 6,
+        nodeId: GRAPH,
+        path: path.slice(1),
+        reason: null,
+      }).ok,
+    ).toBe(true);
   });
 });

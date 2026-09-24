@@ -5,6 +5,8 @@ import type {
   Sessions,
   SessionOutcome,
   StartOutcome,
+  StartPlacement,
+  StartPlacementRequest,
   StartSessionRequest,
   StopSessionRequest,
   TranscriptOutcome,
@@ -25,6 +27,10 @@ import type {
  */
 export interface FakeSessions extends Sessions {
   readonly starts: readonly StartSessionRequest[];
+  /** Every placement it was asked for, in order. */
+  readonly placements: readonly StartPlacementRequest[];
+  /** What every later placement answers with. The default is a refusal. */
+  answerPlacementWith(placement: StartPlacement): void;
   readonly stops: readonly StopSessionRequest[];
   /** Every pause and every resume it was asked for, in order. */
   readonly pauses: readonly PauseSessionRequest[];
@@ -61,6 +67,11 @@ export interface FakeSessionsOptions {
 
 export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessions {
   const starts: StartSessionRequest[] = [];
+  const placements: StartPlacementRequest[] = [];
+  let placement: StartPlacement = {
+    ok: false,
+    problem: 'this fake control was given no placement',
+  };
   const stops: StopSessionRequest[] = [];
   const pauses: PauseSessionRequest[] = [];
   const resumes: PauseSessionRequest[] = [];
@@ -94,6 +105,19 @@ export function createFakeSessions(options: FakeSessionsOptions = {}): FakeSessi
   };
 
   return {
+    placeStart(request: StartPlacementRequest): StartPlacement {
+      placements.push(request);
+      return placement;
+    },
+
+    answerPlacementWith(next: StartPlacement): void {
+      placement = next;
+    },
+
+    get placements(): readonly StartPlacementRequest[] {
+      return placements;
+    },
+
     async start(request: StartSessionRequest): Promise<StartOutcome> {
       starts.push(request);
       return outcome;

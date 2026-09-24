@@ -2749,6 +2749,90 @@ describe('a graph run', () => {
     });
   });
 
+  const SIMULATED_PATH = [
+    {
+      nodeId: 'start' as never,
+      kind: 'trigger' as const,
+      depth: 0,
+      outcome: 'would-run' as const,
+      why: 'would start the run with {}',
+    },
+    {
+      nodeId: 'gate' as never,
+      kind: 'human' as const,
+      depth: 0,
+      outcome: 'would-wait' as const,
+      why: 'would wait on a person for as long as it takes, for robert',
+    },
+  ];
+
+  it('answers a simulate to the client that asked alone, with the path and how it ended', async () => {
+    const { broadcast, graphRuns } = harness();
+    const asker = attach(broadcast);
+    const other = attach(broadcast);
+    await asker.hello();
+    await other.hello();
+    graphRuns.answerSimulationsWith({ ok: true, path: SIMULATED_PATH, reason: null });
+    const otherSaw = other.received.length;
+
+    await asker.say({ type: 'graph-simulate', id: 2, nodeId: GRAPH, input: { language: 'rust' } });
+
+    expect(graphRuns.simulations).toEqual([{ nodeId: GRAPH, input: { language: 'rust' } }]);
+    expect(asker.received.at(-1)).toEqual({
+      type: 'graph-simulated',
+      replyTo: 2,
+      nodeId: GRAPH,
+      path: SIMULATED_PATH,
+      reason: null,
+    });
+    expect(other.received.length).toBe(otherSaw);
+    // Simulate starts nothing: no run was asked for.
+    expect(graphRuns.starts).toEqual([]);
+  });
+
+  /**
+   * A simulation publishes nothing -- no run is numbered and no state will
+   * ever be sent for it -- so asking for one is not asking about the graph's
+   * runs. Marking it watched would spend one of the connection's watched
+   * places on a graph it has not asked to follow.
+   */
+  it('does not mark the graph watched, since nothing will be published for a simulation', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    graphRuns.answerSimulationsWith({ ok: true, path: [], reason: null });
+    await client.say({ type: 'graph-simulate', id: 2, nodeId: GRAPH, input: {} });
+    const saw = client.received.length;
+
+    graphRuns.emit(runState(GRAPH));
+    await Promise.resolve();
+
+    expect(client.received.length).toBe(saw);
+  });
+
+  it('refuses a simulate in the feature’s words, and one before hello', async () => {
+    const { broadcast, graphRuns } = harness();
+    const early = attach(broadcast);
+    await early.say({ type: 'graph-simulate', id: 1, nodeId: GRAPH, input: {} });
+    expect(early.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
+    expect(graphRuns.simulations).toEqual([]);
+
+    const client = attach(broadcast);
+    await client.hello();
+    graphRuns.answerSimulationsWith({
+      ok: false,
+      code: 'refused',
+      problem: 'this hub has no graph by that id',
+    });
+    await client.say({ type: 'graph-simulate', id: 2, nodeId: OTHER, input: {} });
+    expect(client.received.at(-1)).toMatchObject({
+      type: 'refusal',
+      replyTo: 2,
+      code: 'refused',
+      message: 'this hub has no graph by that id',
+    });
+  });
+
   it('refuses an open before hello, and opens nothing', async () => {
     const { broadcast, graphRuns } = harness();
     const client = attach(broadcast);

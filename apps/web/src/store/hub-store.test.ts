@@ -2635,6 +2635,53 @@ describe('graph runs', () => {
     expect(run?.steps.map((step) => step.child)).toEqual([null, { runId: 'hub-21', number: 2 }]);
   });
 
+  it('sends a simulate as a command, with its input', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    h.store.sendCommand({ type: 'graph-simulate', nodeId: GRAPH, input: { language: 'rust' } });
+
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'graph-simulate',
+      id: 2,
+      nodeId: 'hub-10',
+      input: { language: 'rust' },
+    });
+  });
+
+  it('keeps the hub’s answer to a simulate, by the frame it answers, with every step and why', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphSimulated);
+
+    const simulated = h.store.getSnapshot().lastSimulated;
+    expect(simulated?.replyTo).toBe(43);
+    expect(simulated?.reason).toBeNull();
+    expect(simulated?.path.map((step) => `${step.nodeId}:${step.outcome}`)).toEqual([
+      'start:would-run',
+      'classify:would-run',
+      'review:would-run',
+    ]);
+    expect(simulated?.path.at(-1)?.why).toMatch(/^would run claude on mbp-robert/);
+    // Nothing ran, so nothing is filed as a run.
+    expect(h.store.getSnapshot().runs.size).toBe(0);
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('forgets a simulation when the connection goes, like the draft it was of', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.graphSimulated);
+    expect(h.store.getSnapshot().lastSimulated).not.toBeNull();
+
+    unsubscribe();
+
+    // The draft may have been saved by another client meanwhile, and the
+    // fleet placement read may have moved: an old path is not this graph's.
+    expect(h.store.getSnapshot().lastSimulated).toBeNull();
+  });
+
   it('forgets the histories it holds when the connection goes', async () => {
     const h = harness();
     const { socket, unsubscribe } = await establish(h);

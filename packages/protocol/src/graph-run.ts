@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { GRAPH_NODES_MAX, GRAPH_RETRY_MAX, graphNodeIdSchema } from './graph.js';
+import {
+  GRAPH_NODES_MAX,
+  GRAPH_RETRY_MAX,
+  graphNodeIdSchema,
+  graphNodeKindSchema,
+} from './graph.js';
 import { nodeIdSchema, sessionIdSchema, storeIdSchema } from './identity.js';
 import { sessionStatusSchema } from './session.js';
 
@@ -200,3 +205,51 @@ export const graphRunSummarySchema = z.strictObject({
   reason: z.string().nullable(),
 });
 export type GraphRunSummary = z.infer<typeof graphRunSummarySchema>;
+
+/**
+ * How deep a chain of SUB-GRAPH nodes goes below the run a person started.
+ *
+ * The hub's runtime refuses a child deeper than this, and a simulation walks
+ * the same chain with the same limit, so a simulated step's depth is never
+ * more than this. Stated here rather than in the hub because the simulate
+ * answer carries a depth, and a bound a client parses by is a protocol fact.
+ */
+export const GRAPH_SUBGRAPH_DEPTH_MAX = 8;
+
+/**
+ * What one simulated step would do.
+ *
+ * Three words and none of them past tense, because nothing happened: a
+ * simulation walks the shape of a graph and says what a run of it would do
+ * at each node. `would-run` is a step a run would take and move past;
+ * `would-wait` is a HUMAN node, where a run would stop until a person
+ * answers; `would-stop` is where a run would end -- no machine could take an
+ * AGENT, no route held, an ACTION this build does not have -- and it is the
+ * last step at its depth.
+ */
+export const simulatedOutcomeSchema = z.enum(['would-run', 'would-wait', 'would-stop']);
+export type SimulatedOutcome = z.infer<typeof simulatedOutcomeSchema>;
+
+/**
+ * One node a simulation reached, and why it would do what it would.
+ *
+ * `why` is the sentence the step is for: the route that matched and the
+ * reason it held, the machine placement would choose, the wait, the action
+ * this build does not have. Bounded like the one free text a run step may
+ * record, because a path is up to `GRAPH_RUN_STEPS_MAX` of them.
+ *
+ * `depth` is how many SUB-GRAPH nodes the step is below the graph that was
+ * simulated: 0 for its own nodes, 1 for the nodes of a graph one of them
+ * pins, and so on. The child's steps follow the SUB-GRAPH step that reached
+ * them, so the path is the walk in order and a client indents by depth; a
+ * child's node ids are that graph's, which is why the depth is on every
+ * step rather than inferred.
+ */
+export const graphSimulatedStepSchema = z.strictObject({
+  nodeId: graphNodeIdSchema,
+  kind: graphNodeKindSchema,
+  depth: z.int().min(0).max(GRAPH_SUBGRAPH_DEPTH_MAX),
+  outcome: simulatedOutcomeSchema,
+  why: z.string().min(1).max(GRAPH_RUN_OUTPUT_MAX_CHARS),
+});
+export type GraphSimulatedStep = z.infer<typeof graphSimulatedStepSchema>;
