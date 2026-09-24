@@ -25,4 +25,10 @@ export const SESSION_KIND: NodeKind = nodeKindSchema.parse('session');
  * document as a plain node with nothing to click.
  */
 export const DOC_KIND: NodeKind = nodeKindSchema.parse('doc');
+/**
+ * The graph kind, seeded by the hub's migration 0017 and opened by this build
+ * at `#/graph/<nodeId>`. Named here for the reason the doc kind is: the tree
+ * draws it as a leaf with somewhere to go rather than as a plain node.
+ */
+export const GRAPH_KIND: NodeKind = nodeKindSchema.parse('graph');
 export { PROJECT_KIND };

@@ -7,7 +7,7 @@ import {
   type SessionListItem,
 } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
-import { DOC_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
+import { DOC_KIND, GRAPH_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 
 /**
  * The command palette's model, and why it is a second search control rather
@@ -180,6 +180,7 @@ export interface PaletteGroup {
 const HEADINGS: ReadonlyMap<PaletteResultKind, string> = new Map([
   [SESSION_KIND, 'Sessions'],
   [DOC_KIND, 'Documents'],
+  [GRAPH_KIND, 'Graphs'],
   [PROJECT_KIND, 'Projects'],
 ]);
 
@@ -194,10 +195,10 @@ const HEADINGS: ReadonlyMap<PaletteResultKind, string> = new Map([
  * bounded around it, spending a slot and making the hub's `total` a count of
  * rows nobody can see.
  *
- * A graph is deliberately not here. The kind is unseeded until AGX-144, and
- * the selection is asked for by name, so it can be added to the list above the
- * day the migration lands -- without a protocol change, because a kind is a
- * row and not an enum.
+ * A graph joined the list with the migration that seeded it, and it cost no
+ * protocol change -- a kind is a row and not an enum. What it did cost is a
+ * branch in `palette-search.ts`: a kind asked for here and not turned into a
+ * row there is a row the hub returns and the dialog silently drops.
  */
 export const PALETTE_KINDS: readonly PaletteResultKind[] = [...HEADINGS.keys()];
 
@@ -205,10 +206,9 @@ export const PALETTE_KINDS: readonly PaletteResultKind[] = [...HEADINGS.keys()];
  * What a kind is called above its rows.
  *
  * A kind with no heading is labelled with the kind itself: the hub can return
- * one this release has never heard of -- a graph, when AGX-144 lands, or a
- * kind a later migration seeds -- and a heading reading `graph` is worse than
- * the word the hub would have used and far better than the row being dropped
- * or filed under a guess.
+ * one this release has never heard of -- a kind a later migration seeds --
+ * and a heading reading the bare kind is worse than the word the hub would
+ * have used and far better than the row being dropped or filed under a guess.
  */
 export function headingFor(kind: PaletteResultKind): string {
   return HEADINGS.get(kind) ?? kind;

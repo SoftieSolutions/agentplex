@@ -6,11 +6,12 @@ import {
   type CatalogueShape,
 } from '../catalogue/catalogue-model.js';
 import { docHash } from '../docs/doc-route.js';
+import { graphHash } from '../graphs/graph-route.js';
 import { statusWords } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { browserTimers, type Timers } from '../store/timers.js';
 import { destinationHash } from '../shell/destinations.js';
-import { DOC_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
+import { DOC_KIND, GRAPH_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 import { PALETTE_KINDS, type PaletteResult } from './palette-model.js';
 
 /**
@@ -311,6 +312,18 @@ function resultFor(item: CatalogueItem): PaletteResult | null {
       // second line; one naming a machine would be one this made up.
       detail: 'Document',
       href: docHash(item.id),
+    };
+  }
+  if (item.kind === GRAPH_KIND) {
+    return {
+      id: `graph:${item.id}`,
+      kind: item.kind,
+      label: item.displayName,
+      // The kind, for the reason a document says its kind: a catalogue item
+      // carries neither the draft's number nor what is published, and a row
+      // saying "Graph" is the honest second line.
+      detail: 'Graph',
+      href: graphHash(item.id),
     };
   }
   if (item.kind === PROJECT_KIND) {

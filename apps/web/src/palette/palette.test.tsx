@@ -624,12 +624,14 @@ describe('the command palette', () => {
     await open();
     await type('spike');
     await answer({
-      results: [{ ...NAMESAKE_DOC, id: 'graph:1', kind: nodeKindSchema.parse('graph') }],
+      results: [
+        { ...NAMESAKE_DOC, id: 'saved-search:1', kind: nodeKindSchema.parse('saved-search') },
+      ],
     });
 
     // A kind is a row in the hub's table, so one arrives without a release
     // here. It is drawn under its own name rather than dropped.
-    expect(headings()).toEqual(['Sessions', 'graph']);
+    expect(headings()).toEqual(['Sessions', 'saved-search']);
   });
 
   it('moves the arrows across the groups in drawn order, over the headings', async () => {

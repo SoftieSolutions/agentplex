@@ -1,11 +1,9 @@
 import { type JSX, type ReactNode } from 'react';
 import type { CatalogueItem, NodeId } from '@agentplex/protocol';
-import { docHash } from '../docs/doc-route.js';
 import { toneForStatus } from '../sessions/session-list-model.js';
-import { sessionHash } from '../terminal/session-route.js';
 import { Box, Group, Text, UnstyledButton } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
-import { isDoc, nameStyleOf, rowNotes, type CatalogueRow } from './catalogue-model.js';
+import { leafHref, nameStyleOf, rowNotes, type CatalogueRow } from './catalogue-model.js';
 
 /**
  * One row of the catalogue, in either view.
@@ -143,10 +141,9 @@ function RowName({ item, scheme }: RowNameProps): JSX.Element {
     </Text>
   );
 
-  // Two addressable leaves and one rule: a node the client can open is a link
-  // to the address that opens it, and everything else is text.
-  const href =
-    item.anchor !== null ? sessionHash(item.anchor) : isDoc(item.kind) ? docHash(item.id) : null;
+  // Three addressable leaves and one rule, `leafHref`'s: a node the client can
+  // open is a link to the address that opens it, and everything else is text.
+  const href = leafHref(item);
   if (href === null) return text;
   return (
     <UnstyledButton component="a" href={href} style={{ flex: 1, minWidth: 0, display: 'block' }}>

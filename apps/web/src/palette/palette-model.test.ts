@@ -15,7 +15,7 @@ import {
   type SessionListItem,
 } from '../sessions/session-list-model.js';
 import { sessionHash } from '../terminal/session-route.js';
-import { DOC_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
+import { DOC_KIND, GRAPH_KIND, PROJECT_KIND, SESSION_KIND } from '../tree/node-kinds.js';
 import { catalogueResults } from './palette-search.js';
 import {
   firstResult,
@@ -205,6 +205,7 @@ describe('grouping by kind', () => {
   it('names each kind in the words the app uses for it', () => {
     expect(headingFor(SESSION_KIND)).toBe('Sessions');
     expect(headingFor(DOC_KIND)).toBe('Documents');
+    expect(headingFor(GRAPH_KIND)).toBe('Graphs');
     expect(headingFor(PROJECT_KIND)).toBe('Projects');
   });
 
@@ -212,7 +213,7 @@ describe('grouping by kind', () => {
     // `palette-search.ts` asks the hub for exactly these, and a kind with a
     // heading but no place in the question would be a heading nothing ever
     // draws rows under.
-    expect(PALETTE_KINDS).toEqual([SESSION_KIND, DOC_KIND, PROJECT_KIND]);
+    expect(PALETTE_KINDS).toEqual([SESSION_KIND, DOC_KIND, GRAPH_KIND, PROJECT_KIND]);
     for (const kind of PALETTE_KINDS) expect(headingFor(kind)).not.toBe(kind);
   });
 
@@ -220,8 +221,8 @@ describe('grouping by kind', () => {
     // A kind is a row in the hub's table, so a later one arrives without a
     // release here: it is drawn under its own name rather than dropped or
     // labelled with a guess. `node-kinds.ts` argues why that is possible.
-    const graph: NodeKind = nodeKindSchema.parse('graph');
-    expect(headingFor(graph)).toBe('graph');
+    const later: NodeKind = nodeKindSchema.parse('saved-search');
+    expect(headingFor(later)).toBe('saved-search');
   });
 
   it('gathers each kind under one heading, in the order the kinds first appear', () => {

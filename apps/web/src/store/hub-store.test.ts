@@ -2263,3 +2263,128 @@ describe('one session’s transcript', () => {
     expect(h.store.getSnapshot().transcripts.size).toBe(0);
   });
 });
+
+/**
+ * The graph frames, and what the store owes the screen that draws one.
+ *
+ * Four commands and four answers, kept as the hub sent them. A graph is the
+ * hub's own content, so unlike a document nothing here waits on a machine --
+ * and like a document, a create moves the tree and `catalogue-changed` is what
+ * says so, while a save and a publish change no row the layout carries.
+ */
+describe('graphs', () => {
+  const GRAPH = nodeIdSchema.parse('hub-10');
+
+  it('sends a create as a command, so a blink queues it rather than dropping it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    const outcome = h.store.sendCommand({
+      type: 'graph-create',
+      projectId: nodeIdSchema.parse('hub-5'),
+      name: 'release-pipeline',
+    });
+
+    expect(outcome).toEqual({ accepted: true, id: 2, delivery: 'sent' });
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'graph-create',
+      id: 2,
+      projectId: 'hub-5',
+      name: 'release-pipeline',
+    });
+  });
+
+  it('sends an open, a save and a publish as commands too', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    h.store.sendCommand({ type: 'graph-open', nodeId: GRAPH });
+    h.store.sendCommand({ type: 'graph-save', nodeId: GRAPH, document: { nodes: [], edges: [] } });
+    h.store.sendCommand({ type: 'graph-publish', nodeId: GRAPH });
+
+    expect(sentFrames(socket).slice(-3)).toEqual([
+      { type: 'graph-open', id: 2, nodeId: 'hub-10' },
+      { type: 'graph-save', id: 3, nodeId: 'hub-10', document: { nodes: [], edges: [] } },
+      { type: 'graph-publish', id: 4, nodeId: 'hub-10' },
+    ]);
+  });
+
+  it('keeps the answer to a create with the node the graph will be named by', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeLayout();
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.graphCreated);
+
+    expect(h.store.getSnapshot().lastGraphCreated).toEqual({ replyTo: 20, nodeId: 'hub-10' });
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    // The broadcast is what says the tree moved, to this client too.
+    expect(sentFrames(socket).slice(before)).toEqual([]);
+  });
+
+  it('keeps a graph whole, filed by the node as well as by the frame', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphDocument);
+
+    const view = h.store.getSnapshot().lastGraphDocument;
+    expect(view).toMatchObject({
+      replyTo: 23,
+      nodeId: 'hub-10',
+      name: 'release-pipeline',
+      draftVersion: 2,
+      published: [{ version: 1, publishedAt: 1_756_000_000_000 }],
+    });
+    // The document the capture saved: three nodes of three kinds, two edges,
+    // exactly as the hub read them back out of its rows.
+    expect(view?.document.nodes.map((node) => node.kind)).toEqual(['trigger', 'router', 'agent']);
+    expect(view?.document.edges).toEqual([
+      { from: 'start', to: 'classify' },
+      { from: 'classify', to: 'review' },
+    ]);
+  });
+
+  it('keeps the draft number and the hub’s clock from a save, and asks for no tree', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeLayout();
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.graphSaved);
+
+    expect(h.store.getSnapshot().lastGraphSaved).toEqual({
+      replyTo: 21,
+      version: 1,
+      updatedAt: 1_756_000_000_000,
+    });
+    expect(sentFrames(socket).slice(before)).toEqual([]);
+  });
+
+  it('keeps the version a publish made, and asks for no tree', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.subscribeLayout();
+    const before = sentFrames(socket).length;
+
+    socket.deliver(hubFrames.graphPublished);
+
+    expect(h.store.getSnapshot().lastGraphPublished).toEqual({ replyTo: 22, version: 1 });
+    expect(sentFrames(socket).slice(before)).toEqual([]);
+  });
+
+  it('forgets a graph it is holding when the connection goes', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.graphDocument);
+    expect(h.store.getSnapshot().lastGraphDocument).not.toBeNull();
+
+    unsubscribe();
+
+    // Another client may have saved the draft while nothing here was
+    // connected, so a document kept across a disconnection would be a copy
+    // this store cannot vouch for -- the same rule a document's content keeps.
+    expect(h.store.getSnapshot().lastGraphDocument).toBeNull();
+  });
+});

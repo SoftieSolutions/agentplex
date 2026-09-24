@@ -10,6 +10,8 @@ import type { TokenStore } from '../auth/token.js';
 import { CataloguePanel } from '../catalogue/catalogue-panel.js';
 import { createCatalogueStore, type CatalogueStore } from '../catalogue/catalogue-store.js';
 import { useDocRoute } from '../docs/doc-route.js';
+import { GraphPane } from '../graphs/graph-pane.js';
+import { useGraphRoute } from '../graphs/graph-route.js';
 import { appLayoutStore } from '../layout/app-layout.js';
 import { LayoutScreen } from '../layout/layout-screen.js';
 import { narrowedToMachine } from '../machines/machine-selector-model.js';
@@ -111,6 +113,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
   const layout = useHubLayout(hub);
   const sessionRef = useSessionRoute();
   const doc = useDocRoute();
+  const graph = useGraphRoute();
   const destination = useDestination();
   const form = useShellForm();
   const [machine, setMachine] = useState<ServerRegistrationId | null>(null);
@@ -278,6 +281,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
     catalogue,
     sessionRef,
     doc,
+    graph,
     destination: place,
     machine,
     form,
@@ -290,9 +294,9 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
         state={state}
         machine={machine}
         onPickMachine={pickMachine}
-        // A session or a document is a thing and not one of the three places
-        // the bar offers, so no tab claims to be where the app is.
-        current={sessionRef !== null || doc !== null ? null : place}
+        // A session, a document or a graph is a thing and not one of the three
+        // places the bar offers, so no tab claims to be where the app is.
+        current={sessionRef !== null || doc !== null || graph !== null ? null : place}
         onStartSession={() => setStarting(true)}
         status={status}
         actions={actions}
@@ -381,6 +385,8 @@ interface ContentProps {
   readonly sessionRef: SessionRef | null;
   /** The document the address names, or `null` for no document route. */
   readonly doc: NodeId | null;
+  /** The graph the address names, or `null` for no graph route. */
+  readonly graph: NodeId | null;
   /** Already resolved for the form: see `resolveDestination`. */
   readonly destination: Destination;
   readonly machine: ServerRegistrationId | null;
@@ -398,6 +404,12 @@ interface ContentProps {
  * It is deliberately not keyed on the route -- the layout outlives navigation,
  * and the panes key their own mounts.
  *
+ * A graph wins the same way but is drawn straight into the region rather than
+ * through the layout screen. A graph is a screen and not a pane: the canvas
+ * takes the whole region and splits with nothing, so putting it through the
+ * pane layout would widen the persisted pane parser -- which knows sessions
+ * and documents -- for an arrangement nobody can make.
+ *
  * Projects is here rather than in the phone chrome because the two forms share
  * one content region: the tree is the sidebar's on a wide screen and a
  * destination on a phone, and `resolveDestination` has already decided which of
@@ -413,11 +425,17 @@ function content({
   catalogue,
   sessionRef,
   doc,
+  graph,
   destination,
   machine,
   form,
   scheme,
 }: ContentProps): JSX.Element {
+  if (graph !== null) {
+    // Keyed on the node, so following a link from one graph to another mounts
+    // a fresh pane that asks for its own document.
+    return <GraphPane key={graph} nodeId={graph} store={hub} />;
+  }
   if (sessionRef !== null || doc !== null) {
     return <LayoutScreen session={sessionRef} doc={doc} store={hub} />;
   }
