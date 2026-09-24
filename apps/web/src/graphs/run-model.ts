@@ -1,4 +1,10 @@
-import type { GraphNodeId, GraphRunState, GraphRunStep, RunStatus } from '@agentplex/protocol';
+import {
+  assertNever,
+  type GraphNodeId,
+  type GraphRunState,
+  type GraphRunStep,
+  type RunStatus,
+} from '@agentplex/protocol';
 import type { Tone } from '../ui/tokens.js';
 
 /**
@@ -9,6 +15,11 @@ import type { Tone } from '../ui/tokens.js';
  * the state arrives whole and nothing here should remember an earlier one:
  * the hub replaces the running record with its outcome, so a step that is
  * running is exactly a step whose outcome says so in the latest frame.
+ *
+ * `stale` is the store's word that the state it holds was true of a
+ * connection that is gone: the hub sends nothing about a run while the socket
+ * is down, so a run that read `running` then may have ended since. A stale
+ * run is drawn as what it is -- a run being asked about -- and never as live.
  */
 
 /** The word the strip uses for each status. `live` is the mock's word for a run in flight. */
@@ -19,20 +30,22 @@ export const STATUS_WORDS: Record<RunStatus, string> = {
   cancelled: 'cancelled',
 };
 
-/** `run #38 · live · step 3/9`, as mockup 6d letters the strip. */
-export function runStripText(run: GraphRunState): string {
-  return `run #${String(run.number)} · ${STATUS_WORDS[run.status]} · step ${String(run.step)}/${String(run.of)}`;
+/** `run #38 · live · step 3/9`, as mockup 6d letters the strip; `reconnecting` in place of `live` for a stale run. */
+export function runStripText(run: GraphRunState, stale = false): string {
+  const word = stale && run.status === 'running' ? 'reconnecting' : STATUS_WORDS[run.status];
+  return `run #${String(run.number)} · ${word} · step ${String(run.step)}/${String(run.of)}`;
 }
 
 /**
  * The tone a run's status draws in. A run in flight is `running`; one that
  * failed is `blocked`, because it is the thing on the screen that wants a
- * person; a run that ended any other way is at rest.
+ * person; a run that ended any other way is at rest -- and so is a stale run
+ * that read `running`, because nothing here can vouch that it still is.
  */
-export function runTone(status: RunStatus): Tone {
+export function runTone(status: RunStatus, stale = false): Tone {
   switch (status) {
     case 'running':
-      return 'running';
+      return stale ? 'idle' : 'running';
     case 'failed':
       return 'blocked';
     case 'succeeded':
@@ -41,9 +54,9 @@ export function runTone(status: RunStatus): Tone {
   }
 }
 
-/** The node whose step is in flight, or `null` when no step is. */
-export function runningNode(run: GraphRunState | null): GraphNodeId | null {
-  if (run === null || run.status !== 'running') return null;
+/** The node whose step is in flight, or `null` when no step is, or when the run is stale. */
+export function runningNode(run: GraphRunState | null, stale = false): GraphNodeId | null {
+  if (run === null || stale || run.status !== 'running') return null;
   const inFlight = run.steps.find((step) => step.outcome === 'running');
   return inFlight?.nodeId ?? null;
 }
@@ -61,8 +74,24 @@ export function lastOutputFor(run: GraphRunState | null, nodeId: GraphNodeId): L
   return step === undefined ? null : { number: run.number, step };
 }
 
-/** The text drawn in the LAST OUTPUT slot: the output as JSON, or the outcome when there is none. */
+/**
+ * The text drawn in the LAST OUTPUT slot: what the step recorded, in words
+ * per kind, or the outcome when it recorded nothing. Route indexes are
+ * counted from 1 here because that is how the inspector numbers them.
+ */
 export function lastOutputText(last: LastOutput): string {
-  if (last.step.output !== null) return JSON.stringify(last.step.output, null, 2);
-  return last.step.outcome;
+  const output = last.step.output;
+  if (output === null) return last.step.outcome;
+  switch (output.kind) {
+    case 'text':
+      return output.text;
+    case 'route':
+      return output.route === null
+        ? `otherwise to ${output.to}`
+        : `route ${String(output.route + 1)} to ${output.to}`;
+    case 'session':
+      return `session ${output.sessionId} · ${output.status}`;
+    default:
+      return assertNever(output, 'step output');
+  }
 }

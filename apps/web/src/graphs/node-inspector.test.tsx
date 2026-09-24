@@ -240,21 +240,19 @@ describe('NodeInspector', () => {
     expect(slot?.textContent).toBe('');
   });
 
-  it('draws the node’s last step in the run: the run number, and the output as JSON', async () => {
+  it('draws the node’s last step in the run: the run number, and what it recorded in words', async () => {
     await mount(nodeNamed(fixtureDocument(), 'classify'), fixtureDocument(), {
       number: 38,
       step: {
         nodeId: graphNodeIdSchema.parse('classify'),
         attempt: 0,
         outcome: 'succeeded',
-        output: { language: 'rust' },
+        output: { kind: 'route', route: 0, to: graphNodeIdSchema.parse('review') },
       },
     });
 
     expect(container.textContent).toContain('LAST OUTPUT · run #38');
-    expect(container.querySelector('[data-last-output]')?.textContent).toBe(
-      JSON.stringify({ language: 'rust' }, null, 2),
-    );
+    expect(container.querySelector('[data-last-output]')?.textContent).toBe('route 1 to review');
   });
 
   it('draws the outcome when the step made no output', async () => {

@@ -571,6 +571,18 @@ export interface RunCancelledView {
 }
 
 /**
+ * The hub's answer to a read of a graph that has never run.
+ *
+ * A read that finds a run is answered with the run's state, filed in `runs`
+ * by its graph like any other; only the empty answer needs a slot of its
+ * own, and it names the graph so a screen can drop a run it was holding.
+ */
+export interface RunNoneView {
+  readonly replyTo: FrameId;
+  readonly nodeId: NodeId;
+}
+
+/**
  * The hub's yes to a subscribe or an unsubscribe, kept so the control that
  * asked can stop waiting.
  *
@@ -692,14 +704,16 @@ export interface HubSnapshot {
   readonly lastRunStarted: RunStartedView | null;
   /** The hub's most recent yes to a run cancel, kept until the next one. */
   readonly lastRunCancelled: RunCancelledView | null;
+  /** The hub's most recent word that a graph a read named has never run. */
+  readonly lastRunNone: RunNoneView | null;
   /**
    * Every run the hub has told this client about, by run id, each as the
    * whole state last sent.
    *
-   * By run and not by graph, because the frame names the run: a graph can
-   * have two in flight, and the screen that started one holds its id from
-   * `lastRunStarted`. Replaced whole on every frame, since a state is whole.
-   * Bounded by `MAX_REMEMBERED_RUNS`, oldest first.
+   * By run, because the frame names the run and one graph's earlier runs
+   * are still worth reading; a screen picks its graph's newest by the
+   * `nodeId` each state carries. Replaced whole on every frame, since a state
+   * is whole. Bounded by `MAX_REMEMBERED_RUNS`, oldest first.
    */
   readonly runs: ReadonlyMap<GraphRunId, GraphRunState>;
   /** The hub's most recent yes to a subscribe or an unsubscribe. */
@@ -800,6 +814,7 @@ type CommandFrame = Extract<
       | 'graph-publish'
       | 'graph-run'
       | 'graph-run-cancel'
+      | 'graph-run-read'
       | 'push-subscribe'
       | 'push-unsubscribe'
       | 'session-transcript';
@@ -1140,6 +1155,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastGraphPublished: null,
     lastRunStarted: null,
     lastRunCancelled: null,
+    lastRunNone: null,
     runs: new Map(),
     lastPush: null,
     pushPublicKey: null,
@@ -1903,6 +1919,14 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({
           lastRefusal: null,
           lastRunCancelled: { replyTo: frame.replyTo, runId: frame.runId },
+        });
+        return;
+      }
+      case 'graph-run-none': {
+        pending.delete(frame.replyTo);
+        update({
+          lastRefusal: null,
+          lastRunNone: { replyTo: frame.replyTo, nodeId: frame.nodeId },
         });
         return;
       }

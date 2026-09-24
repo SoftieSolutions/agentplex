@@ -310,6 +310,7 @@ function labelFor(text: string): string {
     ['graph-published', 'graphPublished'],
     ['graph-run-started', 'graphRunStarted'],
     ['graph-run-cancelled', 'graphRunCancelled'],
+    ['graph-run-none', 'graphRunNone'],
     ['approval-decided', 'approvalDecided'],
     ['push-subscribed', 'pushSubscribed'],
     ['push-unsubscribed', 'pushUnsubscribed'],
@@ -2140,9 +2141,19 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       return seen.ok && seen.value.type === 'graph-published' && seen.value.replyTo === 29;
     };
     await until(() => starter.received.some(answersSmokePublish), 'the second graph to publish');
+    // A read of a graph that has never run, which is what a screen asks on
+    // open and on every reconnection: the answer is the frame that says so,
+    // and the store reads it to drop a run it may be holding from before.
+    starter.send({ type: 'graph-run-read', id: 30, nodeId: smoke.value.nodeId });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphRunNone'),
+      'the read of a graph never run to be answered',
+    );
+    const graphRunNone = starter.received.find((text) => labelFor(text) === 'graphRunNone');
+    if (graphRunNone === undefined) throw new Error('the read was not answered');
     starter.send({
       type: 'graph-run',
-      id: 30,
+      id: 31,
       nodeId: smoke.value.nodeId,
       input: { suite: 'nightly', language: 'rust' },
     });
@@ -3124,6 +3135,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('graphRunStateCancelled', graphRunStateCancelled);
     captured.set('graphRunStateFailed', graphRunStateFailed);
     captured.set('graphRunStateSucceeded', graphRunStateSucceeded);
+    captured.set('graphRunNone', graphRunNone);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);
     captured.set('nodeMoved', nodeMoved);

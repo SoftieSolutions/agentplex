@@ -2463,9 +2463,24 @@ describe('graph runs', () => {
       'the ROUTER node Classify diff failed: no route on Classify diff matched and it has no otherwise',
     );
     expect(runs.get('hub-15' as never)?.steps[0]?.output).toEqual({
-      suite: 'nightly',
-      language: 'rust',
+      kind: 'text',
+      text: '{"suite":"nightly","language":"rust"}',
     });
+  });
+
+  it('sends a read as a command, and keeps the hub’s word that the graph has never run', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    h.store.sendCommand({ type: 'graph-run-read', nodeId: GRAPH });
+    expect(sentFrames(socket).at(-1)).toEqual({ type: 'graph-run-read', id: 2, nodeId: 'hub-10' });
+
+    socket.deliver(hubFrames.graphRunNone);
+
+    // The graph the fixture's read named is the one its succeeded run is of.
+    const succeeded = JSON.parse(hubFrames.graphRunStateSucceeded) as { nodeId: string };
+    expect(h.store.getSnapshot().lastRunNone).toEqual({ replyTo: 30, nodeId: succeeded.nodeId });
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
   });
 
   it('keeps the hub’s yes to a cancel', async () => {

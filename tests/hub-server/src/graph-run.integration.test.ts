@@ -514,14 +514,18 @@ describe('a graph run over the whole path', () => {
       'the run to succeed',
     );
     const states = runStates(client);
+    // The first frame already has the TRIGGER running: the start and the
+    // first step are one change, published once.
     expect(states[0]).toMatchObject({
+      nodeId,
       runId: started.runId,
       number: 1,
       status: 'running',
-      step: 0,
+      step: 1,
       of: 3,
     });
     expect(states.at(-1)).toMatchObject({
+      nodeId,
       runId: started.runId,
       number: 1,
       status: 'succeeded',
@@ -529,13 +533,28 @@ describe('a graph run over the whole path', () => {
       step: 3,
       of: 3,
       steps: [
-        { nodeId: 'start', attempt: 0, outcome: 'succeeded', output: { language: 'rust' } },
-        { nodeId: 'classify', attempt: 0, outcome: 'succeeded', output: { language: 'rust' } },
+        {
+          nodeId: 'start',
+          attempt: 0,
+          outcome: 'succeeded',
+          output: { kind: 'text', text: '{"language":"rust"}' },
+        },
+        {
+          nodeId: 'classify',
+          attempt: 0,
+          outcome: 'succeeded',
+          output: { kind: 'route', route: 0, to: 'review' },
+        },
         {
           nodeId: 'review',
           attempt: 0,
           outcome: 'succeeded',
-          output: { storeId: WORK, sessionId: 'session-fresh', status: 'awaiting-input' },
+          output: {
+            kind: 'session',
+            storeId: WORK,
+            sessionId: 'session-fresh',
+            status: 'awaiting-input',
+          },
         },
       ],
     });
@@ -550,8 +569,11 @@ describe('a graph run over the whole path', () => {
       ),
     ).toBe(true);
 
-    // The other client heard the same run move, unsolicited.
-    expect(runStates(watcher).at(-1)).toEqual(states.at(-1));
+    // The other client asked about nothing: it heard nothing of this run.
+    expect(runStates(watcher)).toEqual([]);
+    // One that asks afterwards is told where the run stands, whole, by graph.
+    await watcher.say({ type: 'graph-run-read', id: 2, nodeId });
+    expect(runStates(watcher)).toEqual([states.at(-1)]);
 
     // The machine forked the prompt as one argv element, in the project's directory.
     expect(held().machine.ptys.opened.map((request) => request.args)).toEqual([[PROMPT]]);
@@ -594,6 +616,7 @@ describe('a graph run over the whole path', () => {
 
     await client.say({ type: 'graph-run', id: 3, nodeId: created.nodeId, input: {} });
     await client.say({ type: 'graph-run-cancel', id: 4, runId: 'run-nowhere' as never });
+    await client.say({ type: 'graph-run-read', id: 5, nodeId: created.nodeId });
 
     expect(client.reply(3)).toMatchObject({
       type: 'refusal',
@@ -607,6 +630,7 @@ describe('a graph run over the whole path', () => {
       code: 'refused',
       message: 'no run by that id is in flight',
     });
+    expect(client.reply(5)).toEqual({ type: 'graph-run-none', replyTo: 5, nodeId: created.nodeId });
   });
 
   it('carries no forbidden key on any frame in any direction', async () => {

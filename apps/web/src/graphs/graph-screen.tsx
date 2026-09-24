@@ -42,7 +42,10 @@ import { RunStrip } from './run-strip.js';
  * project guessed at.
  *
  * Run runs the newest published version, so it is enabled exactly when one
- * exists and no run of this screen's is in flight. The input it sends is the
+ * exists, no run of the graph is in flight, and the hub has answered where
+ * the graph's run stands -- asked on open and on every reconnection, because
+ * a run somebody started from another tab, or that this tab started just as
+ * its socket went, is a run and not a reason for a second. The input it sends is the
  * empty object: the mock has no input form, and the simulate panel of a later
  * ticket is where a typed input arrives. Simulate is drawn because the mock
  * draws it and disabled because nothing is behind it yet; its title says only
@@ -52,10 +55,12 @@ import { RunStrip } from './run-strip.js';
  * ## The run
  *
  * The strip under the header and the running tone on a card both read one
- * `GraphRunState`, the one the hub last sent for the run this screen
- * started. The state arrives whole on every change, so nothing here keeps a
- * step of its own: `run-model.ts` derives the sentence, the node in flight
- * and the inspector's LAST OUTPUT from the same frame each render.
+ * `GraphRunState`, the graph's newest as the hub last sent it. The state
+ * arrives whole on every change, so nothing here keeps a step of its own:
+ * `run-model.ts` derives the sentence, the node in flight and the inspector's
+ * LAST OUTPUT from the same frame each render. While the connection is being
+ * remade the store marks the run stale, and the strip and the cards draw it
+ * at rest rather than live.
  *
  * ## What is derived once per source, not once per frame
  *
@@ -149,11 +154,12 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
   const muted = colorForRole('textMuted', scheme);
   const document = state.document;
   const selected = document?.nodes.find((node) => node.id === state.selection) ?? null;
-  const running = runningNode(state.run);
+  const running = runningNode(state.run, state.runStale);
   const canRun =
     document !== null &&
     state.published.length > 0 &&
     !state.starting &&
+    !state.readingRun &&
     state.run?.status !== 'running';
 
   return (
@@ -244,6 +250,7 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           run={state.run}
           scheme={scheme}
           cancelling={state.cancelling}
+          stale={state.runStale}
           onCancel={() => graph.cancelRun()}
         />
       )}

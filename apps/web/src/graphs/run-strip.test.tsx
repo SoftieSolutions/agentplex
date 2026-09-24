@@ -70,7 +70,7 @@ describe('RunStrip', () => {
     );
   }
 
-  async function mount(run: GraphRunState, cancelling = false): Promise<void> {
+  async function mount(run: GraphRunState, cancelling = false, stale = false): Promise<void> {
     await act(async () => {
       root = createRoot(container);
       root.render(
@@ -79,6 +79,7 @@ describe('RunStrip', () => {
             run={run}
             scheme="dark"
             cancelling={cancelling}
+            stale={stale}
             onCancel={() => {
               cancels += 1;
             }}
@@ -108,6 +109,17 @@ describe('RunStrip', () => {
       button?.click();
     });
     expect(cancels).toBe(1);
+  });
+
+  it('reads a stale run as reconnecting, at rest, with no Cancel: nothing here can vouch for it', async () => {
+    await mount(state(hubFrames.graphRunStateRunning), false, true);
+
+    const strip = container.querySelector<HTMLElement>('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · reconnecting · step 3/3');
+    expect(strip?.textContent).not.toContain('live');
+    expect(strip?.dataset['runTone']).toBe('idle');
+    expect(strip?.dataset['runStale']).toBe('true');
+    expect(cancel()).toBeUndefined();
   });
 
   it('disables Cancel while the cancel is out', async () => {

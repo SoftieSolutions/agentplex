@@ -3,6 +3,8 @@ import {
   graphNodeIdSchema,
   parseHubFrame,
   parseTextFrame,
+  sessionIdSchema,
+  storeIdSchema,
   type GraphRunState,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
@@ -40,6 +42,15 @@ describe('runStripText', () => {
     );
   });
 
+  it('reads a stale run as reconnecting rather than live, and an ended one as it ended', () => {
+    expect(runStripText(state(hubFrames.graphRunStateRunning), true)).toBe(
+      'run #1 · reconnecting · step 3/3',
+    );
+    expect(runStripText(state(hubFrames.graphRunStateFailed), true)).toBe(
+      'run #2 · failed · step 2/3',
+    );
+  });
+
   it('reads the mock’s example when given its numbers', () => {
     const mock: GraphRunState = {
       ...state(hubFrames.graphRunStateRunning),
@@ -58,11 +69,20 @@ describe('runTone', () => {
     expect(runTone('succeeded')).toBe('idle');
     expect(runTone('cancelled')).toBe('idle');
   });
+
+  it('draws a stale run at rest: nothing here can vouch that it is still running', () => {
+    expect(runTone('running', true)).toBe('idle');
+    expect(runTone('failed', true)).toBe('blocked');
+  });
 });
 
 describe('runningNode', () => {
   it('names the node whose step is in flight', () => {
     expect(runningNode(state(hubFrames.graphRunStateRunning))).toBe('review');
+  });
+
+  it('names nothing for a stale run', () => {
+    expect(runningNode(state(hubFrames.graphRunStateRunning), true)).toBeNull();
   });
 
   it('names nothing for a run that has ended, or no run', () => {
@@ -76,7 +96,12 @@ describe('lastOutputFor', () => {
   it('finds the node’s last step in the run, with the run number', () => {
     expect(lastOutputFor(state(hubFrames.graphRunStateRunning), id('classify'))).toEqual({
       number: 1,
-      step: { nodeId: 'classify', attempt: 0, outcome: 'succeeded', output: { language: 'rust' } },
+      step: {
+        nodeId: 'classify',
+        attempt: 0,
+        outcome: 'succeeded',
+        output: { kind: 'route', route: 0, to: 'review' },
+      },
     });
   });
 
@@ -90,7 +115,17 @@ describe('lastOutputFor', () => {
       ...state(hubFrames.graphRunStateRunning),
       steps: [
         { nodeId: id('review'), attempt: 0, outcome: 'failed', output: null },
-        { nodeId: id('review'), attempt: 1, outcome: 'succeeded', output: { status: 'idle' } },
+        {
+          nodeId: id('review'),
+          attempt: 1,
+          outcome: 'succeeded',
+          output: {
+            kind: 'session',
+            storeId: storeIdSchema.parse('store-work'),
+            sessionId: sessionIdSchema.parse('session-9'),
+            status: 'idle',
+          },
+        },
       ],
     };
     expect(lastOutputFor(retried, id('review'))?.step.attempt).toBe(1);
@@ -98,15 +133,48 @@ describe('lastOutputFor', () => {
 });
 
 describe('lastOutputText', () => {
-  it('is the output as indented JSON, or the outcome when there is none', () => {
+  it('is the trigger’s text as the hub cut it, or the outcome when there is no output', () => {
     const last = lastOutputFor(state(hubFrames.graphRunStateSucceeded), id('start'));
     if (last === null) throw new Error('the trigger has no step');
-    expect(lastOutputText(last)).toBe(
-      JSON.stringify({ suite: 'nightly', language: 'rust' }, null, 2),
-    );
+    expect(lastOutputText(last)).toBe('{"suite":"nightly","language":"rust"}');
 
     const failed = lastOutputFor(state(hubFrames.graphRunStateFailed), id('classify'));
     if (failed === null) throw new Error('the router has no step');
     expect(lastOutputText(failed)).toBe('failed');
+  });
+
+  it('reads a router’s choice and an agent’s session in words', () => {
+    const routed = lastOutputFor(state(hubFrames.graphRunStateRunning), id('classify'));
+    if (routed === null) throw new Error('the router has no step');
+    expect(lastOutputText(routed)).toBe('route 1 to review');
+
+    const number = 1;
+    expect(
+      lastOutputText({
+        number,
+        step: {
+          nodeId: id('classify'),
+          attempt: 0,
+          outcome: 'succeeded',
+          output: { kind: 'route', route: null, to: id('docs') },
+        },
+      }),
+    ).toBe('otherwise to docs');
+    expect(
+      lastOutputText({
+        number,
+        step: {
+          nodeId: id('review'),
+          attempt: 0,
+          outcome: 'succeeded',
+          output: {
+            kind: 'session',
+            storeId: storeIdSchema.parse('store-work'),
+            sessionId: sessionIdSchema.parse('session-9'),
+            status: 'awaiting-input',
+          },
+        },
+      }),
+    ).toBe('session session-9 · awaiting-input');
   });
 });

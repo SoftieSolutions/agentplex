@@ -74,10 +74,18 @@ describe('createGraphStore', () => {
     return { socket, stop };
   }
 
+  /** Opened, with the hub's word that the graph has never run, so Run is free. */
   async function opened(): Promise<{ socket: FakeSocket; stop: () => void }> {
     const handle = await open();
     handle.socket.deliver(hubFrames.graphDocument);
+    handle.socket.deliver(noneFor(frameOf(handle.socket, 'graph-run-read').id));
     return handle;
+  }
+
+  /** The hub's word that the graph has never run, addressed to the read this store sent. */
+  function noneFor(frameId: number): string {
+    const captured = JSON.parse(hubFrames.graphRunNone) as { replyTo: number; nodeId: string };
+    return JSON.stringify({ ...captured, replyTo: frameId, nodeId: 'hub-10' });
   }
 
   type Addressed = Extract<ClientFrame, { id: number }>;
@@ -488,14 +496,113 @@ describe('createGraphStore', () => {
       });
     });
 
-    it('ignores a run this screen did not start', async () => {
+    it('ignores a run of another graph', async () => {
+      const { socket } = await opened();
+
+      // The fixture's succeeded run is of the smoke-test graph, not this one.
+      socket.deliver(hubFrames.graphRunStateSucceeded);
+
+      expect(store.getSnapshot().run).toBeNull();
+    });
+
+    it('shows the graph’s newest run whoever started it, once the hub reports one', async () => {
+      const { socket } = await opened();
+
+      socket.deliver(hubFrames.graphRunStateCancelled);
+      expect(store.getSnapshot().run).toMatchObject({ number: 1, status: 'cancelled' });
+
+      socket.deliver(hubFrames.graphRunStateFailed);
+      expect(store.getSnapshot().run).toMatchObject({ number: 2, status: 'failed' });
+
+      // An older run reported again does not take the strip back.
+      socket.deliver(hubFrames.graphRunStateCancelled);
+      expect(store.getSnapshot().run).toMatchObject({ number: 2 });
+    });
+
+    it('asks where the run stands when it opens, and holds Run until the hub answers', async () => {
+      const { socket } = await open();
+      socket.deliver(hubFrames.graphDocument);
+
+      expect(sent(socket).filter((frame) => frame.type === 'graph-run-read')).toEqual([
+        { type: 'graph-run-read', id: expect.any(Number), nodeId: 'hub-10' },
+      ]);
+      expect(store.getSnapshot().readingRun).toBe(true);
+      const before = sent(socket).length;
+      store.run({});
+      expect(sent(socket).length).toBe(before);
+
+      socket.deliver(noneFor(frameOf(socket, 'graph-run-read').id));
+
+      expect(store.getSnapshot().readingRun).toBe(false);
+      expect(store.getSnapshot().run).toBeNull();
+      store.run({});
+      expect(sent(socket).filter((frame) => frame.type === 'graph-run')).toHaveLength(1);
+    });
+
+    it('takes a run state as the answer to its read, when the graph has one', async () => {
+      const { socket } = await open();
+      socket.deliver(hubFrames.graphDocument);
+
+      socket.deliver(hubFrames.graphRunStateRunning);
+
+      expect(store.getSnapshot().readingRun).toBe(false);
+      expect(store.getSnapshot().run).toMatchObject({ runId: 'hub-11', status: 'running' });
+    });
+
+    it('asks again on a reconnection, and marks the run it holds stale until the answer lands', async () => {
       const { socket } = await opened();
       store.run({});
       socket.deliver(startedFor(frameOf(socket, 'graph-run').id));
+      socket.deliver(hubFrames.graphRunStateRunning);
+      expect(store.getSnapshot().runStale).toBe(false);
 
-      socket.deliver(hubFrames.graphRunStateFailed);
+      const second = await dropped(socket);
+
+      // Held, and no longer vouched for: the hub sends nothing about a run
+      // while the socket is down, and this one may have ended meanwhile.
+      expect(store.getSnapshot().run).toMatchObject({ runId: 'hub-11', status: 'running' });
+      expect(store.getSnapshot().runStale).toBe(true);
+      expect(store.getSnapshot().readingRun).toBe(true);
+
+      second.open();
+      second.deliver(hubFrames.welcome);
+      expect(sent(second).filter((frame) => frame.type === 'graph-run-read')).toEqual([
+        { type: 'graph-run-read', id: expect.any(Number), nodeId: 'hub-10' },
+      ]);
+
+      // The answer: the run ended while nobody here was listening.
+      second.deliver(hubFrames.graphRunStateCancelled);
+      expect(store.getSnapshot().run).toMatchObject({ runId: 'hub-11', status: 'cancelled' });
+      expect(store.getSnapshot().runStale).toBe(false);
+      expect(store.getSnapshot().readingRun).toBe(false);
+      store.run({});
+      expect(sent(second).filter((frame) => frame.type === 'graph-run')).toHaveLength(1);
+    });
+
+    it('drops the run it holds when the hub says the graph has never run', async () => {
+      const { socket } = await opened();
+      socket.deliver(hubFrames.graphRunStateRunning);
+      const second = await dropped(socket);
+      second.open();
+      second.deliver(hubFrames.welcome);
+
+      second.deliver(noneFor(frameOf(second, 'graph-run-read').id));
 
       expect(store.getSnapshot().run).toBeNull();
+      expect(store.getSnapshot().runStale).toBe(false);
+    });
+
+    it('refuses to cancel a stale run: the hub is the one to ask, and it is being asked', async () => {
+      const { socket } = await opened();
+      socket.deliver(hubFrames.graphRunStateRunning);
+      const second = await dropped(socket);
+      second.open();
+      second.deliver(hubFrames.welcome);
+      const before = sent(second).length;
+
+      store.cancelRun();
+
+      expect(sent(second).length).toBe(before);
     });
 
     it('does not send a second run while one of its own is in flight', async () => {
@@ -540,20 +647,42 @@ describe('createGraphStore', () => {
       expect(sent(socket).length).toBe(before);
     });
 
-    it('lets Run be pressed again when the connection drops with a run out', async () => {
+    it('asks where the run stands when the connection drops with a run out, and allows no second Run until it knows', async () => {
       const { socket } = await opened();
       store.run({});
       expect(store.getSnapshot().starting).toBe(true);
 
       const second = await dropped(socket);
 
-      // The hub store forgot the frame without a refusal, so the start has
-      // to come back rather than hold Run disabled for ever. The re-ask for
-      // a clean document clears the problem, as it does after a publish.
+      // The hub store forgot the frame without a refusal, so the start comes
+      // back -- but the hub may well have started the run before the socket
+      // went, and a second Run now would be a second run. So the store asks,
+      // and Run waits for the answer.
       expect(store.getSnapshot().starting).toBe(false);
-
+      expect(store.getSnapshot().readingRun).toBe(true);
       second.open();
       second.deliver(hubFrames.welcome);
+      expect(sent(second).filter((frame) => frame.type === 'graph-run-read')).toHaveLength(1);
+      store.run({});
+      expect(sent(second).filter((frame) => frame.type === 'graph-run')).toHaveLength(0);
+
+      // It had: the screen learns the run it never got the started reply for,
+      // and can cancel it.
+      second.deliver(hubFrames.graphRunStateRunning);
+      expect(store.getSnapshot().run).toMatchObject({ runId: 'hub-11', status: 'running' });
+      store.cancelRun();
+      expect(frameOf(second, 'graph-run-cancel')).toMatchObject({ runId: 'hub-11' });
+    });
+
+    it('lets Run be pressed again once the hub says nothing started', async () => {
+      const { socket } = await opened();
+      store.run({});
+      const second = await dropped(socket);
+      second.open();
+      second.deliver(hubFrames.welcome);
+
+      second.deliver(noneFor(frameOf(second, 'graph-run-read').id));
+
       store.run({});
       expect(sent(second).filter((frame) => frame.type === 'graph-run')).toHaveLength(1);
     });

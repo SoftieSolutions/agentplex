@@ -186,12 +186,19 @@ describe('GraphScreen', () => {
     return socket;
   }
 
+  /** Opened, and told the graph has never run, which is what frees Run. */
   async function opened(): Promise<FakeSocket> {
     const socket = await mount();
     await act(() => {
       socket.deliver(hubFrames.graphDocument);
     });
     await act(settle);
+    const read = sent(socket).find((each) => each.type === 'graph-run-read');
+    if (read === undefined || read.type !== 'graph-run-read') throw new Error('no read was sent');
+    const none = JSON.parse(hubFrames.graphRunNone) as { replyTo: number; nodeId: string };
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...none, replyTo: read.id, nodeId: 'hub-10' }));
+    });
     await act(settle);
     return socket;
   }
@@ -233,6 +240,42 @@ describe('GraphScreen', () => {
     // The fixture's graph has v1 published, which is what Run runs.
     expect(button('Run').disabled).toBe(false);
     expect(container.querySelector('[data-run-strip]')).toBeNull();
+  });
+
+  it('holds Run until the hub has said where the graph’s run stands', async () => {
+    const socket = await mount();
+    await act(() => {
+      socket.deliver(hubFrames.graphDocument);
+    });
+    await act(settle);
+
+    // Published, but the read is out: the hub may be running this graph now.
+    expect(button('Run').disabled).toBe(true);
+    expect(sent(socket).filter((each) => each.type === 'graph-run-read')).toHaveLength(1);
+  });
+
+  it('draws a run the hub reports as stale while the connection is being remade, and not live', async () => {
+    const socket = await opened();
+    await act(() => {
+      socket.deliver(hubFrames.graphRunStateRunning);
+    });
+    await act(settle);
+    expect(container.querySelector('[data-run-strip]')?.textContent).toContain('live');
+    expect(card('review').dataset['running']).toBe('true');
+
+    await act(() => {
+      socket.close();
+    });
+    await act(settle);
+
+    const strip = container.querySelector<HTMLElement>('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · reconnecting · step 3/3');
+    expect(strip?.dataset['runTone']).toBe('idle');
+    expect(card('review').dataset['running']).toBeUndefined();
+    expect(button('Run').disabled).toBe(true);
+    expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Cancel')).toBe(
+      false,
+    );
   });
 
   it('keeps Run disabled, and says why, while nothing is published', async () => {
@@ -280,7 +323,7 @@ describe('GraphScreen', () => {
     await act(settle);
     expect(container.textContent).toContain('LAST OUTPUT · run #1');
     expect(container.querySelector('[data-last-output]')?.textContent).toContain(
-      '"language": "rust"',
+      'route 1 to review',
     );
 
     await act(() => {
