@@ -989,9 +989,6 @@ export function SessionPane({
           >
             Replay
           </Button>
-          {/* The same button the card carries, off the same published fact.
-              Nothing is drawn for a session nobody is running, or for a holder
-              mid-turn. */}
           {/* Pause is the header action the mockup draws first. Offered to any
               held session, mid-turn included -- that is what a pause is for --
               and it reads Resume once the holder says the session is paused. */}
@@ -1002,6 +999,9 @@ export function SessionPane({
             scheme={scheme}
             size="xs"
           />
+          {/* The same button the card carries, off the same published fact.
+              Nothing is drawn for a session nobody is running, or for a holder
+              mid-turn. */}
           <StopButton
             store={hub}
             sessionRef={sessionRef}
