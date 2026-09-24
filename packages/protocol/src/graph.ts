@@ -106,6 +106,17 @@ export const graphPlacementSchema = z.discriminatedUnion('kind', [
 export type GraphPlacement = z.infer<typeof graphPlacementSchema>;
 
 /**
+ * The longest a step waits before a retry: an hour.
+ *
+ * Bounded above as well as below because a delay is handed to a timer, and
+ * Node fires a timer past 2^31 - 1 milliseconds after one millisecond
+ * instead -- so an unbounded backoff is the tight loop the minimum exists to
+ * prevent, reached from the other side. An hour is long enough that a step
+ * waiting on it is waiting on a person, and a person is a HUMAN node.
+ */
+export const GRAPH_RETRY_BACKOFF_MAX_SECONDS = 3600;
+
+/**
  * How many more times a failed step is tried, and how long to wait first.
  *
  * `max` is bounded because a step that fails ten times in a row is failing for
@@ -114,7 +125,7 @@ export type GraphPlacement = z.infer<typeof graphPlacementSchema>;
  */
 export const graphRetrySchema = z.object({
   max: z.int().min(0).max(10),
-  backoff: z.int().min(1),
+  backoff: z.int().min(1).max(GRAPH_RETRY_BACKOFF_MAX_SECONDS),
 });
 export type GraphRetry = z.infer<typeof graphRetrySchema>;
 

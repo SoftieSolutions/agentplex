@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GRAPH_NODES_MAX,
   GRAPH_PROMPT_MAX_CHARS,
+  GRAPH_RETRY_BACKOFF_MAX_SECONDS,
   emptyGraphDocument,
   graphDocumentSchema,
   graphNameSchema,
@@ -194,6 +195,22 @@ describe('graphDocumentSchema', () => {
     expect(graphDocumentSchema.safeParse(noWait).success).toBe(false);
     const ten = { nodes: [{ ...NODES.agent, retry: { max: 10, backoff: 1 } }], edges: [] };
     expect(graphDocumentSchema.safeParse(ten).success).toBe(true);
+  });
+
+  it('bounds the backoff at an hour, so a wait is one a timer can keep', () => {
+    const anHour = {
+      nodes: [{ ...NODES.agent, retry: { max: 1, backoff: GRAPH_RETRY_BACKOFF_MAX_SECONDS } }],
+      edges: [],
+    };
+    expect(graphDocumentSchema.safeParse(anHour).success).toBe(true);
+    const longer = {
+      nodes: [{ ...NODES.agent, retry: { max: 1, backoff: GRAPH_RETRY_BACKOFF_MAX_SECONDS + 1 } }],
+      edges: [],
+    };
+    expect(graphDocumentSchema.safeParse(longer).success).toBe(false);
+    // Past 2^31 - 1 milliseconds Node fires a timer after one millisecond
+    // instead, which is the tight loop the minimum exists to prevent.
+    expect(GRAPH_RETRY_BACKOFF_MAX_SECONDS * 1000).toBeLessThan(2 ** 31);
   });
 
   it('takes both placements and refuses a third', () => {

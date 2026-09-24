@@ -128,6 +128,7 @@ export {
   GRAPH_LABEL_MAX_CHARS,
   GRAPH_NODES_MAX,
   GRAPH_PROMPT_MAX_CHARS,
+  GRAPH_RETRY_BACKOFF_MAX_SECONDS,
   GRAPH_ROUTES_MAX,
   emptyGraphDocument,
   graphDocumentSchema,
@@ -155,6 +156,7 @@ export type {
 
 export {
   ROUTE_CONDITION_MAX_CHARS,
+  ROUTE_GLOB_MAX_WILDCARDS,
   ROUTE_INPUT_MAX_CHARS,
   evaluateRouteCondition,
   parseRouteCondition,
