@@ -1417,3 +1417,35 @@ describe('the transcript frames', () => {
     ).toBe(false);
   });
 });
+
+describe('the pause receipt on the client leg', () => {
+  it('refuses a receipt that says none, as the server leg does', () => {
+    // The hub relays the server's word and adds the server's id. It may not
+    // relay a word the server leg could not have carried, so the same
+    // exclusion applies here rather than a wider schema the hub would have to
+    // re-check by hand.
+    expect(
+      parseHubFrame({
+        type: 'session-paused',
+        replyTo: 40,
+        storeId: 'store-work',
+        sessionId: 'session-1',
+        server: 'registration-1',
+        pause: 'none',
+      }).ok,
+    ).toBe(false);
+  });
+
+  it.each(['requested', 'paused'] as const)('takes a receipt reading %s', (pause) => {
+    expect(
+      parseHubFrame({
+        type: 'session-paused',
+        replyTo: 40,
+        storeId: 'store-work',
+        sessionId: 'session-1',
+        server: 'registration-1',
+        pause,
+      }).ok,
+    ).toBe(true);
+  });
+});

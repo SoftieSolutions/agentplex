@@ -1006,7 +1006,26 @@ export function serveHubConnection(
       // and the receipt has to say what the holder the hub was just sent
       // says -- a receipt that lagged its own machine-state would have the
       // asking client's button and its status dot disagree.
-      const pause = terminals.holder(session)?.pause ?? outcome.pause;
+      const holder = terminals.holder(session);
+      const pause = holder?.pause ?? outcome.pause;
+      if (pause === 'none') {
+        // A resume landed while the report was awaited. The receipt may not
+        // carry `none` -- the wire refuses it -- and a receipt would in any
+        // case tell the asker its pause held when the holder says it did
+        // not. A refusal naming the hold is what the next machine-state will
+        // agree with.
+        send({
+          type: 'session-refused',
+          replyTo,
+          code: 'refused',
+          message: 'that session was resumed before its pause could be confirmed',
+          hold:
+            holder === undefined
+              ? null
+              : { sessionId: session.sessionId, stoppable: holder.stoppable, pause: holder.pause },
+        });
+        return;
+      }
       send({
         type: 'session-paused',
         replyTo,

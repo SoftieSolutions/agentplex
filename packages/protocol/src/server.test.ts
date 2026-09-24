@@ -1134,3 +1134,34 @@ describe('the transcript frames', () => {
     ).toBe(false);
   });
 });
+
+describe('the pause receipt on the server leg', () => {
+  it('refuses a receipt that says none: a pause that did not hold is a refusal, not a receipt', () => {
+    // The receipt's docstring promised "never none" and the parser now keeps
+    // that promise. A server whose pause was undone before it could answer
+    // sends `session-refused`, which has the hold to say how the session
+    // stands; a receipt reading `none` would have the asking client show a
+    // pause taken that the holder contradicts.
+    expect(
+      parseServerToHubFrame({
+        type: 'session-paused',
+        replyTo: 30,
+        storeId: 'store-1',
+        sessionId: 'session-1',
+        pause: 'none',
+      }).ok,
+    ).toBe(false);
+  });
+
+  it.each(['requested', 'paused'] as const)('takes a receipt reading %s', (pause) => {
+    expect(
+      parseServerToHubFrame({
+        type: 'session-paused',
+        replyTo: 30,
+        storeId: 'store-1',
+        sessionId: 'session-1',
+        pause,
+      }).ok,
+    ).toBe(true);
+  });
+});

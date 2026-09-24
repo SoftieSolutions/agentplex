@@ -28,7 +28,7 @@ import { providerReadinessSchema } from './readiness.js';
 import {
   sessionDescriptorSchema,
   sessionHoldSchema,
-  sessionPauseSchema,
+  pauseTakenSchema,
   sessionStartTagSchema,
 } from './session.js';
 import { serverTerminalFrames } from './terminal.js';
@@ -381,15 +381,16 @@ export const serverToHubFrameSchema = z.discriminatedUnion('type', [
   /**
    * The pause was taken, and how far it got: `paused` when the session was
    * already at a boundary, `requested` when it is mid-turn and the server will
-   * finish the pause when the turn ends. Never `none` -- that would be a
-   * refusal, and refusals have their own frame.
+   * finish the pause when the turn ends. Never `none`, and the parser holds
+   * that line: a pause undone before the server could answer is a refusal,
+   * and refusals have their own frame.
    */
   z.object({
     type: z.literal('session-paused'),
     replyTo: frameIdSchema,
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
-    pause: sessionPauseSchema,
+    pause: pauseTakenSchema,
   }),
   /** The session takes input again. Its process was never touched. */
   z.object({

@@ -1458,16 +1458,17 @@ export function serveClientConnection(
   ): Promise<void> {
     const verb = instruction === 'session-pause' ? 'pause' : 'resume';
     try {
-      const outcome =
-        instruction === 'session-pause'
-          ? await sessions.pause(request)
-          : await sessions.resume(request);
-      if (state !== 'established') return;
-      if (!outcome.ok) {
-        refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
-        return;
-      }
+      // Two awaits rather than one behind a ternary: the outcomes are
+      // different shapes -- only a pause's carries the word -- and a union
+      // of the two would have the receipt below read a field the resume's
+      // does not have.
       if (instruction === 'session-pause') {
+        const outcome = await sessions.pause(request);
+        if (state !== 'established') return;
+        if (!outcome.ok) {
+          refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
+          return;
+        }
         send({
           type: 'session-paused',
           replyTo,
@@ -1476,6 +1477,12 @@ export function serveClientConnection(
           server: outcome.server,
           pause: outcome.pause,
         });
+        return;
+      }
+      const outcome = await sessions.resume(request);
+      if (state !== 'established') return;
+      if (!outcome.ok) {
+        refuse(replyTo, outcome.code, outcome.problem, outcome.holder);
         return;
       }
       send({

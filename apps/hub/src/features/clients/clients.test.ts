@@ -881,12 +881,11 @@ describe('starting and stopping a session', () => {
       pause: 'requested',
     });
 
-    sessions.answerPauseWith({
+    sessions.answerResumeWith({
       ok: true,
       storeId: store(STORE),
       sessionId: sessionIdSchema.parse(SESSION),
       server: 'registration-workshop' as ServerRegistrationId,
-      pause: 'none',
     });
     await client.say({ type: 'session-resume', id: 3, storeId: STORE, sessionId: SESSION });
     expect(sessions.resumes).toEqual([{ storeId: STORE, sessionId: SESSION }]);
@@ -899,9 +898,9 @@ describe('starting and stopping a session', () => {
     });
   });
 
-  it('passes a refused pause back as a refusal with the holder on it', async () => {
+  it('passes a refused resume back as a refusal with the holder on it', async () => {
     const sessions = createFakeSessions();
-    sessions.answerPauseWith({
+    sessions.answerResumeWith({
       ok: false,
       code: 'refused',
       problem: 'the server running that session is not reachable right now',

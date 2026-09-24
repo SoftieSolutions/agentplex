@@ -30,7 +30,7 @@ import {
 } from './identity.js';
 import { layoutSchema, nodeNameTextSchema } from './layout.js';
 import { machineStateSchema, sessionHolderSchema } from './machine-state.js';
-import { sessionPauseSchema } from './session.js';
+import { pauseTakenSchema } from './session.js';
 import {
   SERVER_ADDRESS_MAX_CHARS,
   SERVER_LABEL_MAX_CHARS,
@@ -880,7 +880,7 @@ export const hubFrameSchema = z.discriminatedUnion('type', [
     storeId: storeIdSchema,
     sessionId: sessionIdSchema,
     server: serverRegistrationIdSchema,
-    pause: sessionPauseSchema,
+    pause: pauseTakenSchema,
   }),
   /** The session takes input again. */
   z.object({

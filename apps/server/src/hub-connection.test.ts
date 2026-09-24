@@ -26,7 +26,7 @@ import {
 } from './fake-approval-hooks.js';
 import { createFakeDirectoryReader } from './fake-directory-reader.js';
 import { serveHubConnection } from './hub-connection.js';
-import type { ServerIdentity } from '@agentplex/providers';
+import type { Launch, ServerIdentity } from '@agentplex/providers';
 import { createFakeSessionController } from './fake-session-controller.js';
 import { createFakeTerminals } from './fake-terminals.js';
 import { encodeClaudePermissionAnswer } from '@agentplex/providers';
@@ -45,6 +45,12 @@ import { createMachineLoadReader, type MachineLoadReader } from './machine-load.
 import * as linux from './machine-load-linux.fixture.js';
 
 const logger = createLogger('error', () => {});
+
+/** A launch the fake pty takes, for the one test that needs a terminal actually held. */
+const LAUNCH: Launch = {
+  ok: true,
+  plan: { command: 'claude', args: [], cwd: '/data/store-a', env: {}, scrubEnvPrefixes: [] },
+};
 
 const identity: ServerIdentity = {
   serverId: 'server-under-test' as ServerIdentity['serverId'],
@@ -910,6 +916,45 @@ describe('a pause and a resume over the wire', () => {
     expect(since(socket, mark)).toEqual([
       { type: 'store-report', storeId: 'store-a', sessions: [], holding: [], starts: [] },
       { type: 'session-paused', replyTo: 7, ...SESSION_A, pause: 'requested' },
+    ]);
+  });
+
+  it('refuses, rather than receipting none, a pause the holder no longer shows after the report', async () => {
+    // The receipt is read off the holder after the report, and the report is
+    // awaited: a resume can land in that gap. The holder then says `none`,
+    // which the receipt may not carry -- the wire refuses it -- and which
+    // would in any case tell the asking client its pause held when the next
+    // machine-state shows it did not. A refusal naming the hold says how the
+    // session actually stands.
+    const sessions = createFakeSessionController();
+    const { socket, terminals } = connect({ sessions });
+    socket.receive(handshake());
+    await settle();
+    sessions.setReport({ storeId: 'store-a' as StoreId, sessions: [], holding: [] });
+    const session = sessionRefSchema.parse(SESSION_A);
+    const opened = terminals.spawn({ storeId: session.storeId, path: '/data/store-a' }, LAUNCH);
+    if (!opened.ok) throw new Error(opened.problem);
+    terminals.bind(opened.terminal.terminalId, session.sessionId);
+    terminals.observe(session, 'idle');
+    const mark = socket.sent.length;
+    sessions.answerPauseWith({
+      ok: true,
+      storeId: session.storeId,
+      sessionId: session.sessionId,
+      pause: 'paused',
+    });
+
+    socket.receive(JSON.stringify({ type: 'session-pause', id: 11, ...SESSION_A }));
+    await settle();
+
+    expect(since(socket, mark).filter((frame) => frame.type !== 'store-report')).toEqual([
+      {
+        type: 'session-refused',
+        replyTo: 11,
+        code: 'refused',
+        message: 'that session was resumed before its pause could be confirmed',
+        hold: { sessionId: 'session-a', stoppable: true, pause: 'none' },
+      },
     ]);
   });
 
