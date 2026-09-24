@@ -89,6 +89,8 @@ const HUB_FEATURES = [
   'discovery',
   'docs',
   'fleet-state',
+  'graph-runs',
+  'graphs',
   'mcp',
   'pairing',
   'pane-layout',
