@@ -343,6 +343,27 @@ describe('GraphScreen', () => {
     expect(button('Run').disabled).toBe(false);
   });
 
+  it('takes Allow and Deny away while a waiting run is stale: the person may have answered meanwhile', async () => {
+    const socket = await opened();
+    const waiting = JSON.parse(hubFrames.graphRunStateWaiting) as { nodeId: string };
+    await act(() => {
+      socket.deliver(JSON.stringify({ ...waiting, nodeId: GRAPH }));
+      socket.deliver(hubFrames.machineStateGraphRunWaiting);
+    });
+    await act(settle);
+    expect(container.querySelector('[data-run-approval]')).not.toBeNull();
+
+    await act(() => {
+      socket.close();
+    });
+    await act(settle);
+
+    const strip = container.querySelector<HTMLElement>('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · reconnecting · step 2/2');
+    expect(strip?.dataset['runTone']).toBe('idle');
+    expect(container.querySelector('[data-run-approval]')).toBeNull();
+  });
+
   it('draws Allow and Deny under the strip while the run waits on a person, and answers for the run', async () => {
     const socket = await opened();
     await act(() => {
@@ -352,12 +373,14 @@ describe('GraphScreen', () => {
     if (run === undefined || run.type !== 'graph-run') throw new Error('no run was sent');
 
     // The hub's yes, addressed to this screen's frame; the run as the hub
-    // captured it parked at the HUMAN node; and the state carrying the
-    // request the hub raised for it, which is what the pair of buttons reads.
+    // captured it parked at the HUMAN node, filed under this screen's graph;
+    // and the state carrying the request the hub raised for it, which is what
+    // the pair of buttons reads.
     const started = JSON.parse(hubFrames.graphRunStartedWaiting) as { replyTo: number };
+    const waiting = JSON.parse(hubFrames.graphRunStateWaiting) as { nodeId: string };
     await act(() => {
       socket.deliver(JSON.stringify({ ...started, replyTo: run.id }));
-      socket.deliver(hubFrames.graphRunStateWaiting);
+      socket.deliver(JSON.stringify({ ...waiting, nodeId: GRAPH }));
       socket.deliver(hubFrames.machineStateGraphRunWaiting);
     });
     await act(settle);

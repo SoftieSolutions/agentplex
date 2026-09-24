@@ -516,11 +516,7 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     },
 
     run(input: RouteInput): void {
-      if (
-        state.starting ||
-        state.readingRun ||
-        (state.run !== null && isRunOpen(state.run.status))
-      )
+      if (state.starting || state.readingRun || (state.run !== null && isRunOpen(state.run.status)))
         return;
       const outcome = hub.sendCommand({ type: 'graph-run', nodeId, input });
       if (!outcome.accepted) {

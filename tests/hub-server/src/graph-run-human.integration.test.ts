@@ -660,7 +660,7 @@ describe('a graph run that waits on a person, over the whole path', () => {
       status: 'succeeded',
       steps: [
         { nodeId: 'start', outcome: 'succeeded' },
-        { nodeId: 'gate', outcome: 'succeeded', output: { language: 'rust' } },
+        { nodeId: 'gate', outcome: 'succeeded', output: null },
         { nodeId: 'review', outcome: 'succeeded' },
       ],
     });
@@ -670,6 +670,46 @@ describe('a graph run that waits on a person, over the whole path', () => {
     expect(held().machine.sentToServer.some((text) => text.includes('approval-decide'))).toBe(
       false,
     );
+  });
+
+  it('a client that comes back mid-wait reads the run as waiting, finds the request, and its Allow continues the run', async () => {
+    const client = await attach();
+    const { runId, waiting } = await runToTheGate(client, GATED);
+    providerWrites('session-fresh', PROJECT_DIRECTORY);
+
+    // A reconnection is a new socket that was sent no run state: it asks.
+    const back = await attach();
+    expect(runStates(back)).toEqual([]);
+    await back.say({ type: 'graph-run-read', id: 2, nodeId: waiting.graph });
+    expect(runStates(back).at(-1)).toMatchObject({
+      nodeId: waiting.graph,
+      runId,
+      status: 'waiting',
+      steps: [
+        { nodeId: 'start', outcome: 'succeeded' },
+        { nodeId: 'gate', attempt: 0, outcome: 'waiting', output: null },
+      ],
+    });
+    // The request is not on the run state; it is in the machine state every
+    // socket is sent whole, so the socket that came back holds it too.
+    await flushed();
+    expect(waitingOn(back)).toEqual([waiting]);
+
+    await back.say({
+      type: 'approval-decide',
+      id: 3,
+      subject: waiting.approval.subject,
+      approvalId: waiting.approval.approvalId,
+      decision: 'grant',
+    });
+
+    expect(back.reply(3)).toMatchObject({ type: 'approval-decided', outcome: 'granted' });
+    // The read made it a watcher, so the run's end reaches it unasked.
+    await until(
+      () => runStates(back).some((state) => state.status === 'succeeded'),
+      'the run to succeed on the socket that came back',
+    );
+    expect(waitingAtTheHub()).toEqual([]);
   });
 
   it('Deny fails the run naming the node, and starts nothing', async () => {

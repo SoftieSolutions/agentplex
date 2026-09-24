@@ -98,6 +98,12 @@ describe('createGraphStore', () => {
     return JSON.stringify({ ...captured, replyTo: frameId, nodeId: run.nodeId, run });
   }
 
+  /** The captured run parked at a HUMAN node, filed under this store's graph. */
+  function waitingHere(): string {
+    const captured = JSON.parse(hubFrames.graphRunStateWaiting) as { nodeId: string };
+    return JSON.stringify({ ...captured, nodeId: 'hub-10' });
+  }
+
   type Addressed = Extract<ClientFrame, { id: number }>;
 
   function frameOf(socket: FakeSocket, type: Addressed['type']): Addressed {
@@ -645,6 +651,40 @@ describe('createGraphStore', () => {
       store.cancelRun();
 
       expect(sent(second).length).toBe(before);
+    });
+
+    it('treats a run parked at a HUMAN node as open: no second run, and Cancel reaches the hub', async () => {
+      const { socket } = await opened();
+      store.run({});
+      socket.deliver(startedFor(frameOf(socket, 'graph-run').id));
+      socket.deliver(waitingHere());
+      expect(store.getSnapshot().run).toMatchObject({ status: 'waiting' });
+
+      store.run({});
+      expect(sent(socket).filter((frame) => frame.type === 'graph-run')).toHaveLength(1);
+
+      store.cancelRun();
+      expect(sent(socket).filter((frame) => frame.type === 'graph-run-cancel')).toEqual([
+        { type: 'graph-run-cancel', id: expect.any(Number), runId: 'hub-17' },
+      ]);
+    });
+
+    it('holds a waiting run stale across a reconnection until the read says it still waits', async () => {
+      const { socket } = await opened();
+      socket.deliver(waitingHere());
+      const second = await dropped(socket);
+
+      expect(store.getSnapshot().run).toMatchObject({ runId: 'hub-17', status: 'waiting' });
+      expect(store.getSnapshot().runStale).toBe(true);
+      store.cancelRun();
+      second.open();
+      second.deliver(hubFrames.welcome);
+      expect(sent(second).filter((frame) => frame.type === 'graph-run-cancel')).toEqual([]);
+
+      second.deliver(waitingHere());
+
+      expect(store.getSnapshot().run).toMatchObject({ runId: 'hub-17', status: 'waiting' });
+      expect(store.getSnapshot().runStale).toBe(false);
     });
 
     it('does not send a second run while one of its own is in flight', async () => {
