@@ -28,6 +28,7 @@ export {
   SegmentedControl,
   Select,
   SimpleGrid,
+  Slider,
   Stack,
   Stepper,
   Tabs,
