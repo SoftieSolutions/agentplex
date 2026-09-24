@@ -186,7 +186,7 @@ describe('the AGENT executor', () => {
     ]);
     report(
       [descriptor('session-9', 'awaiting-input')],
-      [{ sessionId: sessionIdSchema.parse('session-9'), stoppable: true }],
+      [{ sessionId: sessionIdSchema.parse('session-9'), stoppable: true, pause: 'none' }],
     );
 
     await expect(pending).resolves.toEqual({
@@ -275,7 +275,7 @@ describe('the AGENT executor', () => {
 
   describe('once the session is named', () => {
     const SESSION = sessionIdSchema.parse('session-9');
-    const HELD: SessionHold = { sessionId: SESSION, stoppable: true };
+    const HELD: SessionHold = { sessionId: SESSION, stoppable: true, pause: 'none' };
 
     /**
      * Wrapped in an object rather than returned bare: an async function that

@@ -540,6 +540,37 @@ describe('createGraphStore', () => {
       expect(sent(socket).length).toBe(before);
     });
 
+    it('lets Run be pressed again when the connection drops with a run out', async () => {
+      const { socket } = await opened();
+      store.run({});
+      expect(store.getSnapshot().starting).toBe(true);
+
+      const second = await dropped(socket);
+
+      // The hub store forgot the frame without a refusal, so the start has
+      // to come back rather than hold Run disabled for ever. The re-ask for
+      // a clean document clears the problem, as it does after a publish.
+      expect(store.getSnapshot().starting).toBe(false);
+
+      second.open();
+      second.deliver(hubFrames.welcome);
+      store.run({});
+      expect(sent(second).filter((frame) => frame.type === 'graph-run')).toHaveLength(1);
+    });
+
+    it('stops cancelling when the connection drops with a cancel out', async () => {
+      const { socket } = await opened();
+      store.run({});
+      socket.deliver(startedFor(frameOf(socket, 'graph-run').id));
+      socket.deliver(hubFrames.graphRunStateRunning);
+      store.cancelRun();
+      expect(store.getSnapshot().cancelling).toBe(true);
+
+      await dropped(socket);
+
+      expect(store.getSnapshot().cancelling).toBe(false);
+    });
+
     it('takes the hub’s refusal of a run as the problem and stops starting', async () => {
       const { socket } = await opened();
       store.run({});

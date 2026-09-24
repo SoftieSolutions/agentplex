@@ -235,16 +235,32 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
    * and will answer none of them, so nothing here may wait on one.
    */
   function dropInFlight(): void {
-    const waited = saveFrame !== null ? 'save' : publishFrame !== null ? 'publish' : null;
+    const waited =
+      saveFrame !== null
+        ? 'save'
+        : publishFrame !== null
+          ? 'publish'
+          : runFrame !== null
+            ? 'run'
+            : cancelFrame !== null
+              ? 'cancel'
+              : null;
     openFrame = null;
     saveFrame = null;
     inFlight = null;
     publishFrame = null;
     publishedDocument = null;
     publishAfterSave = false;
+    // A run or a cancel that was out goes the same way: the hub store forgot
+    // the frame, so nothing will ever answer it. The run the hub already
+    // named stays, and its next state names where it stands.
+    runFrame = null;
+    cancelFrame = null;
     moveTo({
       saving: false,
       publishing: false,
+      starting: false,
+      cancelling: false,
       ...(waited === null
         ? {}
         : { problem: `the connection dropped before the hub answered the ${waited}` }),
