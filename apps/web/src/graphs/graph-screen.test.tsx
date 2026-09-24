@@ -343,6 +343,69 @@ describe('GraphScreen', () => {
     expect(button('Run').disabled).toBe(false);
   });
 
+  it('lists the runs newest first, and a picked row puts that run on the strip and in LAST OUTPUT', async () => {
+    const socket = await opened();
+    const asked = sent(socket).find((each) => each.type === 'graph-run-history-request');
+    if (asked === undefined || asked.type !== 'graph-run-history-request') {
+      throw new Error('no history was asked for');
+    }
+    const captured = JSON.parse(hubFrames.graphRunHistory) as object;
+    await act(() => {
+      socket.deliver(hubFrames.graphRunStateCancelled);
+      socket.deliver(hubFrames.graphRunStateFailed);
+      socket.deliver(
+        JSON.stringify({
+          ...captured,
+          replyTo: asked.id,
+          nodeId: 'hub-10',
+          runs: [
+            {
+              runId: 'hub-13',
+              number: 2,
+              status: 'failed',
+              startedAt: 1756000000000,
+              endedAt: 1756000000000,
+              reason: 'the ROUTER node Classify diff failed',
+            },
+            {
+              runId: 'hub-11',
+              number: 1,
+              status: 'cancelled',
+              startedAt: 1756000000000,
+              endedAt: 1756000000000,
+              reason: null,
+            },
+          ],
+        }),
+      );
+    });
+    await act(settle);
+
+    const rows = [...container.querySelectorAll<HTMLElement>('[data-history-run]')];
+    expect(rows.map((row) => row.dataset['historyRun'])).toEqual(['hub-13', 'hub-11']);
+    // The strip follows the newest until a row is picked.
+    expect(container.querySelector('[data-run-strip]')?.textContent).toContain('run #2 · failed');
+
+    await act(() => {
+      rows[1]?.click();
+    });
+    await act(settle);
+
+    expect(container.querySelector('[data-run-strip]')?.textContent).toContain(
+      'run #1 · cancelled · step 3/3',
+    );
+    await act(() => {
+      card('classify').click();
+    });
+    await act(settle);
+    expect(container.textContent).toContain('LAST OUTPUT · run #1');
+    expect(container.querySelector('[data-last-output]')?.textContent).toContain(
+      'route 1 to review',
+    );
+    // Run is about the newest, which has ended, whatever row is being read.
+    expect(button('Run').disabled).toBe(false);
+  });
+
   it('takes Allow and Deny away while a waiting run is stale: the person may have answered meanwhile', async () => {
     const socket = await opened();
     const waiting = JSON.parse(hubFrames.graphRunStateWaiting) as { nodeId: string };

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   graphNodeIdSchema,
+  graphRunIdSchema,
   nodeIdSchema,
   parseClientFrame,
   parseTextFrame,
@@ -795,6 +796,150 @@ describe('createGraphStore', () => {
       expect(store.getSnapshot().problem).toBe(
         'this graph has no published version to run; publish it first',
       );
+    });
+  });
+
+  describe('history', () => {
+    /** The captured history, filed under this store's graph and answering the request it sent. */
+    function historyFor(frameId: number, runs?: unknown[]): string {
+      const captured = JSON.parse(hubFrames.graphRunHistory) as { runs: unknown[] };
+      return JSON.stringify({
+        ...captured,
+        replyTo: frameId,
+        nodeId: 'hub-10',
+        runs: runs ?? captured.runs,
+      });
+    }
+
+    function historyRequests(socket: FakeSocket): ClientFrame[] {
+      return sent(socket).filter((frame) => frame.type === 'graph-run-history-request');
+    }
+
+    /** A captured run state, filed under this store's graph under another run id and number. */
+    function stateHere(frame: string, runId: string, number: number): string {
+      const captured = JSON.parse(frame) as object;
+      return JSON.stringify({ ...captured, nodeId: 'hub-10', runId, number });
+    }
+
+    it('asks for the history when it opens, and takes the answer for its own graph', async () => {
+      const { socket } = await opened();
+
+      expect(historyRequests(socket)).toEqual([
+        { type: 'graph-run-history-request', id: expect.any(Number), nodeId: 'hub-10' },
+      ]);
+      expect(store.getSnapshot().history).toBeNull();
+
+      socket.deliver(historyFor(frameOf(socket, 'graph-run-history-request').id));
+
+      expect(store.getSnapshot().history?.map((run) => run.number)).toEqual([2, 1]);
+      expect(store.getSnapshot().problem).toBeNull();
+    });
+
+    it('ignores a history of another graph', async () => {
+      const { socket } = await opened();
+
+      // The fixture's history is of the smoke-test graph, not this one.
+      socket.deliver(hubFrames.graphRunHistory);
+
+      expect(store.getSnapshot().history).toBeNull();
+    });
+
+    it('asks again on the reconnect edge, as it asks for the run', async () => {
+      const { socket } = await opened();
+      socket.deliver(historyFor(frameOf(socket, 'graph-run-history-request').id));
+
+      const second = await dropped(socket);
+      second.open();
+      second.deliver(hubFrames.welcome);
+
+      expect(historyRequests(second)).toHaveLength(1);
+      // The list held stays on screen until the new answer replaces it.
+      expect(store.getSnapshot().history).toHaveLength(2);
+    });
+
+    it('asks again when a run of its graph moves in a way the list does not show, once at a time', async () => {
+      const { socket } = await opened();
+      socket.deliver(historyFor(frameOf(socket, 'graph-run-history-request').id, []));
+      expect(historyRequests(socket)).toHaveLength(1);
+
+      // A run started: the list does not have it.
+      socket.deliver(hubFrames.graphRunStateRunning);
+      expect(historyRequests(socket)).toHaveLength(2);
+      // It ends while that ask is out: no second ask on top of it.
+      socket.deliver(hubFrames.graphRunStateCancelled);
+      expect(historyRequests(socket)).toHaveLength(2);
+
+      // The answer lists the run as cancelled: nothing more to ask.
+      socket.deliver(
+        historyFor(frameOf(socket, 'graph-run-history-request').id, [
+          {
+            runId: 'hub-11',
+            number: 1,
+            status: 'cancelled',
+            startedAt: 1756000000000,
+            endedAt: 1756000000000,
+            reason: null,
+          },
+        ]),
+      );
+      expect(historyRequests(socket)).toHaveLength(2);
+      expect(store.getSnapshot().history?.map((run) => run.status)).toEqual(['cancelled']);
+    });
+
+    it('shows the newest run until a row is picked, then the picked run held by the hub store', async () => {
+      const { socket } = await opened();
+      socket.deliver(hubFrames.graphRunStateCancelled);
+      socket.deliver(hubFrames.graphRunStateFailed);
+      expect(store.getSnapshot().shownRun).toMatchObject({ number: 2 });
+
+      const before = sent(socket).length;
+      store.selectRun(graphRunIdSchema.parse('hub-11'));
+
+      // Held already, so nothing is asked.
+      expect(sent(socket).length).toBe(before);
+      expect(store.getSnapshot().selectedRun).toBe('hub-11');
+      expect(store.getSnapshot().shownRun).toMatchObject({ runId: 'hub-11', number: 1 });
+      // The newest run is still the one Run and Cancel are about.
+      expect(store.getSnapshot().run).toMatchObject({ number: 2 });
+
+      store.selectRun(null);
+      expect(store.getSnapshot().shownRun).toMatchObject({ number: 2 });
+    });
+
+    it('opens a picked run it does not hold from the hub, and shows it when it lands', async () => {
+      const { socket } = await opened();
+
+      store.selectRun(graphRunIdSchema.parse('hub-31'));
+
+      const asked = frameOf(socket, 'graph-run-open');
+      expect(asked).toMatchObject({ nodeId: 'hub-10', runId: 'hub-31' });
+      expect(store.getSnapshot().shownRun).toBeNull();
+
+      socket.deliver(stateHere(hubFrames.graphRunStateSubgraph, 'hub-31', 7));
+
+      expect(store.getSnapshot().shownRun).toMatchObject({ runId: 'hub-31', number: 7 });
+    });
+
+    it('drops the pick and says why when the hub refuses to open it', async () => {
+      const { socket } = await opened();
+      store.selectRun(graphRunIdSchema.parse('hub-31'));
+
+      socket.deliver(
+        refusalTo(frameOf(socket, 'graph-run-open').id, 'that graph has no run by that id'),
+      );
+
+      expect(store.getSnapshot().selectedRun).toBeNull();
+      expect(store.getSnapshot().problem).toBe('that graph has no run by that id');
+    });
+
+    it('lets go of the pick when Run is pressed, so the strip follows the new run', async () => {
+      const { socket } = await opened();
+      socket.deliver(hubFrames.graphRunStateCancelled);
+      store.selectRun(graphRunIdSchema.parse('hub-11'));
+
+      store.run({});
+
+      expect(store.getSnapshot().selectedRun).toBeNull();
     });
   });
 });

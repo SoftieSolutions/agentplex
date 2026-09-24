@@ -9,6 +9,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import {
+  Anchor,
   Box,
   Button,
   NumberInput,
@@ -32,6 +33,7 @@ import {
   setRoute,
   type GraphEdit,
 } from './graph-model.js';
+import { graphHash } from './graph-route.js';
 import { lastOutputText, type LastOutput } from './run-model.js';
 
 /**
@@ -49,8 +51,11 @@ import { lastOutputText, type LastOutput } from './run-model.js';
  * The LAST OUTPUT slot reads the selected node's last step in the run this
  * screen started -- `LAST OUTPUT · run #38`, then the step's output as JSON
  * or its outcome when it made none -- and is empty until a run has reached
- * the node. It reads the run and never a history: the history list is
- * AGX-265's, and until then what the aside knows is what the strip knows.
+ * the node. The run is whichever the strip shows: the newest, or the one a
+ * person picked from the history list. A SUB-GRAPH step's child is offered
+ * as a link to the child graph's screen, where that run is listed under its
+ * own number; the child is a run of that graph, and its steps are drawn
+ * there against that graph's canvas rather than squeezed into this aside.
  */
 
 /** A machine the Pin control offers: the id it pins, worded by its label. */
@@ -167,6 +172,16 @@ export function NodeInspector({
         >
           {lastOutput === null ? null : lastOutputText(lastOutput)}
         </pre>
+        {node.kind === 'subgraph' && lastOutput !== null && lastOutput.step.child !== null ? (
+          <Anchor
+            data-child-run={lastOutput.step.child.runId}
+            href={graphHash(node.graph)}
+            fz={11}
+            style={MONO}
+          >
+            open run #{String(lastOutput.step.child.number)} in its graph
+          </Anchor>
+        ) : null}
       </Box>
     </Stack>
   );

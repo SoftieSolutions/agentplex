@@ -95,11 +95,17 @@ export function lastOutputFor(run: GraphRunState | null, nodeId: GraphNodeId): L
 
 /**
  * The text drawn in the LAST OUTPUT slot: what the step recorded, in words
- * per kind, or the outcome when it recorded nothing. Route indexes are
+ * per kind, the child run a SUB-GRAPH started, or the outcome when it
+ * recorded nothing. Route indexes are
  * counted from 1 here because that is how the inspector numbers them.
  */
 export function lastOutputText(last: LastOutput): string {
   const output = last.step.output;
+  // A SUB-GRAPH records no output of its own: what it made is its child run,
+  // named by the number a person finds it under in the child graph's list.
+  if (output === null && last.step.child !== null) {
+    return `child run #${String(last.step.child.number)} · ${last.step.outcome}`;
+  }
   if (output === null) return last.step.outcome;
   switch (output.kind) {
     case 'text':

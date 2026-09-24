@@ -2573,4 +2573,53 @@ describe('graph runs', () => {
     expect(h.store.getSnapshot().runs.size).toBe(0);
     unsubscribe();
   });
+
+  it('sends a history request and an open of one run as commands', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    h.store.sendCommand({ type: 'graph-run-history-request', nodeId: GRAPH });
+    h.store.sendCommand({ type: 'graph-run-open', nodeId: GRAPH, runId: 'hub-11' as never });
+
+    expect(sentFrames(socket).slice(-2)).toEqual([
+      { type: 'graph-run-history-request', id: 2, nodeId: 'hub-10' },
+      { type: 'graph-run-open', id: 3, nodeId: 'hub-10', runId: 'hub-11' },
+    ]);
+  });
+
+  it('files a history by the graph it names, newest first as the hub sent it', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphRunHistory);
+
+    const parsed = JSON.parse(hubFrames.graphRunHistory) as { nodeId: string };
+    const history = h.store.getSnapshot().runHistories.get(parsed.nodeId as never);
+    expect(history?.replyTo).toBe(42);
+    expect(history?.runs.map((run) => run.number)).toEqual([2, 1]);
+    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+  });
+
+  it('keeps the child a SUB-GRAPH step names on the run it files', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.graphRunStateSubgraph);
+
+    const [run] = [...h.store.getSnapshot().runs.values()];
+    expect(run?.steps.map((step) => step.child)).toEqual([null, { runId: 'hub-21', number: 2 }]);
+  });
+
+  it('forgets the histories it holds when the connection goes', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.graphRunHistory);
+    expect(h.store.getSnapshot().runHistories.size).toBe(1);
+
+    unsubscribe();
+
+    // A run may have started or ended while nothing here was connected; the
+    // screen asks again on the next welcome.
+    expect(h.store.getSnapshot().runHistories.size).toBe(0);
+  });
 });

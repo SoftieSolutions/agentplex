@@ -17,6 +17,7 @@ import { GraphCanvas } from './flow-adapter.js';
 import { addNode, connect, KIND_WORDS, KINDS, type NodeSeed } from './graph-model.js';
 import { createGraphStore } from './graph-store.js';
 import { NodeInspector, type InspectorMachine } from './node-inspector.js';
+import { RunHistory } from './run-history.js';
 import { isRunOpen, lastOutputFor, runningNode } from './run-model.js';
 import { RunStrip } from './run-strip.js';
 import { ApprovalControls } from '../sessions/approval-controls.js';
@@ -67,6 +68,17 @@ const NO_PROJECT: SessionProject = { kind: 'unplaced' };
  * LAST OUTPUT from the same frame each render. While the connection is being
  * remade the store marks the run stale, and the strip and the cards draw it
  * at rest rather than live.
+ *
+ * ## The history, and a run picked from it
+ *
+ * The graph's runs are listed newest first under the inspector, and a row
+ * picked there is what the strip and LAST OUTPUT read -- `shownRun`, which
+ * is the newest until somebody picks. Run, Cancel and the running card stay
+ * about the newest run: reading an old run is looking at history, and a
+ * button that cancelled whichever run happened to be on the strip would be
+ * a button that means two things. A SUB-GRAPH step's child is offered by the
+ * inspector as a link to the child graph's screen, where that run is listed
+ * under its own number.
  *
  * ## A run waiting on a person
  *
@@ -274,12 +286,14 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           </Button>
         </Group>
       </Group>
-      {state.run === null ? null : (
+      {state.shownRun === null ? null : (
         <RunStrip
-          run={state.run}
+          run={state.shownRun}
           scheme={scheme}
           cancelling={state.cancelling}
-          stale={state.runStale}
+          // Stale is a fact about the newest run's read; a picked run that has
+          // ended is history and cannot go stale.
+          stale={state.shownRun === state.run && state.runStale}
           onCancel={() => graph.cancelRun()}
         />
       )}
@@ -347,10 +361,25 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
               machines={fleet.machines}
               stores={fleet.stores}
               scheme={scheme}
-              lastOutput={selected === null ? null : lastOutputFor(state.run, selected.id)}
+              lastOutput={selected === null ? null : lastOutputFor(state.shownRun, selected.id)}
               onEdit={(edit) => graph.edit(edit)}
             />
           )}
+          <Box
+            style={{
+              borderTop: border,
+              maxHeight: 200,
+              overflowY: 'auto',
+              flexShrink: 0,
+            }}
+          >
+            <RunHistory
+              runs={state.history}
+              selected={state.selectedRun}
+              scheme={scheme}
+              onSelect={(runId) => graph.selectRun(runId)}
+            />
+          </Box>
         </Box>
       </Box>
     </Stack>

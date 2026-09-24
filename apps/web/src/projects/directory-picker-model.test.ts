@@ -60,6 +60,7 @@ function snapshot(over: Partial<HubSnapshot> = {}): HubSnapshot {
     lastRunCancelled: null,
     lastRunLatest: null,
     runs: new Map(),
+    runHistories: new Map(),
     lastPush: null,
     pushPublicKey: null,
     transcripts: new Map(),

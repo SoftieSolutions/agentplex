@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   graphNodeIdSchema,
+  graphRunIdSchema,
   nodeIdSchema,
   parseHubFrame,
   parseTextFrame,
@@ -270,6 +271,7 @@ describe('NodeInspector', () => {
         attempt: 0,
         outcome: 'succeeded',
         output: { kind: 'route', route: 0, to: graphNodeIdSchema.parse('review') },
+        child: null,
       },
     });
 
@@ -285,6 +287,7 @@ describe('NodeInspector', () => {
         attempt: 1,
         outcome: 'failed',
         output: null,
+        child: null,
       },
     });
 
@@ -408,6 +411,38 @@ describe('NodeInspector', () => {
       expect(edits).toHaveLength(before);
     },
   );
+
+  it('offers a SUB-GRAPH step’s child as a link to the child graph, where its number is', async () => {
+    const { document, a } = twoOfAKind('subgraph', 'graph', 'hub-14', 'hub-12');
+    await mount(a, document, {
+      number: 1,
+      step: {
+        nodeId: a.id,
+        attempt: 0,
+        outcome: 'succeeded',
+        output: null,
+        child: { runId: graphRunIdSchema.parse('hub-21'), number: 2 },
+      },
+    });
+
+    expect(container.querySelector('[data-last-output]')?.textContent).toBe(
+      'child run #2 · succeeded',
+    );
+    const link = container.querySelector<HTMLAnchorElement>('a[data-child-run]');
+    expect(link?.getAttribute('href')).toBe('#/graph/hub-14');
+    expect(link?.dataset['childRun']).toBe('hub-21');
+    expect(link?.textContent).toBe('open run #2 in its graph');
+  });
+
+  it('offers no child link on a step that started none', async () => {
+    const { document, a } = twoOfAKind('subgraph', 'graph', 'hub-14', 'hub-12');
+    await mount(a, document, {
+      number: 1,
+      step: { nodeId: a.id, attempt: 0, outcome: 'failed', output: null, child: null },
+    });
+
+    expect(container.querySelector('a[data-child-run]')).toBeNull();
+  });
 
   it('reorders a route with its up and down controls', async () => {
     const withTwo = (() => {
