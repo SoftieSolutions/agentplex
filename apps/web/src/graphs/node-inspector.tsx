@@ -243,6 +243,7 @@ function KindFields({ node, document, stores, scheme, set, onEdit }: KindFieldsP
         <>
           <Field label="Graph">
             <CommittedTextInput
+              key={`${node.id}:graph`}
               label="Graph"
               value={node.graph}
               onCommit={(graph) => set('graph', graph)}
@@ -265,6 +266,7 @@ function KindFields({ node, document, stores, scheme, set, onEdit }: KindFieldsP
         <>
           <Field label="Approvers">
             <CommittedTextInput
+              key={`${node.id}:approvers`}
               label="Approvers"
               placeholder="names, comma separated"
               value={node.approvers.join(', ')}
@@ -286,6 +288,7 @@ function KindFields({ node, document, stores, scheme, set, onEdit }: KindFieldsP
       return (
         <Field label="Action">
           <CommittedTextInput
+            key={`${node.id}:name`}
             label="Action"
             value={node.name}
             onCommit={(name) => set('name', name)}
@@ -320,8 +323,12 @@ interface CommittedTextInputProps {
  * on every keystroke, for the fields the schema refuses half-typed: a route
  * condition is not a condition until its last character, a node id is not an
  * id while it is being typed, and a controlled input the model refused would
- * be one nobody could type into. The draft is this control's own; the key the
- * parent gives it is what resets it when the document changes underneath.
+ * be one nobody could type into. The draft is this control's own, and two
+ * things reset it: the key the parent gives it, on the node and the field,
+ * so selecting another node never shows the last one's typing or writes it
+ * into the new one on blur; and the value moving underneath -- a save that
+ * landed, a re-asked document -- which is caught during render by React's own
+ * rule for state that follows a prop, never in an effect.
  */
 function CommittedTextInput({
   label,
@@ -329,7 +336,15 @@ function CommittedTextInput({
   placeholder,
   onCommit,
 }: CommittedTextInputProps): JSX.Element {
-  const [draft, setDraft] = useState(value);
+  const [held, setHeld] = useState({ value, draft: value });
+  let draft = held.draft;
+  if (held.value !== value) {
+    draft = value;
+    setHeld({ value, draft });
+  }
+  const setDraft = (text: string): void => {
+    setHeld({ value, draft: text });
+  };
   const commit = (): void => {
     if (draft !== value) onCommit(draft);
   };

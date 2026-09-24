@@ -136,7 +136,8 @@ export function createGraphCreation({ hub }: GraphCreationDependencies): GraphCr
       pending = null;
       moveTo({
         waiting: false,
-        refused: 'the connection dropped before the hub answered; check the tree before trying again',
+        refused:
+          'the connection dropped before the hub answered; check the tree before trying again',
       });
       return;
     }

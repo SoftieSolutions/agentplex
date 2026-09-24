@@ -4,17 +4,19 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   graphNodeIdSchema,
+  nodeIdSchema,
   parseHubFrame,
   parseTextFrame,
   serverRegistrationIdSchema,
   storeIdSchema,
   type GraphDocument,
   type GraphNode,
+  type GraphNodeKind,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import { MantineProvider } from '../ui/components.js';
 import { cssVariablesResolver, theme } from '../ui/theme.js';
-import type { GraphEdit } from './graph-model.js';
+import { addNode, setNodeField, type GraphEdit } from './graph-model.js';
 import { NodeInspector, type InspectorMachine } from './node-inspector.js';
 
 /**
@@ -120,9 +122,14 @@ describe('NodeInspector', () => {
   }
 
   async function mount(node: GraphNode | null, document = fixtureDocument()): Promise<void> {
+    root = createRoot(container);
+    await show(node, document);
+  }
+
+  /** Renders into the root that is already there: the same inspector, another node. */
+  async function show(node: GraphNode | null, document = fixtureDocument()): Promise<void> {
     await act(async () => {
-      root = createRoot(container);
-      root.render(
+      root?.render(
         withProvider(
           <NodeInspector
             node={node}
@@ -281,6 +288,64 @@ describe('NodeInspector', () => {
 
     expect(applied().nodes.map((node) => node.id)).toEqual(['start', 'classify']);
   });
+
+  /** Two nodes of one kind, differing in the field under test, in one document. */
+  function twoOfAKind(
+    kind: GraphNodeKind,
+    field: string,
+    first: unknown,
+    second: unknown,
+  ): { document: GraphDocument; a: GraphNode; b: GraphNode } {
+    const seed = { storeId: STORES[0] ?? null, graph: nodeIdSchema.parse('hub-11') };
+    let document = fixtureDocument();
+    const ids: string[] = [];
+    for (const value of [first, second]) {
+      const added = addNode(document, kind, { x: 0, y: 0 }, seed);
+      if (!added.ok) throw new Error(added.problem);
+      const id = added.document.nodes.at(-1)?.id;
+      if (id === undefined) throw new Error('nothing was added');
+      const set = setNodeField(added.document, id, field, value);
+      if (!set.ok) throw new Error(set.problem);
+      document = set.document;
+      ids.push(id);
+    }
+    const [a, b] = ids.map((id) => nodeNamed(document, id));
+    if (a === undefined || b === undefined) throw new Error('two nodes were not made');
+    return { document, a, b };
+  }
+
+  function type(control: HTMLInputElement | HTMLTextAreaElement, text: string): void {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(control, text);
+    control.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  it.each([
+    ['action', 'Action', 'name', 'lint', 'deploy', 'deploy'],
+    ['human', 'Approvers', 'approvers', ['ana'], ['ben', 'cy'], 'ben, cy'],
+    ['subgraph', 'Graph', 'graph', 'hub-11', 'hub-12', 'hub-12'],
+  ] as const)(
+    'shows the newly selected %s node’s %s, not the half-typed text of the one before',
+    async (kind, label, field, first, second, shown) => {
+      const { document, a, b } = twoOfAKind(kind, field, first, second);
+      await mount(a, document);
+      await act(() => {
+        type(input(label), 'half-typed');
+      });
+      expect(input(label).value).toBe('half-typed');
+      const before = edits.length;
+
+      await show(b, document);
+
+      expect(input(label).value).toBe(shown);
+      // Leaving the field commits nothing: the text that was typed belonged to
+      // the other node, and B's value is what the field holds.
+      await act(() => {
+        input(label).dispatchEvent(new FocusEvent('blur'));
+      });
+      expect(edits).toHaveLength(before);
+    },
+  );
 
   it('reorders a route with its up and down controls', async () => {
     const withTwo = (() => {
