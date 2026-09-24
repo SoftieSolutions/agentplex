@@ -915,9 +915,89 @@ describe('createGraphStore', () => {
       expect(asked).toMatchObject({ nodeId: 'hub-10', runId: 'hub-31' });
       expect(store.getSnapshot().shownRun).toBeNull();
 
-      socket.deliver(stateHere(hubFrames.graphRunStateSubgraph, 'hub-31', 7));
+      socket.deliver(latestFor(asked.id, stateHere(hubFrames.graphRunStateSubgraph, 'hub-31', 7)));
 
       expect(store.getSnapshot().shownRun).toMatchObject({ runId: 'hub-31', number: 7 });
+      expect(store.getSnapshot().shownRunStale).toBe(false);
+    });
+
+    /**
+     * A picked run is held across a drop the way the newest is, and for the
+     * same reason it cannot be believed: it may have ended while the socket
+     * was down. So it is opened again on the way back, drawn stale until the
+     * answer lands, and never offers a Cancel meanwhile.
+     */
+    it('opens a held pick again after a drop, and holds it stale with no Cancel until the hub answers', async () => {
+      const { socket } = await opened();
+      socket.deliver(hubFrames.graphRunStateRunning);
+      store.selectRun(graphRunIdSchema.parse('hub-11'));
+      expect(store.getSnapshot().shownRunStale).toBe(false);
+
+      const second = await dropped(socket);
+
+      expect(store.getSnapshot().selectedRun).toBe('hub-11');
+      expect(store.getSnapshot().shownRun).toMatchObject({ runId: 'hub-11', status: 'running' });
+      expect(store.getSnapshot().shownRunStale).toBe(true);
+
+      second.open();
+      second.deliver(hubFrames.welcome);
+      const reopened = frameOf(second, 'graph-run-open');
+      expect(reopened).toMatchObject({ nodeId: 'hub-10', runId: 'hub-11' });
+      // The read of the newest is answered first, and says nothing about the
+      // pick: it is still stale, and Cancel still sends nothing.
+      second.deliver(noneFor(frameOf(second, 'graph-run-read').id));
+      store.cancelRun();
+      expect(sent(second).filter((frame) => frame.type === 'graph-run-cancel')).toEqual([]);
+      expect(store.getSnapshot().shownRunStale).toBe(true);
+
+      // It ended while the socket was down.
+      second.deliver(latestFor(reopened.id, hubFrames.graphRunStateCancelled));
+
+      expect(store.getSnapshot().shownRun).toMatchObject({ runId: 'hub-11', status: 'cancelled' });
+      expect(store.getSnapshot().shownRunStale).toBe(false);
+    });
+
+    it('drops the pick after a drop when the hub no longer has the run', async () => {
+      const { socket } = await opened();
+      socket.deliver(hubFrames.graphRunStateRunning);
+      store.selectRun(graphRunIdSchema.parse('hub-11'));
+      const second = await dropped(socket);
+      second.open();
+      second.deliver(hubFrames.welcome);
+
+      second.deliver(
+        refusalTo(frameOf(second, 'graph-run-open').id, 'that graph has no run by that id'),
+      );
+
+      // The strip follows the newest again, stale or not as that run is.
+      expect(store.getSnapshot().selectedRun).toBeNull();
+      expect(store.getSnapshot().shownRun).toBe(store.getSnapshot().run);
+      expect(store.getSnapshot().shownRunStale).toBe(store.getSnapshot().runStale);
+    });
+
+    it('cancels the run the strip shows: a picked open run, never the newest behind it', async () => {
+      const { socket } = await opened();
+      // The newest is another run of this graph; the pick is the one the
+      // strip names, and Cancel is about what the strip names.
+      socket.deliver(hubFrames.graphRunStateRunning);
+      socket.deliver(stateHere(hubFrames.graphRunStateRunning, 'hub-31', 5));
+      expect(store.getSnapshot().run).toMatchObject({ runId: 'hub-31' });
+      store.selectRun(graphRunIdSchema.parse('hub-11'));
+
+      store.cancelRun();
+
+      expect(frameOf(socket, 'graph-run-cancel')).toMatchObject({ runId: 'hub-11' });
+    });
+
+    it('cancels nothing while the strip shows a picked run that has ended, whatever the newest is doing', async () => {
+      const { socket } = await opened();
+      socket.deliver(hubFrames.graphRunStateCancelled);
+      socket.deliver(stateHere(hubFrames.graphRunStateRunning, 'hub-31', 5));
+      store.selectRun(graphRunIdSchema.parse('hub-11'));
+
+      store.cancelRun();
+
+      expect(sent(socket).filter((frame) => frame.type === 'graph-run-cancel')).toEqual([]);
     });
 
     it('drops the pick and says why when the hub refuses to open it', async () => {

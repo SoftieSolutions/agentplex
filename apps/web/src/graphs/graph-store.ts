@@ -105,11 +105,19 @@ import { isRunOpen } from './run-model.js';
  * every watching screen as a state already; the list catches up off that.
  *
  * Picking a row makes that run the one the strip and LAST OUTPUT read
- * (`shownRun`), while `run` stays the newest -- Run and Cancel are about the
- * run in flight, never about a row somebody is reading. A picked run the hub
- * store already holds is shown at once; one it does not is opened from the
- * hub, and shown when its state lands. Pressing Run lets go of the pick, so
- * the strip follows the run it started.
+ * (`shownRun`), while `run` stays the newest -- Run is about the graph's run
+ * in flight, never about a row somebody is reading. Cancel is about the run
+ * the strip names, because that is the run the button sits beside: a picked
+ * run that has ended offers none, and one still going is the one it stops.
+ * A picked run the hub store already holds is shown at once; one it does not
+ * is opened from the hub, and shown when the answer lands. Pressing Run lets
+ * go of the pick, so the strip follows the run it started.
+ *
+ * A held pick outlives a drop the way the newest run does, and can no more
+ * be believed: it may have ended while the socket was down. So it is opened
+ * again on the drop -- queued until the next welcome -- and drawn stale,
+ * with no Cancel, until the answer lands. A pick whose first open was still
+ * out is let go of instead: there is nothing on the strip to keep.
  */
 
 export interface GraphStoreHub {
@@ -174,6 +182,13 @@ export interface GraphState {
    * picked.
    */
   readonly shownRun: GraphRunState | null;
+  /**
+   * `shownRun` is from a connection that is gone and the hub has not yet
+   * said where it stands: `runStale` when the strip follows the newest, and
+   * a held pick whose re-open is out otherwise. Drawn at rest; Cancel is
+   * refused.
+   */
+  readonly shownRunStale: boolean;
   /** The last thing the hub or the model said no to, in its words, or `null`. */
   readonly problem: string | null;
 }
@@ -190,7 +205,7 @@ export interface GraphStore {
   publish(): void;
   /** Runs the newest published version with this input. Does nothing while a run is in flight or being asked about. */
   run(input: RouteInput): void;
-  /** Asks the hub to stop the graph's run before its next step. Does nothing for a stale run. */
+  /** Asks the hub to stop the run the strip shows before its next step. Does nothing for an ended or stale run. */
   cancelRun(): void;
   /** Shows this run on the strip and in LAST OUTPUT, opening it from the hub if need be; `null` follows the newest again. */
   selectRun(runId: GraphRunId | null): void;
@@ -220,6 +235,7 @@ const EMPTY: GraphState = {
   history: null,
   selectedRun: null,
   shownRun: null,
+  shownRunStale: false,
   problem: null,
 };
 
@@ -267,12 +283,16 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
 
   function moveTo(patch: Partial<GraphState>): void {
     const merged = { ...state, ...patch };
+    // Stale is a held run with its read out: the two facts, not a third.
+    const runStale = merged.run !== null && merged.readingRun;
     const next: GraphState = {
       ...merged,
       dirty: merged.document !== null && merged.document !== confirmed,
-      // Stale is a held run with its read out: the two facts, not a third.
-      runStale: merged.run !== null && merged.readingRun,
+      runStale,
       shownRun: merged.selectedRun === null ? merged.run : pickedState,
+      // The same two facts for a pick: held, and its open out.
+      shownRunStale:
+        merged.selectedRun === null ? runStale : pickedState !== null && openRunFrame !== null,
     };
     if (sameState(next, state)) return;
     state = next;
@@ -372,12 +392,13 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     cancelFrame = null;
     readFrame = null;
     historyFrame = null;
-    // A picked run being opened: the pick goes with the frame nobody will
-    // answer, and the strip follows the newest again.
-    const opening = openRunFrame !== null;
+    // A picked run whose first open was out: the pick goes with the frame
+    // nobody will answer, and the strip follows the newest again. A pick
+    // already held is opened again below instead.
     openRunFrame = null;
+    const reopen = state.selectedRun !== null && pickedState !== null ? state.selectedRun : null;
     moveTo({
-      ...(opening ? { selectedRun: null } : {}),
+      ...(state.selectedRun !== null && reopen === null ? { selectedRun: null } : {}),
       saving: false,
       publishing: false,
       starting: false,
@@ -391,6 +412,24 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     // out unanswered may well have started one. The list goes with it.
     askForRun();
     askForHistory();
+    if (reopen !== null) openPick(reopen);
+  }
+
+  /**
+   * Opens a picked run from the hub. Queued by the hub store while the
+   * connection is down; a pick that cannot be asked about is let go of.
+   */
+  function openPick(runId: GraphRunId): void {
+    const outcome = hub.sendCommand({ type: 'graph-run-open', nodeId, runId });
+    if (!outcome.accepted) {
+      openRunFrame = null;
+      pickedState = null;
+      moveTo({ selectedRun: null, problem: outcome.reason });
+      return;
+    }
+    openRunFrame = outcome.id;
+    // Recomputed so a held pick reads stale from here until the answer.
+    moveTo({});
   }
 
   /**
@@ -493,6 +532,14 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     }
 
     const latest = snapshot.lastRunLatest;
+    // The answer to an open, when the run it carried was not already taken
+    // above as the pick: a run that is not the one picked is not drawn.
+    if (latest !== null && openRunFrame !== null && latest.replyTo === openRunFrame) {
+      openRunFrame = null;
+      const picked = latest.run !== null && latest.run.runId === state.selectedRun;
+      pickedState = picked ? (latest.run ?? null) : null;
+      moveTo(picked ? {} : { selectedRun: null });
+    }
     if (latest !== null && readFrame !== null && latest.replyTo === readFrame) {
       readFrame = null;
       // A run in the answer was filed in `runs` as well, so the newest there
@@ -637,8 +684,10 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     },
 
     cancelRun(): void {
-      const run = state.run;
-      if (run === null || !isRunOpen(run.status) || state.runStale || state.cancelling) return;
+      // The run the strip names, and only while it is known to be where the
+      // strip says: the button sits beside it, so it is the one to stop.
+      const run = state.shownRun;
+      if (run === null || !isRunOpen(run.status) || state.shownRunStale || state.cancelling) return;
       const outcome = hub.sendCommand({ type: 'graph-run-cancel', runId: run.runId });
       if (!outcome.accepted) {
         moveTo({ problem: outcome.reason });
@@ -694,6 +743,7 @@ function sameState(a: GraphState, b: GraphState): boolean {
     a.history === b.history &&
     a.selectedRun === b.selectedRun &&
     a.shownRun === b.shownRun &&
+    a.shownRunStale === b.shownRunStale &&
     a.problem === b.problem
   );
 }

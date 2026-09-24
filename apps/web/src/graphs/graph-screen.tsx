@@ -291,9 +291,9 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           run={state.shownRun}
           scheme={scheme}
           cancelling={state.cancelling}
-          // Stale is a fact about the newest run's read; a picked run that has
-          // ended is history and cannot go stale.
-          stale={state.shownRun === state.run && state.runStale}
+          // Stale is about the run the strip names: the newest's read, or a
+          // held pick's re-open, out after a drop.
+          stale={state.shownRunStale}
           onCancel={() => graph.cancelRun()}
         />
       )}

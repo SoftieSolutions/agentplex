@@ -406,6 +406,64 @@ describe('GraphScreen', () => {
     expect(button('Run').disabled).toBe(false);
   });
 
+  it('cancels the picked run the strip names, and offers no Cancel for it once the connection goes', async () => {
+    const socket = await opened();
+    const asked = sent(socket).find((each) => each.type === 'graph-run-history-request');
+    if (asked === undefined || asked.type !== 'graph-run-history-request') {
+      throw new Error('no history was asked for');
+    }
+    const captured = JSON.parse(hubFrames.graphRunHistory) as object;
+    const running = JSON.parse(hubFrames.graphRunStateRunning) as object;
+    const summary = (runId: string, number: number): object => ({
+      runId,
+      number,
+      status: 'running',
+      startedAt: 1756000000000,
+      endedAt: null,
+      reason: null,
+    });
+    await act(() => {
+      socket.deliver(hubFrames.graphRunStateRunning);
+      // A newer run of this graph, so the pick is not the newest.
+      socket.deliver(JSON.stringify({ ...running, runId: 'hub-31', number: 5 }));
+      socket.deliver(
+        JSON.stringify({
+          ...captured,
+          replyTo: asked.id,
+          nodeId: 'hub-10',
+          runs: [summary('hub-31', 5), summary('hub-11', 1)],
+        }),
+      );
+    });
+    await act(settle);
+    const rows = [...container.querySelectorAll<HTMLElement>('[data-history-run]')];
+    await act(() => {
+      rows[1]?.click();
+    });
+    await act(settle);
+    expect(container.querySelector('[data-run-strip]')?.textContent).toContain('run #1');
+
+    await act(() => {
+      button('Cancel').click();
+    });
+    const cancels = sent(socket).filter((each) => each.type === 'graph-run-cancel');
+    expect(cancels).toEqual([
+      { type: 'graph-run-cancel', id: expect.any(Number), runId: 'hub-11' },
+    ]);
+
+    await act(() => {
+      socket.close();
+    });
+    await act(settle);
+
+    const strip = container.querySelector<HTMLElement>('[data-run-strip]');
+    expect(strip?.textContent).toContain('run #1 · reconnecting');
+    expect(strip?.dataset['runStale']).toBe('true');
+    expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Cancel')).toBe(
+      false,
+    );
+  });
+
   it('takes Allow and Deny away while a waiting run is stale: the person may have answered meanwhile', async () => {
     const socket = await opened();
     const waiting = JSON.parse(hubFrames.graphRunStateWaiting) as { nodeId: string };
