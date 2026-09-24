@@ -64,6 +64,7 @@ import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directo
 import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake-projects.js';
 import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
+import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
 
 /**
  * `read_terminal`, from a pty on one machine to an agent reading it as text.
@@ -263,6 +264,7 @@ async function start(): Promise<Harness> {
     projects: createFakeProjects(),
     catalogue: createFakeCatalogue(),
     docs: createFakeDocs(),
+    graphs: createFakeGraphs(),
     terminal,
     // No push: none of these suites is about it, and a broadcast whose push
     // seam is absent is not the broadcast the hub builds.

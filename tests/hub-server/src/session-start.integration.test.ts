@@ -83,6 +83,7 @@ import {
   type Catalogue,
 } from '../../../apps/hub/src/features/catalogue/catalogue.js';
 import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
+import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
 import { createProjects, type Projects } from '../../../apps/hub/src/features/projects/projects.js';
 import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
 import { createTasks } from '../../../apps/hub/src/features/tasks/tasks.js';
@@ -531,6 +532,7 @@ async function start(
     // Not the subject: a start is what this file is about, and the fake is what
     // a suite stands on when a seam is not its subject.
     docs: createFakeDocs(),
+    graphs: createFakeGraphs(),
     terminal,
     // No push: none of these suites is about it, and a broadcast whose push
     // seam is absent is not the broadcast the hub builds.

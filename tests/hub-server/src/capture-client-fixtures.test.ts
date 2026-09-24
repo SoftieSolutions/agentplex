@@ -290,6 +290,10 @@ function labelFor(text: string): string {
     ['doc-created', 'docCreated'],
     ['doc-saved', 'docSaved'],
     ['doc-content', 'docContent'],
+    ['graph-created', 'graphCreated'],
+    ['graph-document', 'graphDocument'],
+    ['graph-saved', 'graphSaved'],
+    ['graph-published', 'graphPublished'],
     ['approval-decided', 'approvalDecided'],
     ['push-subscribed', 'pushSubscribed'],
     ['push-unsubscribed', 'pushUnsubscribed'],
@@ -1924,6 +1928,94 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
     if (catalogueTreePage === undefined) throw new Error('no final tree page was answered');
 
+    // A graph in that project: made, saved with a document of three kinds,
+    // published, and opened. The whole real path -- the hub's rows, the
+    // publish rules, the one parser each way -- and the four replies captured
+    // here are what the web store reads. After every catalogue page above, so
+    // that none of those fixtures gains a row this conversation did not have
+    // when they were captured; before the machine goes away, because a graph
+    // reaches no machine and the scenario's end is about one that does.
+    starter.send({
+      type: 'graph-create',
+      id: 20,
+      projectId: created.value.nodeId,
+      name: 'release-pipeline',
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphCreated'),
+      'the graph create to be answered',
+    );
+    const graphCreated = starter.received.find((text) => labelFor(text) === 'graphCreated');
+    if (graphCreated === undefined) throw new Error('the graph create was not answered');
+    const madeGraph = parseTextFrame(parseHubFrame, graphCreated);
+    if (!madeGraph.ok || madeGraph.value.type !== 'graph-created') {
+      throw new Error('the graph create was answered with something else');
+    }
+
+    const graphBase = {
+      position: { x: 0, y: 0 },
+      placement: { kind: 'cheapest' },
+      retry: { max: 0, backoff: 1 },
+    } as const;
+    starter.send({
+      type: 'graph-save',
+      id: 21,
+      nodeId: madeGraph.value.nodeId,
+      document: {
+        nodes: [
+          { ...graphBase, id: 'start', kind: 'trigger', label: 'PR opened', source: 'manual' },
+          {
+            ...graphBase,
+            id: 'classify',
+            kind: 'router',
+            label: 'Classify diff',
+            position: { x: 250, y: 84 },
+            model: 'haiku',
+            routes: [{ condition: 'language == rust', to: 'review' }],
+            otherwise: null,
+          },
+          {
+            ...graphBase,
+            id: 'review',
+            kind: 'agent',
+            label: 'Rust reviewer',
+            position: { x: 500, y: 62 },
+            placement: { kind: 'pin', server: 'registration-mbp-robert' },
+            retry: { max: 2, backoff: 30 },
+            prompt: 'Review the Rust in this change.',
+            provider: 'claude',
+            storeId: 'store-agentplex',
+          },
+        ],
+        edges: [
+          { from: 'start', to: 'classify' },
+          { from: 'classify', to: 'review' },
+        ],
+      },
+    });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphSaved'),
+      'the graph save to be answered',
+    );
+    const graphSaved = starter.received.find((text) => labelFor(text) === 'graphSaved');
+    if (graphSaved === undefined) throw new Error('the graph save was not answered');
+
+    starter.send({ type: 'graph-publish', id: 22, nodeId: madeGraph.value.nodeId });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphPublished'),
+      'the graph publish to be answered',
+    );
+    const graphPublished = starter.received.find((text) => labelFor(text) === 'graphPublished');
+    if (graphPublished === undefined) throw new Error('the graph publish was not answered');
+
+    starter.send({ type: 'graph-open', id: 23, nodeId: madeGraph.value.nodeId });
+    await until(
+      () => starter.received.some((text) => labelFor(text) === 'graphDocument'),
+      'the graph open to be answered',
+    );
+    const graphDocument = starter.received.find((text) => labelFor(text) === 'graphDocument');
+    if (graphDocument === undefined) throw new Error('the graph open was not answered');
+
     // The same save once the machine has gone away, which is the refusal the
     // editor is written around: the hub holds no copy of a document, so a
     // write it cannot deliver is a no with the machine named in it, and what
@@ -2883,6 +2975,10 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     captured.set('docSavedAfterOpen', docSavedAfterOpen);
     captured.set('refusalDocAway', refusalDocAway);
     captured.set('docContent', docContent);
+    captured.set('graphCreated', graphCreated);
+    captured.set('graphSaved', graphSaved);
+    captured.set('graphPublished', graphPublished);
+    captured.set('graphDocument', graphDocument);
     captured.set('layoutWithProject', layoutWithProject);
     captured.set('nodeCreated', nodeCreated);
     captured.set('nodeMoved', nodeMoved);

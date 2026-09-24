@@ -34,6 +34,7 @@ import { createPaneLayout } from './features/pane-layout/pane-layout.js';
 import { createPush, type PushSender, type VapidKeyGenerator } from './features/push/push.js';
 import { createAttentionEdge } from './features/push/attention-edge.js';
 import { createDocs } from './features/docs/docs.js';
+import { createGraphs } from './features/graphs/graphs.js';
 import { createProjects } from './features/projects/projects.js';
 import { createServers, type Servers } from './features/servers/servers.js';
 import { createSessions } from './features/sessions/sessions.js';
@@ -591,6 +592,19 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     onTreeChanged: () => catalogue.changed(),
   });
 
+  // Graphs: the one content the hub holds itself. No state, no projects and
+  // no connections among its dependencies, because a graph reaches no machine
+  // until it runs, and the runtime that runs one is a later feature's.
+  const graphs = createGraphs({
+    database,
+    ids,
+    clock,
+    logger,
+    // A graph is a node, so making one changes the tree, on the same wire a
+    // document create takes.
+    onTreeChanged: () => catalogue.changed(),
+  });
+
   // Read per request for the reason the tree above is, and durable for the
   // same one: an arrangement of panes outlives the process that was told it.
   const paneLayout = createPaneLayout({ database, clock });
@@ -624,6 +638,7 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     projects,
     catalogue,
     docs,
+    graphs,
     terminal,
     // The whole feature, narrowed by the seam a connection takes: a socket may
     // say whether it wants to be told, and may not tell anybody. `null` is a

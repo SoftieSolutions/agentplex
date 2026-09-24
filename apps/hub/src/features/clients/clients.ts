@@ -9,6 +9,7 @@ import {
 import type { Pairing } from '../pairing/pairing.js';
 import type { ClientCatalogue } from '../catalogue/catalogue.js';
 import type { Docs } from '../docs/docs.js';
+import type { Graphs } from '../graphs/graphs.js';
 import type { Projects } from '../projects/projects.js';
 import type { Approvals } from '../approvals/approvals.js';
 import type { ApprovalPolicy } from '../approval-policy/approval-policy.js';
@@ -143,6 +144,8 @@ export interface ClientsDependencies {
    * answer waiting to differ.
    */
   readonly docs: Docs;
+  /** Graphs, handed to every client this serves. One instance, for the reason `docs` is. */
+  readonly graphs: Graphs;
   /**
    * The terminal relay every client this serves is one end of.
    *
@@ -225,6 +228,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
     projects,
     catalogue,
     docs,
+    graphs,
     terminal,
     push,
   } = dependencies;
@@ -326,6 +330,7 @@ export function createClients(dependencies: ClientsDependencies): Clients {
         projects,
         catalogue,
         docs,
+        graphs,
         terminal,
         push,
         onClosed: () => {

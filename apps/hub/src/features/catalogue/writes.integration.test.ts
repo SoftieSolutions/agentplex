@@ -69,12 +69,13 @@ describe('the node tree', () => {
   it('reads the kinds the migration seeded, as data rather than as an enum', async () => {
     const kinds = await listNodeKinds(db());
 
-    // Four now, and the two that were added cost an INSERT apiece: migration
-    // 0006 seeded `project` and `doc` without touching a table, which is the
-    // property `node_kinds` exists for.
+    // Five now, and the three that were added cost an INSERT apiece: migration
+    // 0006 seeded `project` and `doc` and 0017 seeded `graph` without touching
+    // a table, which is the property `node_kinds` exists for.
     expect(kinds).toEqual([
       { kind: 'doc', container: false, anchorsSession: false },
       { kind: 'folder', container: true, anchorsSession: false },
+      { kind: 'graph', container: false, anchorsSession: false },
       { kind: 'project', container: true, anchorsSession: false },
       { kind: 'session', container: false, anchorsSession: true },
     ]);
