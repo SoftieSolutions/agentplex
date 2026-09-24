@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore, type JSX } from 'react';
+import { useMemo, useState, useSyncExternalStore, type JSX } from 'react';
 import type {
   GraphNodeKind,
   Layout,
@@ -14,7 +14,7 @@ import { GRAPH_KIND, PROJECT_KIND } from '../tree/node-kinds.js';
 import { Box, Button, Group, Menu, Stack, Text, useComputedColorScheme } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import { GraphCanvas } from './flow-adapter.js';
-import { addNode, connect, KIND_WORDS, KINDS, moveNode, type NodeSeed } from './graph-model.js';
+import { addNode, connect, KIND_WORDS, KINDS, type NodeSeed } from './graph-model.js';
 import { createGraphStore } from './graph-store.js';
 import { NodeInspector, type InspectorMachine } from './node-inspector.js';
 
@@ -40,11 +40,23 @@ import { NodeInspector, type InspectorMachine } from './node-inspector.js';
  * project guessed at.
  *
  * Simulate and Run are drawn because the mock draws them and disabled
- * because nothing is behind them yet: AGX-147 builds the one and AGX-146 the
- * other, and each says so in its title. This is the opposite choice from the
- * New menu, which leaves an unbuilt kind out, and it is made for a different
+ * because nothing is behind them yet: the simulation and the runtime are
+ * later tickets, and each button's title says only that it is not available
+ * yet, because a ticket key is a fact about this repository and not one the
+ * person at the screen can act on. This is the opposite choice from the New
+ * menu, which leaves an unbuilt kind out, and it is made for a different
  * control: a menu row is a promise to make something, while these two are
  * the shape of a header the next two tickets fill in place.
+ *
+ * ## What is derived once per source, not once per frame
+ *
+ * The hub snapshot moves on every frame the hub sends, and the screen reads
+ * it, so the screen renders on every frame. The fleet facts the canvas and
+ * the inspector take are derived from one field of it, `machineState`, and
+ * are memoised on that field: derived per render, the labels map would be a
+ * new object each frame, the canvas would take that as a change of its
+ * inputs and derive its nodes again, and a frame arriving mid-drag would put
+ * the dragged card back where the document has it.
  */
 
 export interface GraphHeading {
@@ -120,7 +132,8 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
   const snapshot = useHubSnapshot(hub);
   const layout = useHubLayout(hub);
 
-  const fleet = fleetFacts(snapshot.machineState);
+  const machineState = snapshot.machineState;
+  const fleet = useMemo(() => fleetFacts(machineState), [machineState]);
   const heading = graphHeading(layout, nodeId, state.name);
   const seed: NodeSeed = { storeId: fleet.stores[0] ?? null, graph: otherGraph(layout, nodeId) };
   const border = `1px solid ${colorForRole('border', scheme)}`;
@@ -194,15 +207,10 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
           >
             {state.draftVersion === null ? 'Publish' : `Publish v${String(state.draftVersion)}`}
           </Button>
-          <Button
-            variant="default"
-            size="xs"
-            disabled
-            title="Simulate is not built yet: AGX-147 adds it"
-          >
+          <Button variant="default" size="xs" disabled title="Simulate is not available yet">
             Simulate
           </Button>
-          <Button size="xs" disabled title="Run is not built yet: AGX-146 adds it">
+          <Button size="xs" disabled title="Run is not available yet">
             Run
           </Button>
         </Group>
@@ -222,7 +230,7 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
               labels={fleet.labels}
               scheme={scheme}
               onSelect={(id) => graph.select(id)}
-              onMove={(id, position) => graph.edit((current) => moveNode(current, id, position))}
+              onEdit={(edit) => graph.edit(edit)}
               onConnect={(from, to) => graph.edit((current) => connect(current, from, to))}
             />
           )}
@@ -244,6 +252,9 @@ export function GraphScreen({ nodeId, store: hub }: GraphScreenProps): JSX.Eleme
         >
           {document === null ? null : (
             <NodeInspector
+              // Keyed on the node so the inspector's own drafts are the node's
+              // and never carry from one selection to the next.
+              key={selected?.id ?? 'none'}
               node={selected}
               document={document}
               machines={fleet.machines}

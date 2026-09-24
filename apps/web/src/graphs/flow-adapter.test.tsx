@@ -10,8 +10,15 @@ import {
   type GraphDocument,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { colorForRole } from '../ui/tokens.js';
 import { setNodeField } from './graph-model.js';
-import { fromFlowChange, GraphCanvas, toFlow, type FlowNodeChange } from './flow-adapter.js';
+import {
+  deriveNodes,
+  fromFlowChange,
+  GraphCanvas,
+  toFlow,
+  type FlowNodeChange,
+} from './flow-adapter.js';
 import { installFlowMocks } from './flow-test-setup.js';
 
 /**
@@ -81,6 +88,13 @@ describe('toFlow', () => {
     expect(new Set(edges.map((edge) => edge.id)).size).toBe(3);
   });
 
+  it('colours every arrowhead from the tokens, so no library grey escapes', () => {
+    const { edges } = toFlow(fixtureDocument(), null, LABELS, 'light');
+    expect(edges.map((edge) => edge.markerEnd)).toEqual(
+      edges.map(() => expect.objectContaining({ color: colorForRole('textFaint', 'light') })),
+    );
+  });
+
   it('draws a router’s otherwise as an edge that says so', () => {
     const edit = setNodeField(fixtureDocument(), id('classify'), 'otherwise', 'start');
     if (!edit.ok) throw new Error(edit.problem);
@@ -138,6 +152,36 @@ describe('fromFlowChange', () => {
   });
 });
 
+describe('deriveNodes', () => {
+  it('keeps what the library measured of a node it already had', () => {
+    const document = fixtureDocument();
+    const previous = toFlow(document, null, LABELS).nodes.map((node) =>
+      node.id === 'start' ? { ...node, measured: { width: 170, height: 64 } } : node,
+    );
+
+    const nodes = deriveNodes(document, id('start'), LABELS, 'dark', previous);
+
+    expect(nodes[0]?.measured).toEqual({ width: 170, height: 64 });
+    expect(nodes[0]?.selected).toBe(true);
+    expect(nodes[1]?.measured).toBeUndefined();
+  });
+
+  it('leaves a node mid-drag where the pointer has it rather than where the document does', () => {
+    const document = fixtureDocument();
+    const previous = toFlow(document, null, LABELS).nodes.map((node) =>
+      node.id === 'classify' ? { ...node, dragging: true, position: { x: 999, y: 333 } } : node,
+    );
+
+    const nodes = deriveNodes(document, null, LABELS, 'dark', previous);
+
+    // The document says 250, 84; the drop is what will tell it otherwise, and
+    // until then a frame from the hub must not snap the card back.
+    expect(nodes[1]?.position).toEqual({ x: 999, y: 333 });
+    expect(nodes[1]?.dragging).toBe(true);
+    expect(nodes[0]?.position).toEqual({ x: 0, y: 0 });
+  });
+});
+
 describe('GraphCanvas', () => {
   let container: HTMLElement;
   let root: Root | null = null;
@@ -163,21 +207,22 @@ describe('GraphCanvas', () => {
   async function mount(
     handlers: Partial<{
       onSelect: (id: unknown) => void;
-      onMove: (id: unknown, position: unknown) => void;
+      onEdit: (edit: unknown) => void;
       onConnect: (from: unknown, to: unknown) => void;
     }> = {},
+    selection: ReturnType<typeof id> | null = null,
   ): Promise<void> {
     await act(async () => {
       root = createRoot(container);
       root.render(
         <GraphCanvas
           document={fixtureDocument()}
-          selection={null}
+          selection={selection}
           labels={LABELS}
           scheme="dark"
           interactive={false}
           onSelect={handlers.onSelect ?? (() => {})}
-          onMove={handlers.onMove ?? (() => {})}
+          onEdit={handlers.onEdit ?? (() => {})}
           onConnect={handlers.onConnect ?? (() => {})}
         />,
       );
@@ -185,6 +230,27 @@ describe('GraphCanvas', () => {
     await act(settle);
     await act(settle);
   }
+
+  it('sets the connection line and the default arrowhead from the tokens', async () => {
+    await mount();
+
+    const canvas = container.querySelector<HTMLElement>('[data-graph-canvas]');
+    expect(canvas?.style.getPropertyValue('--xy-connectionline-stroke')).toBe(
+      colorForRole('accent', 'dark'),
+    );
+  });
+
+  it('does not remove a selected card on Backspace: removal is the inspector’s, by name', async () => {
+    await mount({}, id('classify'));
+    expect(container.querySelectorAll('[data-node-card]')).toHaveLength(3);
+
+    await act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+    });
+    await act(settle);
+
+    expect(container.querySelectorAll('[data-node-card]')).toHaveLength(3);
+  });
 
   it('draws one card per node with its kind on it', async () => {
     await mount();

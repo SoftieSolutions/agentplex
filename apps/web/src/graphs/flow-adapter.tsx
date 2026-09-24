@@ -45,19 +45,29 @@ import { KIND_WORDS, moveNode, nodeSubtitle, zoomLabel, type GraphEdit } from '.
  * The library is given its nodes and told of every change (`onNodesChange`),
  * which is how the document stays the truth: a drag moves the flow node on
  * screen frame by frame, and only the drop (`onNodeDragStop`) reaches the
- * document, as one `moveNode`. The frames in between live in this file's own
- * state, derived from the document again whenever the document changes --
- * the derivation happens during render, by React's own rule for state that
- * follows a prop, and never in an effect. What the derivation keeps from the
- * old nodes is the library's measurements: the size a node was measured at
- * arrives as a change too, and an edge is drawn from that size, so dropping
- * it would draw edges to nothing.
+ * document, through `fromFlowChange` as one `moveNode`. The frames in between
+ * live in this file's own state, derived from the document again whenever
+ * the document changes -- the derivation happens during render, by React's
+ * own rule for state that follows a prop, and never in an effect. What the
+ * derivation keeps from the old nodes is two things of the library's: the
+ * measurements, because an edge is drawn from a node's measured size and
+ * dropping them would draw edges to nothing; and the position of a node
+ * mid-drag, because the document does not know about the drag until the
+ * drop, and a hub frame arriving between two pointer moves must not snap the
+ * card back to where the document last had it.
+ *
+ * Backspace removes nothing here. The library would take a selected card
+ * out of its own nodes on that key, which is a removal the document never
+ * saw and would come back on the next derivation; a node is removed by name
+ * from the inspector, through the model, or not at all.
  *
  * ## Hues
  *
  * The stylesheet is the library's, the colours are not: every `--xy-*`
- * variable the canvas reads is set here from `tokens.ts` roles, so the
- * canvas follows the scheme and no hue lives in this file.
+ * variable the canvas reads is set here from `tokens.ts` roles, the arrowheads
+ * are coloured on each edge and on the library's default, and the connection
+ * line is set too, so the canvas follows the scheme and no hue lives in this
+ * file.
  */
 
 /** What a card carries beyond its position: the words drawn on it. */
@@ -97,7 +107,12 @@ export function toFlow(
     },
   }));
 
-  const arrow = { type: MarkerType.ArrowClosed, width: 14, height: 14 } as const;
+  const arrow = {
+    type: MarkerType.ArrowClosed,
+    width: 14,
+    height: 14,
+    color: colorForRole('textFaint', scheme),
+  } as const;
   const edges: Edge[] = document.edges.map((edge) => ({
     id: `edge:${edge.from}>${edge.to}`,
     source: edge.from,
@@ -198,6 +213,7 @@ function flowVariables(scheme: Scheme): CSSProperties {
     '--xy-background-color': colorForRole('background', scheme),
     '--xy-edge-stroke': colorForRole('textFaint', scheme),
     '--xy-edge-stroke-selected': colorForRole('accent', scheme),
+    '--xy-connectionline-stroke': colorForRole('accent', scheme),
     '--xy-edge-label-background-color': colorForRole('surface', scheme),
     '--xy-edge-label-color': colorForRole('textMuted', scheme),
     '--xy-handle-background-color': colorForRole('textMuted', scheme),
@@ -307,7 +323,8 @@ export interface GraphCanvasProps {
    */
   readonly interactive?: boolean;
   readonly onSelect: (id: GraphNodeId | null) => void;
-  readonly onMove: (id: GraphNodeId, position: { x: number; y: number }) => void;
+  /** An edit the canvas asks of the document: a card dropped where it was dragged to. */
+  readonly onEdit: (edit: (document: GraphDocument) => GraphEdit) => void;
   readonly onConnect: (from: GraphNodeId, to: GraphNodeId) => void;
 }
 
@@ -320,25 +337,31 @@ interface Held {
 }
 
 /**
- * The nodes for a document, keeping what the library measured of the nodes
- * it already had. Position and selection come from the document and the
- * store: they are the truth this file follows, not the state it keeps.
+ * The nodes for a document, keeping what the library holds of the nodes it
+ * already had: their measurements, and the position of one still being
+ * dragged. Everything else -- position at rest, selection, the words on the
+ * card -- comes from the document and the store: they are the truth this
+ * file follows, not the state it keeps.
  */
-function derive(
+export function deriveNodes(
   document: GraphDocument,
   selection: GraphNodeId | null,
   labels: ReadonlyMap<ServerRegistrationId, string>,
   scheme: Scheme,
   previous: readonly CardNode[],
 ): CardNode[] {
-  const measured = new Map(previous.map((node) => [node.id, node]));
+  const held = new Map(previous.map((node) => [node.id, node]));
   return toFlow(document, selection, labels, scheme).nodes.map((node) => {
-    const before = measured.get(node.id);
+    const before = held.get(node.id);
     if (before === undefined) return node;
     const kept: CardNode = { ...node };
     if (before.measured !== undefined) kept.measured = before.measured;
     if (before.width !== undefined) kept.width = before.width;
     if (before.height !== undefined) kept.height = before.height;
+    if (before.dragging === true) {
+      kept.dragging = true;
+      kept.position = before.position;
+    }
     return kept;
   });
 }
@@ -365,7 +388,7 @@ function Canvas({
   scheme,
   interactive = true,
   onSelect,
-  onMove,
+  onEdit,
   onConnect,
 }: GraphCanvasProps): JSX.Element {
   const [held, setHeld] = useState<Held>(() => ({
@@ -386,7 +409,7 @@ function Canvas({
     held.labels !== labels ||
     held.scheme !== scheme
   ) {
-    nodes = derive(document, selection, labels, scheme, held.nodes);
+    nodes = deriveNodes(document, selection, labels, scheme, held.nodes);
     setHeld({ document, selection, labels, scheme, nodes });
   }
 
@@ -396,9 +419,18 @@ function Canvas({
     setHeld((current) => ({ ...current, nodes: applyNodeChanges(changes, current.nodes) }));
   }
 
+  // The drop, as the library would report it, through the one seam that turns
+  // a library change into an edit -- so the path the tests drive is the path
+  // the pointer takes. A change that is none of the document's business is an
+  // edit that changes nothing.
   function onNodeDragStop(_event: unknown, node: CardNode): void {
-    const parsed = graphNodeIdSchema.safeParse(node.id);
-    if (parsed.success) onMove(parsed.data, node.position);
+    const change: FlowNodeChange = {
+      type: 'position',
+      id: node.id,
+      position: node.position,
+      dragging: false,
+    };
+    onEdit((current) => fromFlowChange(change, current) ?? { ok: true, document: current });
   }
 
   function onConnection(connection: Connection): void {
@@ -420,6 +452,8 @@ function Canvas({
         onNodeDragStop={onNodeDragStop}
         onSelectionChange={(params) => onSelect(firstSelected(params))}
         onConnect={onConnection}
+        deleteKeyCode={null}
+        defaultMarkerColor={colorForRole('textFaint', scheme)}
         nodesDraggable={interactive}
         panOnDrag={interactive}
         nodesConnectable={interactive}

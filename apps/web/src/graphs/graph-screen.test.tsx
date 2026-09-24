@@ -228,10 +228,12 @@ describe('GraphScreen', () => {
 
     const simulate = button('Simulate');
     expect(simulate.disabled).toBe(true);
-    expect(simulate.title).toContain('AGX-147');
+    expect(simulate.title).toContain('not available yet');
+    expect(simulate.title).not.toMatch(/AGX-/);
     const run = button('Run');
     expect(run.disabled).toBe(true);
-    expect(run.title).toContain('AGX-146');
+    expect(run.title).toContain('not available yet');
+    expect(run.title).not.toMatch(/AGX-/);
   });
 
   it('draws the canvas with a card per node and the zoom controls', async () => {
