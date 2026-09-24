@@ -25,6 +25,20 @@ const forbidAppInternals = {
 
 const restrictedImports = (extra) => ['error', { patterns: [forbidAppInternals, ...extra] }];
 
+/** The design-system seam: see the apps/web block below. */
+const mantineBehindUi = {
+  group: ['@mantine/*'],
+  message:
+    'Mantine is behind the pass-through in apps/web/src/ui/. Import from there, adding a re-export if the component is new to the app.',
+};
+
+/** The canvas seam: see the apps/web block below. */
+const reactFlowBehindAdapter = {
+  group: ['@xyflow/*'],
+  message:
+    'React Flow is behind the adapter in apps/web/src/graphs/flow-adapter.tsx. Import from there, adding to the adapter if the canvas needs something new.',
+};
+
 /**
  * The narrowing that keeps the doctor unable to open what it inspects, named
  * here because two configurations below need exactly it: the program, and the
@@ -526,42 +540,35 @@ export default tseslint.config(
     // is an edit to one directory instead of a migration. The seam is worth
     // exactly as much as this rule: an unenforced boundary erodes one
     // convenient direct import at a time.
+    //
+    // The canvas seam (AGX-145) is the same argument for React Flow, with one
+    // file where Mantine has one directory: the library draws nodes and edges,
+    // the app decides what a node is, and a second file reaching for it is
+    // the first step towards a canvas nobody can swap. The two seams are one
+    // rule here because ESLint replaces a rule's options rather than merging
+    // them, so a file under both boundaries has to be told both in one place;
+    // the two files that sit inside one seam get the other seam alone below.
     files: ['apps/web/**/*.{ts,tsx}'],
-    ignores: ['apps/web/src/ui/**'],
+    ignores: ['apps/web/src/ui/**', 'apps/web/src/graphs/flow-adapter.tsx'],
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports([
-        {
-          group: ['@mantine/*'],
-          message:
-            'Mantine is behind the pass-through in apps/web/src/ui/. Import from there, adding a re-export if the component is new to the app.',
-        },
+        mantineBehindUi,
+        reactFlowBehindAdapter,
       ]),
     },
   },
   {
-    // The canvas seam (AGX-145). React Flow enters the app through one
-    // adapter file and nowhere else, for the reason Mantine has one
-    // directory: the library draws nodes and edges, the app decides what a
-    // node is, and a second file reaching for the library is the first step
-    // towards a canvas nobody can swap. The adapter is the one exception,
-    // and it is a file rather than a directory because one file is all the
-    // seam should ever need.
-    files: ['apps/web/src/**/*.{ts,tsx}'],
-    ignores: ['apps/web/src/graphs/flow-adapter.tsx'],
+    // Inside the design-system seam, the canvas seam still holds.
+    files: ['apps/web/src/ui/**/*.{ts,tsx}'],
     rules: {
-      '@typescript-eslint/no-restricted-imports': restrictedImports([
-        {
-          group: ['@mantine/*'],
-          message:
-            'Mantine is behind the pass-through in apps/web/src/ui/. Import from there, adding a re-export if the component is new to the app.',
-        },
-        {
-          group: ['@xyflow/*'],
-          message:
-            'React Flow is behind the adapter in apps/web/src/graphs/flow-adapter.tsx. Import from there, adding to the adapter if the canvas needs something new.',
-        },
-      ]),
+      '@typescript-eslint/no-restricted-imports': restrictedImports([reactFlowBehindAdapter]),
     },
+  },
+  {
+    // Inside the canvas seam, the design-system seam still holds: the adapter
+    // draws its cards with plain elements and the tokens, not with Mantine.
+    files: ['apps/web/src/graphs/flow-adapter.tsx'],
+    rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([mantineBehindUi]) },
   },
   {
     // Hues are named once, in src/ui/tokens.ts (AGX-30). A color literal
