@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   ROUTE_CONDITION_MAX_CHARS,
+  ROUTE_GLOB_MAX_WILDCARDS,
   ROUTE_INPUT_MAX_CHARS,
   evaluateRouteCondition,
   parseRouteCondition,
   routeConditionTextSchema,
   routeInputSchema,
+  type RouteCondition,
   type RouteInput,
 } from './route-condition.js';
 
@@ -76,6 +78,45 @@ describe('parseRouteCondition', () => {
     const long = `language == ${'x'.repeat(ROUTE_CONDITION_MAX_CHARS)}`;
     expect(routeConditionTextSchema.safeParse(long).success).toBe(false);
     expect(parseRouteCondition(long).ok).toBe(false);
+  });
+
+  it.each([
+    ['a bidi override in a bare literal', 'language == a‮b', 13],
+    ['a bell in a glob', 'only \u0007*.md', 5],
+    ['a raw control character inside quotes', 'title == "a\u001bb"', 11],
+    ['an escape sequence in a field position', '\u009blanguage == x', 0],
+  ])('refuses %s, at the character', (_why, text, position) => {
+    const parsed = parseRouteCondition(text);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.position).toBe(position);
+    expect(parsed.problem).toMatch(/control or bidirectional/);
+  });
+
+  it('refuses a control character a quoted literal spells as an escape, at the quote', () => {
+    const parsed = parseRouteCondition('title == "a\\u202eb"');
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.position).toBe(9);
+    expect(parsed.problem).toMatch(/control or bidirectional/);
+  });
+
+  it('collapses a run of wildcards: stars within a segment to one, ** segments to one', () => {
+    expect(condition('only **a**b')).toEqual({ kind: 'only', glob: '*a*b' });
+    expect(condition('only src/***/x.rs')).toEqual({ kind: 'only', glob: 'src/**/x.rs' });
+    expect(condition('only **/**/*.rs')).toEqual({ kind: 'only', glob: '**/*.rs' });
+    expect(condition('only docs/**/*.md')).toEqual({ kind: 'only', glob: 'docs/**/*.md' });
+  });
+
+  it(`takes ${String(ROUTE_GLOB_MAX_WILDCARDS)} wildcards and refuses the one after, where it is`, () => {
+    const atTheCap = `only ${'?'.repeat(ROUTE_GLOB_MAX_WILDCARDS)}`;
+    expect(parseRouteCondition(atTheCap).ok).toBe(true);
+    const overIt = `only ${'*a'.repeat(ROUTE_GLOB_MAX_WILDCARDS)}*`;
+    const parsed = parseRouteCondition(overIt);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.position).toBe(5 + 2 * ROUTE_GLOB_MAX_WILDCARDS);
+    expect(parsed.problem).toMatch(/wildcards/);
   });
 });
 
@@ -163,5 +204,54 @@ describe('evaluateRouteCondition', () => {
     const odd = input({ files: ['a+b(c).rs'] });
     expect(evaluateRouteCondition(condition('only a+b(c).rs'), odd)).toBe(true);
     expect(evaluateRouteCondition(condition('only a+b(c).ts'), odd)).toBe(false);
+    expect(evaluateRouteCondition(condition('only a.rs'), input({ files: ['aXrs'] }))).toBe(false);
+    expect(evaluateRouteCondition(condition('only *.rs'), input({ files: ['ars'] }))).toBe(false);
   });
+
+  const only = (glob: string, ...files: string[]): boolean =>
+    evaluateRouteCondition(condition(`only ${glob}`), input({ files }));
+
+  it('lets ** stand for any number of directories, including none', () => {
+    expect(only('docs/**/*.md', 'docs/a.md', 'docs/a/b.md', 'docs/a/b/c/d.md')).toBe(true);
+    expect(only('docs/**/*.md', 'src/a.md')).toBe(false);
+    expect(only('docs/**/*.md', 'docs/a/b.rs')).toBe(false);
+    expect(only('**/*.rs', 'lib.rs', 'src/lib.rs')).toBe(true);
+    expect(only('src/**', 'src/a', 'src/a/b/c')).toBe(true);
+    expect(only('src/**', 'lib/a')).toBe(false);
+    expect(only('a/**/b/**/c', 'a/b/c', 'a/x/b/y/z/c')).toBe(true);
+    expect(only('a/**/b/**/c', 'a/x/c')).toBe(false);
+  });
+
+  it('keeps * and ? within one directory', () => {
+    expect(only('src/*.rs', 'src/lib.rs')).toBe(true);
+    expect(only('src/*.rs', 'src/a/lib.rs')).toBe(false);
+    expect(only('*', 'a', 'b.c')).toBe(true);
+    expect(only('*', 'a/b')).toBe(false);
+    expect(only('src/?.rs', 'src/a.rs')).toBe(true);
+    expect(only('src/?.rs', 'src/ab.rs', 'src//.rs')).toBe(false);
+    expect(only('a*b*c', 'abc', 'aXbYYc')).toBe(true);
+    expect(only('a*b*c', 'ab', 'a/bc')).toBe(false);
+  });
+
+  it('reads a run of stars inside a segment as one star, in a glob no parser collapsed', () => {
+    const stored: RouteCondition = { kind: 'only', glob: 'src/**.rs' };
+    expect(evaluateRouteCondition(stored, input({ files: ['src/lib.rs'] }))).toBe(true);
+    expect(evaluateRouteCondition(stored, input({ files: ['src/a/lib.rs'] }))).toBe(false);
+  });
+
+  it.each([8, 12])(
+    'answers an adversarial glob of %i wildcard runs against a long name well within a tick',
+    (k) => {
+      // A backtracking regular expression takes seconds at k=6 and never
+      // finishes at k=10 on this input. A matcher that has to answer for every
+      // socket on the hub answers in linear time or not at all.
+      const glob = `${'**a'.repeat(k)}**b`;
+      const stored: RouteCondition = { kind: 'only', glob };
+      const files = input({ files: ['a'.repeat(60)] });
+      const started = performance.now();
+      expect(evaluateRouteCondition(stored, files)).toBe(false);
+      expect(evaluateRouteCondition(condition(`only ${glob}`), files)).toBe(false);
+      expect(performance.now() - started).toBeLessThan(100);
+    },
+  );
 });

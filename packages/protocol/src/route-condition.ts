@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { displayableApprovalText } from './approval.js';
 
 /**
  * The one sentence a ROUTER node decides by, and how it is read.
@@ -44,6 +45,18 @@ import { z } from 'zod';
  * small because a condition near it is already one nobody can read.
  */
 export const ROUTE_CONDITION_MAX_CHARS = 200;
+
+/**
+ * How many wildcards one glob may carry, counting each run of stars and each
+ * `?` as one.
+ *
+ * The matcher below is linear whatever the count, so this is not what keeps
+ * the hub responsive; it is what keeps a glob readable. The glob every
+ * documentation route writes, `docs/` then `**` then `/*.md`, has two. A glob
+ * near sixteen is one nobody can say what it matches, and the bound gives the
+ * inspector a place to point at rather than a slow answer.
+ */
+export const ROUTE_GLOB_MAX_WILDCARDS = 16;
 
 /**
  * How large the JSON object a run is started with may be, serialised.
@@ -112,6 +125,61 @@ function safeJsonParse(text: string): unknown {
   }
 }
 
+const UNDISPLAYABLE = 'a condition may not carry a control or bidirectional character';
+
+/**
+ * The index of the first character a person would not see, or `null`.
+ *
+ * The rule is the approval text's, applied one character at a time so the
+ * answer is a position: a condition is drawn back in the inspector exactly as
+ * typed, and a right-to-left override in it would show a different condition
+ * than the one the router runs. Tab and newline survive there and survive
+ * here, where the grammar already reads them as space.
+ */
+function firstUndisplayable(text: string): number | null {
+  let index = 0;
+  for (const character of text) {
+    if (displayableApprovalText(character) !== character) return index;
+    index += character.length;
+  }
+  return null;
+}
+
+/**
+ * The glob as the matcher reads it: a run of stars within a segment is one
+ * star, a segment of nothing but stars is `**`, and two `**` segments in a
+ * row are one. Written down so the document a graph is published from holds
+ * the form the runtime reads, and an inspector can show a person what their
+ * `***` meant.
+ */
+function collapseGlob(glob: string): string {
+  const segments: string[] = [];
+  for (const segment of glob.split('/')) {
+    const collapsed = /^\*{2,}$/.test(segment) ? '**' : segment.replace(/\*{2,}/g, '*');
+    if (collapsed === '**' && segments.at(-1) === '**') continue;
+    segments.push(collapsed);
+  }
+  return segments.join('/');
+}
+
+/** The index of the wildcard past the cap, counting runs of stars, or `null`. */
+function wildcardOverCap(glob: string): number | null {
+  let count = 0;
+  let index = 0;
+  while (index < glob.length) {
+    const character = glob[index];
+    if (character === '*' || character === '?') {
+      count += 1;
+      if (count > ROUTE_GLOB_MAX_WILDCARDS) return index;
+      if (character === '*') while (glob[index] === '*') index += 1;
+      else index += 1;
+    } else {
+      index += 1;
+    }
+  }
+  return null;
+}
+
 export function parseRouteCondition(text: string): RouteConditionParse {
   if (text.length > ROUTE_CONDITION_MAX_CHARS) {
     return refuse(
@@ -119,6 +187,8 @@ export function parseRouteCondition(text: string): RouteConditionParse {
       `a condition is at most ${String(ROUTE_CONDITION_MAX_CHARS)} characters; this one goes on`,
     );
   }
+  const undisplayable = firstUndisplayable(text);
+  if (undisplayable !== null) return refuse(undisplayable, UNDISPLAYABLE);
 
   let position = WHITESPACE.exec(text)?.[0].length ?? 0;
   const rest = (): string => text.slice(position);
@@ -140,10 +210,17 @@ export function parseRouteCondition(text: string): RouteConditionParse {
     skipWhitespace();
     const glob = /^\S+/.exec(rest())?.[0];
     if (glob === undefined) return refuse(position, 'expected a glob after only');
+    const over = wildcardOverCap(glob);
+    if (over !== null) {
+      return refuse(
+        position + over,
+        `a glob has at most ${String(ROUTE_GLOB_MAX_WILDCARDS)} wildcards; this one goes on`,
+      );
+    }
     position += glob.length;
     const trailing = atEnd();
     if (trailing !== null) return trailing;
-    return { ok: true, condition: { kind: 'only', glob } };
+    return { ok: true, condition: { kind: 'only', glob: collapseGlob(glob) } };
   }
 
   position += field.length;
@@ -159,6 +236,9 @@ export function parseRouteCondition(text: string): RouteConditionParse {
   if (text[position] === '"') {
     const quoted = readQuoted(text, position);
     if (quoted === null) return refuse(position, 'expected a closing quote for the literal');
+    // An escape spells the character the text itself may not carry; the
+    // literal is what is compared and shown, so the same rule holds for it.
+    if (firstUndisplayable(quoted.value) !== null) return refuse(position, UNDISPLAYABLE);
     literal = quoted.value;
     position = quoted.end;
   } else {
@@ -236,37 +316,83 @@ function equals(value: unknown, literal: string): boolean {
   return false;
 }
 
-const GLOB_SPECIAL = /[.+^${}()|[\]\\]/g;
-
 /**
- * A glob as a regular expression over a slash-separated path.
+ * Whether one path segment fits one glob segment: `*` is any run of
+ * characters, `?` is one, everything else is itself.
  *
- * `**` crosses directories, `*` stays within one, `?` is one character that is
- * not a slash. Every other character is itself, escaped, so a parenthesis or
- * a plus in a filename is a filename character and never a pattern.
+ * The classic two-pointer matcher. A star remembers where it stood and where
+ * in the segment it was; a later mismatch comes back to the last star and
+ * gives it one more character. That is one pass with bounded backtracking --
+ * every step either advances through the segment or advances the last star's
+ * claim on it -- so a segment of n characters against a glob of m is O(n * m)
+ * at the very worst and nothing like the exponential a backtracking regular
+ * expression makes of `*a*a*a*a`. A run of stars is as good as one star here,
+ * so a glob no parser collapsed is answered just as fast.
  */
-function globToPattern(glob: string): RegExp {
-  let pattern = '';
-  let index = 0;
-  while (index < glob.length) {
-    if (glob.startsWith('**/', index)) {
-      pattern += '(?:.*/)?';
-      index += 3;
-    } else if (glob.startsWith('**', index)) {
-      pattern += '.*';
-      index += 2;
-    } else if (glob[index] === '*') {
-      pattern += '[^/]*';
-      index += 1;
-    } else if (glob[index] === '?') {
-      pattern += '[^/]';
-      index += 1;
+function matchSegment(pattern: string, segment: string): boolean {
+  let p = 0;
+  let s = 0;
+  let starAt = -1;
+  let starClaims = -1;
+  while (s < segment.length) {
+    const wildcard = pattern[p];
+    if (wildcard === '*') {
+      starAt = p;
+      starClaims = s;
+      p += 1;
+    } else if (wildcard === '?' || wildcard === segment[s]) {
+      p += 1;
+      s += 1;
+    } else if (starAt >= 0) {
+      starClaims += 1;
+      s = starClaims;
+      p = starAt + 1;
     } else {
-      pattern += (glob[index] ?? '').replace(GLOB_SPECIAL, '\\$&');
-      index += 1;
+      return false;
     }
   }
-  return new RegExp(`^${pattern}$`);
+  while (pattern[p] === '*') p += 1;
+  return p === pattern.length;
+}
+
+/**
+ * Whether a slash-separated path fits a glob.
+ *
+ * The same matcher one level up: a `**` segment stands for any number of
+ * directories, including none, and every other segment is matched against
+ * exactly one directory or file name by `matchSegment`. `?` never crosses a
+ * slash and neither does one `*`, which falls out of matching by segment
+ * rather than being a rule of its own. A stored glob that was never collapsed
+ * -- `**` inside a segment, `**` twice in a row -- is read the same way the
+ * parser would have written it, so an older document is evaluated and never
+ * re-parsed.
+ */
+function matchGlob(glob: string, path: string): boolean {
+  const patterns = glob.split('/');
+  const segments = path.split('/');
+  let p = 0;
+  let s = 0;
+  let starAt = -1;
+  let starClaims = -1;
+  while (s < segments.length) {
+    const pattern = patterns[p];
+    if (pattern !== undefined && /^\*{2,}$/.test(pattern)) {
+      starAt = p;
+      starClaims = s;
+      p += 1;
+    } else if (pattern !== undefined && matchSegment(pattern, segments[s] ?? '')) {
+      p += 1;
+      s += 1;
+    } else if (starAt >= 0) {
+      starClaims += 1;
+      s = starClaims;
+      p = starAt + 1;
+    } else {
+      return false;
+    }
+  }
+  while (p < patterns.length && /^\*{2,}$/.test(patterns[p] ?? '')) p += 1;
+  return p === patterns.length;
 }
 
 /**
@@ -288,8 +414,7 @@ export function evaluateRouteCondition(condition: RouteCondition, input: RouteIn
     case 'only': {
       const files = lookup(input, 'files');
       if (!Array.isArray(files) || files.length === 0) return false;
-      const pattern = globToPattern(condition.glob);
-      return files.every((file) => typeof file === 'string' && pattern.test(file));
+      return files.every((file) => typeof file === 'string' && matchGlob(condition.glob, file));
     }
   }
 }
