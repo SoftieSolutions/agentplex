@@ -42,7 +42,7 @@ import { createFakeProjects, type FakeProjects } from '../projects/fake-projects
 import { createFakeCatalogue, type FakeCatalogue } from '../catalogue/fake-catalogue.js';
 import { createFakeDocs, type FakeDocs } from '../docs/fake-docs.js';
 import { createFakeGraphs } from '../graphs/fake-graphs.js';
-import { createFakeGraphRuns } from '../graph-runs/fake-graph-runs.js';
+import { createFakeGraphRuns, type FakeGraphRuns } from '../graph-runs/fake-graph-runs.js';
 import { createFakeTerminal, type FakeTerminal } from '../terminal/fake-terminal.js';
 import { createFakePush, FAKE_PUSH_PUBLIC_KEY, type FakePush } from '../push/fake-push.js';
 
@@ -139,6 +139,8 @@ interface Harness {
   /** The subscriptions this broadcast writes through, or `null` for no push. */
   readonly push: FakePush | null;
   readonly approvalPolicy: FakeApprovalPolicy;
+  /** The runtime this broadcast answers run frames through, its states wired back into it. */
+  readonly graphRuns: FakeGraphRuns;
 }
 
 /**
@@ -168,6 +170,10 @@ function harness(
   const timers = createFakeTimers();
   let syncs = 0;
   const terminal = createFakeTerminal();
+  // Wired the way the composition root wires the real feature: a state the
+  // runtime publishes goes back into this broadcast. `broadcast` is assigned
+  // below and nothing emits before then.
+  const graphRuns = createFakeGraphRuns({ onState: (run) => broadcast.runStateChanged(run) });
   const broadcast = createClients({
     hubId: HUB_ID,
     state,
@@ -188,7 +194,7 @@ function harness(
     catalogue,
     docs,
     graphs: createFakeGraphs(),
-    graphRuns: createFakeGraphRuns(),
+    graphRuns,
     terminal,
     push,
   });
@@ -207,6 +213,7 @@ function harness(
     docs,
     terminal,
     push,
+    graphRuns,
   };
 }
 
@@ -2475,5 +2482,88 @@ describe('reading one session’s transcript', () => {
     });
 
     expect(sessions.transcripts).toEqual([]);
+  });
+});
+
+describe('a graph run', () => {
+  const GRAPH = nodeIdSchema.parse('node-graph');
+  const OTHER = nodeIdSchema.parse('node-other-graph');
+  const runState = (nodeId: typeof GRAPH, status: 'running' | 'succeeded' = 'running') => ({
+    nodeId,
+    runId: 'run-1' as never,
+    number: 1,
+    status,
+    reason: null,
+    step: 1,
+    of: 3,
+    steps: [],
+  });
+
+  /**
+   * A run's states are one fact about the hub, but they are hundreds of step
+   * records wide and they move on every step: a client looking at something
+   * else has no use for them. So they go to the connections that asked about
+   * the graph -- opened it, ran it, or read its run -- and to no other.
+   */
+  it('sends a state to the clients that asked about its graph, and to no other', async () => {
+    const { broadcast, graphRuns } = harness();
+    const opener = attach(broadcast);
+    const runner = attach(broadcast);
+    const reader = attach(broadcast);
+    const bystander = attach(broadcast);
+    const elsewhere = attach(broadcast);
+    for (const client of [opener, runner, reader, bystander, elsewhere]) await client.hello();
+    await opener.say({ type: 'graph-open', id: 2, nodeId: GRAPH });
+    await runner.say({ type: 'graph-run', id: 2, nodeId: GRAPH, input: {} });
+    await reader.say({ type: 'graph-run-read', id: 2, nodeId: GRAPH });
+    await elsewhere.say({ type: 'graph-open', id: 2, nodeId: OTHER });
+    const bystanderSaw = bystander.received.length;
+    const elsewhereSaw = elsewhere.received.length;
+
+    graphRuns.emit(runState(GRAPH));
+    await Promise.resolve();
+
+    for (const client of [opener, runner, reader]) {
+      expect(client.received.filter((frame) => frame.type === 'graph-run-state')).toEqual([
+        { type: 'graph-run-state', ...runState(GRAPH) },
+      ]);
+    }
+    expect(bystander.received.length).toBe(bystanderSaw);
+    expect(elsewhere.received.length).toBe(elsewhereSaw);
+  });
+
+  it('answers a read with the graph’s latest run as a state, addressed by the graph and not the frame', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+    graphRuns.answerReadsWith(runState(GRAPH, 'succeeded'));
+
+    await client.say({ type: 'graph-run-read', id: 2, nodeId: GRAPH });
+
+    expect(graphRuns.reads).toEqual([GRAPH]);
+    expect(client.received.at(-1)).toEqual({
+      type: 'graph-run-state',
+      ...runState(GRAPH, 'succeeded'),
+    });
+  });
+
+  it('answers a read of a graph that has never run with none, naming the graph', async () => {
+    const { broadcast } = harness();
+    const client = attach(broadcast);
+    await client.hello();
+
+    await client.say({ type: 'graph-run-read', id: 2, nodeId: GRAPH });
+
+    expect(client.received.at(-1)).toEqual({ type: 'graph-run-none', replyTo: 2, nodeId: GRAPH });
+  });
+
+  it('refuses a read before hello, and reads nothing', async () => {
+    const { broadcast, graphRuns } = harness();
+    const client = attach(broadcast);
+
+    await client.say({ type: 'graph-run-read', id: 1, nodeId: GRAPH });
+
+    expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
+    expect(graphRuns.reads).toEqual([]);
   });
 });

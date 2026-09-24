@@ -1,6 +1,7 @@
 import type {
   GraphNode,
   NodeId,
+  SessionId,
   SessionRef,
   SessionStartTag,
   StartId,
@@ -39,6 +40,23 @@ import { nameOf, type Executor, type StepResult } from './walker.js';
  * deadline, injected, and passing it is a failed attempt with a sentence --
  * which the node's own retry policy may then try again.
  *
+ * ## A spawn nobody is waiting for any more
+ *
+ * A spawn that names itself after its attempt gave up on it -- a slow machine
+ * past the deadline, or a run cancelled while it was starting -- is a real
+ * process with nobody watching it. It is stopped through `Sessions.stop`, the
+ * path every client's stop takes, and the naming is not kept: `abandoned`
+ * remembers each start that was given up on so that its late tag is a stop
+ * and not an entry in `named` for a start that will never ask again. And a
+ * run has at most one unnamed spawn out at a time: a retry waits for the
+ * previous attempt's spawn to be named or abandoned before it starts its own,
+ * so two attempts of one node never have two PTYs starting at once.
+ *
+ * A session that completes a step is a different matter, and it is left
+ * alive on purpose. It is the step's output -- the row the next node's
+ * conditions read and the transcript a person opens to see what the agent
+ * did -- and stopping it would throw away the one thing the step made.
+ *
  * ## When an agent is done
  *
  * The step ends on the fleet state's word and nothing else: the row for
@@ -55,11 +73,14 @@ import { nameOf, type Executor, type StepResult } from './walker.js';
  * change, and each snapshot is read for this one row. What the executor does
  * not do is trust a snapshot that has not caught up yet -- a row that is not
  * there before it has ever been seen is a scan that has not run, not a
- * session that ended.
+ * session that ended. A row that is there, not at a boundary, and held by
+ * nobody this hub can see is the one case neither rule covers: nothing will
+ * ever vanish from it, so it gets the same deadline a naming does, dropped
+ * the moment a holder appears.
  */
 
 export interface AgentExecutorDependencies {
-  readonly sessions: Pick<Sessions, 'start'>;
+  readonly sessions: Pick<Sessions, 'start' | 'stop'>;
   readonly state: Pick<FleetState, 'snapshot' | 'subscribe'>;
   readonly timers: Timers;
   readonly logger: Logger;
@@ -100,6 +121,8 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
 
   /** Namings that arrived before their start did. */
   const named = new Map<StartId, SessionRef>();
+  /** Starts whose attempt gave up on them, and the session each was later stopped as, if any. */
+  const abandoned = new Map<StartId, { readonly storeId: StoreId; stopped: SessionId | null }>();
   /** Starts waiting to be named, with what to do when they are. */
   const awaiting = new Map<
     StartId,
@@ -135,6 +158,7 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
         awaiting.delete(startId);
         cancelDeadline();
         detach();
+        if (ref === null) abandoned.set(startId, { storeId, stopped: null });
         resolve(ref);
       };
       const cancelDeadline = timers.schedule(deadlineMs, () => finish(null));
@@ -155,12 +179,16 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
       let settled = false;
       let unsubscribe: (() => void) | null = null;
       let detach: (() => void) | null = null;
+      /** Running while the row is held by nobody and at no boundary. */
+      let cancelUnheldDeadline: (() => void) | null = null;
+      let lastStatus: SessionRow['descriptor']['status'] = 'unknown';
 
       const finish = (result: StepResult): void => {
         if (settled) return;
         settled = true;
         unsubscribe?.();
         detach?.();
+        cancelUnheldDeadline?.();
         resolve(result);
       };
 
@@ -177,16 +205,21 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
         }
         seenRow = true;
         const status = row.descriptor.status;
+        lastStatus = status;
         if (isBoundary(status)) {
+          const session = { storeId: ref.storeId, sessionId: ref.sessionId, status };
           finish({
             ok: true,
-            output: { storeId: ref.storeId, sessionId: ref.sessionId, status },
+            carried: session,
+            output: { kind: 'session', ...session },
             next: null,
           });
           return;
         }
         if (row.holder !== null) {
           seenHolder = true;
+          cancelUnheldDeadline?.();
+          cancelUnheldDeadline = null;
           return;
         }
         if (seenHolder) {
@@ -194,6 +227,15 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
             ok: false,
             problem: `the session ${ref.sessionId} that ${nameOf(node)} started ended while it was ${status}`,
           });
+          return;
+        }
+        if (cancelUnheldDeadline === null) {
+          cancelUnheldDeadline = timers.schedule(deadlineMs, () =>
+            finish({
+              ok: false,
+              problem: `the session ${ref.sessionId} that ${nameOf(node)} started was ${lastStatus} with nothing holding it, and did not stop within ${String(Math.round(deadlineMs / 1_000))} seconds`,
+            }),
+          );
         }
       };
 
@@ -211,9 +253,21 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
 
   return {
     forProject(project: NodeId | null): Executor<'agent'> {
+      /** This run's one unnamed spawn, while it has one. */
+      let unnamed: Promise<SessionRef | null> | null = null;
       return async (node, _input, context) => {
         const placed = placeNode(state.snapshot(), node);
         if (!placed.ok) return { ok: false, problem: placed.problem };
+
+        // One unnamed spawn per run: a retry does not start its own while
+        // the previous attempt's is still nameless.
+        if (unnamed !== null) await unnamed;
+        if (context.cancellation.cancelled) {
+          return {
+            ok: false,
+            problem: `the run was cancelled before ${nameOf(node)} started`,
+          };
+        }
 
         const outcome = await sessions.start({
           storeId: node.storeId,
@@ -226,10 +280,15 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
         if (!outcome.ok) return { ok: false, problem: outcome.problem };
 
         const onCancel = context.cancellation.onCancel.bind(context.cancellation);
-        const ref: SessionRef | null =
-          outcome.sessionId === null
-            ? await awaitNaming(outcome.startId, outcome.storeId, onCancel)
-            : { storeId: outcome.storeId, sessionId: outcome.sessionId };
+        let ref: SessionRef | null;
+        if (outcome.sessionId === null) {
+          const naming = awaitNaming(outcome.startId, outcome.storeId, onCancel);
+          unnamed = naming;
+          ref = await naming;
+          if (unnamed === naming) unnamed = null;
+        } else {
+          ref = { storeId: outcome.storeId, sessionId: outcome.sessionId };
+        }
         if (ref === null) {
           if (context.cancellation.cancelled) {
             return {
@@ -259,6 +318,36 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
       for (const tag of starts) {
         if (tag.sessionId === null) continue;
         const ref: SessionRef = { storeId, sessionId: tag.sessionId };
+        const givenUp = abandoned.get(tag.startId);
+        if (givenUp !== undefined) {
+          // Named too late: the attempt has failed or was cancelled, and a
+          // PTY is running with nobody watching it. Stopped once, through
+          // the path every stop takes; a scan that reports the tag again
+          // finds it already stopped here.
+          if (givenUp.stopped === tag.sessionId) continue;
+          givenUp.stopped = tag.sessionId;
+          logger.warn('a spawn named itself after its step gave up on it; stopping it', {
+            startId: tag.startId,
+            ...ref,
+          });
+          sessions.stop(ref).then(
+            (stopped) => {
+              if (!stopped.ok) {
+                logger.warn('a late-named spawn could not be stopped', {
+                  ...ref,
+                  problem: stopped.problem,
+                });
+              }
+            },
+            (error: unknown) => {
+              logger.warn('a late-named spawn could not be stopped', {
+                ...ref,
+                problem: String(error),
+              });
+            },
+          );
+          continue;
+        }
         const waiting = awaiting.get(tag.startId);
         if (waiting === undefined) {
           // Nothing waiting: the start's answer is still on its way here, or

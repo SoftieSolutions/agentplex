@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GRAPH_RUN_OUTPUT_MAX_CHARS,
   graphDocumentSchema,
+  sessionIdSchema,
   type GraphDocument,
   type GraphRunStep,
   type RouteInput,
@@ -55,15 +57,12 @@ function agent(
       calls.push({ attempt: context.attempt, prompt: node.prompt });
       const answered = await answer(context.attempt);
       if (!answered.ok) return answered;
-      return {
-        ok: true,
-        output: {
-          storeId: node.storeId,
-          sessionId: `session-${String(context.attempt)}`,
-          status: 'idle',
-        },
-        next: null,
-      };
+      const session = {
+        storeId: node.storeId,
+        sessionId: sessionIdSchema.parse(`session-${String(context.attempt)}`),
+        status: 'idle',
+      } as const;
+      return { ok: true, carried: session, output: { kind: 'session', ...session }, next: null };
     },
   };
 }
@@ -75,6 +74,10 @@ function table(execute: Executor<'agent'>): ExecutorTable {
 interface Driven {
   readonly steps: GraphRunStep[];
   readonly reached: number[];
+  /** What `onEnd` was called with, and how many steps had been reported by then. */
+  readonly ended: { outcome: WalkOutcome; stepsThen: number }[];
+  /** Steps, ends and a microtask queued from each step, in the order they happened. */
+  readonly order: string[];
   readonly timers: ReturnType<typeof createFakeTimers>;
   readonly done: Promise<WalkOutcome>;
   cancel(): void;
@@ -83,6 +86,8 @@ interface Driven {
 function drive(doc: GraphDocument, input: RouteInput, executors: ExecutorTable): Driven {
   const steps: GraphRunStep[] = [];
   const reached: number[] = [];
+  const ended: { outcome: WalkOutcome; stepsThen: number }[] = [];
+  const order: string[] = [];
   const timers = createFakeTimers();
   const handle = walk(doc, input, {
     executors,
@@ -90,9 +95,23 @@ function drive(doc: GraphDocument, input: RouteInput, executors: ExecutorTable):
     onStep: (step, at) => {
       steps.push(step);
       reached.push(at);
+      order.push(`step ${step.nodeId} ${step.outcome}`);
+      queueMicrotask(() => order.push('tick'));
+    },
+    onEnd: (outcome) => {
+      ended.push({ outcome, stepsThen: steps.length });
+      order.push(`end ${outcome.status}`);
     },
   });
-  return { steps, reached, timers, done: handle.done, cancel: () => handle.cancel() };
+  return {
+    steps,
+    reached,
+    ended,
+    order,
+    timers,
+    done: handle.done,
+    cancel: () => handle.cancel(),
+  };
 }
 
 /** Lets promise chains settle without a timer firing. */
@@ -113,18 +132,60 @@ describe('walk', () => {
     });
     expect(run.steps).toEqual([
       { nodeId: 'start', attempt: 0, outcome: 'running', output: null },
-      { nodeId: 'start', attempt: 0, outcome: 'succeeded', output: { language: 'rust' } },
+      {
+        nodeId: 'start',
+        attempt: 0,
+        outcome: 'succeeded',
+        output: { kind: 'text', text: '{"language":"rust"}' },
+      },
       { nodeId: 'review', attempt: 0, outcome: 'running', output: null },
       {
         nodeId: 'review',
         attempt: 0,
         outcome: 'succeeded',
-        output: { storeId: 'store-work', sessionId: 'session-0', status: 'idle' },
+        output: { kind: 'session', storeId: 'store-work', sessionId: 'session-0', status: 'idle' },
       },
     ]);
     // The step count is the nodes reached: 1 at the trigger, 2 at the agent.
     expect(run.reached).toEqual([1, 1, 2, 2]);
     expect(reviewer.calls).toEqual([{ attempt: 0, prompt: 'Review the Rust in this change.' }]);
+  });
+
+  it('says how it ended synchronously, once, after the last step and before done resolves', async () => {
+    const doc = document({ nodes: [TRIGGER, AGENT], edges: [{ from: 'start', to: 'review' }] });
+    const run = drive(doc, {}, table(agent(async () => ({ ok: true })).execute));
+
+    const outcome = await run.done;
+
+    // The end was reported with every step already in the list -- so whoever
+    // publishes the steps can fold the end into the same change -- exactly
+    // once, and in the same synchronous stretch as the last step: no
+    // microtask ran between the two.
+    expect(run.ended).toEqual([{ outcome, stepsThen: 4 }]);
+    expect(run.order.slice(-3)).toEqual(['step review succeeded', 'end succeeded', 'tick']);
+  });
+
+  it('cuts the TRIGGER’s record of the input at the output bound, and hands the input on whole', async () => {
+    const doc = document({ nodes: [TRIGGER, AGENT], edges: [{ from: 'start', to: 'review' }] });
+    const seen: RouteInput[] = [];
+    const executors: ExecutorTable = {
+      trigger: triggerExecutor,
+      router: routerExecutor,
+      agent: async (_node, input) => {
+        seen.push(input);
+        return { ok: true, carried: input, output: null, next: null };
+      },
+    };
+    const input = { body: 'x'.repeat(GRAPH_RUN_OUTPUT_MAX_CHARS + 500) };
+
+    const run = drive(doc, input, executors);
+    await run.done;
+
+    expect(seen).toEqual([input]);
+    const record = run.steps[1]?.output;
+    expect(record?.kind).toBe('text');
+    if (record?.kind !== 'text') return;
+    expect(record.text).toHaveLength(GRAPH_RUN_OUTPUT_MAX_CHARS);
   });
 
   it('hands each executor the previous step’s output as its input', async () => {
@@ -151,7 +212,7 @@ describe('walk', () => {
       router: routerExecutor,
       agent: async (node, input) => {
         seen.push(input);
-        return { ok: true, output: { ran: node.id }, next: null };
+        return { ok: true, carried: { ran: node.id }, output: null, next: null };
       },
     };
 
@@ -194,6 +255,16 @@ describe('walk', () => {
       expect(
         run.steps.filter((step) => step.outcome === 'succeeded').map((step) => step.nodeId),
       ).toEqual(['start', 'classify', 'review']);
+      // The router records which route it took and where that led, and not
+      // the input it read: that can be 16 000 characters, and this cannot.
+      expect(
+        run.steps.find((step) => step.nodeId === 'classify' && step.outcome === 'succeeded'),
+      ).toEqual({
+        nodeId: 'classify',
+        attempt: 0,
+        outcome: 'succeeded',
+        output: { kind: 'route', route: 0, to: 'review' },
+      });
     });
 
     it('falls through to the next route when the first does not hold', async () => {
@@ -216,6 +287,9 @@ describe('walk', () => {
 
       await expect(run.done).resolves.toMatchObject({ status: 'succeeded' });
       expect(run.steps.at(-1)?.nodeId).toBe('docs');
+      expect(
+        run.steps.find((step) => step.nodeId === 'classify' && step.outcome === 'succeeded'),
+      ).toMatchObject({ output: { kind: 'route', route: null, to: 'docs' } });
     });
 
     it('fails the run naming the node when nothing holds and there is no otherwise', async () => {
@@ -268,7 +342,12 @@ describe('walk', () => {
           nodeId: 'review',
           attempt: 2,
           outcome: 'succeeded',
-          output: { storeId: 'store-work', sessionId: 'session-2', status: 'idle' },
+          output: {
+            kind: 'session',
+            storeId: 'store-work',
+            sessionId: 'session-2',
+            status: 'idle',
+          },
         },
       ]);
     });

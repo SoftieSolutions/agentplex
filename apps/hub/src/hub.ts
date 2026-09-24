@@ -626,9 +626,9 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
     logger,
     graphs,
     agent: agentExecutor,
-    // Every state to every client, unsolicited, the way a tree change goes.
-    // `clients` is built below; a run cannot move before a client can ask
-    // for one, so the closure never runs before it exists.
+    // Every state to every client watching its graph, unsolicited, the way a
+    // tree change goes. `clients` is built below; a run cannot move before a
+    // client can ask for one, so the closure never runs before it exists.
     onState: (run) => clients.runStateChanged(run),
   });
 
@@ -796,6 +796,12 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // each one -- a screen that reports the fleet collapsing when what is
       // actually happening is that the hub is going away.
       clients.stop();
+      // Then the runs. A walk in flight is cancelled and the feature writes
+      // and publishes nothing more: `boot.ts` closes the database the moment
+      // this returns, and a step ending after that would otherwise write its
+      // record through a closed handle. The row is left `running` for the
+      // next boot's sweep, which is the truth of what happened to it.
+      graphRuns.stop();
       // Then the ear. Nobody is left to be told what the network says, and a
       // beacon arriving mid-shutdown would otherwise bump a state whose
       // readers have all been closed.

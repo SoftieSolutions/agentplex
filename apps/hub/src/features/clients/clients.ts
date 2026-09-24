@@ -208,12 +208,14 @@ export interface Clients {
   /** How many sockets are being served, established or not. */
   readonly attached: number;
   /**
-   * Tells every established client where a run is, now.
+   * Tells every established client watching the run's graph where it is, now.
    *
    * The seam the runtime's `onState` is wired to. Not coalesced and not
-   * scheduled, for the reason the tree change is not: the frame carries the
-   * run whole, so waiting a turn would buy nothing and cost the strip the
-   * promptness it exists for. A send that throws costs itself.
+   * scheduled here, for the reason the tree change is not: the runtime
+   * already publishes once per change and the frame carries the run whole,
+   * so waiting a turn would buy nothing and cost the strip the promptness it
+   * exists for. Each connection decides whether it is watching that graph;
+   * a send that throws costs itself.
    */
   runStateChanged(state: GraphRunState): void;
   /**

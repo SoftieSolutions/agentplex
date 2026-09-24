@@ -157,6 +157,16 @@ export async function readRun(database: Queryable, runId: GraphRunId): Promise<R
   return row === undefined ? null : runRowSchema.parse(row);
 }
 
+/** One graph's newest run, or `null` when it has never run. */
+export async function latestRun(database: Queryable, graphNodeId: NodeId): Promise<RunRow | null> {
+  const result = await database.query(
+    `SELECT ${COLUMNS} FROM graph_runs WHERE graph_node_id = ? ORDER BY number DESC LIMIT 1`,
+    [graphNodeId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : runRowSchema.parse(row);
+}
+
 /** Every run of one graph, newest first. */
 export async function listRuns(
   database: Queryable,

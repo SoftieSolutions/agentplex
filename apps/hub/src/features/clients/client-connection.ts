@@ -106,13 +106,19 @@ export interface ClientConnection {
    */
   catalogueChanged(version: number): void;
   /**
-   * Tells this client where a run is, if it is established.
+   * Tells this client where a run is, if it is established and has asked
+   * about that run's graph on this connection: opened it, run it, or read
+   * its run.
    *
-   * Unsolicited and sent to every client, like the tree change above it and
-   * for the same reason: a run is one fact about the hub, and two tabs open
-   * on the graph must read the same step. Not encoded once for everybody
-   * either -- a run state is a few hundred characters at most, and the rule
-   * about identical characters protects a state clients could disagree about.
+   * Unsolicited, like the tree change above it, but not to every client: a
+   * run is one fact about the hub and two tabs open on the graph must read
+   * the same step, while a tab open on something else has no use for it. It
+   * is not small, either -- a state carries every step record so far, up to
+   * `GRAPH_RUN_STEPS_MAX` of them with a bounded output each, so a run in a
+   * large graph is tens of kilobytes on every change. Not encoded once for
+   * everybody, because the rule about identical characters protects a state
+   * clients could disagree about, and a client that missed a frame here is
+   * told everything by the next one.
    */
   graphRunState(state: GraphRunState): void;
   /**
@@ -351,6 +357,8 @@ export function serveClientConnection(
 ): ClientConnection {
   let state: ClientConnectionState = 'awaiting-hello';
   let lastVersion: number | null = null;
+  /** The graphs this client has asked about, which is what run states are fanned out by. */
+  const watchedGraphs = new Set<NodeId>();
 
   const send = (frame: HubFrame): void => void socket.send(encodeHubFrame(frame));
 
@@ -791,6 +799,7 @@ export function serveClientConnection(
           helloFirst(frame.id);
           return;
         }
+        watchedGraphs.add(frame.nodeId);
         void answerGraphOpen(frame.id, frame.nodeId);
         return;
       }
@@ -818,6 +827,7 @@ export function serveClientConnection(
           helloFirst(frame.id);
           return;
         }
+        watchedGraphs.add(frame.nodeId);
         void answerGraphRun(frame.id, frame.nodeId, frame.input);
         return;
       }
@@ -828,6 +838,16 @@ export function serveClientConnection(
           return;
         }
         void answerGraphRunCancel(frame.id, frame.runId);
+        return;
+      }
+
+      case 'graph-run-read': {
+        if (state !== 'established') {
+          helloFirst(frame.id);
+          return;
+        }
+        watchedGraphs.add(frame.nodeId);
+        void answerGraphRunRead(frame.id, frame.nodeId);
         return;
       }
 
@@ -1571,9 +1591,10 @@ export function serveClientConnection(
 
   /**
    * Starts a run and answers with its name and number. The run itself
-   * arrives as `graph-run-state`, unsolicited, on every client; this reply
-   * says only that it began. A refusal is the feature's sentence: no such
-   * graph, or nothing published to run.
+   * arrives as `graph-run-state`, unsolicited, on every client watching the
+   * graph; this reply says only that it began. A refusal is the feature's
+   * sentence: no such graph, nothing published to run, or a run of it
+   * already in flight.
    */
   async function answerGraphRun(
     replyTo: FrameId,
@@ -1592,6 +1613,29 @@ export function serveClientConnection(
       logger.error('could not start a run', { problem: String(error) });
       if (state !== 'established') return;
       refuse(replyTo, 'internal', 'the hub could not start that run');
+    }
+  }
+
+  /**
+   * Answers where the graph's newest run stands: as a `graph-run-state`,
+   * which the client files by the graph on it rather than by this frame, or
+   * as `graph-run-none` for a graph that has never run. The one read on this
+   * socket that is answered by an unsolicited-shaped frame, so that a run
+   * arrives in one shape however a client came to hold it.
+   */
+  async function answerGraphRunRead(replyTo: FrameId, nodeId: NodeId): Promise<void> {
+    try {
+      const latest = await graphRuns.latest(nodeId);
+      if (state !== 'established') return;
+      if (latest === null) {
+        send({ type: 'graph-run-none', replyTo, nodeId });
+        return;
+      }
+      send({ type: 'graph-run-state', ...latest });
+    } catch (error) {
+      logger.error('could not read a run', { problem: String(error) });
+      if (state !== 'established') return;
+      refuse(replyTo, 'internal', 'the hub could not read that graph’s runs');
     }
   }
 
@@ -1928,7 +1972,7 @@ export function serveClientConnection(
       send({ type: 'catalogue-changed', version });
     },
     graphRunState(run: GraphRunState): void {
-      if (state !== 'established') return;
+      if (state !== 'established' || !watchedGraphs.has(run.nodeId)) return;
       send({ type: 'graph-run-state', ...run });
     },
     close: end,

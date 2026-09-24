@@ -18,7 +18,11 @@ import { createLogger } from '@agentplex/node-shared';
 import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
-import type { StartOutcome, StartSessionRequest } from '../sessions/sessions.js';
+import type {
+  StartOutcome,
+  StartSessionRequest,
+  StopSessionRequest,
+} from '../sessions/sessions.js';
 import { createAgentExecutor, type AgentExecutor } from './agent-executor.js';
 import type { StepContext, StepResult } from './walker.js';
 
@@ -86,23 +90,33 @@ function descriptor(sessionId: string, status: SessionStatus): SessionDescriptor
   };
 }
 
-/** A start seam whose answer the test releases when it chooses. */
+/** A start seam whose answer the test releases when it chooses, and that records every stop. */
 interface DeferredSessions {
   start(request: StartSessionRequest): Promise<StartOutcome>;
+  stop(request: StopSessionRequest): Promise<never>;
   readonly requests: StartSessionRequest[];
+  readonly stops: StopSessionRequest[];
   answer(outcome: StartOutcome): void;
 }
 
 function deferredSessions(): DeferredSessions {
   const requests: StartSessionRequest[] = [];
+  const stops: StopSessionRequest[] = [];
   let release: ((outcome: StartOutcome) => void) | null = null;
   return {
     requests,
+    stops,
     start(request) {
       requests.push(request);
       return new Promise((resolve) => {
         release = resolve;
       });
+    },
+    stop(request) {
+      stops.push(request);
+      // What the machine answered is nobody's business here: the executor
+      // asked and moved on, so the answer is never read.
+      return new Promise<never>(() => {});
     },
     answer(outcome) {
       if (release === null) throw new Error('nothing has asked for a start');
@@ -191,7 +205,8 @@ describe('the AGENT executor', () => {
 
     await expect(pending).resolves.toEqual({
       ok: true,
-      output: { storeId: WORK, sessionId: 'session-9', status: 'awaiting-input' },
+      carried: { storeId: WORK, sessionId: 'session-9', status: 'awaiting-input' },
+      output: { kind: 'session', storeId: WORK, sessionId: 'session-9', status: 'awaiting-input' },
       next: null,
     });
   });
@@ -233,7 +248,8 @@ describe('the AGENT executor', () => {
 
     await expect(pending).resolves.toEqual({
       ok: true,
-      output: { storeId: WORK, sessionId: 'session-9', status: 'idle' },
+      carried: { storeId: WORK, sessionId: 'session-9', status: 'idle' },
+      output: { kind: 'session', storeId: WORK, sessionId: 'session-9', status: 'idle' },
       next: null,
     });
   });
@@ -270,6 +286,102 @@ describe('the AGENT executor', () => {
     await expect(pending).resolves.toEqual({
       ok: false,
       problem: 'Rust reviewer started on attic but no session was named within 30 seconds',
+    });
+  });
+
+  describe('a spawn named after its attempt was over', () => {
+    const LATE = sessionIdSchema.parse('session-late');
+
+    it('is stopped through the one stop path when the attempt failed at the deadline', async () => {
+      const pending = run();
+      await settle();
+      sessions.answer(started(START_ID));
+      await settle();
+      timers.fireAll();
+      await expect(pending).resolves.toMatchObject({ ok: false });
+
+      executor.noteStarts(WORK, [{ startId: START_ID, sessionId: LATE }]);
+      await settle();
+
+      // The PTY the attempt gave up on is not left running with nobody
+      // watching it, and it is not kept as a naming for a start that will
+      // never ask again.
+      expect(sessions.stops).toEqual([{ storeId: WORK, sessionId: LATE }]);
+    });
+
+    it('is stopped when the attempt was cancelled while it was starting', async () => {
+      const pending = run();
+      await settle();
+      sessions.answer(started(START_ID));
+      await settle();
+      for (const listener of cancelListeners) listener();
+      await expect(pending).resolves.toMatchObject({ ok: false });
+
+      executor.noteStarts(WORK, [{ startId: START_ID, sessionId: LATE }]);
+      await settle();
+
+      expect(sessions.stops).toEqual([{ storeId: WORK, sessionId: LATE }]);
+    });
+
+    it('is stopped once, however many scans report the same tag', async () => {
+      const pending = run();
+      await settle();
+      sessions.answer(started(START_ID));
+      await settle();
+      timers.fireAll();
+      await pending;
+
+      executor.noteStarts(WORK, [{ startId: START_ID, sessionId: LATE }]);
+      executor.noteStarts(WORK, [{ startId: START_ID, sessionId: LATE }]);
+      await settle();
+
+      expect(sessions.stops).toHaveLength(1);
+    });
+  });
+
+  describe('two attempts of one run', () => {
+    it('never have two unnamed spawns out at once: the second start waits for the first to be named', async () => {
+      const step = executor.forProject(PROJECT);
+      const first = step(NODE as Extract<GraphNode, { kind: 'agent' }>, {}, context);
+      await settle();
+      sessions.answer(started(START_ID));
+      await settle();
+
+      const second = step(
+        NODE as Extract<GraphNode, { kind: 'agent' }>,
+        {},
+        { ...context, attempt: 1 },
+      );
+      await settle();
+
+      // One start asked for, not two: the first spawn has no name yet.
+      expect(sessions.requests).toHaveLength(1);
+
+      executor.noteStarts(WORK, [
+        { startId: START_ID, sessionId: sessionIdSchema.parse('session-9') },
+      ]);
+      await settle();
+      expect(sessions.requests).toHaveLength(2);
+
+      report([descriptor('session-9', 'idle')], []);
+      await expect(first).resolves.toMatchObject({ ok: true });
+      sessions.answer({ ok: false, code: 'refused', problem: 'attic said no', holder: null });
+      await expect(second).resolves.toEqual({ ok: false, problem: 'attic said no' });
+    });
+
+    it('lets the second start go once the first spawn has passed its deadline', async () => {
+      const step = executor.forProject(PROJECT);
+      const first = step(NODE as Extract<GraphNode, { kind: 'agent' }>, {}, context);
+      await settle();
+      sessions.answer(started(START_ID));
+      await settle();
+      timers.fireAll();
+      await expect(first).resolves.toMatchObject({ ok: false });
+
+      void step(NODE as Extract<GraphNode, { kind: 'agent' }>, {}, { ...context, attempt: 1 });
+      await settle();
+
+      expect(sessions.requests).toHaveLength(2);
     });
   });
 
@@ -366,6 +478,38 @@ describe('the AGENT executor', () => {
       // Two reports without the row: the scan has not caught up with the spawn.
       report([], []);
       report([], []);
+      expect(await settled(pending)).toBe(false);
+
+      report([descriptor('session-9', 'idle')], [HELD]);
+      await expect(pending).resolves.toMatchObject({ ok: true });
+    });
+
+    it('fails at the deadline a row seen with nothing holding it that never stops', async () => {
+      const { pending } = await named();
+      // A row the scan found, working, held by no server this hub can see:
+      // a process that died before any holder was reported, or one this hub
+      // will never hear the end of. Without a bound it would wait for ever.
+      report([descriptor('session-9', 'working')], []);
+      expect(await settled(pending)).toBe(false);
+      expect(timers.pending).toBe(1);
+
+      timers.fireAll();
+
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        problem:
+          'the session session-9 that Rust reviewer started was working with nothing holding it, and did not stop within 30 seconds',
+      });
+    });
+
+    it('drops that deadline once a holder appears, and waits on the holder instead', async () => {
+      const { pending } = await named();
+      report([descriptor('session-9', 'working')], []);
+      expect(timers.pending).toBe(1);
+
+      report([descriptor('session-9', 'working')], [HELD]);
+      expect(timers.pending).toBe(0);
+      timers.fireAll();
       expect(await settled(pending)).toBe(false);
 
       report([descriptor('session-9', 'idle')], [HELD]);

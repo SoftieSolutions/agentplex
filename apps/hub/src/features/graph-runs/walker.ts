@@ -2,12 +2,14 @@ import {
   assertNever,
   evaluateRouteCondition,
   GRAPH_NODES_MAX,
+  GRAPH_RUN_OUTPUT_MAX_CHARS,
   parseRouteCondition,
   type GraphDocument,
   type GraphNode,
   type GraphNodeId,
   type GraphNodeKind,
   type GraphRunStep,
+  type GraphRunStepOutput,
   type RouteInput,
 } from '@agentplex/protocol';
 import type { Timers } from '@agentplex/node-shared';
@@ -38,10 +40,23 @@ import type { Timers } from '@agentplex/node-shared';
  * ## A step is one attempt
  *
  * Every attempt at a node is reported twice: once as `running` when it begins
- * and once with what it became. The same `nodeId` and `attempt` on both, so
- * that whoever keeps the list replaces the first record with the second
- * rather than holding a step that is forever running beside the one that
- * ended. Retries are further attempts of the same node, one wait apart.
+ * and once with what it became. The same `nodeId` and `attempt` on both, and
+ * the second always directly after the first, so that whoever keeps the list
+ * replaces a running record with its outcome rather than holding a step that
+ * is forever running beside the one that ended. Retries are further attempts
+ * of the same node, one wait apart. A node reached twice, through a cycle,
+ * is two runs of records: the list is the walk in order, not a table by node.
+ *
+ * ## What a step hands on is not what it records
+ *
+ * A result has two outputs. `carried` is the route input the next node is
+ * given -- what a ROUTER's conditions read -- and it may be as wide as a route
+ * input is allowed to be. `output` is what the step record says about it, in
+ * the bounded shape the protocol fixes per kind of node, and it is the only
+ * one of the two that leaves this process. The end of the run is reported
+ * through `onEnd` synchronously, before `done` resolves, so that whoever
+ * publishes the steps can fold the end into the same change as the last
+ * step's outcome instead of sending the list twice.
  *
  * ## Cancel stops before the next step
  *
@@ -56,13 +71,19 @@ import type { Timers } from '@agentplex/node-shared';
 /**
  * What one attempt at a node produced.
  *
- * `next` is the node the run goes to, or `null` to follow the node's one
- * outgoing edge. Only a ROUTER ever names one: its routes are the choice, and
- * the walk following an edge on its behalf would be a second reading of the
- * same decision.
+ * `carried` is handed to the next node; `output` is recorded on the step, or
+ * `null` when the step has nothing worth a record. `next` is the node the run
+ * goes to, or `null` to follow the node's one outgoing edge. Only a ROUTER
+ * ever names one: its routes are the choice, and the walk following an edge
+ * on its behalf would be a second reading of the same decision.
  */
 export type StepResult =
-  | { readonly ok: true; readonly output: RouteInput; readonly next: GraphNodeId | null }
+  | {
+      readonly ok: true;
+      readonly carried: RouteInput;
+      readonly output: GraphRunStepOutput | null;
+      readonly next: GraphNodeId | null;
+    }
   | { readonly ok: false; readonly problem: string };
 
 /** How a step learns that the run was cancelled under it. */
@@ -104,6 +125,11 @@ export interface WalkDependencies {
    * far -- the `step` of `step 3/9`.
    */
   readonly onStep: (step: GraphRunStep, reached: number) => void;
+  /**
+   * Called once, synchronously, with how the run ended, after the last
+   * `onStep` and before `done` resolves.
+   */
+  readonly onEnd: (outcome: WalkOutcome) => void;
 }
 
 export interface Walk {
@@ -127,20 +153,26 @@ const KIND_WORDS: Record<GraphNodeKind, string> = {
   action: 'ACTION',
 };
 
-/** A TRIGGER passes the run input on. Where a run starts, and nothing else. */
+/**
+ * A TRIGGER passes the run input on, and records it as text cut at the
+ * output bound. Where a run starts, and nothing else.
+ */
 export const triggerExecutor: Executor<'trigger'> = async (_node, input) => ({
   ok: true,
-  output: input,
+  carried: input,
+  output: { kind: 'text', text: JSON.stringify(input).slice(0, GRAPH_RUN_OUTPUT_MAX_CHARS) },
   next: null,
 });
 
 /**
  * A ROUTER picks the first route whose condition holds against its input,
- * else `otherwise`, else fails naming itself. Its output is its input: a
- * router decides where the run goes and changes nothing on the way.
+ * else `otherwise`, else fails naming itself. It hands its input on unchanged
+ * -- a router decides where the run goes and changes nothing on the way -- and
+ * records the choice: the index of the route that held, or `null` for
+ * `otherwise`, and the node it led to.
  */
 export const routerExecutor: Executor<'router'> = async (node, input) => {
-  for (const route of node.routes) {
+  for (const [index, route] of node.routes.entries()) {
     const parsed = parseRouteCondition(route.condition);
     if (!parsed.ok) {
       return {
@@ -149,10 +181,22 @@ export const routerExecutor: Executor<'router'> = async (node, input) => {
       };
     }
     if (evaluateRouteCondition(parsed.condition, input)) {
-      return { ok: true, output: input, next: route.to };
+      return {
+        ok: true,
+        carried: input,
+        output: { kind: 'route', route: index, to: route.to },
+        next: route.to,
+      };
     }
   }
-  if (node.otherwise !== null) return { ok: true, output: input, next: node.otherwise };
+  if (node.otherwise !== null) {
+    return {
+      ok: true,
+      carried: input,
+      output: { kind: 'route', route: null, to: node.otherwise },
+      next: node.otherwise,
+    };
+  }
   return { ok: false, problem: `no route on ${nameOf(node)} matched and it has no otherwise` };
 };
 
@@ -211,7 +255,7 @@ export function walk(
   input: RouteInput,
   dependencies: WalkDependencies,
 ): Walk {
-  const { executors, timers, onStep } = dependencies;
+  const { executors, timers, onStep, onEnd } = dependencies;
   const cancellation = createCancellation();
   const byId = new Map(document.nodes.map((node) => [node.id, node]));
 
@@ -245,14 +289,24 @@ export function walk(
     return { next: byId.get(outgoing[0]?.to ?? node.id) ?? null };
   };
 
+  /**
+   * Every exit of `run` goes through here, so the end is said in the same
+   * synchronous stretch as the last step -- an `await` between them would be
+   * a microtask in which the list is published without its end.
+   */
+  const end = (outcome: WalkOutcome): WalkOutcome => {
+    onEnd(outcome);
+    return outcome;
+  };
+
   async function run(): Promise<WalkOutcome> {
     const triggers = document.nodes.filter((node) => node.kind === 'trigger');
     const trigger = triggers[0];
     if (trigger === undefined || triggers.length !== 1) {
-      return {
+      return end({
         status: 'failed',
         reason: `a run starts at the one TRIGGER node, and this document has ${String(triggers.length)}`,
-      };
+      });
     }
 
     let node: GraphNode = trigger;
@@ -260,21 +314,21 @@ export function walk(
     let reached = 0;
 
     for (;;) {
-      if (cancellation.cancelled) return { status: 'cancelled' };
+      if (cancellation.cancelled) return end({ status: 'cancelled' });
       reached += 1;
       if (reached > GRAPH_NODES_MAX) {
-        return {
+        return end({
           status: 'failed',
           reason: `the run reached ${nameOf(node)} as its ${String(reached)}th step, more nodes than a graph holds, so it is looping`,
-        };
+        });
       }
 
       const execute = executorFor(executors, node);
       if (execute === null) {
-        return {
+        return end({
           status: 'failed',
           reason: `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} is a kind this runtime cannot execute yet`,
-        };
+        });
       }
 
       let result: StepResult | null = null;
@@ -301,49 +355,49 @@ export function walk(
         // ends without another try.
         if (cancellation.cancelled) {
           onStep({ nodeId: node.id, attempt, outcome: 'cancelled', output: null }, reached);
-          return { status: 'cancelled' };
+          return end({ status: 'cancelled' });
         }
 
         onStep({ nodeId: node.id, attempt, outcome: 'failed', output: null }, reached);
         if (attempt === node.retry.max) {
           const tries = node.retry.max + 1;
-          return {
+          return end({
             status: 'failed',
             reason:
               tries === 1
                 ? `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} failed: ${attempted.problem}`
                 : `the ${KIND_WORDS[node.kind]} node ${nameOf(node)} failed on all ${String(tries)} attempts; the last said: ${attempted.problem}`,
-          };
+          });
         }
         const waited = await wait(node.retry.backoff * 1_000);
-        if (!waited) return { status: 'cancelled' };
+        if (!waited) return end({ status: 'cancelled' });
       }
 
       // Unreachable by construction -- the loop either broke with a result or
       // returned -- and said as a failure rather than a throw so the run ends
       // in words if it ever is reached.
       if (result === null || !result.ok) {
-        return { status: 'failed', reason: `the node ${nameOf(node)} ended with no result` };
+        return end({ status: 'failed', reason: `the node ${nameOf(node)} ended with no result` });
       }
 
-      carried = result.output;
-      if (cancellation.cancelled) return { status: 'cancelled' };
+      carried = result.carried;
+      if (cancellation.cancelled) return end({ status: 'cancelled' });
 
       let next: GraphNode | null;
       if (result.next !== null) {
         next = byId.get(result.next) ?? null;
         if (next === null) {
-          return {
+          return end({
             status: 'failed',
             reason: `${nameOf(node)} routed to ${result.next}, which is no node here`,
-          };
+          });
         }
       } else {
         const followed = followEdge(node);
-        if ('problem' in followed) return { status: 'failed', reason: followed.problem };
+        if ('problem' in followed) return end({ status: 'failed', reason: followed.problem });
         next = followed.next;
       }
-      if (next === null) return { status: 'succeeded', output: carried };
+      if (next === null) return end({ status: 'succeeded', output: carried });
       node = next;
     }
   }

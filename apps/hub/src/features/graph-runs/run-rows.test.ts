@@ -10,7 +10,15 @@ import { createLogger } from '@agentplex/node-shared';
 import type { Database } from '../../db/database.js';
 import { openMigratedSchema, type MigratedSchema } from '../../db/test-migrated-schema.js';
 import { createGraphs } from '../graphs/graphs.js';
-import { endRun, failRunningRuns, insertRun, listRuns, readRun, replaceSteps } from './run-rows.js';
+import {
+  endRun,
+  failRunningRuns,
+  insertRun,
+  latestRun,
+  listRuns,
+  readRun,
+  replaceSteps,
+} from './run-rows.js';
 
 /**
  * The rows a run is, against the real schema 0018 makes.
@@ -80,7 +88,7 @@ const STEPS: readonly GraphRunStep[] = [
     nodeId: 'start' as GraphRunStep['nodeId'],
     attempt: 0,
     outcome: 'succeeded',
-    output: { language: 'rust' },
+    output: { kind: 'text', text: '{"language":"rust"}' },
   },
 ];
 
@@ -195,6 +203,16 @@ describe('run rows', () => {
 
     expect((await listRuns(db(), graph)).map((run) => run.number)).toEqual([3, 2, 1]);
     expect(await listRuns(db(), other)).toEqual([]);
+  });
+
+  it('reads one graph’s newest run alone, and null for a graph never run', async () => {
+    const graph = await publishedGraph();
+    const other = await publishedGraph('other');
+    await insertRun(db(), ids, clock, { graphNodeId: graph, version: 1, input: {} });
+    const second = await insertRun(db(), ids, clock, { graphNodeId: graph, version: 1, input: {} });
+
+    expect(await latestRun(db(), graph)).toMatchObject({ runId: second.runId, number: 2 });
+    expect(await latestRun(db(), other)).toBeNull();
   });
 
   it('answers null for a run id nobody minted', async () => {
