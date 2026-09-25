@@ -311,7 +311,15 @@ jobs:
   #
   # Any component's release advances the branch, not only the CLI's. The script
   # and the packages have to agree, and the newest released commit is the one
-  # that agrees with the newest package.
+  # that agrees with the newest package -- newest along `master`. A tag cut from
+  # a commit that is not on `master`, or from one older than the tree the branch
+  # already has, is recorded in the manifest and leaves the tree alone.
+  #
+  # No concurrency group, deliberately. Releases of different components run
+  # side by side and all write this branch, and a group would keep one running
+  # and one pending job and cancel the older pending ones -- four tags pushed
+  # together would lose two manifest entries. The script reads the branch
+  # again and retries when its push is refused instead.
   v1:
     name: v1
     needs: release
@@ -326,7 +334,13 @@ jobs:
       VERSION: ${{ needs.release.outputs.version }}
       PROTOCOL: ${{ needs.release.outputs.protocol }}
     steps:
+      # Full history, because whether the released commit may become the
+      # branch's tree is two ancestry questions -- is it on `master`, and does
+      # it descend from the commit the tree came from last -- and a shallow
+      # clone answers both "no" without knowing.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -362,73 +376,16 @@ jobs:
         run: pnpm --filter @agentplex/release build
 
       # The branch is advanced rather than fast-forwarded, and the difference is
-      # `versions.json`.
+      # `versions.json`: the manifest is in no commit on `master`, so a `v1`
+      # carrying one is never an ancestor of the next released commit. Each
+      # release is a new commit on top of the branch's own head, holding the
+      # released tree or the tree the branch already had, with the manifest
+      # merged into it.
       #
-      # This job used to push `$GITHUB_SHA` straight at `refs/heads/v1`, which
-      # worked while the branch held nothing but the released tree. It cannot
-      # now: the manifest is not in any commit on `master`, so a `v1` carrying
-      # one is never an ancestor of the next released commit and the push after
-      # that would be refused. So the released tree is taken wholesale on top of
-      # the previous `v1`, the manifest is merged into it, and the result is a
-      # commit whose parent is where the branch already was.
-      #
-      # A prerelease takes the manifest half and not the tree half. The script
-      # `curl | bash` fetches from this branch has to be the one from the last
-      # full release, so a release candidate leaves the tree exactly where it
-      # was and changes one file. The only exception is a branch that does not
-      # exist yet, where the candidate's tree is the only tree there is.
-      #
-      # Still no `--force`. The parent is the branch's own head, so a push that
-      # is not a fast-forward is refused by the server -- which is the guard,
-      # rather than something this script has to check. A `v1` that has moved
-      # ahead of the tag is a fact somebody needs to look at, not something a
-      # release job should overwrite.
+      # The script carries the argument for the rest -- why a refused push is
+      # read again and retried rather than serialised with a concurrency group,
+      # and why a tag not on `master`, or older than the tree the branch
+      # already has, is recorded without moving `install.sh`. It pushes by
+      # commit id to `refs/heads/v1` and never with `--force`.
       - name: Publish versions.json and advance v1 to the released commit
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          prerelease='no'
-          case "$VERSION" in *-*) prerelease='yes' ;; esac
-
-          previous="$RUNNER_TEMP/previous.json"
-          if git fetch --no-tags origin '+refs/heads/v1:refs/remotes/origin/v1'; then
-            git show 'origin/v1:versions.json' > "$previous" 2>/dev/null || : > "$previous"
-            git checkout -B v1 origin/v1
-            # The released tree wholesale, with HEAD left on v1: the commit this
-            # makes has the branch's head as its parent and the tag's content as
-            # its tree. Skipped for a prerelease, which leaves the branch's own
-            # tree in place and only rewrites the manifest below.
-            if [ "$prerelease" = 'no' ]; then
-              git read-tree -u --reset "$GITHUB_SHA"
-            fi
-          else
-            : > "$previous"
-            git checkout -B v1 "$GITHUB_SHA"
-          fi
-
-          node scripts/versions-manifest.ts "$COMPONENT" "$VERSION" "$PROTOCOL" "$previous" \
-            > versions.json
-          cat versions.json
-
-          if [ "$prerelease" = 'yes' ]; then
-            subject="$COMPONENT $VERSION: recorded in the manifest, without moving the branch"
-            body="$GITHUB_REF_NAME published $COMPONENT at $VERSION, a prerelease speaking
-          protocol $PROTOCOL. It is listed in versions.json so that
-          --role=$COMPONENT@$VERSION can install it, and it is not what the manifest
-          calls current. The tree is untouched: install.sh on this branch stays the
-          one from the last full release."
-          else
-            subject="$COMPONENT $VERSION: the installer and the manifest for the released commit"
-            body="$GITHUB_REF_NAME published $COMPONENT at $VERSION, speaking protocol $PROTOCOL.
-          This branch is what \`curl | bash\` fetches install.sh from and what an
-          install reads versions.json from, so both move to the commit the release
-          was cut from."
-          fi
-
-          git add versions.json
-          git commit -m "$subject
-
-          $body"
-          git push origin v1
+        run: scripts/advance-v1.sh "$COMPONENT" "$VERSION" "$PROTOCOL" "$GITHUB_SHA" origin

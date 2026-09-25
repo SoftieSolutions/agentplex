@@ -41,11 +41,11 @@ and CI runs each under its own name for that reason:
 ```sh
 pnpm docker:install    # the published package, installed by a bare npm
 pnpm docker:bootstrap  # install.sh, both roles, on containers with no Node
-pnpm lint:shell        # shellcheck over install.sh
+pnpm lint:shell        # shellcheck over install.sh and advance-v1.sh
 ```
 
 `pnpm lint:shell` is deliberately not part of `pnpm lint`: the image the checks
-run in is a Node image, and adding shellcheck to it to lint one file is a worse
+run in is a Node image, and adding shellcheck to it to lint two files is a worse
 trade than a second command. CI runs it on the runner, which ships one.
 
 ## The shape of the codebase
