@@ -9,7 +9,7 @@ import { createLogger } from '@agentplex/node-shared';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createFakeProviderAdapter, createFakeProviderFiles } from '@agentplex/providers/testing';
-import { createProviderRegistry } from '@agentplex/providers';
+import { createProviderRegistry, type ProviderFiles } from '@agentplex/providers';
 import { createDirectoryBrowser } from '../directories/directory-browse.js';
 import { createFakeDirectoryReader } from '../directories/fake-directory-reader.js';
 import { createFakeWorkingTree, type FakeWorkingTree } from '../working-tree/fake-working-tree.js';
@@ -53,6 +53,12 @@ interface Machine {
   readonly terminals: TerminalManager;
   readonly ptys: FakePtyFactory;
   readonly workingTree: FakeWorkingTree;
+  /**
+   * The store's transcripts as they now stand, by path. Every read goes to
+   * what is in here at the time, so a test can have the provider write between
+   * two reports.
+   */
+  readonly transcripts: Record<string, string>;
 }
 
 interface MachineOptions {
@@ -68,6 +74,12 @@ interface MachineOptions {
    * to.
    */
   readonly browseRoots?: readonly string[];
+  /** More made-up transcripts in the store, by path, beside the three every machine has. */
+  readonly files?: Readonly<Record<string, string>>;
+  /** The pid each fake pty reports, in the order they are opened. */
+  readonly pids?: readonly number[];
+  /** How many terminals the machine keeps before it evicts one. */
+  readonly cap?: number;
 }
 
 /**
@@ -87,38 +99,45 @@ const DISK = createFakeDirectoryReader({
 });
 
 function machine(options: MachineOptions = {}): Machine {
-  const files = createFakeProviderFiles({
-    files: {
-      '/volumes/work/claude/sessions/session-1.json': JSON.stringify({
-        signal: 'awaiting-input',
-        updatedAt: START - 1_000,
-        cwd: '/volumes/work/project',
-        // What this made-up provider records of the work itself, which is
-        // what a transcript read answers with. Three, so a bound of two has
-        // something to leave behind.
-        activities: [
-          { kind: 'command', text: 'pnpm install', exitStatus: 0 },
-          { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
-          { kind: 'command', text: 'pnpm test', exitStatus: 1 },
-        ],
-      }),
-      // A session this provider records no working directory for. Its adapter
-      // refuses a resume rather than guessing one, and that refusal has to
-      // survive the trip rather than becoming a crash.
-      '/volumes/work/claude/sessions/session-homeless.json': JSON.stringify({
-        signal: 'awaiting-input',
-        updatedAt: START - 1_000,
-      }),
-      // Mid-turn as of its last write, which is what withholds a stop.
-      '/volumes/work/claude/sessions/session-busy.json': JSON.stringify({
-        signal: 'progressing',
-        updatedAt: START - 1_000,
-        cwd: '/volumes/work/project',
-      }),
-    },
-  });
+  const transcripts: Record<string, string> = {
+    '/volumes/work/claude/sessions/session-1.json': JSON.stringify({
+      signal: 'awaiting-input',
+      updatedAt: START - 1_000,
+      cwd: '/volumes/work/project',
+      // What this made-up provider records of the work itself, which is
+      // what a transcript read answers with. Three, so a bound of two has
+      // something to leave behind.
+      activities: [
+        { kind: 'command', text: 'pnpm install', exitStatus: 0 },
+        { kind: 'edit', path: 'src/auth/refresh.ts', added: 18, removed: 4 },
+        { kind: 'command', text: 'pnpm test', exitStatus: 1 },
+      ],
+    }),
+    // A session this provider records no working directory for. Its adapter
+    // refuses a resume rather than guessing one, and that refusal has to
+    // survive the trip rather than becoming a crash.
+    '/volumes/work/claude/sessions/session-homeless.json': JSON.stringify({
+      signal: 'awaiting-input',
+      updatedAt: START - 1_000,
+    }),
+    // Mid-turn as of its last write, which is what withholds a stop.
+    '/volumes/work/claude/sessions/session-busy.json': JSON.stringify({
+      signal: 'progressing',
+      updatedAt: START - 1_000,
+      cwd: '/volumes/work/project',
+    }),
+    ...options.files,
+  };
+  // A fresh fake over the record on every read, so a rewrite shows up at the
+  // next scan the way a provider's own write would.
+  const files: ProviderFiles = {
+    readFile: (path) => createFakeProviderFiles({ files: transcripts }).readFile(path),
+    listDirectory: (path) => createFakeProviderFiles({ files: transcripts }).listDirectory(path),
+    readFileTail: (path, maxBytes) =>
+      createFakeProviderFiles({ files: transcripts }).readFileTail(path, maxBytes),
+  };
 
-  const ptys = createFakePtyFactory();
+  const ptys = createFakePtyFactory(options.pids === undefined ? {} : { pids: options.pids });
   const terminals = createTerminalManager({
     supervisor: createPtySupervisor({
       pty: ptys,
@@ -127,11 +146,13 @@ function machine(options: MachineOptions = {}): Machine {
       environment: {},
     }),
     clock,
+    ...(options.cap === undefined ? {} : { cap: options.cap }),
   });
 
   const workingTree = options.workingTree ?? createFakeWorkingTree();
 
   return {
+    transcripts,
     ptys,
     terminals,
     workingTree,
@@ -500,6 +521,234 @@ describe('a report', () => {
     const report = await sessions.report(WORK);
 
     expect(report?.sessions.map((one) => one.uncommitted)).toEqual([null, null, null]);
+  });
+});
+
+/**
+ * Which session a spawn turned out to be.
+ *
+ * Every terminal here starts at `START`, silent -- no prompt, so nothing the
+ * provider writes can be told apart by content -- and every session sits in a
+ * made-up transcript beside the three every machine has, which were written
+ * before `START` and so are never candidates.
+ */
+describe('binding a spawned terminal', () => {
+  const SESSIONS_AT = '/volumes/work/claude/sessions';
+
+  function transcript(fields: Readonly<Record<string, unknown>>): string {
+    return JSON.stringify({ signal: 'awaiting-input', cwd: '/volumes/work/project', ...fields });
+  }
+
+  async function spawnSilently(sessions: SessionController): Promise<string> {
+    const outcome = await sessions.start({
+      storeId: WORK,
+      sessionId: null,
+      provider: 'claude',
+      prompt: null,
+      directory: null,
+    });
+    if (!outcome.ok) throw new Error(`the spawn was refused: ${outcome.problem}`);
+    return outcome.terminalId;
+  }
+
+  it('leaves a session that began before the terminal to whoever began it', async () => {
+    // The case the last write got wrong. Somebody opened this session a
+    // minute ago in their own terminal and spoke to it half a second after
+    // ours started; its last write is after our start, its first is not, and
+    // a session cannot have been created by a process that did not yet exist.
+    const { sessions, terminals } = machine({
+      files: {
+        [`${SESSIONS_AT}/session-theirs.json`]: transcript({
+          createdAt: START - 60_000,
+          updatedAt: START + 500,
+        }),
+      },
+    });
+    const terminalId = await spawnSilently(sessions);
+
+    const report = await sessions.report(WORK);
+
+    expect(report?.holding).toEqual([]);
+    expect(terminals.terminal(terminalId)?.session).toBeNull();
+  });
+
+  it('binds nothing when two sessions began after the terminal did', async () => {
+    // Either could be ours, and a wrong guess is a claim to hold somebody
+    // else's session. The next scan, or the pid, settles it.
+    const { sessions, terminals } = machine({
+      files: {
+        [`${SESSIONS_AT}/session-one.json`]: transcript({
+          createdAt: START + 1,
+          updatedAt: START + 1,
+        }),
+        [`${SESSIONS_AT}/session-two.json`]: transcript({
+          createdAt: START + 2,
+          updatedAt: START + 2,
+        }),
+      },
+    });
+    const terminalId = await spawnSilently(sessions);
+
+    const report = await sessions.report(WORK);
+
+    expect(report?.holding).toEqual([]);
+    expect(terminals.terminal(terminalId)?.session).toBeNull();
+  });
+
+  it('binds the one session that began after the terminal did, and reports the hold', async () => {
+    const { sessions, terminals } = machine({
+      files: {
+        [`${SESSIONS_AT}/session-ours.json`]: transcript({
+          createdAt: START + 1,
+          updatedAt: START + 1,
+        }),
+      },
+    });
+    const terminalId = await spawnSilently(sessions);
+
+    const report = await sessions.report(WORK);
+
+    expect(report?.holding).toEqual([
+      { sessionId: 'session-ours', stoppable: true, pause: 'none' },
+    ]);
+    expect(terminals.terminal(terminalId)?.session).toEqual({
+      storeId: WORK,
+      sessionId: 'session-ours',
+    });
+  });
+
+  it('binds the session whose verified pid is the terminal own, whatever its dates', async () => {
+    // The provider registered the very process this server forked. No other
+    // session's timing can confuse that, so the dates are not consulted --
+    // even a second session that began after the terminal does not make it
+    // ambiguous.
+    const { sessions, terminals } = machine({
+      pids: [4242],
+      files: {
+        [`${SESSIONS_AT}/session-ours.json`]: transcript({
+          createdAt: START - 60_000,
+          updatedAt: START - 1_000,
+          running: true,
+          pid: 4242,
+        }),
+        [`${SESSIONS_AT}/session-later.json`]: transcript({
+          createdAt: START + 1,
+          updatedAt: START + 1,
+        }),
+      },
+    });
+    const terminalId = await spawnSilently(sessions);
+
+    const report = await sessions.report(WORK);
+
+    expect(report?.holding).toEqual([
+      { sessionId: 'session-ours', stoppable: true, pause: 'none' },
+    ]);
+    expect(terminals.terminal(terminalId)?.session).toEqual({
+      storeId: WORK,
+      sessionId: 'session-ours',
+    });
+  });
+
+  it('never binds a session another verified process is running, however its dates fit', async () => {
+    // Started after ours and alone in the store, so timing alone would take
+    // it. But its provider names the process running it, and that process is
+    // not the one this server forked: a claim to hold it would be false.
+    const { sessions, terminals } = machine({
+      pids: [4242],
+      files: {
+        [`${SESSIONS_AT}/session-theirs.json`]: transcript({
+          createdAt: START + 1,
+          updatedAt: START + 1,
+          running: true,
+          pid: 777,
+        }),
+      },
+    });
+    const terminalId = await spawnSilently(sessions);
+
+    const report = await sessions.report(WORK);
+
+    expect(report?.holding).toEqual([]);
+    expect(terminals.terminal(terminalId)?.session).toBeNull();
+  });
+
+  /**
+   * One of our own terminals held a session and has since exited.
+   *
+   * Once the process is gone the provider stops vouching for it, so the
+   * session loses its pid, no live terminal holds it, and it began after every
+   * terminal here did: timing alone would hand it to the next unbound spawn.
+   * But this server knows whose it was.
+   */
+  describe('after a terminal that had a session exits', () => {
+    const PROMPTED = `${SESSIONS_AT}/session-prompted.json`;
+
+    async function spawnPrompted(sessions: SessionController): Promise<string> {
+      const outcome = await sessions.start({
+        storeId: WORK,
+        sessionId: null,
+        provider: 'claude',
+        prompt: 'fix the build',
+        directory: null,
+      });
+      if (!outcome.ok) throw new Error(`the spawn was refused: ${outcome.problem}`);
+      return outcome.terminalId;
+    }
+
+    /** The prompted terminal's process exits, and with it the provider's word that anything runs the session. */
+    function exitPrompted({ ptys, transcripts }: Machine): void {
+      ptys.ptys[1]?.close({ exitCode: 0, signal: null });
+      transcripts[PROMPTED] = transcript({ createdAt: START + 1, updatedAt: START + 2 });
+    }
+
+    const running = {
+      [PROMPTED]: transcript({
+        createdAt: START + 1,
+        updatedAt: START + 1,
+        running: true,
+        pid: 2222,
+      }),
+    };
+
+    it('never hands that session to a terminal still waiting for its own', async () => {
+      const world = machine({ pids: [1111, 2222], files: running });
+      const { sessions, terminals } = world;
+      const silent = await spawnSilently(sessions);
+      const prompted = await spawnPrompted(sessions);
+
+      const first = await sessions.report(WORK);
+      expect(first?.holding).toEqual([
+        { sessionId: 'session-prompted', stoppable: true, pause: 'none' },
+      ]);
+      expect(terminals.terminal(prompted)?.session?.sessionId).toBe('session-prompted');
+
+      exitPrompted(world);
+      const second = await sessions.report(WORK);
+
+      expect(second?.holding).toEqual([]);
+      expect(terminals.terminal(silent)?.session).toBeNull();
+    });
+
+    it('still never hands it over once the exited terminal has been evicted', async () => {
+      // An exited terminal is the first thing the cap closes, and with it goes
+      // the terminal table's only record that the session was ours.
+      const world = machine({ cap: 2, pids: [1111, 2222, 3333], files: running });
+      const { sessions, terminals } = world;
+      const silent = await spawnSilently(sessions);
+      const prompted = await spawnPrompted(sessions);
+      await sessions.report(WORK);
+
+      exitPrompted(world);
+      const later = await spawnSilently(sessions);
+      expect(terminals.terminal(prompted)).toBeUndefined();
+
+      const report = await sessions.report(WORK);
+
+      expect(report?.holding).toEqual([]);
+      expect(terminals.terminal(silent)?.session).toBeNull();
+      expect(terminals.terminal(later)?.session).toBeNull();
+    });
   });
 });
 

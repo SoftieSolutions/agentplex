@@ -211,15 +211,17 @@ async function readProject(
       // written; the verified registry entry says what is happening, and only
       // it can tell an unanswered tool call that is waiting for a human from
       // one that is simply still running.
-      const resolved = resolveWithRegistry(
-        parsed.transcript.signal,
-        registry.live.get(sessionId.data),
-      );
+      const entry = registry.live.get(sessionId.data);
+      const resolved = resolveWithRegistry(parsed.transcript.signal, entry);
       sessions.push({
         sessionId: sessionId.data,
         signal: resolved.signal,
+        createdAt: parsed.transcript.createdAt,
         updatedAt: parsed.transcript.updatedAt,
         running: resolved.running,
+        // `live` holds only entries whose process was verified, so a pid read
+        // off it is a process and not a registry's stale claim.
+        pid: entry?.pid ?? null,
         cwd: parsed.transcript.cwd,
         title: parsed.transcript.title,
         usage: parsed.transcript.usage,

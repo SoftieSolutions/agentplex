@@ -60,8 +60,12 @@ describe('createCodexAdapter.discover', () => {
       {
         sessionId: COMPLETED_ID,
         signal: 'awaiting-input',
+        // The `session_meta` line, which codex writes before any turn.
+        createdAt: Date.parse('2026-09-12T02:51:30.988Z'),
         updatedAt: Date.parse('2026-09-12T02:51:35.024Z'),
         running: false,
+        // codex keeps no process registry, so there is never a pid to name.
+        pid: null,
         cwd: CWD,
         title: 'Reply with pineapple',
         // codex's own running thread total, with the cached part taken back

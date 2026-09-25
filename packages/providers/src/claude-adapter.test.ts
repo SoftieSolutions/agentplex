@@ -61,8 +61,13 @@ describe('createClaudeAdapter.discover', () => {
       {
         sessionId: SESSION_ID,
         signal: 'awaiting-input',
+        // The first turn, which is what a spawned terminal is joined by; the
+        // last one moves every time anybody speaks.
+        createdAt: Date.parse('2026-09-03T02:02:01.540Z'),
         updatedAt: Date.parse('2026-09-03T02:03:10.027Z'),
         running: false,
+        // No registry entry in this store, so no process this adapter verified.
+        pid: null,
         cwd: '/Users/dev/Code/agentplex',
         title: 'Docker compose without hub',
         // Two API responses across four lines, counted once each. The
@@ -305,6 +310,15 @@ describe('createClaudeAdapter.discover, against the session registry', () => {
     expect(found.status).toBe('working');
   });
 
+  it('names the pid of the process it verified, which is what a spawn is joined by', async () => {
+    // The pid a server spawned and the pid Claude Code registered are the
+    // same process when the spawn exec'd Claude Code, and that is the one
+    // join no other session's timing can confuse.
+    const found = await discoverOne({ [TRANSCRIPT]: PENDING_TOOL_USE, [ENTRY]: REGISTRY_ENTRY });
+
+    expect(found.session.pid).toBe(PID);
+  });
+
   it('keeps the AGX-17 answer when the registry entry outlived its process', async () => {
     // The entry is still on disk — they always are — and its pid is gone.
     const found = await discoverOne(
@@ -313,6 +327,8 @@ describe('createClaudeAdapter.discover, against the session registry', () => {
     );
 
     expect(found.session.running).toBe(false);
+    // An entry is a claim, and one whose process is gone names nobody.
+    expect(found.session.pid).toBeNull();
     expect(found.session.signal).toBe('progressing');
     expect(found.status).toBe('idle');
   });

@@ -47,6 +47,12 @@ const FAKE_WORKING_WINDOW_MS = 60_000;
 
 const fakeTranscriptSchema = z.object({
   signal: z.enum(['awaiting-permission', 'awaiting-input', 'progressing', 'quiet', 'unknown']),
+  /**
+   * When this made-up session was first written. Absent means at its last
+   * write, which keeps a fixture that states only `updatedAt` saying one date
+   * rather than inventing a second.
+   */
+  createdAt: z.int().nonnegative().optional(),
   updatedAt: z.int().nonnegative(),
   /**
    * Whether this made-up provider verified a live process of its own. Absent
@@ -54,6 +60,13 @@ const fakeTranscriptSchema = z.object({
    * like — and it keeps these tests exercising the caller's own liveness path.
    */
   running: z.boolean().optional(),
+  /**
+   * The pid of that verified process. A fixture that names one says
+   * `running: true` beside it, because a real adapter reports a pid only for a
+   * process it verified; nothing here checks the pair, and a fixture that set
+   * one without the other would be describing no provider that exists.
+   */
+  pid: z.int().positive().nullish(),
   /** This made-up provider records neither, and `null` is what that looks like. */
   cwd: z.string().min(1).nullish(),
   title: z.string().min(1).nullish(),
@@ -421,8 +434,10 @@ function parseTranscript(name: string, contents: string) {
     session: {
       sessionId: sessionId.data,
       signal: parsed.data.signal,
+      createdAt: parsed.data.createdAt ?? parsed.data.updatedAt,
       updatedAt: parsed.data.updatedAt,
       running: parsed.data.running ?? false,
+      pid: parsed.data.pid ?? null,
       cwd: parsed.data.cwd ?? null,
       title: parsed.data.title ?? null,
       usage: parsed.data.usage ?? null,

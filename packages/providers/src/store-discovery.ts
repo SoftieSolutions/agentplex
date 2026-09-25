@@ -1,4 +1,10 @@
-import type { Provider, SessionDescriptor, SessionRef, StoreDescriptor } from '@agentplex/protocol';
+import type {
+  Provider,
+  SessionDescriptor,
+  SessionId,
+  SessionRef,
+  StoreDescriptor,
+} from '@agentplex/protocol';
 import type { Clock } from '@agentplex/node-shared';
 import type { DiscoveryProblem, ProviderAdapter } from './provider-adapter.js';
 import type { ProviderRegistry } from './provider-registry.js';
@@ -34,9 +40,26 @@ export interface StoreDiscoveryProblem extends DiscoveryProblem {
   readonly provider: Provider;
 }
 
+/**
+ * When a session began and which verified process is running it, as its
+ * adapter reported them.
+ *
+ * Kept beside the descriptors rather than on them. These are what a server
+ * joins a terminal it spawned to the session the provider minted by, and the
+ * hub has no use for either, so neither changes what crosses the wire.
+ */
+export interface SessionOrigin {
+  /** Epoch ms of the session's first write. */
+  readonly createdAt: number;
+  /** The adapter-verified pid, or `null` when the adapter verified none. */
+  readonly pid: number | null;
+}
+
 export interface StoreSessions {
   readonly sessions: readonly SessionDescriptor[];
   readonly problems: readonly StoreDiscoveryProblem[];
+  /** One entry per session in `sessions`, by id. */
+  readonly origins: ReadonlyMap<SessionId, SessionOrigin>;
 }
 
 /**
@@ -60,6 +83,7 @@ export async function discoverStoreSessions(
   return {
     sessions: found.flatMap((one) => one.sessions),
     problems: found.flatMap((one) => one.problems),
+    origins: new Map(found.flatMap((one) => [...one.origins])),
   };
 }
 
@@ -78,6 +102,7 @@ async function discoverWithAdapter(
     return {
       sessions: [],
       problems: [{ provider, subject: store.path, problem: `adapter failed: ${String(error)}` }],
+      origins: new Map(),
     };
   }
 
@@ -142,5 +167,11 @@ async function discoverWithAdapter(
   return {
     sessions,
     problems: discovered.problems.map((problem) => ({ provider, ...problem })),
+    origins: new Map(
+      discovered.sessions.map((session) => [
+        session.sessionId,
+        { createdAt: session.createdAt, pid: session.pid },
+      ]),
+    ),
   };
 }

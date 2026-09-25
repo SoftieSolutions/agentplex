@@ -72,6 +72,42 @@ describe('discoverStoreSessions', () => {
     ]);
   });
 
+  it('keeps when each session began and its verified pid beside the listing, not on it', async () => {
+    // What this server joins a spawned terminal to its session by. Neither is
+    // anything the hub reads, so neither goes on a descriptor: the wire stays
+    // as it was and the server keeps them to itself.
+    const files = createFakeProviderFiles({
+      files: {
+        [`${transcriptsAt('claude')}/session-a.json`]: JSON.stringify({
+          signal: 'progressing',
+          createdAt: NOW - 60_000,
+          updatedAt: NOW - 1_000,
+          running: true,
+          pid: 4242,
+        }),
+        [`${transcriptsAt('claude')}/session-b.json`]: transcript('quiet'),
+      },
+    });
+    const registry = createProviderRegistry([createFakeProviderAdapter({ files })]);
+
+    const discovered = await discoverStoreSessions(STORE, {
+      registry,
+      clock,
+      liveness: nothingRunning,
+    });
+
+    expect(discovered.origins).toEqual(
+      new Map([
+        ['session-a', { createdAt: NOW - 60_000, pid: 4242 }],
+        // A made-up session that states no start began at its last write,
+        // and one that names no pid has none.
+        ['session-b', { createdAt: NOW - 1_000, pid: null }],
+      ]),
+    );
+    expect(discovered.sessions[0]).not.toHaveProperty('createdAt');
+    expect(discovered.sessions[0]).not.toHaveProperty('pid');
+  });
+
   it('carries a cwd and title the adapter did not find as null, and derives neither itself', async () => {
     // The only place a cwd is reliable is inside the provider's own format —
     // Claude Code's per-project directory name, for one, encodes `/` and `.`
@@ -402,6 +438,6 @@ describe('discoverStoreSessions', () => {
       liveness: nothingRunning,
     });
 
-    expect(discovered).toEqual({ sessions: [], problems: [] });
+    expect(discovered).toEqual({ sessions: [], problems: [], origins: new Map() });
   });
 });
