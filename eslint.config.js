@@ -466,8 +466,13 @@ export default tseslint.config(
     // suite adds two paths only a process has -- `$XDG_CACHE_HOME` and
     // `AGENTPLEX_VERSIONS` -- and it reaches no network to use them: the second
     // is the installer's own seam for a release read off a disk.
+    //
+    // The `v1` suite's subject is a shell script too, and a pair of git
+    // repositories it pushes between: whether a push was refused and retried is
+    // a fact about the remote, which only real git on both ends can supply.
     files: [
       'scripts/install.sh.integration.test.ts',
+      'scripts/advance-v1.integration.test.ts',
       'apps/cli/src/main.integration.test.ts',
       'apps/cli/src/installation/installation.integration.test.ts',
       'apps/cli/src/commands/update/update.integration.test.ts',

@@ -50,8 +50,8 @@ async function main(): Promise<void> {
   process.stdout.write(serializeVersionsManifest(manifest));
 }
 
-// Executed by the release workflow's `v1` job. The schema it merges through is
-// tested in the package that owns it.
+// Executed by `advance-v1.sh`, which the release workflow's `v1` job runs. The
+// schema it merges through is tested in the package that owns it.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await main();
 }

@@ -41,8 +41,13 @@ FROM base AS manifests
 # missing python3 in a stage that has nothing to do with node-pty. They stay in
 # this stage and never reach the runtime image, which copies the compiled
 # result rather than building anything.
+#
+# git is here for a test rather than for the install: the suite for
+# `scripts/advance-v1.sh` drives real git against a bare repository, and the
+# slim Node image has none. Same reasoning about where it stops: the runtime
+# image does not descend from this stage.
 RUN apt-get update \
-    && apt-get install --no-install-recommends --yes python3 make g++ \
+    && apt-get install --no-install-recommends --yes python3 make g++ git \
     && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/hub/package.json ./apps/hub/

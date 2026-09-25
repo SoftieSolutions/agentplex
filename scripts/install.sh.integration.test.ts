@@ -60,6 +60,8 @@ const clientInstallCommand = join(
 );
 const rootManifest = join(workspaceRoot, 'package.json');
 const releaseWorkflow = join(workspaceRoot, '.github', 'workflows', 'release.yml');
+// What the release workflow's `v1` job runs to push the branch.
+const advanceScript = join(scriptsDirectory, 'advance-v1.sh');
 // The two Docker stages that run this script against a machine it can really
 // install onto, and the two files that have to agree about how they are built.
 const checkWorkflow = join(workspaceRoot, '.github', 'workflows', 'ci.yml');
@@ -1731,14 +1733,16 @@ describe('where the script says it is served from', () => {
 
   /**
    * The other half of a URL that resolves: something has to put the script at
-   * it. The release workflow's `v1` job is that something, so the ref the URL
-   * names and the ref that job pushes are held together here rather than left
-   * to agree by memory across two directories.
+   * it. The release workflow's `v1` job is that something, by running
+   * `advance-v1.sh`, so the ref the URL names and the ref that script pushes
+   * are held together here rather than left to agree by memory across two
+   * directories -- and so is the job running the script at all.
    */
   it('is served from the ref the release workflow moves', () => {
     const [, , ref] = new URL(declaredUrl()).pathname.split('/').slice(1);
     expect(ref).toBeDefined();
-    expect(readFileSync(releaseWorkflow, 'utf8')).toContain(`refs/heads/${ref}`);
+    expect(readFileSync(releaseWorkflow, 'utf8')).toContain('run: scripts/advance-v1.sh ');
+    expect(readFileSync(advanceScript, 'utf8')).toContain(`refs/heads/${ref}`);
   });
 });
 
