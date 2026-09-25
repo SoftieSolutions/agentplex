@@ -12,7 +12,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { serveServerEnd } from './server-end.js';
-import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
+import { createFakeTerminals } from '../../../apps/server/src/terminal/fake-terminals.js';
 import { createFakeStoreFiles, readyProvider } from '@agentplex/providers/testing';
 import {
   createSocketPair,
@@ -25,18 +25,18 @@ import {
   type MessageSocket,
   type SocketDialer,
 } from '@agentplex/node-shared';
-import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
 import type { Database } from '../../../apps/hub/src/db/database.js';
 import {
   registerServer,
   revokeServer,
-} from '../../../apps/hub/src/features/pairing/server-registrations.js';
+} from '../../../apps/hub/src/pairing/server-registrations.js';
 import {
   createPairing,
   newServerRegistrationSchema,
   type Pairing,
-} from '../../../apps/hub/src/features/pairing/pairing.js';
+} from '../../../apps/hub/src/pairing/pairing.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
@@ -45,11 +45,11 @@ import {
   createFleetState,
   type FleetState,
   type StoreView,
-} from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
-import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
-import type { StoreReport } from '../../../apps/server/src/session-control.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { toMachineState } from '../../../apps/hub/src/features/fleet-state/machine-state.js';
+} from '../../../apps/hub/src/fleet-state/fleet-state.js';
+import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import type { StoreReport } from '../../../apps/server/src/sessions/session-control.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { toMachineState } from '../../../apps/hub/src/fleet-state/machine-state.js';
 
 /**
  * The reducer against the real supervisor, over real handshakes.

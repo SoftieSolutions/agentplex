@@ -12,7 +12,7 @@ import {
   type LogLevel,
 } from '@agentplex/node-shared';
 import { z } from 'zod';
-import type { LocalServerEntry } from './features/pairing/pairing.js';
+import type { LocalServerEntry } from './pairing/pairing.js';
 
 /**
  * The hub's configuration: a value produced from argv and env by a pure

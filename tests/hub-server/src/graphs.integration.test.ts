@@ -11,19 +11,19 @@ import {
 } from '@agentplex/protocol';
 import { createFakeMessageSocket, createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger } from '@agentplex/node-shared';
-import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
-import { createFakeApprovals } from '../../../apps/hub/src/features/approvals/fake-approvals.js';
-import { createFakeApprovalPolicy } from '../../../apps/hub/src/features/approval-policy/fake-approval-policy.js';
-import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
-import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
-import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
-import { createFakePairing } from '../../../apps/hub/src/features/pairing/fake-pairing.js';
-import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake-projects.js';
-import { createFakeSessions } from '../../../apps/hub/src/features/sessions/fake-sessions.js';
-import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake-terminal.js';
-import { createFleetState } from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
-import { createGraphs } from '../../../apps/hub/src/features/graphs/graphs.js';
-import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
+import { createClients, type Clients } from '../../../apps/hub/src/clients/clients.js';
+import { createFakeApprovals } from '../../../apps/hub/src/approvals/fake-approvals.js';
+import { createFakeApprovalPolicy } from '../../../apps/hub/src/approval-policy/fake-approval-policy.js';
+import { createFakeAttention } from '../../../apps/hub/src/attention/fake-attention.js';
+import { createFakeCatalogue } from '../../../apps/hub/src/catalogue/fake-catalogue.js';
+import { createFakeDocs } from '../../../apps/hub/src/docs/fake-docs.js';
+import { createFakePairing } from '../../../apps/hub/src/pairing/fake-pairing.js';
+import { createFakeProjects } from '../../../apps/hub/src/projects/fake-projects.js';
+import { createFakeSessions } from '../../../apps/hub/src/sessions/fake-sessions.js';
+import { createFakeTerminal } from '../../../apps/hub/src/terminal/fake-terminal.js';
+import { createFleetState } from '../../../apps/hub/src/fleet-state/fleet-state.js';
+import { createGraphs } from '../../../apps/hub/src/graphs/graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/graph-runs/fake-graph-runs.js';
 import {
   openMigratedSchema,
   type MigratedSchema,

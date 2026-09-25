@@ -25,10 +25,11 @@ session's identity is `{ storeId, sessionId }`, never the machine.
 - `apps/` holds deployables: `hub`, `server`, `cli`, `web`. `apps/cli` owns the
   bin and `apps/cli/src/commands/` holds a subcommand. Nothing imports an app,
   and nothing reaches into one by path.
-- `apps/hub/src/features/` is a folder per feature, each with one entry file
-  `<feature>.ts` exporting `<Name>` and `create<Name>`. Another feature imports
-  that file and nothing else in the folder; `pnpm lint` enforces it and
-  `CONTRIBUTING.md` argues it.
+- `hub`, `server` and `web` group `src/` by feature, one folder each, with the
+  composition root at the top. A hub feature has one entry file `<feature>.ts`
+  exporting `<Name>` and `create<Name>`; another feature imports that file and
+  nothing else in the folder. `db/` and `http/` are seams, not features.
+  `pnpm lint` enforces it and `CONTRIBUTING.md` argues it.
 - `apps/web` carries its published name in the workspace, because the hub finds
   the client by resolving that one specifier — the same in a checkout, the image
   and `lib/node_modules`. A file location, not an import: the hub loads no

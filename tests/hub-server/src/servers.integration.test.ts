@@ -6,7 +6,7 @@ import {
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import { serveServerEnd } from './server-end.js';
-import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
+import { createFakeTerminals } from '../../../apps/server/src/terminal/fake-terminals.js';
 import { createFakeStoreFiles, readyProvider } from '@agentplex/providers/testing';
 import {
   createSocketPair,
@@ -18,22 +18,22 @@ import type { Database } from '../../../apps/hub/src/db/database.js';
 import {
   registerServer,
   revokeServer,
-} from '../../../apps/hub/src/features/pairing/server-registrations.js';
+} from '../../../apps/hub/src/pairing/server-registrations.js';
 import {
   createPairing,
   newServerRegistrationSchema,
   type LiveServerRegistration,
   type Pairing,
-} from '../../../apps/hub/src/features/pairing/pairing.js';
+} from '../../../apps/hub/src/pairing/pairing.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
 } from '../../../apps/hub/src/db/test-migrated-schema.js';
-import { attentionEligibleStores } from '../../../apps/hub/src/features/servers/attention.js';
-import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
-import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { attentionEligibleStores } from '../../../apps/hub/src/servers/attention.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
+import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
 
 /**
  * The fleet: which servers are dialled, and what one being down costs the

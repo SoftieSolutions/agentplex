@@ -50,7 +50,7 @@ const draining = rowsFrom(hubFrames.machineStateDraining);
  * phases the capture did not catch -- vary the two fields on a captured row
  * and read it back through the same parser -- rather than writing a row by
  * hand. The problem sentences are the hub's own, transcribed from
- * `refusalText` in apps/hub/src/features/servers/server-handshake.ts.
+ * `refusalText` in apps/hub/src/servers/server-handshake.ts.
  */
 function staleAs(
   staleReason: StaleReason | null,

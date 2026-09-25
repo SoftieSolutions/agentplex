@@ -21,17 +21,17 @@ import {
 } from '@agentplex/node-shared';
 import { createSocketPair } from '@agentplex/node-shared/testing';
 import { createFakeStoreFiles, readyProvider } from '@agentplex/providers/testing';
-import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
+import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createFakeTerminals } from '../../../apps/server/src/terminal/fake-terminals.js';
 import { createSqliteDatabase } from '../../../apps/hub/src/db/sqlite.js';
 import { nodeMigrationFileSystem } from '../../../apps/hub/src/db/node-migration-files.js';
-import { createFakeBeaconSource } from '../../../apps/hub/src/features/discovery/fake-discovery.js';
-import { createFakeWebAssets } from '../../../apps/hub/src/features/web/fake-web.js';
+import { createFakeBeaconSource } from '../../../apps/hub/src/discovery/fake-discovery.js';
+import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web.js';
 import {
   CLIENT_SOCKET_PATH,
   CLIENT_TICKET_PATH,
-} from '../../../apps/hub/src/features/client-auth/client-auth.js';
+} from '../../../apps/hub/src/client-auth/client-auth.js';
 import { startHub, type Hub } from '../../../apps/hub/src/hub.js';
 import { serveServerEnd } from './server-end.js';
 

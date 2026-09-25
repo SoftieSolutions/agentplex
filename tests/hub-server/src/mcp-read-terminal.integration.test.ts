@@ -29,23 +29,23 @@ import {
   createFakeStoreFiles,
 } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
-import { createSessionController } from '../../../apps/server/src/session-control.js';
-import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
+import { createSessionController } from '../../../apps/server/src/sessions/session-control.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/working-tree/fake-working-tree.js';
 import {
   createTerminalManager,
   type TerminalManager,
-} from '../../../apps/server/src/terminal-manager.js';
-import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
-import { createFakeApprovals } from '../../../apps/hub/src/features/approvals/fake-approvals.js';
-import { createFakeApprovalPolicy } from '../../../apps/hub/src/features/approval-policy/fake-approval-policy.js';
-import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
-import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
-import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
+} from '../../../apps/server/src/terminal/terminal-manager.js';
+import { createClients, type Clients } from '../../../apps/hub/src/clients/clients.js';
+import { createFakeApprovals } from '../../../apps/hub/src/approvals/fake-approvals.js';
+import { createFakeApprovalPolicy } from '../../../apps/hub/src/approval-policy/fake-approval-policy.js';
+import { createFakeAttention } from '../../../apps/hub/src/attention/fake-attention.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
+import { registerServer } from '../../../apps/hub/src/pairing/server-registrations.js';
 import {
   createPairing,
   newServerRegistrationSchema,
-} from '../../../apps/hub/src/features/pairing/pairing.js';
+} from '../../../apps/hub/src/pairing/pairing.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
@@ -53,19 +53,19 @@ import {
 import {
   createFleetState,
   type FleetState,
-} from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
-import { createSessions } from '../../../apps/hub/src/features/sessions/sessions.js';
-import { createTerminal, type Terminal } from '../../../apps/hub/src/features/terminal/terminal.js';
-import { readTerminalTool } from '../../../apps/hub/src/features/mcp/read-terminal.js';
-import { callTool, type ToolCall } from '../../../apps/hub/src/features/mcp/test-tool-call.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
-import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
-import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake-projects.js';
-import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
-import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
-import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
-import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
+} from '../../../apps/hub/src/fleet-state/fleet-state.js';
+import { createSessions } from '../../../apps/hub/src/sessions/sessions.js';
+import { createTerminal, type Terminal } from '../../../apps/hub/src/terminal/terminal.js';
+import { readTerminalTool } from '../../../apps/hub/src/mcp/read-terminal.js';
+import { callTool, type ToolCall } from '../../../apps/hub/src/mcp/test-tool-call.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
+import { createFakeProjects } from '../../../apps/hub/src/projects/fake-projects.js';
+import { createFakeCatalogue } from '../../../apps/hub/src/catalogue/fake-catalogue.js';
+import { createFakeDocs } from '../../../apps/hub/src/docs/fake-docs.js';
+import { createFakeGraphs } from '../../../apps/hub/src/graphs/fake-graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/graph-runs/fake-graph-runs.js';
 
 /**
  * `read_terminal`, from a pty on one machine to an agent reading it as text.

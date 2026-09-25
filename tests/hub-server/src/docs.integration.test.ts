@@ -27,22 +27,22 @@ import { serveServerEnd } from './server-end.js';
 import {
   createFakeProjectFiles,
   type FakeProjectFiles,
-} from '../../../apps/server/src/fake-project-files.js';
-import { createProjectDocs } from '../../../apps/server/src/project-docs.js';
-import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
-import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
-import { createFakeApprovals } from '../../../apps/hub/src/features/approvals/fake-approvals.js';
-import { createFakeApprovalPolicy } from '../../../apps/hub/src/features/approval-policy/fake-approval-policy.js';
-import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
-import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
-import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
+} from '../../../apps/server/src/projects/fake-project-files.js';
+import { createProjectDocs } from '../../../apps/server/src/projects/project-docs.js';
+import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import { createFakeTerminals } from '../../../apps/server/src/terminal/fake-terminals.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createClients, type Clients } from '../../../apps/hub/src/clients/clients.js';
+import { createFakeApprovals } from '../../../apps/hub/src/approvals/fake-approvals.js';
+import { createFakeApprovalPolicy } from '../../../apps/hub/src/approval-policy/fake-approval-policy.js';
+import { createFakeAttention } from '../../../apps/hub/src/attention/fake-attention.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
+import { registerServer } from '../../../apps/hub/src/pairing/server-registrations.js';
 import {
   createPairing,
   newServerRegistrationSchema,
-} from '../../../apps/hub/src/features/pairing/pairing.js';
+} from '../../../apps/hub/src/pairing/pairing.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
@@ -50,14 +50,14 @@ import {
 import {
   createFleetState,
   type FleetState,
-} from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
-import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake-terminal.js';
-import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
-import { createDocs } from '../../../apps/hub/src/features/docs/docs.js';
-import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
-import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
-import { createProjects } from '../../../apps/hub/src/features/projects/projects.js';
-import { createSessions } from '../../../apps/hub/src/features/sessions/sessions.js';
+} from '../../../apps/hub/src/fleet-state/fleet-state.js';
+import { createFakeTerminal } from '../../../apps/hub/src/terminal/fake-terminal.js';
+import { createFakeCatalogue } from '../../../apps/hub/src/catalogue/fake-catalogue.js';
+import { createDocs } from '../../../apps/hub/src/docs/docs.js';
+import { createFakeGraphs } from '../../../apps/hub/src/graphs/fake-graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/graph-runs/fake-graph-runs.js';
+import { createProjects } from '../../../apps/hub/src/projects/projects.js';
+import { createSessions } from '../../../apps/hub/src/sessions/sessions.js';
 
 /**
  * A document, from a client's frame to a file on another machine and back.
@@ -79,7 +79,7 @@ import { createSessions } from '../../../apps/hub/src/features/sessions/sessions
  * Listing is not here, and that is not an omission: `docs.list` reads the hub's
  * index and asks no machine anything, so there is no leg for this file to
  * exercise. It is covered where it lives, in
- * `apps/hub/src/features/docs/docs.integration.test.ts`, including the case
+ * `apps/hub/src/docs/docs.integration.test.ts`, including the case
  * this file cannot reach -- a document listed while the machine holding it is
  * switched off.
  */

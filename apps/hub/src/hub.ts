@@ -17,34 +17,30 @@ import type { StoreFileSystem } from '@agentplex/providers';
 import type { Database } from './db/database.js';
 import { loadMigrations, type MigrationFileSystem } from './db/migration-files.js';
 import { migrate } from './db/migrations.js';
-import {
-  createClientAuth,
-  requestPath,
-  NOT_AUTHORIZED,
-} from './features/client-auth/client-auth.js';
-import { createApprovals } from './features/approvals/approvals.js';
-import { createApprovalPolicy } from './features/approval-policy/approval-policy.js';
-import { createCatalogue } from './features/catalogue/catalogue.js';
-import { createClients, type Clients } from './features/clients/clients.js';
-import { createDiscovery, type BeaconSource } from './features/discovery/discovery.js';
-import { createFleetState, type FleetState } from './features/fleet-state/fleet-state.js';
-import { createMcp } from './features/mcp/mcp.js';
-import { createPairing, type LocalServerEntry } from './features/pairing/pairing.js';
-import { createPaneLayout } from './features/pane-layout/pane-layout.js';
-import { createPush, type PushSender, type VapidKeyGenerator } from './features/push/push.js';
-import { createAttentionEdge } from './features/push/attention-edge.js';
-import { createDocs } from './features/docs/docs.js';
-import { createGraphs } from './features/graphs/graphs.js';
-import { createAgentExecutor } from './features/graph-runs/agent-executor.js';
-import { createGraphRuns } from './features/graph-runs/graph-runs.js';
-import { createHumanExecutor } from './features/graph-runs/human-executor.js';
-import { createProjects } from './features/projects/projects.js';
-import { createServers, type Servers } from './features/servers/servers.js';
-import { createSessions } from './features/sessions/sessions.js';
-import { createTasks } from './features/tasks/tasks.js';
-import { createAttention } from './features/attention/attention.js';
-import { createTerminal } from './features/terminal/terminal.js';
-import { createWeb, type WebAssetFileSystem } from './features/web/web.js';
+import { createClientAuth, requestPath, NOT_AUTHORIZED } from './client-auth/client-auth.js';
+import { createApprovals } from './approvals/approvals.js';
+import { createApprovalPolicy } from './approval-policy/approval-policy.js';
+import { createCatalogue } from './catalogue/catalogue.js';
+import { createClients, type Clients } from './clients/clients.js';
+import { createDiscovery, type BeaconSource } from './discovery/discovery.js';
+import { createFleetState, type FleetState } from './fleet-state/fleet-state.js';
+import { createMcp } from './mcp/mcp.js';
+import { createPairing, type LocalServerEntry } from './pairing/pairing.js';
+import { createPaneLayout } from './pane-layout/pane-layout.js';
+import { createPush, type PushSender, type VapidKeyGenerator } from './push/push.js';
+import { createAttentionEdge } from './push/attention-edge.js';
+import { createDocs } from './docs/docs.js';
+import { createGraphs } from './graphs/graphs.js';
+import { createAgentExecutor } from './graph-runs/agent-executor.js';
+import { createGraphRuns } from './graph-runs/graph-runs.js';
+import { createHumanExecutor } from './graph-runs/human-executor.js';
+import { createProjects } from './projects/projects.js';
+import { createServers, type Servers } from './servers/servers.js';
+import { createSessions } from './sessions/sessions.js';
+import { createTasks } from './tasks/tasks.js';
+import { createAttention } from './attention/attention.js';
+import { createTerminal } from './terminal/terminal.js';
+import { createWeb, type WebAssetFileSystem } from './web/web.js';
 import { createHubRoutes } from './http/routes.js';
 import { ensureHubIdentity } from './hub-identity.js';
 

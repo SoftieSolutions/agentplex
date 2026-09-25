@@ -1,21 +1,21 @@
 import type { ServerConfig } from './config.js';
-import { ensureDataRoot, type DataRootFileSystem } from './data-root.js';
-import type { DirectoryReader } from './directory-browse.js';
+import { ensureDataRoot, type DataRootFileSystem } from './data-root/data-root.js';
+import type { DirectoryReader } from './directories/directory-browse.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
-import type { ProjectFileSystem } from './project-files.js';
+import type { ProjectFileSystem } from './projects/project-files.js';
 import type {
   GrantFileSystem,
   ProviderPreflight,
   ProviderRegistry,
   StoreFileSystem,
 } from '@agentplex/providers';
-import type { BeaconNetwork } from './server-beacon.js';
-import type { StoreWatcher } from './store-watch.js';
-import type { ApprovalHooks } from './approval-launch.js';
+import type { BeaconNetwork } from './beacon/server-beacon.js';
+import type { StoreWatcher } from './store-watch/store-watch.js';
+import type { ApprovalHooks } from './approvals/approval-launch.js';
 import { startSessionServer, type SessionServer } from './server.js';
-import type { MachineLoadReader } from './machine-load.js';
-import type { WorkingTree } from './working-tree.js';
-import type { TerminalManager } from './terminal-manager.js';
+import type { MachineLoadReader } from './machine-load/machine-load.js';
+import type { WorkingTree } from './working-tree/working-tree.js';
+import type { TerminalManager } from './terminal/terminal-manager.js';
 import type { Clock, IdGenerator, Logger, Timers, TokenMinter } from '@agentplex/node-shared';
 import type { ProviderReadiness } from '@agentplex/protocol';
 

@@ -10,17 +10,17 @@ import {
 } from '@agentplex/providers/testing';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
-import { createTerminalManager } from './terminal-manager.js';
-import { createFakeDataRoot, type FakeDataRoot } from './fake-data-root.js';
-import { createFakeStoreWatcher } from './fake-store-watcher.js';
-import { createFakeProjectFiles } from './fake-project-files.js';
+import { createTerminalManager } from './terminal/terminal-manager.js';
+import { createFakeDataRoot, type FakeDataRoot } from './data-root/fake-data-root.js';
+import { createFakeStoreWatcher } from './store-watch/fake-store-watcher.js';
+import { createFakeProjectFiles } from './projects/fake-project-files.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
-import { createFakeWorkingTree } from './fake-working-tree.js';
+import { createFakeWorkingTree } from './working-tree/fake-working-tree.js';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import type { ServerConfig } from './config.js';
-import { createFakeMachineLoadReader } from './fake-machine-probe.js';
-import { createFakeDirectoryReader } from './fake-directory-reader.js';
+import { createFakeMachineLoadReader } from './machine-load/fake-machine-probe.js';
+import { createFakeDirectoryReader } from './directories/fake-directory-reader.js';
 
 const logger = createLogger('error', () => {});
 const ids = { newId: () => 'hub-under-test' };

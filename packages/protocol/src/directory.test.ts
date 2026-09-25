@@ -86,7 +86,7 @@ describe('directoryListingFrameSchema', () => {
  * The claim that this is "the same normalisation the server's project key uses"
  * is not made by a test here: it is made by `project-files.ts` calling this
  * function, and checked against `node:path`'s own POSIX `normalize` in
- * `apps/server/src/project-files.test.ts`, which is somewhere a Node builtin
+ * `apps/server/src/projects/project-files.test.ts`, which is somewhere a Node builtin
  * may be imported. This package is bundled into a browser and may import none.
  */
 describe('normaliseDirectory', () => {

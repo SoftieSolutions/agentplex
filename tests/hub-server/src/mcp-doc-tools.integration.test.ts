@@ -16,18 +16,18 @@ import { serveServerEnd } from './server-end.js';
 import {
   createFakeProjectFiles,
   type FakeProjectFiles,
-} from '../../../apps/server/src/fake-project-files.js';
-import { createProjectDocs } from '../../../apps/server/src/project-docs.js';
-import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
-import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
-import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
+} from '../../../apps/server/src/projects/fake-project-files.js';
+import { createProjectDocs } from '../../../apps/server/src/projects/project-docs.js';
+import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import { createFakeTerminals } from '../../../apps/server/src/terminal/fake-terminals.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
+import { registerServer } from '../../../apps/hub/src/pairing/server-registrations.js';
 import {
   createPairing,
   newServerRegistrationSchema,
-} from '../../../apps/hub/src/features/pairing/pairing.js';
+} from '../../../apps/hub/src/pairing/pairing.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
@@ -35,20 +35,20 @@ import {
 import {
   createFleetState,
   type FleetState,
-} from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
-import { createDocs, type Docs } from '../../../apps/hub/src/features/docs/docs.js';
-import { createProjects, type Projects } from '../../../apps/hub/src/features/projects/projects.js';
-import { docCreateTool } from '../../../apps/hub/src/features/mcp/doc-create.js';
-import { docListTool } from '../../../apps/hub/src/features/mcp/doc-list.js';
-import { docReadTool } from '../../../apps/hub/src/features/mcp/doc-read.js';
-import { docUpdateTool } from '../../../apps/hub/src/features/mcp/doc-update.js';
-import { callTool, type ToolCall } from '../../../apps/hub/src/features/mcp/test-tool-call.js';
+} from '../../../apps/hub/src/fleet-state/fleet-state.js';
+import { createDocs, type Docs } from '../../../apps/hub/src/docs/docs.js';
+import { createProjects, type Projects } from '../../../apps/hub/src/projects/projects.js';
+import { docCreateTool } from '../../../apps/hub/src/mcp/doc-create.js';
+import { docListTool } from '../../../apps/hub/src/mcp/doc-list.js';
+import { docReadTool } from '../../../apps/hub/src/mcp/doc-read.js';
+import { docUpdateTool } from '../../../apps/hub/src/mcp/doc-update.js';
+import { callTool, type ToolCall } from '../../../apps/hub/src/mcp/test-tool-call.js';
 
 /**
  * The document tools, from an agent's call to a file on another machine's disk
  * and back.
  *
- * The unit suites in `features/mcp` cover what each tool decides against a fake
+ * The unit suites in `apps/hub/src/mcp` cover what each tool decides against a fake
  * of the docs feature. This is the question no fake can answer: that the
  * feature behind the four tools is the real one over a real migrated schema,
  * that a `doc_create` naming a project node ends as a file under the *server's*

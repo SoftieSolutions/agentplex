@@ -1,15 +1,15 @@
 import type { MessageSocket } from '@agentplex/node-shared';
 import { createFakeGrantAuthority } from '@agentplex/providers/testing';
-import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
-import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
-import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
-import { createHubAudience } from '../../../apps/server/src/hub-audience.js';
-import { createProjectDocs } from '../../../apps/server/src/project-docs.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
+import { createFakeProjectFiles } from '../../../apps/server/src/projects/fake-project-files.js';
+import { createHubAudience } from '../../../apps/server/src/hub/hub-audience.js';
+import { createProjectDocs } from '../../../apps/server/src/projects/project-docs.js';
 import {
   serveHubConnection,
   type HubConnection,
   type HubConnectionDependencies,
-} from '../../../apps/server/src/hub-connection.js';
+} from '../../../apps/server/src/hub/hub-connection.js';
 
 /**
  * The server end of a linked socket pair, with the per-connection wiring a test

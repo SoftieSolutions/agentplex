@@ -23,20 +23,20 @@ import {
   nodeStoreFileSystem,
 } from '@agentplex/providers';
 import { checkNodePty, createPtySupervisor, nodePtyFactory } from '@agentplex/pty';
-import type { ApprovalHooks } from './approval-launch.js';
+import type { ApprovalHooks } from './approvals/approval-launch.js';
 import { startRuntime } from './boot.js';
-import { nodeApprovalFiles, openApprovalListener } from './node-approval-listener.js';
+import { nodeApprovalFiles, openApprovalListener } from './approvals/node-approval-listener.js';
 import { loadServerConfig, serverUsage } from './config.js';
-import { createNodeBeaconNetwork } from './node-beacon-transport.js';
-import { nodeDataRoot } from './node-data-root.js';
-import { nodeDirectoryReader } from './node-directory-reader.js';
-import { nodeProjectFiles } from './node-project-files.js';
-import { nodeStoreWatcher } from './node-store-watcher.js';
+import { createNodeBeaconNetwork } from './beacon/node-beacon-transport.js';
+import { nodeDataRoot } from './data-root/node-data-root.js';
+import { nodeDirectoryReader } from './directories/node-directory-reader.js';
+import { nodeProjectFiles } from './projects/node-project-files.js';
+import { nodeStoreWatcher } from './store-watch/node-store-watcher.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
-import { createMachineLoadReader, createNodeMachineProbe } from './machine-load.js';
-import { createGitWorkingTree } from './working-tree.js';
-import { refuseWithoutTerminals } from './terminal-support.js';
-import { createTerminalManager } from './terminal-manager.js';
+import { createMachineLoadReader, createNodeMachineProbe } from './machine-load/machine-load.js';
+import { createGitWorkingTree } from './working-tree/working-tree.js';
+import { refuseWithoutTerminals } from './terminal/terminal-support.js';
+import { createTerminalManager } from './terminal/terminal-manager.js';
 
 /**
  * The server's entrypoint: wiring and process concerns only. argv, env,
@@ -82,7 +82,7 @@ async function openApprovals(dataPath: string, logger: Logger): Promise<Approval
     directory: opened.directory,
     files: nodeApprovalFiles,
     hookCommand: process.execPath,
-    hookArgs: [fileURLToPath(new URL('./approval-hook.js', import.meta.url))],
+    hookArgs: [fileURLToPath(new URL('./approvals/approval-hook.js', import.meta.url))],
   };
 }
 

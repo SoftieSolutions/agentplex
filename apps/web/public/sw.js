@@ -80,8 +80,8 @@ async function shellNetworkFirst(request) {
 /**
  * Push: one session has newly started wanting a human, said on a lock screen.
  *
- * The hub decides when (apps/hub/src/features/push/attention-edge.ts) and what
- * may be said (features/push/push.ts). What arrives here is
+ * The hub decides when (apps/hub/src/push/attention-edge.ts) and what
+ * may be said (apps/hub/src/push/push.ts). What arrives here is
  * `{ title, body, data: { storeId, sessionId } }`, where `title` is the
  * provider and `body` is the status in words -- or, for a graph run waiting
  * on a person, `{ title, body, data: { graph } }`, where `body` names the run

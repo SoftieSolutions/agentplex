@@ -24,14 +24,14 @@ import type { Launch, LaunchPlan } from '@agentplex/providers';
 import { startRuntime, type Runtime } from './boot.js';
 import type { ServerConfig } from './config.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
-import { createFakeDataRoot } from './fake-data-root.js';
-import { createFakeDirectoryReader } from './fake-directory-reader.js';
-import { createFakeWorkingTree } from './fake-working-tree.js';
-import { createFakeTerminals, type FakeTerminals } from './fake-terminals.js';
-import { createFakeMachineLoadReader } from './fake-machine-probe.js';
-import { createFakeProjectFiles, type FakeProjectFiles } from './fake-project-files.js';
-import { createFakeStoreWatcher, type FakeStoreWatcher } from './fake-store-watcher.js';
-import { PROJECT_FILES_DIRECTORY } from './project-files.js';
+import { createFakeDataRoot } from './data-root/fake-data-root.js';
+import { createFakeDirectoryReader } from './directories/fake-directory-reader.js';
+import { createFakeWorkingTree } from './working-tree/fake-working-tree.js';
+import { createFakeTerminals, type FakeTerminals } from './terminal/fake-terminals.js';
+import { createFakeMachineLoadReader } from './machine-load/fake-machine-probe.js';
+import { createFakeProjectFiles, type FakeProjectFiles } from './projects/fake-project-files.js';
+import { createFakeStoreWatcher, type FakeStoreWatcher } from './store-watch/fake-store-watcher.js';
+import { PROJECT_FILES_DIRECTORY } from './projects/project-files.js';
 
 /**
  * The draining shutdown, against a real server on a real port with a real hub

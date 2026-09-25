@@ -1,6 +1,6 @@
 import type { SessionRef, StoreId } from '@agentplex/protocol';
 import type { Clock, Logger, Timers } from '@agentplex/node-shared';
-import type { TerminalManager } from './terminal-manager.js';
+import type { TerminalManager } from './terminal/terminal-manager.js';
 
 /**
  * The drain: the stretch between "this server is going down" and "everything it
