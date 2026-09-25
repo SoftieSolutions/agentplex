@@ -538,12 +538,19 @@ RUN grep -qx 'server /home/alice/.agentplex /home/alice/.agentplex/bin /home/ali
 # could not get one here would be this machine disagreeing with itself, which is
 # worth failing on rather than allowing for.
 #
+# No --bin-path and no --server-identity-file, and that is the other half of
+# the assertion: the doctor reads the settings file the units name, which
+# carries AGENTPLEX_BIN_PATH, and the identity file defaults to
+# $HOME/.agentplex/server.json exactly as the server's does. A doctor that
+# needed them retyped was reporting on a machine nobody runs. The report names
+# the file it read, and the data root it would write into.
+#
 # It still exits 1, because a logged-out provider is not usable and that is a
 # true statement about this container. The report is what is read.
-RUN agentplex doctor --role=server \
-    --bin-path="$HOME/.agentplex/bin" \
-    --server-identity-file="$HOME/.agentplex/server.json" >/tmp/doctor-after-setup.log 2>&1 || true
+RUN agentplex doctor --role=server >/tmp/doctor-after-setup.log 2>&1 || true
 RUN cat /tmp/doctor-after-setup.log \
+    && grep -qx '  /home/alice/\.agentplex/agentplex\.env' /tmp/doctor-after-setup.log \
+    && grep -Eq '^  ready +/home/alice/\.agentplex$' /tmp/doctor-after-setup.log \
     && grep -Eq '^  claude +unauthenticated +.*/home/alice/\.agentplex/bin$' /tmp/doctor-after-setup.log
 
 # Undoing it, which is the only place an uninstall can be exercised against
@@ -646,6 +653,10 @@ RUN find /opt/agentplex/node ! -user root -printf '%u %p\n' | tee /tmp/node-fore
 # rewrite it and nobody else on the machine can read it.
 RUN test "$(stat -c '%U:%G' /etc/agentplex/agentplex.env)" = root:agentplex \
     && test "$(stat -c '%a' /etc/agentplex/agentplex.env)" = 640
+# The identity file, named outright on this tier and nowhere near the default:
+# the account's home is the state directory, so the server's default would be a
+# file under /var/lib/agentplex/.agentplex that nothing mints.
+RUN grep -qx 'AGENTPLEX_SERVER_IDENTITY_FILE=/var/lib/agentplex/server.json' /etc/agentplex/agentplex.env
 
 # The same boundary as the account itself sees it, which is the form a provider
 # install and a compromised session both arrive in. Writing is what setup does

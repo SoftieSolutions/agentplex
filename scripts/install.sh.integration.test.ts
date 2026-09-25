@@ -1270,6 +1270,58 @@ describe('the settings file it writes once', () => {
     expect(lines).toContain(`AGENTPLEX_BIN_PATH=${prefix}/bin`);
   });
 
+  it('leaves the identity file to the default on a per-user install', () => {
+    // The server defaults it to `$HOME/.agentplex/server.json`, which on this
+    // tier is the prefix setup mints it into, so a line here would only be a
+    // second place to say the same path and to get it wrong.
+    const { home, result, contents } = environmentFileWritten(() => ['--role=server']);
+
+    expect(result.status).toBe(0);
+    const lines = contents(`${home}/.agentplex/agentplex.env`).split('\n');
+    expect(lines.filter((line) => line.startsWith('AGENTPLEX_SERVER_IDENTITY_FILE='))).toEqual([]);
+    expect(lines).toContain(`#AGENTPLEX_SERVER_IDENTITY_FILE=${home}/.agentplex/server.json`);
+  });
+
+  it('records the identity file on a --system install, where the default would miss it', () => {
+    // The account's home is the state directory, so the server's default there
+    // is `<state>/.agentplex/server.json` -- a file nothing mints. The fleet
+    // tier says the path outright instead of leaning on a default that is
+    // right only by accident.
+    //
+    // Driven as a step, not a run: a --system run needs root and writes /etc.
+    // The ownership at the end of the step is root's to hand out and its own
+    // root-only case below asserts it, so it is stubbed here and this case is
+    // about the contents alone.
+    const { script, home } = scratch();
+    const library = sourceableLibrary(script);
+    const driver = `${script}.system-settings`;
+    writeFileSync(
+      driver,
+      [
+        `source ${quote(library)}`,
+        'chown() { :; }',
+        'chmod() { :; }',
+        `UNIT_SCOPE='system'`,
+        `SERVICE_USER='agentplex'`,
+        `ROLE='server'`,
+        `DRY_RUN='no'`,
+        ...systemLayout(home),
+        'write_environment_file',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(driver, 0o755);
+
+    const result = run(driver, home, []);
+
+    expect(result.status).toBe(0);
+    const lines = readFileSync(join(home, 'etc', 'agentplex.env'), 'utf8').split('\n');
+    expect(lines).toContain(`AGENTPLEX_SERVER_IDENTITY_FILE=${join(home, 'state')}/server.json`);
+    expect(lines.filter((line) => line.includes('AGENTPLEX_SERVER_IDENTITY_FILE='))).toHaveLength(
+      1,
+    );
+  });
+
   it('records the prefix it was given rather than the one it would have chosen', () => {
     const { home, result, contents } = environmentFileWritten((where) => [
       '--role=server',

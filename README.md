@@ -115,24 +115,24 @@ pnpm docker:check   # the same, in a container
 
 Every setting has one flag and one environment variable; the flag wins.
 
-| Flag                     | Environment                      | Default               | Meaning                                                                                    |
-| ------------------------ | -------------------------------- | --------------------- | ------------------------------------------------------------------------------------------ |
-| `--role`                 | `AGENTPLEX_ROLE`                 | none, required        | `hub`, `server` or `both`                                                                  |
-| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`             | Interface to bind                                                                          |
-| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`                | Port the hub serves on                                                                     |
-| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`                | Port the hub dials                                                                         |
-| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none                  | SQLite file, absolute; required for `hub` and `both`                                       |
-| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none                  | Client credential, 32+ chars; required for `hub`, `both`                                   |
-| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none                  | Store root; repeatable, absolute                                                           |
-| `--browse-root`          | `AGENTPLEX_BROWSE_ROOTS`         | none                  | Directory a client may browse under; repeatable, absolute. None means browsing is refused  |
-| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | none                  | Absolute; required for `server` and `both`                                                 |
-| `--server-token`         | `AGENTPLEX_SERVER_TOKEN`         | minted on first start | Pairing token the deployment sets, 32+ chars; for a machine whose disk does not outlive it |
-| `--data-path`            | `AGENTPLEX_DATA_PATH`            | `$HOME/.agentplex`    | Absolute; the one directory a server writes into                                           |
-| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none                  | Agent directory, searched before `PATH`; repeatable                                        |
-| `--tz`                   | `AGENTPLEX_TZ`                   | inherited             | Zone a spawned session reports times in; IANA name                                         |
-| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                   | Terminals held at once; at least 1                                                         |
-| `--drain-seconds`        | `AGENTPLEX_SERVER_DRAIN_SECONDS` | `15`                  | Seconds shutdown waits for turns to end                                                    |
-| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`                | `debug`, `info`, `warn`, `error`                                                           |
+| Flag                     | Environment                      | Default                        | Meaning                                                                                    |
+| ------------------------ | -------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------ |
+| `--role`                 | `AGENTPLEX_ROLE`                 | none, required                 | `hub`, `server` or `both`                                                                  |
+| `--host`                 | `AGENTPLEX_HOST`                 | `0.0.0.0`                      | Interface to bind                                                                          |
+| `--hub-port`             | `AGENTPLEX_HUB_PORT`             | `8080`                         | Port the hub serves on                                                                     |
+| `--server-port`          | `AGENTPLEX_SERVER_PORT`          | `8081`                         | Port the hub dials                                                                         |
+| `--database-file`        | `AGENTPLEX_DATABASE_FILE`        | none                           | SQLite file, absolute; required for `hub` and `both`                                       |
+| `--client-token`         | `AGENTPLEX_CLIENT_TOKEN`         | none                           | Client credential, 32+ chars; required for `hub`, `both`                                   |
+| `--store-path`           | `AGENTPLEX_STORE_PATH`           | none                           | Store root; repeatable, absolute                                                           |
+| `--browse-root`          | `AGENTPLEX_BROWSE_ROOTS`         | none                           | Directory a client may browse under; repeatable, absolute. None means browsing is refused  |
+| `--server-identity-file` | `AGENTPLEX_SERVER_IDENTITY_FILE` | `$HOME/.agentplex/server.json` | Absolute; where setup mints the identity. `--system` installs write it out                 |
+| `--server-token`         | `AGENTPLEX_SERVER_TOKEN`         | minted on first start          | Pairing token the deployment sets, 32+ chars; for a machine whose disk does not outlive it |
+| `--data-path`            | `AGENTPLEX_DATA_PATH`            | `$HOME/.agentplex`             | Absolute; the one directory a server writes into                                           |
+| `--bin-path`             | `AGENTPLEX_BIN_PATH`             | none                           | Agent directory, searched before `PATH`; repeatable                                        |
+| `--tz`                   | `AGENTPLEX_TZ`                   | inherited                      | Zone a spawned session reports times in; IANA name                                         |
+| `--terminal-cap`         | `AGENTPLEX_TERMINAL_CAP`         | `8`                            | Terminals held at once; at least 1                                                         |
+| `--drain-seconds`        | `AGENTPLEX_SERVER_DRAIN_SECONDS` | `15`                           | Seconds shutdown waits for turns to end                                                    |
+| `--log-level`            | `AGENTPLEX_LOG_LEVEL`            | `info`                         | `debug`, `info`, `warn`, `error`                                                           |
 
 ### Checking a machine
 
