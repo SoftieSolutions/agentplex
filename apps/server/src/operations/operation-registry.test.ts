@@ -24,7 +24,7 @@ import { createOperationRegistry } from './operation-registry.js';
  */
 
 const DIRECTORY = '/srv/work';
-const GIT_STATUS = `git --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch`;
+const GIT_STATUS = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch`;
 const CLEAN = '# branch.oid abc\n# branch.head main\n';
 
 describe('the operation registry', () => {

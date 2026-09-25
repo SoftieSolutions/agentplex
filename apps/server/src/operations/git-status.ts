@@ -29,6 +29,31 @@ import { directorySchema, firstLine } from './directory.js';
  * `.git/index.lock` and refresh the index as a side effect of being asked a
  * question, and this runs against a directory an agent is actively working in.
  * A probe that takes a lock can lose a race with the thing it is watching.
+ *
+ * The two `-c` pairs in front keep the repository's own config from naming a
+ * program this runs. `core.fsmonitor` is a command git executes on every
+ * status, and whoever wrote the checkout's `.git/config` chose it; `-c` wins
+ * over every config file, so `core.fsmonitor=false` means git scans the tree
+ * itself. `core.hooksPath=/dev/null` closes the same door for any hook a
+ * subcommand might fire. Two programs the repository names are still
+ * reachable, and neither `-c` pair touches them:
+ *
+ * - A clean or process filter the repository configures and selects through
+ *   its attributes runs on a stat-dirty file. No flag turns filters off
+ *   without naming the driver, and the repository picks that name.
+ * - In a partial clone (`remote.<name>.promisor=true`), rename detection that
+ *   needs a blob the clone never fetched starts a child `git fetch`, and that
+ *   child runs whatever the repository's config names for reaching its
+ *   remote: among others `remote.<name>.uploadpack`, `core.sshCommand`,
+ *   `core.gitProxy`, `core.askPass`, a credential helper, an `ext::` URL
+ *   where the repository allows that protocol, or any of these reached
+ *   through a `url.<base>.insteadOf` rewrite. Probed on git 2.50.1: a staged rename away from a
+ *   missing blob made this exact argv run a marker-writing `uploadpack`.
+ *   `GIT_NO_LAZY_FETCH=1` and `git --no-lazy-fetch` both stopped it. The
+ *   variable is honoured from git 2.39.4 on, bookworm's 2.39.5 included, but
+ *   the runner fixes the child's environment once for every operation; the
+ *   flag arrived in 2.45, and 2.39.5 refuses it as an unknown option. So
+ *   neither is used here yet.
  */
 export interface GitStatus {
   /** The branch's short name, or `null` when HEAD is detached. */
@@ -61,7 +86,18 @@ export const gitStatusOperation: Operation<GitStatusRequest, GitStatus> = {
 
   argv: ({ directory }) => ({
     file: 'git',
-    args: ['--no-optional-locks', '-C', directory, 'status', '--porcelain=v2', '--branch'],
+    args: [
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.hooksPath=/dev/null',
+      '--no-optional-locks',
+      '-C',
+      directory,
+      'status',
+      '--porcelain=v2',
+      '--branch',
+    ],
   }),
 
   /**

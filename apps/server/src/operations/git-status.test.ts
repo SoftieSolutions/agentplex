@@ -36,7 +36,7 @@ const DIRECTORY = '/Users/dev/Code/agentplex';
  * checks nothing. The directory is here, in the arguments, and this line is
  * what fails if it ever moves to a spawn cwd.
  */
-const COMMAND_LINE = `git --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch`;
+const COMMAND_LINE = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch`;
 
 function runner(stdout: string) {
   return createFakeProcessRunner({ outcomes: { [COMMAND_LINE]: printed(stdout) } });
@@ -108,9 +108,22 @@ describe('git.status', () => {
     await runOperation(gitStatusOperation, { directory: DIRECTORY }, fake);
 
     const [request] = fake.requests;
+    // The two `-c` pairs lead: a repository's `core.fsmonitor` is a program
+    // git runs on every status, and the probe must not run it.
     expect(request).toEqual({
       file: 'git',
-      args: ['--no-optional-locks', '-C', DIRECTORY, 'status', '--porcelain=v2', '--branch'],
+      args: [
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        '--no-optional-locks',
+        '-C',
+        DIRECTORY,
+        'status',
+        '--porcelain=v2',
+        '--branch',
+      ],
       timeoutMs: gitStatusOperation.timeoutMs,
     });
     // The point of the assertion above, stated as itself: a directory is

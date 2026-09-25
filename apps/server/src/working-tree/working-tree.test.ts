@@ -7,8 +7,8 @@ import { createFakeWorkingTree } from './fake-working-tree.js';
 import { createGitWorkingTree, readWorkingTrees, DIRECTORIES_PER_REPORT } from './working-tree.js';
 
 const DIRECTORY = '/volumes/work/project';
-const DIFF_COMMAND = `git --no-optional-locks -C ${DIRECTORY} diff-index -M --numstat -z HEAD --`;
-const STATUS_COMMAND = `git --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch`;
+const DIFF_COMMAND = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} diff-index -M --numstat -z HEAD --`;
+const STATUS_COMMAND = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch`;
 
 const ONE_FILE: UncommittedDiff = {
   files: 1,
@@ -107,8 +107,33 @@ describe('the real reader', () => {
     // directory an agent is actively writing in, and a probe that takes
     // `.git/index.lock` can lose a race with the thing it is watching.
     expect(runner.requests.map((request) => request.args)).toEqual([
-      ['--no-optional-locks', '-C', DIRECTORY, 'status', '--porcelain=v2', '--branch'],
-      ['--no-optional-locks', '-C', DIRECTORY, 'diff-index', '-M', '--numstat', '-z', 'HEAD', '--'],
+      [
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        '--no-optional-locks',
+        '-C',
+        DIRECTORY,
+        'status',
+        '--porcelain=v2',
+        '--branch',
+      ],
+      [
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        '--no-optional-locks',
+        '-C',
+        DIRECTORY,
+        'diff-index',
+        '-M',
+        '--numstat',
+        '-z',
+        'HEAD',
+        '--',
+      ],
     ]);
   });
 });
