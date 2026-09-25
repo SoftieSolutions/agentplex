@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { builtinModules } from 'node:module';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import js from '@eslint/js';
 import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
@@ -18,12 +21,93 @@ import tseslint from 'typescript-eslint';
 // the hub resolves the package's manifest to find the directory of bytes it
 // serves, and loads no module out of it. The boundary is unchanged, so the name
 // this refuses moved with the package.
+//
+// These patterns judge a specifier by its spelling, which is enough for one
+// that is not relative. A relative one is judged by where it lands, in
+// `stayInMember` below: whether `../../x` leaves a member depends on how deep
+// the importing file sits, which no pattern can see. `**/apps/*/src/**`
+// therefore gives up the relative forms, so that one import is reported once.
 const forbidAppInternals = {
-  group: ['**/apps/*/src/**', 'agentplex/*', '@softiesolutions/agentplex-web*'],
-  message: 'Apps do not import each other. Share through @agentplex/protocol instead.',
+  group: ['**/apps/*/src/**', '!./**', '!../**', 'agentplex/*', '@softiesolutions/agentplex-web*'],
+  message: 'Apps do not import each other. Share through @agentplex/protocol.',
 };
 
-const restrictedImports = (extra) => ['error', { patterns: [forbidAppInternals, ...extra] }];
+/**
+ * A member is a directory holding a `package.json`: each app, each package,
+ * `scripts`, each suite under `tests`, and the repository root around them.
+ * A relative specifier in an `import`, an `export ... from` or an
+ * `export * from` is resolved against the file that writes it, and refused
+ * when the nearest `package.json` at or above where it lands is not the
+ * nearest one above that file. What it names past the climb -- `src`, `dist`,
+ * a manifest, a script -- and how the climb is spelled do not matter.
+ * `reachable` names the members, by path from the repository root, that a
+ * file may land in besides its own.
+ * Static imports only: a dynamic `import()` is seen neither here nor by
+ * no-restricted-imports.
+ */
+const memberRoots = new Map();
+const memberRootOf = (path) => {
+  if (!memberRoots.has(path)) {
+    const parent = dirname(path);
+    memberRoots.set(
+      path,
+      existsSync(join(path, 'package.json')) ? path : parent === path ? null : memberRootOf(parent),
+    );
+  }
+  return memberRoots.get(path);
+};
+
+const stayInMember = {
+  meta: {
+    type: 'problem',
+    schema: [
+      {
+        type: 'object',
+        properties: { reachable: { type: 'array', items: { type: 'string' } } },
+        additionalProperties: false,
+      },
+    ],
+    messages: {
+      escapes:
+        "'{{specifier}}' lands in {{target}}, which is not this file's member. No member reaches into another by relative path: import the package by its name.",
+    },
+  },
+  create(context) {
+    if (!isAbsolute(context.filename)) return {};
+    const directory = dirname(context.filename);
+    const own = memberRootOf(directory);
+    const reachable = new Set(
+      (context.options[0]?.reachable ?? []).map((member) => join(import.meta.dirname, member)),
+    );
+    const check = (node) => {
+      const specifier = node.source?.value;
+      if (typeof specifier !== 'string' || !/^\.\.?(\/|$)/.test(specifier)) return;
+      const target = memberRootOf(resolve(directory, specifier.replace(/\?.*$/, '')));
+      if (target === own || reachable.has(target)) return;
+      context.report({
+        node: node.source,
+        messageId: 'escapes',
+        data: {
+          specifier,
+          target:
+            target === null
+              ? 'no member'
+              : relative(import.meta.dirname, target) || 'the repository root',
+        },
+      });
+    };
+    return {
+      ImportDeclaration: check,
+      ExportNamedDeclaration: check,
+      ExportAllDeclaration: check,
+    };
+  },
+};
+
+const restrictedImports = (extra, paths = []) => [
+  'error',
+  { paths, patterns: [forbidAppInternals, ...extra] },
+];
 
 /** The design-system seam: see the apps/web block below. */
 const mantineBehindUi = {
@@ -114,6 +198,9 @@ const HUB_FEATURES = [
  */
 const HUB_SEAMS = ['db', 'http'];
 
+const PROTOCOL_IS_A_LEAF =
+  'packages/protocol is shared by a Node service and a browser bundle: it may use neither Node builtins nor another workspace package.';
+
 const startsNoChild = {
   group: ['node:child_process', 'child_process'],
   message:
@@ -123,18 +210,38 @@ const startsNoChild = {
 /**
  * One feature reaching into another. `alsoAllowed` is how the test-file block
  * below adds `fake-<feature>.ts`, which is a seam a test may stand on and a
- * service module may not.
+ * service module may not. An entry is a path from the folder that holds the
+ * features, a `<feature>/fake-*.js` with `*` for the feature, and is opened
+ * under both spellings below.
  */
 const featureEntriesOnly = (alsoAllowed = []) => [
   {
-    group: [
-      // Every sibling folder is closed, then the seams and each named
-      // feature's entry file are opened again.
-      '../*/*',
-      ...HUB_SEAMS.map((seam) => `!../${seam}/*`),
-      ...HUB_FEATURES.map((feature) => `!../${feature}/${feature}.js`),
-      ...alsoAllowed,
-    ],
+    // Every sibling folder is closed, then the seams and each named feature's
+    // entry file are opened again.
+    //
+    // The patterns match the specifier's spelling and are anchored, so `..`
+    // does not cover `./..`: each rule is written for both. A spelling that
+    // does not start with either, `././../x/y` or `./z/../../x/y`, is not
+    // seen here at all; this rule holds the two ways a sibling is written.
+    //
+    // A feature's files sit one folder under `src`, so three climbs have left
+    // `src` and `apps/hub`, and landed in `apps`. Where that climb leaves the
+    // hub it is `stayInMember`'s report rather than a second one from here, so
+    // `../../..` is reopened, the folder as well as what is under it, because
+    // `*/*` matches it as a folder and nothing under an excluded folder can be
+    // reopened. A climb that comes back in, `../../../hub/src/...`, lands in
+    // the file's own member and so passes `stayInMember`, and `apps/hub` is
+    // closed again for that reason: the only three-level climbs left open are
+    // the ones that really leave.
+    group: ['..', './..'].flatMap((up) => [
+      `${up}/*/*`,
+      `!${up}/../..`,
+      `!${up}/../../**`,
+      `${up}/../../hub`,
+      ...HUB_SEAMS.map((seam) => `!${up}/${seam}/*`),
+      ...HUB_FEATURES.map((feature) => `!${up}/${feature}/${feature}.js`),
+      ...alsoAllowed.map((path) => `!${up}/${path}`),
+    ]),
     message:
       'A feature reaches another only through its entry file: import ../<feature>/<feature>.js, and add what you need to that interface rather than reaching past it.',
   },
@@ -153,7 +260,9 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
     },
+    plugins: { agentplex: { rules: { 'stay-in-member': stayInMember } } },
     rules: {
+      'agentplex/stay-in-member': 'error',
       '@typescript-eslint/consistent-type-imports': ['error', { fixStyle: 'inline-type-imports' }],
       '@typescript-eslint/no-unused-vars': [
         'error',
@@ -166,16 +275,29 @@ export default tseslint.config(
     },
   },
   {
+    // `scripts` is the repository's tooling and ships nowhere, so a suite or a
+    // test configuration may stand on it: the environment pins every runner
+    // shares, and the daemon list the packaging step writes and the bin's
+    // tests hold it to. Code that ships may not, because nothing under
+    // `scripts` is in a published package for it to find at runtime.
+    files: ['**/*.test.ts', '**/*.test.tsx', '**/vite.config.ts', '**/vitest.config.ts'],
+    rules: { 'agentplex/stay-in-member': ['error', { reachable: ['scripts'] }] },
+  },
+  {
     // The protocol package is a leaf: it depends on neither app, and on no
     // runtime that only one of them has.
     files: ['packages/protocol/**/*.ts'],
     languageOptions: { globals: {} },
     rules: {
-      // Node globals, not just Node imports. `types: []` in this package's
-      // tsconfig does not keep them out: vite's declarations reach the program
-      // through vitest and carry a `/// <reference types="node" />`, which
-      // re-injects @types/node whatever the types array says. So a bare
-      // `process.env` typechecks cleanly here, and lint is what catches it.
+      // Node globals, not just Node imports, and lint is the enforcement for
+      // both: the typechecker cannot be. This package's tsconfig keeps
+      // `types: ["node"]` because `types: []` fails the build: `URL` and
+      // `atob`/`btoa` are declared by @types/node and not by the ES lib the
+      // package compiles against. Even with `types: []`, vite's declarations
+      // reach the typecheck program through vitest carrying a
+      // `/// <reference types="node" />`. So a bare `process.env` or an
+      // `import 'fs'` typechecks cleanly here, and these two rules are what
+      // catch it.
       'no-restricted-globals': [
         'error',
         ...['process', 'Buffer', '__dirname', '__filename', 'global', 'setImmediate'].map(
@@ -185,13 +307,24 @@ export default tseslint.config(
           }),
         ),
       ],
-      '@typescript-eslint/no-restricted-imports': restrictedImports([
-        {
-          group: ['node:*', '@agentplex/*'],
-          message:
-            'packages/protocol is shared by a Node service and a browser bundle: it may use neither Node builtins nor another workspace package.',
-        },
-      ]),
+      // A builtin needs no `node:` prefix, so `node:*` alone let `'fs'` and
+      // `'crypto'` through. The bare names come from the running Node's own
+      // list, and they are exact-match `paths` rather than `patterns`: as a
+      // gitignore pattern `path` also matches `./path`, which is this
+      // package's own file. The prefixed forms stay with `node:*`, which also
+      // covers the builtins that exist only with the prefix; naming them in
+      // both places reports one import twice.
+      '@typescript-eslint/no-restricted-imports': restrictedImports(
+        [
+          {
+            group: ['node:*', '@agentplex/*'],
+            message: PROTOCOL_IS_A_LEAF,
+          },
+        ],
+        builtinModules
+          .filter((name) => !name.startsWith('node:'))
+          .map((name) => ({ name, message: PROTOCOL_IS_A_LEAF })),
+      ),
     },
   },
   {
@@ -317,13 +450,14 @@ export default tseslint.config(
     files: ['tests/hub-server/**/*.ts'],
     languageOptions: { globals: globals.node },
     rules: {
+      'agentplex/stay-in-member': 'off',
       '@typescript-eslint/no-restricted-imports': restrictedImports([
         {
           group: ['node:child_process', 'child_process'],
           message: 'Starting a child directly bypasses the operation registry.',
         },
       ]).map((entry) =>
-        typeof entry === 'object' ? { patterns: entry.patterns.slice(1) } : entry,
+        typeof entry === 'object' ? { ...entry, patterns: entry.patterns.slice(1) } : entry,
       ),
     },
   },
@@ -366,7 +500,7 @@ export default tseslint.config(
     ignores: HUB_SEAMS.map((seam) => `apps/hub/src/${seam}/**`),
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports(
-        featureEntriesOnly(['!../*/fake-*.js']),
+        featureEntriesOnly(['*/fake-*.js']),
       ),
     },
   },
