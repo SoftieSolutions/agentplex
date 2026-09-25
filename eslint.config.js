@@ -1,3 +1,4 @@
+import { builtinModules } from 'node:module';
 import js from '@eslint/js';
 import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
@@ -18,12 +19,30 @@ import tseslint from 'typescript-eslint';
 // the hub resolves the package's manifest to find the directory of bytes it
 // serves, and loads no module out of it. The boundary is unchanged, so the name
 // this refuses moved with the package.
+//
+// `**/apps/*/src/**` only sees a path that names `apps`, and a relative one
+// from inside an app never has to: `../../hub/src/config.js` from
+// `apps/cli/src` is the hub. `../**/src/**` is the shape every such escape
+// has. Each member keeps its code under `src`, so a relative path that climbs
+// and then passes through a `src` segment has left the member it started in --
+// except a path of nothing but `../` then `src`, which is a sibling of `src`
+// (a script, a test directory) reaching back into its own member.
 const forbidAppInternals = {
-  group: ['**/apps/*/src/**', 'agentplex/*', '@softiesolutions/agentplex-web*'],
-  message: 'Apps do not import each other. Share through @agentplex/protocol instead.',
+  group: [
+    '**/apps/*/src/**',
+    '../**/src/**',
+    '!../src/**',
+    'agentplex/*',
+    '@softiesolutions/agentplex-web*',
+  ],
+  message:
+    'Apps do not import each other, and no member reaches into another by relative path. Share through @agentplex/protocol, or import the package by its name.',
 };
 
-const restrictedImports = (extra) => ['error', { patterns: [forbidAppInternals, ...extra] }];
+const restrictedImports = (extra, paths = []) => [
+  'error',
+  { paths, patterns: [forbidAppInternals, ...extra] },
+];
 
 /** The design-system seam: see the apps/web block below. */
 const mantineBehindUi = {
@@ -114,6 +133,9 @@ const HUB_FEATURES = [
  */
 const HUB_SEAMS = ['db', 'http'];
 
+const PROTOCOL_IS_A_LEAF =
+  'packages/protocol is shared by a Node service and a browser bundle: it may use neither Node builtins nor another workspace package.';
+
 const startsNoChild = {
   group: ['node:child_process', 'child_process'],
   message:
@@ -171,11 +193,15 @@ export default tseslint.config(
     files: ['packages/protocol/**/*.ts'],
     languageOptions: { globals: {} },
     rules: {
-      // Node globals, not just Node imports. `types: []` in this package's
-      // tsconfig does not keep them out: vite's declarations reach the program
-      // through vitest and carry a `/// <reference types="node" />`, which
-      // re-injects @types/node whatever the types array says. So a bare
-      // `process.env` typechecks cleanly here, and lint is what catches it.
+      // Node globals, not just Node imports, and lint is the enforcement for
+      // both: the typechecker cannot be. This package's tsconfig keeps
+      // `types: ["node"]`, because `types: []` was measured (2a798f03, then
+      // reverted) and fails the build -- `URL` and `atob`/`btoa` are declared by
+      // @types/node and not by the ES lib -- and even with it, vite's
+      // declarations reach the program through vitest carrying a
+      // `/// <reference types="node" />`. So a bare `process.env` or an
+      // `import 'fs'` typechecks cleanly here, and these two rules are what
+      // catch it.
       'no-restricted-globals': [
         'error',
         ...['process', 'Buffer', '__dirname', '__filename', 'global', 'setImmediate'].map(
@@ -185,13 +211,24 @@ export default tseslint.config(
           }),
         ),
       ],
-      '@typescript-eslint/no-restricted-imports': restrictedImports([
-        {
-          group: ['node:*', '@agentplex/*'],
-          message:
-            'packages/protocol is shared by a Node service and a browser bundle: it may use neither Node builtins nor another workspace package.',
-        },
-      ]),
+      // A builtin needs no `node:` prefix, so `node:*` alone let `'fs'` and
+      // `'crypto'` through. The bare names come from the running Node's own
+      // list, and they are exact-match `paths` rather than `patterns`: as a
+      // gitignore pattern `path` also matches `./path`, which is this
+      // package's own file. The prefixed forms stay with `node:*`, which also
+      // covers the builtins that exist only with the prefix; naming them in
+      // both places reports one import twice.
+      '@typescript-eslint/no-restricted-imports': restrictedImports(
+        [
+          {
+            group: ['node:*', '@agentplex/*'],
+            message: PROTOCOL_IS_A_LEAF,
+          },
+        ],
+        builtinModules
+          .filter((name) => !name.startsWith('node:'))
+          .map((name) => ({ name, message: PROTOCOL_IS_A_LEAF })),
+      ),
     },
   },
   {
@@ -323,7 +360,7 @@ export default tseslint.config(
           message: 'Starting a child directly bypasses the operation registry.',
         },
       ]).map((entry) =>
-        typeof entry === 'object' ? { patterns: entry.patterns.slice(1) } : entry,
+        typeof entry === 'object' ? { ...entry, patterns: entry.patterns.slice(1) } : entry,
       ),
     },
   },
