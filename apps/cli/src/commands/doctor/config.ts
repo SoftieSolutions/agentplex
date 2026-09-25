@@ -2,17 +2,31 @@ import { z } from 'zod';
 import {
   DEFAULT_HUB_PORT,
   DEFAULT_SERVER_PORT,
-  LOG_LEVELS,
+  HUB_SETTINGS,
+  SERVER_SETTINGS,
+  nonEmpty,
   readAbsolutePath,
   readAbsolutePaths,
+  readAnnounce,
+  readDataPath,
+  readDrainSeconds,
   readFlags,
+  readHost,
+  readIdentityPath,
+  readLocalServer,
+  readLogLevel,
   readPort,
-  readSetting,
+  readServerToken,
+  readTerminalCap,
+  readTimezone,
   settingValue,
   usageLines,
+  type Environment,
   type LogLevel,
   type Setting,
 } from '@agentplex/node-shared';
+import type { RecordedDeployment } from '../../installation/recorded-settings.js';
+import { SYSTEM_STATE_DIR } from '../../installation/layout.js';
 
 /**
  * The doctor's configuration: the settings the installer wrote, read the way
@@ -20,6 +34,14 @@ import {
  * deployment* can start. A doctor with flags of its own would be reporting on
  * a machine nobody is going to run. `main` calls this once and wires the
  * result.
+ *
+ * "The way the daemons read them" is literal. The tables and the parsers are
+ * the ones in `@agentplex/node-shared` that the server and the hub read
+ * through, so every flag either daemon accepts is one this accepts, and every
+ * value either refuses is refused here. What starts from the settings file is
+ * also the daemons' order: the file the units name, then this process's
+ * environment over it, then flags over both -- the file is what the service
+ * runs with, and the other two are how an operator asks "and what if".
  */
 
 /**
@@ -73,18 +95,32 @@ export interface ServerConfig {
    * Where this server keeps its own identity: its `serverId` and the pairing
    * token the user types into the hub.
    *
-   * Required, and absolute, for the reason the store paths are: this file is
-   * the difference between a server the hub recognises and one it has never
-   * met, and a path resolved against whatever directory a unit file or a
-   * container image happened to leave the process in would silently become a
-   * different file -- at which point the server mints a new identity, the
-   * pairing stops working, and nothing says why.
-   *
-   * There is no default. A location this consequential is a deployment
-   * decision, and a default would be picked once, by accident, on the machine
-   * where it happened to work.
+   * Absolute, for the reason the store paths are, and defaulted from the home
+   * exactly as the server defaults it -- `readIdentityPath` carries both
+   * arguments -- so that the file this reports on is the one the server would
+   * open.
    */
   readonly identityPath: string;
+  /**
+   * The one directory the server writes into, defaulted as the server
+   * defaults it. `inspectMachine` asks whether the server could create it or
+   * write in it, because the server refuses to start when it cannot.
+   */
+  readonly dataPath: string;
+  /**
+   * The pairing token the deployment set, or undefined for one the server
+   * mints. Parsed so that a token too short to be one is refused here as it is
+   * at boot; nothing in the report prints it.
+   */
+  readonly serverToken: { readonly token: string; readonly setting: string } | undefined;
+  /**
+   * The zone a spawned child reports times in, or undefined to inherit.
+   * Carried into the environment the preflight runs under, which is the one a
+   * spawn would get.
+   */
+  readonly timezone: string | undefined;
+  /** How long the server's shutdown waits for turns to end, in milliseconds. */
+  readonly drainMs: number;
   /**
    * How many terminals this server may hold at once.
    *
@@ -117,12 +153,12 @@ export interface ServerConfig {
  * What a hub needs before it can boot, as the settings name it.
  *
  * Three of these four are `null`-able, and that is the difference between this
- * half and the server half above. A server with no identity file is a
- * configuration the doctor refuses to run against, because there is nothing to
- * inspect. A hub with no database file or no client token is a machine in a
- * state an operator asked about: it is the most common way a half-finished hub
- * fails, and the doctor's job is to print that as a line rather than to answer
- * a usage message instead of the report.
+ * half and the server half above. The server's paths all have defaults, so a
+ * server half the doctor cannot settle is a machine with no home to default
+ * from, which it refuses as the server does. A hub with no database file or no
+ * client token is a machine in a state an operator asked about: it is the most
+ * common way a half-finished hub fails, and the doctor's job is to print that
+ * as a line rather than to answer a usage message instead of the report.
  *
  * A setting that is present and *malformed* -- a relative path, a port that is
  * not a number -- still stops the run with a usage error, the way it does for
@@ -144,10 +180,25 @@ export interface HubConfig {
    */
   readonly clientToken: string | null;
   /**
-   * Where the server on this machine keeps its identity, when the settings name
-   * one, and `null` for the hub that has none -- which is most hubs.
+   * The server on this machine the hub pairs at boot -- where it keeps its
+   * identity and the port the hub dials -- when the settings name one, and
+   * `null` for the hub that has none, which is most hubs.
    */
-  readonly localServerIdentityPath: string | null;
+  readonly localServer: { readonly identityPath: string; readonly port: number } | null;
+}
+
+/**
+ * Where the settings this configuration was read from came from.
+ *
+ * `file` is the settings file found, read or not, and `null` when there is
+ * none -- a checkout or a container configured by environment alone.
+ * `problems` is why it could not be read, when it could not: a finding for the
+ * report, never a refusal, because the environment and the flags are still
+ * there to read.
+ */
+export interface SettingsSource {
+  readonly file: string | null;
+  readonly problems: readonly string[];
 }
 
 /**
@@ -162,18 +213,21 @@ export type Config =
       readonly role: 'hub';
       readonly logLevel: LogLevel;
       readonly host: string;
+      readonly settings: SettingsSource;
       readonly hub: HubConfig;
     }
   | {
       readonly role: 'server';
       readonly logLevel: LogLevel;
       readonly host: string;
+      readonly settings: SettingsSource;
       readonly server: ServerConfig;
     }
   | {
       readonly role: 'both';
       readonly logLevel: LogLevel;
       readonly host: string;
+      readonly settings: SettingsSource;
       readonly hub: HubConfig;
       readonly server: ServerConfig;
     };
@@ -186,157 +240,167 @@ export type ConfigResult =
 export interface ConfigSources {
   /** Arguments after the node binary and script path. */
   readonly argv: readonly string[];
-  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly env: Environment;
+  /**
+   * The settings file the daemons' units name, as `readRecordedSettings` found
+   * it. Absent is a machine with none, which is how a test and a container are
+   * configured.
+   */
+  readonly recorded?: RecordedDeployment;
 }
 
-const DEFAULT_LOG_LEVEL: LogLevel = 'info';
+const NO_SETTINGS_FILE: RecordedDeployment = {
+  scope: null,
+  file: null,
+  values: new Map(),
+  problems: [],
+};
+
 /**
- * The terminal manager's own default, restated: it lives in `apps/server` now
- * and this program may not import it. AGX-100 replaces this configuration with
- * the doctor's own, and this constant goes with it.
+ * The one setting that is the doctor's own. Neither daemon reads it -- which
+ * daemon runs is which program was started -- but the installer records it,
+ * and it decides which half of this machine there is to inspect.
  */
-const DEFAULT_TERMINAL_CAP = 8;
-/** Containers reach the process from outside their own loopback. */
-const DEFAULT_HOST = '0.0.0.0';
-
-const MISSING_IDENTITY_FILE =
-  'the server role needs somewhere to keep its identity and pairing token: ' +
-  'set AGENTPLEX_SERVER_IDENTITY_FILE or pass --server-identity-file (an absolute path)';
+const ROLE = { flag: '--role', env: 'AGENTPLEX_ROLE' } as const;
 
 /**
- * Each setting has one flag and one env var. Flags win, because a flag is
- * typed by a person at the moment they mean it and an env var is inherited.
+ * Every setting the doctor reads: the role, which is its own, and then each
+ * daemon's whole table.
  *
- * Every setting is in here, including the interface to bind. One read
- * elsewhere -- `process.env['AGENTPLEX_HOST']`, straight out of `main` -- is one
- * setting with no flag, missing from `usage()`, and rejected by `readFlags` if
- * anyone tried to type it.
+ * Each daemon's table, and not a list of the settings the doctor happens to
+ * check, because the doctor is pointed at a deployment and a deployment is
+ * whatever the daemons accept. A setting it read and never checked was once
+ * argued against here as a flag an operator could type and learn nothing
+ * from. That turned out to be the smaller cost: a doctor that refused
+ * `--data-path` could not be pointed at the server that sets it at all.
+ *
+ * Both tables carry the log level and the host, so the list is made unique by
+ * flag, or the usage would name each twice.
  */
-const SETTINGS = {
-  role: { flag: '--role', env: 'AGENTPLEX_ROLE' },
-  logLevel: { flag: '--log-level', env: 'AGENTPLEX_LOG_LEVEL' },
-  host: { flag: '--host', env: 'AGENTPLEX_HOST' },
-  hubPort: { flag: '--hub-port', env: 'AGENTPLEX_HUB_PORT' },
-  databaseFile: { flag: '--database-file', env: 'AGENTPLEX_DATABASE_FILE' },
-  clientToken: { flag: '--client-token', env: 'AGENTPLEX_CLIENT_TOKEN' },
-  /**
-   * The server on this machine, which the hub pairs at boot from the token in
-   * that file. The hub's own settings carry a port beside it; this program does
-   * not read one, because a setting it read and never checked would be a
-   * setting an operator could type at a doctor and learn nothing from.
-   */
-  localServerIdentityFile: {
-    flag: '--local-server-identity-file',
-    env: 'AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE',
-  },
-  serverPort: { flag: '--server-port', env: 'AGENTPLEX_SERVER_PORT' },
-  /** Repeatable: a server may mount more than one store. */
-  storePath: { flag: '--store-path', env: 'AGENTPLEX_STORE_PATH' },
-  /** Repeatable, and ordered: the first directory holding a program wins. */
-  binPath: { flag: '--bin-path', env: 'AGENTPLEX_BIN_PATH' },
-  /** Repeatable: a machine may offer more than one place to browse. */
-  browseRoot: { flag: '--browse-root', env: 'AGENTPLEX_BROWSE_ROOTS' },
-  serverIdentityFile: {
-    flag: '--server-identity-file',
-    env: 'AGENTPLEX_SERVER_IDENTITY_FILE',
-  },
-  terminalCap: { flag: '--terminal-cap', env: 'AGENTPLEX_TERMINAL_CAP' },
-  /**
-   * Takes `true` or `false` rather than being a bare presence flag, which
-   * `readFlags` would refuse anyway: every setting here has one value, and a
-   * flag with none is a typo. It earns its keep beyond consistency, too -- an
-   * image that sets `AGENTPLEX_ANNOUNCE=true` can be run quiet with
-   * `--announce=false`, which a presence flag could never express.
-   */
-  announce: { flag: '--announce', env: 'AGENTPLEX_ANNOUNCE' },
-} as const;
+const SETTINGS: readonly Setting[] = uniqueByFlag([
+  ROLE,
+  ...Object.values(HUB_SETTINGS),
+  ...Object.values(SERVER_SETTINGS),
+]);
+
+function uniqueByFlag(settings: readonly Setting[]): readonly Setting[] {
+  const byFlag = new Map<string, Setting>();
+  for (const setting of settings) if (!byFlag.has(setting.flag)) byFlag.set(setting.flag, setting);
+  return [...byFlag.values()];
+}
 
 const roleSchema = z.enum(ROLES);
-const logLevelSchema = z.enum(LOG_LEVELS);
-const hostSchema = z.string().min(1);
 
-export function loadDoctorConfig({ argv, env }: ConfigSources): ConfigResult {
+export function loadDoctorConfig({
+  argv,
+  env,
+  recorded = NO_SETTINGS_FILE,
+}: ConfigSources): ConfigResult {
   const problems: string[] = [];
 
   const flags = readFlags(
     argv,
-    Object.values(SETTINGS).map((setting) => setting.flag),
+    SETTINGS.map((setting) => setting.flag),
   );
   if (!flags.ok) return { ok: false, problems: [...flags.problems] };
 
-  const read = (setting: { readonly flag: string; readonly env: string }): string | undefined =>
-    settingValue(flags.values, env, setting);
+  const settings = deploymentEnvironment(recorded, env);
+  const read = (setting: Setting): string | undefined =>
+    settingValue(flags.values, settings, setting);
 
-  const role = readRole(read(SETTINGS.role), problems);
+  const role = readRole(read(ROLE), problems);
+  const logLevel = readLogLevel(read(SERVER_SETTINGS.logLevel), problems);
+  const host = readHost(read(SERVER_SETTINGS.host), problems);
+  const source: SettingsSource = { file: recorded.file, problems: recorded.problems };
 
-  const logLevel = readSetting(logLevelSchema, read(SETTINGS.logLevel), DEFAULT_LOG_LEVEL, (raw) =>
-    problems.push(
-      `unknown log level ${JSON.stringify(raw)}: expected one of ${LOG_LEVELS.join(', ')}`,
-    ),
-  );
-
-  const host = readSetting(hostSchema, read(SETTINGS.host), DEFAULT_HOST, (raw) =>
-    problems.push(
-      `${SETTINGS.host.flag} must be an address or hostname to bind, not ${JSON.stringify(raw)}`,
-    ),
-  );
-
-  const serverPort = readPort(
-    read(SETTINGS.serverPort),
-    SETTINGS.serverPort.flag,
-    DEFAULT_SERVER_PORT,
-    problems,
-  );
-
-  const storePaths = readAbsolutePaths(
-    SETTINGS.storePath,
-    flags.values.get(SETTINGS.storePath.flag),
-    env[SETTINGS.storePath.env],
-    problems,
-  );
-
-  const binPath = readAbsolutePaths(
-    SETTINGS.binPath,
-    flags.values.get(SETTINGS.binPath.flag),
-    env[SETTINGS.binPath.env],
-    problems,
-  );
-
-  const browseRoots = readAbsolutePaths(
-    SETTINGS.browseRoot,
-    flags.values.get(SETTINGS.browseRoot.flag),
-    env[SETTINGS.browseRoot.env],
-    problems,
-  );
-
-  const terminalCap = readTerminalCap(read(SETTINGS.terminalCap), problems);
-
-  const announce = readAnnounce(read(SETTINGS.announce), problems);
-
-  const identityPath = readIdentityPath(read(SETTINGS.serverIdentityFile), role, problems);
-
-  // A server-only machine runs no hub, so a hub setting that a `both` machine's
-  // settings file left in the environment is read and then dropped rather than
-  // held against the run: a relative `AGENTPLEX_DATABASE_FILE` is not this
-  // machine's problem, and refusing to inspect a server over it would be.
+  // Each half is read only on a role that runs it, and into the run's problems
+  // only then. The settings file is one file: on a `both` machine inspected as
+  // `--role=server` a relative `AGENTPLEX_DATABASE_FILE` is not this run's
+  // problem, and a hub-only machine with no HOME is not refused over the
+  // server's home defaults.
   const hub = readHubConfig(read, role === 'server' ? [] : problems);
+  const server =
+    role === 'hub' ? undefined : readServerConfig(read, flags.values, settings, problems);
 
   if (role === undefined || problems.length > 0) return { ok: false, problems };
 
-  if (role === 'hub') return { ok: true, config: { role, logLevel, host, hub } };
+  if (role === 'hub') return { ok: true, config: { role, logLevel, host, settings: source, hub } };
 
-  if (identityPath === undefined) return { ok: false, problems: [MISSING_IDENTITY_FILE] };
-  const server: ServerConfig = {
-    port: serverPort,
+  if (server === undefined) return { ok: false, problems };
+  if (role === 'server') {
+    return { ok: true, config: { role, logLevel, host, settings: source, server } };
+  }
+  return { ok: true, config: { role, logLevel, host, settings: source, hub, server } };
+}
+
+/**
+ * What the daemons would find in their environment: the settings file, with
+ * this process's environment over it.
+ *
+ * A variable here that is blank does not hide the file's line. Everywhere else
+ * in this program a blank variable is a setting nobody set, and a shell that
+ * exported `AGENTPLEX_ROLE=` has not said anything about the role.
+ *
+ * `HOME` is the one variable taken from the tier rather than from this shell.
+ * On the fleet tier the daemon runs as the service account and systemd sets
+ * its home from the account database, which `install.sh` made the state
+ * directory -- so that is what the server's defaults come from, whatever home
+ * the operator or `sudo` is running this with.
+ */
+function deploymentEnvironment(recorded: RecordedDeployment, env: Environment): Environment {
+  const merged: Record<string, string | undefined> = Object.fromEntries(recorded.values);
+  for (const [key, value] of Object.entries(env)) {
+    if (nonEmpty(value) !== undefined) merged[key] = value;
+  }
+  if (recorded.scope === 'system') merged['HOME'] = SYSTEM_STATE_DIR;
+  return merged;
+}
+
+/**
+ * The server's half, read through the server's own parsers, or `undefined`
+ * when a path it needs could not be settled -- which is already a problem.
+ */
+function readServerConfig(
+  read: (setting: Setting) => string | undefined,
+  flags: ReadonlyMap<string, readonly string[]>,
+  env: Environment,
+  problems: string[],
+): ServerConfig | undefined {
+  const table = SERVER_SETTINGS;
+  const paths = (setting: Setting): readonly string[] =>
+    readAbsolutePaths(setting, flags.get(setting.flag), env[setting.env], problems);
+
+  const port = readPort(
+    read(table.serverPort),
+    table.serverPort.flag,
+    DEFAULT_SERVER_PORT,
+    problems,
+  );
+  const storePaths = paths(table.storePath);
+  const binPath = paths(table.binPath);
+  const browseRoots = paths(table.browseRoot);
+  const terminalCap = readTerminalCap(read(table.terminalCap), problems);
+  const announce = readAnnounce(read(table.announce), problems);
+  const timezone = readTimezone(read(table.timezone), problems);
+  const drainMs = readDrainSeconds(read(table.drainSeconds), problems);
+  const serverToken = readServerToken(read(table.serverToken), problems);
+  const identityPath = readIdentityPath(read(table.serverIdentityFile), env, problems);
+  const dataPath = readDataPath(read(table.dataPath), env, problems);
+
+  if (identityPath === undefined || dataPath === undefined) return undefined;
+  return {
+    port,
     storePaths,
     binPath,
     browseRoots,
     identityPath,
+    dataPath,
+    serverToken,
+    timezone,
     terminalCap,
+    drainMs,
     announce,
   };
-  if (role === 'server') return { ok: true, config: { role, logLevel, host, server } };
-  return { ok: true, config: { role, logLevel, host, hub, server } };
 }
 
 /**
@@ -351,52 +415,28 @@ function readHubConfig(
   read: (setting: Setting) => string | undefined,
   problems: string[],
 ): HubConfig {
-  const rawDatabase = read(SETTINGS.databaseFile);
+  const table = HUB_SETTINGS;
+  const rawDatabase = read(table.databaseFile);
   const databaseFile =
     rawDatabase === undefined
       ? null
-      : (readAbsolutePath(rawDatabase, SETTINGS.databaseFile.flag, problems) ?? null);
-
-  const rawLocalServer = read(SETTINGS.localServerIdentityFile);
-  const localServerIdentityPath =
-    rawLocalServer === undefined
-      ? null
-      : (readAbsolutePath(rawLocalServer, SETTINGS.localServerIdentityFile.flag, problems) ?? null);
+      : (readAbsolutePath(rawDatabase, table.databaseFile.flag, problems) ?? null);
 
   return {
-    port: readPort(read(SETTINGS.hubPort), SETTINGS.hubPort.flag, DEFAULT_HUB_PORT, problems),
+    port: readPort(read(table.port), table.port.flag, DEFAULT_HUB_PORT, problems),
     databaseFile,
-    clientToken: read(SETTINGS.clientToken) ?? null,
-    localServerIdentityPath,
+    clientToken: read(table.clientToken) ?? null,
+    localServer: readLocalServer(
+      read(table.localServerIdentityFile),
+      read(table.localServerPort),
+      problems,
+    ),
   };
-}
-
-/**
- * The identity file path, required by every role that runs a server, and read
- * the way the server reads it: absolute, because a relative path is resolved
- * against whatever directory the process was left in.
- */
-function readIdentityPath(
-  raw: string | undefined,
-  role: Role | undefined,
-  problems: string[],
-): string | undefined {
-  if (role === 'hub') return undefined;
-  if (raw === undefined) {
-    // A role that did not parse is reported already; it is still asked for an
-    // identity file, so that the run which fixes the role does not then
-    // discover a second missing setting.
-    problems.push(MISSING_IDENTITY_FILE);
-    return undefined;
-  }
-  return readAbsolutePath(raw, SETTINGS.serverIdentityFile.flag, problems);
 }
 
 /** The settings this program reads, for a usage message. */
 export function doctorUsage(): string {
-  return ['Usage: agentplex doctor [options]', '', ...usageLines(Object.values(SETTINGS))].join(
-    '\n',
-  );
+  return ['Usage: agentplex doctor [options]', '', ...usageLines(SETTINGS)].join('\n');
 }
 
 /**
@@ -404,9 +444,7 @@ export function doctorUsage(): string {
  */
 function readRole(raw: string | undefined, problems: string[]): Role | undefined {
   if (raw === undefined) {
-    problems.push(
-      `no role: set ${SETTINGS.role.env} or pass ${SETTINGS.role.flag} (${ROLES.join(', ')})`,
-    );
+    problems.push(`no role: set ${ROLE.env} or pass ${ROLE.flag} (${ROLES.join(', ')})`);
     return undefined;
   }
   const result = roleSchema.safeParse(raw);
@@ -415,43 +453,4 @@ function readRole(raw: string | undefined, problems: string[]): Role | undefined
     return undefined;
   }
   return result.data;
-}
-
-/**
- * The terminal cap: a whole number of terminals, at least one.
- *
- * Zero is refused rather than taken literally. It would parse, and it would
- * mean a server that accepts sessions and can never run one -- a configuration
- * whose only symptom is every launch being refused for a reason that reads like
- * a bug. There is no upper bound: how much memory the machine has is the
- * operator's to know, and a ceiling invented here would be wrong on the box
- * that was bought to run twenty of them.
- */
-function readTerminalCap(raw: string | undefined, problems: string[]): number {
-  if (raw === undefined) return DEFAULT_TERMINAL_CAP;
-  const cap = Number(raw);
-  if (!Number.isInteger(cap) || cap < 1) {
-    problems.push(
-      `${SETTINGS.terminalCap.flag} must be a whole number of terminals, at least 1, not ${JSON.stringify(raw)}`,
-    );
-    return DEFAULT_TERMINAL_CAP;
-  }
-  return cap;
-}
-
-/**
- * Whether to announce on the local network. Off unless it says `true`.
- *
- * Only those two words are accepted. `yes`, `1` and `on` would each be
- * somebody's reasonable guess, and accepting a family of spellings means
- * eventually accepting one that was meant as a no -- a mistake that, in this
- * one direction, starts broadcasting a machine's address to a network where
- * nobody asked for it. A refusal names the two words and costs one restart.
- */
-function readAnnounce(raw: string | undefined, problems: string[]): boolean {
-  if (raw === undefined) return false;
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  problems.push(`${SETTINGS.announce.flag} must be true or false, not ${JSON.stringify(raw)}`);
-  return false;
 }

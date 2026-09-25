@@ -1,7 +1,15 @@
+import { dirname } from 'node:path';
 import type { ProviderReadiness } from '@agentplex/protocol';
 import { NODE_PTY_REMEDY, type PtyAvailability } from '@agentplex/pty';
-import type { Config, Role } from './config.js';
-import { hubLines, hubUsable, inspectHub, type HubChecks, type HubDependencies } from './hub.js';
+import type { Config, Role, SettingsSource } from './config.js';
+import {
+  hubLines,
+  hubUsable,
+  inspectHub,
+  type HubChecks,
+  type HubDependencies,
+  type PathAccess,
+} from './hub.js';
 import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 
 /**
@@ -52,6 +60,12 @@ export interface DoctorDependencies extends HubDependencies {
 export interface DoctorReport {
   readonly role: Role;
   /**
+   * The settings file this report describes, or why it could not be read.
+   * Never part of `usable`: a file this user may not read is a machine this
+   * user can still inspect by environment and flags, and the line says so.
+   */
+  readonly settings: SettingsSource;
+  /**
    * Whether everything this looked at can actually be used.
    *
    * On the report rather than left to whoever prints it, because it is also the
@@ -77,6 +91,26 @@ export interface DoctorReport {
   readonly browseRoots: readonly StoreCheck[];
   /** The pty seam, or `null` on a role that opens none. */
   readonly terminals: TerminalCheck | null;
+  /** The directory the server writes into, or `null` on a role that runs none. */
+  readonly dataRoot: DataRootCheck | null;
+}
+
+/**
+ * The server's data root, as the server will meet it at boot.
+ *
+ * The server creates it with every parent and refuses to start when it cannot
+ * create it or cannot write in it (`data-root.ts` in the server carries that
+ * rule). So there are three answers and not two: `ready` is a directory this
+ * user may write in, `creatable` is one that is not there yet under a directory
+ * this user may write in -- the ordinary first start -- and `unusable` is every
+ * way the server would refuse. Only the last one is a machine that is not
+ * ready.
+ */
+export interface DataRootCheck {
+  readonly path: string;
+  readonly state: 'ready' | 'creatable' | 'unusable';
+  /** What to say beneath the line, or `null` when there is nothing to add. */
+  readonly detail: string | null;
 }
 
 /**
@@ -127,12 +161,14 @@ export async function inspectMachine(
   if (!('server' in config)) {
     return {
       role: config.role,
+      settings: config.settings,
       usable: hub === null || hubUsable(hub),
       hub,
       providers: [],
       stores: [],
       browseRoots: [],
       terminals: null,
+      dataRoot: null,
     };
   }
 
@@ -142,9 +178,11 @@ export async function inspectMachine(
     config.server.browseRoots.map((path) => checkStore(path, files)),
   );
   const pty = checkTerminals(terminals());
+  const dataRoot = await checkDataRoot(config.server.dataPath, files, dependencies.access);
 
   return {
     role: config.role,
+    settings: config.settings,
     usable:
       (hub === null || hubUsable(hub)) &&
       readiness.every((provider) => provider.state === 'ready') &&
@@ -154,13 +192,94 @@ export async function inspectMachine(
       // code. Having none is not: that is the default, and a machine nobody
       // asked to offer browsing is working exactly as configured.
       browseRoots.every((root) => root.state === 'present') &&
-      pty.state === 'ready',
+      pty.state === 'ready' &&
+      dataRoot.state !== 'unusable',
     hub,
     providers: readiness,
     stores,
     browseRoots,
     terminals: pty,
+    dataRoot,
   };
+}
+
+/**
+ * The data root, without creating it.
+ *
+ * Asked the way `checkDatabase` in `hub.ts` asks about the hub's database: of
+ * the things already there, through `statDirectory` and then `access`, because
+ * `access` on its own answers `denied` for a path that does not exist, which
+ * would report the ordinary first start as a failure. Where the database
+ * question stops at the directory above -- the hub creates the file and not
+ * the directory -- this one keeps climbing to the nearest directory that is
+ * there, because the server's create is recursive: `/srv/agentplex/data` under
+ * a writable `/srv` is a data root it can make.
+ */
+async function checkDataRoot(
+  path: string,
+  files: StoreFileSystem,
+  access: PathAccess,
+): Promise<DataRootCheck> {
+  const entry = await files.statDirectory(path);
+  switch (entry.kind) {
+    case 'directory': {
+      const writable = await access(path);
+      return writable.kind === 'writable'
+        ? { path, state: 'ready', detail: null }
+        : {
+            path,
+            state: 'unusable',
+            detail: `the server could not write in it: ${writable.reason}`,
+          };
+    }
+    case 'not-a-directory':
+      return { path, state: 'unusable', detail: 'that path is not a directory' };
+    case 'failed':
+      return { path, state: 'unusable', detail: entry.reason };
+    case 'missing':
+      return await checkDataRootAncestor(path, files, access);
+  }
+}
+
+/** The nearest directory above a missing data root, and whether it may be written in. */
+async function checkDataRootAncestor(
+  path: string,
+  files: StoreFileSystem,
+  access: PathAccess,
+): Promise<DataRootCheck> {
+  let ancestor = dirname(path);
+  for (;;) {
+    const entry = await files.statDirectory(ancestor);
+    switch (entry.kind) {
+      case 'directory': {
+        const writable = await access(ancestor);
+        return writable.kind === 'writable'
+          ? {
+              path,
+              state: 'creatable',
+              detail: `not there yet: it will be created at startup, under ${ancestor}`,
+            }
+          : {
+              path,
+              state: 'unusable',
+              detail: `not there, and the server could not create it under ${ancestor}: ${writable.reason}`,
+            };
+      }
+      case 'not-a-directory':
+        return { path, state: 'unusable', detail: `${ancestor} is not a directory` };
+      case 'failed':
+        return { path, state: 'unusable', detail: entry.reason };
+      case 'missing': {
+        const parent = dirname(ancestor);
+        // The root itself missing is a filesystem this process cannot see at
+        // all, and there is nothing further up to ask.
+        if (parent === ancestor) {
+          return { path, state: 'unusable', detail: 'no directory above it is there' };
+        }
+        ancestor = parent;
+      }
+    }
+  }
 }
 
 function checkTerminals(availability: PtyAvailability): TerminalCheck {
@@ -194,6 +313,10 @@ async function checkStore(path: string, files: StoreFileSystem): Promise<StoreCh
 export function formatDoctorReport(report: DoctorReport): readonly string[] {
   const lines = [`agentplex doctor  role=${report.role}`, ''];
 
+  // First of all, because it says what everything below is a report on: the
+  // file the daemons' units name, or the environment and flags alone.
+  lines.push('settings', ...settingsLines(report.settings), '');
+
   // First, because on the machine this section is about it is the whole report
   // and on a server it is one line. The other order makes a hub operator read
   // three "runs no server" lines before reaching anything about their machine.
@@ -212,6 +335,15 @@ export function formatDoctorReport(report: DoctorReport): readonly string[] {
     lines.push('  this machine runs no server, so it opens no terminals');
   } else {
     lines.push(...terminalLines(report.terminals));
+  }
+
+  // Beside the terminals, because it gates the server the same way: one that
+  // cannot create or write its data root does not start.
+  lines.push('', 'data root');
+  if (report.dataRoot === null) {
+    lines.push('  this machine runs no server, so it writes no data root');
+  } else {
+    lines.push(`  ${dataRootLine(report.dataRoot)}`);
   }
 
   lines.push('', 'providers');
@@ -305,4 +437,23 @@ function terminalLines(terminals: TerminalCheck): readonly string[] {
 function storeLine(store: StoreCheck): string {
   const line = `${store.state.padEnd(10)} ${store.path}`;
   return store.problem === null ? line : `${line}\n    ${store.problem}`;
+}
+
+function dataRootLine(root: DataRootCheck): string {
+  const line = `${root.state.padEnd(10)} ${root.path}`;
+  return root.detail === null ? line : `${line}\n    ${root.detail}`;
+}
+
+/**
+ * Where the report's settings came from. A file that could not be read is said
+ * first and plainly, because everything below it was read without that file --
+ * which on a fleet machine is most of what the daemons are started with.
+ */
+function settingsLines(settings: SettingsSource): readonly string[] {
+  const instead = '    so this read the environment and flags only';
+  if (settings.problems.length > 0) {
+    return [...settings.problems.map((problem) => `  ${problem}`), instead];
+  }
+  if (settings.file === null) return ['  no settings file found', instead];
+  return [`  ${settings.file}`];
 }

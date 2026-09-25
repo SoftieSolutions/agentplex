@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from 'node:path';
-import type { InstallationLookup } from './installation.js';
+import type { InstallationLookup } from './recorded-settings.js';
 
 /**
  * The two arguments `start`, `stop` and `status` take, read the same way by all

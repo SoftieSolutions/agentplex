@@ -172,7 +172,7 @@ export async function inspectHub(
   const [database, port, localServer] = await Promise.all([
     checkDatabase(config.databaseFile, files, access),
     checkPort(host, config.port, ports),
-    checkLocalServer(config.localServerIdentityPath, files),
+    checkLocalServer(config.localServer?.identityPath ?? null, files),
   ]);
 
   return {
