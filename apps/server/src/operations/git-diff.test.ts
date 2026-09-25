@@ -49,7 +49,7 @@ const DIRECTORY = '/Users/dev/Code/agentplex';
  * checks nothing. The directory is here, in the arguments, and this line is
  * what fails if it ever moves to a spawn cwd.
  */
-const COMMAND_LINE = `git --no-optional-locks -C ${DIRECTORY} diff-index -M --numstat -z HEAD --`;
+const COMMAND_LINE = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} diff-index -M --numstat -z HEAD --`;
 
 function runner(stdout: string) {
   return createFakeProcessRunner({ outcomes: { [COMMAND_LINE]: printed(stdout) } });
@@ -141,9 +141,15 @@ describe('git.diff', () => {
     await runOperation(gitDiffOperation, { directory: DIRECTORY }, fake);
 
     const [request] = fake.requests;
+    // The two `-c` pairs lead: `diff-index` runs a repository's
+    // `core.fsmonitor` just as `status` does, and the probe must not.
     expect(request).toEqual({
       file: 'git',
       args: [
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.hooksPath=/dev/null',
         '--no-optional-locks',
         '-C',
         DIRECTORY,

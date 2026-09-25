@@ -29,6 +29,16 @@ import { directorySchema, firstLine } from './directory.js';
  * `.git/index.lock` and refresh the index as a side effect of being asked a
  * question, and this runs against a directory an agent is actively working in.
  * A probe that takes a lock can lose a race with the thing it is watching.
+ *
+ * The two `-c` pairs in front keep the repository's own config from naming a
+ * program this runs. `core.fsmonitor` is a command git executes on every
+ * status, and whoever wrote the checkout's `.git/config` chose it; `-c` wins
+ * over every config file, so `core.fsmonitor=false` means git scans the tree
+ * itself. `core.hooksPath=/dev/null` closes the same door for any hook a
+ * subcommand might fire. A clean or process filter the repository configures
+ * and selects through its attributes still runs on a stat-dirty file: no flag
+ * turns filters off without naming the driver, and the repository picks that
+ * name.
  */
 export interface GitStatus {
   /** The branch's short name, or `null` when HEAD is detached. */
@@ -61,7 +71,18 @@ export const gitStatusOperation: Operation<GitStatusRequest, GitStatus> = {
 
   argv: ({ directory }) => ({
     file: 'git',
-    args: ['--no-optional-locks', '-C', directory, 'status', '--porcelain=v2', '--branch'],
+    args: [
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.hooksPath=/dev/null',
+      '--no-optional-locks',
+      '-C',
+      directory,
+      'status',
+      '--porcelain=v2',
+      '--branch',
+    ],
   }),
 
   /**

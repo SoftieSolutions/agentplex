@@ -22,7 +22,7 @@ import { directorySchema, firstLine } from './directory.js';
  * `uncommittedDiffSchema` in the protocol: the short version is that the branch
  * sense needs a base ref nobody can choose honestly for an arbitrary checkout.
  *
- * Four deliberate choices in the argv:
+ * Five deliberate choices in the argv:
  *
  * - **`diff-index` rather than `diff`.** Plumbing, so the output format is a
  *   contract rather than a convenience, and — the reason it actually matters —
@@ -44,6 +44,13 @@ import { directorySchema, firstLine } from './directory.js';
  *   `git.status` gives: a probe that takes `.git/index.lock` can lose a race
  *   with the agent it is watching, and a directory belongs in the argv a test
  *   asserts on rather than in a spawn cwd nobody can see.
+ * - **`-c core.fsmonitor=false -c core.hooksPath=/dev/null`.** `diff-index`
+ *   refreshes stat information through the fsmonitor just as `status` does, so
+ *   a repository's `core.fsmonitor` is a program this would otherwise run, and
+ *   `core.hooksPath` closes the same door for any hook. `git.status` says what
+ *   these leave open: a filter driver the repository configures still runs on a
+ *   stat-dirty file. `--numstat` fires no textconv and no external diff, so
+ *   `--no-textconv` and `--no-ext-diff` would change nothing.
  */
 export const gitDiffRequestSchema = z.strictObject({ directory: directorySchema });
 export type GitDiffRequest = z.infer<typeof gitDiffRequestSchema>;
@@ -56,6 +63,10 @@ export const gitDiffOperation: Operation<GitDiffRequest, UncommittedDiff> = {
   argv: ({ directory }) => ({
     file: 'git',
     args: [
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.hooksPath=/dev/null',
       '--no-optional-locks',
       '-C',
       directory,
