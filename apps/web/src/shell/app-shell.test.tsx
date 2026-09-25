@@ -545,6 +545,7 @@ describe('the shell', () => {
     await act(() => {
       row.click();
     });
+    await act(settle);
 
     // The second way into onboarding, which is what "you can enroll more
     // machines later" was a promise of. The hash is the whole of it: what
