@@ -11,7 +11,11 @@ import type {
   StoreId,
 } from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
-import { type ProviderRegistry, discoverStoreSessions } from '@agentplex/providers';
+import {
+  type ProviderRegistry,
+  type SessionOrigin,
+  discoverStoreSessions,
+} from '@agentplex/providers';
 import type { LaunchApprovals, OpenLaunchApproval } from '../approvals/approval-launch.js';
 import type { DirectoryGuard } from '../directories/directory-browse.js';
 import type { Terminal, TerminalManager, TerminalOutcome } from '../terminal/terminal-manager.js';
@@ -392,7 +396,7 @@ export function createSessionController(
       // resumed elsewhere is a different session that happens to share a
       // history, and every relative path in that history now points somewhere
       // else.
-      const known = await discover(store);
+      const { sessions: known } = await discover(store);
       const descriptor = known.find((one) => one.sessionId === request.sessionId);
       if (descriptor === undefined) {
         return {
@@ -495,8 +499,8 @@ export function createSessionController(
       const store = storeOf(storeId);
       if (store === undefined) return null;
 
-      const sessions = await discover(store);
-      bindSpawned(store.storeId, sessions);
+      const { sessions, origins } = await discover(store);
+      bindSpawned(store.storeId, sessions, origins);
 
       // Derived once, by the adapter, and handed to the terminal holding the
       // session. It is what `stoppable` is computed from, so a status nobody
@@ -643,7 +647,10 @@ export function createSessionController(
     });
   }
 
-  async function discover(store: StoreDescriptor): Promise<readonly SessionDescriptor[]> {
+  async function discover(store: StoreDescriptor): Promise<{
+    readonly sessions: readonly SessionDescriptor[];
+    readonly origins: ReadonlyMap<SessionId, SessionOrigin>;
+  }> {
     const found = await discoverStoreSessions(store, {
       registry: providers,
       clock,
@@ -653,7 +660,7 @@ export function createSessionController(
       // A session that cannot be read costs itself, never the listing.
       logger.warn('session unreadable', { provider, subject, problem });
     }
-    return found.sessions;
+    return { sessions: found.sessions, origins: found.origins };
   }
 
   /** What this server is running in a store, in the form the hub reads it. */
@@ -677,29 +684,66 @@ export function createSessionController(
    *
    * A spawn cannot name its session up front -- that would mean `--session-id`,
    * the flag family that splits a history in two -- so the id has to be found
-   * afterwards, and a scan is the only thing that can find it. The join is by
-   * time: a session whose provider first wrote to it at or after a terminal
-   * started, that no live terminal already holds, is that terminal's.
+   * afterwards, and a scan is the only thing that can find it. Two passes, the
+   * certain one first.
    *
-   * It binds only when exactly one session fits, and that is the conservative
-   * direction rather than the convenient one. Binding the wrong session would
-   * make this server claim to hold a session somebody else is running, which is
-   * the one claim the hub acts on: it would refuse a legitimate start and offer
-   * a stop button aimed at the wrong process. An unbound terminal is merely a
-   * session the hub does not yet know is held, which the next scan fixes.
+   * By pid: a session whose adapter verified the very process this terminal
+   * forked is this terminal's, whatever its dates say. That holds only when
+   * the spawn exec'd the provider, which is what a launch plan does.
+   *
+   * By time, for whatever the pid could not settle, and only among sessions
+   * no verified process is running: a session with a pid that the first pass
+   * did not bind is being run by somebody else's process, including one our
+   * own terminal handed a new id to, and timing must not take it from them.
+   * Of those, a session the provider *first* wrote to at or after the
+   * terminal started, that no live terminal already holds, is the terminal's.
+   * The first write and never the last: a session somebody opened an hour ago
+   * and spoke to a second ago was written to after the terminal started, and
+   * it is not the terminal's.
+   *
+   * Timing binds only when exactly one session fits, and that is the
+   * conservative direction rather than the convenient one. Binding the wrong
+   * session would make this server claim to hold a session somebody else is
+   * running, which is the one claim the hub acts on: it would refuse a
+   * legitimate start and offer a stop button aimed at the wrong process. An
+   * unbound terminal is merely a session the hub does not yet know is held,
+   * which the next scan fixes.
    */
-  function bindSpawned(storeId: StoreId, sessions: readonly SessionDescriptor[]): void {
+  function bindSpawned(
+    storeId: StoreId,
+    sessions: readonly SessionDescriptor[],
+    origins: ReadonlyMap<SessionId, SessionOrigin>,
+  ): void {
     const unbound = liveIn(storeId)
       .filter((terminal) => terminal.session === null)
       .sort((left, right) => left.run.startedAt - right.run.startedAt);
     if (unbound.length === 0) return;
 
     const claimed = new Set(holdsIn(storeId).map((hold) => hold.sessionId));
+    const unclaimed = (session: SessionDescriptor): boolean => !claimed.has(session.sessionId);
 
+    const untimed: Terminal[] = [];
     for (const terminal of unbound) {
-      const candidates = sessions.filter(
-        (session) => !claimed.has(session.sessionId) && session.updatedAt >= terminal.run.startedAt,
+      const own = sessions.find(
+        (session) => unclaimed(session) && origins.get(session.sessionId)?.pid === terminal.run.pid,
       );
+      if (own === undefined) {
+        untimed.push(terminal);
+        continue;
+      }
+      if (bindOne(storeId, terminal, own.sessionId, 'pid')) claimed.add(own.sessionId);
+    }
+
+    for (const terminal of untimed) {
+      const candidates = sessions.filter((session) => {
+        const origin = origins.get(session.sessionId);
+        return (
+          unclaimed(session) &&
+          origin !== undefined &&
+          origin.pid === null &&
+          origin.createdAt >= terminal.run.startedAt
+        );
+      });
 
       const [only] = candidates;
       if (only === undefined || candidates.length > 1) {
@@ -710,21 +754,26 @@ export function createSessionController(
         continue;
       }
 
-      const bound = terminals.bind(terminal.terminalId, only.sessionId);
-      if (!bound.ok) {
-        logger.warn('could not bind a spawned terminal', {
-          storeId,
-          sessionId: only.sessionId,
-          problem: bound.problem,
-        });
-        continue;
-      }
-
-      claimed.add(only.sessionId);
-      logger.info('spawned terminal bound to its session', {
-        storeId,
-        sessionId: only.sessionId,
-      });
+      if (bindOne(storeId, terminal, only.sessionId, 'time')) claimed.add(only.sessionId);
     }
+  }
+
+  function bindOne(
+    storeId: StoreId,
+    terminal: Terminal,
+    sessionId: SessionId,
+    by: 'pid' | 'time',
+  ): boolean {
+    const bound = terminals.bind(terminal.terminalId, sessionId);
+    if (!bound.ok) {
+      logger.warn('could not bind a spawned terminal', {
+        storeId,
+        sessionId,
+        problem: bound.problem,
+      });
+      return false;
+    }
+    logger.info('spawned terminal bound to its session', { storeId, sessionId, by });
+    return true;
   }
 }
