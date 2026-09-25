@@ -6,10 +6,11 @@ describe('childEnvironment', () => {
   it('hands back what was inherited when no directories were configured', () => {
     const inherited = { PATH: '/usr/bin', HOME: '/home/a' };
 
-    // Identity, not a copy that happens to match: an operator who has set
-    // nothing gets the behaviour they had before this setting existed, and
+    // Equal, and no longer identical: the scrub of agentplex's own variables
+    // means the result is always a copy. What still holds is that an operator
+    // who has set nothing gets every variable they had, value for value, and
     // there is no third state where the PATH was rebuilt from itself.
-    expect(childEnvironment({ inherited, binPath: [], timezone: undefined })).toBe(inherited);
+    expect(childEnvironment({ inherited, binPath: [], timezone: undefined })).toEqual(inherited);
   });
 
   it('builds the PATH out of the configured directories, in order', () => {
@@ -128,7 +129,7 @@ describe('childEnvironment', () => {
     // is what every already-installed machine has today.
     const inherited = { TZ: 'America/Asuncion', PATH: '/usr/bin' };
 
-    expect(childEnvironment({ inherited, binPath: [], timezone: undefined })).toBe(inherited);
+    expect(childEnvironment({ inherited, binPath: [], timezone: undefined })).toEqual(inherited);
   });
 
   it('replaces an inherited TZ rather than letting the unit file win', () => {
@@ -173,6 +174,60 @@ describe('childEnvironment', () => {
     // the PATH this machine had, and the tools on it still have to resolve.
     expect(environment['PATH']).toBe(['/opt/bin', '/inherited/bin'].join(delimiter));
   });
+
+  // The server's own secrets and settings live in its environment, and every
+  // child of it -- a coding agent, a hook, `git` -- would otherwise read them.
+  const agentplexInherited = {
+    AGENTPLEX_SERVER_TOKEN: 'secret',
+    AGENTPLEX_DATA_PATH: '/var/lib/agentplex',
+    AGENTPLEX_ROLE: 'server',
+    PATH: '/usr/bin',
+    HOME: '/home/a',
+  };
+
+  function agentplexNames(environment: Readonly<Record<string, string | undefined>>): string[] {
+    return Object.keys(environment).filter((name) => name.toUpperCase().startsWith('AGENTPLEX_'));
+  }
+
+  it('keeps agentplex variables out of a child when nothing was configured', () => {
+    // The case that used to hand `inherited` back untouched, and so the one
+    // that leaked the token to every child of an unconfigured machine.
+    const environment = childEnvironment({
+      inherited: agentplexInherited,
+      binPath: [],
+      timezone: undefined,
+    });
+
+    expect(agentplexNames(environment)).toEqual([]);
+    expect(environment['PATH']).toBe('/usr/bin');
+    expect(environment['HOME']).toBe('/home/a');
+  });
+
+  it('keeps agentplex variables out of a child when both settings are configured', () => {
+    const environment = childEnvironment({
+      inherited: agentplexInherited,
+      binPath: ['/opt/bin'],
+      timezone: 'Europe/Madrid',
+    });
+
+    expect(agentplexNames(environment)).toEqual([]);
+    expect(environment['PATH']).toBe(['/opt/bin', '/usr/bin'].join(delimiter));
+    expect(environment['HOME']).toBe('/home/a');
+    expect(environment['TZ']).toBe('Europe/Madrid');
+  });
+
+  it('drops a differently-cased agentplex variable too', () => {
+    // Case-insensitive for the reason PATH and TZ are: on Windows
+    // `agentplex_server_token` is the same variable as the upper-case one.
+    const environment = childEnvironment({
+      inherited: { agentplex_server_token: 'secret', HOME: '/home/a' },
+      binPath: [],
+      timezone: undefined,
+    });
+
+    expect(agentplexNames(environment)).toEqual([]);
+    expect(environment['HOME']).toBe('/home/a');
+  });
 });
 
 describe('childSearchPath', () => {
@@ -194,6 +249,18 @@ describe('childSearchPath', () => {
       '/usr/bin',
       '/bin',
     ]);
+  });
+
+  it('reads the same PATH back from an environment the scrub has passed through', () => {
+    // The scrub removes agentplex's own variables and nothing the search path
+    // is made of.
+    const environment = childEnvironment({
+      inherited: { AGENTPLEX_SERVER_TOKEN: 'secret', PATH: ['/usr/bin', '/bin'].join(delimiter) },
+      binPath: [],
+      timezone: undefined,
+    });
+
+    expect(childSearchPath(environment)).toEqual(['/usr/bin', '/bin']);
   });
 
   it('searches nothing when there is no PATH at all', () => {

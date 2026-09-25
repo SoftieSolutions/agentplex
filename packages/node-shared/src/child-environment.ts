@@ -2,12 +2,15 @@ import { delimiter } from 'node:path';
 
 /**
  * What a child of agentplex gets for an environment: what this process
- * inherited, with the recorded directories put in front of its PATH.
+ * inherited, less agentplex's own variables, with the recorded directories put
+ * in front of its PATH.
  *
- * It is a pure function, and it is the whole of what `binPath` means. `main`
- * calls it once and hands the result to both spawn seams, so the answer to
- * "which `claude` runs" is one value composed in one place rather than a rule
- * each seam has to remember.
+ * It is a pure function, and it is the whole of what `binPath` means. The
+ * server's `main` calls it once and hands the result to both of its spawn
+ * seams, and the CLI's `doctor`, `setup`, `status` and `update` commands and
+ * its unit installer each compose theirs here too, so the answer to "which
+ * `claude` runs" is one value composed in one place rather than a rule each
+ * seam has to remember.
  *
  * Prepended, and the three options are genuinely different:
  *
@@ -59,6 +62,30 @@ import { delimiter } from 'node:path';
  * composed the same way, and not as a second place that reaches for an
  * environment.
  *
+ * The one thing removed is every variable whose name starts with `AGENTPLEX_`,
+ * compared case-insensitively for the reason PATH and TZ are. They are this
+ * process's own configuration -- the server's token among them -- and a coding
+ * agent, a hook it runs, or any tool either shells out to has no business
+ * reading them. The scrub is here rather than at a spawn site because this is
+ * the one function every child environment in the repository passes through:
+ * a seam that had to remember it is a seam that one day would not, and the
+ * token would reach a child without anything failing. Every caller reads its
+ * own configuration from `process.env`, never from what this returns, so
+ * nothing agentplex reads for itself is lost.
+ *
+ * A variable a child genuinely needs comes back per launch through the launch
+ * plan's `env`, which `scrubEnvironment` applies after this: that is how the
+ * approval hook still gets `AGENTPLEX_APPROVAL_SOCKET` and
+ * `AGENTPLEX_APPROVAL_SECRET`. A future adapter that needs an `AGENTPLEX_`
+ * variable in its child must pass it the same way, because an inherited one
+ * now vanishes here without a word.
+ *
+ * The CLI's detached `update --check` refresh deliberately does not come
+ * through here and takes raw `process.env`: that child is `agentplex` itself,
+ * and it needs `AGENTPLEX_VERSIONS` and `AGENTPLEX_PREFIX` to find the cache
+ * and the installation it is checking. Routing it through this function would
+ * strip exactly what it runs on.
+ *
  * Nothing else is touched. HOME, and the provider state directory under it,
  * are how an adopted binary finds the credentials the operator logged in with.
  */
@@ -83,16 +110,14 @@ export function childEnvironment({
   binPath,
   timezone,
 }: ChildEnvironmentSources): Readonly<Record<string, string | undefined>> {
-  // Nothing configured is the deployment saying nothing, so this says nothing
-  // either: a machine that has never run setup behaves exactly as it did
-  // before either setting existed.
-  if (binPath.length === 0 && timezone === undefined) return inherited;
-
   const environment: Record<string, string | undefined> = {};
   const resolvesPath = binPath.length > 0;
   let inheritedPath: string | undefined;
 
   for (const [name, value] of Object.entries(inherited)) {
+    // Before anything else, and whatever was configured: an unconfigured
+    // machine is the one that would otherwise hand the token to every child.
+    if (name.toUpperCase().startsWith('AGENTPLEX_')) continue;
     // `process.env` is case-insensitive on Windows and a plain record is not.
     // Copying one into the other is where `Path` would survive beside the
     // `PATH` set below, leaving which of them resolves a program up to the
