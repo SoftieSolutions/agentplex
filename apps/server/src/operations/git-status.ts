@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { CompletedProcess, Operation, OperationOutcome } from '@agentplex/providers';
-import { directorySchema, firstLine } from './directory.js';
+import { firstLine } from '@agentplex/node-shared';
+import { directorySchema } from './directory.js';
 
 /**
  * What a session's working directory looks like to git right now.
@@ -131,7 +132,7 @@ function readGitStatus(
     return {
       ok: false,
       refusal: 'failed',
-      problem: `git could not read ${directory}: ${firstLine(completed.stderr)}`,
+      problem: `git could not read ${directory}: ${firstLine(completed.stderr) || 'it said nothing'}`,
     };
   }
 

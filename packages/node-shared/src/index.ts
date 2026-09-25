@@ -37,6 +37,10 @@ export type {
   WebSocketListenerOptions,
 } from './ws-message-socket.js';
 
+export { errnoCode, isErrno } from './errno.js';
+
+export { firstLine } from './text.js';
+
 export { childEnvironment, childSearchPath } from './child-environment.js';
 export type { ChildEnvironmentSources } from './child-environment.js';
 

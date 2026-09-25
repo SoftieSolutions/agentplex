@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { errnoCode } from '@agentplex/node-shared';
 import type { DetachedSpawner, DetachedStart } from './detached-spawn.js';
 import type { Argv } from './operation.js';
 import type { ProcessOutcome, ProcessRequest, ProcessRunner } from './process-runner.js';
@@ -106,25 +107,30 @@ export function createNodeProcessRunner({
  * program answered no" and "there is no program".
  */
 function exitCodeOf(error: unknown): number | null {
-  if (typeof error !== 'object' || error === null) return null;
-  const code: unknown = (error as { code?: unknown }).code;
-  return typeof code === 'number' ? code : null;
+  return typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'number'
+    ? error.code
+    : null;
 }
 
 function describeFailure(request: ProcessRequest, error: unknown): string {
-  if (typeof error === 'object' && error !== null) {
-    const record = error as { code?: unknown; killed?: unknown };
-    // Both of these kill the child, so `killed` alone cannot tell them apart,
-    // and they are different problems to whoever reads the message: one is a
-    // program that would not finish, the other one that would not stop talking.
-    if (record.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-      return `${request.file} wrote more than ${MAX_OUTPUT_BYTES} bytes and was killed`;
-    }
-    if (record.killed === true) {
-      return `${request.file} did not finish within ${request.timeoutMs}ms and was killed`;
-    }
+  // Both of these kill the child, so `killed` alone cannot tell them apart,
+  // and they are different problems to whoever reads the message: one is a
+  // program that would not finish, the other one that would not stop talking.
+  if (errnoCode(error) === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+    return `${request.file} wrote more than ${MAX_OUTPUT_BYTES} bytes and was killed`;
+  }
+  if (wasKilled(error)) {
+    return `${request.file} did not finish within ${request.timeoutMs}ms and was killed`;
   }
   return `${request.file} could not be run: ${String(error)}`;
+}
+
+/** `killed` is set by `execFile` when it sent the signal; anything else is not that. */
+function wasKilled(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'killed' in error && error.killed === true;
 }
 
 /**

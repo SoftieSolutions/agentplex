@@ -6,6 +6,7 @@ import {
   type ProcessRunner,
   type ProgramResolver,
 } from '@agentplex/providers';
+import { firstLine, nonEmpty } from '@agentplex/node-shared';
 import { z } from 'zod';
 import type { UnitScope } from './layout.js';
 
@@ -226,7 +227,7 @@ const showOperation: Operation<UnitsRequest, UnitState> = {
       // inventing a fact about a service it never asked about.
       return {
         ok: true,
-        result: { ...unknownUnit(unit), problem: firstLine(completed) },
+        result: { ...unknownUnit(unit), problem: said(completed) },
       };
     }
     // Every value through `nonEmpty`, because systemd answers a property it
@@ -347,7 +348,7 @@ export function createSystemd({ runner, programs }: SystemdDependencies): System
 function acted(completed: CompletedProcess): OperationOutcome<null> {
   return completed.exitCode === 0
     ? { ok: true, result: null }
-    : { ok: false, refusal: 'failed', problem: firstLine(completed) };
+    : { ok: false, refusal: 'failed', problem: said(completed) };
 }
 
 function unknownUnit(unit: string): UnitState {
@@ -381,14 +382,10 @@ function readProperties(stdout: string): ReadonlyMap<string, string> {
  * empty string, because a problem nobody can read is a problem nobody can act
  * on.
  */
-function firstLine(completed: CompletedProcess): string {
-  const said = nonEmpty(completed.stderr) ?? nonEmpty(completed.stdout);
-  return said === undefined
-    ? `systemctl exited ${completed.exitCode} and said nothing`
-    : (said.split('\n')[0] ?? '').trim();
-}
-
-function nonEmpty(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
+function said(completed: CompletedProcess): string {
+  return (
+    firstLine(completed.stderr) ||
+    firstLine(completed.stdout) ||
+    `systemctl exited ${completed.exitCode} and said nothing`
+  );
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { errnoCode } from '@agentplex/node-shared';
 import type {
   FileCreate,
   FileEntry,
@@ -58,7 +59,7 @@ export const nodeProjectFiles: ProjectFileSystem = {
       await writeFile(path, contents, { encoding: 'utf8', flag: 'wx' });
       return { kind: 'created' };
     } catch (error) {
-      return errorCode(error) === 'EEXIST'
+      return errnoCode(error) === 'EEXIST'
         ? { kind: 'exists' }
         : { kind: 'failed', reason: String(error) };
     }
@@ -85,7 +86,7 @@ export const nodeProjectFiles: ProjectFileSystem = {
       const [contents, found] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
       return { kind: 'read', contents, updatedAt: Math.round(found.mtimeMs) };
     } catch (error) {
-      return errorCode(error) === 'ENOENT'
+      return errnoCode(error) === 'ENOENT'
         ? { kind: 'missing' }
         : { kind: 'failed', reason: String(error) };
     }
@@ -96,7 +97,7 @@ export const nodeProjectFiles: ProjectFileSystem = {
     try {
       names = await readdir(path, { withFileTypes: true });
     } catch (error) {
-      const code = errorCode(error);
+      const code = errnoCode(error);
       return code === 'ENOENT' || code === 'ENOTDIR'
         ? { kind: 'missing' }
         : { kind: 'failed', reason: String(error) };
@@ -120,10 +121,3 @@ export const nodeProjectFiles: ProjectFileSystem = {
     return { kind: 'listed', entries };
   },
 };
-
-/** Node's errno is a property on an `Error`, not a type: read it as a claim. */
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const code: unknown = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : undefined;
-}

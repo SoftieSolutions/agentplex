@@ -1,5 +1,6 @@
 import { readdir, realpath, stat } from 'node:fs/promises';
 import type { DirectoryEntry } from '@agentplex/protocol';
+import { errnoCode } from '@agentplex/node-shared';
 import type { DirectoryRead, DirectoryReader, RealPath } from './directory-browse.js';
 
 /**
@@ -37,7 +38,7 @@ export const nodeDirectoryReader: DirectoryReader = {
     try {
       resolved = await realpath(path);
     } catch (error) {
-      const code = errorCode(error);
+      const code = errnoCode(error);
       if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'missing' };
       return { kind: 'failed', reason: String(error) };
     }
@@ -51,7 +52,7 @@ export const nodeDirectoryReader: DirectoryReader = {
       // It resolved a moment ago and will not stat now: a directory that was
       // removed between the two calls, or a mount that went away. `missing` is
       // the honest reading of both.
-      return errorCode(error) === 'ENOENT'
+      return errnoCode(error) === 'ENOENT'
         ? { kind: 'missing' }
         : { kind: 'failed', reason: String(error) };
     }
@@ -80,10 +81,3 @@ export const nodeDirectoryReader: DirectoryReader = {
     }
   },
 };
-
-/** Node's errno is a property on an `Error`, not a type: read it as a claim. */
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const code: unknown = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : undefined;
-}

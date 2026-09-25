@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
+import { errnoCode } from '@agentplex/node-shared';
 import type { WebAssetFileSystem } from './web.js';
 
 /**
@@ -40,13 +41,7 @@ export function createNodeWebAssets(root: string): WebAssetFileSystem {
   };
 }
 
-/** A thrown value is a claim like any other: it is read, never asserted about. */
 function isAbsent(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    typeof error.code === 'string' &&
-    ABSENT.has(error.code)
-  );
+  const code = errnoCode(error);
+  return code !== undefined && ABSENT.has(code);
 }

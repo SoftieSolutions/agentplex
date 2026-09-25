@@ -141,6 +141,17 @@ describe('createNodeProcessRunner', { timeout: TEST_TIMEOUT_MS }, () => {
     expect(outcome).toMatchObject({ kind: 'failed' });
     if (outcome.kind === 'failed') expect(outcome.problem).toContain('250ms');
   });
+
+  it('kills a program that will not stop talking, and says that rather than a timeout', async () => {
+    const outcome = await runner.run({
+      file: node,
+      args: ['-e', "process.stdout.write('x'.repeat(2 * 1024 * 1024))"],
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    expect(outcome).toMatchObject({ kind: 'failed' });
+    if (outcome.kind === 'failed') expect(outcome.problem).toContain('wrote more than');
+  });
 });
 
 /**
