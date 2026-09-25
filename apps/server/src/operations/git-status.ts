@@ -35,10 +35,21 @@ import { directorySchema, firstLine } from './directory.js';
  * status, and whoever wrote the checkout's `.git/config` chose it; `-c` wins
  * over every config file, so `core.fsmonitor=false` means git scans the tree
  * itself. `core.hooksPath=/dev/null` closes the same door for any hook a
- * subcommand might fire. A clean or process filter the repository configures
- * and selects through its attributes still runs on a stat-dirty file: no flag
- * turns filters off without naming the driver, and the repository picks that
- * name.
+ * subcommand might fire. Two programs the repository names are still
+ * reachable, and neither `-c` pair touches them:
+ *
+ * - A clean or process filter the repository configures and selects through
+ *   its attributes runs on a stat-dirty file. No flag turns filters off
+ *   without naming the driver, and the repository picks that name.
+ * - In a partial clone (`remote.<name>.promisor=true`), rename detection that
+ *   needs a blob the clone never fetched starts a child `git fetch`, and that
+ *   child runs the repository's `remote.<name>.uploadpack`, `core.sshCommand`
+ *   or credential helper. Probed on git 2.50.1: a staged rename away from a
+ *   missing blob made this exact argv run a marker-writing `uploadpack`.
+ *   `GIT_NO_LAZY_FETCH=1` and `git --no-lazy-fetch` both stopped it, but the
+ *   runner fixes the child's environment once for every operation, and git
+ *   2.39.5 refuses `--no-lazy-fetch` as an unknown option, so neither is used
+ *   here yet.
  */
 export interface GitStatus {
   /** The branch's short name, or `null` when HEAD is detached. */

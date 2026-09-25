@@ -48,9 +48,13 @@ import { directorySchema, firstLine } from './directory.js';
  *   refreshes stat information through the fsmonitor just as `status` does, so
  *   a repository's `core.fsmonitor` is a program this would otherwise run, and
  *   `core.hooksPath` closes the same door for any hook. `git.status` says what
- *   these leave open: a filter driver the repository configures still runs on a
- *   stat-dirty file. `--numstat` fires no textconv and no external diff, so
- *   `--no-textconv` and `--no-ext-diff` would change nothing.
+ *   these leave open, and both apply here: a filter driver the repository
+ *   configures still runs on a stat-dirty file, and in a partial clone `-M`
+ *   lazily fetches a missing blob through the repository's own
+ *   `remote.<name>.uploadpack`, `core.sshCommand` or credential helper. Probed
+ *   on git 2.50.1, this argv ran a marker-writing `uploadpack`. `--numstat`
+ *   fires no textconv and no external diff, so `--no-textconv` and
+ *   `--no-ext-diff` would change nothing.
  */
 export const gitDiffRequestSchema = z.strictObject({ directory: directorySchema });
 export type GitDiffRequest = z.infer<typeof gitDiffRequestSchema>;
