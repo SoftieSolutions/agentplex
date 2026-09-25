@@ -371,6 +371,19 @@ describe('loadServerConfig server identity file', () => {
     expect(identityPath(['--server-identity-file=/srv/id.json'])).toBe('/srv/id.json');
   });
 
+  it('reads the file setup records under a prefix it was handed, not the one the home gives', () => {
+    // `agentplex setup --prefix=/opt/agentplex` mints the identity at
+    // /opt/agentplex/server.json and records it under this literal name, which
+    // setup's own suite reads back. A server that fell back to the home here
+    // would mint a second identity with another token.
+    expect(
+      loadBare([], {
+        HOME,
+        AGENTPLEX_SERVER_IDENTITY_FILE: '/opt/agentplex/server.json',
+      }),
+    ).toMatchObject({ ok: true, config: { identityPath: '/opt/agentplex/server.json' } });
+  });
+
   it('reads it from the environment, over the default the home would have given', () => {
     expect(identityPath([])).toBe(IDENTITY_FILE);
   });

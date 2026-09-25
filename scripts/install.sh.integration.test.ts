@@ -1270,10 +1270,10 @@ describe('the settings file it writes once', () => {
     expect(lines).toContain(`AGENTPLEX_BIN_PATH=${prefix}/bin`);
   });
 
-  it('leaves the identity file to the default on a per-user install', () => {
-    // The server defaults it to `$HOME/.agentplex/server.json`, which on this
-    // tier is the prefix setup mints it into, so a line here would only be a
-    // second place to say the same path and to get it wrong.
+  it('leaves the identity file for setup to record on a per-user install', () => {
+    // Setup mints the identity in the prefix and replaces this commented line
+    // with the path it minted. Nothing is minted until setup runs, so an
+    // uncommented line here would name a file that may never exist.
     const { home, result, contents } = environmentFileWritten(() => ['--role=server']);
 
     expect(result.status).toBe(0);
@@ -1331,6 +1331,21 @@ describe('the settings file it writes once', () => {
     expect(result.status).toBe(0);
     expect(contents(`${home}/custom/agentplex.env`).split('\n')).toContain(
       `AGENTPLEX_PREFIX=${home}/custom`,
+    );
+  });
+
+  it('offers the identity line in the prefix it was given, where setup mints the file', () => {
+    // The line setup replaces in place. Under a prefix that is not the default
+    // it is the only thing standing between the server and a second identity
+    // at $HOME/.agentplex/server.json, so it names the file setup will mint.
+    const { home, result, contents } = environmentFileWritten((where) => [
+      '--role=server',
+      `--prefix=${where}/custom`,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(contents(`${home}/custom/agentplex.env`).split('\n')).toContain(
+      `#AGENTPLEX_SERVER_IDENTITY_FILE=${home}/custom/server.json`,
     );
   });
 });

@@ -1,6 +1,6 @@
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { Provider, StoreDescriptor } from '@agentplex/protocol';
-import { DEFAULT_HUB_PORT, DEFAULT_SERVER_PORT } from '@agentplex/node-shared';
+import { DEFAULT_HUB_PORT, DEFAULT_SERVER_PORT, SERVER_SETTINGS } from '@agentplex/node-shared';
 import type { ProcessRunner, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
 import type { PtySupervisor } from '@agentplex/pty';
 import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
@@ -12,6 +12,7 @@ import {
   LOCAL_SERVER_SETTINGS,
   pathListValue,
   upsertSettings,
+  type Setting,
 } from './settings-file.js';
 import { describeProviderLogin, offerProviderLogin } from './provider-login.js';
 import type { SetupMachine } from './setup-machine.js';
@@ -266,8 +267,19 @@ export async function runSetupWizard(
   const recorded = await recordLocalServer(outcome, prefix, dependencies);
   if (recorded.kind === 'ended') return { kind: 'no-input' };
 
+  // The identity file the apply path just minted or found, recorded where the
+  // server will read it whatever the operator answered above: which file the
+  // server presents its token from is not a pairing. After the pairing only so
+  // that a settings file that step already wrote it into is not written twice.
+  const identity = await recordServerIdentity(
+    outcome,
+    prefix,
+    recorded.value.recordedIn,
+    dependencies,
+  );
+
   terminal.write('');
-  for (const line of [...recorded.value.lines, ...whatIsLeft(outcome)]) {
+  for (const line of [...identity, ...recorded.value.lines, ...whatIsLeft(outcome)]) {
     terminal.write(line);
   }
 
@@ -728,10 +740,94 @@ async function logInProviders(
   return lines;
 }
 
-/** The recording step's own report, and whether this machine's server was recorded. */
+/**
+ * Recording the server's own identity file: the path it presents its token from.
+ *
+ * The apply path mints the identity at the plan's path, `<prefix>/server.json`,
+ * and a server that is not told that reads `$HOME/.agentplex/server.json`
+ * instead. Those are one file only when the prefix is the one setup owns by
+ * itself. Under any other -- an installer's `--prefix`, or one typed by hand --
+ * the server minted a second identity with a different token at its first
+ * start, and nothing said so: the token setup reported paired nothing, and on
+ * `--role=both` the hub was refused by its own server. So the path is written
+ * wherever setup has a server identity at all, whatever the prefix, and the
+ * default is never what makes the two agree.
+ *
+ * Into `<prefix>/agentplex.env`, the file the per-user units read, and not
+ * asked for. The settings-file question the pairing step asks is the operator
+ * naming which hub this machine belongs to; this is the server being told
+ * where its own file is, which the operator already agreed to when they
+ * applied a plan that named it. `alreadyIn` is the file the pairing step wrote,
+ * which carries the same line, so that file is not written a second time.
+ *
+ * An identity the apply path could not settle is not recorded: the apply path
+ * has already reported it, and a line pointing at a file that is not an
+ * identity would be recording a problem as a setting.
+ *
+ * A failure costs itself, for the reason the pairing's does: the machine is
+ * provisioned, and the flag to start the server with is the whole of the fix.
+ */
+async function recordServerIdentity(
+  outcome: SetupOutcome,
+  prefix: string,
+  alreadyIn: string | null,
+  { machine }: SetupWizardDependencies,
+): Promise<readonly string[]> {
+  const server = outcome.server;
+  if (server === null || server.identity.problem !== null) return [];
+
+  const identityPath = server.identity.path;
+  const path = join(prefix, SETTINGS_FILE_NAME);
+  const written =
+    path === alreadyIn
+      ? { ok: true as const }
+      : await writeSettings(path, [serverIdentitySetting(identityPath)], machine);
+  const flag = `${SERVER_SETTINGS.serverIdentityFile.flag} ${identityPath}`;
+
+  return written.ok
+    ? [
+        `Recorded ${identityPath} as this server's identity file in ${path}. Start the ` +
+          `server from that file (the unit reads it as its EnvironmentFile), or pass ${flag}.`,
+      ]
+    : [
+        `This server's identity file was not recorded: ${written.problem}. Start the server ` +
+          `with ${flag}, or it keeps an identity of its own under its home, with another token.`,
+      ];
+}
+
+/** The setting that names the server's identity file, as the server's config reads it. */
+function serverIdentitySetting(identityPath: string): Setting {
+  return { key: SERVER_SETTINGS.serverIdentityFile.env, value: identityPath };
+}
+
+/**
+ * These settings, upserted into the file at `path`, or why they could not be.
+ *
+ * The file is read first so that every line setup does not name survives the
+ * write; one that is missing is created with exactly these.
+ */
+async function writeSettings(
+  path: string,
+  settings: readonly Setting[],
+  machine: SetupMachine,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly problem: string }> {
+  const existing = await machine.readFile(path);
+  if (existing.kind === 'failed') {
+    return { ok: false, problem: `cannot read ${path}: ${existing.reason}` };
+  }
+
+  const written = await machine.writeFile(
+    path,
+    upsertSettings(existing.kind === 'read' ? existing.contents : null, settings),
+  );
+  return written.ok ? written : { ok: false, problem: `cannot write ${path}: ${written.problem}` };
+}
+
+/** The recording step's own report, and the settings file it recorded the server in. */
 interface LocalServerStep {
   readonly lines: readonly string[];
-  readonly recorded: boolean;
+  /** `null` when nothing was written: declined, not both, or a failure. */
+  readonly recordedIn: string | null;
 }
 
 /**
@@ -767,7 +863,7 @@ async function recordLocalServer(
   const { terminal, machine } = dependencies;
   const server = outcome.server;
   if (outcome.role !== 'both' || server === null) {
-    return { kind: 'answered', value: { lines: [], recorded: false } };
+    return { kind: 'answered', value: { lines: [], recordedIn: null } };
   }
 
   const browseRoots = pathListValue(server.browseRoots);
@@ -777,7 +873,7 @@ async function recordLocalServer(
       kind: 'answered',
       value: {
         lines: [`This machine was not recorded for the hub: ${identity.problem}`],
-        recorded: false,
+        recordedIn: null,
       },
     };
   }
@@ -793,44 +889,35 @@ async function recordLocalServer(
   const path = await askForSettingsFile(prefix, terminal);
   if (path.kind === 'ended') return path;
   if (path.value === null) {
-    return { kind: 'answered', value: { lines: [notRecorded(identity.path)], recorded: false } };
+    return { kind: 'answered', value: { lines: [notRecorded(identity.path)], recordedIn: null } };
   }
 
   // The directory the operator just named, because naming a file to write is
   // asking for the file to be there.
   await machine.makeDirectory(dirname(path.value));
 
-  const existing = await machine.readFile(path.value);
-  if (existing.kind === 'failed') {
-    return {
-      kind: 'answered',
-      value: {
-        lines: [`This machine was not recorded: cannot read ${path.value}: ${existing.reason}`],
-        recorded: false,
-      },
-    };
-  }
-
-  const written = await machine.writeFile(
+  const written = await writeSettings(
     path.value,
-    upsertSettings(existing.kind === 'read' ? existing.contents : null, [
+    [
       { key: LOCAL_SERVER_SETTINGS.identityFile.env, value: identity.path },
       { key: LOCAL_SERVER_SETTINGS.port.env, value: String(server.port) },
-      // The server's half of the same file. Written only when the operator
-      // named a root: an empty list is what the server already does, and a
-      // `AGENTPLEX_BROWSE_ROOTS=` line saying so would replace the installer's
-      // commented-out line with one that means the same thing and reads as a
-      // decision somebody took.
+      // The server's half of the same file, because on this role both daemons
+      // start from it. Its identity file is already recorded in the prefix's
+      // settings, which is this file unless the operator named another; when
+      // they did, a server started beside this hub has to find it here too.
+      serverIdentitySetting(identity.path),
+      // Written only when the operator named a root: an empty list is what the
+      // server already does, and a `AGENTPLEX_BROWSE_ROOTS=` line saying so
+      // would replace the installer's commented-out line with one that means
+      // the same thing and reads as a decision somebody took.
       ...(browseRoots === null ? [] : [{ key: BROWSE_ROOTS_SETTING.env, value: browseRoots }]),
-    ]),
+    ],
+    machine,
   );
   if (!written.ok) {
     return {
       kind: 'answered',
-      value: {
-        lines: [`This machine was not recorded: cannot write ${path.value}: ${written.problem}`],
-        recorded: false,
-      },
+      value: { lines: [`This machine was not recorded: ${written.problem}`], recordedIn: null },
     };
   }
 
@@ -838,7 +925,7 @@ async function recordLocalServer(
     kind: 'answered',
     value: {
       lines: describeLocalServer(path.value, identity.path, server.port),
-      recorded: true,
+      recordedIn: path.value,
     },
   };
 }

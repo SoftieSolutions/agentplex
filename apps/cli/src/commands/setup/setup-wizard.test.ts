@@ -12,6 +12,8 @@ import {
 import { createClaudeAdapter, createProviderRegistry } from '@agentplex/providers';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
+import { readIdentityPath } from '@agentplex/node-shared';
+import { readEnvironmentFile } from '../../installation/environment-file.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine, type FakeSetupMachine } from './fake-setup-machine.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
@@ -623,6 +625,7 @@ describe('the setup wizard', () => {
           'AGENTPLEX_ROLE=both',
           '#AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=/var/lib/agentplex/server.json',
           '#AGENTPLEX_LOCAL_SERVER_PORT=8081',
+          `#AGENTPLEX_SERVER_IDENTITY_FILE=${PREFIX}/server.json`,
           '',
         ].join('\n'),
       },
@@ -634,6 +637,7 @@ describe('the setup wizard', () => {
       'AGENTPLEX_ROLE=both',
       `AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=${IDENTITY}`,
       'AGENTPLEX_LOCAL_SERVER_PORT=8081',
+      `AGENTPLEX_SERVER_IDENTITY_FILE=${IDENTITY}`,
       '',
     ]);
   });
@@ -671,28 +675,86 @@ describe('the setup wizard', () => {
     expect(
       lines.filter((line) => line.startsWith('AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=')),
     ).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith('AGENTPLEX_SERVER_IDENTITY_FILE='))).toEqual([
+      `AGENTPLEX_SERVER_IDENTITY_FILE=${IDENTITY}`,
+    ]);
   });
 
-  it('writes no settings when the operator does not name a file', async () => {
+  it('records no pairing when the operator does not name a file', async () => {
     // Declining is a legitimate answer, and what it gets is the sentence that
     // was true before this step existed: the token is in that file, and typing
-    // it into a hub is how this machine gets paired.
+    // it into a hub is how this machine gets paired. The server's own identity
+    // file is still recorded: it is not a pairing, and without it the token in
+    // that sentence is not necessarily the one the server presents.
     const wizard = await run(['', '', '', '', '', '', '', 'none', '']);
 
-    expect(wizard.machine.writes).toEqual([]);
+    expect(settings(wizard.machine).filter((line) => line.startsWith('AGENTPLEX_LOCAL_'))).toEqual(
+      [],
+    );
+    expect(settings(wizard.machine)).toContain(`AGENTPLEX_SERVER_IDENTITY_FILE=${IDENTITY}`);
     expect(wizard.terminal.transcript).toContain(`paired: the pairing token is in ${IDENTITY}`);
   });
 
-  it('records nothing in --role=server, and does not ask about settings', async () => {
+  it('records the server in the hub settings file the operator named, beside its own', async () => {
+    // Both daemons read one settings file, so a hub started from the file the
+    // operator named starts its server from it too.
+    const HUB_SETTINGS = '/srv/agentplex/hub.env';
+    const wizard = await run(['', '', '', '', '', '', '', HUB_SETTINGS, '']);
+
+    expect(settings(wizard.machine, HUB_SETTINGS)).toEqual(
+      expect.arrayContaining([
+        `AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=${IDENTITY}`,
+        `AGENTPLEX_SERVER_IDENTITY_FILE=${IDENTITY}`,
+      ]),
+    );
+    expect(settings(wizard.machine)).toContain(`AGENTPLEX_SERVER_IDENTITY_FILE=${IDENTITY}`);
+  });
+
+  it('records no pairing in --role=server, and does not ask about settings', async () => {
     // The bound that matters most. A `--role=server` machine is one a hub
     // elsewhere has to be told about by a person, which is the rule the
-    // loopback case is the exception to.
+    // loopback case is the exception to. What it does record is the server's
+    // own identity file, which is not a pairing and is not a question.
     const wizard = await run(['', '', '', '', '', '', ''], { role: 'server' });
 
-    expect(wizard.machine.writes).toEqual([]);
+    expect(wizard.machine.writes).toEqual([SETTINGS]);
+    expect(settings(wizard.machine)).toEqual([`AGENTPLEX_SERVER_IDENTITY_FILE=${IDENTITY}`, '']);
+    expect(wizard.terminal.transcript).toContain(
+      `Recorded ${IDENTITY} as this server's identity file in ${SETTINGS}`,
+    );
     expect(
       wizard.terminal.questions.some((question) => question.startsWith('Hub settings file')),
     ).toBe(false);
+  });
+
+  it('records the identity it minted under a prefix it was handed, for the server to read', async () => {
+    // The split this closes: `install.sh --prefix=/opt/agentplex` hands the
+    // prefix over, setup mints the identity inside it, and a server that was
+    // not told so fell back to $HOME/.agentplex/server.json and minted a second
+    // identity with another token. The token setup printed then paired nothing.
+    const wizard = await run(['', '', '', '', '', '', ''], {
+      role: 'server',
+      prefix: HANDED_PREFIX,
+    });
+
+    const minted = `${HANDED_PREFIX}/server.json`;
+    const file = `${HANDED_PREFIX}/agentplex.env`;
+    expect(settings(wizard.machine, file)).toContain(`AGENTPLEX_SERVER_IDENTITY_FILE=${minted}`);
+    expect(wizard.files.contents.get(minted)).toContain('minted-on-the-machine');
+
+    // And read back the way the server reads it: the settings file as the
+    // unit's EnvironmentFile hands it over, through the parser the server's
+    // config calls, with a home whose default is somewhere else entirely.
+    const recorded = readEnvironmentFile(wizard.machine.contents.get(file) ?? '');
+    const problems: string[] = [];
+    const resolved = readIdentityPath(
+      recorded.values.get('AGENTPLEX_SERVER_IDENTITY_FILE'),
+      { HOME },
+      problems,
+    );
+    expect(problems).toEqual([]);
+    expect(resolved).toBe(minted);
+    expect(resolved).not.toBe(IDENTITY);
   });
 
   it('records nothing in --role=hub: there is no server on this machine', async () => {
@@ -720,6 +782,10 @@ describe('the setup wizard', () => {
     // providers it installed.
     expect(wizard.outcome).toEqual({ kind: 'applied', problems: [] });
     expect(wizard.terminal.transcript).toContain('This machine was not recorded');
+    expect(wizard.terminal.transcript).toContain(
+      `This server's identity file was not recorded: cannot write ${SETTINGS}`,
+    );
+    expect(wizard.terminal.transcript).toContain(`--server-identity-file ${IDENTITY}`);
   });
 
   it('asks again rather than taking a port it could not read', async () => {

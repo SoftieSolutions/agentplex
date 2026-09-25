@@ -34,7 +34,8 @@ export const LOCAL_SERVER_SETTINGS = {
 } as const;
 
 /**
- * The server setting setup writes into the same file, and the only one it does.
+ * A server setting setup writes into the same file. The other is the server's
+ * identity file, which the wizard names from the shared table in node-shared.
  *
  * Setup's own copy of the name, for the reason above: setup may not import the
  * server, and the server's `config.test.ts` asserts on the same literal, so two
