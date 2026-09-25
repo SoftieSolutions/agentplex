@@ -783,8 +783,13 @@ describe('watching a terminal', () => {
     next.open();
     next.deliver(hubFrames.welcome);
 
-    // Interest, then the size, in that order: a resize for a terminal this
-    // connection is not yet watching is a frame the hub can only refuse.
+    // Interest first, and the size only once this connection's hub has
+    // answered it: a resize for a terminal the connection is not yet watching
+    // is a frame the hub can only refuse.
+    expect(sentFrames(next).slice(1)).toEqual([
+      { type: 'session-subscribe', id: 5, target: TARGET },
+    ]);
+    next.deliver(addressedTo(hubFrames.sessionSubscribed, 5));
     expect(sentFrames(next).slice(1)).toEqual([
       { type: 'session-subscribe', id: 5, target: TARGET },
       { type: 'terminal-resize', id: 6, target: TARGET, size: { cols: 120, rows: 40 } },
@@ -1223,15 +1228,36 @@ describe('terminal resize', () => {
     h.store.sendTerminalResize(TARGET, { cols: 80, rows: 24 });
     expect(sentFrames(socket).some((frame) => frame.type === 'terminal-resize')).toBe(false);
 
+    // The answer is when the far end hears it, from the store itself: the
+    // pane's pacer never reports a size twice, so nobody else will say it.
     socket.deliver(hubFrames.sessionSubscribed);
-    h.store.sendTerminalResize(TARGET, { cols: 100, rows: 30 });
-
     expect(sentFrames(socket).at(-1)).toEqual({
       type: 'terminal-resize',
       id: 3,
       target: TARGET,
+      size: { cols: 80, rows: 24 },
+    });
+
+    // Attached, a change goes out at once.
+    h.store.sendTerminalResize(TARGET, { cols: 100, rows: 30 });
+    expect(sentFrames(socket).at(-1)).toEqual({
+      type: 'terminal-resize',
+      id: 4,
+      target: TARGET,
       size: { cols: 100, rows: 30 },
     });
+  });
+
+  it('sends nothing for a target nobody watches', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const before = sentFrames(socket).length;
+
+    // No subscription, so nothing the hub could route it to: the frame could
+    // only be refused, and there is no record to remember the size on.
+    h.store.sendTerminalResize(TARGET, { cols: 80, rows: 24 });
+
+    expect(sentFrames(socket)).toHaveLength(before);
   });
 });
 

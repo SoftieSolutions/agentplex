@@ -930,8 +930,8 @@ export interface HubStore {
    *
    * Not a command and not a keystroke: a size is standing interest of a sort
    * the other two are not — it is a fact about the viewer that stays true
-   * until the next one, so the last one sent is replayed with the
-   * subscription on every reconnection. Silent on success, like the wire:
+   * until the next one, so the last one given is said again each time the hub
+   * answers the subscription. Silent on success, like the wire:
    * what a pane can see for itself is not worth a frame back.
    */
   sendTerminalResize(target: ClientTerminalTarget, size: TerminalSize): void;
@@ -1145,7 +1145,8 @@ interface TerminalRecord {
    */
   subscribeId: FrameId | null;
   /**
-   * The last size sent for this terminal, replayed with the subscription.
+   * The last size the pane gave for this terminal, said again each time the
+   * hub answers the subscription.
    *
    * A size is not a keystroke and not a command: it stays true until the next
    * one, so a reconnection that did not carry it would leave the process on
@@ -1442,22 +1443,16 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     return id;
   }
 
-  /** Asks for one terminal, and for the size the viewer already has. */
+  /**
+   * Asks for one terminal. The size the viewer has waits for the answer: a
+   * resize for a terminal this connection is not yet watching is a frame the
+   * hub can only refuse, and `session-subscribed` is where it goes out.
+   */
   function subscribeTerminal(record: TerminalRecord): void {
     record.subscribeId = sendTerminalFrame('subscribe', record.key, (id) => ({
       type: 'session-subscribe',
       id,
       target: record.target,
-    }));
-    const size = record.size;
-    if (size === null) return;
-    // After the subscribe, never before: a resize for a terminal this
-    // connection is not yet watching is a frame the hub can only refuse.
-    sendTerminalFrame('resize', record.key, (id) => ({
-      type: 'terminal-resize',
-      id,
-      target: record.target,
-      size,
     }));
   }
 
@@ -2100,6 +2095,19 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // here is what the replay is about to say again.
         if (record.printed) record.resumedAbove = record.feed.dropped + record.feed.bytes;
         record.attached = true;
+        // The size the pane last reported, said now and by the store: the
+        // pane's pacer never reports a size twice, so a size it gave before
+        // this answer -- or before a machine coming back re-answered it --
+        // reaches the far end here or not at all.
+        const size = record.size;
+        if (size !== null) {
+          sendTerminalFrame('resize', record.key, (id) => ({
+            type: 'terminal-resize',
+            id,
+            target: record.target,
+            size,
+          }));
+        }
         record.ended = null;
         record.problem = null;
         record.replayChunks = frame.replayChunks;
@@ -2512,19 +2520,22 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
 
     sendTerminalResize(target: ClientTerminalTarget, size: TerminalSize): void {
       const key = terminalKey(target);
-      // Remembered whether or not it can be sent, and remembered even for a
-      // target nothing is watching: the size is what the pane currently is,
-      // and the connection returning is when the far end gets to hear it.
+      // A target nothing watches has no subscription for the hub to route a
+      // resize to, and no record to remember it on: nothing to do. No pane
+      // lands here, since a pane mounts its terminal only once it watches.
       const record = terminals.get(key);
-      if (record !== undefined) record.size = size;
-      if (record === undefined || record.attached) {
-        sendTerminalFrame('resize', key, (id) => ({
-          type: 'terminal-resize',
-          id,
-          target,
-          size,
-        }));
-      }
+      if (record === undefined) return;
+      // Remembered whether or not it can be sent: the size is what the pane
+      // currently is, and the next `session-subscribed` -- this connection's
+      // first, or the one after a redial -- is when the far end hears it.
+      record.size = size;
+      if (!record.attached) return;
+      sendTerminalFrame('resize', key, (id) => ({
+        type: 'terminal-resize',
+        id,
+        target,
+        size,
+      }));
     },
 
     watchTerminal(target: ClientTerminalTarget): () => void {
