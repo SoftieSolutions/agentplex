@@ -25,6 +25,7 @@ import {
   terminalKey,
   type HubCommand,
   type HubStoreDependencies,
+  type StoreSocket,
 } from './hub-store.js';
 import { hubFrames } from './hub-frames.fixture.js';
 
@@ -199,15 +200,17 @@ describe('reconnecting', () => {
     const h = harness();
     const { socket } = await establish(h);
 
+    // Each welcome schedules the heartbeat's 30 s interval, so the ladder is
+    // read between those.
     socket.drop();
     expect(h.store.getSnapshot().phase).toBe('reconnecting');
-    expect(h.timers.delays).toEqual([500]);
+    expect(h.timers.delays).toEqual([30_000, 500]);
 
     // The redial reaches a socket that drops before it is established.
     (await redial(h)).drop();
-    expect(h.timers.delays).toEqual([500, 1_000]);
+    expect(h.timers.delays).toEqual([30_000, 500, 1_000]);
     (await redial(h)).drop();
-    expect(h.timers.delays).toEqual([500, 1_000, 2_000]);
+    expect(h.timers.delays).toEqual([30_000, 500, 1_000, 2_000]);
 
     // A connection that holds resets the ladder.
     const fourth = await redial(h);
@@ -215,7 +218,7 @@ describe('reconnecting', () => {
     fourth.deliver(hubFrames.welcome);
     expect(h.store.getSnapshot().phase).toBe('connected');
     fourth.drop();
-    expect(h.timers.delays).toEqual([500, 1_000, 2_000, 500]);
+    expect(h.timers.delays).toEqual([30_000, 500, 1_000, 2_000, 30_000, 500]);
   });
 
   it('a failed ticket exchange is an ordinary connect failure, said in words', async () => {
@@ -243,6 +246,202 @@ describe('reconnecting', () => {
 
     const outcome = h.store.sendCommand(START);
     expect(outcome.accepted).toBe(false);
+  });
+});
+
+describe('heartbeat', () => {
+  const A_PAIRING = {
+    type: 'server-pair',
+    label: 'gpu-box-01',
+    address: 'wss://gpu-box-01.example:8443',
+    token: 'the-token-the-server-printed',
+  } as const;
+
+  /**
+   * A socket whose `close()` reports nothing, which is what a half-open one
+   * does in a real browser: the `close` event waits out the closing
+   * handshake, 20 s to four minutes depending on the browser. The fake's own
+   * `close()` answers at once, which would let a store that waits for the
+   * event pass a test it fails in the field.
+   */
+  function halfOpen(socket: StoreSocket): StoreSocket {
+    return {
+      send: (text) => socket.send(text),
+      close: () => {},
+      onOpen: (fire) => socket.onOpen(fire),
+      onMessage: (fire) => socket.onMessage(fire),
+      onClose: (fire) => socket.onClose(fire),
+    };
+  }
+
+  /** A wake source the test fires by hand, and can see being let go of. */
+  function manualWake() {
+    let fire: (() => void) | null = null;
+    return {
+      wake: (listener: () => void) => {
+        fire = listener;
+        return () => {
+          fire = null;
+        };
+      },
+      fire: () => fire?.(),
+      get subscribed(): boolean {
+        return fire !== null;
+      },
+    };
+  }
+
+  it('asks once the connection has been quiet, and gives it up when the hub never answers', async () => {
+    const sockets = createFakeSocketFactory();
+    const h = harness({ createSocket: (ticket) => halfOpen(sockets.create(ticket)) });
+    h.store.subscribe(() => {});
+    await settle();
+    const socket = sockets.sockets[0] as FakeSocket;
+    socket.open();
+    socket.deliver(hubFrames.welcome);
+    expect(h.timers.delays).toEqual([30_000]);
+
+    h.timers.fireAll();
+    expect(sentFrames(socket).at(-1)).toEqual({ type: 'ping', id: 2 });
+    expect(h.timers.delays).toEqual([30_000, 10_000]);
+    expect(h.store.getSnapshot().phase).toBe('connected');
+
+    const answer = h.store.request(A_PAIRING);
+    h.timers.fireAll();
+
+    // Given up without waiting for a `close` the socket never reports: the
+    // phase, the waiter and the retry all move on the deadline alone.
+    expect(h.store.getSnapshot().phase).toBe('reconnecting');
+    expect(h.store.getSnapshot().problem).toBe('the hub did not answer a ping within 10 s');
+    await expect(answer).resolves.toEqual({
+      ok: false,
+      reason: 'the connection dropped before the hub answered',
+    });
+    expect(h.timers.delays).toEqual([30_000, 10_000, 500]);
+    expect(h.timers.pending).toBe(1);
+
+    // The close that finally arrives, a minute later, is a socket already
+    // given up on and schedules nothing a second time.
+    socket.drop();
+    expect(h.timers.pending).toBe(1);
+    expect(h.timers.delays).toEqual([30_000, 10_000, 500]);
+
+    h.timers.fireAll();
+    await settle();
+    expect(sockets.sockets).toHaveLength(2);
+  });
+
+  it('hangs up the socket it gave up on, as best it can', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.timers.fireAll();
+    h.timers.fireAll();
+    expect(socket.closedByStore).toBe(true);
+    // The fake answers `close()` at once; that answer is stale and counted once.
+    expect(h.timers.pending).toBe(1);
+    expect(h.store.getSnapshot().phase).toBe('reconnecting');
+  });
+
+  it('keeps the connection on the pong that answers the ping, and asks again later', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.timers.fireAll();
+    expect(sentFrames(socket).at(-1)).toEqual({ type: 'ping', id: 2 });
+
+    // The captured pong answers frame 2, which is this ping.
+    socket.deliver(hubFrames.pong);
+    expect(h.store.getSnapshot().phase).toBe('connected');
+    expect(h.timers.delays).toEqual([30_000, 10_000, 30_000]);
+    expect(h.timers.pending).toBe(1);
+
+    h.timers.fireAll();
+    expect(sentFrames(socket).at(-1)).toEqual({ type: 'ping', id: 3 });
+    expect(h.store.getSnapshot().phase).toBe('connected');
+  });
+
+  it('does not take a pong answering some other ping for this one', async () => {
+    const h = harness();
+    await establish(h);
+    h.timers.fireAll();
+    h.timers.fireAll();
+    // The captured pong, answering the ping the last connection gave up on.
+    const stale = hubFrames.pong;
+
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+    h.timers.fireAll();
+    // Frame 3 was the redial's hello; this connection's ping is 4.
+    expect(sentFrames(next).at(-1)).toEqual({ type: 'ping', id: 4 });
+    next.deliver(stale);
+    h.timers.fireAll();
+    expect(h.store.getSnapshot().phase).toBe('reconnecting');
+    expect(next.closedByStore).toBe(true);
+  });
+
+  it('a wake while waiting to retry dials at once', async () => {
+    const wake = manualWake();
+    const h = harness({ wake: wake.wake });
+    const { socket } = await establish(h);
+    socket.drop();
+    expect(h.store.getSnapshot().phase).toBe('reconnecting');
+    expect(h.timers.pending).toBe(1);
+
+    wake.fire();
+    expect(h.timers.pending).toBe(0);
+    await settle();
+    expect(h.sockets.sockets).toHaveLength(2);
+  });
+
+  it('a wake while connected asks the hub now rather than at the next interval', async () => {
+    const wake = manualWake();
+    const h = harness({ wake: wake.wake });
+    const { socket } = await establish(h);
+
+    wake.fire();
+    expect(sentFrames(socket).at(-1)).toEqual({ type: 'ping', id: 2 });
+    // The interval is gone and the deadline is what is pending.
+    expect(h.timers.pending).toBe(1);
+    expect(h.timers.delays).toEqual([30_000, 10_000]);
+
+    // A second wake with the question still open asks nothing more.
+    wake.fire();
+    expect(socket.sent).toHaveLength(2);
+    expect(h.timers.pending).toBe(1);
+  });
+
+  it('a wake while dialling leaves the dial alone', async () => {
+    const wake = manualWake();
+    const h = harness({ wake: wake.wake });
+    h.store.subscribe(() => {});
+    wake.fire();
+    await settle();
+    expect(h.sockets.sockets).toHaveLength(1);
+    expect(h.timers.pending).toBe(0);
+  });
+
+  it('listens for wakes only while somebody listens to the store, and stops the clock with it', async () => {
+    const wake = manualWake();
+    const h = harness({ wake: wake.wake });
+    expect(wake.subscribed).toBe(false);
+
+    const { unsubscribe } = await establish(h);
+    expect(wake.subscribed).toBe(true);
+    expect(h.timers.pending).toBe(1);
+
+    unsubscribe();
+    expect(wake.subscribed).toBe(false);
+    expect(h.timers.pending).toBe(0);
+  });
+
+  it('stops the clock when the connection drops, so a ping never reaches a dead socket', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.timers.fireAll();
+    socket.drop();
+    // The deadline went with the socket; only the retry is left.
+    expect(h.timers.pending).toBe(1);
+    expect(h.timers.delays.at(-1)).toBe(500);
   });
 });
 

@@ -6,7 +6,8 @@ import { browserTimers } from './timers.js';
 
 /**
  * The store's seams, filled with the real browser: `fetch` for the ticket
- * exchange, `WebSocket` for the socket, `setTimeout` for the backoff. This is
+ * exchange, `WebSocket` for the socket, `setTimeout` for the backoff and the
+ * heartbeat, the page's visibility and `online` events for a wake. This is
  * the one file in the store that touches a platform API, so it is the one file
  * its tests cannot reach past — everything here is either a pure function,
  * tested, or a one-line adapter over the platform.
@@ -81,9 +82,26 @@ function wrapWebSocket(socket: WebSocket): StoreSocket {
 }
 
 /**
+ * Fires when the page has reason to doubt its connection: it came back into
+ * view, where a phone may have slept with the socket open, or the network
+ * came back. Leaving view is no such moment and wakes nothing.
+ */
+export function subscribeWake(fire: () => void): () => void {
+  const onVisibility = (): void => {
+    if (document.visibilityState === 'visible') fire();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  window.addEventListener('online', fire);
+  return () => {
+    document.removeEventListener('visibilitychange', onVisibility);
+    window.removeEventListener('online', fire);
+  };
+}
+
+/**
  * The real dependencies for `createHubStore`.
  *
- * Four seams and no more, and the list got shorter rather than longer when the
+ * Five seams and no more, and the list got shorter rather than longer when the
  * terminal frames landed. The store used to take its subscribe and keystroke
  * frames as injected encoders, because the protocol had no frame to put either
  * on and an unfilled seam was the honest way to say so. There are frames now,
@@ -113,5 +131,6 @@ export function createBrowserDependencies(options: BrowserDependencyOptions): Hu
     createSocket: (ticket) => wrapWebSocket(new WebSocket(socketUrl(window.location, ticket))),
     timers: browserTimers,
     frameIds: createFrameIdCounter(),
+    wake: subscribeWake,
   };
 }
