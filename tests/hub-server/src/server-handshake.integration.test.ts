@@ -9,11 +9,11 @@ import { createProviderRegistry } from '@agentplex/providers';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
-import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
+import { createTerminalManager } from '../../../apps/server/src/terminal/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
-import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
-import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
-import { createFakeStoreWatcher } from '../../../apps/server/src/fake-store-watcher.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/working-tree/fake-working-tree.js';
+import { createFakeStoreWatcher } from '../../../apps/server/src/store-watch/fake-store-watcher.js';
 import {
   createLogger,
   closure,
@@ -25,9 +25,9 @@ import {
 import {
   handshakeWithServer,
   type DialTarget,
-} from '../../../apps/hub/src/features/servers/server-handshake.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
+} from '../../../apps/hub/src/servers/server-handshake.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createFakeProjectFiles } from '../../../apps/server/src/projects/fake-project-files.js';
 
 /**
  * The handshake over a real socket, against the real server role.

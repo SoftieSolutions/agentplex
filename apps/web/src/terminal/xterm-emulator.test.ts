@@ -31,7 +31,7 @@ import {
  * What the pane makes of real bytes that are wider than one column each.
  *
  * The fixture is a bordered panel a shell drew through a real pty
- * (apps/server/src/capture-unicode-width-fixtures.test.ts), padded by the
+ * (apps/server/src/terminal/capture-unicode-width-fixtures.test.ts), padded by the
  * program that drew it on the assumption every modern terminal makes: an
  * emoji is two columns. So the question these tests ask the emulator is a
  * question about columns — does the right border land in the same column on

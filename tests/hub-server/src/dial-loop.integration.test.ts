@@ -7,7 +7,7 @@ import {
   type StoreDescriptor,
 } from '@agentplex/protocol';
 import { serveServerEnd } from './server-end.js';
-import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
+import { createFakeTerminals } from '../../../apps/server/src/terminal/fake-terminals.js';
 import { createFakeStoreFiles, readyProvider } from '@agentplex/providers/testing';
 import {
   createFakeMessageSocket,
@@ -23,23 +23,23 @@ import {
   findServer,
   registerServer,
   revokeServer,
-} from '../../../apps/hub/src/features/pairing/server-registrations.js';
+} from '../../../apps/hub/src/pairing/server-registrations.js';
 import {
   createPairing,
   newServerRegistrationSchema,
   type LiveServerRegistration,
   type Pairing,
-} from '../../../apps/hub/src/features/pairing/pairing.js';
-import { listStores } from '../../../apps/hub/src/features/pairing/store-records.js';
+} from '../../../apps/hub/src/pairing/pairing.js';
+import { listStores } from '../../../apps/hub/src/pairing/store-records.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
 } from '../../../apps/hub/src/db/test-migrated-schema.js';
-import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { startDialLoop, type DialLoop } from '../../../apps/hub/src/features/servers/dial-loop.js';
-import { createMessageSocketTransports } from '../../../apps/hub/src/features/servers/transport.js';
-import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
+import { startDialLoop, type DialLoop } from '../../../apps/hub/src/servers/dial-loop.js';
+import { createMessageSocketTransports } from '../../../apps/hub/src/servers/transport.js';
+import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
 
 /**
  * The connection supervisor for one server, driven end to end.

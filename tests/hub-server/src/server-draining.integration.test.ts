@@ -26,24 +26,24 @@ import {
 } from '@agentplex/providers/testing';
 import { serveServerEnd } from './server-end.js';
 import { drainingSessions } from '../../../apps/server/src/drain.js';
-import type { HubConnection } from '../../../apps/server/src/hub-connection.js';
-import { createSessionController } from '../../../apps/server/src/session-control.js';
-import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
-import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
-import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
-import { createFakeProjects } from '../../../apps/hub/src/features/projects/fake-projects.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+import type { HubConnection } from '../../../apps/server/src/hub/hub-connection.js';
+import { createSessionController } from '../../../apps/server/src/sessions/session-control.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/working-tree/fake-working-tree.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
+import { createFakeProjects } from '../../../apps/hub/src/projects/fake-projects.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
 import {
   createTerminalManager,
   type TerminalManager,
-} from '../../../apps/server/src/terminal-manager.js';
-import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
-import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
+} from '../../../apps/server/src/terminal/terminal-manager.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
+import { registerServer } from '../../../apps/hub/src/pairing/server-registrations.js';
 import {
   createPairing,
   newServerRegistrationSchema,
-} from '../../../apps/hub/src/features/pairing/pairing.js';
+} from '../../../apps/hub/src/pairing/pairing.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
@@ -51,9 +51,9 @@ import {
 import {
   createFleetState,
   type FleetState,
-} from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
-import { toMachineState } from '../../../apps/hub/src/features/fleet-state/machine-state.js';
-import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
+} from '../../../apps/hub/src/fleet-state/fleet-state.js';
+import { toMachineState } from '../../../apps/hub/src/fleet-state/machine-state.js';
+import { createSessions, type Sessions } from '../../../apps/hub/src/sessions/sessions.js';
 
 /**
  * A server going down on purpose, and what the hub does about it.

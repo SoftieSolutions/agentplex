@@ -23,18 +23,18 @@ import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
 import { DEFAULT_DRAIN_MS } from '../../../apps/server/src/drain.js';
-import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
-import { createFakeStoreWatcher } from '../../../apps/server/src/fake-store-watcher.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { createFakeProjectFiles } from '../../../apps/server/src/fake-project-files.js';
-import { createTerminalManager } from '../../../apps/server/src/terminal-manager.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/working-tree/fake-working-tree.js';
+import { createFakeStoreWatcher } from '../../../apps/server/src/store-watch/fake-store-watcher.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createFakeProjectFiles } from '../../../apps/server/src/projects/fake-project-files.js';
+import { createTerminalManager } from '../../../apps/server/src/terminal/terminal-manager.js';
 import { startSessionServer, type SessionServer } from '../../../apps/server/src/server.js';
-import { localServerPairing } from '../../../apps/hub/src/features/pairing/local-server.js';
+import { localServerPairing } from '../../../apps/hub/src/pairing/local-server.js';
 import {
   handshakeWithServer,
   type DialTarget,
-} from '../../../apps/hub/src/features/servers/server-handshake.js';
-import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
+} from '../../../apps/hub/src/servers/server-handshake.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
 
 /**
  * The `--role=both` box, end to end, across the change that introduced grants.

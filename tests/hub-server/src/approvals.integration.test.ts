@@ -38,26 +38,26 @@ import {
   createApprovalGate,
   APPROVAL_DENIAL_MESSAGE,
   type ApprovalGate,
-} from '../../../apps/server/src/approval-gate.js';
+} from '../../../apps/server/src/approvals/approval-gate.js';
 import {
   createFakeApprovalListener,
   createFakeHookConnection,
   hookLine,
   type FakeHookConnection,
-} from '../../../apps/server/src/fake-approval-hooks.js';
-import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
-import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { createHubAudience } from '../../../apps/server/src/hub-audience.js';
+} from '../../../apps/server/src/approvals/fake-approval-hooks.js';
+import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import { createFakeTerminals } from '../../../apps/server/src/terminal/fake-terminals.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createHubAudience } from '../../../apps/server/src/hub/hub-audience.js';
 import { serveServerEnd } from './server-end.js';
-import { createFakeBeaconSource } from '../../../apps/hub/src/features/discovery/fake-discovery.js';
-import { createFakeWebAssets } from '../../../apps/hub/src/features/web/fake-web.js';
+import { createFakeBeaconSource } from '../../../apps/hub/src/discovery/fake-discovery.js';
+import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web.js';
 import { createSqliteDatabase, type SqliteDatabase } from '../../../apps/hub/src/db/sqlite.js';
 import { loadMigrations } from '../../../apps/hub/src/db/migration-files.js';
 import { migrate } from '../../../apps/hub/src/db/migrations.js';
 import { nodeMigrationFileSystem } from '../../../apps/hub/src/db/node-migration-files.js';
-import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
-import { newServerRegistrationSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
+import { registerServer } from '../../../apps/hub/src/pairing/server-registrations.js';
+import { newServerRegistrationSchema } from '../../../apps/hub/src/pairing/pairing.js';
 import { startHub, type Hub } from '../../../apps/hub/src/hub.js';
 
 /**

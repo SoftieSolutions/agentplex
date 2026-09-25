@@ -1093,7 +1093,7 @@ describe('the assembled packages', { timeout: 60_000 }, () => {
    * The client is what stopped being a relative path, and this is the shape of
    * why: `../../web/dist` from the hub's main.js now names a directory inside
    * the hub's own package that nothing puts anything in. The hub resolves the
-   * client's package instead -- see `apps/hub/src/features/web/web-package.ts` -- and
+   * client's package instead -- see `apps/hub/src/web/web-package.ts` -- and
    * the two trees below are the two packages that arrangement assumes.
    */
   it('leaves the client where the hub cannot reach it by counting directories', async () => {

@@ -41,31 +41,31 @@ import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testin
 import { createPtySupervisor } from '@agentplex/pty';
 import { serveServerEnd } from './server-end.js';
 import { forbiddenKeysIn } from './frame-keys.js';
-import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
-import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
-import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { createSessionController } from '../../../apps/server/src/session-control.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/working-tree/fake-working-tree.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createSessionController } from '../../../apps/server/src/sessions/session-control.js';
 import {
   createTerminalManager,
   type TerminalManager,
-} from '../../../apps/server/src/terminal-manager.js';
-import { createClients, type Clients } from '../../../apps/hub/src/features/clients/clients.js';
-import { createFakeApprovals } from '../../../apps/hub/src/features/approvals/fake-approvals.js';
-import { createFakeApprovalPolicy } from '../../../apps/hub/src/features/approval-policy/fake-approval-policy.js';
-import { createFakeAttention } from '../../../apps/hub/src/features/attention/fake-attention.js';
-import { createFakeCatalogue } from '../../../apps/hub/src/features/catalogue/fake-catalogue.js';
-import { createFakeDocs } from '../../../apps/hub/src/features/docs/fake-docs.js';
-import { createFakeGraphs } from '../../../apps/hub/src/features/graphs/fake-graphs.js';
-import { createFakeGraphRuns } from '../../../apps/hub/src/features/graph-runs/fake-graph-runs.js';
-import { createFakeTerminal } from '../../../apps/hub/src/features/terminal/fake-terminal.js';
-import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
-import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
+} from '../../../apps/server/src/terminal/terminal-manager.js';
+import { createClients, type Clients } from '../../../apps/hub/src/clients/clients.js';
+import { createFakeApprovals } from '../../../apps/hub/src/approvals/fake-approvals.js';
+import { createFakeApprovalPolicy } from '../../../apps/hub/src/approval-policy/fake-approval-policy.js';
+import { createFakeAttention } from '../../../apps/hub/src/attention/fake-attention.js';
+import { createFakeCatalogue } from '../../../apps/hub/src/catalogue/fake-catalogue.js';
+import { createFakeDocs } from '../../../apps/hub/src/docs/fake-docs.js';
+import { createFakeGraphs } from '../../../apps/hub/src/graphs/fake-graphs.js';
+import { createFakeGraphRuns } from '../../../apps/hub/src/graph-runs/fake-graph-runs.js';
+import { createFakeTerminal } from '../../../apps/hub/src/terminal/fake-terminal.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
+import { registerServer } from '../../../apps/hub/src/pairing/server-registrations.js';
 import {
   createPairing,
   newServerRegistrationSchema,
-} from '../../../apps/hub/src/features/pairing/pairing.js';
+} from '../../../apps/hub/src/pairing/pairing.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
@@ -73,9 +73,9 @@ import {
 import {
   createFleetState,
   type FleetState,
-} from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
-import { createProjects } from '../../../apps/hub/src/features/projects/projects.js';
-import { createSessions } from '../../../apps/hub/src/features/sessions/sessions.js';
+} from '../../../apps/hub/src/fleet-state/fleet-state.js';
+import { createProjects } from '../../../apps/hub/src/projects/projects.js';
+import { createSessions } from '../../../apps/hub/src/sessions/sessions.js';
 
 /**
  * Pausing a session, from a client's frame to the terminal on another machine

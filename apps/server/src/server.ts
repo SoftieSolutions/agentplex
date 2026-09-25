@@ -17,15 +17,15 @@ import {
   type TokenMinter,
   createWebSocketListener,
 } from '@agentplex/node-shared';
-import { createApprovalGate, type ApprovalGate } from './approval-gate.js';
+import { createApprovalGate, type ApprovalGate } from './approvals/approval-gate.js';
 import {
   createLaunchApprovals,
   type ApprovalHooks,
   type LaunchApprovals,
-} from './approval-launch.js';
-import { createDirectoryBrowser, type DirectoryReader } from './directory-browse.js';
+} from './approvals/approval-launch.js';
+import { createDirectoryBrowser, type DirectoryReader } from './directories/directory-browse.js';
 import { createDrain, drainingSessions } from './drain.js';
-import { serveHubConnection, type HubConnection } from './hub-connection.js';
+import { serveHubConnection, type HubConnection } from './hub/hub-connection.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import {
   type ConfiguredToken,
@@ -37,17 +37,17 @@ import {
   serverGrantsPath,
   type StoreFileSystem,
 } from '@agentplex/providers';
-import { announceServer, type BeaconNetwork } from './server-beacon.js';
+import { announceServer, type BeaconNetwork } from './beacon/server-beacon.js';
 import { ensureServerIdentity } from '@agentplex/providers';
-import { createHubAudience } from './hub-audience.js';
-import { sweepGrants } from './grant-sweep.js';
-import { createSessionController } from './session-control.js';
-import type { MachineLoadReader } from './machine-load.js';
-import { createProjectDocs } from './project-docs.js';
-import type { ProjectFileSystem } from './project-files.js';
-import type { WorkingTree } from './working-tree.js';
-import type { TerminalManager } from './terminal-manager.js';
-import { watchStores, type StoreWatcher } from './store-watch.js';
+import { createHubAudience } from './hub/hub-audience.js';
+import { sweepGrants } from './hub/grant-sweep.js';
+import { createSessionController } from './sessions/session-control.js';
+import type { MachineLoadReader } from './machine-load/machine-load.js';
+import { createProjectDocs } from './projects/project-docs.js';
+import type { ProjectFileSystem } from './projects/project-files.js';
+import type { WorkingTree } from './working-tree/working-tree.js';
+import type { TerminalManager } from './terminal/terminal-manager.js';
+import { watchStores, type StoreWatcher } from './store-watch/store-watch.js';
 
 /**
  * The server role.

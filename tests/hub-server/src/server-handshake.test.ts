@@ -9,7 +9,7 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { serveServerEnd } from './server-end.js';
-import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
+import { createFakeTerminals } from '../../../apps/server/src/terminal/fake-terminals.js';
 import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerIdentity } from '@agentplex/providers';
 import {
@@ -25,9 +25,9 @@ import { createLogger } from '@agentplex/node-shared';
 import {
   handshakeWithServer,
   type DialTarget,
-} from '../../../apps/hub/src/features/servers/server-handshake.js';
-import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+} from '../../../apps/hub/src/servers/server-handshake.js';
+import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
 
 const logger = createLogger('error', () => {});
 const hubId = 'hub-under-test' as HubId;

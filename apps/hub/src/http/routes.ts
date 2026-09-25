@@ -1,12 +1,8 @@
 import { PROTOCOL_VERSION } from '@agentplex/protocol';
 import { sendBytes, sendJson, type Logger, type RequestHandler } from '@agentplex/node-shared';
-import {
-  requestPath,
-  CLIENT_TICKET_PATH,
-  type ClientAuth,
-} from '../features/client-auth/client-auth.js';
-import { MCP_PATH, type Mcp } from '../features/mcp/mcp.js';
-import type { Web } from '../features/web/web.js';
+import { requestPath, CLIENT_TICKET_PATH, type ClientAuth } from '../client-auth/client-auth.js';
+import { MCP_PATH, type Mcp } from '../mcp/mcp.js';
+import type { Web } from '../web/web.js';
 
 /**
  * Everything this hub answers on its one port, in the order it answers it.
@@ -23,7 +19,7 @@ import type { Web } from '../features/web/web.js';
  * answer to the name.
  *
  * One origin is a requirement rather than packaging convenience --
- * `features/web/web.ts` carries that argument -- and this is where it is kept.
+ * `web/web.ts` carries that argument -- and this is where it is kept.
  *
  * Everything routes on `requestPath` and never on `request.url`, because the
  * socket's URL carries a ticket and a raw request target is therefore a
@@ -39,7 +35,7 @@ export interface HubRouteDependencies {
   readonly clientAuth: ClientAuth;
   /**
    * The MCP endpoint. The one route that writes its own response: streamable
-   * HTTP is a body shape the SDK owns, and `features/mcp/mcp.ts` argues why
+   * HTTP is a body shape the SDK owns, and `mcp/mcp.ts` argues why
    * that is the seam rather than a value this file turns into HTTP.
    */
   readonly mcp: Mcp;

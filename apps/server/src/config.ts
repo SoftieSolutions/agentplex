@@ -16,7 +16,7 @@ import {
 } from '@agentplex/node-shared';
 import type { ConfiguredToken } from '@agentplex/providers';
 import { DEFAULT_DRAIN_MS } from './drain.js';
-import { DEFAULT_TERMINAL_CAP } from './terminal-manager.js';
+import { DEFAULT_TERMINAL_CAP } from './terminal/terminal-manager.js';
 
 /**
  * The server's configuration: a value produced from argv and env by a pure

@@ -20,14 +20,14 @@ import {
   type StoreDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
-import { createApprovalGate } from '../../../apps/server/src/approval-gate.js';
+import { createApprovalGate } from '../../../apps/server/src/approvals/approval-gate.js';
 import {
   createFakeApprovalListener,
   createFakeHookConnection,
   hookLine,
-} from '../../../apps/server/src/fake-approval-hooks.js';
-import { createHubAudience } from '../../../apps/server/src/hub-audience.js';
-import { createFakeSessionController } from '../../../apps/server/src/fake-session-controller.js';
+} from '../../../apps/server/src/approvals/fake-approval-hooks.js';
+import { createHubAudience } from '../../../apps/server/src/hub/hub-audience.js';
+import { createFakeSessionController } from '../../../apps/server/src/sessions/fake-session-controller.js';
 import {
   createFakeStoreFiles,
   createFakeProviderAdapter,
@@ -44,25 +44,25 @@ import { createPtySupervisor } from '@agentplex/pty';
 import {
   createTerminalManager,
   type TerminalManager,
-} from '../../../apps/server/src/terminal-manager.js';
-import { createSessionController } from '../../../apps/server/src/session-control.js';
-import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
+} from '../../../apps/server/src/terminal/terminal-manager.js';
+import { createSessionController } from '../../../apps/server/src/sessions/session-control.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/working-tree/fake-working-tree.js';
 import {
   createFakeBeaconSource,
   type FakeBeaconSource,
-} from '../../../apps/hub/src/features/discovery/fake-discovery.js';
-import { createFakeWebAssets } from '../../../apps/hub/src/features/web/fake-web.js';
+} from '../../../apps/hub/src/discovery/fake-discovery.js';
+import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web.js';
 import { serveServerEnd } from './server-end.js';
-import type { HubConnection } from '../../../apps/server/src/hub-connection.js';
-import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
-import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
-import { createFakeTerminals } from '../../../apps/server/src/fake-terminals.js';
+import type { HubConnection } from '../../../apps/server/src/hub/hub-connection.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
+import { createFakeTerminals } from '../../../apps/server/src/terminal/fake-terminals.js';
 import type {
   PauseOutcome,
   SessionController,
   SessionOutcome,
   StoreReport,
-} from '../../../apps/server/src/session-control.js';
+} from '../../../apps/server/src/sessions/session-control.js';
 import {
   createUnreachableDialer,
   createSocketPair,
@@ -82,14 +82,14 @@ import {
 import { migrate } from '../../../apps/hub/src/db/migrations.js';
 import { nodeMigrationFileSystem } from '../../../apps/hub/src/db/node-migration-files.js';
 import { createSqliteDatabase } from '../../../apps/hub/src/db/sqlite.js';
-import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
-import { newServerRegistrationSchema } from '../../../apps/hub/src/features/pairing/pairing.js';
+import { registerServer } from '../../../apps/hub/src/pairing/server-registrations.js';
+import { newServerRegistrationSchema } from '../../../apps/hub/src/pairing/pairing.js';
 import { startHub, type Hub } from '../../../apps/hub/src/hub.js';
 import {
   CLIENT_SOCKET_PATH,
   CLIENT_TICKET_PATH,
-} from '../../../apps/hub/src/features/client-auth/client-auth.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
+} from '../../../apps/hub/src/client-auth/client-auth.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
 
 /**
  * Captures what a real hub says to a client, for the web store's tests.

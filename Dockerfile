@@ -905,7 +905,7 @@ COPY apps/hub/migrations ./apps/hub/migrations
 # web`, which in this image means the link copied in with apps/hub/node_modules
 # above -- a relative link, so it still lands on /app/apps/web -- and then the
 # `dist` beside the manifest copied in above that. Three homes, one specifier:
-# see apps/hub/src/features/web/web-package.ts.
+# see apps/hub/src/web/web-package.ts.
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 
 # Somewhere for the hub's database to live. The directory has to exist in the

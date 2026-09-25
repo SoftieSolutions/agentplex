@@ -22,19 +22,19 @@ import {
   createFakeStoreFiles,
 } from '@agentplex/providers/testing';
 import { createProviderRegistry } from '@agentplex/providers';
-import { createSessionController } from '../../../apps/server/src/session-control.js';
-import { createFakeWorkingTree } from '../../../apps/server/src/fake-working-tree.js';
+import { createSessionController } from '../../../apps/server/src/sessions/session-control.js';
+import { createFakeWorkingTree } from '../../../apps/server/src/working-tree/fake-working-tree.js';
 import {
   createTerminalManager,
   type TerminalManager,
-} from '../../../apps/server/src/terminal-manager.js';
-import { createExponentialBackoff } from '../../../apps/hub/src/features/servers/backoff.js';
-import { createServers, type Servers } from '../../../apps/hub/src/features/servers/servers.js';
-import { registerServer } from '../../../apps/hub/src/features/pairing/server-registrations.js';
+} from '../../../apps/server/src/terminal/terminal-manager.js';
+import { createExponentialBackoff } from '../../../apps/hub/src/servers/backoff.js';
+import { createServers, type Servers } from '../../../apps/hub/src/servers/servers.js';
+import { registerServer } from '../../../apps/hub/src/pairing/server-registrations.js';
 import {
   createPairing,
   newServerRegistrationSchema,
-} from '../../../apps/hub/src/features/pairing/pairing.js';
+} from '../../../apps/hub/src/pairing/pairing.js';
 import {
   openMigratedSchema,
   type MigratedSchema,
@@ -42,24 +42,24 @@ import {
 import {
   createFleetState,
   type FleetState,
-} from '../../../apps/hub/src/features/fleet-state/fleet-state.js';
-import { createSessions, type Sessions } from '../../../apps/hub/src/features/sessions/sessions.js';
-import { createTerminal, type Terminal } from '../../../apps/hub/src/features/terminal/terminal.js';
-import { listProjectsTool } from '../../../apps/hub/src/features/mcp/list-projects.js';
-import { listSessionsTool } from '../../../apps/hub/src/features/mcp/list-sessions.js';
-import { sendInputTool } from '../../../apps/hub/src/features/mcp/send-input.js';
-import { startSessionTool } from '../../../apps/hub/src/features/mcp/start-session.js';
-import { stopSessionTool } from '../../../apps/hub/src/features/mcp/stop-session.js';
-import { callTool, type ToolCall } from '../../../apps/hub/src/features/mcp/test-tool-call.js';
-import { createFakeMachineLoadReader } from '../../../apps/server/src/fake-machine-probe.js';
-import { createDirectoryBrowser } from '../../../apps/server/src/directory-browse.js';
-import { createFakeDirectoryReader } from '../../../apps/server/src/fake-directory-reader.js';
-import { createProjects, type Projects } from '../../../apps/hub/src/features/projects/projects.js';
+} from '../../../apps/hub/src/fleet-state/fleet-state.js';
+import { createSessions, type Sessions } from '../../../apps/hub/src/sessions/sessions.js';
+import { createTerminal, type Terminal } from '../../../apps/hub/src/terminal/terminal.js';
+import { listProjectsTool } from '../../../apps/hub/src/mcp/list-projects.js';
+import { listSessionsTool } from '../../../apps/hub/src/mcp/list-sessions.js';
+import { sendInputTool } from '../../../apps/hub/src/mcp/send-input.js';
+import { startSessionTool } from '../../../apps/hub/src/mcp/start-session.js';
+import { stopSessionTool } from '../../../apps/hub/src/mcp/stop-session.js';
+import { callTool, type ToolCall } from '../../../apps/hub/src/mcp/test-tool-call.js';
+import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';
+import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
+import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
+import { createProjects, type Projects } from '../../../apps/hub/src/projects/projects.js';
 
 /**
  * The act tools, from an agent's call to a pty on another machine and back.
  *
- * The unit suites in `features/mcp` cover what each tool decides against a fake
+ * The unit suites in `apps/hub/src/mcp` cover what each tool decides against a fake
  * of the feature it calls. This is the question no fake can answer: that the
  * feature behind each tool is the real one, that a start the hub scheduled
  * reaches a machine and forks a process, that the characters an agent typed are

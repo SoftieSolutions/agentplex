@@ -17,8 +17,8 @@ import {
 } from '@agentplex/node-shared';
 import { createSocketPair } from '@agentplex/node-shared/testing';
 import { createFakeStoreFiles } from '@agentplex/providers/testing';
-import { createFakeBeaconSource } from '../../../apps/hub/src/features/discovery/fake-discovery.js';
-import { createFakeWebAssets } from '../../../apps/hub/src/features/web/fake-web.js';
+import { createFakeBeaconSource } from '../../../apps/hub/src/discovery/fake-discovery.js';
+import { createFakeWebAssets } from '../../../apps/hub/src/web/fake-web.js';
 import { createSqliteDatabase, type SqliteDatabase } from '../../../apps/hub/src/db/sqlite.js';
 import { loadMigrations } from '../../../apps/hub/src/db/migration-files.js';
 import { migrate } from '../../../apps/hub/src/db/migrations.js';

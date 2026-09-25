@@ -165,7 +165,7 @@ async function loadServiceWorker(windows: FakeWindow[] = []): Promise<Harness> {
   };
 }
 
-/** The payload `apps/hub/src/features/push/push.ts` sends, verbatim. */
+/** The payload `apps/hub/src/push/push.ts` sends, verbatim. */
 function hubPayload(storeId = 'store-work', sessionId = 'session-1'): Record<string, unknown> {
   return {
     title: 'claude',

@@ -69,7 +69,7 @@ const doctorOpensNoPty = [
 /**
  * The hub's features, each a folder with one entry file (AGX-226).
  *
- * A feature may be read by another feature through `features/<b>/<b>.ts` and
+ * A feature may be read by another feature through `<b>/<b>.ts` and
  * through nothing else in that folder. The entry file names the interface and
  * the factory and re-exports nothing, so it is a seam rather than a barrel:
  * what is not on it is not another feature's to reach, and moving a file
@@ -83,6 +83,9 @@ const doctorOpensNoPty = [
  * it -- which is the right direction for a rule about who may reach whom.
  */
 const HUB_FEATURES = [
+  'approval-policy',
+  'approvals',
+  'attention',
   'catalogue',
   'client-auth',
   'clients',
@@ -98,9 +101,18 @@ const HUB_FEATURES = [
   'push',
   'servers',
   'sessions',
+  'tasks',
   'terminal',
   'web',
 ];
+
+/**
+ * The folders in `apps/hub/src` that are not features: the seams every feature
+ * may hold. The features sit beside them and beside the composition root, so a
+ * folder is a feature unless it is named here -- which keeps a new feature
+ * failing closed rather than open.
+ */
+const HUB_SEAMS = ['db', 'http'];
 
 const startsNoChild = {
   group: ['node:child_process', 'child_process'],
@@ -116,10 +128,10 @@ const startsNoChild = {
 const featureEntriesOnly = (alsoAllowed = []) => [
   {
     group: [
-      // Named per folder rather than as one `../*/*`: that form also matches
-      // `../../db/database.js`, which is a seam every feature may hold and not
-      // a feature at all.
-      ...HUB_FEATURES.map((feature) => `../${feature}/*`),
+      // Every sibling folder is closed, then the seams and each named
+      // feature's entry file are opened again.
+      '../*/*',
+      ...HUB_SEAMS.map((seam) => `!../${seam}/*`),
       ...HUB_FEATURES.map((feature) => `!../${feature}/${feature}.js`),
       ...alsoAllowed,
     ],
@@ -339,7 +351,8 @@ export default tseslint.config(
     // it is a rule about features reaching each other: `hub.ts` is the
     // composition root and names every entry file by design, and `main.ts`
     // names the Node-backed implementations of the seams it injects.
-    files: ['apps/hub/src/features/*/**/*.ts'],
+    files: ['apps/hub/src/*/**/*.ts'],
+    ignores: HUB_SEAMS.map((seam) => `apps/hub/src/${seam}/**`),
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports(featureEntriesOnly()),
     },
@@ -349,7 +362,8 @@ export default tseslint.config(
     // point of there being one: `fake-<feature>.ts` sits beside the entry file
     // and is what a suite in a neighbouring folder uses instead of the real
     // thing. Nothing that ships matches this pattern.
-    files: ['apps/hub/src/features/*/**/*.test.ts'],
+    files: ['apps/hub/src/*/**/*.test.ts'],
+    ignores: HUB_SEAMS.map((seam) => `apps/hub/src/${seam}/**`),
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports(
         featureEntriesOnly(['!../*/fake-*.js']),
@@ -509,7 +523,7 @@ export default tseslint.config(
     // resolver as a subject.
     files: [
       'apps/hub/src/main.integration.test.ts',
-      'apps/hub/src/features/web/web-package.integration.test.ts',
+      'apps/hub/src/web/web-package.integration.test.ts',
       'apps/server/src/main.integration.test.ts',
       'apps/cli/src/commands/setup/main.integration.test.ts',
     ],

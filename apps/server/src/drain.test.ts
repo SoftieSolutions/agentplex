@@ -4,7 +4,7 @@ import type { Clock, Timers } from '@agentplex/node-shared';
 import { createLogger } from '@agentplex/node-shared';
 import type { Launch, LaunchPlan } from '@agentplex/providers';
 import { createDrain, drainingSessions, DRAIN_POLL_MS } from './drain.js';
-import { createFakeTerminals, type FakeTerminals } from './fake-terminals.js';
+import { createFakeTerminals, type FakeTerminals } from './terminal/fake-terminals.js';
 
 /**
  * The drain, against the real terminal manager over the fake pty.

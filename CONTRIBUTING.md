@@ -114,7 +114,7 @@ machine refuses it unless a root is above it. The party that types a path and
 the party that runs a process are two hops apart, with a parser and a root list
 between them.
 
-`apps/server/src/directory-browse.ts` holds the containment rule and the reason
+`apps/server/src/directories/directory-browse.ts` holds the containment rule and the reason
 it runs on `fs.realpath` rather than on the string. Its `allow` is that rule
 alone — a session start asks it, and takes no listing with it — and
 `tests/hub-server/src/session-start.integration.test.ts` is where the wire shape
@@ -138,13 +138,16 @@ migration is history: add a new one rather than editing it.
 
 ## Features
 
-`apps/hub/src/features/` is one folder per feature: the fleet state, the paired
+`apps/hub/src/` is one folder per feature: the fleet state, the paired
 servers, pairing, sessions, the terminal relay, projects, documents, the
 catalogue, the pane layout, the clients, client auth, discovery, the web
-assets, and MCP. Four rules hold it together, and `pnpm lint` enforces the
+assets, MCP and the rest. Beside them sit `db/` and `http/`, which are seams
+every feature may hold, and the composition root: `hub.ts`, `boot.ts`,
+`main.ts`. `apps/server/src/` is grouped the same way, without the entry-file
+rule. Four rules hold it together, and `pnpm lint` enforces the
 first one.
 
-**A feature is a folder with one entry file.** `features/catalogue/catalogue.ts`
+**A feature is a folder with one entry file.** `catalogue/catalogue.ts`
 exports the interface `Catalogue` and `createCatalogue(deps)`, and another
 feature imports that file and nothing else from the folder. It is not a barrel:
 it defines the interface and the factory and re-exports nothing, so what is on
@@ -155,8 +158,10 @@ outside `catalogue/` — and it is the reason a vocabulary type lives on the ent
 file rather than in whichever file happens to produce it. `ServerConnectionReport`
 is defined in `servers/servers.ts` and not in the dial loop that builds one.
 
-The lint rule is in `eslint.config.js` and names the feature folders, so adding
-a feature means adding a line. Forgetting the line fails closed — nothing may
+The lint rule is in `eslint.config.js`. It closes every folder beside a feature,
+then opens the seams in `HUB_SEAMS` and the entry file of each feature in
+`HUB_FEATURES`, so adding a feature means adding a line. Forgetting the line
+fails closed — nothing may
 import the new feature — which is the right direction for a rule about who may
 reach whom. A rule that fails open is one nobody notices has stopped holding.
 
@@ -173,7 +178,7 @@ the real thing. Test files may import one and service modules may not, which is
 the one place the lint rule above is looser for a test.
 
 **Frames enter through one switch per direction, and the switch is exhaustive.**
-`features/clients/client-connection.ts` and `features/servers/frame-router.ts`
+`clients/client-connection.ts` and `servers/frame-router.ts`
 both end in `assertNever`, so a frame added to the protocol with no case fails
 typecheck. Neither did, and the cost was not a crash: the four client terminal
 frames and four of the server's parsed cleanly, matched no case, and fell out of
@@ -185,7 +190,7 @@ holding a frame id that would never be answered. What this build cannot serve it
 now says so — a refusal in words to a client, a debug line naming the frame from
 a server — and neither is silence.
 
-**A feature with two callers is what a feature is for.** `features/docs/docs.ts`
+**A feature with two callers is what a feature is for.** `docs/docs.ts`
 exposes four functions and reaches a server through the connections seam;
 `client-connection.ts` calls them on a frame and the four MCP document tools
 call the same four in the same process. Neither reaches a connection itself, and
@@ -195,7 +200,7 @@ that is the point rather than a tidiness: a second caller putting its own
 the machine is away -- and the two would part company the first time one of them
 was fixed.
 
-One file is deliberately thin. `features/servers/transport.ts` is how the hub
+One file is deliberately thin. `servers/transport.ts` is how the hub
 speaks to a server once it is connected, and it declares only what is actually
 used: `ask`, `stream`, the handlers for what arrives unprompted, and `close`.
 The stream half was named in a comment and not declared until there was a relay
@@ -247,7 +252,7 @@ fixtures beside them, and three files touched -- all of it inside
 
 **The rung is cheap only when the seam has already been paid for, and writing
 the file is how you find out whether it has.** Two defects surfaced by drafting
-the codex ticket were fixed before it landed: `apps/server/src/hub-connection.ts`
+the codex ticket were fixed before it landed: `apps/server/src/hub/hub-connection.ts`
 had hand-copied the provider union out of `providerSchema` (AGX-173), and
 `createProviderRegistry([createClaudeAdapter(...)])` was written out in three
 entrypoints, so a second adapter would have been an edit to all three (AGX-174).
@@ -277,7 +282,7 @@ holds state of its own. It costs a folder with one entry file, a
 `fake-<feature>.ts` beside it, a line in `HUB_FEATURES` in `eslint.config.js`,
 and in `hub.ts` an import, the factory call naming the seams and features it
 takes, and its entry in the composition -- and nothing outside that app moves.
-`features/docs` (AGX-242) is `docs.ts`, `doc-rows.ts`, `fake-docs.ts`, a
+`docs/` (AGX-242) is `docs.ts`, `doc-rows.ts`, `fake-docs.ts`, a
 forward-only migration, and a `createDocs` block in `hub.ts` whose eight
 dependencies are most of what the folder costs to reach. Two callers are what
 make it a feature rather than a file: the client connection calls its four
@@ -506,7 +511,7 @@ prettier.
 ## Connectivity
 
 **The hub dials. A server dials out to nothing.** Every socket a server has is
-one a hub opened; `apps/server/src/hub-connection.ts` answers connections and
+one a hub opened; `apps/server/src/hub/hub-connection.ts` answers connections and
 opens none. The rejected option is the obvious one — servers calling home — and
 it buys exactly one thing: a server behind NAT would need no forwarded port.
 What it costs is the property the rest of the design rests on. A server that
