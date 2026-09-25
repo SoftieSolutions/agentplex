@@ -96,16 +96,14 @@ describe('loadHubConfig client token', () => {
   });
 });
 
+/**
+ * What a local server entry may be is `daemon-settings.test.ts` in
+ * `@agentplex/node-shared`, beside the parser the doctor reads it through too.
+ * These pin that the two settings reach the hub's configuration at all.
+ */
 describe('loadHubConfig local server', () => {
   it('names none by default: a hub does not go looking for a server beside it', () => {
     expect(load([])).toMatchObject({ ok: true, config: { localServer: null } });
-  });
-
-  it('is an entry once the identity file is named, on the server default port', () => {
-    expect(load(['--local-server-identity-file', IDENTITY])).toMatchObject({
-      ok: true,
-      config: { localServer: { identityPath: IDENTITY, port: 8081 } },
-    });
   });
 
   it('reads both from the environment, which is what a settings file is', () => {
@@ -120,12 +118,6 @@ describe('loadHubConfig local server', () => {
   it('refuses a port with no identity file, which names nothing to pair', () => {
     expect(expectProblems(load(['--local-server-port', '9091']))).toEqual([
       expect.stringContaining('--local-server-identity-file'),
-    ]);
-  });
-
-  it('refuses a relative identity file', () => {
-    expect(expectProblems(load(['--local-server-identity-file', 'server.json']))).toEqual([
-      expect.stringContaining('absolute'),
     ]);
   });
 });

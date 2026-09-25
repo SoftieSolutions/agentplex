@@ -22,7 +22,7 @@ lists them.
 
 ```sh
 npm install --global https://github.com/SoftieSolutions/agentplex/releases/download/cli-v1.0.0/agentplex.tgz
-agentplex doctor --role=server --server-identity-file="$HOME/.agentplex/server.json"
+agentplex doctor --role=server
 ```
 
 The package is `@softiesolutions/agentplex` and the command is `agentplex`. The
@@ -232,8 +232,13 @@ executes at install time:
 ## Checking a machine
 
 `agentplex doctor` reads the settings the installer wrote and reports what
-they can actually start. It asks the half of the machine the role runs, and
-both halves on `--role=both`.
+they can actually start. It reads them the way the daemons do: the settings
+file their units name (`$HOME/.agentplex/agentplex.env`, or
+`/etc/agentplex/agentplex.env` on a `--system` install), this shell's
+environment over it, and flags over both -- and it accepts every flag either
+daemon accepts. A settings file it may not read is the first line of the
+report, not a refusal. It asks the half of the machine the role runs, and both
+halves on `--role=both`.
 
 A hub, which has to boot before anything else on the machine matters:
 
@@ -254,9 +259,15 @@ A hub, which has to boot before anything else on the machine matters:
   whether that file is there and parses. A hub that cannot read it boots and
   logs one line, and then the server beside it silently never appears.
 
-A server: whether a pseudoterminal can be opened at all; per provider the
-version, the directory it resolved from and whether it says it is logged in;
-per store, whether the path is there.
+A server: whether a pseudoterminal can be opened at all; whether its data root
+is there and writable, or could be created under the nearest directory that is;
+the identity file it would read its pairing token from, and on a `both` machine
+whether the hub pairs its local server from that same file (the doctor finds
+settings only under `$HOME/.agentplex` and `/etc/agentplex`, so with none found
+the path is the default and says so: under a custom prefix, pass
+`--server-identity-file` for the check to be exact); per provider the
+version, the directory it resolved from and whether it says it is logged in; per
+store, whether the path is there.
 
 Apart from that one bind it changes nothing -- it opens no database, opens no
 pty and writes nothing, and it asks whether node-pty loads, which maps a file

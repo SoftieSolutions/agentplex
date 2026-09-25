@@ -58,3 +58,24 @@ export {
   wantsHelp,
 } from './settings.js';
 export type { FlagsResult, Setting } from './settings.js';
+
+export {
+  DATA_PATH,
+  DEFAULT_DRAIN_MS,
+  DEFAULT_HOST,
+  DEFAULT_LOG_LEVEL,
+  DEFAULT_TERMINAL_CAP,
+  HUB_SETTINGS,
+  SERVER_SETTINGS,
+  readAnnounce,
+  readDataPath,
+  readDrainSeconds,
+  readHost,
+  readIdentityPath,
+  readLocalServer,
+  readLogLevel,
+  readServerToken,
+  readTerminalCap,
+  readTimezone,
+} from './daemon-settings.js';
+export type { Environment } from './daemon-settings.js';

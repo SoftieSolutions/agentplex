@@ -13,6 +13,7 @@ import {
   serverGrantsPath,
 } from '@agentplex/providers';
 import {
+  DEFAULT_DRAIN_MS,
   createLogger,
   createWebSocketDialer,
   randomTokenMinter,
@@ -22,7 +23,6 @@ import {
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
-import { DEFAULT_DRAIN_MS } from '../../../apps/server/src/drain.js';
 import { createFakeWorkingTree } from '../../../apps/server/src/working-tree/fake-working-tree.js';
 import { createFakeStoreWatcher } from '../../../apps/server/src/store-watch/fake-store-watcher.js';
 import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-load/fake-machine-probe.js';

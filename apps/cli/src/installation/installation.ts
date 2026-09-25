@@ -1,16 +1,9 @@
 import { z } from 'zod';
 import { DAEMONS } from '../programs.js';
 import { COMPONENTS, COMPONENT_PACKAGES, type Component } from './components.js';
-import { readEnvironmentFile } from './environment-file.js';
 import type { InstallationFiles } from './installation-files.js';
-import {
-  nodeStampFile,
-  packageDirectory,
-  systemLayout,
-  unitFile,
-  userLayout,
-  type Layout,
-} from './layout.js';
+import { nodeStampFile, packageDirectory, unitFile, type Layout } from './layout.js';
+import { findLayout, unreadableProblem, type InstallationLookup } from './recorded-settings.js';
 
 /**
  * What is installed on this machine, read off the disk it was installed onto.
@@ -111,15 +104,6 @@ export interface InstalledUnit {
 export type Runtime =
   { readonly kind: 'installed'; readonly version: string } | { readonly kind: 'adopted' };
 
-export interface InstallationLookup {
-  /** `$HOME`, read at the entrypoint. The per-user layout hangs off it. */
-  readonly home: string;
-  /** `--prefix`, or `null` to look where an install would have put one. */
-  readonly prefix: string | null;
-  /** `--system`, for a machine that has a user install as well as a fleet one. */
-  readonly system: boolean;
-}
-
 /**
  * The manifest as this reads it: two fields, and everything else parsed away.
  *
@@ -139,7 +123,20 @@ export async function readInstallation(
   files: InstallationFiles,
 ): Promise<InstallationResult> {
   const found = await findLayout(lookup, files);
-  if (!found.ok) return found;
+  if (!found.ok) {
+    return {
+      ok: false,
+      problems:
+        found.unreadable.length > 0
+          ? found.unreadable.map(unreadableProblem)
+          : [
+              `no agentplex settings file at ${found.candidates
+                .map((candidate) => candidate.settingsFile)
+                .join(' or ')}: this is where install.sh writes one, and an install ` +
+                'made somewhere else needs the same --prefix it was given',
+            ],
+    };
+  }
 
   const { layout, settings } = found;
   const packages = await Promise.all(
@@ -163,85 +160,6 @@ export async function readInstallation(
       units,
       runtime: await readRuntime(layout, files),
     },
-  };
-}
-
-/**
- * Which of the two layouts this machine has, decided by which one's settings
- * file is there.
- *
- * The settings file is the right thing to decide on because it is the file
- * `install.sh` writes exactly once per install, in the same branch that chose
- * the unit directory and the scope. A prefix with a package in it and no
- * settings file is a half-finished install, and a directory with neither is
- * somebody's unrelated directory; both want the refusal below rather than a
- * `status` that reports emptiness as though it had looked at an agentplex.
- *
- * The user layout is tried first. On a machine that has both -- a fleet install
- * and an operator's own beside it -- the one in their home is the one they
- * meant, and `--system` is how they say otherwise.
- */
-async function findLayout(
-  lookup: InstallationLookup,
-  files: InstallationFiles,
-): Promise<
-  | {
-      readonly ok: true;
-      readonly layout: Layout;
-      readonly settings: { readonly role: string | null };
-    }
-  | { readonly ok: false; readonly problems: readonly string[] }
-> {
-  const candidates = lookup.system
-    ? [systemLayout(lookup.prefix ?? undefined)]
-    : [
-        ...(lookup.home.length === 0 && lookup.prefix === null
-          ? []
-          : [userLayout(lookup.home, lookup.prefix ?? undefined)]),
-        systemLayout(lookup.prefix ?? undefined),
-      ];
-
-  const problems: string[] = [];
-  for (const candidate of candidates) {
-    const read = await files.readFile(candidate.settingsFile);
-    if (read.kind === 'missing') continue;
-    if (read.kind === 'failed') {
-      // A file that is there and will not be read is not an absence. The fleet
-      // settings file is root's, mode 0640, so this is what an operator who is
-      // neither root nor the service account gets, and "no agentplex here" is
-      // the one answer that would send them looking in the wrong place.
-      problems.push(`cannot read ${candidate.settingsFile}: ${read.reason}`);
-      continue;
-    }
-
-    const settings = readEnvironmentFile(read.contents);
-    // Only the fleet layout takes its prefix from the file, and only because
-    // its settings file is not inside the prefix: `/etc/agentplex/agentplex.env`
-    // says nothing about where the install went, which is the whole reason
-    // `install.sh` records the line. In the per-user layout the file was found
-    // *inside* the prefix, so finding it is already knowing where it is -- and
-    // a `--prefix` somebody typed wins over a recorded one either way, because
-    // a flag is typed by a person at the moment they mean it.
-    const recorded =
-      candidate.scope === 'system' && lookup.prefix === null && settings.prefix !== null
-        ? systemLayout(settings.prefix)
-        : candidate;
-    return { ok: true, layout: recorded, settings };
-  }
-
-  return {
-    ok: false,
-    problems: [
-      ...problems,
-      ...(problems.length > 0
-        ? []
-        : [
-            `no agentplex settings file at ${candidates
-              .map((candidate) => candidate.settingsFile)
-              .join(' or ')}: this is where install.sh writes one, and an install ` +
-              'made somewhere else needs the same --prefix it was given',
-          ]),
-    ],
   };
 }
 

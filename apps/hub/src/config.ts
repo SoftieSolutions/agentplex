@@ -1,17 +1,18 @@
 import {
   DEFAULT_HUB_PORT,
-  DEFAULT_SERVER_PORT,
-  LOG_LEVELS,
+  HUB_SETTINGS,
   MIN_TOKEN_LENGTH,
   readAbsolutePath,
   readFlags,
+  readHost,
+  readLocalServer,
+  readLogLevel,
   readPort,
-  readSetting,
   settingValue,
   usageLines,
   type LogLevel,
+  type Setting,
 } from '@agentplex/node-shared';
-import { z } from 'zod';
 import type { LocalServerEntry } from './pairing/pairing.js';
 
 /**
@@ -77,34 +78,14 @@ export interface HubConfigSources {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
-const DEFAULT_LOG_LEVEL: LogLevel = 'info';
-/** Containers reach the process from outside their own loopback. */
-const DEFAULT_HOST = '0.0.0.0';
-
 /**
- * Every setting is in here, including the interface to bind. One read
- * elsewhere -- `process.env['AGENTPLEX_HOST']`, straight out of `main` -- is
- * one setting with no flag, missing from `usage()`, and rejected by `readFlags`
- * if anyone tried to type it.
+ * The table and the rules every reader of the settings file shares live in
+ * `@agentplex/node-shared`'s `daemon-settings.ts`, because the doctor reads
+ * this same table to report on the hub it describes. What is the hub's own is
+ * below: that a missing database file or client token stops it starting,
+ * where the doctor reports either as a line.
  */
-const SETTINGS = {
-  logLevel: { flag: '--log-level', env: 'AGENTPLEX_LOG_LEVEL' },
-  host: { flag: '--host', env: 'AGENTPLEX_HOST' },
-  port: { flag: '--hub-port', env: 'AGENTPLEX_HUB_PORT' },
-  databaseFile: { flag: '--database-file', env: 'AGENTPLEX_DATABASE_FILE' },
-  clientToken: { flag: '--client-token', env: 'AGENTPLEX_CLIENT_TOKEN' },
-  /**
-   * The local server, as two settings: where its identity file is, and the
-   * port it binds. The file is what makes an entry; the port takes the
-   * server's default when it is not given, because that is the port the
-   * server beside this hub binds when it is not told otherwise either.
-   */
-  localServerIdentityFile: {
-    flag: '--local-server-identity-file',
-    env: 'AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE',
-  },
-  localServerPort: { flag: '--local-server-port', env: 'AGENTPLEX_LOCAL_SERVER_PORT' },
-} as const;
+const SETTINGS = HUB_SETTINGS;
 
 const MISSING_DATABASE_FILE =
   'the hub needs a database: set AGENTPLEX_DATABASE_FILE or pass --database-file';
@@ -113,9 +94,6 @@ const BAD_CLIENT_TOKEN =
   'the hub needs a client token of at least ' +
   `${MIN_TOKEN_LENGTH} characters: set AGENTPLEX_CLIENT_TOKEN or pass --client-token ` +
   '(generate one with: openssl rand -base64 32)';
-
-const logLevelSchema = z.enum(LOG_LEVELS);
-const hostSchema = z.string().min(1);
 
 export function loadHubConfig({ argv, env }: HubConfigSources): HubConfigResult {
   const problems: string[] = [];
@@ -126,20 +104,10 @@ export function loadHubConfig({ argv, env }: HubConfigSources): HubConfigResult 
   );
   if (!flags.ok) return { ok: false, problems: [...flags.problems] };
 
-  const read = (setting: { readonly flag: string; readonly env: string }): string | undefined =>
-    settingValue(flags.values, env, setting);
+  const read = (setting: Setting): string | undefined => settingValue(flags.values, env, setting);
 
-  const logLevel = readSetting(logLevelSchema, read(SETTINGS.logLevel), DEFAULT_LOG_LEVEL, (raw) =>
-    problems.push(
-      `unknown log level ${JSON.stringify(raw)}: expected one of ${LOG_LEVELS.join(', ')}`,
-    ),
-  );
-
-  const host = readSetting(hostSchema, read(SETTINGS.host), DEFAULT_HOST, (raw) =>
-    problems.push(
-      `${SETTINGS.host.flag} must be an address or hostname to bind, not ${JSON.stringify(raw)}`,
-    ),
-  );
+  const logLevel = readLogLevel(read(SETTINGS.logLevel), problems);
+  const host = readHost(read(SETTINGS.host), problems);
 
   const port = readPort(read(SETTINGS.port), SETTINGS.port.flag, DEFAULT_HUB_PORT, problems);
 
@@ -189,37 +157,6 @@ function readClientToken(raw: string | undefined, problems: string[]): string | 
     return undefined;
   }
   return raw;
-}
-
-/**
- * The local server the hub pairs at boot, or `null` when the settings name
- * none.
- *
- * The identity file is what makes an entry. A port on its own names nothing --
- * there is no file to read a token from -- and is refused rather than ignored,
- * because a setting that is read and does nothing is the shape of a typo that
- * costs somebody an afternoon. The path is absolute for the reason the server's
- * own identity path is: a relative one names a different file per working
- * directory, and a hub that read a different token than the server holds would
- * dial its own machine and be refused, with nothing pointing at the cause.
- */
-function readLocalServer(
-  rawPath: string | undefined,
-  rawPort: string | undefined,
-  problems: string[],
-): LocalServerEntry | null {
-  if (rawPath === undefined) {
-    if (rawPort !== undefined) {
-      problems.push(
-        `${SETTINGS.localServerPort.flag} names a port for a local server, but no ` +
-          `${SETTINGS.localServerIdentityFile.flag} names its identity file`,
-      );
-    }
-    return null;
-  }
-  const identityPath = readAbsolutePath(rawPath, SETTINGS.localServerIdentityFile.flag, problems);
-  const port = readPort(rawPort, SETTINGS.localServerPort.flag, DEFAULT_SERVER_PORT, problems);
-  return identityPath === undefined ? null : { identityPath, port };
 }
 
 /**

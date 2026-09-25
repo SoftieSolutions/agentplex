@@ -27,7 +27,7 @@ describe('the settings file', () => {
       '',
     ].join('\n');
 
-    expect(readEnvironmentFile(written)).toEqual({
+    expect(readEnvironmentFile(written)).toMatchObject({
       prefix: '/home/alice/.agentplex',
       role: 'both',
     });
@@ -36,8 +36,38 @@ describe('the settings file', () => {
   it('says nothing about a key the file does not carry', () => {
     // A `--no-setup` install that somebody edited down, and a file that is
     // simply not an agentplex one. Both are `null` rather than a guess.
-    expect(readEnvironmentFile('AGENTPLEX_ROLE=hub\n')).toEqual({ prefix: null, role: 'hub' });
-    expect(readEnvironmentFile('')).toEqual({ prefix: null, role: null });
+    expect(readEnvironmentFile('AGENTPLEX_ROLE=hub\n')).toMatchObject({
+      prefix: null,
+      role: 'hub',
+    });
+    expect(readEnvironmentFile('')).toEqual({ prefix: null, role: null, values: new Map() });
+  });
+
+  it('hands back every setting it can read, which is what the doctor starts from', () => {
+    // The same file the daemons are started with, read the same limited way:
+    // the doctor's question is what that file makes of this machine, so it
+    // needs every key in it and not only the two `status` asks about.
+    const written = [
+      '# agentplex settings',
+      'AGENTPLEX_ROLE=server',
+      'AGENTPLEX_BIN_PATH=/home/alice/.agentplex/bin',
+      '#AGENTPLEX_CLIENT_TOKEN=',
+      'AGENTPLEX_BROWSE_ROOTS="/home/a person/code"',
+      'AGENTPLEX_SERVER_PORT=9000',
+      'AGENTPLEX_SERVER_PORT=9001',
+      'not a setting at all',
+      '',
+    ].join('\n');
+
+    expect(readEnvironmentFile(written).values).toEqual(
+      new Map([
+        ['AGENTPLEX_ROLE', 'server'],
+        ['AGENTPLEX_BIN_PATH', '/home/alice/.agentplex/bin'],
+        ['AGENTPLEX_BROWSE_ROOTS', '/home/a person/code'],
+        // The last assignment, which is what systemd hands the daemon.
+        ['AGENTPLEX_SERVER_PORT', '9001'],
+      ]),
+    );
   });
 
   it('does not read a commented-out line as a setting', () => {

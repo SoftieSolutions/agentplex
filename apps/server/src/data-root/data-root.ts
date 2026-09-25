@@ -1,4 +1,4 @@
-import { DATA_PATH } from '../config.js';
+import { DATA_PATH } from '@agentplex/node-shared';
 
 /**
  * The one directory this server writes into, and the rule for what may go in
@@ -59,9 +59,13 @@ import { DATA_PATH } from '../config.js';
  * reports on it. A path that three programs must agree on is part of the
  * deployment, not a private detail of one daemon, and deriving it from a
  * directory only one of those programs is configured with would mean teaching
- * the other two about this setting to buy nothing. That it is also the one
- * file every already-installed machine has an absolute path recorded for is
- * the second reason, not the first.
+ * the other two about this setting to buy nothing.
+ *
+ * Both default from the account's home, and on an ordinary install the
+ * identity file's default does land inside this directory's. That is the two
+ * defaults agreeing about where an install keeps things, not the identity file
+ * folding in: moving the data root does not move the identity, and a machine
+ * that sets one setting has said nothing about the other.
  *
  * **Anything belonging to a hub.** A hub has a database and this is not it. A
  * machine running both daemons runs two programs, and only one of them owns

@@ -16,13 +16,16 @@ import {
   nodeStoreFileSystem,
 } from '@agentplex/providers';
 import { checkNodePty } from '@agentplex/pty';
+import { nodeInstallationFiles } from '../../installation/node-installation-files.js';
+import { readRecordedSettings } from '../../installation/recorded-settings.js';
 import { doctorUsage, loadDoctorConfig } from './config.js';
 import { formatDoctorReport, inspectMachine } from './doctor.js';
 import { nodePathAccess, nodePortProbe } from './node-hub-probes.js';
 
 /**
- * `agentplex doctor`: read the settings, inspect the machine, print the
- * report, exit. It opens no database, opens no pty and writes nothing, and this
+ * `agentplex doctor`: read the settings -- the file the daemons are started
+ * with, this environment over it, flags over both -- inspect the machine, print
+ * the report, exit. It opens no database, opens no pty and writes nothing, and this
  * program cannot: it depends on nothing that provisions, and the one thing it
  * borrows from `pty` is the question of whether the addon loads --
  * `createPtySupervisor` is not reachable from here, so there is no expression in
@@ -76,9 +79,23 @@ export async function main(): Promise<void> {
     return;
   }
 
-  const loaded = loadDoctorConfig({ argv: process.argv.slice(2), env: process.env });
+  // The file the daemons' units name, found the way `status` finds it. Only
+  // the default places are looked in: the doctor takes the daemons' flags and
+  // has no `--prefix` of its own, and a flag it read to find the file would be
+  // one no daemon accepts. A file that will not be read is carried into the
+  // report rather than refusing it; see `readRecordedSettings`.
+  const recorded = await readRecordedSettings(
+    { home: process.env['HOME'] ?? '', prefix: null, system: false },
+    nodeInstallationFiles,
+  );
+
+  const loaded = loadDoctorConfig({ argv: process.argv.slice(2), env: process.env, recorded });
   if (!loaded.ok) {
-    for (const problem of loaded.problems) writeError(`agentplex doctor: ${problem}`);
+    // A settings file that could not be read is said here too: on a fleet
+    // machine it is most often the reason the role is missing at all.
+    for (const problem of [...recorded.problems, ...loaded.problems]) {
+      writeError(`agentplex doctor: ${problem}`);
+    }
     writeError(`\n${doctorUsage()}`);
     process.exitCode = EXIT_BAD_CONFIGURATION;
     return;
@@ -93,7 +110,7 @@ export async function main(): Promise<void> {
   const environment = childEnvironment({
     inherited: process.env,
     binPath: 'server' in config ? config.server.binPath : [],
-    timezone: undefined,
+    timezone: 'server' in config ? config.server.timezone : undefined,
   });
   const processRunner = createNodeProcessRunner({ environment });
   const programs = createNodeProgramResolver(childSearchPath(environment));

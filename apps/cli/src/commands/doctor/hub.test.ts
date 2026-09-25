@@ -32,7 +32,7 @@ function hubConfig(overrides: Partial<HubConfig> = {}): HubConfig {
     port: 8080,
     databaseFile: DATABASE,
     clientToken: GOOD_TOKEN,
-    localServerIdentityPath: null,
+    localServer: null,
     ...overrides,
   };
 }
@@ -230,12 +230,15 @@ describe('the local server', () => {
   });
 
   it('is ready when the identity file parses', async () => {
-    const checks = await inspect(hubConfig({ localServerIdentityPath: IDENTITY_PATH }), {
-      files: createFakeStoreFiles({
-        directories: [DATABASE_DIRECTORY],
-        files: { [IDENTITY_PATH]: '{"serverId":"server-1","token":"a-token-off-the-disk"}' },
-      }),
-    });
+    const checks = await inspect(
+      hubConfig({ localServer: { identityPath: IDENTITY_PATH, port: 8081 } }),
+      {
+        files: createFakeStoreFiles({
+          directories: [DATABASE_DIRECTORY],
+          files: { [IDENTITY_PATH]: '{"serverId":"server-1","token":"a-token-off-the-disk"}' },
+        }),
+      },
+    );
 
     expect(checks.localServer).toEqual({ path: IDENTITY_PATH, state: 'ready', problem: null });
     expect(hubUsable(checks)).toBe(true);
@@ -244,19 +247,24 @@ describe('the local server', () => {
   it('fails the run when the file the settings point at is not there', async () => {
     // The hub boots either way and logs one warn line, and then the server
     // beside it never appears. Nothing else on the machine says so again.
-    const checks = await inspect(hubConfig({ localServerIdentityPath: IDENTITY_PATH }));
+    const checks = await inspect(
+      hubConfig({ localServer: { identityPath: IDENTITY_PATH, port: 8081 } }),
+    );
 
     expect(checks.localServer).toMatchObject({ path: IDENTITY_PATH, state: 'unusable' });
     expect(hubUsable(checks)).toBe(false);
   });
 
   it('fails the run when the file is there and is not a server identity', async () => {
-    const checks = await inspect(hubConfig({ localServerIdentityPath: IDENTITY_PATH }), {
-      files: createFakeStoreFiles({
-        directories: [DATABASE_DIRECTORY],
-        files: { [IDENTITY_PATH]: '{"serverId":"server-1"}' },
-      }),
-    });
+    const checks = await inspect(
+      hubConfig({ localServer: { identityPath: IDENTITY_PATH, port: 8081 } }),
+      {
+        files: createFakeStoreFiles({
+          directories: [DATABASE_DIRECTORY],
+          files: { [IDENTITY_PATH]: '{"serverId":"server-1"}' },
+        }),
+      },
+    );
 
     expect(checks.localServer).toMatchObject({ state: 'unusable' });
     expect(checks.localServer?.problem).toContain('identity file');
@@ -272,7 +280,10 @@ describe('the local server', () => {
       files: { [IDENTITY_PATH]: 'not json at all' },
     });
 
-    const checks = await inspect(hubConfig({ localServerIdentityPath: IDENTITY_PATH }), { files });
+    const checks = await inspect(
+      hubConfig({ localServer: { identityPath: IDENTITY_PATH, port: 8081 } }),
+      { files },
+    );
 
     expect(checks.localServer).toMatchObject({ state: 'unusable' });
     expect(files.creates).toEqual([]);

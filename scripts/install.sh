@@ -1705,6 +1705,31 @@ write_environment_file() {
   report 'settings' "$ENV_FILE (create)"
   [ "$DRY_RUN" = 'no' ] || return 0
 
+  # The server's identity file, written out on the fleet tier only.
+  #
+  # On a per-user install the line stays commented, naming
+  # $STATE_DIR/server.json -- the prefix, on this tier -- because
+  # `agentplex setup` is what mints the file there, and setup replaces this
+  # line with the path it minted. That is what keeps a --prefix install to one
+  # identity: unset, the server keeps its identity at
+  # $HOME/.agentplex/server.json, which is this prefix only when the prefix is
+  # the default one, and a server that read the default under any other would
+  # mint a second identity with a token nobody was shown. A run with
+  # --no-setup mints nothing here, so the server's default is the only
+  # identity there is until setup runs.
+  #
+  # On --system the account's home is the state directory, and that default
+  # would be $STATE_DIR/.agentplex/server.json: a file nothing mints, under a
+  # directory nothing else uses. So the fleet tier names the file outright, in
+  # the state directory the account owns, and never leans on the default. Not
+  # in the prefix, which is root's there and the account may not write.
+  # Written whatever the role: this file is written once, and a hub that later
+  # runs a server beside it should not have to learn this line then.
+  local server_identity="#AGENTPLEX_SERVER_IDENTITY_FILE=$STATE_DIR/server.json"
+  if [ "$UNIT_SCOPE" = 'system' ]; then
+    server_identity="AGENTPLEX_SERVER_IDENTITY_FILE=$STATE_DIR/server.json"
+  fi
+
   mkdir -p "$(dirname "$ENV_FILE")"
   # 0600 before anything is written into it: the client token lives here, and a
   # file that is briefly world-readable is world-readable. A --system run widens
@@ -1716,7 +1741,8 @@ write_environment_file() {
 #
 # install.sh wrote this file once and will not touch it again. Three lines are
 # uncommented because they are the three facts the installer had: the role you
-# asked for, the prefix it created, and the bin path inside it. The rest is
+# asked for, the prefix it created, and the bin path inside it -- and on a
+# --system install a fourth, the server's identity file. The rest is
 # commented out because guessing a database path or a store path is worse than
 # leaving one absent -- fill them in, or let \`$PACKAGE_NAME setup\` do it.
 #
@@ -1749,10 +1775,11 @@ AGENTPLEX_BIN_PATH=$BIN_DIR
 #AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE=$STATE_DIR/server.json
 #AGENTPLEX_LOCAL_SERVER_PORT=8081
 
-# The server's half. The identity file is required for role=server and
-# role=both, and holds the pairing token; store paths are absolute and
-# ':'-separated.
-#AGENTPLEX_SERVER_IDENTITY_FILE=$STATE_DIR/server.json
+# The server's half. The identity file holds this server's identity and the
+# pairing token; \`$PACKAGE_NAME setup\` records here the one it mints. Unset,
+# the server keeps it at \$HOME/.agentplex/server.json. Store paths are
+# absolute and ':'-separated.
+$server_identity
 #AGENTPLEX_STORE_PATH=
 
 # The directories a client may browse when somebody picks a project on this

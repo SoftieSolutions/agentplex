@@ -7,7 +7,7 @@ import type {
   StoreDescriptor,
   StoreId,
 } from '@agentplex/protocol';
-import type { Clock } from '@agentplex/node-shared';
+import { DEFAULT_TERMINAL_CAP, type Clock } from '@agentplex/node-shared';
 import type { GrantId, Launch, SessionLiveness } from '@agentplex/providers';
 import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
 
@@ -81,16 +81,6 @@ import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
  * is not a `hubId`: a grant is a record this server minted and a hub id is a
  * name a peer asserts.
  */
-
-/**
- * Terminals a machine can hold at once, absent configuration.
- *
- * Each one is a forked agent plus its scrollback, and the number is a guess at
- * a laptop rather than at a server. It is deliberately larger than the number
- * of sessions a person watches at once and small enough that the eviction rule
- * gets exercised rather than being theatre nobody ever reaches.
- */
-export const DEFAULT_TERMINAL_CAP = 8;
 
 /**
  * Who is watching, rather than how many.

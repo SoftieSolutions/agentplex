@@ -1,5 +1,5 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -246,5 +246,51 @@ describe('agentplex doctor on a hub', { timeout: TEST_TIMEOUT_MS }, () => {
     // Not exit 2: the settings are not a typo to fix before the machine can be
     // inspected, they are the finding.
     expect(result.status).toBe(1);
+  });
+});
+
+/**
+ * The settings file, which is what a machine is actually configured with.
+ *
+ * The daemons' units name it as their EnvironmentFile, so a doctor that read
+ * only its own environment and flags was reporting on a machine nobody runs:
+ * the operator had to retype, as flags, what the installer and setup had
+ * already written down. This is the doctor run the way an operator runs it on
+ * an installed machine -- with no flags at all.
+ *
+ * Its own home rather than the suite's, because the file lives under it: a
+ * `role=server` settings file in the shared home would be read by every other
+ * run in this file. The assertion is on stdout rather than the exit code: a
+ * server with no provider installed is a machine that is not ready, which is
+ * exit 1 and a true report, and what this case is about is which machine the
+ * report describes.
+ */
+describe('agentplex doctor on an installed machine', { timeout: TEST_TIMEOUT_MS }, () => {
+  it('reads the role and the server settings out of the settings file, with no flags', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentplex-doctor-home-'));
+    const prefix = join(home, '.agentplex');
+    const bin = join(prefix, 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(
+      join(prefix, 'agentplex.env'),
+      [
+        '# agentplex settings, as install.sh and setup leave them.',
+        'AGENTPLEX_ROLE=server',
+        `AGENTPLEX_PREFIX=${prefix}`,
+        `AGENTPLEX_BIN_PATH=${bin}`,
+        `AGENTPLEX_SERVER_IDENTITY_FILE=${join(prefix, 'server.json')}`,
+        '',
+      ].join('\n'),
+    );
+
+    const result = runWith({ HOME: home });
+
+    expect(result.stderr).not.toContain('no role');
+    expect(result.stdout).toContain('agentplex doctor  role=server');
+    expect(result.stdout).toContain(join(prefix, 'agentplex.env'));
+    // The identity file the settings name, which is the one the server reads.
+    expect(result.stdout).toContain(`server identity\n  ${join(prefix, 'server.json')}\n`);
+    // The data root defaults from that same home, and it is there.
+    expect(result.stdout).toMatch(new RegExp(`ready +${prefix.replaceAll('.', '\\.')}`));
   });
 });

@@ -1,11 +1,15 @@
 import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { HUB_SETTINGS, SERVER_SETTINGS } from '@agentplex/node-shared';
+import type { RecordedDeployment } from '../../installation/recorded-settings.js';
 import { loadDoctorConfig, doctorUsage, type ConfigResult, type HubConfig } from './config.js';
 
 const IDENTITY_FILE = '/etc/agentplex/server.json';
+const HOME = '/home/dev';
 
 /**
- * Every case needs an identity file.
+ * Every case needs an identity file, and a home for the data root to default
+ * from.
  *
  * They are supplied through the environment rather than written into each argv
  * so that a test about the terminal cap stays a test about the terminal cap. A
@@ -17,9 +21,24 @@ function load(argv: string[], env: Record<string, string | undefined> = {}): Con
     argv,
     env: {
       AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE,
+      HOME,
       ...env,
     },
   });
+}
+
+/** A settings file the doctor found, as `readRecordedSettings` hands it over. */
+function recordedFile(
+  values: Readonly<Record<string, string>>,
+  overrides: Partial<RecordedDeployment> = {},
+): RecordedDeployment {
+  return {
+    scope: 'user',
+    file: `${HOME}/.agentplex/agentplex.env`,
+    values: new Map(Object.entries(values)),
+    problems: [],
+    ...overrides,
+  };
 }
 
 function expectProblems(result: ConfigResult): readonly string[] {
@@ -343,8 +362,40 @@ describe('loadDoctorConfig server identity file', () => {
     return result.ok && 'server' in result.config ? result.config.server.identityPath : undefined;
   }
 
-  it('requires one for the server role', () => {
-    const problems = expectProblems(loadBare(['--role=server']));
+  it('defaults to where the server defaults it, under the home', () => {
+    // The server reads `$HOME/.agentplex/server.json` when nothing names the
+    // file, so a doctor that refused to look without one would be refusing
+    // the configuration the service actually runs.
+    const result = loadBare(['--role=server'], { HOME });
+    expect(result).toMatchObject({
+      ok: true,
+      config: { server: { identityPath: '/home/dev/.agentplex/server.json' } },
+    });
+  });
+
+  it('says whether the path is the default or one a setting named', () => {
+    // The default is the one path the doctor can be wrong about: nothing named
+    // it, so whether it is the file a unit reads depends on the unit's settings,
+    // which this run may not have found.
+    const defaulted = (argv: string[], env: Record<string, string | undefined>): unknown => {
+      const result = loadBare(argv, env);
+      return result.ok && 'server' in result.config
+        ? result.config.server.identityPathDefaulted
+        : undefined;
+    };
+
+    expect(defaulted(['--role=server'], { HOME })).toBe(true);
+    expect(defaulted(['--role=server', '--server-identity-file=/srv/id.json'], { HOME })).toBe(
+      false,
+    );
+    expect(
+      defaulted(['--role=server'], { HOME, AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE }),
+    ).toBe(false);
+  });
+
+  it('refuses to guess when there is no home to default from, and names the setting', () => {
+    const problems = expectProblems(loadBare(['--role=server', '--data-path=/srv/agentplex']));
+    expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('AGENTPLEX_SERVER_IDENTITY_FILE');
   });
 
@@ -366,10 +417,168 @@ describe('loadDoctorConfig server identity file', () => {
     expect(problems[0]).toContain('absolute path');
   });
 
-  it('normalizes the path it was given', () => {
-    expect(identityPath(['--role=server', '--server-identity-file=/srv/../srv/id.json'])).toBe(
-      '/srv/id.json',
-    );
+  it('asks a hub-only machine for none, even one with no home', () => {
+    // A hub starts no server, so neither of the server's home defaults is
+    // this machine's business; refusing a hub over one would be refusing to
+    // inspect it over a setting it never reads.
+    expect(loadBare(['--role=hub'])).toMatchObject({ ok: true, config: { role: 'hub' } });
+  });
+});
+
+describe('loadDoctorConfig data path', () => {
+  function dataPath(argv: string[], env: Record<string, string | undefined> = {}) {
+    const result = load(argv, env);
+    expect(result.ok).toBe(true);
+    return result.ok && 'server' in result.config ? result.config.server.dataPath : undefined;
+  }
+
+  it('is accepted, which a doctor that read its own copy of the settings did not do', () => {
+    expect(dataPath(['--role=server', '--data-path=/x'])).toBe('/x');
+  });
+
+  it('defaults from the home, as the server does', () => {
+    expect(dataPath(['--role=server'])).toBe('/home/dev/.agentplex');
+  });
+
+  it('refuses a relative path', () => {
+    const problems = expectProblems(load(['--role=server', '--data-path=agentplex']));
+    expect(problems[0]).toContain('absolute path');
+  });
+
+  it('defaults from the service account home on the fleet tier, whatever this shell says', () => {
+    // A `--system` daemon runs as the account whose home `install.sh` made the
+    // state directory. The operator's HOME -- or root's, under sudo -- is not
+    // the one its defaults come from.
+    const result = loadDoctorConfig({
+      argv: ['--role=server'],
+      env: { HOME: '/root' },
+      recorded: recordedFile({}, { scope: 'system', file: '/etc/agentplex/agentplex.env' }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: {
+        server: {
+          dataPath: '/var/lib/agentplex/.agentplex',
+          identityPath: '/var/lib/agentplex/.agentplex/server.json',
+        },
+      },
+    });
+  });
+});
+
+describe('loadDoctorConfig the settings file', () => {
+  it('reads the deployment from the file the daemons are started with', () => {
+    const result = loadDoctorConfig({
+      argv: [],
+      env: { HOME },
+      recorded: recordedFile({
+        AGENTPLEX_ROLE: 'server',
+        AGENTPLEX_BIN_PATH: '/home/dev/.agentplex/bin',
+        AGENTPLEX_SERVER_IDENTITY_FILE: '/home/dev/.agentplex/server.json',
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: {
+        role: 'server',
+        server: {
+          binPath: ['/home/dev/.agentplex/bin'],
+          identityPath: '/home/dev/.agentplex/server.json',
+        },
+      },
+    });
+  });
+
+  it('lets the environment win over the file, and a flag win over both', () => {
+    const recorded = recordedFile({ AGENTPLEX_ROLE: 'server', AGENTPLEX_SERVER_PORT: '9001' });
+    const port = (argv: string[], env: Record<string, string>): unknown => {
+      const result = loadDoctorConfig({ argv, env: { HOME, ...env }, recorded });
+      return result.ok && 'server' in result.config ? result.config.server.port : undefined;
+    };
+
+    expect(port([], {})).toBe(9001);
+    expect(port([], { AGENTPLEX_SERVER_PORT: '9002' })).toBe(9002);
+    expect(port(['--server-port=9003'], { AGENTPLEX_SERVER_PORT: '9002' })).toBe(9003);
+  });
+
+  it('does not let a blank variable in this shell hide what the file says', () => {
+    // A blank variable is a setting nobody set, everywhere else in this
+    // program; an exported empty one must not erase the file's line.
+    const result = loadDoctorConfig({
+      argv: [],
+      env: { HOME, AGENTPLEX_ROLE: '' },
+      recorded: recordedFile({ AGENTPLEX_ROLE: 'server' }),
+    });
+    expect(result).toMatchObject({ ok: true, config: { role: 'server' } });
+  });
+
+  it('says which file it read', () => {
+    const result = loadDoctorConfig({
+      argv: ['--role=hub'],
+      env: {},
+      recorded: recordedFile({}),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      config: { settings: { file: '/home/dev/.agentplex/agentplex.env', problems: [] } },
+    });
+  });
+
+  it('carries a file it could not read as a finding, and reads the rest', () => {
+    const result = loadDoctorConfig({
+      argv: ['--role=hub'],
+      env: {},
+      recorded: {
+        scope: 'system',
+        file: '/etc/agentplex/agentplex.env',
+        values: new Map(),
+        problems: ['cannot read /etc/agentplex/agentplex.env: EACCES'],
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      config: {
+        settings: {
+          file: '/etc/agentplex/agentplex.env',
+          problems: ['cannot read /etc/agentplex/agentplex.env: EACCES'],
+        },
+      },
+    });
+  });
+
+  it('reads none when there is none', () => {
+    expect(load(['--role=hub'])).toMatchObject({
+      ok: true,
+      config: { settings: { file: null, problems: [] } },
+    });
+  });
+});
+
+/**
+ * Every flag either daemon accepts, accepted here. The doctor's promise is
+ * that it reads the deployment the way the daemons do, and a flag one of them
+ * takes that this refuses is a deployment it cannot be pointed at.
+ */
+describe('loadDoctorConfig flag parity with the daemons', () => {
+  const tables = { server: SERVER_SETTINGS, hub: HUB_SETTINGS };
+
+  for (const [daemon, table] of Object.entries(tables)) {
+    for (const setting of Object.values(table)) {
+      it(`accepts the ${daemon}'s ${setting.flag}`, () => {
+        const result = load(['--role=both', `${setting.flag}=x`]);
+        const problems = result.ok ? [] : result.problems;
+        expect(problems.filter((problem) => problem.includes('unknown argument'))).toEqual([]);
+      });
+    }
+  }
+
+  it('lists each flag once in its usage, though both daemons read some of them', () => {
+    const lines = doctorUsage().split('\n');
+    for (const flag of ['--log-level', '--host']) {
+      expect(lines.filter((line) => line.trim().startsWith(`${flag} `))).toHaveLength(1);
+    }
   });
 });
 
@@ -440,7 +649,7 @@ describe('loadDoctorConfig hub settings', () => {
       port: 9090,
       databaseFile: '/var/lib/agentplex/agentplex.db',
       clientToken: 'a-token-long-enough-for-anybody',
-      localServerIdentityPath: IDENTITY_FILE,
+      localServer: { identityPath: IDENTITY_FILE, port: 8081 },
     });
   });
 
@@ -455,13 +664,23 @@ describe('loadDoctorConfig hub settings', () => {
     expect(hubHalf(load(['--role=hub']))).toMatchObject({
       databaseFile: null,
       clientToken: null,
-      localServerIdentityPath: null,
+      localServer: null,
     });
   });
 
   it('still refuses a database path that is not absolute, which is a typo and not a finding', () => {
     const problems = expectProblems(load(['--role=hub', '--database-file=agentplex.db']));
     expect(problems[0]).toContain('absolute path');
+  });
+
+  it('reads the local server port the hub pairs it on', () => {
+    const result = load(['--role=hub'], {
+      AGENTPLEX_LOCAL_SERVER_IDENTITY_FILE: IDENTITY_FILE,
+      AGENTPLEX_LOCAL_SERVER_PORT: '9091',
+    });
+    expect(hubHalf(result)).toMatchObject({
+      localServer: { identityPath: IDENTITY_FILE, port: 9091 },
+    });
   });
 
   it('refuses a local server identity path that is not absolute', () => {
@@ -499,6 +718,7 @@ describe('loadDoctorConfig hub settings', () => {
       '--database-file',
       '--client-token',
       '--local-server-identity-file',
+      '--local-server-port',
     ]) {
       expect(doctorUsage()).toContain(flag);
     }
