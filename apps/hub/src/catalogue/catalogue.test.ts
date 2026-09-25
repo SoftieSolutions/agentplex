@@ -3,6 +3,7 @@ import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import {
   sessionIdSchema,
   storeIdSchema,
+  type NodeId,
   type SessionDescriptor,
   type StoreId,
 } from '@agentplex/protocol';
@@ -55,7 +56,16 @@ interface Harness {
 }
 
 function harness(
-  options: { readonly failOn?: RegExp; readonly nodes?: readonly unknown[] } = {},
+  options: {
+    readonly failOn?: RegExp;
+    readonly nodes?: readonly unknown[];
+    /**
+     * What the tree is told when it asks where a directory is, in place of the
+     * fake's own answer. The rest of the fake stays whole: its methods are
+     * closures, so one of them is borrowed rather than the fake copied.
+     */
+    readonly findByDirectory?: (directory: string) => Promise<NodeId | null>;
+  } = {},
 ): Harness {
   const database = createFakeDatabase({
     ...(options.failOn === undefined ? {} : { failOn: options.failOn }),
@@ -90,7 +100,10 @@ function harness(
       candidates: [],
       graphRunApprovals: [],
     }),
-    projects,
+    projects:
+      options.findByDirectory === undefined
+        ? projects
+        : { directories: () => projects.directories(), findByDirectory: options.findByDirectory },
     // Nothing in this file removes a node, and a holder is only ever read to
     // refuse one. `mutations.test` is where that question is asked.
     readHolder: () => null,
@@ -267,6 +280,58 @@ describe('the catalogue following what a store was read to hold', () => {
     const opened = [...transactions(test.database).values()];
     expect(opened).toHaveLength(2);
     expect(opened[1]?.some((text) => text.includes('DELETE FROM nodes'))).toBe(true);
+  });
+
+  /**
+   * The lookup runs before the transaction and outside it, so a refusal there
+   * is not the transaction's to catch. It is the same bargain all the same: a
+   * store's tree update lost until its next report, and never the report path
+   * unwound or the pass left standing with nobody to finish it.
+   */
+  it('costs a failed project lookup that store and nothing else', async () => {
+    let asked = 0;
+    const test = harness({
+      findByDirectory: async () => {
+        asked += 1;
+        if (asked === 1) throw new Error('the projects could not be read');
+        return null;
+      },
+    });
+    test.stores.set(STORE_A, [descriptor(STORE_A, 's1', null, '/srv/work/agentplex')]);
+
+    await expect(test.catalogue.observe(STORE_A)).resolves.toBeUndefined();
+
+    expect(
+      test.logs.some(
+        (record) =>
+          record.level === 'warn' &&
+          record.message.includes('could not be brought into line') &&
+          record.fields.storeId === STORE_A,
+      ),
+    ).toBe(true);
+    expect(transactions(test.database).size).toBe(0);
+  });
+
+  it('starts a new pass for a store reported after a lookup failed', async () => {
+    let asked = 0;
+    const test = harness({
+      findByDirectory: async () => {
+        asked += 1;
+        if (asked === 1) throw new Error('the projects could not be read');
+        return null;
+      },
+    });
+    test.stores.set(STORE_A, [descriptor(STORE_A, 's1', null, '/srv/work/agentplex')]);
+
+    // A pass that failed and left itself standing would have every later
+    // report attach to it and wait on a promise that already settled, and the
+    // tree would stop following every store for the life of the hub. Whether
+    // the first pass resolves is the test above's question, not this one's.
+    await test.catalogue.observe(STORE_A).catch(() => undefined);
+    await test.catalogue.observe(STORE_A);
+
+    expect(asked).toBe(2);
+    expect(transactions(test.database).size).toBe(1);
   });
 });
 

@@ -413,31 +413,41 @@ export function createCatalogue({
   /** The pass in flight, or `null` when the tree is caught up. */
   let catchingUp: Promise<void> | null = null;
 
-  /** One store, in one transaction, with its failure costing only itself. */
+  /**
+   * One store, in one transaction, with its failure costing only itself.
+   *
+   * Everything this does is inside the one `try`, the lookup before the
+   * transaction included, because this is what the pass awaits: a rejection
+   * that left here would end `catchUp` with its pass still standing, and every
+   * later report would attach to a promise that had already failed.
+   */
   const follow = async (storeId: StoreId): Promise<void> => {
-    const sessions = readStore(storeId);
-    if (sessions === null) {
-      // The store went away between the report and this turn -- its last server
-      // was revoked, or unmounted the volume. There is no reading, so there is
-      // nothing this may prune against.
-      log.debug('a store was read and is already gone; the tree is left alone', { storeId });
-      return;
-    }
-
-    // Resolved before the transaction opens rather than inside it. The lookup
-    // belongs to another feature, which holds the database rather than this
-    // transaction's handle, and a feature reaching into a transaction it was
-    // not given is how two owners of one connection start to matter.
-    //
-    // What that costs is a window: a project removed between this and the
-    // insert below leaves a parent that is gone, the foreign key refuses the
-    // row, and the whole pass for this store is logged and dropped. The next
-    // report brings another whole reading, so it is a stale tree for a few
-    // seconds and never a wrong one -- the same bargain the catch below
-    // already makes.
-    const placements = await placementsFor(sessions);
-
     try {
+      const sessions = readStore(storeId);
+      if (sessions === null) {
+        // The store went away between the report and this turn -- its last
+        // server was revoked, or unmounted the volume. There is no reading, so
+        // there is nothing this may prune against.
+        log.debug('a store was read and is already gone; the tree is left alone', { storeId });
+        return;
+      }
+
+      // Resolved before the transaction opens rather than inside it. The lookup
+      // belongs to another feature, which holds the database rather than this
+      // transaction's handle, and a feature reaching into a transaction it was
+      // not given is how two owners of one connection start to matter. It is
+      // also a top-level query, which waits behind any open transaction: asked
+      // from inside this one, it would wait on the transaction that is waiting
+      // on it.
+      //
+      // What that costs is a window: a project removed between this and the
+      // insert below leaves a parent that is gone, the foreign key refuses the
+      // row, and the whole pass for this store is logged and dropped. A lookup
+      // that fails outright is dropped the same way. Either way the next report
+      // brings another whole reading, so it is a stale tree for a few seconds
+      // and never a wrong one.
+      const placements = await placementsFor(sessions);
+
       // One transaction for the pair. A reading is one reading, and a tree with
       // the placements committed and the sweep not is a tree that agrees with
       // no reading that ever happened.
@@ -524,28 +534,37 @@ export function createCatalogue({
     // to the fleet state and broadcast on the turn it arrived on, and the tree
     // write is what happens after that, not before it.
     await Promise.resolve();
-    while (true) {
-      const next = reached.values().next();
-      if (next.done === true) {
-        // Cleared here, at the moment this pass decides it has nothing left,
-        // rather than when its promise settles. Between those two is a window
-        // in which a store marked for a pass would attach to one that is
-        // already finished, and wait for a report that may never come.
-        catchingUp = null;
-        return;
+    try {
+      while (true) {
+        const next = reached.values().next();
+        // The `finally` below clears the pass on this return, at the moment it
+        // decides it has nothing left, rather than when its promise settles.
+        // Between those two is a window in which a store marked for a pass
+        // would attach to one that is already finished, and wait for a report
+        // that may never come.
+        if (next.done === true) return;
+        // Taken out before the write rather than after, so that a report
+        // arriving while this store is being written marks it again and earns
+        // another pass. Clearing it afterwards would swallow that reading.
+        reached.delete(next.value);
+        await follow(next.value);
       }
-      // Taken out before the write rather than after, so that a report arriving
-      // while this store is being written marks it again and earns another
-      // pass. Clearing it afterwards would swallow that reading.
-      reached.delete(next.value);
-      await follow(next.value);
+    } finally {
+      // A `finally` so the pass stands down whichever way it ends. `follow`
+      // does not reject, so the throw is a backstop: a pass that ended on one
+      // and stayed standing would have every later report attach to it, and
+      // the tree would stop following every store for the life of the hub.
+      // The stores still marked stay marked, and the next report starts a pass
+      // that takes them.
+      catchingUp = null;
     }
   };
 
   const observe = (storeId: StoreId): Promise<void> => {
     reached.add(storeId);
-    // No `catch` and no `finally`: `follow` swallows its own failure, so this
-    // cannot reject and there is nothing here for a rejection to escape from.
+    // `follow` swallows its own failure, whichever step it came from, so this
+    // is not meant to reject. Should it anyway, `catchUp` has already stood
+    // itself down, and the caller that left it unawaited catches what is left.
     catchingUp ??= catchUp();
     return catchingUp;
   };

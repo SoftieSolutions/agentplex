@@ -388,9 +388,20 @@ export async function startHub(dependencies: HubDependencies): Promise<Hub> {
       // stores' transactions; this one is taken after the whole pass and
       // carries the version to prove it, which is what makes the drop above
       // settle on the newest reading rather than on whichever landed last.
-      // There is no rejection to handle: `observe` swallows its own failure by
-      // contract, which is the same reason it is safe to leave unawaited here.
-      if (accepted) void catalogue.observe(report.storeId).then(followProjects);
+      // `observe` swallows a failed store by contract, and the catch is the
+      // backstop for the contract breaking: left unawaited here, a rejection
+      // would otherwise be unhandled, and an unhandled rejection ends the hub.
+      if (accepted) {
+        void catalogue
+          .observe(report.storeId)
+          .then(followProjects)
+          .catch((error: unknown) => {
+            logger.warn('the tree could not follow a store', {
+              storeId: report.storeId,
+              problem: String(error),
+            });
+          });
+      }
       // The one part of a report the reducer wants nothing to do with: a start
       // is not a session and a tag is not a row. It goes to the relay, which is
       // the only thing that has been waiting to hear which session a spawn it
