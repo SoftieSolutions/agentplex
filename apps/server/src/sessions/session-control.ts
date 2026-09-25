@@ -266,6 +266,27 @@ export function createSessionController(
     );
 
   /**
+   * Every session one of this server's own terminals has held, by store, for
+   * the life of this process.
+   *
+   * Kept here rather than read off the terminal table because the table
+   * forgets: an exited terminal is the first thing the cap evicts, and the
+   * session it held is exactly the one a later spawn must not take. One id per
+   * session this server ever ran is a set that stays small.
+   */
+  const ours = new Map<StoreId, Set<SessionId>>();
+
+  function oursIn(storeId: StoreId): Set<SessionId> {
+    const known = ours.get(storeId) ?? new Set<SessionId>();
+    ours.set(storeId, known);
+    for (const terminal of terminals.terminals) {
+      if (terminal.storeId !== storeId || terminal.session === null) continue;
+      known.add(terminal.session.sessionId);
+    }
+    return known;
+  }
+
+  /**
    * Ties one launch's secret and settings file to the life of its process.
    *
    * Both ends of it are here because both are the same fact. A launch that
@@ -416,6 +437,7 @@ export function createSessionController(
       });
       const resumed = terminals.resume(session, launch);
       retireWith(resumed, opened ?? null);
+      if (resumed.ok) oursIn(store.storeId).add(session.sessionId);
       logger.info('session resume', {
         ...session,
         ok: resumed.ok,
@@ -696,7 +718,11 @@ export function createSessionController(
    * did not bind is being run by somebody else's process, including one our
    * own terminal handed a new id to, and timing must not take it from them.
    * Of those, a session the provider *first* wrote to at or after the
-   * terminal started, that no live terminal already holds, is the terminal's.
+   * terminal started, that none of this server's terminals has ever held, is
+   * the terminal's. Ever, not now: once a terminal's process exits its
+   * provider stops vouching for it, so the session it held is pid-less,
+   * unheld and newer than every spawn still waiting -- the one session timing
+   * would pick, and the one this server knows is not theirs.
    * The first write and never the last: a session somebody opened an hour ago
    * and spoke to a second ago was written to after the terminal started, and
    * it is not the terminal's.
@@ -714,12 +740,12 @@ export function createSessionController(
     sessions: readonly SessionDescriptor[],
     origins: ReadonlyMap<SessionId, SessionOrigin>,
   ): void {
+    const claimed = oursIn(storeId);
     const unbound = liveIn(storeId)
       .filter((terminal) => terminal.session === null)
       .sort((left, right) => left.run.startedAt - right.run.startedAt);
     if (unbound.length === 0) return;
 
-    const claimed = new Set(holdsIn(storeId).map((hold) => hold.sessionId));
     const unclaimed = (session: SessionDescriptor): boolean => !claimed.has(session.sessionId);
 
     const untimed: Terminal[] = [];
