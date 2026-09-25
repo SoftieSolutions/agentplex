@@ -1028,6 +1028,16 @@ export interface HubStoreDependencies {
   readonly maxQueuedCommands?: number;
   /** Reconnect backoff, first try to steady state. The last entry repeats. */
   readonly reconnectDelaysMs?: readonly number[];
+  /** How long an established connection goes before it pings the hub. */
+  readonly heartbeatIntervalMs?: number;
+  /** How long a ping may go unanswered before the connection is given up. */
+  readonly heartbeatTimeoutMs?: number;
+  /**
+   * Tells the store the page has reason to doubt its connection: it came back
+   * into view, or the network came back. Subscribed while anything listens to
+   * the store; the returned function unsubscribes. None means no wakes.
+   */
+  readonly wake?: (fire: () => void) => () => void;
 }
 
 /**
@@ -1040,6 +1050,15 @@ const DEFAULT_MAX_QUEUED_COMMANDS = 32;
 
 /** Fast enough that a blip heals unnoticed; capped so a dead hub is not hammered. */
 const DEFAULT_RECONNECT_DELAYS_MS: readonly number[] = [500, 1_000, 2_000, 4_000, 8_000, 15_000];
+
+/**
+ * A socket the network dropped without a word stays open to the browser until
+ * a write fails, which can be minutes, so the store asks. Under the 60 s idle
+ * timeout a reverse proxy commonly holds, and a dead link is noticed within
+ * interval plus deadline.
+ */
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 10_000;
 
 /** The one place a client frame becomes characters. */
 export function encodeClientFrame(frame: ClientFrame): string {
@@ -1169,6 +1188,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   const capacity = dependencies.maxQueuedCommands ?? DEFAULT_MAX_QUEUED_COMMANDS;
   const delays = dependencies.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
   const feedBytes = dependencies.terminalFeedBytes ?? DEFAULT_FEED_BYTES;
+  const heartbeatInterval = dependencies.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  const heartbeatTimeout = dependencies.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
 
   const listeners = new Set<() => void>();
   let snapshot: HubSnapshot = {
@@ -1222,6 +1243,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   let attempt = 0;
   let everConnected = false;
   let cancelRetry: (() => void) | null = null;
+  /** The heartbeat's one pending timer: the next ping, or the deadline on the last. */
+  let cancelHeartbeat: (() => void) | null = null;
+  /** The ping the hub has not answered yet, which only its own pong clears. */
+  let outstandingPing: FrameId | null = null;
+  let unsubscribeWake: (() => void) | null = null;
 
   const queue: { readonly id: FrameId; readonly command: HubCommand }[] = [];
   /** Sent commands awaiting a reply, by the id the reply will name. */
@@ -1592,32 +1618,97 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     });
     opened.onClose(() => {
       if (mine !== generation) return;
-      socket = null;
-      established = false;
-      const unanswered = pending.size;
-      pending.clear();
-      settleWaiting('the connection dropped before the hub answered');
-      abandonQueries('the connection dropped before the hub answered this catalogue query');
-      detachTerminals();
-      // A run held across a drop is where it was when the socket went, and
-      // nothing on the next one moves it until a state or a read's answer
-      // arrives: a screen mounted meanwhile must not draw it live.
-      const heldRuns = runs.size > 0;
-      runs.clear();
-      if (unanswered > 0 || heldRuns) {
-        update({
-          ...(heldRuns ? { runs: new Map() } : {}),
-          ...(unanswered > 0
-            ? {
-                problem: `the connection dropped before the hub answered ${String(unanswered)} command${
-                  unanswered === 1 ? '' : 's'
-                }`,
-              }
-            : {}),
-        });
-      }
-      scheduleRetry();
+      lose(null);
     });
+  }
+
+  /**
+   * The connection is gone, whether the socket said so or the heartbeat
+   * decided it: everything that was waiting on it is answered, and a retry is
+   * scheduled.
+   *
+   * `problem` is why, when the store knows better than "it closed"; a close
+   * the socket reported words only the commands it stranded.
+   */
+  function lose(problem: string | null): void {
+    socket = null;
+    established = false;
+    stopHeartbeat();
+    const unanswered = pending.size;
+    pending.clear();
+    settleWaiting('the connection dropped before the hub answered');
+    abandonQueries('the connection dropped before the hub answered this catalogue query');
+    detachTerminals();
+    // A run held across a drop is where it was when the socket went, and
+    // nothing on the next one moves it until a state or a read's answer
+    // arrives: a screen mounted meanwhile must not draw it live.
+    const heldRuns = runs.size > 0;
+    runs.clear();
+    const stranded =
+      unanswered > 0
+        ? `the connection dropped before the hub answered ${String(unanswered)} command${
+            unanswered === 1 ? '' : 's'
+          }`
+        : null;
+    const said =
+      problem !== null && stranded !== null ? `${problem}; ${stranded}` : (problem ?? stranded);
+    if (said !== null || heldRuns) {
+      update({
+        ...(heldRuns ? { runs: new Map() } : {}),
+        ...(said !== null ? { problem: said } : {}),
+      });
+    }
+    scheduleRetry();
+  }
+
+  /** Waits out one quiet interval, then asks. Replaces whatever was pending. */
+  function scheduleHeartbeat(): void {
+    stopHeartbeat();
+    cancelHeartbeat = timers.schedule(heartbeatInterval, ping);
+  }
+
+  function stopHeartbeat(): void {
+    cancelHeartbeat?.();
+    cancelHeartbeat = null;
+    outstandingPing = null;
+  }
+
+  function ping(): void {
+    cancelHeartbeat = null;
+    const wire = socket;
+    if (!established || wire === null) return;
+    const id = frameIds.next();
+    outstandingPing = id;
+    wire.send(encodeClientFrame({ type: 'ping', id }));
+    cancelHeartbeat = timers.schedule(heartbeatTimeout, () => {
+      cancelHeartbeat = null;
+      const unanswering = socket;
+      // Given up here and now rather than when the socket reports its close:
+      // a browser holds a half-open socket's `close` until its closing
+      // handshake times out, and the bump makes that late event a stale one.
+      generation += 1;
+      lose(`the hub did not answer a ping within ${String(heartbeatTimeout / 1_000)} s`);
+      unanswering?.close();
+    });
+  }
+
+  /**
+   * The page came back into view or back online, either of which is a moment
+   * a connection may have died unnoticed. A retry waiting out its backoff
+   * dials now; an established connection with no question open asks now.
+   * Anything else -- a dial in flight, a failure, a ping already out -- is
+   * left alone, because a second dial would orphan the first socket.
+   */
+  function wake(): void {
+    if (cancelRetry !== null) {
+      cancelRetry();
+      connect();
+      return;
+    }
+    if (established && !failed && socket !== null && outstandingPing === null) {
+      stopHeartbeat();
+      ping();
+    }
   }
 
   /**
@@ -1685,10 +1776,15 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         });
         replaySubscriptions();
         flushQueue();
+        scheduleHeartbeat();
         return;
       }
-      case 'pong':
+      case 'pong': {
+        // Only the answer to the ping still open counts; an older one says
+        // nothing about whether the latest question reached the hub.
+        if (outstandingPing !== null && frame.replyTo === outstandingPing) scheduleHeartbeat();
         return;
+      }
       case 'machine-state': {
         // No client-side version arithmetic: the hub already never re-sends a
         // version on one connection, and a fresh connection starts with the
@@ -2347,6 +2443,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     generation += 1;
     cancelRetry?.();
     cancelRetry = null;
+    stopHeartbeat();
+    unsubscribeWake?.();
+    unsubscribeWake = null;
     const wire = socket;
     socket = null;
     established = false;
@@ -2429,7 +2528,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   return {
     subscribe(listener: () => void): () => void {
       listeners.add(listener);
-      if (listeners.size === 1) connect();
+      if (listeners.size === 1) {
+        unsubscribeWake = dependencies.wake?.(wake) ?? null;
+        connect();
+      }
       let active = true;
       return () => {
         if (!active) return;

@@ -1,6 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import type { TokenStore } from '../auth/token.js';
-import { createBrowserDependencies, parseTicketBody, socketUrl } from './browser.js';
+import { createBrowserDependencies, parseTicketBody, socketUrl, subscribeWake } from './browser.js';
 
 describe('parseTicketBody', () => {
   it('reads the ticket the hub actually answers with', () => {
@@ -60,5 +61,57 @@ describe('createBrowserDependencies', () => {
     // No token is an empty Bearer (`Headers` trims the trailing space), which
     // the hub refuses with its ordinary 401; it is never a header left out.
     expect(headers).toEqual(['Bearer', 'Bearer the-token-typed-on-the-device', 'Bearer']);
+  });
+});
+
+describe('subscribeWake', () => {
+  /** Stands in for `document.visibilityState`, which jsdom will not let a test move. */
+  function showing(state: DocumentVisibilityState): void {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+  }
+
+  it('wakes when the network comes back, until it is let go of', () => {
+    let woken = 0;
+    const unsubscribe = subscribeWake(() => {
+      woken += 1;
+    });
+
+    window.dispatchEvent(new Event('online'));
+    expect(woken).toBe(1);
+
+    unsubscribe();
+    window.dispatchEvent(new Event('online'));
+    expect(woken).toBe(1);
+  });
+
+  it('wakes when the page comes back into view, and not when it leaves', () => {
+    let woken = 0;
+    const unsubscribe = subscribeWake(() => {
+      woken += 1;
+    });
+
+    showing('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(woken).toBe(0);
+
+    showing('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(woken).toBe(1);
+
+    unsubscribe();
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(woken).toBe(1);
+  });
+
+  it('is what the real dependencies hand the store to be woken by', () => {
+    const tokens: TokenStore = { read: () => null, write: () => true, clear: () => true };
+    let woken = 0;
+    const unsubscribe = createBrowserDependencies({ tokens }).wake?.(() => {
+      woken += 1;
+    });
+
+    window.dispatchEvent(new Event('online'));
+    expect(woken).toBe(1);
+    unsubscribe?.();
   });
 });
