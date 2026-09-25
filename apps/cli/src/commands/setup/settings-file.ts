@@ -1,3 +1,5 @@
+import type { SetupMachine } from './setup-machine.js';
+
 /**
  * The settings file the daemons start from, as setup fills it in.
  *
@@ -126,4 +128,27 @@ function isCommentedAssignment(line: string, key: string): boolean {
 function quote(value: string): string {
   if (!/[\s"'#\\]/.test(value)) return value;
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * These settings, upserted into the file at `path`, or why they could not be.
+ *
+ * The file is read first so that every line setup does not name survives the
+ * write; one that is missing is created with exactly these.
+ */
+export async function writeSettings(
+  path: string,
+  settings: readonly Setting[],
+  machine: SetupMachine,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly problem: string }> {
+  const existing = await machine.readFile(path);
+  if (existing.kind === 'failed') {
+    return { ok: false, problem: `cannot read ${path}: ${existing.reason}` };
+  }
+
+  const written = await machine.writeFile(
+    path,
+    upsertSettings(existing.kind === 'read' ? existing.contents : null, settings),
+  );
+  return written.ok ? written : { ok: false, problem: `cannot write ${path}: ${written.problem}` };
 }

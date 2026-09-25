@@ -17,6 +17,8 @@ import {
 } from '@agentplex/providers';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
+import { readIdentityPath } from '@agentplex/node-shared';
+import { readEnvironmentFile } from '../../installation/environment-file.js';
 import { createFakeMachine, type FakeMachine } from './fake-machine.js';
 import { createFakeSetupMachine, type FakeSetupMachine } from './fake-setup-machine.js';
 import { createFakeTerminal, type FakeTerminal } from './fake-terminal.js';
@@ -93,6 +95,10 @@ async function run(
     readonly files?: FakeStoreFiles;
     /** What the operator types, when the invocation is the interactive one. */
     readonly answers?: readonly string[];
+    /** Files already on the machine setup writes settings through: what an installer left. */
+    readonly settingsFiles?: Readonly<Record<string, string>>;
+    /** Paths on that machine a file cannot be written at. */
+    readonly unwritable?: readonly string[];
   } = {},
 ): Promise<Run> {
   const machine = options.machine ?? machineWithClaude();
@@ -101,6 +107,8 @@ async function run(
     pathDirectories: ['/opt/homebrew/bin'],
     directories: ['/home/dev/.claude'],
     executables: ['/opt/homebrew/bin/claude'],
+    ...(options.settingsFiles === undefined ? {} : { files: options.settingsFiles }),
+    ...(options.unwritable === undefined ? {} : { unwritable: options.unwritable }),
   });
   const files =
     options.files ??
@@ -207,12 +215,16 @@ describe('agentplex setup --plan', () => {
     // The bound the local-server exception is drawn at on this front end. This
     // run is `--role=both`, so a hub and a server end up on one host, and the
     // command is holding the machine seam the wizard writes settings through.
-    // It writes none: a machine the plan named and nobody was present for is
-    // not a machine a hub may decide to trust, and the plan does not name the
-    // settings file either.
+    // It writes neither of the hub's: a machine the plan named and nobody was
+    // present for is not a machine a hub may decide to trust, and the plan does
+    // not name the hub's settings file either. The one line it does write is
+    // the server's own identity file, which is not a pairing.
     const replayed = await run(['--plan', PLAN_FILE], { plan: PLAN });
 
-    expect(replayed.setupMachine.writes).toEqual([]);
+    expect(replayed.setupMachine.writes).toEqual([`${PREFIX}/agentplex.env`]);
+    expect(replayed.setupMachine.contents.get(`${PREFIX}/agentplex.env`)).not.toContain(
+      'AGENTPLEX_LOCAL_',
+    );
     expect(replayed.code).toBe(0);
   });
 
@@ -234,9 +246,107 @@ describe('agentplex setup --plan', () => {
     plan.server.pairingToken = null;
     const replayed = await run(['--plan', PLAN_FILE], { plan: JSON.stringify(plan) });
 
-    expect(replayed.setupMachine.writes).toEqual([]);
+    expect(replayed.setupMachine.contents.get(`${PREFIX}/agentplex.env`)).not.toContain(
+      'AGENTPLEX_LOCAL_',
+    );
     expect(replayed.out).toContain(`pairing: a token was minted into ${IDENTITY}`);
     expect(replayed.out).not.toContain('minted-on-the-machine');
+  });
+
+  it('records the identity it minted under the plan prefix, for the server to read', async () => {
+    // The per-user machine install.sh documents for a plan: `--prefix=/opt/agentplex
+    // --no-setup`, then `setup --plan`. The installer left the identity line
+    // commented, and a server that is not told reads $HOME/.agentplex/server.json
+    // and mints a second identity with a token nobody was shown. Recording the
+    // file is not a pairing, so the rule that keeps a replay from pairing
+    // anything does not reach it.
+    const settingsFile = `${HANDED_PREFIX}/agentplex.env`;
+    const minted = `${HANDED_PREFIX}/server.json`;
+    const plan = JSON.stringify({
+      version: SETUP_PLAN_VERSION,
+      role: 'server',
+      server: {
+        port: 8081,
+        storePaths: [STORE],
+        binPath: ['/opt/homebrew/bin'],
+        identityPath: minted,
+        installPrefix: HANDED_PREFIX,
+        providers: [{ provider: 'claude', version: null }],
+      },
+    });
+
+    const replayed = await run(['--plan', PLAN_FILE], {
+      plan,
+      settingsFiles: {
+        [settingsFile]: [
+          'AGENTPLEX_ROLE=server',
+          `#AGENTPLEX_SERVER_IDENTITY_FILE=${minted}`,
+          '',
+        ].join('\n'),
+      },
+    });
+
+    expect(replayed.code).toBe(0);
+    expect(replayed.files.contents.get(minted)).toContain('minted-on-the-machine');
+    expect(replayed.setupMachine.contents.get(settingsFile)?.split('\n')).toEqual([
+      'AGENTPLEX_ROLE=server',
+      `AGENTPLEX_SERVER_IDENTITY_FILE=${minted}`,
+      '',
+    ]);
+    expect(replayed.out).toContain(
+      `Recorded ${minted} as this server's identity file in ${settingsFile}`,
+    );
+
+    // Read back the way the server reads it: the file as the unit hands it
+    // over, through the parser the server's config calls, with a home whose
+    // default is somewhere else entirely.
+    const recorded = readEnvironmentFile(replayed.setupMachine.contents.get(settingsFile) ?? '');
+    const problems: string[] = [];
+    const resolved = readIdentityPath(
+      recorded.values.get('AGENTPLEX_SERVER_IDENTITY_FILE'),
+      { HOME: '/home/dev' },
+      problems,
+    );
+    expect(problems).toEqual([]);
+    expect(resolved).toBe(minted);
+  });
+
+  it('leaves one identity line when the same plan is replayed twice', async () => {
+    const machine = machineWithClaude();
+    const files = createFakeStoreFiles({ files: { [PLAN_FILE]: PLAN } });
+    const settingsFile = `${PREFIX}/agentplex.env`;
+
+    const first = await run(['--plan', PLAN_FILE], { machine, files });
+    const second = await run(['--plan', PLAN_FILE], {
+      machine,
+      files,
+      settingsFiles: {
+        [settingsFile]: first.setupMachine.contents.get(settingsFile) ?? '',
+      },
+    });
+
+    expect(second.setupMachine.contents.get(settingsFile)?.split('\n')).toEqual([
+      `AGENTPLEX_SERVER_IDENTITY_FILE=${IDENTITY}`,
+      '',
+    ]);
+  });
+
+  it('says it could not record the identity file without failing the run', async () => {
+    // A prefix the replaying account may not write is a machine that is still
+    // provisioned, and whose settings may name the file already: the fleet tier
+    // keeps them under /etc and names it there. What is left is the flag, said
+    // where an unattended caller's log keeps it.
+    const settingsFile = `${PREFIX}/agentplex.env`;
+    const replayed = await run(['--plan', PLAN_FILE], {
+      plan: PLAN,
+      unwritable: [settingsFile],
+    });
+
+    expect(replayed.code).toBe(0);
+    expect(replayed.errors).toContain(
+      `This server's identity file was not recorded: cannot write ${settingsFile}`,
+    );
+    expect(replayed.errors).toContain(`--server-identity-file ${IDENTITY}`);
   });
 
   it('refuses an argument it does not know', async () => {

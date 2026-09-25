@@ -4,6 +4,7 @@ import type { PtySupervisor } from '@agentplex/pty';
 import type { Clock, IdGenerator, TokenMinter } from '@agentplex/node-shared';
 import { applySetupPlan, type SetupOutcome } from './apply-setup-plan.js';
 import { describeOutcome } from './describe-outcome.js';
+import { recordServerIdentity } from './record-server-identity.js';
 import type { SetupMachine } from './setup-machine.js';
 import type { UnitsAfterSetup } from './start-after-setup.js';
 import { parseSetupPlan, ROLES, setupBinPath, type Role, type SetupPlan } from './setup-plan.js';
@@ -46,7 +47,10 @@ const PREFIX_FLAG = '--prefix';
 export interface SetupCommandDependencies {
   /** Where the wizard asks its questions. Unused on the `--plan` path. */
   readonly terminal: SetupTerminal;
-  /** What the wizard discovers from: a home directory, a PATH, and a filesystem. */
+  /**
+   * What the wizard discovers from: a home directory, a PATH, and a filesystem.
+   * Both front ends record the server's identity file through it.
+   */
   readonly machine: SetupMachine;
   /**
    * The one-shot process seam, built from the directories the plan names.
@@ -247,9 +251,29 @@ async function replayPlan(
     tokens: dependencies.tokens,
   });
 
+  // The identity file the apply path minted or found, recorded where the
+  // per-user units read it. Not a pairing, which is what keeps it on this
+  // front end when the local-server step is not: the plan already named the
+  // file, and a server under any prefix but the default one that is not told
+  // so mints a second identity with a token nobody was shown.
+  const identity =
+    parsed.plan.role === 'hub'
+      ? null
+      : await recordServerIdentity(
+          outcome,
+          parsed.plan.server.installPrefix,
+          null,
+          dependencies.machine,
+        );
+
   write(`agentplex setup: replayed ${file}`);
   for (const line of describeOutcome(outcome)) write(line);
   for (const line of describeUnattendedPairing(parsed.plan, outcome)) write(line);
+  // A write that failed is said where an unattended caller's log keeps its
+  // errors, and does not fail the run: the machine is provisioned, and on the
+  // fleet tier the settings under /etc already name the file, in a prefix the
+  // service account may not write.
+  if (identity !== null) (identity.recorded ? write : writeError)(identity.line);
   for (const problem of outcome.problems) writeError(`agentplex setup: ${problem}`);
 
   return {
