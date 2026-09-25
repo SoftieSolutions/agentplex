@@ -5,6 +5,7 @@ import {
   SETTINGS_FILE_NAME,
   SYSTEM_CONFIG_DIR,
   SYSTEM_PREFIX,
+  SYSTEM_STATE_DIR,
   SYSTEM_UNIT_DIR,
   nodeBinary,
   nodeStampFile,
@@ -46,6 +47,10 @@ describe('the layouts', () => {
     expect(SYSTEM_PREFIX).toBe(declared('SYSTEM_PREFIX'));
     expect(SYSTEM_CONFIG_DIR).toBe(declared('SYSTEM_CONFIG_DIR'));
     expect(SYSTEM_UNIT_DIR).toBe(declared('SYSTEM_UNIT_DIR'));
+    // The service account's home, which is what its daemons default their own
+    // paths from and therefore what the doctor has to default them from too.
+    expect(SYSTEM_STATE_DIR).toBe(declared('SYSTEM_STATE_DIR'));
+    expect(SCRIPT).toContain('--home-dir "$STATE_DIR"');
   });
 
   it('name the settings file the way the installer and the units do', () => {

@@ -38,6 +38,16 @@ export const SETTINGS_FILE_NAME = 'agentplex.env';
 export const SYSTEM_PREFIX = '/opt/agentplex';
 export const SYSTEM_CONFIG_DIR = '/etc/agentplex';
 export const SYSTEM_UNIT_DIR = '/etc/systemd/system';
+/**
+ * The service account's home, which `useradd` is told is the state directory.
+ *
+ * Not part of a `Layout`: nothing an installation command finds lives there.
+ * It is here for `doctor`, because a daemon on this tier runs as that account
+ * and defaults its own paths off `HOME`, which systemd sets from the account
+ * database -- so the home that decides a default is this one, not whichever an
+ * operator or `sudo` happens to have.
+ */
+export const SYSTEM_STATE_DIR = '/var/lib/agentplex';
 
 /** The per-user layout, from the branch a plain run takes. */
 export const USER_PREFIX_DIRECTORY = '.agentplex';

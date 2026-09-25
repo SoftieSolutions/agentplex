@@ -256,7 +256,6 @@ describe('loadServerConfig bin path', () => {
   });
 });
 
-
 /**
  * The settings whose rules are shared with the hub and the doctor. What each
  * value may be is `daemon-settings.test.ts` in `@agentplex/node-shared`; what

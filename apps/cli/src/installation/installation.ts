@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { DAEMONS } from '../programs.js';
 import { COMPONENTS, COMPONENT_PACKAGES, type Component } from './components.js';
-import { readEnvironmentFile } from './environment-file.js';
+import { readEnvironmentFile, type RecordedSettings } from './environment-file.js';
 import type { InstallationFiles } from './installation-files.js';
 import {
   nodeStampFile,
@@ -10,6 +10,7 @@ import {
   unitFile,
   userLayout,
   type Layout,
+  type UnitScope,
 } from './layout.js';
 
 /**
@@ -139,7 +140,20 @@ export async function readInstallation(
   files: InstallationFiles,
 ): Promise<InstallationResult> {
   const found = await findLayout(lookup, files);
-  if (!found.ok) return found;
+  if (!found.ok) {
+    return {
+      ok: false,
+      problems:
+        found.unreadable.length > 0
+          ? found.unreadable.map(unreadableProblem)
+          : [
+              `no agentplex settings file at ${found.candidates
+                .map((candidate) => candidate.settingsFile)
+                .join(' or ')}: this is where install.sh writes one, and an install ` +
+                'made somewhere else needs the same --prefix it was given',
+            ],
+    };
+  }
 
   const { layout, settings } = found;
   const packages = await Promise.all(
@@ -166,6 +180,68 @@ export async function readInstallation(
   };
 }
 
+/** What a settings file says about the deployment, as `doctor` reads it. */
+export interface RecordedDeployment {
+  /** The tier whose settings file this is, or `null` when none was found. */
+  readonly scope: UnitScope | null;
+  /** The settings file found, read or not, or `null` when there is none. */
+  readonly file: string | null;
+  /** Every value the file holds; empty when it was not found or not read. */
+  readonly values: ReadonlyMap<string, string>;
+  /** Why the file could not be read, when it could not. */
+  readonly problems: readonly string[];
+}
+
+/**
+ * The settings file as `doctor` reads it: every value in it, the tier it was
+ * found on, and never a refusal.
+ *
+ * The same search `status` makes, because the doctor's question is about the
+ * deployment the daemons are started with and that is the file their units
+ * name. What differs is what each command can do without it. `status` has
+ * nothing to report on a machine with no settings file; `doctor` still has the
+ * environment and its flags, which is how a container or a checkout is
+ * configured at all. So a missing file is an empty map, and one that is there
+ * and will not be read -- the fleet file is root's at 0640, so this is the
+ * ordinary case for an operator who is neither root nor the account -- is a
+ * problem to report beside the findings rather than instead of them.
+ *
+ * The scope comes back with it, and for an unreadable file too, because it is
+ * what decides the home a daemon defaults its paths from: on the fleet tier
+ * that is the service account's, whatever the operator's is.
+ */
+export async function readRecordedSettings(
+  lookup: InstallationLookup,
+  files: InstallationFiles,
+): Promise<RecordedDeployment> {
+  const found = await findLayout(lookup, files);
+  if (found.ok) {
+    return {
+      scope: found.layout.scope,
+      file: found.layout.settingsFile,
+      values: found.settings.values,
+      problems: [],
+    };
+  }
+
+  const [first] = found.unreadable;
+  return {
+    scope: first?.layout.scope ?? null,
+    file: first?.layout.settingsFile ?? null,
+    values: new Map(),
+    problems: found.unreadable.map(unreadableProblem),
+  };
+}
+
+interface UnreadableSettings {
+  readonly layout: Layout;
+  readonly reason: string;
+}
+
+function unreadableProblem({ layout, reason }: UnreadableSettings): string {
+  return `cannot read ${layout.settingsFile}: ${reason}`;
+}
+
 /**
  * Which of the two layouts this machine has, decided by which one's settings
  * file is there.
@@ -174,8 +250,9 @@ export async function readInstallation(
  * `install.sh` writes exactly once per install, in the same branch that chose
  * the unit directory and the scope. A prefix with a package in it and no
  * settings file is a half-finished install, and a directory with neither is
- * somebody's unrelated directory; both want the refusal below rather than a
- * `status` that reports emptiness as though it had looked at an agentplex.
+ * somebody's unrelated directory; both want the refusal `readInstallation`
+ * makes rather than a `status` that reports emptiness as though it had looked
+ * at an agentplex.
  *
  * The user layout is tried first. On a machine that has both -- a fleet install
  * and an operator's own beside it -- the one in their home is the one they
@@ -188,9 +265,13 @@ async function findLayout(
   | {
       readonly ok: true;
       readonly layout: Layout;
-      readonly settings: { readonly role: string | null };
+      readonly settings: RecordedSettings;
     }
-  | { readonly ok: false; readonly problems: readonly string[] }
+  | {
+      readonly ok: false;
+      readonly candidates: readonly Layout[];
+      readonly unreadable: readonly UnreadableSettings[];
+    }
 > {
   const candidates = lookup.system
     ? [systemLayout(lookup.prefix ?? undefined)]
@@ -201,7 +282,7 @@ async function findLayout(
         systemLayout(lookup.prefix ?? undefined),
       ];
 
-  const problems: string[] = [];
+  const unreadable: UnreadableSettings[] = [];
   for (const candidate of candidates) {
     const read = await files.readFile(candidate.settingsFile);
     if (read.kind === 'missing') continue;
@@ -210,7 +291,7 @@ async function findLayout(
       // settings file is root's, mode 0640, so this is what an operator who is
       // neither root nor the service account gets, and "no agentplex here" is
       // the one answer that would send them looking in the wrong place.
-      problems.push(`cannot read ${candidate.settingsFile}: ${read.reason}`);
+      unreadable.push({ layout: candidate, reason: read.reason });
       continue;
     }
 
@@ -229,20 +310,7 @@ async function findLayout(
     return { ok: true, layout: recorded, settings };
   }
 
-  return {
-    ok: false,
-    problems: [
-      ...problems,
-      ...(problems.length > 0
-        ? []
-        : [
-            `no agentplex settings file at ${candidates
-              .map((candidate) => candidate.settingsFile)
-              .join(' or ')}: this is where install.sh writes one, and an install ` +
-              'made somewhere else needs the same --prefix it was given',
-          ]),
-    ],
-  };
+  return { ok: false, candidates, unreadable };
 }
 
 async function readPackage(

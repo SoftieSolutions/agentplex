@@ -10,9 +10,10 @@
  * without reading the format.
  *
  * So this reads it, and the shape of what it reads is the whole of the
- * discipline: two keys, by name, out of a file whose other lines it does not
- * claim to understand. It is not a systemd `EnvironmentFile` parser and must
- * not grow into one. The things it deliberately does not do -- continuation
+ * discipline: `KEY=value` lines, out of a file whose other lines it does not
+ * claim to understand. Two keys come back by name, and `doctor` takes every
+ * key there is, because its question is what this file makes of the machine.
+ * It is not a systemd `EnvironmentFile` parser and must not grow into one. The things it deliberately does not do -- continuation
  * lines, `$VARIABLE` expansion, single-quoted C-escapes -- are all things
  * systemd does, and a reader that did half of them would be more wrong than one
  * that does none: an operator whose file uses them would get a value that is
@@ -32,13 +33,22 @@ export interface RecordedSettings {
   readonly prefix: string | null;
   /** `AGENTPLEX_ROLE`, or `null`. Not parsed into a role: see below. */
   readonly role: string | null;
+  /**
+   * Every `KEY=value` this could read, the last assignment of each.
+   *
+   * Words, not settings: nothing here knows which keys a daemon reads or what
+   * they may say. The daemons' own parsers decide that, and the doctor runs
+   * these through them exactly as it runs the environment.
+   */
+  readonly values: ReadonlyMap<string, string>;
 }
 
 const PREFIX_KEY = 'AGENTPLEX_PREFIX';
 const ROLE_KEY = 'AGENTPLEX_ROLE';
 
 /**
- * The two values, or `null` for each the file does not carry.
+ * The two values, or `null` for each the file does not carry, and every value
+ * beside them.
  *
  * The role is carried through as the word the file holds rather than parsed
  * against the three roles that exist. `status` reports what is installed, and
@@ -57,13 +67,16 @@ export function readEnvironmentFile(contents: string): RecordedSettings {
     const separator = trimmed.indexOf('=');
     if (separator <= 0) continue;
     const key = trimmed.slice(0, separator).trim();
-    if (key !== PREFIX_KEY && key !== ROLE_KEY) continue;
     // The last assignment wins, which is what systemd does with a file that
     // names one key twice and therefore what the daemon was started with.
     values.set(key, unquote(trimmed.slice(separator + 1).trim()));
   }
 
-  return { prefix: values.get(PREFIX_KEY) ?? null, role: values.get(ROLE_KEY) ?? null };
+  return {
+    prefix: values.get(PREFIX_KEY) ?? null,
+    role: values.get(ROLE_KEY) ?? null,
+    values,
+  };
 }
 
 /**
