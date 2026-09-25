@@ -2,7 +2,6 @@ import type { IncomingMessage } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   closure,
-  CLOSE_NORMAL,
   type DialResult,
   type MessageSocket,
   type SocketClosure,
@@ -33,18 +32,42 @@ export interface WebSocketDialerOptions {
    * there.
    */
   readonly connectTimeoutMs?: number;
+  /**
+   * How large a frame from the dialled peer may be, in bytes, before the
+   * connection is dropped. Without it `ws` lets a dialled socket take frames of
+   * up to 100 MiB, buffered whole before anything above can refuse one.
+   */
+  readonly maxPayloadBytes?: number;
 }
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 
+/**
+ * The ceiling on a frame a server sends the hub.
+ *
+ * Above the largest frames the protocol bounds, by a margin rather than by a
+ * derivation. A `doc-content` frame is at most about 1.60 MB: `DOC_CONTENT_MAX_CHARS`
+ * code units at the six bytes JSON spends escaping a control character, plus an
+ * envelope. A `terminal-output` frame is at most about 1.4 MB: `TERMINAL_CHUNK_MAX_CHARS`
+ * of base64 at one byte each. But a store report, a document listing and the
+ * stores in an accepted handshake have no cap on how many entries they carry, so
+ * no number here is the largest frame a well-behaved server can send -- a cap
+ * set at the bounded maxima would drop a healthy server with a large store.
+ * Until those are bounded this is a guard against a peer that is broken or
+ * hostile, not a statement about what a frame can be, and it is still a sixth
+ * of what `ws` would otherwise buffer.
+ */
+const DEFAULT_DIALER_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+
 export function createWebSocketDialer(options: WebSocketDialerOptions = {}): SocketDialer {
   const handshakeTimeout = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+  const maxPayload = options.maxPayloadBytes ?? DEFAULT_DIALER_MAX_PAYLOAD_BYTES;
 
   return {
     dial(address: string): Promise<DialResult> {
       return new Promise<DialResult>((resolve) => {
         let opened = false;
-        const socket = new WebSocket(address, { handshakeTimeout });
+        const socket = new WebSocket(address, { handshakeTimeout, maxPayload });
 
         socket.once('open', () => {
           opened = true;
@@ -53,7 +76,7 @@ export function createWebSocketDialer(options: WebSocketDialerOptions = {}): Soc
 
         // Before `open` this is the dial failing, and the caller gets a value.
         // After it, the socket is somebody else's and its errors reach them as
-        // the close that `ws` always emits next.
+        // the reason on the close that `ws` always emits next.
         socket.once('error', (error: Error) => {
           if (opened) return;
           resolve({ ok: false, problem: String(error) });
@@ -71,6 +94,17 @@ export function createWebSocketDialer(options: WebSocketDialerOptions = {}): Soc
  */
 export function wrapWebSocket(socket: WebSocket): MessageSocket {
   let ended = false;
+  let failure = '';
+
+  // Installed here rather than in `onClose`, for two reasons. An `error` with
+  // no listener is thrown by the emitter, and a socket closed without anyone
+  // subscribing -- a client refused at the door -- would take the process down
+  // with it. And an error is not a closure of its own: `ws` always follows one
+  // with `close`, whose code is the real one and whose reason is empty when the
+  // error was this side's, so the error is kept to be that reason.
+  socket.on('error', (error: Error) => {
+    if (failure === '') failure = String(error);
+  });
 
   return {
     send(text: string): void {
@@ -91,6 +125,7 @@ export function wrapWebSocket(socket: WebSocket): MessageSocket {
     },
 
     close(reason: SocketClosure): void {
+      // Only idempotence. Delivery is `close`'s, per listener, below.
       if (ended) return;
       ended = true;
       socket.close(reason.code, reason.reason);
@@ -106,17 +141,14 @@ export function wrapWebSocket(socket: WebSocket): MessageSocket {
     },
 
     onClose(listener: (reason: SocketClosure) => void): void {
+      // `close` and nothing else, so each listener is handed exactly one
+      // closure and every listener is handed the same one. `ws` emits it once
+      // per socket, after an error as well as after a clean close, which makes
+      // `once` the whole guarantee: a flag shared between listeners would give
+      // the closure to the first and starve the others. Through `closure()`
+      // because the recorded error is ours, not a peer's 123 bytes.
       socket.once('close', (code: number, reason: Buffer) => {
-        ended = true;
-        listener({ code, reason: reason.toString('utf8') });
-      });
-      // An error that arrives before any close is still a close as far as
-      // anything above is concerned; `ws` emits `close` after it, and `once`
-      // above means whichever lands first is the one delivered.
-      socket.once('error', (error: Error) => {
-        if (ended) return;
-        ended = true;
-        listener(closure(CLOSE_NORMAL, String(error)));
+        listener(closure(code, reason.toString('utf8') || failure));
       });
     },
   };
