@@ -6,6 +6,7 @@
 #   pnpm docker:test        tests only
 #   pnpm docker:install     the published package, installed by a bare npm
 #   pnpm docker:bootstrap   install.sh, both roles, on containers with no Node
+#   pnpm docker:runtime     the CLI, run inside the runtime image it ships in
 #
 # One service per check, because CI runs them as separate jobs and a
 # contributor reproducing a red check should be able to run that check alone
@@ -19,9 +20,10 @@
 # laptop while CI called it green.
 #
 # Not every service is a container to run, though. The four checks are a
-# command in an image. The two bootstraps are a stage whose every RUN line is
-# an assertion, so building them is running them and there is nothing left to
-# start afterwards -- `pnpm docker:bootstrap` is a `docker compose build`.
+# command in an image. The two bootstraps and the runtime check are a stage
+# whose every RUN line is an assertion, so building them is running them and
+# there is nothing left to start afterwards -- `pnpm docker:bootstrap` and
+# `pnpm docker:runtime` are a `docker compose build`.
 #
 # No database service, and none is needed: the hub's database is a file, so the
 # migration and query suites open one in a temporary directory and run
@@ -147,3 +149,18 @@ services:
     build:
       context: .
       target: hub-bootstrap-check
+
+  # The image docker-compose.yml deploys, with the bin run inside it. Every
+  # check above either runs in the full workspace, where every package is
+  # installed, or installs the packed tarballs, which bundle their own; the
+  # runtime image is neither, and it copies each workspace package in by name.
+  # One left off that list is a command that dies at import in the shipped
+  # image and passes everywhere else, which is how `status` and `update` came to
+  # fail there on a missing @agentplex/release.
+  #
+  # Built and never run, like the bootstraps: `runtime-check` is `runtime` plus
+  # RUN lines that each invoke a command and write nothing.
+  runtime:
+    build:
+      context: .
+      target: runtime-check

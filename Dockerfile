@@ -53,6 +53,7 @@ COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
 COPY packages/pty/package.json ./packages/pty/
+COPY packages/release/package.json ./packages/release/
 COPY scripts/package.json ./scripts/
 COPY tests/hub-server/package.json ./tests/hub-server/
 # The install runs the pty package's postinstall, which repairs the executable
@@ -871,6 +872,7 @@ COPY --from=runtime-deps /app/packages/node-shared/node_modules ./packages/node-
 COPY --from=runtime-deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
 COPY --from=runtime-deps /app/packages/providers/node_modules ./packages/providers/node_modules
 COPY --from=runtime-deps /app/packages/pty/node_modules ./packages/pty/node_modules
+COPY --from=runtime-deps /app/packages/release/node_modules ./packages/release/node_modules
 # The workspace manifest, which in this image is the package root's: the bin
 # resolves `--version` three levels up from its own `dist`, the same expression
 # that finds the published manifest in the tarball. Without this file here that
@@ -884,6 +886,7 @@ COPY packages/node-shared/package.json ./packages/node-shared/
 COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/providers/package.json ./packages/providers/
 COPY packages/pty/package.json ./packages/pty/
+COPY packages/release/package.json ./packages/release/
 # The client's manifest, which is what the hub resolves to find the client: the
 # link in apps/hub/node_modules points here, and a package directory with no
 # manifest in it is a resolution that lands somewhere Node cannot name.
@@ -895,6 +898,7 @@ COPY --from=build /app/packages/node-shared/dist ./packages/node-shared/dist
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY --from=build /app/packages/providers/dist ./packages/providers/dist
 COPY --from=build /app/packages/pty/dist ./packages/pty/dist
+COPY --from=build /app/packages/release/dist ./packages/release/dist
 COPY apps/hub/migrations ./apps/hub/migrations
 # The client. It is static files: the runtime needs the bytes and none of the
 # dependencies that made them, which is why this is a copy out of `build` and
@@ -947,3 +951,27 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 CMD ["nod
 # daemon's flags exactly as before.
 ENTRYPOINT ["node"]
 CMD ["apps/hub/dist/main.js"]
+
+# The CLI, run inside the image it ships in. The daemons are what this image is
+# for, but the bin is in it too -- `docker run --entrypoint node <image>
+# apps/cli/dist/main.js status` is how an operator asks a container what it
+# is -- and nothing else in the repository runs the bin from this tree: the
+# install and bootstrap checks run it out of the packed tarballs, which carry
+# their own copy of every workspace package they bundle.
+#
+# That gap is how the image shipped without @agentplex/release. `status` and
+# `update` import it at load (status/main.ts through versions/versions-cache.ts,
+# update/main.ts and update-flags.ts), so each died with ERR_MODULE_NOT_FOUND
+# before printing a word. `doctor` never imports it, which is why it stays here:
+# it is the control, the command that passed while the other two failed, and a
+# red `doctor` means the image is broken more widely than one missing package.
+#
+# Every RUN line is an assertion and writes nothing, so this stage is built and
+# never run, and the image `runtime` produces is unchanged by it. Being last, it
+# is also the default target of a bare `docker build .`, which is harmless:
+# docker-compose.yml pins `target: runtime` for the hub, so what is deployed is
+# never this stage, and a bare build now checks the image as well as making it.
+FROM runtime AS runtime-check
+RUN node apps/cli/dist/main.js doctor --help > /dev/null
+RUN node apps/cli/dist/main.js status --help > /dev/null
+RUN node apps/cli/dist/main.js update --help > /dev/null
