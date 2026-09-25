@@ -43,13 +43,17 @@ import { directorySchema, firstLine } from './directory.js';
  *   without naming the driver, and the repository picks that name.
  * - In a partial clone (`remote.<name>.promisor=true`), rename detection that
  *   needs a blob the clone never fetched starts a child `git fetch`, and that
- *   child runs the repository's `remote.<name>.uploadpack`, `core.sshCommand`
- *   or credential helper. Probed on git 2.50.1: a staged rename away from a
+ *   child runs whatever the repository's config names for reaching its
+ *   remote: among others `remote.<name>.uploadpack`, `core.sshCommand`,
+ *   `core.gitProxy`, `core.askPass`, a credential helper, an `ext::` URL
+ *   where the repository allows that protocol, or any of these reached
+ *   through a `url.<base>.insteadOf` rewrite. Probed on git 2.50.1: a staged rename away from a
  *   missing blob made this exact argv run a marker-writing `uploadpack`.
- *   `GIT_NO_LAZY_FETCH=1` and `git --no-lazy-fetch` both stopped it, but the
- *   runner fixes the child's environment once for every operation, and git
- *   2.39.5 refuses `--no-lazy-fetch` as an unknown option, so neither is used
- *   here yet.
+ *   `GIT_NO_LAZY_FETCH=1` and `git --no-lazy-fetch` both stopped it. The
+ *   variable is honoured from git 2.39.4 on, bookworm's 2.39.5 included, but
+ *   the runner fixes the child's environment once for every operation; the
+ *   flag arrived in 2.45, and 2.39.5 refuses it as an unknown option. So
+ *   neither is used here yet.
  */
 export interface GitStatus {
   /** The branch's short name, or `null` when HEAD is detached. */

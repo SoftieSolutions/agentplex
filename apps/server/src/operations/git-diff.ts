@@ -49,10 +49,17 @@ import { directorySchema, firstLine } from './directory.js';
  *   a repository's `core.fsmonitor` is a program this would otherwise run, and
  *   `core.hooksPath` closes the same door for any hook. `git.status` says what
  *   these leave open, and both apply here: a filter driver the repository
- *   configures still runs on a stat-dirty file, and in a partial clone `-M`
- *   lazily fetches a missing blob through the repository's own
- *   `remote.<name>.uploadpack`, `core.sshCommand` or credential helper. Probed
- *   on git 2.50.1, this argv ran a marker-writing `uploadpack`. `--numstat`
+ *   configures still runs on a stat-dirty file. In a partial clone this argv
+ *   lazily fetches any HEAD blob of a changed file that the clone never
+ *   fetched: `--numstat` needs both sides to count lines, so a plain
+ *   modification fetches with no rename in sight, and `-M` adds the blobs
+ *   rename detection compares. The child fetch runs whatever the
+ *   repository's config names for reaching its remote, the same list
+ *   `git.status` gives: among others `remote.<name>.uploadpack`,
+ *   `core.sshCommand`, `core.gitProxy`, `core.askPass`, a credential helper,
+ *   an `ext::` URL where the repository allows that protocol, or any of these
+ *   through a `url.<base>.insteadOf` rewrite. Probed on git 2.50.1, this argv
+ *   ran a marker-writing `uploadpack`. `--numstat`
  *   fires no textconv and no external diff, so `--no-textconv` and
  *   `--no-ext-diff` would change nothing.
  */
