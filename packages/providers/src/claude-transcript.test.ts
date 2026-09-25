@@ -26,6 +26,13 @@ const NO_TURNS = fixture('claude-no-turns.jsonl');
 const LAST_TURN_AT = Date.parse('2026-09-03T02:03:10.027Z');
 
 /**
+ * The first turn in `claude-completed-turn.jsonl`: the opening `user` line.
+ * The `last-prompt`, `mode` and `permission-mode` lines above it carry no
+ * timestamp, and the `system` line after the last turn is not a turn.
+ */
+const FIRST_TURN_AT = Date.parse('2026-09-03T02:02:01.540Z');
+
+/**
  * The two API responses in `claude-completed-turn.jsonl`, added up once each.
  *
  * Worked from the fixture by hand so the test states an answer rather than
@@ -52,6 +59,7 @@ describe('parseClaudeTranscript', () => {
       ok: true,
       transcript: {
         turns: 6,
+        createdAt: FIRST_TURN_AT,
         updatedAt: LAST_TURN_AT,
         cwd: '/Users/dev/Code/agentplex',
         title: 'Docker compose without hub',
@@ -150,6 +158,29 @@ describe('parseClaudeTranscript', () => {
     const parsed = parseClaudeTranscript(COMPLETED_TURN);
 
     expect(parsed.ok && parsed.transcript.updatedAt).toBe(LAST_TURN_AT);
+  });
+
+  it('dates the start of a session by its first turn', () => {
+    // What a spawned terminal is joined to its session by. A session somebody
+    // started an hour ago and wrote to a second ago is not the one a terminal
+    // opened a moment ago created, and only the first write can tell them
+    // apart: the last one moves every time anyone speaks.
+    const parsed = parseClaudeTranscript(COMPLETED_TURN);
+
+    expect(parsed.ok && parsed.transcript.createdAt).toBe(FIRST_TURN_AT);
+  });
+
+  it('ignores a subagent sidechain when dating the start of the session', () => {
+    // A sidechain is the session's work but not its conversation, for the
+    // start exactly as for the end.
+    const sidechain = JSON.stringify({
+      ...(JSON.parse(lastLineOf(COMPLETED_TURN, 'assistant')) as Record<string, unknown>),
+      isSidechain: true,
+      timestamp: '2026-09-03T01:00:00.000Z',
+    });
+    const parsed = parseClaudeTranscript(`${sidechain}\n${COMPLETED_TURN}`);
+
+    expect(parsed.ok && parsed.transcript.createdAt).toBe(FIRST_TURN_AT);
   });
 
   it('calls a transcript that stops on an unanswered tool call progressing', () => {

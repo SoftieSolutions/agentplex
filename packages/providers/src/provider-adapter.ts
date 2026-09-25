@@ -167,6 +167,15 @@ export interface DiscoveredSession {
    */
   readonly sessionId: SessionId;
   readonly signal: TranscriptSignal;
+  /**
+   * Epoch ms, as the provider dated its own first write.
+   *
+   * Not a wire field. It is what a server joins a terminal it spawned to the
+   * session the provider minted for it by: a session that began before the
+   * terminal did is somebody else's, however recently it was written to, and
+   * the last write cannot say that because it moves every time anyone speaks.
+   */
+  readonly createdAt: number;
   /** Epoch ms, as the provider dated its own last write. */
   readonly updatedAt: number;
   /**
@@ -183,6 +192,17 @@ export interface DiscoveredSession {
    * and neither source has to know about the other.
    */
   readonly running: boolean;
+  /**
+   * The pid of the live process behind `running`, or `null` when the adapter
+   * verified none -- including every provider that keeps no registry to
+   * verify one from.
+   *
+   * Required and nullable for the reason `usage` below is. It is the one join
+   * between a terminal a server spawned and the session it is running that no
+   * other session's timing can confuse, and a pid the adapter had not verified
+   * would be a registry's stale claim standing in for a process.
+   */
+  readonly pid: number | null;
   /**
    * Where the session was working, read out of the provider's own files.
    *

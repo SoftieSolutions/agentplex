@@ -248,11 +248,14 @@ async function readRollout(
   found.push({
     sessionId: sessionId.data,
     signal: parsed.rollout.signal,
+    createdAt: parsed.rollout.createdAt,
     updatedAt: parsed.rollout.updatedAt,
     // Always. See the note at the top of this file: codex keeps nothing this
     // adapter could verify a process against, and a claim nothing backs is
     // worse than the caller's own answer on its own.
     running: false,
+    // Always, for the same reason.
+    pid: null,
     cwd: parsed.rollout.cwd,
     title: names.get(sessionId.data) ?? null,
     usage: parsed.rollout.usage,

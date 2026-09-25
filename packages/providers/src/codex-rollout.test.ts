@@ -45,6 +45,7 @@ describe('parseCodexRollout', () => {
       rollout: {
         sessionId: '01a09386-f378-7b23-83a7-6c263ed59701',
         turns: 1,
+        createdAt: Date.parse('2026-09-12T02:51:30.988Z'),
         updatedAt: Date.parse('2026-09-12T02:51:35.024Z'),
         cwd: '/Users/dev/Code/agentplex',
         signal: 'awaiting-input',
@@ -273,6 +274,15 @@ describe('parseCodexRollout', () => {
     const parsed = parseCodexRollout(PENDING_TOOL_CALL);
 
     expect(parsed.ok && parsed.rollout.updatedAt).toBe(Date.parse('2026-09-12T02:37:44.589Z'));
+  });
+
+  it('dates the start of a session by the earliest line codex wrote, its meta included', () => {
+    // Every codex line is dated, and `session_meta` is the first thing codex
+    // writes for a session -- before any turn starts. It is the session
+    // coming into being, which is the moment a spawned terminal is joined by.
+    const parsed = parseCodexRollout(COMPLETED_TURN);
+
+    expect(parsed.ok && parsed.rollout.createdAt).toBe(Date.parse('2026-09-12T02:51:30.988Z'));
   });
 
   it('takes the thread total codex keeps rather than adding the records up', () => {

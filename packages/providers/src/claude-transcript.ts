@@ -142,6 +142,12 @@ const titleSchema = z.object({
 export interface ClaudeTranscript {
   /** Turns actually recognised. Zero of these means this file is not a session. */
   readonly turns: number;
+  /**
+   * Epoch ms of the oldest turn, as Claude Code dated it: when the session
+   * first said anything. Sidechains are left out for the reason they are left
+   * out of `updatedAt`.
+   */
+  readonly createdAt: number;
   /** Epoch ms of the newest turn, as Claude Code dated it. */
   readonly updatedAt: number;
   readonly cwd: string | null;
@@ -195,6 +201,7 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
   let lines = 0;
   let json = 0;
   let turns = 0;
+  let createdAt = Number.POSITIVE_INFINITY;
   let updatedAt = 0;
   let cwd: string | null = null;
   let title: string | null = null;
@@ -241,7 +248,11 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
 
     turns += 1;
     last = turn.data;
-    updatedAt = Math.max(updatedAt, Date.parse(turn.data.timestamp));
+    const at = Date.parse(turn.data.timestamp);
+    // The minimum rather than the first turn's date, so the answer does not
+    // rest on the order Claude Code appended its lines in.
+    createdAt = Math.min(createdAt, at);
+    updatedAt = Math.max(updatedAt, at);
     if (turn.data.cwd !== undefined) cwd = turn.data.cwd;
     // Last wins, like the cwd above it, and for the same reason: `/model`
     // mid-session is ordinary and the question is what this session is running
@@ -265,6 +276,7 @@ export function parseClaudeTranscript(contents: string): ClaudeTranscriptParse {
     ok: true,
     transcript: {
       turns,
+      createdAt,
       updatedAt,
       cwd,
       title,

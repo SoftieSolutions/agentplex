@@ -102,6 +102,7 @@ export type { WorkingDirectory } from './working-directory.js';
 export { discoverStoreSessions } from './store-discovery.js';
 export type {
   SessionLiveness,
+  SessionOrigin,
   StoreDiscoveryDependencies,
   StoreDiscoveryProblem,
   StoreSessions,

@@ -204,6 +204,11 @@ export interface CodexRollout {
   readonly sessionId: string | null;
   /** Turns actually started. Zero of these means this file is not a session. */
   readonly turns: number;
+  /**
+   * Epoch ms of the oldest line, as codex dated it: its `session_meta`, in
+   * every capture, which codex writes before any turn starts.
+   */
+  readonly createdAt: number;
   /** Epoch ms of the newest line, as codex dated it. */
   readonly updatedAt: number;
   readonly cwd: string | null;
@@ -257,6 +262,7 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
   let lines = 0;
   let json = 0;
   let turns = 0;
+  let createdAt = Number.POSITIVE_INFINITY;
   let updatedAt = 0;
   let sessionId: string | null = null;
   let cwd: string | null = null;
@@ -285,7 +291,9 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
     const line = lineSchema.safeParse(entry);
     if (!line.success) continue;
 
-    updatedAt = Math.max(updatedAt, Date.parse(line.data.timestamp));
+    const at = Date.parse(line.data.timestamp);
+    createdAt = Math.min(createdAt, at);
+    updatedAt = Math.max(updatedAt, at);
 
     if (line.data.type === 'session_meta') {
       const meta = sessionMetaSchema.safeParse(line.data.payload);
@@ -354,6 +362,7 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
     rollout: {
       sessionId,
       turns,
+      createdAt,
       updatedAt,
       cwd,
       signal: signalOf(open, lastClose),
