@@ -56,23 +56,27 @@ export function createSqliteDatabase(path: string, options: SqliteOptions = {}):
   enableWriteAheadLog(connection);
 
   /**
-   * Statements run one at a time because there is one connection, and the
-   * statements themselves are synchronous, so a query cannot interleave with
-   * anything. A transaction can: its body awaits, and a second `BEGIN` on this
-   * connection is an error rather than a queue. This chain is that queue.
+   * Every use of the connection takes its turn here. A single statement is
+   * synchronous and cannot interleave with another, but a transaction body
+   * awaits, and whatever runs on this connection while it waits runs inside
+   * that transaction: a second `BEGIN` is an error, and a plain statement is
+   * silently committed or rolled back with somebody else's work. This chain is
+   * what keeps anything out of that gap.
    */
   let pending: Promise<unknown> = Promise.resolve();
   const exclusively = <T>(body: () => Promise<T>): Promise<T> => {
     const result = pending.then(body);
-    // Swallowed, so one failed transaction does not reject the next one.
+    // Swallowed, so one failed turn does not reject the next one.
     pending = result.then(ignore, ignore);
     return result;
   };
 
-  const query = async <Row>(text: string, values?: readonly unknown[]): Promise<QueryResult<Row>> =>
-    execute<Row>(connection, text, values);
-
-  const queryable: Queryable = { query };
+  // The transaction handle. Unqueued, because it only ever runs while its
+  // transaction already holds the turn: queueing it would wait on itself.
+  const queryable: Queryable = {
+    query: async <Row>(text: string, values?: readonly unknown[]) =>
+      execute<Row>(connection, text, values),
+  };
 
   const runTransaction = async <T>(body: (tx: Queryable) => Promise<T>): Promise<T> => {
     // IMMEDIATE takes the write lock now rather than at the first write. A
@@ -101,15 +105,20 @@ export function createSqliteDatabase(path: string, options: SqliteOptions = {}):
 
   return {
     /**
-     * Deliberately not queued. A statement is synchronous, so it needs no turn
-     * of its own, and queueing it would deadlock the first caller that ran a
-     * query from inside a transaction body.
+     * Queued behind any open transaction, so a statement issued while a body
+     * awaits runs after that transaction commits or rolls back, never inside
+     * it. Without the queue, one feature's rollback would take another
+     * feature's write with it, and a read in the gap would see rows that are
+     * about to be undone.
      *
-     * That caller gets a different answer here than it got from a pool: the
-     * statement runs on the connection the transaction is open on, so it is
-     * inside that transaction rather than beside it.
+     * The price is a rule: a transaction body reaches the database only
+     * through its `tx`, and never awaits anything that issues a top-level
+     * query. Such a query waits for the transaction, the transaction waits for
+     * the body, and the hub deadlocks. `fake-database.ts` does not model the
+     * queue, so a test on it will not catch the mistake.
      */
-    query,
+    query: <Row>(text: string, values?: readonly unknown[]): Promise<QueryResult<Row>> =>
+      exclusively(async () => execute<Row>(connection, text, values)),
 
     transaction: (body) => exclusively(() => runTransaction(body)),
 

@@ -33,6 +33,43 @@ async function probeValues(database: SqliteDatabase): Promise<number[]> {
   return result.rows.map((row) => row.value);
 }
 
+interface Deferred {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+}
+
+function deferred(): Deferred {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+interface Tracked<T> {
+  readonly promise: Promise<T>;
+  readonly settled: boolean;
+}
+
+/** Records whether `promise` has settled, without awaiting it. */
+function track<T>(promise: Promise<T>): Tracked<T> {
+  const tracked = { promise, settled: false };
+  promise.then(
+    () => {
+      tracked.settled = true;
+    },
+    () => {
+      tracked.settled = true;
+    },
+  );
+  return tracked;
+}
+
+/** One macrotask turn: every microtask queued before it has run. */
+function nextTurn(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 afterEach(async () => {
   await Promise.all(open.splice(0).map((database) => database.close()));
 });
@@ -176,24 +213,60 @@ describe('createSqliteDatabase', () => {
     expect(await probeValues(database)).toEqual([1, 2, 3, 4]);
   });
 
-  it('puts a query issued during a transaction inside that transaction', async () => {
-    const database = openDatabase('joined.db');
+  it('keeps a write issued beside a transaction out of the rollback of that transaction', async () => {
+    const database = openDatabase('beside.db');
     await createProbeTable(database);
 
-    // What a caller would reach for a pinned handle to guarantee, guaranteed
-    // without one. There is a single connection and `query` is deliberately
-    // not queued, so a statement issued beside a running transaction still
-    // lands on the connection that transaction is open on. The rollback is the
-    // proof: a statement genuinely outside it would have survived.
-    await expect(
-      database.transaction(async (tx) => {
-        await tx.query('INSERT INTO probe (value) VALUES (?)', [1]);
-        await database.query('INSERT INTO probe (value) VALUES (?)', [2]);
-        throw new Error('no');
-      }),
-    ).rejects.toThrow('no');
+    // Another feature writing while a transaction body awaits. There is one
+    // connection, so a statement that ran in that gap would land inside the
+    // open transaction and be rolled back with it. The surviving row is the
+    // proof it waited for the transaction instead.
+    const entered = deferred();
+    const release = deferred();
+    const transaction = database.transaction(async (tx) => {
+      await tx.query('INSERT INTO probe (value) VALUES (?)', [1]);
+      entered.resolve();
+      await release.promise;
+      throw new Error('no');
+    });
+    await entered.promise;
 
-    expect(await probeValues(database)).toEqual([]);
+    // Not awaited: it cannot settle until the transaction has.
+    const write = track(database.query('INSERT INTO probe (value) VALUES (?)', [2]));
+    await nextTurn();
+    expect(write.settled).toBe(false);
+
+    release.resolve();
+    await expect(transaction).rejects.toThrow('no');
+    await write.promise;
+
+    expect(await probeValues(database)).toEqual([2]);
+  });
+
+  it('holds a read issued during a transaction until that transaction has settled', async () => {
+    const database = openDatabase('read-beside.db');
+    await createProbeTable(database);
+
+    const entered = deferred();
+    const release = deferred();
+    const transaction = database.transaction(async (tx) => {
+      await tx.query('INSERT INTO probe (value) VALUES (?)', [1]);
+      entered.resolve();
+      await release.promise;
+      throw new Error('no');
+    });
+    await entered.promise;
+
+    // Run in the gap, this would read the uncommitted row the transaction is
+    // about to roll back.
+    const read = track(database.query<{ value: number }>('SELECT value FROM probe'));
+    await nextTurn();
+    expect(read.settled).toBe(false);
+
+    release.resolve();
+    await expect(transaction).rejects.toThrow('no');
+
+    expect((await read.promise).rows).toEqual([]);
   });
 
   it('copies an open database with backup, including uncommitted-then-committed rows', async () => {
