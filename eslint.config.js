@@ -210,24 +210,38 @@ const startsNoChild = {
 /**
  * One feature reaching into another. `alsoAllowed` is how the test-file block
  * below adds `fake-<feature>.ts`, which is a seam a test may stand on and a
- * service module may not.
+ * service module may not. An entry is a path from the folder that holds the
+ * features, a `<feature>/fake-*.js` with `*` for the feature, and is opened
+ * under both spellings below.
  */
 const featureEntriesOnly = (alsoAllowed = []) => [
   {
-    group: [
-      // Every sibling folder is closed, then the seams and each named
-      // feature's entry file are opened again. A feature's files sit one
-      // folder under `src`, so three climbs have left the hub, and that is
-      // `stayInMember`'s report rather than a second one from here. `../../..`
-      // is reopened as well as what is under it, because `../*/*` matches it
-      // as a folder and nothing under an excluded folder can be reopened.
-      '../*/*',
-      '!../../..',
-      '!../../../**',
-      ...HUB_SEAMS.map((seam) => `!../${seam}/*`),
-      ...HUB_FEATURES.map((feature) => `!../${feature}/${feature}.js`),
-      ...alsoAllowed,
-    ],
+    // Every sibling folder is closed, then the seams and each named feature's
+    // entry file are opened again.
+    //
+    // The patterns match the specifier's spelling and are anchored, so `..`
+    // does not cover `./..`: each rule is written for both. A spelling that
+    // does not start with either, `././../x/y` or `./z/../../x/y`, is not
+    // seen here at all; this rule holds the two ways a sibling is written.
+    //
+    // A feature's files sit one folder under `src`, so three climbs have left
+    // `src` and `apps/hub`, and landed in `apps`. Where that climb leaves the
+    // hub it is `stayInMember`'s report rather than a second one from here, so
+    // `../../..` is reopened, the folder as well as what is under it, because
+    // `*/*` matches it as a folder and nothing under an excluded folder can be
+    // reopened. A climb that comes back in, `../../../hub/src/...`, lands in
+    // the file's own member and so passes `stayInMember`, and `apps/hub` is
+    // closed again for that reason: the only three-level climbs left open are
+    // the ones that really leave.
+    group: ['..', './..'].flatMap((up) => [
+      `${up}/*/*`,
+      `!${up}/../..`,
+      `!${up}/../../**`,
+      `${up}/../../hub`,
+      ...HUB_SEAMS.map((seam) => `!${up}/${seam}/*`),
+      ...HUB_FEATURES.map((feature) => `!${up}/${feature}/${feature}.js`),
+      ...alsoAllowed.map((path) => `!${up}/${path}`),
+    ]),
     message:
       'A feature reaches another only through its entry file: import ../<feature>/<feature>.js, and add what you need to that interface rather than reaching past it.',
   },
@@ -486,7 +500,7 @@ export default tseslint.config(
     ignores: HUB_SEAMS.map((seam) => `apps/hub/src/${seam}/**`),
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports(
-        featureEntriesOnly(['!../*/fake-*.js']),
+        featureEntriesOnly(['*/fake-*.js']),
       ),
     },
   },
