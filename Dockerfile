@@ -527,6 +527,13 @@ RUN node -p "const plan = JSON.parse(require('fs').readFileSync(process.env.HOME
     | tee /tmp/plan-fields.log
 RUN grep -qx 'server /home/alice/.agentplex /home/alice/.agentplex/bin /home/alice/.claude /home/alice/.agentplex/server.json claude' /tmp/plan-fields.log
 
+# The identity file recorded where the server reads it, in place of the line
+# install.sh left commented. The prefix here is the default one, so the path is
+# also the server's default -- which is exactly why this has to be asserted
+# rather than inferred: under any other prefix the default is a second identity.
+RUN grep -qx 'AGENTPLEX_SERVER_IDENTITY_FILE=/home/alice/.agentplex/server.json' "$HOME/.agentplex/agentplex.env" \
+    && ! grep -q '^#AGENTPLEX_SERVER_IDENTITY_FILE=' "$HOME/.agentplex/agentplex.env"
+
 # And the machine the run left behind, asked again by the program an operator
 # would ask with.
 #
@@ -540,10 +547,10 @@ RUN grep -qx 'server /home/alice/.agentplex /home/alice/.agentplex/bin /home/ali
 #
 # No --bin-path and no --server-identity-file, and that is the other half of
 # the assertion: the doctor reads the settings file the units name, which
-# carries AGENTPLEX_BIN_PATH, and the identity file defaults to
-# $HOME/.agentplex/server.json exactly as the server's does. A doctor that
-# needed them retyped was reporting on a machine nobody runs. The report names
-# the file it read, and the data root it would write into.
+# carries AGENTPLEX_BIN_PATH from install.sh and AGENTPLEX_SERVER_IDENTITY_FILE
+# from setup. A doctor that needed them retyped was reporting on a machine
+# nobody runs. The report names the file it read, the data root it would write
+# into, and the identity file the server would read its token from.
 #
 # It still exits 1, because a logged-out provider is not usable and that is a
 # true statement about this container. The report is what is read.
@@ -551,6 +558,7 @@ RUN agentplex doctor --role=server >/tmp/doctor-after-setup.log 2>&1 || true
 RUN cat /tmp/doctor-after-setup.log \
     && grep -qx '  /home/alice/\.agentplex/agentplex\.env' /tmp/doctor-after-setup.log \
     && grep -Eq '^  ready +/home/alice/\.agentplex$' /tmp/doctor-after-setup.log \
+    && grep -A1 -x 'server identity' /tmp/doctor-after-setup.log | grep -x '  /home/alice/\.agentplex/server\.json' >/dev/null \
     && grep -Eq '^  claude +unauthenticated +.*/home/alice/\.agentplex/bin$' /tmp/doctor-after-setup.log
 
 # Undoing it, which is the only place an uninstall can be exercised against

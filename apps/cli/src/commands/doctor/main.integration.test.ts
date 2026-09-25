@@ -288,6 +288,8 @@ describe('agentplex doctor on an installed machine', { timeout: TEST_TIMEOUT_MS 
     expect(result.stderr).not.toContain('no role');
     expect(result.stdout).toContain('agentplex doctor  role=server');
     expect(result.stdout).toContain(join(prefix, 'agentplex.env'));
+    // The identity file the settings name, which is the one the server reads.
+    expect(result.stdout).toContain(`server identity\n  ${join(prefix, 'server.json')}\n`);
     // The data root defaults from that same home, and it is there.
     expect(result.stdout).toMatch(new RegExp(`ready +${prefix.replaceAll('.', '\\.')}`));
   });

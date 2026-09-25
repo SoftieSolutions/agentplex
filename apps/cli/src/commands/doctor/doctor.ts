@@ -93,6 +93,31 @@ export interface DoctorReport {
   readonly terminals: TerminalCheck | null;
   /** The directory the server writes into, or `null` on a role that runs none. */
   readonly dataRoot: DataRootCheck | null;
+  /** The server's identity file, or `null` on a role that runs no server. */
+  readonly identity: IdentityCheck | null;
+}
+
+/**
+ * The file the server keeps its identity and pairing token in, as the settings
+ * resolve it.
+ *
+ * The path is the point. It is where the token the operator types into a hub
+ * comes from, and it resolves through a setting with a default under the home,
+ * so a server started from settings that do not name the file setup minted
+ * reads, and mints, another -- with a token nobody was shown. Printing it is
+ * what makes that visible.
+ *
+ * Nothing here reads the file. A server that finds none mints one at its first
+ * start, so its absence is not a finding; whether a file is there is the hub's
+ * local-server check, which reads it because the hub will.
+ *
+ * `problem` is the one mismatch this can prove from the settings alone: on a
+ * machine that is both, a hub that pairs its local server from a different
+ * file than the one this server reads.
+ */
+export interface IdentityCheck {
+  readonly path: string;
+  readonly problem: string | null;
 }
 
 /**
@@ -169,6 +194,7 @@ export async function inspectMachine(
       browseRoots: [],
       terminals: null,
       dataRoot: null,
+      identity: null,
     };
   }
 
@@ -179,6 +205,10 @@ export async function inspectMachine(
   );
   const pty = checkTerminals(terminals());
   const dataRoot = await checkDataRoot(config.server.dataPath, files, dependencies.access);
+  const identity = checkIdentity(
+    config.server.identityPath,
+    'hub' in config ? config.hub.localServer : null,
+  );
 
   return {
     role: config.role,
@@ -193,13 +223,36 @@ export async function inspectMachine(
       // asked to offer browsing is working exactly as configured.
       browseRoots.every((root) => root.state === 'present') &&
       pty.state === 'ready' &&
-      dataRoot.state !== 'unusable',
+      dataRoot.state !== 'unusable' &&
+      identity.problem === null,
     hub,
     providers: readiness,
     stores,
     browseRoots,
     terminals: pty,
     dataRoot,
+    identity,
+  };
+}
+
+/**
+ * The server's identity file, and whether the hub beside it pairs from it.
+ *
+ * Paths compared, not tokens. Two files can hold one token, which is why the
+ * problem says "unless". On the machine this exists for, the server's file is
+ * one it has not minted yet or minted with a token of its own, and reading it
+ * would say nothing the two paths do not.
+ */
+function checkIdentity(
+  path: string,
+  localServer: { readonly identityPath: string } | null,
+): IdentityCheck {
+  if (localServer === null || localServer.identityPath === path) return { path, problem: null };
+  return {
+    path,
+    problem:
+      `the hub pairs its local server from ${localServer.identityPath}, not this file: ` +
+      'unless the two hold the same token, this server refuses the hub',
   };
 }
 
@@ -344,6 +397,16 @@ export function formatDoctorReport(report: DoctorReport): readonly string[] {
     lines.push('  this machine runs no server, so it writes no data root');
   } else {
     lines.push(`  ${dataRootLine(report.dataRoot)}`);
+  }
+
+  // Beside the data root, because it is the other file the server reads at
+  // boot, and the one the token an operator types into a hub comes out of.
+  lines.push('', 'server identity');
+  if (report.identity === null) {
+    lines.push('  this machine runs no server, so it holds no server identity');
+  } else {
+    lines.push(`  ${report.identity.path}`);
+    if (report.identity.problem !== null) lines.push(`    ${report.identity.problem}`);
   }
 
   lines.push('', 'providers');

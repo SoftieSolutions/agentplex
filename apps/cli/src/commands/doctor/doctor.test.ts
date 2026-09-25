@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { PtyAvailability } from '@agentplex/pty';
 import { MIN_TOKEN_LENGTH } from '@agentplex/node-shared';
 import type { Config, HubConfig, SettingsSource } from './config.js';
-import { formatDoctorReport, inspectMachine, type DataRootCheck } from './doctor.js';
+import {
+  formatDoctorReport,
+  inspectMachine,
+  type DataRootCheck,
+  type IdentityCheck,
+} from './doctor.js';
 import type { HubChecks } from './hub.js';
 import {
   createFakeModuleResolver,
@@ -41,6 +46,12 @@ const NO_SETTINGS_FILE: SettingsSource = { file: null, problems: [] };
 
 /** The data root of a server with nothing wrong with it, for the printing cases. */
 const WRITABLE_ROOT: DataRootCheck = { path: DATA_ROOT, state: 'ready', detail: null };
+
+/** The identity file of a server with nothing wrong with it, for the printing cases. */
+const SERVER_IDENTITY: IdentityCheck = { path: IDENTITY_PATH, problem: null };
+
+/** A server identity the hub's local pairing reads as one it can present. */
+const IDENTITY_CONTENTS = '{"serverId":"server-1","token":"a-token-off-the-disk"}';
 
 /**
  * The hub half of a machine where everything a hub needs is there. Its own
@@ -137,6 +148,17 @@ function bothConfig(storePaths: readonly string[]): Config {
     hub: hubSettings,
     server: server.server,
   };
+}
+
+/**
+ * A machine that is both, whose hub pairs the server beside it from the
+ * identity file at `identityPath` -- the one setup recorded for the hub, which
+ * is not necessarily the one the server reads.
+ */
+function pairedBothConfig(identityPath: string): Config {
+  const both = bothConfig(['/volumes/work']);
+  if (both.role !== 'both') throw new Error('bothConfig builds a machine that is both');
+  return { ...both, hub: { ...both.hub, localServer: { identityPath, port: 8081 } } };
 }
 
 const providers = createProviderRegistry([createFakeProviderAdapter({ provider: 'claude' })]);
@@ -237,6 +259,60 @@ describe('inspectMachine', () => {
     });
 
     expect(report).toMatchObject({ role: 'hub', providers: [], stores: [], terminals: null });
+    expect(report.identity).toBeNull();
+  });
+
+  describe('the server identity', () => {
+    it('names the file the server would open, as the settings resolved it', async () => {
+      const report = await inspectMachine(serverConfig([]), {
+        providers,
+        ...workingHub,
+        preflight: { run: async () => [] },
+        files: serverFiles(),
+        terminals: workingPty,
+      });
+
+      expect(report.identity).toEqual({ path: IDENTITY_PATH, problem: null });
+    });
+
+    it('fails a machine whose hub pairs its local server from another file', async () => {
+      // The split setup used to leave under a prefix it was handed: the hub
+      // reads a token from the file setup minted, and the server beside it
+      // reads, and mints, another. The hub is refused by its own server, and
+      // until this line nothing on the machine said so.
+      const elsewhere = '/opt/agentplex/server.json';
+      const report = await inspectMachine(pairedBothConfig(elsewhere), {
+        providers,
+        ...workingHub,
+        preflight: { run: async () => [readyProvider('claude')] },
+        files: serverFiles({
+          directories: [DATABASE_DIRECTORY, '/volumes/work'],
+          files: { [elsewhere]: IDENTITY_CONTENTS, [IDENTITY_PATH]: IDENTITY_CONTENTS },
+        }),
+        terminals: workingPty,
+      });
+
+      expect(report.hub?.localServer).toMatchObject({ state: 'ready' });
+      expect(report.identity).toEqual({ path: IDENTITY_PATH, problem: expect.any(String) });
+      expect(report.identity?.problem).toContain(elsewhere);
+      expect(report.usable).toBe(false);
+    });
+
+    it('is usable when the hub pairs its local server from the file the server reads', async () => {
+      const report = await inspectMachine(pairedBothConfig(IDENTITY_PATH), {
+        providers,
+        ...workingHub,
+        preflight: { run: async () => [readyProvider('claude')] },
+        files: serverFiles({
+          directories: [DATABASE_DIRECTORY, '/volumes/work'],
+          files: { [IDENTITY_PATH]: IDENTITY_CONTENTS },
+        }),
+        terminals: workingPty,
+      });
+
+      expect(report.identity).toEqual({ path: IDENTITY_PATH, problem: null });
+      expect(report.usable).toBe(true);
+    });
   });
 
   /**
@@ -518,6 +594,7 @@ describe('formatDoctorReport', () => {
       role: 'server',
       settings: NO_SETTINGS_FILE,
       dataRoot: WRITABLE_ROOT,
+      identity: SERVER_IDENTITY,
       hub: null,
       usable: true,
       providers: [readyProvider('claude')],
@@ -537,6 +614,7 @@ describe('formatDoctorReport', () => {
       role: 'server',
       settings: NO_SETTINGS_FILE,
       dataRoot: WRITABLE_ROOT,
+      identity: SERVER_IDENTITY,
       hub: null,
       usable: false,
       providers: [missingProvider('claude')],
@@ -558,6 +636,7 @@ describe('formatDoctorReport', () => {
       role: 'server',
       settings: NO_SETTINGS_FILE,
       dataRoot: WRITABLE_ROOT,
+      identity: SERVER_IDENTITY,
       hub: null,
       usable: true,
       providers: [readyProvider('claude')],
@@ -576,6 +655,7 @@ describe('formatDoctorReport', () => {
       role: 'hub',
       settings: NO_SETTINGS_FILE,
       dataRoot: null,
+      identity: null,
       hub: readyHub(),
       usable: true,
       providers: [],
@@ -592,6 +672,7 @@ describe('formatDoctorReport', () => {
       role: 'server',
       settings: NO_SETTINGS_FILE,
       dataRoot: WRITABLE_ROOT,
+      identity: SERVER_IDENTITY,
       hub: null,
       usable: false,
       providers: [],
@@ -613,6 +694,7 @@ describe('formatDoctorReport', () => {
       role: 'server',
       settings: NO_SETTINGS_FILE,
       dataRoot: WRITABLE_ROOT,
+      identity: SERVER_IDENTITY,
       hub: null,
       usable: false,
       providers: [],
@@ -638,6 +720,7 @@ describe('formatDoctorReport', () => {
       role: 'server',
       settings: NO_SETTINGS_FILE,
       dataRoot: WRITABLE_ROOT,
+      identity: SERVER_IDENTITY,
       hub: null,
       usable: true,
       providers: [],
@@ -654,6 +737,7 @@ describe('formatDoctorReport', () => {
       role: 'server',
       settings: NO_SETTINGS_FILE,
       dataRoot: WRITABLE_ROOT,
+      identity: SERVER_IDENTITY,
       hub: null,
       usable: false,
       providers: [],
@@ -674,6 +758,7 @@ describe('formatDoctorReport', () => {
       role: 'hub',
       settings: NO_SETTINGS_FILE,
       dataRoot: null,
+      identity: null,
       hub: readyHub(),
       usable: true,
       providers: [],
@@ -692,6 +777,7 @@ describe('formatDoctorReport', () => {
       role: 'server',
       settings: NO_SETTINGS_FILE,
       dataRoot: WRITABLE_ROOT,
+      identity: SERVER_IDENTITY,
       hub: null,
       usable: true,
       providers: [],
@@ -708,6 +794,7 @@ describe('formatDoctorReport', () => {
       role: 'hub',
       settings: NO_SETTINGS_FILE,
       dataRoot: null,
+      identity: null,
       hub: readyHub(),
       usable: true,
       providers: [],
@@ -727,6 +814,7 @@ describe('formatDoctorReport', () => {
       role: 'hub',
       settings: { file: '/home/robert/.agentplex/agentplex.env', problems: [] },
       dataRoot: null,
+      identity: null,
       hub: readyHub(),
       usable: true,
       providers: [],
@@ -744,6 +832,7 @@ describe('formatDoctorReport', () => {
       role: 'hub',
       settings: NO_SETTINGS_FILE,
       dataRoot: null,
+      identity: null,
       hub: readyHub(),
       usable: true,
       providers: [],
@@ -766,6 +855,7 @@ describe('formatDoctorReport', () => {
         problems: ['cannot read /etc/agentplex/agentplex.env: EACCES'],
       },
       dataRoot: null,
+      identity: null,
       hub: readyHub(),
       usable: true,
       providers: [],
@@ -788,6 +878,7 @@ describe('formatDoctorReport', () => {
         state: 'creatable',
         detail: `not there yet: it will be created at startup, under ${HOME_DIRECTORY}`,
       },
+      identity: SERVER_IDENTITY,
       hub: null,
       usable: true,
       providers: [],
@@ -806,6 +897,7 @@ describe('formatDoctorReport', () => {
       role: 'hub',
       settings: NO_SETTINGS_FILE,
       dataRoot: null,
+      identity: null,
       hub: readyHub(),
       usable: true,
       providers: [],
@@ -815,5 +907,42 @@ describe('formatDoctorReport', () => {
     }).join('\n');
 
     expect(printed).toContain('runs no server, so it writes no data root');
+  });
+
+  it('prints the server identity file, and a hub that pairs from another beneath it', () => {
+    const printed = formatDoctorReport({
+      role: 'both',
+      settings: NO_SETTINGS_FILE,
+      dataRoot: WRITABLE_ROOT,
+      identity: { path: IDENTITY_PATH, problem: 'the hub pairs from /opt/agentplex/server.json' },
+      hub: readyHub(),
+      usable: false,
+      providers: [],
+      stores: [],
+      browseRoots: [],
+      terminals: { state: 'ready', problem: null },
+    });
+
+    const section = printed.indexOf('server identity');
+    expect(section).toBeGreaterThan(-1);
+    expect(printed[section + 1]).toBe(`  ${IDENTITY_PATH}`);
+    expect(printed[section + 2]).toBe('    the hub pairs from /opt/agentplex/server.json');
+  });
+
+  it('says a machine that runs no server holds no server identity', () => {
+    const printed = formatDoctorReport({
+      role: 'hub',
+      settings: NO_SETTINGS_FILE,
+      dataRoot: null,
+      identity: null,
+      hub: readyHub(),
+      usable: true,
+      providers: [],
+      stores: [],
+      browseRoots: [],
+      terminals: null,
+    }).join('\n');
+
+    expect(printed).toContain('runs no server, so it holds no server identity');
   });
 });

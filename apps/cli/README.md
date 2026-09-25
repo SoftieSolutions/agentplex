@@ -261,8 +261,10 @@ A hub, which has to boot before anything else on the machine matters:
 
 A server: whether a pseudoterminal can be opened at all; whether its data root
 is there and writable, or could be created under the nearest directory that is;
-per provider the version, the directory it resolved from and whether it says it
-is logged in; per store, whether the path is there.
+the identity file it would read its pairing token from, and on a `both` machine
+whether the hub pairs its local server from that same file; per provider the
+version, the directory it resolved from and whether it says it is logged in; per
+store, whether the path is there.
 
 Apart from that one bind it changes nothing -- it opens no database, opens no
 pty and writes nothing, and it asks whether node-pty loads, which maps a file
