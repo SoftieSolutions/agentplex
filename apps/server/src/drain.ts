@@ -52,19 +52,6 @@ import type { TerminalManager } from './terminal/terminal-manager.js';
  */
 
 /**
- * How long a drain waits, absent configuration, in milliseconds.
- *
- * Chosen against the unit, not against a feeling. `install.sh` writes
- * `TimeoutStopSec=20s` and renders this number from the same pair, so a machine
- * has one number and a five-second margin: what is left when the drain gives up
- * is what this process has to kill the stragglers, close its sockets and exit
- * before systemd stops caring. This default is what a checkout, a container and
- * anything else without that unit gets, and it matches what the installer
- * writes so that the two cannot say different things about the same server.
- */
-export const DEFAULT_DRAIN_MS = 15_000;
-
-/**
  * How often the drain asks again, in milliseconds.
  *
  * Asking means scanning every store that still has a terminal in it, which is

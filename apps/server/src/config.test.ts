@@ -256,6 +256,13 @@ describe('loadServerConfig bin path', () => {
   });
 });
 
+
+/**
+ * The settings whose rules are shared with the hub and the doctor. What each
+ * value may be is `daemon-settings.test.ts` in `@agentplex/node-shared`; what
+ * these cases pin is that the setting reaches this server's configuration, by
+ * flag and by environment, and that its problems join everyone else's.
+ */
 describe('loadServerConfig terminal cap', () => {
   function terminalCap(argv: string[], env: Record<string, string | undefined> = {}): unknown {
     const result = load(argv, env);
@@ -275,11 +282,6 @@ describe('loadServerConfig terminal cap', () => {
     const problems = expectProblems(load(['--terminal-cap=0']));
     expect(problems[0]).toContain('at least 1');
   });
-
-  it('refuses a cap that is not a whole number of terminals', () => {
-    expect(expectProblems(load(['--terminal-cap=lots']))).toHaveLength(1);
-    expect(expectProblems(load(['--terminal-cap=2.5']))).toHaveLength(1);
-  });
 });
 
 describe('loadServerConfig drain budget', () => {
@@ -298,17 +300,8 @@ describe('loadServerConfig drain budget', () => {
     expect(drainMs([], { AGENTPLEX_SERVER_DRAIN_SECONDS: '5' })).toBe(5_000);
   });
 
-  it('accepts no drain at all, which is the shutdown this replaced', () => {
-    // Not refused the way a terminal cap of zero is. A cap of zero describes a
-    // server that can never do its job; this describes one that waits for
-    // nothing, and it still closes at a boundary whatever is already at one.
-    expect(drainMs(['--drain-seconds=0'])).toBe(0);
-  });
-
-  it('refuses a budget that is not a whole number of seconds, or is negative', () => {
+  it('refuses a budget that is negative', () => {
     expect(expectProblems(load(['--drain-seconds=-1']))).toHaveLength(1);
-    expect(expectProblems(load(['--drain-seconds=soon']))).toHaveLength(1);
-    expect(expectProblems(load(['--drain-seconds=2.5']))).toHaveLength(1);
   });
 
   it('is listed in the usage message like every other setting', () => {
@@ -325,9 +318,6 @@ describe('loadServerConfig announce', () => {
   }
 
   it('is off until somebody says otherwise', () => {
-    // A default of on would be a program that broadcasts its address on
-    // whatever network it was installed next to. No default is right for both
-    // the homelab and the laptop on a cafe wifi, so the operator says.
     expect(announce([])).toBe(false);
   });
 
@@ -341,13 +331,6 @@ describe('loadServerConfig announce', () => {
     // image that sets the environment variable has to be overridable by the
     // person typing the command, and `--announce` alone could only say yes.
     expect(announce(['--announce=false'], { AGENTPLEX_ANNOUNCE: 'true' })).toBe(false);
-  });
-
-  it('refuses a value it would have to guess at', () => {
-    // Guessing wrong in one direction starts broadcasting on a network where
-    // nobody asked for it.
-    const problems = expectProblems(load(['--announce=yes']));
-    expect(problems[0]).toContain('true or false');
   });
 });
 
@@ -369,8 +352,19 @@ describe('loadServerConfig server identity file', () => {
     return result.ok ? result.config.identityPath : undefined;
   }
 
-  it('requires one, because a server without an identity has nothing to present', () => {
-    const problems = expectProblems(loadBare([]));
+  it('defaults to where setup mints it, under the account home', () => {
+    // `agentplex setup` writes the identity at `$HOME/.agentplex/server.json`
+    // and records it only for the hub. A server that required the setting
+    // refused to start on every machine set up that way.
+    expect(loadBare([], { HOME })).toMatchObject({
+      ok: true,
+      config: { identityPath: '/home/dev/.agentplex/server.json' },
+    });
+  });
+
+  it('refuses to guess when there is no home to default from, and names the setting', () => {
+    const problems = expectProblems(loadBare([], { AGENTPLEX_DATA_PATH: '/srv/agentplex' }));
+    expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('AGENTPLEX_SERVER_IDENTITY_FILE');
   });
 
@@ -378,20 +372,13 @@ describe('loadServerConfig server identity file', () => {
     expect(identityPath(['--server-identity-file=/srv/id.json'])).toBe('/srv/id.json');
   });
 
-  it('reads it from the environment, which is all a container is configured with', () => {
+  it('reads it from the environment, over the default the home would have given', () => {
     expect(identityPath([])).toBe(IDENTITY_FILE);
   });
 
   it('refuses a relative path, which would be a different file per working directory', () => {
-    // The failure this prevents is silent: a server started from elsewhere
-    // mints a second identity, and the pairing the user completed stops
-    // working with nothing anywhere saying why.
     const problems = expectProblems(load(['--server-identity-file=server.json']));
     expect(problems[0]).toContain('absolute path');
-  });
-
-  it('normalizes the path it was given', () => {
-    expect(identityPath(['--server-identity-file=/srv/../srv/id.json'])).toBe('/srv/id.json');
   });
 });
 
@@ -418,9 +405,6 @@ describe('loadServerConfig data path', () => {
   }
 
   it('defaults to the directory under the account home an install already owns', () => {
-    // The same directory `install.sh` calls the state directory on the tier
-    // that has a home: a machine that was never told where to put this gets
-    // the place everything else about agentplex on it already is.
     expect(dataPath([])).toBe('/home/dev/.agentplex');
   });
 
@@ -438,40 +422,9 @@ describe('loadServerConfig data path', () => {
     );
   });
 
-  it('is what is set, not what the home would have given', () => {
-    // The fleet tier's account has a home and its state lives somewhere else.
-    expect(
-      dataPath([], { HOME: '/var/lib/agentplex', AGENTPLEX_DATA_PATH: '/srv/agentplex' }),
-    ).toBe('/srv/agentplex');
-  });
-
-  it('refuses a relative path, which would be a different directory per working directory', () => {
-    const problems = expectProblems(load(['--data-path=agentplex']));
-    expect(problems[0]).toContain('absolute path');
-  });
-
-  it('normalizes the path it was given, so one directory has one name', () => {
-    expect(dataPath(['--data-path=/var/lib/other/../agentplex/'])).toBe('/var/lib/agentplex');
-  });
-
   it('refuses to guess when there is no home to default from', () => {
-    // The one thing it must not do is pick something. A server whose state
-    // went to a directory nobody named forgets it the first time that
-    // directory is not there, and nothing anywhere says why.
     const problems = expectProblems(loadBare([]));
     expect(problems[0]).toContain('AGENTPLEX_DATA_PATH');
-  });
-
-  it('refuses a home that is not absolute rather than resolving it against a cwd', () => {
-    const problems = expectProblems(loadBare([], { HOME: 'dev' }));
-    expect(problems[0]).toContain('HOME');
-  });
-
-  it('takes a home that is absolute and reports nothing', () => {
-    expect(loadBare([], { HOME: '/var/lib/agentplex' })).toMatchObject({
-      ok: true,
-      config: { dataPath: '/var/lib/agentplex/.agentplex' },
-    });
   });
 
   it('is collected with every other problem rather than reported on its own', () => {
@@ -495,9 +448,6 @@ describe('loadServerConfig timezone', () => {
   }
 
   it('is unset until somebody says otherwise, which leaves a child inheriting', () => {
-    // The honest default, and the one `binPath` takes for the same reason: a
-    // deployment that has said nothing about a zone gets what the unit gave
-    // it, rather than a zone this program picked on its behalf.
     expect(timezone([])).toBeUndefined();
   });
 
@@ -508,47 +458,6 @@ describe('loadServerConfig timezone', () => {
 
   it('lets the flag win over the environment, like every other setting', () => {
     expect(timezone(['--tz=Asia/Tokyo'], { AGENTPLEX_TZ: 'UTC' })).toBe('Asia/Tokyo');
-  });
-
-  it('refuses a name no zone answers to, rather than handing a child a silent UTC', () => {
-    // What the check buys. A child handed a `TZ` naming nothing does not
-    // refuse; it sits in UTC, and the operator finds out when an agent tells
-    // them the wrong day. This turns that into one sentence at startup.
-    const problems = expectProblems(load(['--tz=Europe/Madird']));
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain('Europe/Madird');
-  });
-
-  it('accepts UTC, which the list of canonical names does not contain', () => {
-    // Measured rather than assumed, and the reason this is not checked against
-    // `Intl.supportedValuesOf('timeZone')`: on Node 24 that list holds neither
-    // `UTC` nor any `US/*` name, so a membership test would refuse the single
-    // most likely value an operator types.
-    expect(Intl.supportedValuesOf('timeZone')).not.toContain('UTC');
-    expect(timezone(['--tz=UTC'])).toBe('UTC');
-  });
-
-  it('accepts the aliases a machine accepts, spelled the way the operator wrote them', () => {
-    // Every one of these is a real entry in the tz database a child looks the
-    // word up in -- `date` reports PDT and IST for the first two inside
-    // `node:24-bookworm-slim` -- so they are kept as typed. Rewriting
-    // `Asia/Kolkata` to the `Asia/Calcutta` that ICU still canonicalizes it to
-    // would put a name in a session that its operator did not choose.
-    expect(timezone(['--tz=US/Pacific'])).toBe('US/Pacific');
-    expect(timezone(['--tz=Asia/Kolkata'])).toBe('Asia/Kolkata');
-    expect(timezone(['--tz=Europe/Kyiv'])).toBe('Europe/Kyiv');
-  });
-
-  it('corrects the capitalization, which is the spelling that would silently fail', () => {
-    // The one input ICU accepts and a child does not. ICU matches a zone name
-    // case-insensitively; the tz database is a directory of files, so glibc
-    // finds nothing for `america/new_york` and falls back to UTC without a
-    // word -- `date` prints `america +0000` inside `node:24-bookworm-slim`.
-    // Normalized rather than refused, for the reason a path is normalized
-    // rather than refused: it is the same zone, and ICU has just said how it
-    // is spelled.
-    expect(timezone(['--tz=america/new_york'])).toBe('America/New_York');
-    expect(timezone(['--tz=utc'])).toBe('UTC');
   });
 
   it('is collected with every other problem rather than reported on its own', () => {
@@ -615,33 +524,17 @@ describe('loadServerConfig server token', () => {
     expect(load([])).toMatchObject({ ok: true, config: { serverToken: undefined } });
   });
 
-  it('takes a token the orchestrator injected, for a machine whose disk does not outlive it', () => {
-    const result = load([], { AGENTPLEX_SERVER_TOKEN: TOKEN });
-    expect(result).toMatchObject({ ok: true, config: { serverToken: { token: TOKEN } } });
-  });
-
-  it('carries the setting name with the value, so a refusal can name what to change', () => {
-    // The module that refuses a disagreement lives in a package that does not
-    // own this variable's name, and a refusal it could not name would send an
-    // operator looking.
+  it('takes a token the orchestrator injected, and names the setting it came from', () => {
     const result = load([], { AGENTPLEX_SERVER_TOKEN: TOKEN });
     expect(result).toMatchObject({
       ok: true,
-      config: { serverToken: { setting: 'AGENTPLEX_SERVER_TOKEN' } },
+      config: { serverToken: { token: TOKEN, setting: 'AGENTPLEX_SERVER_TOKEN' } },
     });
   });
 
   it('takes the flag over the environment, like every other setting', () => {
     const result = load([`--server-token=${TOKEN}`], { AGENTPLEX_SERVER_TOKEN: 'inherited-one' });
     expect(result).toMatchObject({ ok: true, config: { serverToken: { token: TOKEN } } });
-  });
-
-  it('refuses one short enough to guess rather than taking it as given', () => {
-    // A minted token has 43 characters of CSPRNG behind it. A supplied one is
-    // whatever somebody typed, and the failure is a server anybody on the
-    // network can pair with.
-    const problems = expectProblems(load([], { AGENTPLEX_SERVER_TOKEN: 'letmein' }));
-    expect(problems[0]).toContain('--server-token');
   });
 
   it('is a setting nobody set when the env var is blank, not an empty token', () => {
