@@ -262,7 +262,10 @@ A hub, which has to boot before anything else on the machine matters:
 A server: whether a pseudoterminal can be opened at all; whether its data root
 is there and writable, or could be created under the nearest directory that is;
 the identity file it would read its pairing token from, and on a `both` machine
-whether the hub pairs its local server from that same file; per provider the
+whether the hub pairs its local server from that same file (the doctor finds
+settings only under `$HOME/.agentplex` and `/etc/agentplex`, so with none found
+the path is the default and says so: under a custom prefix, pass
+`--server-identity-file` for the check to be exact); per provider the
 version, the directory it resolved from and whether it says it is logged in; per
 store, whether the path is there.
 

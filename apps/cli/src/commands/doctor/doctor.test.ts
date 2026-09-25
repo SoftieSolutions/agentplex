@@ -48,7 +48,7 @@ const NO_SETTINGS_FILE: SettingsSource = { file: null, problems: [] };
 const WRITABLE_ROOT: DataRootCheck = { path: DATA_ROOT, state: 'ready', detail: null };
 
 /** The identity file of a server with nothing wrong with it, for the printing cases. */
-const SERVER_IDENTITY: IdentityCheck = { path: IDENTITY_PATH, problem: null };
+const SERVER_IDENTITY: IdentityCheck = { path: IDENTITY_PATH, problem: null, note: null };
 
 /** A server identity the hub's local pairing reads as one it can present. */
 const IDENTITY_CONTENTS = '{"serverId":"server-1","token":"a-token-off-the-disk"}';
@@ -119,6 +119,7 @@ function serverConfig(
       // a server ships with, and the doctor reports it rather than judging it.
       browseRoots,
       identityPath: IDENTITY_PATH,
+      identityPathDefaulted: false,
       dataPath,
       serverToken: undefined,
       timezone: undefined,
@@ -272,7 +273,7 @@ describe('inspectMachine', () => {
         terminals: workingPty,
       });
 
-      expect(report.identity).toEqual({ path: IDENTITY_PATH, problem: null });
+      expect(report.identity).toEqual({ path: IDENTITY_PATH, problem: null, note: null });
     });
 
     it('fails a machine whose hub pairs its local server from another file', async () => {
@@ -293,7 +294,11 @@ describe('inspectMachine', () => {
       });
 
       expect(report.hub?.localServer).toMatchObject({ state: 'ready' });
-      expect(report.identity).toEqual({ path: IDENTITY_PATH, problem: expect.any(String) });
+      expect(report.identity).toEqual({
+        path: IDENTITY_PATH,
+        problem: expect.any(String),
+        note: null,
+      });
       expect(report.identity?.problem).toContain(elsewhere);
       expect(report.usable).toBe(false);
     });
@@ -310,8 +315,74 @@ describe('inspectMachine', () => {
         terminals: workingPty,
       });
 
-      expect(report.identity).toEqual({ path: IDENTITY_PATH, problem: null });
+      expect(report.identity).toEqual({ path: IDENTITY_PATH, problem: null, note: null });
       expect(report.usable).toBe(true);
+    });
+
+    describe('when nothing named the file', () => {
+      /** A server whose identity path is the home default, read with `settings`. */
+      function defaultedConfig(settings: SettingsSource): Config {
+        const config = serverConfig([]);
+        if (!('server' in config)) throw new Error('serverConfig builds a server half');
+        return {
+          ...config,
+          settings,
+          server: { ...config.server, identityPathDefaulted: true },
+        };
+      }
+
+      async function inspect(config: Config): Promise<IdentityCheck | null> {
+        const report = await inspectMachine(config, {
+          providers,
+          ...workingHub,
+          preflight: { run: async () => [] },
+          files: serverFiles(),
+          terminals: workingPty,
+        });
+        return report.identity;
+      }
+
+      it('says the default is only the default when no settings file was found', async () => {
+        // A per-user install under a custom prefix keeps its settings where the
+        // doctor does not look, so the path printed is the one under this home
+        // and not necessarily the one the unit reads. That is said rather than
+        // judged: the default is right on the default prefix.
+        const identity = await inspect(defaultedConfig(NO_SETTINGS_FILE));
+
+        expect(identity?.path).toBe(IDENTITY_PATH);
+        expect(identity?.problem).toBeNull();
+        expect(identity?.note).toContain('the default, because no settings file was found');
+        expect(identity?.note).toContain('--server-identity-file');
+        expect(identity?.note).toContain('AGENTPLEX_SERVER_IDENTITY_FILE');
+      });
+
+      it('does not count the note against the machine', async () => {
+        const report = await inspectMachine(defaultedConfig(NO_SETTINGS_FILE), {
+          providers,
+          ...workingHub,
+          preflight: { run: async () => [] },
+          files: serverFiles(),
+          terminals: workingPty,
+        });
+
+        expect(report.usable).toBe(true);
+      });
+
+      it('says nothing more when a settings file was found and left it to the default', async () => {
+        // The unit reads that file, and it does not name the identity file, so
+        // the default is exactly what the server will open.
+        const identity = await inspect(
+          defaultedConfig({ file: '/home/robert/.agentplex/agentplex.env', problems: [] }),
+        );
+
+        expect(identity?.note).toBeNull();
+      });
+
+      it('says nothing more when a flag or the environment named the file', async () => {
+        const identity = await inspect(serverConfig([]));
+
+        expect(identity?.note).toBeNull();
+      });
     });
   });
 
@@ -914,7 +985,11 @@ describe('formatDoctorReport', () => {
       role: 'both',
       settings: NO_SETTINGS_FILE,
       dataRoot: WRITABLE_ROOT,
-      identity: { path: IDENTITY_PATH, problem: 'the hub pairs from /opt/agentplex/server.json' },
+      identity: {
+        path: IDENTITY_PATH,
+        problem: 'the hub pairs from /opt/agentplex/server.json',
+        note: null,
+      },
       hub: readyHub(),
       usable: false,
       providers: [],
@@ -927,6 +1002,25 @@ describe('formatDoctorReport', () => {
     expect(section).toBeGreaterThan(-1);
     expect(printed[section + 1]).toBe(`  ${IDENTITY_PATH}`);
     expect(printed[section + 2]).toBe('    the hub pairs from /opt/agentplex/server.json');
+  });
+
+  it('prints a note on a defaulted identity file beneath its path', () => {
+    const printed = formatDoctorReport({
+      role: 'server',
+      settings: NO_SETTINGS_FILE,
+      dataRoot: WRITABLE_ROOT,
+      identity: { path: IDENTITY_PATH, problem: null, note: 'the default, and only that' },
+      hub: null,
+      usable: true,
+      providers: [],
+      stores: [],
+      browseRoots: [],
+      terminals: { state: 'ready', problem: null },
+    });
+
+    const section = printed.indexOf('server identity');
+    expect(printed[section + 1]).toBe(`  ${IDENTITY_PATH}`);
+    expect(printed[section + 2]).toBe('    the default, and only that');
   });
 
   it('says a machine that runs no server holds no server identity', () => {

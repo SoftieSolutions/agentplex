@@ -373,6 +373,26 @@ describe('loadDoctorConfig server identity file', () => {
     });
   });
 
+  it('says whether the path is the default or one a setting named', () => {
+    // The default is the one path the doctor can be wrong about: nothing named
+    // it, so whether it is the file a unit reads depends on the unit's settings,
+    // which this run may not have found.
+    const defaulted = (argv: string[], env: Record<string, string | undefined>): unknown => {
+      const result = loadBare(argv, env);
+      return result.ok && 'server' in result.config
+        ? result.config.server.identityPathDefaulted
+        : undefined;
+    };
+
+    expect(defaulted(['--role=server'], { HOME })).toBe(true);
+    expect(defaulted(['--role=server', '--server-identity-file=/srv/id.json'], { HOME })).toBe(
+      false,
+    );
+    expect(
+      defaulted(['--role=server'], { HOME, AGENTPLEX_SERVER_IDENTITY_FILE: IDENTITY_FILE }),
+    ).toBe(false);
+  });
+
   it('refuses to guess when there is no home to default from, and names the setting', () => {
     const problems = expectProblems(loadBare(['--role=server', '--data-path=/srv/agentplex']));
     expect(problems).toHaveLength(1);

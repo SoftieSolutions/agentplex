@@ -1,5 +1,6 @@
 import { dirname } from 'node:path';
 import type { ProviderReadiness } from '@agentplex/protocol';
+import { SERVER_SETTINGS } from '@agentplex/node-shared';
 import { NODE_PTY_REMEDY, type PtyAvailability } from '@agentplex/pty';
 import type { Config, Role, SettingsSource } from './config.js';
 import {
@@ -114,10 +115,17 @@ export interface DoctorReport {
  * `problem` is the one mismatch this can prove from the settings alone: on a
  * machine that is both, a hub that pairs its local server from a different
  * file than the one this server reads.
+ *
+ * `note` is what this cannot prove, said rather than judged: a path nothing
+ * named, read with no settings file found, is the home default, which is the
+ * file the unit reads only when its settings do not name another. A per-user
+ * install under a custom prefix keeps those settings where the doctor does not
+ * look. Not a problem, because on the default prefix the default is right.
  */
 export interface IdentityCheck {
   readonly path: string;
   readonly problem: string | null;
+  readonly note: string | null;
 }
 
 /**
@@ -206,7 +214,8 @@ export async function inspectMachine(
   const pty = checkTerminals(terminals());
   const dataRoot = await checkDataRoot(config.server.dataPath, files, dependencies.access);
   const identity = checkIdentity(
-    config.server.identityPath,
+    config.server,
+    config.settings,
     'hub' in config ? config.hub.localServer : null,
   );
 
@@ -244,15 +253,26 @@ export async function inspectMachine(
  * would say nothing the two paths do not.
  */
 function checkIdentity(
-  path: string,
+  server: { readonly identityPath: string; readonly identityPathDefaulted: boolean },
+  settings: SettingsSource,
   localServer: { readonly identityPath: string } | null,
 ): IdentityCheck {
-  if (localServer === null || localServer.identityPath === path) return { path, problem: null };
+  const path = server.identityPath;
+  const note =
+    server.identityPathDefaulted && settings.file === null
+      ? 'the default, because no settings file was found: under a custom prefix the unit ' +
+        `reads another, so pass ${SERVER_SETTINGS.serverIdentityFile.flag} (or set ` +
+        `${SERVER_SETTINGS.serverIdentityFile.env}) for this to be exact`
+      : null;
+  if (localServer === null || localServer.identityPath === path) {
+    return { path, problem: null, note };
+  }
   return {
     path,
     problem:
       `the hub pairs its local server from ${localServer.identityPath}, not this file: ` +
       'unless the two hold the same token, this server refuses the hub',
+    note,
   };
 }
 
@@ -407,6 +427,7 @@ export function formatDoctorReport(report: DoctorReport): readonly string[] {
   } else {
     lines.push(`  ${report.identity.path}`);
     if (report.identity.problem !== null) lines.push(`    ${report.identity.problem}`);
+    if (report.identity.note !== null) lines.push(`    ${report.identity.note}`);
   }
 
   lines.push('', 'providers');

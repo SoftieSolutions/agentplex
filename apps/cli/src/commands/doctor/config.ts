@@ -102,6 +102,15 @@ export interface ServerConfig {
    */
   readonly identityPath: string;
   /**
+   * Whether nothing named `identityPath`, so it is the home default.
+   *
+   * The one reading of it the doctor can be wrong about. A named path is the
+   * file whatever else is true; the default is the file the unit reads only
+   * when the unit's settings do not name another, and the doctor finds those
+   * settings only in the default places.
+   */
+  readonly identityPathDefaulted: boolean;
+  /**
    * The one directory the server writes into, defaulted as the server
    * defaults it. `inspectMachine` asks whether the server could create it or
    * write in it, because the server refuses to start when it cannot.
@@ -384,7 +393,8 @@ function readServerConfig(
   const timezone = readTimezone(read(table.timezone), problems);
   const drainMs = readDrainSeconds(read(table.drainSeconds), problems);
   const serverToken = readServerToken(read(table.serverToken), problems);
-  const identityPath = readIdentityPath(read(table.serverIdentityFile), env, problems);
+  const namedIdentityPath = read(table.serverIdentityFile);
+  const identityPath = readIdentityPath(namedIdentityPath, env, problems);
   const dataPath = readDataPath(read(table.dataPath), env, problems);
 
   if (identityPath === undefined || dataPath === undefined) return undefined;
@@ -394,6 +404,7 @@ function readServerConfig(
     binPath,
     browseRoots,
     identityPath,
+    identityPathDefaulted: namedIdentityPath === undefined,
     dataPath,
     serverToken,
     timezone,
