@@ -13,11 +13,12 @@
  * discipline: `KEY=value` lines, out of a file whose other lines it does not
  * claim to understand. Two keys come back by name, and `doctor` takes every
  * key there is, because its question is what this file makes of the machine.
- * It is not a systemd `EnvironmentFile` parser and must not grow into one. The things it deliberately does not do -- continuation
- * lines, `$VARIABLE` expansion, single-quoted C-escapes -- are all things
- * systemd does, and a reader that did half of them would be more wrong than one
- * that does none: an operator whose file uses them would get a value that is
- * quietly not the one the daemon is started with.
+ * It is not a systemd `EnvironmentFile` parser and must not grow into one. The
+ * things it deliberately does not do -- continuation lines, `$VARIABLE`
+ * expansion, single-quoted C-escapes -- are all things systemd does, and a
+ * reader that did half of them would be more wrong than one that does none: an
+ * operator whose file uses them would get a value that is quietly not the one
+ * the daemon is started with.
  *
  * What it does handle is exactly what the installer and setup write:
  * `KEY=value` with `#` comments, and the double-quoted form `settings-file.ts`
