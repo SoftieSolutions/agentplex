@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import type { FileRead } from '@agentplex/providers';
+import { isErrno } from '@agentplex/node-shared';
 import type { InstallationFiles } from './installation-files.js';
 
 /**
@@ -30,12 +31,3 @@ export const nodeInstallationFiles: InstallationFiles = {
     }
   },
 };
-
-function isErrno(error: unknown, code: string): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === code
-  );
-}

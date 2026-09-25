@@ -2,6 +2,7 @@ import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter } from 'node:path';
 import type { FileRead } from '@agentplex/providers';
+import { isErrno } from '@agentplex/node-shared';
 import type { DirectoryMade, FileWritten, SetupMachine } from './setup-machine.js';
 
 /**
@@ -88,13 +89,4 @@ export function createNodeSetupMachine({ home, path }: NodeSetupMachineSources):
       }
     },
   };
-}
-
-function isErrno(error: unknown, code: string): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === code
-  );
 }

@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { runOperation, type Operation, type ProcessRunner } from '@agentplex/providers';
 import { z } from 'zod';
+import { firstLine } from '@agentplex/node-shared';
 import type { Installation } from '../../installation/installation.js';
 import { NODE_DIRECTORY, NODE_STAMP, type Layout } from '../../installation/layout.js';
 import type { ManifestReader } from '../../versions/version-check.js';
@@ -302,11 +303,6 @@ const extractOperation: Operation<{ readonly archive: string; readonly directory
         : {
             ok: false,
             refusal: 'failed',
-            problem: `tar could not unpack the runtime: ${firstLine(completed.stderr)}`,
+            problem: `tar could not unpack the runtime: ${firstLine(completed.stderr) || 'it said nothing'}`,
           },
   };
-
-function firstLine(text: string): string {
-  const said = text.trim();
-  return said.length === 0 ? 'it said nothing' : (said.split('\n')[0] ?? '');
-}

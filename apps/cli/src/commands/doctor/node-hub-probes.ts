@@ -1,5 +1,6 @@
 import { access, constants } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { errnoCode } from '@agentplex/node-shared';
 import type { PathAccess, PortProbe, PortState, WriteAccess } from './hub.js';
 
 /**
@@ -57,12 +58,12 @@ export const nodePortProbe: PortProbe = async (host: string, port: number): Prom
       });
     };
 
-    server.once('error', (error: NodeJS.ErrnoException) => {
+    server.once('error', (error: Error) => {
       server.removeAllListeners();
       // No `close()` here: a listener that never bound has nothing to close,
       // and calling it would produce a second error about not being open.
       resolve(
-        error.code === 'EADDRINUSE'
+        errnoCode(error) === 'EADDRINUSE'
           ? { kind: 'in-use' }
           : { kind: 'failed', reason: String(error) },
       );

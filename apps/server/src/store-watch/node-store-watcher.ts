@@ -1,4 +1,5 @@
 import { watch, type FSWatcher } from 'node:fs';
+import { errnoCode } from '@agentplex/node-shared';
 import {
   STORE_WATCH_POLL_MS,
   type StoreWatch,
@@ -44,7 +45,7 @@ export const nodeStoreWatcher: StoreWatcher = {
       // gone, the process is out of watch descriptors -- is a failure to
       // establish, and the caller's backoff is what that is for. Turning every
       // error into a poll would quietly report a store nobody can read.
-      if (errorCode(error) !== UNAVAILABLE) throw error;
+      if (errnoCode(error) !== UNAVAILABLE) throw error;
       return pollInstead(events);
     }
 
@@ -84,11 +85,4 @@ function pollInstead(events: StoreWatchEvents): StoreWatch {
       clearInterval(handle);
     },
   };
-}
-
-/** Node's errno is a property on an `Error`, not a type: read it as a claim. */
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const code: unknown = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : undefined;
 }

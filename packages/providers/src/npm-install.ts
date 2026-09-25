@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
+import { firstLine } from '@agentplex/node-shared';
 import type { CompletedProcess } from './operations/process-runner.js';
 import type { InstalledProvider, OneShotRead } from './provider-adapter.js';
 
@@ -176,8 +177,4 @@ function parseJson(text: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function firstLine(text: string): string {
-  return text.trim().split('\n')[0] ?? '';
 }

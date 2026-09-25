@@ -1,3 +1,4 @@
+import { firstLine } from '@agentplex/node-shared';
 import { CODEX_COMMAND, planCodexLaunch } from './codex-launch.js';
 import { NPM_COMMAND, npmInstallSpec, parseNpmPrefix, readNpmInstall } from './npm-install.js';
 import type { CompletedProcess } from './operations/process-runner.js';
@@ -256,10 +257,6 @@ function answerLines(completed: CompletedProcess): readonly string[] {
     .flatMap((stream) => stream.split('\n'))
     .map((line) => line.trim())
     .filter((line) => line !== '');
-}
-
-function firstLine(text: string): string {
-  return text.trim().split('\n')[0] ?? '';
 }
 
 function lastLine(text: string): string {

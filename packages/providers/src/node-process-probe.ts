@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { errnoCode } from '@agentplex/node-shared';
 import { runOperation } from './operations/operation.js';
 import { processStartTimeOperation } from './operations/process-start-time.js';
 import type { ProcessRunner } from './operations/process-runner.js';
@@ -52,7 +53,7 @@ export function createNodeProcessProbe({ runner }: NodeProcessProbeDependencies)
         // Alive, but owned by another user. "Not mine" is not "not there", and
         // reading it as absence would drop every session a server watches
         // without having spawned it.
-        return errorCode(error) === 'EPERM';
+        return errnoCode(error) === 'EPERM';
       }
     },
 
@@ -148,10 +149,4 @@ function numberAt(fields: readonly string[], index: number): number | null {
 /** Guards `process.kill`, whose meaning changes for 0 and for negatives. */
 function isPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const code: unknown = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : undefined;
 }

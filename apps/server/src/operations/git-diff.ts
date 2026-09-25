@@ -5,7 +5,8 @@ import {
   type UncommittedDiff,
 } from '@agentplex/protocol';
 import type { CompletedProcess, Operation, OperationOutcome } from '@agentplex/providers';
-import { directorySchema, firstLine } from './directory.js';
+import { firstLine } from '@agentplex/node-shared';
+import { directorySchema } from './directory.js';
 
 /**
  * The line counts behind "files changed": what is in a working tree now and is
@@ -131,7 +132,7 @@ function readGitDiff(
     return {
       ok: false,
       refusal: 'failed',
-      problem: `git could not diff ${directory}: ${firstLine(completed.stderr)}`,
+      problem: `git could not diff ${directory}: ${firstLine(completed.stderr) || 'it said nothing'}`,
     };
   }
 

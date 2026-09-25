@@ -27,15 +27,3 @@ import { directorySchema } from '@agentplex/protocol';
  * places to drift apart.
  */
 export { directorySchema };
-
-/**
- * The first line of a program's stderr, for a refusal that quotes it.
- *
- * git says why better than anything here could — "not a git repository",
- * "detected dubious ownership", "bad revision 'HEAD'" — and the first line is
- * the sentence; whatever follows is usage text nobody asked for.
- */
-export function firstLine(text: string): string {
-  const line = text.trim().split('\n')[0];
-  return line === undefined || line === '' ? 'it said nothing' : line;
-}

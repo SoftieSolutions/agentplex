@@ -1,5 +1,6 @@
 import { constants } from 'node:fs';
 import { access, mkdir } from 'node:fs/promises';
+import { errnoCode } from '@agentplex/node-shared';
 import type { DataRootFileSystem, DirectoryCreate, WriteAccess } from './data-root.js';
 
 /**
@@ -31,7 +32,7 @@ export const nodeDataRoot: DataRootFileSystem = {
       const first = await mkdir(path, { recursive: true });
       return first === undefined ? { kind: 'exists' } : { kind: 'created' };
     } catch (error) {
-      const code = errorCode(error);
+      const code = errnoCode(error);
       return code === 'EEXIST' || code === 'ENOTDIR'
         ? { kind: 'not-a-directory' }
         : { kind: 'failed', reason: String(error) };
@@ -47,10 +48,3 @@ export const nodeDataRoot: DataRootFileSystem = {
     }
   },
 };
-
-/** Node's errno is a property on an `Error`, not a type: read it as a claim. */
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const code: unknown = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : undefined;
-}

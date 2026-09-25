@@ -1,5 +1,6 @@
 import { open, readdir, readFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
+import { errnoCode } from '@agentplex/node-shared';
 import type { FileRead } from './store-identity.js';
 import type { DirectoryEntry, DirectoryRead, ProviderFiles, TailRead } from './provider-files.js';
 
@@ -112,15 +113,8 @@ function missingOrFailed(
   error: unknown,
   ...alsoMissing: readonly string[]
 ): { kind: 'missing' } | { kind: 'failed'; reason: string } {
-  const code = errorCode(error);
+  const code = errnoCode(error);
   return code === 'ENOENT' || (code !== undefined && alsoMissing.includes(code))
     ? { kind: 'missing' }
     : { kind: 'failed', reason: String(error) };
-}
-
-/** Node's errno is a property on an `Error`, not a type: read it as a claim. */
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const code: unknown = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : undefined;
 }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { firstLine } from '@agentplex/node-shared';
 import type { CompletedProcess } from './operations/process-runner.js';
 import { planClaudeLaunch, CLAUDE_COMMAND } from './claude-launch.js';
 import { NPM_COMMAND, npmInstallSpec, parseNpmPrefix, readNpmInstall } from './npm-install.js';
@@ -270,8 +271,4 @@ function parseJson(text: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function firstLine(text: string): string {
-  return text.trim().split('\n')[0] ?? '';
 }
