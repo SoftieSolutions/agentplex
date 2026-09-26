@@ -5,21 +5,17 @@ import {
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
   type Activity,
-  type ApprovalAnsweredBy,
-  type ApprovalOutcome,
   type ApprovalPolicyRecord,
   type CatalogueItem,
   type CatalogueQuery,
   type ClientFrame,
   type ClientTerminalTarget,
-  type DirectoryEntry,
   type FrameId,
   type GraphDocument,
   type GraphPublishedVersion,
   type GraphRunId,
   type GraphRunState,
   type GraphRunSummary,
-  type GraphSimulatedStep,
   type HubFrame,
   type HubId,
   type Layout,
@@ -29,7 +25,6 @@ import {
   type ServerRegistrationId,
   type SessionHolder,
   type SessionId,
-  type SessionPause,
   type SessionRef,
   type StoreId,
   type SubscriptionEndReason,
@@ -251,18 +246,13 @@ export interface StartedView {
 /**
  * Everything the hub has said about one start this client asked for.
  *
- * Kept per start and keyed by the frame that carried it, which the two fields
- * beside it are not: `lastStarted` and `lastRefusal` are one slot each, and a
- * screen reading them is reading whatever was answered most recently to
- * anybody. That is the right shape for the connection line -- the newest "no",
- * whoever asked for it -- and exactly the wrong one for a pane waiting on a
- * start of its own: a second start succeeding clears the first one's refusal,
- * and a pane reading the shared slot would quietly go back to saying it was
- * starting.
+ * Kept per start and keyed by the frame that carried it, like `answers`, and
+ * beside it for one reason `answers` cannot serve: an entry is written the
+ * moment a start is accepted, so a pane opened in the same click has an entry
+ * to read before anything has been answered.
  *
- * So the answers are filed against the start they answer. The key is the id of
- * the `session-start` frame, which is the name the asking already has and the
- * one every reply to it carries as `replyTo`; nothing here compares anything.
+ * The key is the id of the `session-start` frame, which is the name the
+ * asking already has and the one every reply to it carries as `replyTo`.
  *
  * Both fields are `null` while the hub has not answered. They are never both
  * set: a start is answered once.
@@ -272,100 +262,6 @@ export interface StartView {
   readonly started: StartedView | null;
   /** The hub's no, in its own words. */
   readonly refusal: RefusalView | null;
-}
-
-/**
- * The hub's answer to a stop, kept so a screen can say what landed.
- *
- * Kept beside `lastStarted` and for the same reason: the reply names the
- * machine the hub resolved, which the client never sent and cannot derive.
- * It is also the one reply a screen renders for something it may not have
- * asked for -- a stop from another tab is answered to that tab, and the row
- * it landed on is what this frame names -- so the payload is held rather
- * than dropped and the session row is read out of it.
- */
-export interface StoppedView {
-  readonly replyTo: FrameId;
-  readonly storeId: StoreId;
-  readonly sessionId: SessionId;
-  /** The machine the hub resolved the session to, hub-side. */
-  readonly server: ServerRegistrationId;
-}
-
-/**
- * The hub's answer to a pause: the receipt, and how far the pause got.
- *
- * `pause` is the server's word, relayed. `paused` means the session was at a
- * turn boundary and its keyboard is withheld now; `requested` means it is
- * mid-turn and the server will finish the pause when the turn ends. The
- * button that asked reads it to say "pausing" or nothing; what the screen
- * draws for the session comes from the holder on the next machine state,
- * exactly as it does for a stop.
- */
-export interface PausedView {
-  readonly replyTo: FrameId;
-  readonly storeId: StoreId;
-  readonly sessionId: SessionId;
-  readonly server: ServerRegistrationId;
-  readonly pause: SessionPause;
-}
-
-/** The hub's answer to a resume: a receipt and nothing more, since the only word it could carry is `none`. */
-export interface ResumedView {
-  readonly replyTo: FrameId;
-  readonly storeId: StoreId;
-  readonly sessionId: SessionId;
-  readonly server: ServerRegistrationId;
-}
-
-/**
- * The hub's answer to an acknowledgement or a mute: the whole attention row as
- * it now stands.
- *
- * Kept for one reason, and it is a narrow one: the control that sent the frame
- * has to stop waiting. What the screen *draws* comes from the session row of
- * the next machine state, which every tab is sent -- so this is a receipt and
- * not a second copy of the state, and nothing reads the two moments off it.
- * They are here because the frame carries them, and keeping half a captured
- * frame would make this view one more thing to hold in step with the protocol
- * for no gain.
- */
-export interface AttentionView {
-  readonly replyTo: FrameId;
-  readonly storeId: StoreId;
-  readonly sessionId: SessionId;
-  readonly acknowledgedThrough: number | null;
-  readonly mutedAt: number | null;
-}
-
-/**
- * The hub's answer to a decision: what became of the request, in one word.
- *
- * Two fields because the frame has two, and the narrowness is the point. It
- * names no session and no approval -- `replyTo` already says which question
- * this answers, and the id is spent the moment the request ends -- so nothing
- * can read a row out of it. What is still pending leaves the session row of
- * the next machine state, which is where every client reads it, this one
- * included.
- *
- * The outcome is about the request and not about the tap: `granted` may be
- * somebody else's grant, which is what deciding once means, and `withdrawn`
- * and `expired` are the two endings where a person answered and nothing
- * happened. Keeping it is what lets the control that asked say which.
- */
-export interface ApprovalView {
-  readonly replyTo: FrameId;
-  readonly outcome: ApprovalOutcome;
-  /**
-   * The standing rule whose grant took effect, or `null` for a request a person
-   * answered.
-   *
-   * Kept because the outcome alone is not enough for the control that asked:
-   * `granted` is `granted` whether this tap was the one applied or a rule got
-   * there first, and a screen that could not tell those apart would report
-   * somebody's tap as having done something it did not do.
-   */
-  readonly answeredBy: ApprovalAnsweredBy | null;
 }
 
 /**
@@ -382,56 +278,6 @@ export interface ApprovalView {
 export interface ApprovalPolicyView {
   readonly replyTo: FrameId;
   readonly rules: readonly ApprovalPolicyRecord[];
-}
-
-/**
- * The hub's answer to a browse, kept so the picker that asked can render it.
- *
- * `replyTo` is what joins it to the request, because a picker may have more
- * than one browse in flight -- a user who clicks twice while a slow disk is
- * answering -- and a snapshot field with no id on it would show the first
- * answer under the second directory.
- *
- * `directory` is `null` for the listing of roots, and the entries are then the
- * roots themselves carrying their own absolute paths. Everywhere else an entry
- * is one segment and is joined onto the directory. The store keeps both exactly
- * as the hub sent them; the joining rule lives in `projects/directory-picker-model.ts`,
- * where a test can reach it.
- */
-export interface DirectoryListingView {
-  readonly replyTo: FrameId;
-  readonly directory: string | null;
-  readonly roots: readonly string[];
-  readonly entries: readonly DirectoryEntry[];
-  readonly truncated: boolean;
-}
-
-/**
- * The hub's answer to a project create, kept so the form that asked can act.
- *
- * The node id is what makes it worth keeping. A project is named by its id from
- * then on -- a start names one -- and a form that had to find its own project
- * back out of the next tree by name would be matching on the one field the user
- * is free to change.
- */
-export interface ProjectCreatedView {
-  readonly replyTo: FrameId;
-  readonly nodeId: NodeId;
-}
-
-/**
- * The hub's yes to one of the five tree edits, kept so the menu that asked can
- * close itself and say what happened.
- *
- * One view for all five, because the yes really is the same: the tree did what
- * was asked, and what the screen shows next comes from the layout it re-reads
- * when `catalogue-changed` arrives. `nodeId` is the one thing a create adds —
- * the id of the folder it made — and it is `null` for the four edits that make
- * nothing.
- */
-export interface TreeChangeView {
-  readonly replyTo: FrameId;
-  readonly nodeId: NodeId | null;
 }
 
 /**
@@ -453,34 +299,6 @@ export interface CataloguePageView {
   readonly nextCursor: string | null;
   readonly total: number;
   readonly version: number;
-}
-
-/**
- * The hub's answer to a document create, kept so the form that asked can act.
- *
- * The same shape and the same reason as a project's: every later frame about
- * this document names the node, and a form that had to find its own back out
- * of the next tree would be matching on a name the user may rename.
- */
-export interface DocCreatedView {
-  readonly replyTo: FrameId;
-  readonly nodeId: NodeId;
-}
-
-/**
- * A document the hub answered with, whole, and when the machine holding it
- * says it was written.
- *
- * `replyTo` is what joins it to the request for the reason a listing carries
- * one: a person may open a second document while a slow disk is answering the
- * first, and a snapshot field with no id on it would put the first document
- * under the second name. The editor is AGX-243; what this store owes it is the
- * characters and the time, kept exactly as they arrived.
- */
-export interface DocContentView {
-  readonly replyTo: FrameId;
-  readonly content: string;
-  readonly updatedAt: number;
 }
 
 /**
@@ -506,28 +324,6 @@ export interface TranscriptView {
 }
 
 /**
- * The hub's answer to a save: when the machine holding the document wrote it.
- *
- * Kept rather than discarded, because it is the only evidence a client has
- * that a save landed on a disk rather than merely leaving the browser -- and
- * it is the server's clock, so an editor showing "saved a moment ago" is
- * showing what the machine said and not what this tab assumed.
- */
-export interface DocSavedView {
-  readonly replyTo: FrameId;
-  readonly updatedAt: number;
-}
-
-/**
- * The hub's answer to a graph create, kept so the form that asked can act.
- * The same shape and the same reason as a document's.
- */
-export interface GraphCreatedView {
-  readonly replyTo: FrameId;
-  readonly nodeId: NodeId;
-}
-
-/**
  * A graph as the hub answered an open: its name, its draft and the draft's
  * number, and which versions are published.
  *
@@ -545,69 +341,6 @@ export interface GraphDocumentView {
   readonly published: readonly GraphPublishedVersion[];
 }
 
-/** The hub's answer to a save: which draft, and when on the hub's clock. */
-export interface GraphSavedView {
-  readonly replyTo: FrameId;
-  readonly version: number;
-  readonly updatedAt: number;
-}
-
-/** The hub's answer to a publish: the version the draft became. */
-export interface GraphPublishedView {
-  readonly replyTo: FrameId;
-  readonly version: number;
-}
-
-/**
- * The hub's answer to a run: what the run is called, and its number.
- *
- * `replyTo` is what joins it to the screen that pressed Run, and `runId` is
- * what that screen then reads the run's states by -- a state carries no
- * `replyTo`, because it is not an answer to anything.
- */
-export interface RunStartedView {
-  readonly replyTo: FrameId;
-  readonly runId: GraphRunId;
-  readonly number: number;
-}
-
-/** The hub's yes to a cancel. The run's end arrives as a state, not here. */
-export interface RunCancelledView {
-  readonly replyTo: FrameId;
-  readonly runId: GraphRunId;
-}
-
-/**
- * The hub's answer to a read of a graph's run: the newest run, or `null`
- * when the graph has never run.
- *
- * Kept so the screen that asked can match it to its read, and name the graph
- * so a screen can drop a run it was holding when the answer is `null`. A run
- * in the answer is also filed in `runs`, like any state, so a screen reading
- * the graph's newest there sees it either way.
- */
-export interface RunLatestView {
-  readonly replyTo: FrameId;
-  readonly nodeId: NodeId;
-  readonly run: GraphRunState | null;
-}
-
-/**
- * The hub's answer to a simulate: what a run of the graph's draft would do,
- * step by step with why, and the sentence the walk stopped on or `null`.
- *
- * Kept by the frame it answers, like a save or a publish, so the screen that
- * pressed Simulate matches it to its own request and a second screen's
- * answer is not drawn as this one's. Nothing in it is a run: no run id, no
- * number, and nothing filed in `runs`.
- */
-export interface SimulatedView {
-  readonly replyTo: FrameId;
-  readonly nodeId: NodeId;
-  readonly path: readonly GraphSimulatedStep[];
-  readonly reason: string | null;
-}
-
 /**
  * The hub's answer to a history request: one graph's runs, newest first, at
  * most the protocol's bound, as summaries without steps. Filed by the graph
@@ -617,26 +350,6 @@ export interface RunHistoryView {
   readonly replyTo: FrameId;
   readonly nodeId: NodeId;
   readonly runs: readonly GraphRunSummary[];
-}
-
-/**
- * The hub's yes to a subscribe or an unsubscribe, kept so the control that
- * asked can stop waiting.
- *
- * One view for two frames, like `AttentionView`: both answers carry nothing
- * but the id of the frame they answer, and two views would be two things to
- * hold in step for a difference nothing renders. `subscribed` is which of the
- * two it was, because a control that says "notifications are on" has to know
- * which way the last answer went.
- *
- * It is a receipt and never the state of a subscription. What a browser is
- * actually subscribed to lives in the browser -- `pushManager.getSubscription`
- * is the only honest answer -- and a store field that claimed otherwise would
- * go on claiming it after somebody revoked the permission in their settings.
- */
-export interface PushView {
-  readonly replyTo: FrameId;
-  readonly subscribed: boolean;
 }
 
 export interface HubSnapshot {
@@ -694,10 +407,6 @@ export interface HubSnapshot {
    * emptied when nothing is looking any more.
    */
   readonly answers: ReadonlyMap<FrameId, Reply>;
-  /** The hub's most recent "no", kept until a later command is answered yes. */
-  readonly lastRefusal: RefusalView | null;
-  /** The hub's most recent yes to a start, kept until the next one. */
-  readonly lastStarted: StartedView | null;
   /**
    * What the hub has said about each start this client made, by the id of the
    * frame that carried it.
@@ -706,23 +415,8 @@ export interface HubSnapshot {
    * pane opened on a start reads its own answer and not the newest one.
    */
   readonly starts: ReadonlyMap<FrameId, StartView>;
-  /** The hub's most recent yes to a stop, kept until the next one. */
-  readonly lastStopped: StoppedView | null;
-  /** The hub's most recent yes to a pause, and to a resume, each kept until the next. */
-  readonly lastPaused: PausedView | null;
-  readonly lastResumed: ResumedView | null;
-  /** The hub's most recent yes to an acknowledgement or a mute. */
-  readonly lastAttention: AttentionView | null;
-  /** What the hub last said became of an approval this client answered. */
-  readonly lastApproval: ApprovalView | null;
   /** Every project's standing policy this client has been answered, by node. */
   readonly approvalPolicies: ReadonlyMap<NodeId, ApprovalPolicyView>;
-  /** The hub's most recent directory listing, kept until the next one. */
-  readonly lastListing: DirectoryListingView | null;
-  /** The hub's most recent yes to a project create, kept until the next one. */
-  readonly lastProjectCreated: ProjectCreatedView | null;
-  /** The hub's most recent yes to a tree edit, kept until the next one. */
-  readonly lastTreeChange: TreeChangeView | null;
   /**
    * The last catalogue page this store was answered, or `null` before the first.
    *
@@ -733,16 +427,6 @@ export interface HubSnapshot {
    * screen.
    */
   readonly catalogue: CataloguePageView | null;
-  /** The hub's most recent yes to a document create, kept until the next one. */
-  readonly lastDocCreated: DocCreatedView | null;
-  /** The hub's most recent yes to a document save, kept until the next one. */
-  readonly lastDocSaved: DocSavedView | null;
-  /** The most recent document the hub answered with, kept until the next one. */
-  readonly lastDocContent: DocContentView | null;
-  /** The hub's most recent yes to a graph create, kept until the next one. */
-  readonly lastGraphCreated: GraphCreatedView | null;
-  /** The most recent graph the hub answered with, kept until the next one. */
-  readonly lastGraphDocument: GraphDocumentView | null;
   /**
    * Each graph as the hub last answered an open of it, by the graph.
    *
@@ -753,18 +437,6 @@ export interface HubSnapshot {
    * since the hub's draft may be saved by another client meanwhile.
    */
   readonly graphDocuments: ReadonlyMap<NodeId, GraphDocumentView>;
-  /** The hub's most recent yes to a graph save, kept until the next one. */
-  readonly lastGraphSaved: GraphSavedView | null;
-  /** The hub's most recent yes to a graph publish, kept until the next one. */
-  readonly lastGraphPublished: GraphPublishedView | null;
-  /** The hub's most recent yes to a run, kept until the next one. */
-  readonly lastRunStarted: RunStartedView | null;
-  /** The hub's most recent yes to a run cancel, kept until the next one. */
-  readonly lastRunCancelled: RunCancelledView | null;
-  /** The hub's most recent answer to a read of a graph's run. */
-  readonly lastRunLatest: RunLatestView | null;
-  /** The hub's most recent answer to a simulate, kept until the next one or a drop. */
-  readonly lastSimulated: SimulatedView | null;
   /**
    * Every run the hub has told this client about, by run id, each as the
    * whole state last sent.
@@ -785,8 +457,6 @@ export interface HubSnapshot {
    * yet. Dropped with the connection, like `runs`.
    */
   readonly runHistories: ReadonlyMap<NodeId, RunHistoryView>;
-  /** The hub's most recent yes to a subscribe or an unsubscribe. */
-  readonly lastPush: PushView | null;
   /**
    * What the hub has answered each transcript read with, by the id of the
    * frame that asked.
@@ -1237,34 +907,12 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     terminals: new Map(),
     terminalInput: INITIAL_TERMINAL,
     answers: new Map(),
-    lastRefusal: null,
-    lastStarted: null,
     starts: new Map(),
-    lastStopped: null,
-    lastPaused: null,
-    lastResumed: null,
-    lastAttention: null,
-    lastApproval: null,
     approvalPolicies: new Map(),
-    lastListing: null,
-    lastProjectCreated: null,
-    lastTreeChange: null,
     catalogue: null,
-    lastDocCreated: null,
-    lastDocSaved: null,
-    lastDocContent: null,
-    lastGraphCreated: null,
-    lastGraphDocument: null,
     graphDocuments: new Map(),
-    lastGraphSaved: null,
-    lastGraphPublished: null,
-    lastRunStarted: null,
-    lastRunCancelled: null,
-    lastRunLatest: null,
-    lastSimulated: null,
     runs: new Map(),
     runHistories: new Map(),
-    lastPush: null,
     pushPublicKey: null,
     transcripts: new Map(),
   };
@@ -1883,7 +1531,6 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           sessionId: frame.sessionId,
           server: frame.server,
         };
-        update({ lastRefusal: null, lastStarted: started });
         noteStartAnswer(frame.replyTo, { started, refusal: null });
         // The reply is also the moment a subscription by this start's handle
         // becomes possible, which is why it is retried here. A pane opens in
@@ -1901,94 +1548,37 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         retrySubscribeByStart(frame.replyTo);
         return;
       }
-      case 'session-stopped': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastStopped: {
-            replyTo: frame.replyTo,
-            storeId: frame.storeId,
-            sessionId: frame.sessionId,
-            server: frame.server,
-          },
-        });
-        return;
-      }
-      case 'session-paused': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastPaused: {
-            replyTo: frame.replyTo,
-            storeId: frame.storeId,
-            sessionId: frame.sessionId,
-            server: frame.server,
-            pause: frame.pause,
-          },
-        });
-        return;
-      }
-      case 'session-resumed': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastResumed: {
-            replyTo: frame.replyTo,
-            storeId: frame.storeId,
-            sessionId: frame.sessionId,
-            server: frame.server,
-          },
-        });
-        return;
-      }
-      case 'session-attention': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastAttention: {
-            replyTo: frame.replyTo,
-            storeId: frame.storeId,
-            sessionId: frame.sessionId,
-            acknowledgedThrough: frame.acknowledgedThrough,
-            mutedAt: frame.mutedAt,
-          },
-        });
-        return;
-      }
-      case 'approval-decided': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        // Kept the way an attention reply is kept, and clearing the refusal
-        // for the same reason: the last thing the hub said about this client's
-        // frames is now a yes, and a card showing both would put a sentence
-        // about an answered question beside the answer. The outcome is the
-        // whole payload -- what is still open is read off the next machine
-        // state, never out of here.
-        update({
-          lastRefusal: null,
-          lastApproval: {
-            replyTo: frame.replyTo,
-            outcome: frame.outcome,
-            answeredBy: frame.answeredBy,
-          },
-        });
-        return;
-      }
+      // Answers and nothing more: the screen that sent the frame reads its own
+      // out of `answers`, and what it draws next comes from the state. None of
+      // them asks for the tree again. The hub broadcasts `catalogue-changed`
+      // after every change to the tree, and asking on the reply as well would
+      // be two requests for one change -- on the only client that already
+      // knows. A save, a publish or a run changes nothing the tree carries.
+      case 'session-stopped':
+      case 'session-paused':
+      case 'session-resumed':
+      case 'session-attention':
+      case 'approval-decided':
       case 'push-subscribed':
-      case 'push-unsubscribed': {
+      case 'push-unsubscribed':
+      case 'directory-listing':
+      case 'project-created':
+      case 'node-created':
+      case 'node-renamed':
+      case 'node-moved':
+      case 'node-removed':
+      case 'node-removal-forgotten':
+      case 'doc-created':
+      case 'doc-saved':
+      case 'doc-content':
+      case 'graph-created':
+      case 'graph-saved':
+      case 'graph-published':
+      case 'graph-run-started':
+      case 'graph-run-cancelled':
+      case 'graph-simulated': {
         pending.delete(frame.replyTo);
         remember(frame);
-        // The refusal is cleared for the reason a start clears it: the last
-        // thing the hub said is now a yes, and a control showing both would be
-        // showing a sentence about a question that has since been answered.
-        update({
-          lastRefusal: null,
-          lastPush: { replyTo: frame.replyTo, subscribed: frame.type === 'push-subscribed' },
-        });
         return;
       }
       case 'approval-policy': {
@@ -2001,7 +1591,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // client holding a policy nobody vouched for.
         const policies = new Map(snapshot.approvalPolicies);
         policies.set(frame.projectId, { replyTo: frame.replyTo, rules: frame.rules });
-        update({ lastRefusal: null, approvalPolicies: policies });
+        update({ approvalPolicies: policies });
         return;
       }
       case 'server-paired':
@@ -2010,143 +1600,18 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         waiting.delete(frame.replyTo);
         return;
       }
-      case 'directory-listing': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        // The refusal is cleared for the reason a start clears it: the last
-        // thing the hub said is now a yes, and a picker showing both would be
-        // showing a sentence about a question that has since been answered.
-        update({
-          lastRefusal: null,
-          lastListing: {
-            replyTo: frame.replyTo,
-            directory: frame.directory,
-            roots: frame.roots,
-            entries: frame.entries,
-            truncated: frame.truncated,
-          },
-        });
-        return;
-      }
-      case 'project-created': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        // No re-request here, and there used to be one. The hub now broadcasts
-        // `catalogue-changed` after every change to the tree, this one
-        // included, so asking again on the reply as well would be two requests
-        // for one change — and only on the client that made it, which was
-        // always the wrong half: the other tabs are looking at the same tree.
-        update({
-          lastRefusal: null,
-          lastProjectCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
-        });
-        return;
-      }
-      case 'node-created': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastTreeChange: { replyTo: frame.replyTo, nodeId: frame.nodeId },
-        });
-        return;
-      }
-      case 'doc-created': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastDocCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
-        });
-        // No re-request here, for the reason a project create has none: a
-        // document is a node, so the hub broadcasts `catalogue-changed` after
-        // making one, and asking again on the reply as well would be two
-        // requests for one change -- on the only client that already knows.
-        return;
-      }
-      case 'doc-saved': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        // Nothing about the tree changed. A save changes the file on a machine
-        // and the hub's index of when; it changes no row the layout carries,
-        // so there is nothing here for a re-read of the tree to find.
-        update({
-          lastRefusal: null,
-          lastDocSaved: { replyTo: frame.replyTo, updatedAt: frame.updatedAt },
-        });
-        return;
-      }
-      case 'doc-content': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastDocContent: {
-            replyTo: frame.replyTo,
-            content: frame.content,
-            updatedAt: frame.updatedAt,
-          },
-        });
-        return;
-      }
-      case 'graph-created': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        // No re-request, for the reason a document create has none: a graph is
-        // a node, the hub broadcasts `catalogue-changed` after making one, and
-        // this client hears it like every other.
-        update({
-          lastRefusal: null,
-          lastGraphCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
-        });
-        return;
-      }
       case 'graph-document': {
         pending.delete(frame.replyTo);
-        const graph: GraphDocumentView = {
+        const graphs = new Map(snapshot.graphDocuments);
+        graphs.set(frame.nodeId, {
           replyTo: frame.replyTo,
           nodeId: frame.nodeId,
           name: frame.name,
           draftVersion: frame.draftVersion,
           document: frame.document,
           published: frame.published,
-        };
-        const graphs = new Map(snapshot.graphDocuments);
-        graphs.set(frame.nodeId, graph);
-        update({ lastRefusal: null, lastGraphDocument: graph, graphDocuments: graphs });
-        return;
-      }
-      case 'graph-saved': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        // A save changes the draft and nothing the tree carries.
-        update({
-          lastRefusal: null,
-          lastGraphSaved: {
-            replyTo: frame.replyTo,
-            version: frame.version,
-            updatedAt: frame.updatedAt,
-          },
         });
-        return;
-      }
-      case 'graph-published': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        // A publish changes which versions exist and nothing the tree carries.
-        update({
-          lastRefusal: null,
-          lastGraphPublished: { replyTo: frame.replyTo, version: frame.version },
-        });
-        return;
-      }
-      case 'graph-run-started': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastRunStarted: { replyTo: frame.replyTo, runId: frame.runId, number: frame.number },
-        });
+        update({ graphDocuments: graphs });
         return;
       }
       case 'graph-run-state': {
@@ -2157,15 +1622,6 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         update({ runs: new Map(runs) });
         return;
       }
-      case 'graph-run-cancelled': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastRunCancelled: { replyTo: frame.replyTo, runId: frame.runId },
-        });
-        return;
-      }
       case 'graph-run-latest': {
         // The answer to a read, and to an open of one run: either way it is
         // addressed, and the frame that asked is settled here.
@@ -2173,26 +1629,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         remember(frame);
         // A run in the answer is filed like any state, so that a screen
         // reading its graph's newest out of `runs` finds it there too.
-        if (frame.run !== null) fileRun(frame.run);
-        update({
-          lastRefusal: null,
-          lastRunLatest: { replyTo: frame.replyTo, nodeId: frame.nodeId, run: frame.run },
-          ...(frame.run === null ? {} : { runs: new Map(runs) }),
-        });
-        return;
-      }
-      case 'graph-simulated': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastSimulated: {
-            replyTo: frame.replyTo,
-            nodeId: frame.nodeId,
-            path: frame.path,
-            reason: frame.reason,
-          },
-        });
+        if (frame.run !== null) {
+          fileRun(frame.run);
+          update({ runs: new Map(runs) });
+        }
         return;
       }
       case 'graph-run-history': {
@@ -2206,7 +1646,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           nodeId: frame.nodeId,
           runs: frame.runs,
         });
-        update({ lastRefusal: null, runHistories: histories });
+        update({ runHistories: histories });
         return;
       }
       case 'session-transcript-read': {
@@ -2222,19 +1662,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           olderExist: frame.olderExist,
         });
         evictOldestTranscripts();
-        update({ lastRefusal: null, transcripts: new Map(transcripts) });
-        return;
-      }
-      case 'node-renamed':
-      case 'node-moved':
-      case 'node-removed':
-      case 'node-removal-forgotten': {
-        pending.delete(frame.replyTo);
-        remember(frame);
-        // One case for four frames, because the answer is the same: the tree
-        // did what was asked, and what is on screen comes from the layout the
-        // broadcast is about to make this client re-read.
-        update({ lastRefusal: null, lastTreeChange: { replyTo: frame.replyTo, nodeId: null } });
+        update({ transcripts: new Map(transcripts) });
         return;
       }
       case 'catalogue-page': {
@@ -2397,8 +1825,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         pending.delete(frame.replyTo);
         remember(frame);
         // A refusal answers a request as surely as a reply does, and its words
-        // are the hub's own. It still goes into `lastRefusal`: the connection
-        // line shows the newest "no" whoever asked for it.
+        // are the hub's own: filed under the frame it refuses, like a yes.
         waiting.get(frame.replyTo)?.({ ok: false, reason: frame.message });
         waiting.delete(frame.replyTo);
         // A refused query has a caller blocked on it, and it is told first: the
@@ -2414,10 +1841,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           message: frame.message,
           holder: frame.holder,
         };
-        update({ lastRefusal: refusal });
-        // And against the start it answers, when it answers one. The slot
-        // above is the newest "no" on the connection and a later yes clears
-        // it; a pane waiting on this start needs the one that was said to it.
+        // And against the start it answers, when it answers one.
         noteStartAnswer(frame.replyTo, { started: null, refusal });
         if (!established && frame.code === 'protocol-version') {
           // Redialling on a timer cannot change which protocol either side
@@ -2564,22 +1988,18 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       commandQueue: queueView(null),
       terminalInput: INITIAL_TERMINAL,
       // An answer is to a frame some screen sent on a connection that is now
-      // over, and the next one to look sends its own.
+      // over, and the next one to look sends its own. Among them are a
+      // directory listing of somebody else's disk as it was, a document that
+      // may have been edited on its own machine meanwhile, and a simulated
+      // path through a draft that may have moved: copies this store cannot
+      // vouch for.
       answers: new Map(),
-      // A listing describes somebody else's disk as it was; nothing is looking
-      // any more, and the next page to look will ask again.
-      lastListing: null,
-      // Same, and more so: a catalogue page is pinned to a version this hub run
+      // A catalogue page is pinned to a version this hub run
       // may not be at when somebody looks again.
       catalogue: null,
-      // The same, and more so: a document is a file that may have been edited
-      // on its own machine while nothing here was connected, so holding the
-      // characters would be holding a copy this store cannot vouch for.
-      lastDocContent: null,
       // A graph's draft is the hub's, and another client may have saved it
-      // while nothing here was connected: the same copy this store cannot
-      // vouch for, so the screen asks again when it is looked at.
-      lastGraphDocument: null,
+      // while nothing here was connected: a copy this store cannot vouch
+      // for, so the screen asks again when it is looked at.
       graphDocuments: new Map(),
       // A run moves on the hub's own clock. What this store held is where a
       // run was when the socket went, and the next state to arrive is whole.
@@ -2587,9 +2007,6 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // A run may have started or ended meanwhile, so a list held from then
       // is a list nobody can vouch for; the screen asks again.
       runHistories: new Map(),
-      // A path is a reading of a draft and of the fleet's placement, and
-      // either may have moved while nothing here was connected.
-      lastSimulated: null,
       // And the same again: the transcript file goes on being appended to on
       // its own machine while nothing here is connected.
       transcripts: new Map(),
