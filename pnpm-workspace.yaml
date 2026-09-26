@@ -22,13 +22,8 @@ allowBuilds:
   node-pty: true
 
 # Registry fetches retry for longer than pnpm's defaults (2 retries, 10s then
-# 1min backoff, 60s timeout). CI run 36029081408 (2026-09-24, AGX-145, the
-# bootstrap job) failed on "node-pty-1.1.0.tgz error (23). Will retry in 10
-# seconds. 2 retries left", then a TimeoutError, with exactly those defaults:
-# a flaky registry, not a broken change. Here rather than in .npmrc because
-# pnpm 11 reads only auth settings from .npmrc; a fetch setting there is
-# ignored without a word. The Dockerfile's `manifests` stage asserts
-# fetchRetries, so that cannot happen quietly.
+# 1min backoff, 60s timeout). Here and not in .npmrc, which pnpm 11 reads only
+# for auth; the Dockerfile's `manifests` stage asserts fetchRetries.
 fetchRetries: 5
 fetchRetryMintimeout: 10000
 fetchRetryMaxtimeout: 60000

@@ -29,14 +29,9 @@ ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /app
 COPY package.json .npmrc ./
 # `corepack install` reads the version out of packageManager, so the pinned
-# pnpm lives in exactly one place.
-#
-# It is also one registry download with no retry of its own and no setting to
-# ask for one, and CI runs 35003811530 and 35047068283 each lost a job to a
-# single failed fetch of the pnpm tarball. So it is retried here, five times
-# with a growing pause. The explicit `exit 1` is load-bearing: this RUN has no
-# `-e`, and without it a fifth failure would end the loop, and the layer, as a
-# success with no pnpm in it.
+# pnpm lives in exactly one place. It has no retry setting, so it is retried
+# here. This RUN has no `-e`: without the explicit `exit 1`, a fifth failure
+# would build as a success with no pnpm in it.
 RUN corepack enable \
     && for attempt in 1 2 3 4 5; do \
         corepack install && break; \
@@ -62,11 +57,8 @@ RUN apt-get update \
     && apt-get install --no-install-recommends --yes python3 make g++ git \
     && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
-# The registry retry settings in pnpm-workspace.yaml are all that stands
-# between one slow tarball and a red install, and nothing else notices them
-# gone: pnpm 11 reads no fetch setting out of .npmrc, so moving them back there
-# would be silently ignored. Asserted where the file first exists, so the stage
-# that runs `pnpm install` cannot be built without them.
+# pnpm 11 silently ignores fetch settings in .npmrc, so the retries in
+# pnpm-workspace.yaml are asserted where that file first exists.
 RUN pnpm config get fetch-retries | grep -qx 5
 COPY apps/hub/package.json ./apps/hub/
 COPY apps/cli/package.json ./apps/cli/
