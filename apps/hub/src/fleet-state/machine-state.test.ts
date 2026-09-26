@@ -7,6 +7,7 @@ import {
   serverIdSchema,
   serverAddressSchema,
   sessionIdSchema,
+  sessionRefKey,
   storeIdSchema,
   type Activity,
   type MachineState,
@@ -17,7 +18,7 @@ import {
 import { readyProvider } from '@agentplex/providers/testing';
 import { createLogger } from '@agentplex/node-shared';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
-import { createFleetState, sessionKey, type SessionProject } from './fleet-state.js';
+import { createFleetState, type SessionProject } from './fleet-state.js';
 import { toMachineState } from './machine-state.js';
 
 /**
@@ -150,7 +151,10 @@ function publishedInProject(project: SessionProject) {
   state.applyProjects(
     new Map([
       [
-        sessionKey({ storeId: store('store-work'), sessionId: sessionIdSchema.parse('session-1') }),
+        sessionRefKey({
+          storeId: store('store-work'),
+          sessionId: sessionIdSchema.parse('session-1'),
+        }),
         project,
       ],
     ]),

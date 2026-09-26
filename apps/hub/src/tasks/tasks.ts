@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   SESSION_TASK_MAX_CHARS,
+  sessionRefKey,
   sessionRefSchema,
   type SessionId,
   type SessionRef,
@@ -143,15 +144,6 @@ const storedRowSchema = z.object({
 });
 
 /**
- * The key the in-memory map is filed under. JSON for the reason attention's is:
- * a store id and a session id are opaque, and two sessions colliding on one key
- * would put one session's task on another.
- */
-function keyOf(ref: SessionRef): string {
-  return JSON.stringify([ref.storeId, ref.sessionId]);
-}
-
-/**
  * The prompt as a task, or `null` when it is not one.
  *
  * Three things happen here and each is the parse rather than a convenience.
@@ -201,7 +193,7 @@ export function createTasks({
   const naming = createStartNaming({ timers, logger });
 
   const record = async (ref: SessionRef, task: string): Promise<void> => {
-    if (rows.has(keyOf(ref))) {
+    if (rows.has(sessionRefKey(ref))) {
       logger.debug('this session already has a task', ref);
       return;
     }
@@ -223,7 +215,7 @@ export function createTasks({
       logger.warn('a task could not be written', { ...ref, problem: String(error) });
       return;
     }
-    rows.set(keyOf(ref), task);
+    rows.set(sessionRefKey(ref), task);
     onChanged(ref, task);
   };
 
@@ -249,7 +241,7 @@ export function createTasks({
           });
           continue;
         }
-        rows.set(keyOf(ref.data), parsed.data.task);
+        rows.set(sessionRefKey(ref.data), parsed.data.task);
         onChanged(ref.data, parsed.data.task);
         loaded += 1;
       }

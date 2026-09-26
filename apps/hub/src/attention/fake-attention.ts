@@ -1,4 +1,4 @@
-import type { SessionRef } from '@agentplex/protocol';
+import { sessionRefKey, type SessionRef } from '@agentplex/protocol';
 import type { Attention, AttentionOutcome, SessionAttention } from './attention.js';
 import { UNATTENDED } from './attention.js';
 
@@ -45,16 +45,21 @@ export interface FakeAttentionOptions {
 export function createFakeAttention(options: FakeAttentionOptions = {}): FakeAttention {
   const now = options.now ?? 1_000;
   const through = options.through ?? 500;
-  const rows = new Map<string, SessionAttention>();
+  /** Rows by session, each beside the ref it is keyed by. */
+  const rows = new Map<
+    string,
+    { readonly ref: SessionRef; readonly attention: SessionAttention }
+  >();
   const acknowledged: SessionRef[] = [];
   const mutes: { ref: SessionRef; muted: boolean }[] = [];
   const announced: SessionRef[] = [];
   let refusal: Extract<AttentionOutcome, { ok: false }> | null = null;
 
-  const keyOf = (ref: SessionRef): string => JSON.stringify([ref.storeId, ref.sessionId]);
+  const heldFor = (ref: SessionRef): SessionAttention =>
+    rows.get(sessionRefKey(ref))?.attention ?? UNATTENDED;
 
   const write = (ref: SessionRef, attention: SessionAttention): AttentionOutcome => {
-    rows.set(keyOf(ref), attention);
+    rows.set(sessionRefKey(ref), { ref, attention });
     announced.push(ref);
     options.onChanged?.(ref, attention);
     return { ok: true, attention };
@@ -62,27 +67,23 @@ export function createFakeAttention(options: FakeAttentionOptions = {}): FakeAtt
 
   return {
     async load(): Promise<void> {
-      for (const [key, attention] of rows) {
-        const [storeId, sessionId] = JSON.parse(key) as [
-          SessionRef['storeId'],
-          SessionRef['sessionId'],
-        ];
-        announced.push({ storeId, sessionId });
-        options.onChanged?.({ storeId, sessionId }, attention);
+      for (const { ref, attention } of rows.values()) {
+        announced.push(ref);
+        options.onChanged?.(ref, attention);
       }
     },
 
     async acknowledge(ref: SessionRef): Promise<AttentionOutcome> {
       acknowledged.push(ref);
       if (refusal !== null) return refusal;
-      const held = rows.get(keyOf(ref)) ?? UNATTENDED;
+      const held = heldFor(ref);
       return write(ref, { acknowledgedThrough: through, mutedAt: held.mutedAt });
     },
 
     async setMuted(ref: SessionRef, muted: boolean): Promise<AttentionOutcome> {
       mutes.push({ ref, muted });
       if (refusal !== null) return refusal;
-      const held = rows.get(keyOf(ref)) ?? UNATTENDED;
+      const held = heldFor(ref);
       return write(ref, {
         acknowledgedThrough: held.acknowledgedThrough,
         mutedAt: muted ? now : null,

@@ -1,6 +1,6 @@
-import { wantsAttention, type ApprovalId, type StoreId } from '@agentplex/protocol';
+import { sessionRefKey, wantsAttention, type ApprovalId, type StoreId } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
-import type { HubStateSnapshot, SessionRow } from '../fleet-state/fleet-state.js';
+import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
 import type { PushEvent } from './push.js';
 
 /**
@@ -88,11 +88,6 @@ export interface AttentionEdge {
   observe(snapshot: HubStateSnapshot): void;
 }
 
-/** One session's key in the remembered map. Two ids that are already strings. */
-function sessionKey(row: SessionRow): string {
-  return `${row.ref.storeId}\u0000${row.ref.sessionId}`;
-}
-
 export function createAttentionEdge({
   notify,
   logger: parent,
@@ -146,7 +141,7 @@ export function createAttentionEdge({
         if (seeding) seeded.add(store.storeId);
 
         for (const row of store.sessions) {
-          const key = sessionKey(row);
+          const key = sessionRefKey(row.ref);
           present.add(key);
           const updatedAt = row.descriptor.updatedAt;
 
