@@ -39,8 +39,7 @@ session's identity is `{ storeId, sessionId }`, never the machine.
   `pnpm test` is `pnpm -r test`: a suite outside a member runs nowhere.
 - `packages/` holds seams with at least two consumers: `protocol`,
   `node-shared`, `providers`, `pty`, `release`. A package's dependency list is
-  its allowed import set, and `pnpm lint` holds each package to it. One
-  consumer means a folder, not a package.
+  its allowed import set. One consumer means a folder, not a package.
 - `packages/protocol` is bundled into a browser as well as loaded by a service,
   so it may use neither Node builtins nor another workspace package.
 - `tests/hub-server` is the one place both apps load into one process: the hub
