@@ -23,14 +23,14 @@ describe('sessionRefKey', () => {
     expect(sessionRefKey(ref('session-a', 'store-a'))).not.toBe(base);
   });
 
-  it.each([
-    ['/', ['a/b', 'c'], ['a', 'b/c']],
-    ['a space', ['a b', 'c'], ['a', 'b c']],
-    ['NUL', ['a\u0000b', 'c'], ['a', 'b\u0000c']],
-    ['a colon', ['a:b', 'c'], ['a', 'b:c']],
-    ['a quote and comma', ['a","b', 'c'], ['a', 'b","c']],
-  ])('keeps ids apart when they contain %s', (_label, [s1, i1], [s2, i2]) => {
-    expect(sessionRefKey(ref(s1, i1))).not.toBe(sessionRefKey(ref(s2, i2)));
+  it.each<[label: string, left: SessionRef, right: SessionRef]>([
+    ['/', ref('a/b', 'c'), ref('a', 'b/c')],
+    ['a space', ref('a b', 'c'), ref('a', 'b c')],
+    ['NUL', ref('a\u0000b', 'c'), ref('a', 'b\u0000c')],
+    ['a colon', ref('a:b', 'c'), ref('a', 'b:c')],
+    ['a quote and comma', ref('a","b', 'c'), ref('a', 'b","c')],
+  ])('keeps ids apart when they contain %s', (_label, left, right) => {
+    expect(sessionRefKey(left)).not.toBe(sessionRefKey(right));
   });
 
   it('is a string that carries both ids', () => {
