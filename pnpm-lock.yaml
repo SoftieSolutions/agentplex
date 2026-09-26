@@ -325,30 +325,41 @@ importers:
         version: 3.2.7(@types/node@24.13.3)(jsdom@30.0.1)(supports-color@7.2.0)(yaml@2.9.0)
 
   scripts:
-    devDependencies:
+    dependencies:
       '@agentplex/protocol':
         specifier: workspace:*
         version: link:../packages/protocol
       '@agentplex/release':
         specifier: workspace:*
         version: link:../packages/release
+      zod:
+        specifier: '>=4.5.4 <5.0.0'
+        version: 4.5.4
+    devDependencies:
       '@types/node':
         specifier: '>=24.13.3 <25.0.0'
         version: 24.13.3
       '@vitest/coverage-v8':
         specifier: '>=3.2.7 <4.0.0'
         version: 3.2.7(supports-color@7.2.0)(vitest@3.2.7(@types/node@24.13.3)(jsdom@30.0.1)(supports-color@7.2.0)(yaml@2.9.0))
+      eslint:
+        specifier: '>=9.39.5 <10.0.0'
+        version: 9.39.5(supports-color@7.2.0)
       typescript:
         specifier: '>=5.9.3 <6.0.0'
         version: 5.9.3
+      typescript-eslint:
+        specifier: '>=8.69.0 <9.0.0'
+        version: 8.69.0(eslint@9.39.5(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
       vitest:
         specifier: '>=3.2.7 <4.0.0'
         version: 3.2.7(@types/node@24.13.3)(jsdom@30.0.1)(supports-color@7.2.0)(yaml@2.9.0)
-      zod:
-        specifier: '>=4.5.4 <5.0.0'
-        version: 4.5.4
 
   tests/hub-server:
+    dependencies:
+      '@agentplex/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
     devDependencies:
       '@agentplex/node-shared':
         specifier: workspace:*
@@ -356,9 +367,6 @@ importers:
       '@agentplex/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@agentplex/providers':
-        specifier: workspace:*
-        version: link:../../packages/providers
       '@agentplex/pty':
         specifier: workspace:*
         version: link:../../packages/pty
