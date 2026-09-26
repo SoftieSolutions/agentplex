@@ -22,9 +22,8 @@ import {
   encodeHubFrame,
   serveClientConnection,
   type ClientConnection,
-  type ClientPush,
-  type EncodedMachineState,
 } from './client-connection.js';
+import type { ClientPush, EncodedMachineState } from './connection-dependencies.js';
 
 /**
  * Every attached client, and the one thing they are all told.
