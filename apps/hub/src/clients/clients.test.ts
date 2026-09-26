@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   APPROVAL_PROPOSAL_MAX_CHARS,
-  clientFrameSchema,
   type ClientFrame,
+  parseClientFrame,
   parseHubFrame,
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
@@ -2847,13 +2847,23 @@ describe('a graph run', () => {
 });
 
 /**
+ * A sample through the hub's own parser, so a sample the protocol would refuse
+ * fails here rather than reaching the gate as a frame no client could send.
+ */
+function clientFrame(raw: unknown): ClientFrame {
+  const parsed = parseClientFrame(raw);
+  if (!parsed.ok) throw new Error(`not a client frame: ${parsed.reason}`);
+  return parsed.value;
+}
+
+/**
  * The gate, as one rule over every frame the protocol carries.
  *
  * A connection that has not said hello may say one other thing -- that it
  * could not read what the hub sent -- and nothing else reaches a feature. The
  * samples are keyed by frame type so that a frame added to the protocol fails
- * the first assertion here until somebody writes it a sample, and with it the
- * proof that it too is refused before hello and touches nothing on the way.
+ * to compile here until somebody writes it a sample, and with it the proof
+ * that it too is refused before hello and touches nothing on the way.
  */
 describe('every frame but a hello, before one', () => {
   const STORE = 'store-work';
@@ -2862,15 +2872,15 @@ describe('every frame but a hello, before one', () => {
   const TARGET = { by: 'session', storeId: STORE, sessionId: SESSION };
 
   const SAMPLES: Record<Exclude<ClientFrame['type'], 'hello' | 'protocol-error'>, ClientFrame> = {
-    ping: clientFrameSchema.parse({ type: 'ping', id: 1 }),
-    'layout-request': clientFrameSchema.parse({ type: 'layout-request', id: 1 }),
-    'pane-layout-request': clientFrameSchema.parse({ type: 'pane-layout-request', id: 1 }),
-    'pane-layout-save': clientFrameSchema.parse({
+    ping: clientFrame({ type: 'ping', id: 1 }),
+    'layout-request': clientFrame({ type: 'layout-request', id: 1 }),
+    'pane-layout-request': clientFrame({ type: 'pane-layout-request', id: 1 }),
+    'pane-layout-save': clientFrame({
       type: 'pane-layout-save',
       id: 1,
       layout: '{}',
     }),
-    'session-start': clientFrameSchema.parse({
+    'session-start': clientFrame({
       type: 'session-start',
       id: 1,
       storeId: STORE,
@@ -2880,89 +2890,89 @@ describe('every frame but a hello, before one', () => {
       server: null,
       project: null,
     }),
-    'session-stop': clientFrameSchema.parse({
+    'session-stop': clientFrame({
       type: 'session-stop',
       id: 1,
       storeId: STORE,
       sessionId: SESSION,
     }),
-    'session-pause': clientFrameSchema.parse({
+    'session-pause': clientFrame({
       type: 'session-pause',
       id: 1,
       storeId: STORE,
       sessionId: SESSION,
     }),
-    'session-resume': clientFrameSchema.parse({
+    'session-resume': clientFrame({
       type: 'session-resume',
       id: 1,
       storeId: STORE,
       sessionId: SESSION,
     }),
-    'session-transcript': clientFrameSchema.parse({
+    'session-transcript': clientFrame({
       type: 'session-transcript',
       id: 1,
       storeId: STORE,
       sessionId: SESSION,
       count: 50,
     }),
-    'session-acknowledge': clientFrameSchema.parse({
+    'session-acknowledge': clientFrame({
       type: 'session-acknowledge',
       id: 1,
       storeId: STORE,
       sessionId: SESSION,
     }),
-    'session-mute': clientFrameSchema.parse({
+    'session-mute': clientFrame({
       type: 'session-mute',
       id: 1,
       storeId: STORE,
       sessionId: SESSION,
       muted: true,
     }),
-    'server-pair': clientFrameSchema.parse({ ...A_PAIRING, id: 1 }),
-    'server-unpair': clientFrameSchema.parse({
+    'server-pair': clientFrame({ ...A_PAIRING, id: 1 }),
+    'server-unpair': clientFrame({
       type: 'server-unpair',
       id: 1,
       registrationId: 'registration-1',
     }),
-    'directory-list': clientFrameSchema.parse({
+    'directory-list': clientFrame({
       type: 'directory-list',
       id: 1,
       server: 'registration-1',
       directory: null,
     }),
-    'project-create': clientFrameSchema.parse({
+    'project-create': clientFrame({
       type: 'project-create',
       id: 1,
       name: 'work',
       directory: '/srv/work',
     }),
-    'node-create-folder': clientFrameSchema.parse({
+    'node-create-folder': clientFrame({
       type: 'node-create-folder',
       id: 1,
       parentId: null,
       name: 'this week',
     }),
-    'node-rename': clientFrameSchema.parse({
+    'node-rename': clientFrame({
       type: 'node-rename',
       id: 1,
       nodeId: NODE,
       name: 'the checkout',
     }),
-    'node-move': clientFrameSchema.parse({
+    'node-move': clientFrame({
       type: 'node-move',
       id: 1,
       nodeId: NODE,
       parentId: 'node-folder',
       position: 3,
     }),
-    'node-remove': clientFrameSchema.parse({ type: 'node-remove', id: 1, nodeId: NODE }),
-    'node-forget-removal': clientFrameSchema.parse({
+    'node-remove': clientFrame({ type: 'node-remove', id: 1, nodeId: NODE }),
+    'node-forget-removal': clientFrame({
       type: 'node-forget-removal',
       id: 1,
       storeId: STORE,
       sessionId: SESSION,
     }),
-    'catalogue-query': clientFrameSchema.parse({
+    'catalogue-query': clientFrame({
       type: 'catalogue-query',
       id: 1,
       view: 'list',
@@ -2972,7 +2982,7 @@ describe('every frame but a hello, before one', () => {
       cursor: null,
       limit: 25,
     }),
-    'doc-create': clientFrameSchema.parse({
+    'doc-create': clientFrame({
       type: 'doc-create',
       id: 1,
       projectId: 'project-1',
@@ -2980,81 +2990,81 @@ describe('every frame but a hello, before one', () => {
       name: 'plan.md',
       content: '# Plan\n',
     }),
-    'doc-save': clientFrameSchema.parse({
+    'doc-save': clientFrame({
       type: 'doc-save',
       id: 1,
       nodeId: NODE,
       content: '# Plan\n',
     }),
-    'doc-open': clientFrameSchema.parse({ type: 'doc-open', id: 1, nodeId: NODE }),
-    'graph-create': clientFrameSchema.parse({
+    'doc-open': clientFrame({ type: 'doc-open', id: 1, nodeId: NODE }),
+    'graph-create': clientFrame({
       type: 'graph-create',
       id: 1,
       projectId: 'project-1',
       name: 'triage',
     }),
-    'graph-open': clientFrameSchema.parse({ type: 'graph-open', id: 1, nodeId: NODE }),
-    'graph-save': clientFrameSchema.parse({
+    'graph-open': clientFrame({ type: 'graph-open', id: 1, nodeId: NODE }),
+    'graph-save': clientFrame({
       type: 'graph-save',
       id: 1,
       nodeId: NODE,
       document: { nodes: [], edges: [] },
     }),
-    'graph-publish': clientFrameSchema.parse({ type: 'graph-publish', id: 1, nodeId: NODE }),
-    'graph-run': clientFrameSchema.parse({ type: 'graph-run', id: 1, nodeId: NODE, input: {} }),
-    'graph-run-cancel': clientFrameSchema.parse({
+    'graph-publish': clientFrame({ type: 'graph-publish', id: 1, nodeId: NODE }),
+    'graph-run': clientFrame({ type: 'graph-run', id: 1, nodeId: NODE, input: {} }),
+    'graph-run-cancel': clientFrame({
       type: 'graph-run-cancel',
       id: 1,
       runId: 'run-1',
     }),
-    'graph-run-read': clientFrameSchema.parse({ type: 'graph-run-read', id: 1, nodeId: NODE }),
-    'graph-run-history-request': clientFrameSchema.parse({
+    'graph-run-read': clientFrame({ type: 'graph-run-read', id: 1, nodeId: NODE }),
+    'graph-run-history-request': clientFrame({
       type: 'graph-run-history-request',
       id: 1,
       nodeId: NODE,
     }),
-    'graph-run-open': clientFrameSchema.parse({
+    'graph-run-open': clientFrame({
       type: 'graph-run-open',
       id: 1,
       nodeId: NODE,
       runId: 'run-1',
     }),
-    'graph-simulate': clientFrameSchema.parse({
+    'graph-simulate': clientFrame({
       type: 'graph-simulate',
       id: 1,
       nodeId: NODE,
       input: {},
     }),
-    'session-subscribe': clientFrameSchema.parse({
+    'session-subscribe': clientFrame({
       type: 'session-subscribe',
       id: 1,
       target: TARGET,
     }),
-    'session-unsubscribe': clientFrameSchema.parse({
+    'session-unsubscribe': clientFrame({
       type: 'session-unsubscribe',
       id: 1,
       target: TARGET,
     }),
-    'terminal-input': clientFrameSchema.parse({
+    'terminal-input': clientFrame({
       type: 'terminal-input',
       id: 1,
       target: TARGET,
       data: 'yes\r',
     }),
-    'terminal-resize': clientFrameSchema.parse({
+    'terminal-resize': clientFrame({
       type: 'terminal-resize',
       id: 1,
       target: TARGET,
       size: { cols: 96, rows: 30 },
     }),
-    'approval-decide': clientFrameSchema.parse({
+    'approval-decide': clientFrame({
       type: 'approval-decide',
       id: 1,
       subject: { kind: 'session', storeId: STORE, sessionId: SESSION },
       approvalId: 'approval-1',
       decision: 'grant',
     }),
-    'push-subscribe': clientFrameSchema.parse({
+    'push-subscribe': clientFrame({
       type: 'push-subscribe',
       id: 1,
       subscription: {
@@ -3066,23 +3076,23 @@ describe('every frame but a hello, before one', () => {
         },
       },
     }),
-    'push-unsubscribe': clientFrameSchema.parse({
+    'push-unsubscribe': clientFrame({
       type: 'push-unsubscribe',
       id: 1,
       endpoint: 'https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bHxN0-example',
     }),
-    'approval-policy-list': clientFrameSchema.parse({
+    'approval-policy-list': clientFrame({
       type: 'approval-policy-list',
       id: 1,
       projectId: 'node-project-work',
     }),
-    'approval-policy-add': clientFrameSchema.parse({
+    'approval-policy-add': clientFrame({
       type: 'approval-policy-add',
       id: 1,
       projectId: 'node-project-work',
       rule: { tool: 'Bash', proposal: 'command: pnpm test' },
     }),
-    'approval-policy-remove': clientFrameSchema.parse({
+    'approval-policy-remove': clientFrame({
       type: 'approval-policy-remove',
       id: 1,
       projectId: 'node-project-work',
@@ -3183,14 +3193,6 @@ describe('every frame but a hello, before one', () => {
     };
     return { broadcast, calls, records, terminal };
   }
-
-  it('has a sample for every frame the protocol carries', () => {
-    const carried = clientFrameSchema.options
-      .map((option) => option.shape.type.value)
-      .filter((type) => type !== 'hello' && type !== 'protocol-error');
-
-    expect(Object.keys(SAMPLES).sort()).toEqual(carried.sort());
-  });
 
   it.each(Object.entries(SAMPLES))(
     'refuses %s, closes, and reaches nothing',

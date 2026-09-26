@@ -11,11 +11,11 @@ import { acts, answers, defineMcpTool, type McpTool } from './tool-registry.js';
  * Makes a document in a project, on one machine, with its first content.
  *
  * The same four arguments the client frame carries and in the same shape, for
- * the same reasons `client.ts` states them. `projectId` is a node id and never
- * a directory: the hub is the only party that turns one into a path, on the
- * machine that is about to write. `server` is named by the caller and is not
- * the hub's to choose -- unlike a session start, which names a store the hub
- * may run on any machine that has it mounted, a document is a file on one
+ * the same reasons `client-to-hub.ts` states them. `projectId` is a node id and
+ * never a directory: the hub is the only party that turns one into a path, on
+ * the machine that is about to write. `server` is named by the caller and is
+ * not the hub's to choose -- unlike a session start, which names a store the
+ * hub may run on any machine that has it mounted, a document is a file on one
  * machine's disk and there is no sense in which the hub could pick.
  *
  * It refuses where the docs feature refuses and in the feature's own words:

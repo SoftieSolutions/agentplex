@@ -33,7 +33,7 @@ import type { ConnectionPhase } from '../store/views.js';
  * one and the hub has no business choosing it. What this offers is every
  * connected machine, and what it cannot offer is the narrower question -- which
  * of them has this project's directory. A client knows a project by its node
- * id and never by its path (`client.ts` says why a doc frame carries no
+ * id and never by its path (`client-to-hub.ts` says why a doc frame carries no
  * directory), so "the machines this checkout is on" is not a question this
  * build can ask. A machine that does not have it answers the create with the
  * refusal its own disk gives, and the form renders that sentence.

@@ -6,17 +6,17 @@ import { sessionIdSchema, startIdSchema, storeIdSchema } from './identity.js';
  * Terminal frames: the bytes a session produces, the keystrokes it is given,
  * and the standing interest that connects the two.
  *
- * They live here rather than in `client.ts` or `server.ts` because they are the
- * one part of the protocol that is relayed rather than answered. A client
- * subscribes to a session, the hub subscribes to the server holding it, and the
- * chunk that comes back travels both legs almost unchanged; two hand-written
- * copies of these shapes would be two things to keep in step for no gain, and
- * the day they drifted the symptom would be a terminal that renders almost
- * right.
+ * They live here rather than in `client-to-hub.ts`, `hub-to-client.ts` or
+ * `server.ts` because they are the one part of the protocol that is relayed
+ * rather than answered. A client subscribes to a session, the hub subscribes to
+ * the server holding it, and the chunk that comes back travels both legs almost
+ * unchanged; two hand-written copies of these shapes would be two things to
+ * keep in step for no gain, and the day they drifted the symptom would be a
+ * terminal that renders almost right.
  *
- * Each direction still owns exactly one parser. `client.ts` and `server.ts`
- * put these schemas into their own unions, and nothing downstream re-checks a
- * `type` the union already decided.
+ * Each direction still owns exactly one parser. `client-to-hub.ts`,
+ * `hub-to-client.ts` and `server.ts` put these schemas into their own unions,
+ * and nothing downstream re-checks a `type` the union already decided.
  *
  * ## The one field that differs between the legs, and why it is not two files
  *

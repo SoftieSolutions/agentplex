@@ -115,9 +115,9 @@ export const DIRECTORY_ENTRIES_MAX = 1000;
  * may name from here.
  *
  * The client leg carries one more field -- which server -- and is defined in
- * `client.ts` beside the rest of that direction. By the time a request reaches
- * this leg the hub has already picked the connection, so naming the machine
- * again would be the hub telling a server which server it is.
+ * `client-to-hub.ts` beside the rest of that direction. By the time a request
+ * reaches this leg the hub has already picked the connection, so naming the
+ * machine again would be the hub telling a server which server it is.
  */
 export const directoryListFrameSchema = z.object({
   type: z.literal('directory-list'),

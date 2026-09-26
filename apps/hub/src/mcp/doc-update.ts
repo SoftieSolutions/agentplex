@@ -15,9 +15,9 @@ import { acts, answers, defineMcpTool, type McpTool } from './tool-registry.js';
  * reading it is the party that has to get this right and a hint in a schema
  * comment it never sees would not help it.
  *
- * The protocol is shaped that way on purpose and `client.ts` carries the
- * argument: the hub holds no copy of any document, so a patch would be the hub
- * applying a diff against a version it never saw whole, and a write that
+ * The protocol is shaped that way on purpose and `client-to-hub.ts` carries
+ * the argument: the hub holds no copy of any document, so a patch would be the
+ * hub applying a diff against a version it never saw whole, and a write that
  * half-applied would leave a file nobody can account for. `doc_read` returns
  * the whole document for exactly this reason -- read it, change it, send it
  * back.

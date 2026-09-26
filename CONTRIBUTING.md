@@ -351,22 +351,22 @@ the version (AGX-284) is what keeps it paid only by the peers on the leg that
 moved: a client-only change no longer refuses every paired server.
 
 Which leg bumps is decided by the snapshot that moves, not by the file you
-edited. `client.ts` and `server.ts` share a good deal -- approval, directory,
-doc, frames, identity, machine-state, session, terminal, transcript and
-readiness schemas are imported by both -- so an edit to one of those can move
-either leg or both. `packages/protocol/src/wire-shape.test.ts` renders each
-leg's schemas to JSON Schema and compares them with
-`wire-shape/<leg>-leg.v<version>.json`: change a shape without a bump and the
-file for the current number no longer matches; bump without committing the new
-file and the test fails, because it checks through `import.meta.glob` that the
-file was there before the run rather than trusting vitest, which writes a
-missing file snapshot and passes whenever `CI` is unset -- as it is in the check
-containers, where handing pnpm `CI` makes it write its store and trips the write
-guard. The first run after a bump writes the new file and fails naming it;
-commit it and delete the old one by hand: `toMatchFileSnapshot` never reports an
-obsolete file. What the guard
-cannot see is logic inside a `.refine` or `.transform`, which JSON Schema has no
-way to say; a change there needs the bump without the guard's help.
+edited. The client leg's two files (`client-to-hub.ts`, `hub-to-client.ts`) and
+`server.ts` share a good deal -- approval, directory, doc, frames, identity,
+machine-state, session, terminal, transcript and readiness schemas are imported
+by both -- so an edit to one of those can move either leg or both.
+`packages/protocol/src/wire-shape.test.ts` renders each leg's schemas to JSON
+Schema and compares them with `wire-shape/<leg>-leg.v<version>.json`: change a
+shape without a bump and the file for the current number no longer matches; bump
+without committing the new file and the test fails, because it checks through
+`import.meta.glob` that the file was there before the run rather than trusting
+vitest, which writes a missing file snapshot and passes whenever `CI` is unset
+-- as it is in the check containers, where handing pnpm `CI` makes it write its
+store and trips the write guard. The first run after a bump writes the new file
+and fails naming it; commit it and delete the old one by hand:
+`toMatchFileSnapshot` never reports an obsolete file. What the guard cannot see
+is logic inside a `.refine` or `.transform`, which JSON Schema has no way to
+say; a change there needs the bump without the guard's help.
 
 The web client records both legs, not only the one its `hello` speaks. It judges
 a discovered server's beacon against its own `SERVER_PROTOCOL_VERSION`
@@ -374,9 +374,9 @@ a discovered server's beacon against its own `SERVER_PROTOCOL_VERSION`
 while the two builds hold the same number. Recording the leg is what lets
 `install.sh`, the image and `agentplex update` refuse a web and a hub that
 disagree on it; the price is that a server-leg change releases the web client
-too. AGX-242's three document frames
-are what it looks like: protocol 20, `packages/protocol/src/client.ts`, the
-hub's `client-connection.ts` and `frame-router.ts`, the web store, a regenerated
+too. AGX-242's three document frames are what it looks like: protocol 20,
+`packages/protocol/src/client-to-hub.ts` and `hub-to-client.ts`, the hub's
+`client-connection.ts` and `frame-router.ts`, the web store, a regenerated
 `hub-frames.fixture.ts` and the `tests/hub-server` suite. The feature folder was
 the cheap half of that diff.
 

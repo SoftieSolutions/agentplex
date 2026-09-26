@@ -70,8 +70,8 @@ export interface DocsDependencies {
    *
    * Only the read, like the catalogue takes: this feature makes no project,
    * renames none and removes none. The directory is the one thing a document
-   * frame needs and the one thing a client may not supply -- see `client.ts`
-   * for why a doc frame carries a node id and never a path.
+   * frame needs and the one thing a client may not supply -- see
+   * `client-to-hub.ts` for why a doc frame carries a node id and never a path.
    */
   readonly projects: Pick<Projects, 'directoryOf'>;
   /** How an instruction reaches one paired server. */

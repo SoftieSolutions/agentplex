@@ -6,7 +6,8 @@ import {
   catalogueItemSchema,
   catalogueQuerySchema,
 } from './catalogue.js';
-import { parseClientFrame, parseHubFrame } from './client.js';
+import { parseClientFrame } from './client-to-hub.js';
+import { parseHubFrame } from './hub-to-client.js';
 import {
   nodeIdSchema,
   nodeKindSchema,
