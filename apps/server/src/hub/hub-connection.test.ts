@@ -31,11 +31,8 @@ import { createFakeSessionController } from '../sessions/fake-session-controller
 import { createFakeTerminals } from '../terminal/fake-terminals.js';
 import { encodeClaudePermissionAnswer } from '@agentplex/providers';
 import { readProviderFixture } from '@agentplex/providers/testing';
-import {
-  createFakeGrantAuthority,
-  missingProvider,
-  readyProvider,
-} from '@agentplex/providers/testing';
+import { missingProvider, readyProvider } from '@agentplex/providers/testing';
+import { createFakeGrantAuthority } from '../grants/fake-grant-authority.js';
 import { createHubAudience } from './hub-audience.js';
 import {
   createFakeMachineLoadReader,

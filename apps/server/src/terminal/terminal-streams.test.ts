@@ -9,7 +9,8 @@ import {
 } from '@agentplex/protocol';
 import { createLogger } from '@agentplex/node-shared';
 import type { FakePtyFactory } from '@agentplex/pty/testing';
-import type { GrantId, Launch, LaunchPlan } from '@agentplex/providers';
+import type { Launch, LaunchPlan } from '@agentplex/providers';
+import type { GrantId } from '../grants/server-grants.js';
 import { createFakeTerminals, type FakeTerminalsOptions } from './fake-terminals.js';
 import type { TerminalManager } from './terminal-manager.js';
 import {

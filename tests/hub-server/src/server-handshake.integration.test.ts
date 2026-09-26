@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { serverAddressSchema, type HubId } from '@agentplex/protocol';
-import {
-  createFakeGrantFiles,
-  createFakeStoreFiles,
-  createFakeProcessRunner,
-} from '@agentplex/providers/testing';
+import { createFakeStoreFiles, createFakeProcessRunner } from '@agentplex/providers/testing';
+import { createFakeGrantFiles } from '../../../apps/server/src/grants/fake-grant-files.js';
 import { createProviderRegistry } from '@agentplex/providers';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
 import { createFakePtyFactory } from '@agentplex/pty/testing';

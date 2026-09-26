@@ -29,14 +29,13 @@ import { serveHubConnection, type HubConnection } from './hub/hub-connection.js'
 import type { OperationRegistry } from './operations/operation-registry.js';
 import {
   type ConfiguredToken,
-  type GrantFileSystem,
   type ProviderPreflight,
   type ProviderRegistry,
   ensureStores,
-  openServerGrants,
-  serverGrantsPath,
   type StoreFileSystem,
 } from '@agentplex/providers';
+import { type GrantFileSystem, serverGrantsPath } from './grants/server-grants.js';
+import { openServerGrants } from './grants/server-grant-store.js';
 import { announceServer, type BeaconNetwork } from './beacon/server-beacon.js';
 import { ensureServerIdentity } from '@agentplex/providers';
 import { createHubAudience } from './hub/hub-audience.js';

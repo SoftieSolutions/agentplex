@@ -2,7 +2,7 @@ import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
 import { hubIdSchema, type HubId } from '@agentplex/protocol';
 import { tokenDigest, tokenMatches } from '@agentplex/node-shared';
-import type { FileRead } from './store-identity.js';
+import type { FileRead } from '@agentplex/providers';
 
 /**
  * A grant: one hub's permission to talk to this server, as a thing that can be
