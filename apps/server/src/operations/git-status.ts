@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { CompletedProcess, Operation, OperationOutcome } from '@agentplex/providers';
 import { firstLine } from '@agentplex/node-shared';
 import { directorySchema } from './directory.js';
+import { filterSwitches } from './git-filter-names.js';
 
 /**
  * What a session's working directory looks like to git right now.
@@ -36,25 +37,32 @@ import { directorySchema } from './directory.js';
  * status, and whoever wrote the checkout's `.git/config` chose it; `-c` wins
  * over every config file, so `core.fsmonitor=false` means git scans the tree
  * itself. `core.hooksPath=/dev/null` closes the same door for any hook a
- * subcommand might fire. Two programs the repository names are still
- * reachable, and neither `-c` pair touches them:
+ * subcommand might fire. Neither pair touches three more ways the repository
+ * can name a program, and each is closed by other means:
  *
  * - A clean or process filter the repository configures and selects through
- *   its attributes runs on a stat-dirty file. No flag turns filters off
- *   without naming the driver, and the repository picks that name.
+ *   its attributes runs on a stat-dirty file, and no flag turns filters off
+ *   without naming the driver. So this is a factory over the names: the probe
+ *   is only ever run through `runGuardedGitProbe`, which reads the names the
+ *   repository's own config defines and builds it with four more `-c` pairs
+ *   per name. A filter written into the config between that read and this
+ *   probe is still run; `git-filter-names.ts` says why that gap is there.
+ * - `--ignore-submodules=dirty` keeps status from starting a child git in each
+ *   populated submodule to ask whether it is dirty. That child reads the
+ *   submodule's own config, whose filters the read above never saw. The cost
+ *   is that uncommitted work inside a submodule is not counted; a submodule
+ *   whose checked-out commit moved still is. A count that is sometimes low is
+ *   the direction this already degrades in.
  * - In a partial clone (`remote.<name>.promisor=true`), rename detection that
  *   needs a blob the clone never fetched starts a child `git fetch`, and that
  *   child runs whatever the repository's config names for reaching its
  *   remote: among others `remote.<name>.uploadpack`, `core.sshCommand`,
  *   `core.gitProxy`, `core.askPass`, a credential helper, an `ext::` URL
  *   where the repository allows that protocol, or any of these reached
- *   through a `url.<base>.insteadOf` rewrite. Probed on git 2.50.1: a staged rename away from a
- *   missing blob made this exact argv run a marker-writing `uploadpack`.
- *   `GIT_NO_LAZY_FETCH=1` and `git --no-lazy-fetch` both stopped it. The
- *   variable is honoured from git 2.39.4 on, bookworm's 2.39.5 included, but
- *   the runner fixes the child's environment once for every operation; the
- *   flag arrived in 2.45, and 2.39.5 refuses it as an unknown option. So
- *   neither is used here yet.
+ *   through a `url.<base>.insteadOf` rewrite. The probes' runner sets
+ *   `GIT_NO_LAZY_FETCH=1`, and `withoutLazyFetch` says why it is a variable and
+ *   not `--no-lazy-fetch`. Such a status then exits 128, so the reading is
+ *   lost whole, branch included.
  */
 export interface GitStatus {
   /** The branch's short name, or `null` when HEAD is detached. */
@@ -80,37 +88,48 @@ export interface GitStatus {
 export const gitStatusRequestSchema = z.strictObject({ directory: directorySchema });
 export type GitStatusRequest = z.infer<typeof gitStatusRequestSchema>;
 
-export const gitStatusOperation: Operation<GitStatusRequest, GitStatus> = {
-  name: 'git.status',
-  summary: 'Branch, upstream distance and uncommitted change count for a directory',
-  request: gitStatusRequestSchema,
+/**
+ * The probe, built for the filter names one repository configures. There is no
+ * exported probe built for none: that would be an unguarded status one import
+ * away from anything that wanted one.
+ */
+export function createGitStatusOperation(
+  filterNames: readonly string[],
+): Operation<GitStatusRequest, GitStatus> {
+  return {
+    name: 'git.status',
+    summary: 'Branch, upstream distance and uncommitted change count for a directory',
+    request: gitStatusRequestSchema,
 
-  argv: ({ directory }) => ({
-    file: 'git',
-    args: [
-      '-c',
-      'core.fsmonitor=false',
-      '-c',
-      'core.hooksPath=/dev/null',
-      '--no-optional-locks',
-      '-C',
-      directory,
-      'status',
-      '--porcelain=v2',
-      '--branch',
-    ],
-  }),
+    argv: ({ directory }) => ({
+      file: 'git',
+      args: [
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        ...filterSwitches(filterNames),
+        '--no-optional-locks',
+        '-C',
+        directory,
+        'status',
+        '--porcelain=v2',
+        '--branch',
+        '--ignore-submodules=dirty',
+      ],
+    }),
 
-  /**
-   * Two seconds. A `git status` on a warm repository is milliseconds; one that
-   * takes longer than this is on a network mount or behind a lock, and a
-   * session list that blocks on it is worse than one that says it does not
-   * know.
-   */
-  timeoutMs: 2_000,
+    /**
+     * Two seconds. A `git status` on a warm repository is milliseconds; one that
+     * takes longer than this is on a network mount or behind a lock, and a
+     * session list that blocks on it is worse than one that says it does not
+     * know.
+     */
+    timeoutMs: 2_000,
 
-  read: readGitStatus,
-};
+    read: readGitStatus,
+  };
+}
 
 /**
  * Porcelain v2, which is the format that exists to be parsed.

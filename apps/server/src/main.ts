@@ -33,6 +33,7 @@ import { nodeDirectoryReader } from './directories/node-directory-reader.js';
 import { nodeProjectFiles } from './projects/node-project-files.js';
 import { nodeStoreWatcher } from './store-watch/node-store-watcher.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
+import { withoutLazyFetch } from './operations/git-probe.js';
 import { createMachineLoadReader, createNodeMachineProbe } from './machine-load/machine-load.js';
 import { createGitWorkingTree } from './working-tree/working-tree.js';
 import { refuseWithoutTerminals } from './terminal/terminal-support.js';
@@ -142,10 +143,19 @@ async function main(): Promise<void> {
     timezone: config.timezone,
   });
 
-  // The one place a one-shot child is started. Every operation shares this
-  // runner, so what a child inherits is decided above and cannot be added to
-  // further down.
+  // The one-shot runners, and the only two. What a child inherits is decided
+  // here and cannot be added to further down. The providers and the preflight
+  // take the first, with exactly the environment above, because what they
+  // probe is what a session will be started with.
   const processRunner = createNodeProcessRunner({ environment });
+  // The second is the same environment with lazy fetching off, for the git
+  // probes: in a partial clone a probe would otherwise start a `git fetch` that
+  // runs whatever the repository names for reaching its remote. It goes to the
+  // registry and the working-tree reader and nowhere else -- a session and the
+  // pty keep the environment above, because an agent's own git in a partial
+  // clone has to fetch. `process.start-time` shares the registry and so runs
+  // `ps` with the variable set too, which `ps` never reads.
+  const gitProbeRunner = createNodeProcessRunner({ environment: withoutLazyFetch(environment) });
 
   // Where a bare program name will actually resolve, read back out of the
   // environment composed above rather than out of the setting that shaped it.
@@ -215,14 +225,14 @@ async function main(): Promise<void> {
       // not among them, and `createSetupOperationRegistry` is deliberately
       // not called here: a serving process has no installer to be asked for
       // over a socket, rather than one it declines to use.
-      operations: createOperationRegistry(processRunner),
+      operations: createOperationRegistry(gitProbeRunner),
       // The typed callers of operations, over the same runner: what git says
       // about a session's working directory -- the branch, and what is
       // uncommitted -- attached to every store report. They name `git.status`
       // and `git.diff` at compile time rather than by string, so they can
       // reach no operation the registry does not have and no name it does not
       // know.
-      workingTree: createGitWorkingTree({ runner: processRunner }),
+      workingTree: createGitWorkingTree({ runner: gitProbeRunner }),
       // What this machine says about its own cpus, read when a hub asks and
       // never on a timer. Composed here for the reason everything else is: the
       // probe is the one thing in it that touches the outside world.

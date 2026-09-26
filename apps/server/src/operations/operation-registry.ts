@@ -1,5 +1,6 @@
-import { gitDiffOperation } from './git-diff.js';
-import { gitStatusOperation } from './git-status.js';
+import { createGitDiffOperation } from './git-diff.js';
+import { runGuardedGitProbe, type GitProbe } from './git-probe.js';
+import { createGitStatusOperation } from './git-status.js';
 import {
   runOperation,
   type Operation,
@@ -18,7 +19,11 @@ import {
  * which a caller could add one, no plugin hook, and no path that falls back to
  * running a name it does not know. A name that is not in this file is a
  * refusal, always, and the set of programs a build can start is a diff a
- * reviewer reads rather than a runtime property nobody can enumerate.
+ * reviewer reads rather than a runtime property nobody can enumerate. That set
+ * holds one argv the list of names does not: each git probe starts a `git
+ * config` read of the repository's filter drivers before itself. The read is
+ * reached from this file, through `registerGuarded`, and never by a name a
+ * caller can send.
  *
  * The spec names the failure mode this is built against: "a generic
  * `{ command }` frame is the failure mode the registry exists to prevent — more
@@ -51,15 +56,17 @@ import {
  *
  * Both of the last two are on the store report path: every scan attaches what
  * it read to the descriptors it is about to send, so the branch and the numbers
- * a client draws are what this machine read off its own disk.
+ * a client draws are what this machine read off its own disk. Each of them is
+ * two children rather than one: the filter read above, then the probe with
+ * those filters switched off.
  *
  * Nothing speculative is here. An operation with no caller is an argv nobody
  * has run, and the registry's value is that its contents are exactly what this
  * build can do.
  */
 const OPERATIONS: readonly RegisteredOperation[] = [
-  register(gitDiffOperation),
-  register(gitStatusOperation),
+  registerGuarded(createGitDiffOperation),
+  registerGuarded(createGitStatusOperation),
   register(processStartTimeOperation),
 ];
 
@@ -87,6 +94,25 @@ function register<Request, Result>(operation: Operation<Request, Result>): Regis
   };
 }
 
+/**
+ * A git probe, which only runs after the repository's filter names were read.
+ *
+ * Registered through its factory rather than as an operation, so the name-keyed
+ * path has no probe built for no names to reach: the only thing `run` can do
+ * with it is `runGuardedGitProbe`. The name and the summary do not depend on the
+ * names, so they are read off a probe built for none.
+ */
+function registerGuarded<Request extends { readonly directory: string }, Result>(
+  create: GitProbe<Request, Result>,
+): RegisteredOperation {
+  const { name, summary } = create([]);
+  return {
+    name,
+    summary,
+    run: (request, runner) => runGuardedGitProbe(create, request, runner),
+  };
+}
+
 export interface OperationRegistry {
   /** The operations this build has, for a boot log line and, later, an MCP listing. */
   readonly operations: readonly OperationSummary[];
@@ -96,8 +122,9 @@ export interface OperationRegistry {
    * The result is `unknown` on purpose. A caller that reached the registry by
    * name learned the name from outside the type system, so it cannot be handed
    * a typed result honestly; a caller that knows which operation it wants calls
-   * `runOperation` with the operation itself and keeps its types. Both paths
-   * run the same parser, build the same argv and start the same child.
+   * `runOperation` with the operation itself -- `runGuardedGitProbe` with the
+   * factory, for a git probe -- and keeps its types. Both paths run the same
+   * parser, build the same argv and start the same children.
    */
   execute(name: string, request: unknown): Promise<OperationOutcome<unknown>>;
 }
