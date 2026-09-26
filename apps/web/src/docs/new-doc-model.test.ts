@@ -9,7 +9,7 @@ import {
   type MachineState,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { DocCreatedView, RefusalView } from '../store/hub-store.js';
+import { answersOf, replyFrom } from '../store/replies.fixture.js';
 import {
   buildDocCreate,
   docCreateBlockedReason,
@@ -114,28 +114,27 @@ describe('why the create is disabled', () => {
 });
 
 describe('what the hub said about the create', () => {
-  const pending = frameIdSchema.parse(8);
-  const created: DocCreatedView = { replyTo: pending, nodeId: nodeIdSchema.parse('hub-5') };
-  const refusal: RefusalView = {
-    replyTo: pending,
-    code: 'refused',
-    message: 'that project already has a document called plan.md on mbp-robert',
-    holder: null,
-  };
+  // A thin mapping over `followUp`, carrying the node a yes names.
+  const created = replyFrom(hubFrames.docCreated, 'doc-created');
+  const pending = created.replyTo;
+  const refusal = replyFrom(hubFrames.refusalDocAway, 'refusal');
 
   it('waits until an answer names this frame', () => {
-    expect(docCreateFollowUp(pending, null, null)).toEqual({ kind: 'waiting' });
+    expect(docCreateFollowUp(pending, answersOf())).toEqual({ kind: 'waiting' });
     expect(
-      docCreateFollowUp(pending, { ...created, replyTo: frameIdSchema.parse(9) }, null),
+      docCreateFollowUp(pending, answersOf({ ...created, replyTo: frameIdSchema.parse(99) })),
     ).toEqual({ kind: 'waiting' });
   });
 
   it('carries the node a made document is named by from then on', () => {
-    expect(docCreateFollowUp(pending, created, null)).toEqual({ kind: 'made', nodeId: 'hub-5' });
+    expect(docCreateFollowUp(pending, answersOf(created))).toEqual({
+      kind: 'made',
+      nodeId: 'hub-6',
+    });
   });
 
   it('renders the hub sentence when the answer was no', () => {
-    expect(docCreateFollowUp(pending, null, refusal)).toEqual({
+    expect(docCreateFollowUp(refusal.replyTo, answersOf(refusal))).toEqual({
       kind: 'refused',
       words: refusal.message,
     });

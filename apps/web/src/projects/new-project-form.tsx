@@ -62,9 +62,7 @@ export function NewProjectForm({
 
   const blocked = createBlockedReason(snapshot.phase, name, directory);
   const followUp: CreateFollowUp | null =
-    pending === null || !pending.accepted
-      ? null
-      : createFollowUp(pending.id, snapshot.lastProjectCreated, snapshot.lastRefusal);
+    pending === null || !pending.accepted ? null : createFollowUp(pending.id, snapshot.answers);
 
   function close(): void {
     setPending(null);

@@ -107,8 +107,8 @@ export function transcriptState(
 
   // The hub's own words, and only when they answer this pane's newest question.
   // A refusal to another pane's read, or to a stop somebody pressed, is not
-  // this tab's business: the store keeps the newest "no" on the connection, and
-  // drawing it here would put an unrelated sentence under a transcript.
+  // this tab's business, and drawing it here would put an unrelated sentence
+  // under a transcript.
   if (refusal !== null && refusal.replyTo === asks.latest) {
     return { activities: standing, status: refusal.message, tone: 'blocked' };
   }

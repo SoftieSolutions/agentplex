@@ -6,7 +6,7 @@ import {
   type PendingApproval,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { ApprovalView, RefusalView } from '../store/hub-store.js';
+import { answersOf, replyFrom } from '../store/replies.fixture.js';
 import { approvalFollowUp, decideCommand } from './approval-model.js';
 
 /**
@@ -21,18 +21,6 @@ function stateFrom(text: string): MachineState {
     throw new Error('the fixture is not a machine-state frame');
   }
   return parsed.value.state;
-}
-
-function approvalFrom(text: string): ApprovalView {
-  const parsed = parseTextFrame(parseHubFrame, text);
-  if (!parsed.ok || parsed.value.type !== 'approval-decided') {
-    throw new Error('the fixture is not an approval-decided frame');
-  }
-  return {
-    replyTo: parsed.value.replyTo,
-    outcome: parsed.value.outcome,
-    answeredBy: parsed.value.answeredBy,
-  };
 }
 
 /** The one session in the captured state that has a request open on it. */
@@ -106,43 +94,37 @@ describe('the frame an answer sends', () => {
 });
 
 describe('what the hub has said about the answer', () => {
-  const granted = approvalFrom(hubFrames.approvalDecided);
-  const refusal: RefusalView = {
-    replyTo: 7,
-    code: 'refused',
-    message: 'this hub knows no session by that id',
-    holder: null,
-  };
+  // A thin mapping over `followUp`: each of its four answers, renamed.
+  const granted = replyFrom(hubFrames.approvalDecided, 'approval-decided');
+  const refusal = { ...replyFrom(hubFrames.refusalAttention, 'refusal'), replyTo: 7 };
+  const answers = answersOf(granted, refusal);
 
   it('says nothing while nothing has been sent', () => {
-    expect(approvalFollowUp(null, granted, null)).toEqual({ kind: 'idle' });
+    expect(approvalFollowUp(null, answers)).toEqual({ kind: 'idle' });
   });
 
   it('waits until an answer to this frame arrives, not until any answer does', () => {
-    // One snapshot holds one reply for the whole page. Two cards can each be
-    // waiting, and a card reading the newest of either would draw the other
-    // one's outcome under its own buttons.
-    expect(approvalFollowUp(99, granted, refusal)).toEqual({ kind: 'waiting' });
+    // Two cards can each be waiting, and each reads the answer to its own frame.
+    expect(approvalFollowUp(99, answers)).toEqual({ kind: 'waiting' });
   });
 
   it('carries the outcome word, because the four endings are drawn differently', () => {
-    expect(approvalFollowUp(granted.replyTo, granted, null)).toEqual({
+    expect(approvalFollowUp(granted.replyTo, answers)).toEqual({
       kind: 'decided',
       outcome: 'granted',
+      answeredBy: null,
     });
-    // The three the hub can send in the same slot. `withdrawn` and `expired`
+    // The three the hub can send in the same frame. `withdrawn` and `expired`
     // are the endings where somebody answered and nothing happened, and
     // reporting either as a denial would be the one dishonest thing here.
     for (const outcome of ['denied', 'withdrawn', 'expired'] as const) {
-      expect(approvalFollowUp(4, { replyTo: 4, outcome, answeredBy: null }, null)).toEqual({
-        kind: 'decided',
-        outcome,
-      });
+      const other = answersOf({ ...granted, replyTo: 4, outcome });
+      expect(approvalFollowUp(4, other)).toEqual({ kind: 'decided', outcome, answeredBy: null });
     }
   });
 
   it("carries the hub's own words when it says no", () => {
-    expect(approvalFollowUp(refusal.replyTo, granted, refusal)).toEqual({
+    expect(approvalFollowUp(refusal.replyTo, answers)).toEqual({
       kind: 'refused',
       words: 'this hub knows no session by that id',
     });

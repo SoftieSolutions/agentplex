@@ -1,12 +1,6 @@
-import { DOC_CONTENT_MAX_CHARS, type NodeId } from '@agentplex/protocol';
-import type {
-  CommandOutcome,
-  ConnectionPhase,
-  DocContentView,
-  DocSavedView,
-  HubCommand,
-  RefusalView,
-} from '../store/hub-store.js';
+import { DOC_CONTENT_MAX_CHARS, type FrameId, type NodeId } from '@agentplex/protocol';
+import { followUp, type Reply } from '../store/answers.js';
+import type { CommandOutcome, ConnectionPhase, HubCommand } from '../store/hub-store.js';
 import type { Timers } from '../store/timers.js';
 import {
   documentArrived,
@@ -58,9 +52,7 @@ export interface DocEditorHub {
   subscribe(listener: () => void): () => void;
   getSnapshot(): {
     readonly phase: ConnectionPhase;
-    readonly lastDocContent: DocContentView | null;
-    readonly lastDocSaved: DocSavedView | null;
-    readonly lastRefusal: RefusalView | null;
+    readonly answers: ReadonlyMap<FrameId, Reply>;
   };
   sendCommand(command: HubCommand): CommandOutcome;
 }
@@ -124,22 +116,25 @@ export function createDocEditorStore(dependencies: DocEditorStoreDependencies): 
   /**
    * The hub's snapshot changed. Every answer is matched on the frame this
    * editor is waiting for, which is what keeps one pane's refusal out of
-   * another pane's document -- the snapshot holds the last answer of each kind
-   * for every screen at once.
+   * another pane's document.
    */
   function onHubChange(): void {
     const snapshot = hub.getSnapshot();
 
-    const content = snapshot.lastDocContent;
-    if (content !== null && state.openFrame === content.replyTo) {
-      moveTo(documentArrived(state, content.content, content.updatedAt));
+    const opening = state.openFrame;
+    const opened = followUp(opening, snapshot.answers, 'doc-content');
+    if (opened.kind === 'answered') {
+      moveTo(documentArrived(state, opened.answer.content, opened.answer.updatedAt));
+    } else if (opened.kind === 'refused' && opening !== null) {
+      moveTo(refused(state, opening, opened.words));
     }
-    const written = snapshot.lastDocSaved;
-    if (written !== null && state.saveFrame === written.replyTo) {
-      moveTo(saveLanded(state, written.updatedAt));
+    const saving = state.saveFrame;
+    const saved = followUp(saving, snapshot.answers, 'doc-saved');
+    if (saved.kind === 'answered') {
+      moveTo(saveLanded(state, saved.answer.updatedAt));
+    } else if (saved.kind === 'refused' && saving !== null) {
+      moveTo(refused(state, saving, saved.words));
     }
-    const no = snapshot.lastRefusal;
-    if (no !== null) moveTo(refused(state, no.replyTo, no.message));
 
     const phase = snapshot.phase;
     const returned = phase === 'connected' && phaseBefore !== 'connected';

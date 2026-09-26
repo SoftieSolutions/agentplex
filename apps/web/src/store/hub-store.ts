@@ -743,6 +743,16 @@ export interface HubSnapshot {
   readonly lastGraphCreated: GraphCreatedView | null;
   /** The most recent graph the hub answered with, kept until the next one. */
   readonly lastGraphDocument: GraphDocumentView | null;
+  /**
+   * Each graph as the hub last answered an open of it, by the graph.
+   *
+   * By node and not by frame, because a graph is a screen with one of it per
+   * node: any open of this node -- the screen's own, or a remount's -- is an
+   * answer the screen wants, and a screen holding the frame id it asked with
+   * would lose its document across a remount. Emptied when nothing is looking,
+   * since the hub's draft may be saved by another client meanwhile.
+   */
+  readonly graphDocuments: ReadonlyMap<NodeId, GraphDocumentView>;
   /** The hub's most recent yes to a graph save, kept until the next one. */
   readonly lastGraphSaved: GraphSavedView | null;
   /** The hub's most recent yes to a graph publish, kept until the next one. */
@@ -1245,6 +1255,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     lastDocContent: null,
     lastGraphCreated: null,
     lastGraphDocument: null,
+    graphDocuments: new Map(),
     lastGraphSaved: null,
     lastGraphPublished: null,
     lastRunStarted: null,
@@ -2092,18 +2103,17 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'graph-document': {
         pending.delete(frame.replyTo);
-        remember(frame);
-        update({
-          lastRefusal: null,
-          lastGraphDocument: {
-            replyTo: frame.replyTo,
-            nodeId: frame.nodeId,
-            name: frame.name,
-            draftVersion: frame.draftVersion,
-            document: frame.document,
-            published: frame.published,
-          },
-        });
+        const graph: GraphDocumentView = {
+          replyTo: frame.replyTo,
+          nodeId: frame.nodeId,
+          name: frame.name,
+          draftVersion: frame.draftVersion,
+          document: frame.document,
+          published: frame.published,
+        };
+        const graphs = new Map(snapshot.graphDocuments);
+        graphs.set(frame.nodeId, graph);
+        update({ lastRefusal: null, lastGraphDocument: graph, graphDocuments: graphs });
         return;
       }
       case 'graph-saved': {
@@ -2570,6 +2580,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // while nothing here was connected: the same copy this store cannot
       // vouch for, so the screen asks again when it is looked at.
       lastGraphDocument: null,
+      graphDocuments: new Map(),
       // A run moves on the hub's own clock. What this store held is where a
       // run was when the socket went, and the next state to arrive is whole.
       runs: new Map(),

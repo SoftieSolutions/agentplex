@@ -1,11 +1,6 @@
 import { graphNameSchema, type FrameId, type NodeId } from '@agentplex/protocol';
-import type {
-  CommandOutcome,
-  ConnectionPhase,
-  GraphCreatedView,
-  HubCommand,
-  RefusalView,
-} from '../store/hub-store.js';
+import { followUp, type Reply } from '../store/answers.js';
+import type { CommandOutcome, ConnectionPhase, HubCommand } from '../store/hub-store.js';
 
 /**
  * Every rule the New graph form follows, as functions of values, and the one
@@ -89,8 +84,7 @@ export interface GraphCreationHub {
   subscribe(listener: () => void): () => void;
   getSnapshot(): {
     readonly phase: ConnectionPhase;
-    readonly lastGraphCreated: GraphCreatedView | null;
-    readonly lastRefusal: RefusalView | null;
+    readonly answers: ReadonlyMap<FrameId, Reply>;
   };
   sendCommand(command: HubCommand): CommandOutcome;
 }
@@ -141,18 +135,17 @@ export function createGraphCreation({ hub }: GraphCreationDependencies): GraphCr
       });
       return;
     }
-    const made = snapshot.lastGraphCreated;
-    if (made !== null && made.replyTo === pending.id) {
+    const said = followUp(pending.id, snapshot.answers, 'graph-created');
+    if (said.kind === 'answered') {
       const { onMade } = pending;
       pending = null;
       moveTo(IDLE);
-      onMade(made.nodeId);
+      onMade(said.answer.nodeId);
       return;
     }
-    const no = snapshot.lastRefusal;
-    if (no !== null && no.replyTo === pending.id) {
+    if (said.kind === 'refused') {
       pending = null;
-      moveTo({ waiting: false, refused: no.message });
+      moveTo({ waiting: false, refused: said.words });
     }
   }
 

@@ -56,7 +56,7 @@ export function AttentionControls({
   const mutes = offersMute(item);
   if (!acknowledges && !mutes) return null;
 
-  const followUp = attentionFollowUp(pending, snapshot.lastAttention, snapshot.lastRefusal);
+  const followUp = attentionFollowUp(pending, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : rejected;
   const waiting = followUp.kind === 'waiting';
 

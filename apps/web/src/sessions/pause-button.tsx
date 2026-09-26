@@ -53,12 +53,7 @@ export function PauseButton({
 
   if (!offersPause(holder) && !offersResume(holder)) return null;
 
-  const followUp = pauseFollowUp(
-    pending,
-    snapshot.lastPaused,
-    snapshot.lastResumed,
-    snapshot.lastRefusal,
-  );
+  const followUp = pauseFollowUp(pending, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : rejected;
   const resuming = offersResume(holder);
   const note = pauseNote(holder);

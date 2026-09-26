@@ -173,11 +173,7 @@ export function ApprovalControls({
   // either: there is nothing to clear it from, and a stale object that matches
   // nothing is already idle.
   const sent = answer !== null && answer.approvalId === approvalId ? answer : null;
-  const followUp = approvalFollowUp(
-    sent?.frameId ?? null,
-    snapshot.lastApproval,
-    snapshot.lastRefusal,
-  );
+  const followUp = approvalFollowUp(sent?.frameId ?? null, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : (sent?.refusal ?? null);
   // Disabled while the hub has not answered, and once it has: a request that
   // has ended has ended, and a live Allow over a settled one would be a button
@@ -207,9 +203,7 @@ export function ApprovalControls({
    * and a granted request must not imply a rule was saved.
    */
   const written = rule !== null && rule.approvalId === approvalId ? rule : null;
-  const rulePolicy =
-    project.kind === 'project' ? (snapshot.approvalPolicies.get(project.id) ?? null) : null;
-  const ruleFollowUp = policyFollowUp(written?.frameId ?? null, rulePolicy, snapshot.lastRefusal);
+  const ruleFollowUp = policyFollowUp(written?.frameId ?? null, snapshot.answers);
   const ruleWords =
     ruleFollowUp.kind === 'refused'
       ? `the rule was not added: ${ruleFollowUp.words}`
@@ -397,9 +391,7 @@ export function ApprovalControls({
         }}
       >
         {refused ??
-          (followUp.kind === 'decided'
-            ? outcomeWords(followUp.outcome, snapshot.lastApproval?.answeredBy ?? null)
-            : '')}
+          (followUp.kind === 'decided' ? outcomeWords(followUp.outcome, followUp.answeredBy) : '')}
       </Text>
       {/**
        * The rule's own region, mounted for the same reason and kept separate

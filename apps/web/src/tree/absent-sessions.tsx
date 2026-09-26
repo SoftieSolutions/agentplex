@@ -42,9 +42,7 @@ export function AbsentSessions({
   if (absent.length === 0) return null;
 
   const followUp =
-    pending === null || !pending.accepted
-      ? null
-      : treeFollowUp(pending.id, snapshot.lastTreeChange, snapshot.lastRefusal);
+    pending === null || !pending.accepted ? null : treeFollowUp(pending.id, snapshot.answers);
   const refused = followUp?.kind === 'refused' ? followUp.words : null;
 
   function putBack(ref: SessionRef): void {

@@ -11,7 +11,8 @@ import {
   type PendingApproval,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { ApprovalPolicyView, RefusalView } from '../store/hub-store.js';
+import type { ApprovalPolicyView } from '../store/hub-store.js';
+import { answersOf, replyFrom } from '../store/replies.fixture.js';
 import {
   allowAlwaysCommand,
   forgetRuleCommand,
@@ -210,42 +211,32 @@ describe('the project a session is filed under', () => {
 });
 
 /**
- * What the hub has said about a rule this client wrote or took out.
- *
- * The same correlation `approvalFollowUp` makes and for the same reason: one
- * snapshot holds one refusal and one policy per project, and a control that
- * read the newest of either would report another control's answer as its own.
+ * What the hub has said about a rule this client wrote or took out: a thin
+ * mapping over `followUp`, each of its four answers renamed.
  */
 describe('where a policy edit has got to', () => {
-  const refusal: RefusalView = {
-    replyTo: 7,
-    code: 'refused',
-    message: 'that project has no policy this hub can write',
-    holder: null,
-  };
+  const answered = replyFrom(hubFrames.approvalPolicy, 'approval-policy');
+  const refusal = { ...replyFrom(hubFrames.refusal, 'refusal'), replyTo: 7 };
+  const answers = answersOf(answered, refusal);
 
   it('is idle until something has been sent', () => {
-    expect(policyFollowUp(null, policy(), refusal)).toEqual({ kind: 'idle' });
+    expect(policyFollowUp(null, answers)).toEqual({ kind: 'idle' });
   });
 
   it('waits while the hub has said nothing about this frame', () => {
-    expect(policyFollowUp(7, null, null)).toEqual({ kind: 'waiting' });
+    expect(policyFollowUp(7, answersOf())).toEqual({ kind: 'waiting' });
     // A policy answered for somebody else's frame is not this one's answer.
-    expect(policyFollowUp(7, { replyTo: 4, rules: [] }, null)).toEqual({ kind: 'waiting' });
+    expect(policyFollowUp(9, answers)).toEqual({ kind: 'waiting' });
   });
 
   it('is done when the policy the hub answered with is the answer to this frame', () => {
-    expect(policyFollowUp(7, { replyTo: 7, rules: [] }, null)).toEqual({ kind: 'done' });
+    expect(policyFollowUp(answered.replyTo, answers)).toEqual({ kind: 'done' });
   });
 
   it("repeats the hub's refusal in the hub's own words", () => {
-    expect(policyFollowUp(7, null, refusal)).toEqual({
+    expect(policyFollowUp(7, answers)).toEqual({
       kind: 'refused',
-      words: 'that project has no policy this hub can write',
+      words: refusal.message,
     });
-  });
-
-  it('ignores a refusal of some other frame', () => {
-    expect(policyFollowUp(9, null, refusal)).toEqual({ kind: 'waiting' });
   });
 });

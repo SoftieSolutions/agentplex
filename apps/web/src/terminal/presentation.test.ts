@@ -157,6 +157,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     lastDocContent: null,
     lastGraphCreated: null,
     lastGraphDocument: null,
+    graphDocuments: new Map(),
     lastGraphSaved: null,
     lastGraphPublished: null,
     lastRunStarted: null,

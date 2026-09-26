@@ -119,7 +119,7 @@ export function ApprovalsBlock({ project, store, scheme }: ApprovalsBlockProps):
     (row): row is Extract<PolicyRow, { kind: 'auto' }> => row.kind === 'auto',
   );
   const sentences = rows.filter((row) => row.kind !== 'auto');
-  const followUp = policyFollowUp(edit?.frameId ?? null, policy, snapshot.lastRefusal);
+  const followUp = policyFollowUp(edit?.frameId ?? null, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : (edit?.refusal ?? null);
 
   function forget(ruleId: ApprovalPolicyRuleId): void {

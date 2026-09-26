@@ -1,5 +1,5 @@
 import type { FrameId } from '@agentplex/protocol';
-import type { PushView, RefusalView } from '../store/hub-store.js';
+import { followUp, type Reply } from '../store/answers.js';
 import type { PushPermission } from './push-operations.js';
 
 /**
@@ -178,15 +178,16 @@ export type PushFollowUp =
  */
 export function pushFollowUp(
   pending: FrameId | null,
-  lastPush: PushView | null,
-  lastRefusal: RefusalView | null,
+  answers: ReadonlyMap<FrameId, Reply>,
 ): PushFollowUp {
-  if (pending === null) return { kind: 'idle' };
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message };
+  const said = followUp(pending, answers, 'push-subscribed', 'push-unsubscribed');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return said;
+    case 'refused':
+      return { kind: 'refused', words: said.words };
+    case 'answered':
+      return { kind: 'done', subscribed: said.answer.type === 'push-subscribed' };
   }
-  if (lastPush !== null && lastPush.replyTo === pending) {
-    return { kind: 'done', subscribed: lastPush.subscribed };
-  }
-  return { kind: 'waiting' };
 }

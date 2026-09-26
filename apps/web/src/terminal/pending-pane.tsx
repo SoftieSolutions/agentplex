@@ -84,9 +84,8 @@ export function PendingPane({ startId, store: hub, emulators }: PendingPaneProps
     [hub, target],
   );
 
-  // This start's own answer, and never the connection's newest one: a second
-  // start succeeding elsewhere on this socket clears `lastRefusal`, and a pane
-  // reading that slot would go back to saying it was starting.
+  // This start's own answer, filed against the frame that asked for it, so a
+  // second start answered elsewhere on this socket cannot change what it says.
   const words = pendingWords(snapshot.starts.get(startId) ?? null, snapshot.machineState);
   const tone = toneFor(words);
   const scope = terminalScopeNotice(terminal);

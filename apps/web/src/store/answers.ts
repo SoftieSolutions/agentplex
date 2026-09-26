@@ -16,8 +16,9 @@ import type { FrameId, HubFrame } from '@agentplex/protocol';
  * that real answers need: `pong` arrives every thirty seconds, the layout and
  * the subscription answers are standing interest with fields of their own on
  * the snapshot, a catalogue page and a pairing answer settle a promise, a
- * transcript is large and already bounded in `transcripts`, and a pane-layout
- * save is waited on by nobody.
+ * transcript is large and already bounded in `transcripts`, a graph document
+ * is filed by its node in `graphDocuments` because a screen reads it by node,
+ * and a pane-layout save is waited on by nobody.
  */
 export type AnswerType =
   | 'session-started'
@@ -40,7 +41,6 @@ export type AnswerType =
   | 'doc-saved'
   | 'doc-content'
   | 'graph-created'
-  | 'graph-document'
   | 'graph-saved'
   | 'graph-published'
   | 'graph-run-started'
@@ -152,11 +152,25 @@ export function refusalTo(
 }
 
 /**
+ * The refusal the most recent reply was, or `null` when that reply was a yes.
+ *
+ * What "the hub refused the last request" means on the connection line. A
+ * refusal with a later yes after it is still held for the screen that asked,
+ * but it is no longer what became of the last request, and saying it was
+ * would be the line over-claiming a failure that has since been answered.
+ */
+export function refusalToLatest(answers: ReadonlyMap<FrameId, Reply>): Refusal | null {
+  const held = [...answers.values()];
+  const latest = held[held.length - 1];
+  return latest?.type === 'refusal' ? latest : null;
+}
+
+/**
  * The most recent reply of one type, whoever asked for it, or `null`.
  *
- * For the two readers that are about the connection rather than one control:
- * the list's line about a stop that landed, and the settings screen's newest
- * refusal. Every other reader asks by its own id through `followUp`.
+ * For the one reader that is about the connection rather than one control:
+ * the list's line about a stop that landed, whoever asked for it. Every other
+ * reader asks by its own id through `followUp`.
  */
 export function newestAnswer<T extends Reply['type']>(
   answers: ReadonlyMap<FrameId, Reply>,

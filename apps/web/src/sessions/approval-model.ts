@@ -1,11 +1,13 @@
 import type {
+  ApprovalAnsweredBy,
   ApprovalDecision,
   ApprovalId,
   ApprovalOutcome,
   ApprovalSubject,
   FrameId,
 } from '@agentplex/protocol';
-import type { ApprovalView, HubCommand, RefusalView } from '../store/hub-store.js';
+import { followUp, type Reply } from '../store/answers.js';
+import type { HubCommand } from '../store/hub-store.js';
 
 /**
  * Everything answering an approval decides, as pure functions: what the frame
@@ -60,29 +62,35 @@ export function decideCommand(
 export type ApprovalFollowUp =
   | { readonly kind: 'idle' }
   | { readonly kind: 'waiting' }
-  | { readonly kind: 'decided'; readonly outcome: ApprovalOutcome }
+  | {
+      readonly kind: 'decided';
+      readonly outcome: ApprovalOutcome;
+      /**
+       * The standing rule whose grant took effect, or `null` for a request a
+       * person answered: `granted` alone cannot say whether this tap was the
+       * one applied or a rule got there first.
+       */
+      readonly answeredBy: ApprovalAnsweredBy | null;
+    }
   | { readonly kind: 'refused'; readonly words: string };
 
-/**
- * What the hub has said about the frame this control is waiting on.
- *
- * Correlated by `replyTo` and never by "the most recent answer", exactly as
- * `attentionFollowUp` is: one snapshot holds one refusal and one approval
- * reply for the whole page, and two cards can each be waiting -- a card that
- * read the newest of either would draw the other one's outcome under its own
- * buttons.
- */
+/** What the hub has said about the frame this control is waiting on. */
 export function approvalFollowUp(
   pending: FrameId | null,
-  lastApproval: ApprovalView | null,
-  lastRefusal: RefusalView | null,
+  answers: ReadonlyMap<FrameId, Reply>,
 ): ApprovalFollowUp {
-  if (pending === null) return { kind: 'idle' };
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message };
+  const said = followUp(pending, answers, 'approval-decided');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return said;
+    case 'refused':
+      return { kind: 'refused', words: said.words };
+    case 'answered':
+      return {
+        kind: 'decided',
+        outcome: said.answer.outcome,
+        answeredBy: said.answer.answeredBy,
+      };
   }
-  if (lastApproval !== null && lastApproval.replyTo === pending) {
-    return { kind: 'decided', outcome: lastApproval.outcome };
-  }
-  return { kind: 'waiting' };
 }

@@ -5,6 +5,7 @@ import {
   followUp,
   newestAnswer,
   refusalTo,
+  refusalToLatest,
   rememberAnswer,
   type Reply,
 } from './answers.js';
@@ -130,6 +131,19 @@ describe('refusalTo', () => {
     expect(refusalTo(answers, refusal.replyTo)).toBe(refusal);
     expect(refusalTo(answers, stopped.replyTo)).toBeNull();
     expect(refusalTo(answers, null)).toBeNull();
+  });
+});
+
+describe('refusalToLatest', () => {
+  it('is the refusal when the most recent reply was one', () => {
+    expect(refusalToLatest(answersOf(stopped, refusal))).toBe(refusal);
+  });
+
+  it('is null once a later command has been answered yes', () => {
+    // The connection line says what became of the last request; a refusal
+    // with a yes after it is still held for its own screen, but it is not that.
+    expect(refusalToLatest(answersOf(refusal, stopped))).toBeNull();
+    expect(refusalToLatest(answersOf())).toBeNull();
   });
 });
 

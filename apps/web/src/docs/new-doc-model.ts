@@ -6,12 +6,8 @@ import {
   type NodeId,
   type ServerRegistrationId,
 } from '@agentplex/protocol';
-import type {
-  ConnectionPhase,
-  DocCreatedView,
-  HubCommand,
-  RefusalView,
-} from '../store/hub-store.js';
+import { followUp, type Reply } from '../store/answers.js';
+import type { ConnectionPhase, HubCommand } from '../store/hub-store.js';
 
 /**
  * Every rule the New doc action follows, as functions of values.
@@ -142,14 +138,16 @@ export type DocCreateFollowUp =
 
 export function docCreateFollowUp(
   pending: FrameId,
-  lastCreated: DocCreatedView | null,
-  lastRefusal: RefusalView | null,
+  answers: ReadonlyMap<FrameId, Reply>,
 ): DocCreateFollowUp {
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message };
+  const said = followUp(pending, answers, 'doc-created');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return { kind: 'waiting' };
+    case 'refused':
+      return { kind: 'refused', words: said.words };
+    case 'answered':
+      return { kind: 'made', nodeId: said.answer.nodeId };
   }
-  if (lastCreated !== null && lastCreated.replyTo === pending) {
-    return { kind: 'made', nodeId: lastCreated.nodeId };
-  }
-  return { kind: 'waiting' };
 }

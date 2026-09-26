@@ -42,7 +42,7 @@ export function StopButton({
 
   if (!offersStop(holder)) return null;
 
-  const followUp = stopFollowUp(pending, snapshot.lastStopped, snapshot.lastRefusal);
+  const followUp = stopFollowUp(pending, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : rejected;
 
   function stop(event: MouseEvent<HTMLButtonElement>): void {

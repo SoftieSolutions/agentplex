@@ -63,9 +63,7 @@ export function NodeMenu({
   const [rejected, setRejected] = useState<string | null>(null);
 
   const followUp: TreeFollowUp | null =
-    pending === null || !pending.accepted
-      ? null
-      : treeFollowUp(pending.id, snapshot.lastTreeChange, snapshot.lastRefusal);
+    pending === null || !pending.accepted ? null : treeFollowUp(pending.id, snapshot.answers);
   const refused = followUp?.kind === 'refused' ? followUp : null;
   const stoppable = followUp === null ? null : stopOffer(followUp);
 

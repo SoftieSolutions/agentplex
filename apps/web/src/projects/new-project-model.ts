@@ -1,5 +1,6 @@
 import type { FrameId, Layout, MachineState, ServerRegistrationId } from '@agentplex/protocol';
-import type { HubCommand, ProjectCreatedView, RefusalView } from '../store/hub-store.js';
+import { followUp, type Reply } from '../store/answers.js';
+import type { HubCommand } from '../store/hub-store.js';
 import { PROJECT_KIND } from './project-kind.js';
 
 /**
@@ -94,16 +95,18 @@ export type CreateFollowUp =
 
 export function createFollowUp(
   pending: FrameId,
-  lastCreated: ProjectCreatedView | null,
-  lastRefusal: RefusalView | null,
+  answers: ReadonlyMap<FrameId, Reply>,
 ): CreateFollowUp {
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message };
+  const said = followUp(pending, answers, 'project-created');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return { kind: 'waiting' };
+    case 'refused':
+      return { kind: 'refused', words: said.words };
+    case 'answered':
+      return { kind: 'made', words: 'the project is in your tree' };
   }
-  if (lastCreated !== null && lastCreated.replyTo === pending) {
-    return { kind: 'made', words: 'the project is in your tree' };
-  }
-  return { kind: 'waiting' };
 }
 
 /** One project, as a picker offers it. */

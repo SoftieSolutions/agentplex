@@ -8,6 +8,7 @@ import {
   type NodeId,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
+import { answersOf, replyFrom } from '../store/replies.fixture.js';
 import {
   buildForgetRemoval,
   buildMove,
@@ -41,13 +42,6 @@ function stateFrom(text: string): MachineState {
   const parsed = parseTextFrame(parseHubFrame, text);
   if (!parsed.ok || parsed.value.type !== 'machine-state') throw new Error('not a state frame');
   return parsed.value.state;
-}
-
-function refusalFrom(text: string) {
-  const parsed = parseTextFrame(parseHubFrame, text);
-  if (!parsed.ok || parsed.value.type !== 'refusal') throw new Error('not a refusal frame');
-  const frame = parsed.value;
-  return { replyTo: frame.replyTo, code: frame.code, message: frame.message, holder: frame.holder };
 }
 
 const ARRANGED = layoutFrom(hubFrames.layoutArranged);
@@ -151,18 +145,32 @@ describe('what the frames carry', () => {
 });
 
 describe('what to do with the hub answer', () => {
+  // A thin mapping over `followUp` across the five edits' answers.
   it('waits until something answers the id this menu sent', () => {
-    expect(treeFollowUp(11, null, null)).toEqual({ kind: 'waiting' });
+    const moved = replyFrom(hubFrames.nodeMoved, 'node-moved');
+    expect(treeFollowUp(11, answersOf())).toEqual({ kind: 'waiting' });
     // Somebody else's reply, on the same socket. A menu that read it would be
     // closing itself on an answer to a question it did not ask.
-    expect(treeFollowUp(11, { replyTo: 9, nodeId: null }, null)).toEqual({ kind: 'waiting' });
-    expect(treeFollowUp(11, { replyTo: 11, nodeId: null }, null)).toEqual({ kind: 'done' });
+    expect(treeFollowUp(11, answersOf(moved))).toEqual({ kind: 'waiting' });
+    expect(treeFollowUp(moved.replyTo, answersOf(moved))).toEqual({ kind: 'done' });
+  });
+
+  it('is done on any of the five edits the hub answers', () => {
+    for (const reply of [
+      replyFrom(hubFrames.nodeCreated, 'node-created'),
+      replyFrom(hubFrames.nodeRenamed, 'node-renamed'),
+      replyFrom(hubFrames.nodeMoved, 'node-moved'),
+      replyFrom(hubFrames.nodeRemoved, 'node-removed'),
+      replyFrom(hubFrames.nodeRemovalForgotten, 'node-removal-forgotten'),
+    ]) {
+      expect(treeFollowUp(reply.replyTo, answersOf(reply))).toEqual({ kind: 'done' });
+    }
   });
 
   it('keeps the hub words and the machine on a refusal that names one', () => {
-    const refusal = refusalFrom(hubFrames.refusalHolder);
+    const refusal = replyFrom(hubFrames.refusalHolder, 'refusal');
 
-    const followUp = treeFollowUp(refusal.replyTo, null, refusal);
+    const followUp = treeFollowUp(refusal.replyTo, answersOf(refusal));
 
     expect(followUp).toEqual({
       kind: 'refused',
@@ -183,8 +191,8 @@ describe('what to do with the hub answer', () => {
   });
 
   it('offers no stop for a refusal that names no machine', () => {
-    const refusal = refusalFrom(hubFrames.refusal);
+    const refusal = replyFrom(hubFrames.refusal, 'refusal');
 
-    expect(stopOffer(treeFollowUp(refusal.replyTo, null, refusal))).toBeNull();
+    expect(stopOffer(treeFollowUp(refusal.replyTo, answersOf(refusal)))).toBeNull();
   });
 });

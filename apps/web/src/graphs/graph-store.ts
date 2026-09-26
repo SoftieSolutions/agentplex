@@ -10,19 +10,13 @@ import type {
   NodeId,
   RouteInput,
 } from '@agentplex/protocol';
+import { followUp, refusalTo, type Reply } from '../store/answers.js';
 import type {
   CommandOutcome,
   ConnectionPhase,
   GraphDocumentView,
-  GraphPublishedView,
-  GraphSavedView,
   HubCommand,
-  RefusalView,
-  RunCancelledView,
   RunHistoryView,
-  RunLatestView,
-  RunStartedView,
-  SimulatedView,
 } from '../store/hub-store.js';
 import type { GraphEdit } from './graph-model.js';
 import { historyIsBehind } from './run-history-model.js';
@@ -135,16 +129,10 @@ export interface GraphStoreHub {
   subscribe(listener: () => void): () => void;
   getSnapshot(): {
     readonly phase: ConnectionPhase;
-    readonly lastGraphDocument: GraphDocumentView | null;
-    readonly lastGraphSaved: GraphSavedView | null;
-    readonly lastGraphPublished: GraphPublishedView | null;
-    readonly lastRunStarted: RunStartedView | null;
-    readonly lastRunCancelled: RunCancelledView | null;
-    readonly lastRunLatest: RunLatestView | null;
-    readonly lastSimulated: SimulatedView | null;
+    readonly answers: ReadonlyMap<FrameId, Reply>;
+    readonly graphDocuments: ReadonlyMap<NodeId, GraphDocumentView>;
     readonly runs: ReadonlyMap<GraphRunId, GraphRunState>;
     readonly runHistories: ReadonlyMap<NodeId, RunHistoryView>;
-    readonly lastRefusal: RefusalView | null;
   };
   sendCommand(command: HubCommand): CommandOutcome;
 }
@@ -475,8 +463,9 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
     // Filed by node and not by frame, the way the hub store files it: a graph
     // is a screen with one of it per node, and any open of this node -- this
     // store's or a remount's -- is an answer this store wants.
-    const answer = snapshot.lastGraphDocument;
-    if (answer !== null && answer !== takenAnswer && answer.nodeId === nodeId) {
+    const { answers } = snapshot;
+    const answer = snapshot.graphDocuments.get(nodeId) ?? null;
+    if (answer !== null && answer !== takenAnswer) {
       takenAnswer = answer;
       openFrame = null;
       confirmed = answer.document;
@@ -497,20 +486,23 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       });
     }
 
-    const saved = snapshot.lastGraphSaved;
-    if (saved !== null && saveFrame !== null && saved.replyTo === saveFrame) {
+    const saved = followUp(saveFrame, answers, 'graph-saved');
+    if (saved.kind === 'answered') {
       saveFrame = null;
       confirmed = inFlight;
       inFlight = null;
-      moveTo({ saving: false, savedVersion: saved.version, savedAt: saved.updatedAt });
+      moveTo({
+        saving: false,
+        savedVersion: saved.answer.version,
+        savedAt: saved.answer.updatedAt,
+      });
       if (publishAfterSave) {
         publishAfterSave = false;
         sendPublish();
       }
     }
 
-    const published = snapshot.lastGraphPublished;
-    if (published !== null && publishFrame !== null && published.replyTo === publishFrame) {
+    if (followUp(publishFrame, answers, 'graph-published').kind === 'answered') {
       publishFrame = null;
       // The hub stamped the draft it held, which is the one this store had
       // confirmed when the publish went out; an edit made since is still
@@ -522,8 +514,7 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       askForGraph();
     }
 
-    const runStarted = snapshot.lastRunStarted;
-    if (runStarted !== null && runFrame !== null && runStarted.replyTo === runFrame) {
+    if (followUp(runFrame, answers, 'graph-run-started').kind === 'answered') {
       runFrame = null;
       moveTo({ starting: false });
     }
@@ -563,77 +554,95 @@ export function createGraphStore({ hub, nodeId }: GraphStoreDependencies): Graph
       askForHistory();
     }
 
-    const latest = snapshot.lastRunLatest;
     // The answer to an open, when the run it carried was not already taken
     // above as the pick: a run that is not the one picked is not drawn.
-    if (latest !== null && openRunFrame !== null && latest.replyTo === openRunFrame) {
+    const opened = followUp(openRunFrame, answers, 'graph-run-latest');
+    if (opened.kind === 'answered') {
       openRunFrame = null;
-      const picked = latest.run !== null && latest.run.runId === state.selectedRun;
-      pickedState = picked ? (latest.run ?? null) : null;
+      const { run } = opened.answer;
+      const picked = run !== null && run.runId === state.selectedRun;
+      pickedState = picked ? run : null;
       moveTo(picked ? {} : { selectedRun: null });
     }
-    if (latest !== null && readFrame !== null && latest.replyTo === readFrame) {
+    const read = followUp(readFrame, answers, 'graph-run-latest');
+    if (read.kind === 'answered') {
       readFrame = null;
       // A run in the answer was filed in `runs` as well, so the newest there
       // is at least as new as it; `null` is the graph never having run.
+      const { run } = read.answer;
       moveTo({
-        run: latest.run === null ? null : (newestRun(snapshot.runs) ?? latest.run),
+        run: run === null ? null : (newestRun(snapshot.runs) ?? run),
         readingRun: false,
       });
     }
 
-    const simulated = snapshot.lastSimulated;
-    if (simulated !== null && simulateFrame !== null && simulated.replyTo === simulateFrame) {
+    const simulated = followUp(simulateFrame, answers, 'graph-simulated');
+    if (simulated.kind === 'answered') {
       simulateFrame = null;
       moveTo({
         simulating: false,
-        simulation: { path: simulated.path, reason: simulated.reason },
+        simulation: { path: simulated.answer.path, reason: simulated.answer.reason },
       });
     }
 
-    const cancelled = snapshot.lastRunCancelled;
-    if (cancelled !== null && cancelFrame !== null && cancelled.replyTo === cancelFrame) {
+    if (followUp(cancelFrame, answers, 'graph-run-cancelled').kind === 'answered') {
       cancelFrame = null;
       moveTo({ cancelling: false });
     }
 
-    const no = snapshot.lastRefusal;
-    if (no !== null) {
-      if (no.replyTo === runFrame) {
-        runFrame = null;
-        moveTo({ starting: false, problem: no.message });
-      } else if (no.replyTo === simulateFrame) {
-        simulateFrame = null;
-        moveTo({ simulating: false, problem: no.message });
-      } else if (no.replyTo === cancelFrame) {
-        cancelFrame = null;
-        moveTo({ cancelling: false, problem: no.message });
-      } else if (no.replyTo === readFrame) {
-        readFrame = null;
-        moveTo({ readingRun: false, problem: no.message });
-      } else if (no.replyTo === historyFrame) {
-        historyFrame = null;
-        historyRefused = true;
-        moveTo({ problem: no.message });
-      } else if (no.replyTo === openRunFrame) {
-        openRunFrame = null;
-        pickedState = null;
-        moveTo({ selectedRun: null, problem: no.message });
-      } else if (no.replyTo === openFrame) {
-        openFrame = null;
-        moveTo({ problem: no.message });
-      } else if (no.replyTo === saveFrame) {
-        saveFrame = null;
-        inFlight = null;
-        // A publish waiting on this save goes with it: what it would stamp is
-        // the draft the hub still holds, not what is on screen.
-        publishAfterSave = false;
-        moveTo({ saving: false, publishing: false, problem: no.message });
-      } else if (no.replyTo === publishFrame) {
-        publishFrame = null;
-        publishedDocument = null;
-        moveTo({ publishing: false, problem: no.message });
-      }
+    // Each frame this store has out reads its own refusal, so a "no" to one
+    // screen's frame never lands on another's.
+    const noToRun = refusalTo(answers, runFrame);
+    if (noToRun !== null) {
+      runFrame = null;
+      moveTo({ starting: false, problem: noToRun.message });
+    }
+    const noToSimulate = refusalTo(answers, simulateFrame);
+    if (noToSimulate !== null) {
+      simulateFrame = null;
+      moveTo({ simulating: false, problem: noToSimulate.message });
+    }
+    const noToCancel = refusalTo(answers, cancelFrame);
+    if (noToCancel !== null) {
+      cancelFrame = null;
+      moveTo({ cancelling: false, problem: noToCancel.message });
+    }
+    const noToRead = refusalTo(answers, readFrame);
+    if (noToRead !== null) {
+      readFrame = null;
+      moveTo({ readingRun: false, problem: noToRead.message });
+    }
+    const noToHistory = refusalTo(answers, historyFrame);
+    if (noToHistory !== null) {
+      historyFrame = null;
+      historyRefused = true;
+      moveTo({ problem: noToHistory.message });
+    }
+    const noToPick = refusalTo(answers, openRunFrame);
+    if (noToPick !== null) {
+      openRunFrame = null;
+      pickedState = null;
+      moveTo({ selectedRun: null, problem: noToPick.message });
+    }
+    const noToOpen = refusalTo(answers, openFrame);
+    if (noToOpen !== null) {
+      openFrame = null;
+      moveTo({ problem: noToOpen.message });
+    }
+    const noToSave = refusalTo(answers, saveFrame);
+    if (noToSave !== null) {
+      saveFrame = null;
+      inFlight = null;
+      // A publish waiting on this save goes with it: what it would stamp is
+      // the draft the hub still holds, not what is on screen.
+      publishAfterSave = false;
+      moveTo({ saving: false, publishing: false, problem: noToSave.message });
+    }
+    const noToPublish = refusalTo(answers, publishFrame);
+    if (noToPublish !== null) {
+      publishFrame = null;
+      publishedDocument = null;
+      moveTo({ publishing: false, problem: noToPublish.message });
     }
 
     const phase = snapshot.phase;

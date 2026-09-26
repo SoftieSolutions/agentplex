@@ -1,10 +1,15 @@
 import type { DirectoryEntry, FrameId, ServerRegistrationId } from '@agentplex/protocol';
-import type {
-  DirectoryListingView,
-  HubCommand,
-  HubSnapshot,
-  RefusalView,
-} from '../store/hub-store.js';
+import { followUp, type Answer, type Refusal, type Reply } from '../store/answers.js';
+import type { HubCommand } from '../store/hub-store.js';
+
+/**
+ * The hub's answer to a browse, exactly as it sent it.
+ *
+ * `directory` is `null` for the listing of roots, and the entries are then the
+ * roots themselves carrying their own absolute paths. Everywhere else an entry
+ * is one segment and is joined onto the directory -- by `descendTo`, below.
+ */
+export type DirectoryListing = Answer<'directory-listing'>;
 
 /**
  * Every rule the directory picker follows, as functions of values.
@@ -38,7 +43,7 @@ export interface BrowseStep {
  * to list it, so the picker does not offer the click rather than offering one
  * that is answered with a sentence.
  */
-export function descendTo(listing: DirectoryListingView, entry: DirectoryEntry): string | null {
+export function descendTo(listing: DirectoryListing, entry: DirectoryEntry): string | null {
   if (entry.kind !== 'directory') return null;
   // At the top the entries are the roots themselves, absolute already. There is
   // nothing to join them onto: `directory` is null precisely because there is no
@@ -108,19 +113,23 @@ export function browseFor(
 export type PickerView =
   | { readonly kind: 'idle' }
   | { readonly kind: 'waiting' }
-  | { readonly kind: 'listing'; readonly listing: DirectoryListingView }
+  | { readonly kind: 'listing'; readonly listing: DirectoryListing }
   | { readonly kind: 'refused'; readonly words: string };
 
-export function pickerView(snapshot: HubSnapshot, pending: FrameId | null): PickerView {
-  if (pending === null) return { kind: 'idle' };
-  if (snapshot.lastListing?.replyTo === pending) {
-    return { kind: 'listing', listing: snapshot.lastListing };
+export function pickerView(
+  answers: ReadonlyMap<FrameId, Reply>,
+  pending: FrameId | null,
+): PickerView {
+  const said = followUp(pending, answers, 'directory-listing');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return said;
+    case 'refused':
+      return { kind: 'refused', words: refusalWords(said.refusal) };
+    case 'answered':
+      return { kind: 'listing', listing: said.answer };
   }
-  const refusal = snapshot.lastRefusal;
-  if (refusal !== null && refusal.replyTo === pending) {
-    return { kind: 'refused', words: refusalWords(refusal) };
-  }
-  return { kind: 'waiting' };
 }
 
 /**
@@ -132,7 +141,7 @@ export function pickerView(snapshot: HubSnapshot, pending: FrameId | null): Pick
  * browse". What is added is the one thing the message cannot say about itself:
  * whether trying again is worth anything.
  */
-export function refusalWords(refusal: RefusalView): string {
+export function refusalWords(refusal: Refusal): string {
   return refusal.code === 'internal'
     ? `${refusal.message}. Trying again may work.`
     : refusal.message;
@@ -147,7 +156,7 @@ export function refusalWords(refusal: RefusalView): string {
  * server keeps whichever entries the disk returned first, so a missing name
  * may sort anywhere among the rows shown.
  */
-export function truncationNotice(listing: DirectoryListingView): string | null {
+export function truncationNotice(listing: DirectoryListing): string | null {
   if (!listing.truncated) return null;
   return (
     `${String(listing.entries.length)} of its entries are shown: ` +

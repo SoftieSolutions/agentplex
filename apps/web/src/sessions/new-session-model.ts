@@ -10,7 +10,8 @@ import type {
   SessionRef,
   StoreId,
 } from '@agentplex/protocol';
-import type { ConnectionPhase, HubCommand, RefusalView, StartedView } from '../store/hub-store.js';
+import { followUp, type Reply } from '../store/answers.js';
+import type { ConnectionPhase, HubCommand } from '../store/hub-store.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { serverLabel } from './session-list-model.js';
 
@@ -391,39 +392,44 @@ export interface HeldElsewhere {
 
 export function startFollowUp(
   pending: FrameId,
-  lastStarted: StartedView | null,
-  lastRefusal: RefusalView | null,
+  answers: ReadonlyMap<FrameId, Reply>,
   state: MachineState | null,
   /** The session the start named, or `null` for a fresh spawn. */
   asked: SessionRef | null,
 ): StartFollowUp {
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    const { holder } = lastRefusal;
-    return {
-      kind: 'refused',
-      words: lastRefusal.message,
-      held:
-        holder === null
-          ? null
-          : {
-              holder,
-              machine: state === null ? holder.server : serverLabel(state, holder.server),
-              session: asked,
-            },
-    };
-  }
-  if (lastStarted !== null && lastStarted.replyTo === pending) {
-    if (lastStarted.sessionId !== null) {
+  const said = followUp(pending, answers, 'session-started');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return { kind: 'waiting' };
+    case 'refused': {
+      const { holder } = said.refusal;
       return {
-        kind: 'navigate',
-        hash: sessionPaneHash({ storeId: lastStarted.storeId, sessionId: lastStarted.sessionId }),
+        kind: 'refused',
+        words: said.words,
+        held:
+          holder === null
+            ? null
+            : {
+                holder,
+                machine: state === null ? holder.server : serverLabel(state, holder.server),
+                session: asked,
+              },
       };
     }
-    const label = state === null ? lastStarted.server : serverLabel(state, lastStarted.server);
-    return {
-      kind: 'started',
-      words: `started on ${label}; the session appears in the list once the provider writes its first turn`,
-    };
+    case 'answered': {
+      const started = said.answer;
+      if (started.sessionId !== null) {
+        return {
+          kind: 'navigate',
+          hash: sessionPaneHash({ storeId: started.storeId, sessionId: started.sessionId }),
+        };
+      }
+      const label = state === null ? started.server : serverLabel(state, started.server);
+      return {
+        kind: 'started',
+        words: `started on ${label}; the session appears in the list once the provider writes its first turn`,
+      };
+    }
   }
-  return { kind: 'waiting' };
 }

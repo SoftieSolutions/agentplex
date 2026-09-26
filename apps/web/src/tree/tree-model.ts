@@ -7,7 +7,8 @@ import type {
   SessionHolder,
   SessionRef,
 } from '@agentplex/protocol';
-import type { HubCommand, RefusalView, TreeChangeView } from '../store/hub-store.js';
+import { followUp, type Reply } from '../store/answers.js';
+import type { HubCommand } from '../store/hub-store.js';
 import { FOLDER_KIND, PROJECT_KIND } from './node-kinds.js';
 
 /**
@@ -184,16 +185,25 @@ export type TreeFollowUp =
   | { readonly kind: 'done' }
   | { readonly kind: 'refused'; readonly words: string; readonly holder: SessionHolder | null };
 
-export function treeFollowUp(
-  pending: FrameId,
-  lastChange: TreeChangeView | null,
-  lastRefusal: RefusalView | null,
-): TreeFollowUp {
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message, holder: lastRefusal.holder };
+export function treeFollowUp(pending: FrameId, answers: ReadonlyMap<FrameId, Reply>): TreeFollowUp {
+  const said = followUp(
+    pending,
+    answers,
+    'node-created',
+    'node-renamed',
+    'node-moved',
+    'node-removed',
+    'node-removal-forgotten',
+  );
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return { kind: 'waiting' };
+    case 'refused':
+      return { kind: 'refused', words: said.words, holder: said.refusal.holder };
+    case 'answered':
+      return { kind: 'done' };
   }
-  if (lastChange !== null && lastChange.replyTo === pending) return { kind: 'done' };
-  return { kind: 'waiting' };
 }
 
 /** Whether a stop may be offered for that refusal, and for which machine. */

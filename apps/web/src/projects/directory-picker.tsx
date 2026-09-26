@@ -68,7 +68,7 @@ export function DirectoryPicker({
   const [pending, setPending] = useState<FrameId | null>(null);
   const [rejected, setRejected] = useState<string | null>(null);
 
-  const view = pickerView(snapshot, pending);
+  const view = pickerView(snapshot.answers, pending);
   const listing = view.kind === 'listing' ? view.listing : null;
   const blocked = chooseBlockedReason(view);
   const muted = colorForRole('textMuted', scheme);
