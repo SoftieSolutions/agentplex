@@ -222,8 +222,22 @@ rather than something each caller has to remember.
 
 ## Workspace boundaries
 
-Both apps may depend on `@agentplex/protocol`. Nothing else crosses a package
-line, and neither app may import the other. `pnpm lint` enforces this.
+An app or package imports only what its own `package.json` declares: workspace
+packages and third-party ones, values and types alike. A devDependency serves a
+type-only import anywhere, and a value import only in a test, a test's support
+module or a test runner's configuration.
+`pnpm lint` enforces it by reading each member's manifest, so declaring a
+dependency is the whole of allowing one.
+
+No app imports another. For a static import -- `import`, `import type`,
+`export ... from` -- lint refuses reaching into another app's source by path,
+and naming the web client's package, which the hub declares only to find the
+files it serves. Neither check sees a dynamic `import()`:
+`import('../../hub/src/hub.js')` in the server and
+`import('@softiesolutions/agentplex-web')` in the hub both lint clean. Any other
+app named by its package name, statically or not, is refused only because no
+manifest declares it. Those are the changes review has to catch: a dynamic
+import that crosses into another app, and a dependency on an app.
 
 `packages/protocol` is shared by a Node service and a browser bundle, so it may
 use neither Node builtins nor another workspace package.
@@ -293,9 +307,9 @@ second answer to what a document write means.
 **3. A package, once the second consumer actually exists.** `AGENTS.md` states
 the rule -- `packages/` holds seams with at least two consumers, and one
 consumer is a folder -- and the cost is why the rule has a number in it: a
-manifest, a tsconfig, a build, a block in `eslint.config.js` naming what the
-package may import, and a place in the packaging step. `release` is the clean
-case: the bin and `scripts/` both imported it the day it landed.
+manifest naming what the package may import, a tsconfig, a build, and a place in
+the packaging step. `release` is the clean case: the bin and `scripts/` both
+imported it the day it landed.
 
 `node-shared` and `providers` are the exception the rule allows, and it is
 narrower than it looks. Both were carved out of `apps/agentplexd` while `apps/`
@@ -306,8 +320,8 @@ exist it has four consumers", in the future tense. What makes that defensible is
 that the split was not a hope: it was the epic being executed, written down in a
 design document, with the tickets that create the second consumer already filed.
 A second consumer somebody intends to write is not one, and cutting a package
-ahead of a split that is merely likely buys a manifest, a build and a lint block
-in exchange for nothing.
+ahead of a split that is merely likely buys a manifest, a build and a place in
+the packaging step in exchange for nothing.
 
 Placement on this rung can carry more than the rule. AGX-174 put the adapter
 list in `packages/providers` rather than in `apps/cli`, which holds two of its
