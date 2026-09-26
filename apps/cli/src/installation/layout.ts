@@ -49,6 +49,13 @@ export const SYSTEM_UNIT_DIR = '/etc/systemd/system';
  */
 export const SYSTEM_STATE_DIR = '/var/lib/agentplex';
 
+/**
+ * The service account a `--system` install runs both daemons as, and the owner
+ * of the directories that account may write. `install.sh` makes it with
+ * `useradd --system` and names its home the state directory above.
+ */
+export const SYSTEM_ACCOUNT = 'agentplex';
+
 /** The per-user layout, from the branch a plain run takes. */
 export const USER_PREFIX_DIRECTORY = '.agentplex';
 export const USER_UNIT_DIRECTORY = join('.config', 'systemd', 'user');
@@ -126,4 +133,21 @@ export function nodeStampFile(layout: Layout): string {
 /** The interpreter inside that directory, which is what a unit's ExecStart names. */
 export function nodeBinary(layout: Layout): string {
   return join(layout.prefix, NODE_DIRECTORY, 'bin', 'node');
+}
+
+/** Where npm links a global package's bin under this prefix: `BIN_DIR`. */
+export function binDirectory(layout: Layout): string {
+  return join(layout.prefix, 'bin');
+}
+
+/**
+ * Where the daemons keep their state and start in: `STATE_DIR`.
+ *
+ * The prefix itself on a per-user install, and the service account's home on
+ * the fleet one whatever the prefix -- `resolve_layout`'s two branches. Not a
+ * field of `Layout`, because nothing that finds an install has needed it; the
+ * unit's `WorkingDirectory` and the install plan are what ask.
+ */
+export function stateDirectory(layout: Layout): string {
+  return layout.scope === 'system' ? SYSTEM_STATE_DIR : layout.prefix;
 }

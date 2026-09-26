@@ -6,6 +6,7 @@ import type { Installation } from '../../installation/installation.js';
 import { NODE_DIRECTORY, NODE_STAMP, type Layout } from '../../installation/layout.js';
 import type { ManifestReader } from '../../versions/version-check.js';
 import type { FileOutcome, UpdateMachine } from './update-machine.js';
+import { NODE_MAJOR } from '../../installation/node-directory.js';
 
 /**
  * The runtime, and why it moves before the packages do.
@@ -42,9 +43,6 @@ import type { FileOutcome, UpdateMachine } from './update-machine.js';
  * it does not own, and `uninstall_node` bets on the same record when it refuses
  * to remove one.
  */
-
-/** The Node major this project declares in `engines` and installs. */
-export const NODE_MAJOR = '24';
 
 /**
  * Where the current release of that major is named.
