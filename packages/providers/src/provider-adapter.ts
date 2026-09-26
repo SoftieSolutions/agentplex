@@ -400,6 +400,29 @@ export interface StatusObservation {
 }
 
 /**
+ * A provider's signal, reduced to the status every provider shares.
+ *
+ * `progressing` does not become `working` on elapsed time alone. A recent write
+ * proves something wrote recently, not that anything is running now, so the
+ * choice would be between under-claiming `idle` and putting a spinner on
+ * sessions that died hours ago. A verified live process is the only route to
+ * `working`; a session without one keeps the quiet answer, which is the honest
+ * one.
+ *
+ * Note what is *not* here: no elapsed-time rule reads `now` behind the caller's
+ * back, and the two arguments that could tempt one -- `updatedAt` and `now` --
+ * are supplied rather than read. A provider that ever needs such a rule gets it
+ * in its own `status` method, which is the per-provider hook; this function is
+ * what they share while none does.
+ */
+export function statusFromObservation({ signal, running }: StatusObservation): SessionStatus {
+  if (signal === 'awaiting-permission' || signal === 'awaiting-input') return signal;
+  if (running) return 'working';
+  if (signal === 'unknown') return 'unknown';
+  return 'idle';
+}
+
+/**
  * How a provider is pointed at the program that asks this machine before a tool
  * call runs, or `null` for one that cannot be.
  *
