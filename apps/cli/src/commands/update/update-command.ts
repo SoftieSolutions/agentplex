@@ -35,6 +35,7 @@ import {
   planUpdate,
   type UpdatePlan,
 } from './update-plan.js';
+import { resolvePins } from './resolve-pins.js';
 import { readUpdateFlags, updateUsage, type RuntimeConsent } from './update-flags.js';
 import type { UpdateMachine } from './update-machine.js';
 
@@ -140,11 +141,22 @@ export async function runUpdateCommand(
     ]);
   }
 
+  // After the absent check, so a component this machine does not have is told
+  // so rather than that its series is empty. A pin that cannot be resolved is
+  // not a wrong invocation -- the words were right, the manifest had nothing
+  // for them -- so it exits as `install.sh` does when it stops on the same
+  // series: not done, and without the usage.
+  const pins = resolvePins(flags.asked, checked);
+  if (!pins.ok) {
+    for (const problem of pins.problems) writeError(`agentplex update: ${problem}`);
+    return EXIT_NOT_DONE;
+  }
+
   const plan = planUpdate({
     installation,
     manifest: checked.ok ? checked.manifest : null,
     problem: checked.ok ? null : checked.problem,
-    asked: flags.asked,
+    asked: pins.resolved,
   });
 
   write(

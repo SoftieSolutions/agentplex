@@ -126,7 +126,10 @@ beforeAll(async () => {
     JSON.stringify(
       {
         cli: { current: '1.5.0', releases: { '1.5.0': {} } },
-        hub: { current: '1.2.0', releases: { '1.2.0': BOTH } },
+        // `1.2.5` is what `hub@1.2` finds. The current stays 1.2.0, which a
+        // mirror may say and the schema allows, so the unpinned check above
+        // still reads this hub as up to date.
+        hub: { current: '1.2.0', releases: { '1.2.5': BOTH, '1.2.0': BOTH } },
         server: { current: '1.5.0', releases: { '1.5.0': { server: 3 } } },
         web: { current: '1.1.0', releases: { '1.1.0': BOTH } },
       },
@@ -188,14 +191,33 @@ describe('agentplex update --check against a real prefix', () => {
   );
 });
 
-describe('what update refuses, before it touches anything', () => {
-  it('refuses a partial pin with the shape a pin takes', { timeout: RUN_TIMEOUT_MS }, async () => {
-    const refused = await run('update', 'hub@1.3');
+describe('a pin that names a series', () => {
+  it(
+    'plans the newest release the manifest lists under it',
+    { timeout: RUN_TIMEOUT_MS },
+    async () => {
+      const checked = await run('update', '--check', 'hub@1.2');
 
-    expect(refused.code).toBe(2);
-    expect(refused.stdout).toBe('');
-    expect(refused.stderr).toContain('1.3.0 rather than 1.3');
-  });
+      expect(checked.code).toBe(0);
+      expect(checked.stdout).toMatch(/^ {2}hub {6}1\.2\.0 {8}-> 1\.2\.5$/m);
+      expect(checked.stderr).toBe('');
+    },
+  );
+});
+
+describe('what update refuses, before it touches anything', () => {
+  it(
+    'refuses a series the manifest lists nothing under, naming it',
+    { timeout: RUN_TIMEOUT_MS },
+    async () => {
+      const refused = await run('update', 'hub@1.3');
+
+      expect(refused.code).toBe(1);
+      expect(refused.stdout).toBe('');
+      expect(refused.stderr).toContain('offers no hub release under 1.3');
+      expect(refused.stderr).toContain('hub@1.3');
+    },
+  );
 
   it(
     'refuses a component this machine does not have, and points at setup',

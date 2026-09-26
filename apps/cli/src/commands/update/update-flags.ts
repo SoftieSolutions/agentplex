@@ -1,4 +1,4 @@
-import { isReleaseVersion } from '@agentplex/release';
+import { readPin, type Pin } from '@agentplex/release';
 import { COMPONENTS, type Component } from '../../installation/components.js';
 import { lookupUsageLines, readLookupFlags } from '../../installation/lookup-flags.js';
 
@@ -18,11 +18,12 @@ import { lookupUsageLines, readLookupFlags } from '../../installation/lookup-fla
  * box runs a server; a silent no-op would leave them believing it, and an
  * install would turn a typo into a new daemon.
  *
- * **A pin is exact.** `hub@1.3` is refused, with the grammar named, because a
- * pin is a release tag and `versions.json` describes only what is current --
- * there is nothing here to resolve a range against. AGX-198 is the ticket that
- * would give the manifest history and make it resolvable; this command refuses
- * the shape rather than guessing at it.
+ * **A pin is exact or a series, as it is for `install.sh`.** `hub@1.3.0` names
+ * a release tag; `hub@1.3` and `hub@1` name a series, which resolves to the
+ * newest release the manifest lists under it and never to a prerelease. The
+ * grammar and the resolver are `packages/release`'s `pin.ts`, held against the
+ * installer's bash by the table both suites run. This reads the word; the
+ * series is resolved once the manifest has been read -- see `resolve-pins.ts`.
  */
 
 export const CHECK_FLAG = '--check';
@@ -30,11 +31,11 @@ export const DRY_RUN_FLAG = '--dry-run';
 export const NODE_FLAG = '--node';
 export const NO_NODE_FLAG = '--no-node';
 
-/** One component named on the command line, with the version it was pinned to. */
+/** One component named on the command line, with the pin it was given. */
 export interface AskedComponent {
   readonly component: Component;
-  /** An exact release, or `null` for whatever the manifest calls current. */
-  readonly version: string | null;
+  /** An exact release or a series, or `null` for whatever the manifest calls current. */
+  readonly pin: Pin | null;
 }
 
 /**
@@ -138,7 +139,7 @@ function readComponent(
 ): { ok: true; value: AskedComponent } | { ok: false; problem: string } {
   const separator = argument.indexOf('@');
   const name = separator === -1 ? argument : argument.slice(0, separator);
-  const version = separator === -1 ? null : argument.slice(separator + 1);
+  const word = separator === -1 ? null : argument.slice(separator + 1);
 
   if (!isComponent(name)) {
     return {
@@ -149,16 +150,19 @@ function readComponent(
     };
   }
 
-  if (version === null) return { ok: true, value: { component: name, version: null } };
-  if (!isReleaseVersion(version)) {
+  if (word === null) return { ok: true, value: { component: name, pin: null } };
+  const pin = readPin(word);
+  if (pin === null) {
     return {
       ok: false,
       problem:
-        `${name} is pinned to ${JSON.stringify(version)}, which is not a release this can ` +
-        'install. A pin names a release tag, so it is exact: 1.3.0 rather than 1.3',
+        `${name} is pinned to ${JSON.stringify(word)}, which is not a version this can ` +
+        'install: a pin is an exact <major>.<minor>.<patch>, naming the release tag ' +
+        `${name}-v<version>, or a series -- <major>.<minor> or <major> -- which resolves to ` +
+        'the newest release published under it',
     };
   }
-  return { ok: true, value: { component: name, version } };
+  return { ok: true, value: { component: name, pin } };
 }
 
 function isComponent(name: string): name is Component {
@@ -182,7 +186,8 @@ export function updateUsage(): string {
     '',
     ...lookupUsageLines(),
     '',
-    '  A pin is exact: hub@1.3.0 names a release tag, and hub@1.3 is refused because',
-    '  the manifest says what is current rather than what has been.',
+    '  A pin is exact or a series. hub@1.3.0 names a release tag;',
+    '  hub@1.3 takes the newest 1.3.x the manifest lists, and hub@1 the newest 1.x.',
+    '  A series never resolves to a prerelease, which is pinned by its full version.',
   ].join('\n');
 }

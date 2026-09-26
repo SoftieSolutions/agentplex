@@ -563,14 +563,14 @@ RUN cat /tmp/status-available.log \
     && grep -q '9.9.9 available' /tmp/status-available.log \
     && grep -q 'checked just now' /tmp/status-available.log
 
-# A pin to this command names a release tag, so it is exact, and it is refused at
-# the flag before the manifest is read and long before anything is stopped.
-# `install.sh` takes a series as well as a tag -- it resolves one against the
-# release history the manifest carries -- and this command deliberately does
-# not: one resolver, in the place a fleet points at, rather than two that have
-# to keep agreeing.
-RUN ! AGENTPLEX_VERSIONS=/tmp/mirror agentplex update hub@1.3 2>&1 | tee /tmp/pin.log
-RUN grep -q '1.3.0 rather than 1.3' /tmp/pin.log
+# A series pin, which this command takes as `install.sh` does: the newest
+# release the manifest lists under it, against the mirror above -- `cli@9.8`
+# is 9.8.0 although 9.9.9 is current. A series nothing is published under stops
+# the run before anything is stopped, naming the pin it could not resolve.
+RUN AGENTPLEX_VERSIONS=/tmp/mirror agentplex update --check cli@9.8 2>&1 | tee /tmp/series.log
+RUN grep -Eq '^  cli +[0-9]+\.[0-9]+\.[0-9]+ +-> 9\.8\.0$' /tmp/series.log
+RUN ! AGENTPLEX_VERSIONS=/tmp/mirror agentplex update --check cli@9.7 2>&1 | tee /tmp/pin.log
+RUN cat /tmp/pin.log && grep -q 'cli@9.7' /tmp/pin.log
 
 # install.sh into the wizard it hands over to, which is the one composition
 # nothing had ever run.
