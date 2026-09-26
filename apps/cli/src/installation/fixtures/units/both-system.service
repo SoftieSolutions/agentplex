@@ -32,11 +32,17 @@ RestartSec=5s
 # message in a restart loop.
 RestartPreventExitStatus=2
 # SIGTERM is the default and the signal main.ts shuts down on. The server drains
-# first -- it waits for the turns it is holding to reach a boundary -- and the
-# two lines below are the one number that bounds both halves of that: the daemon
-# stops waiting with the margin still to go, and systemd's SIGKILL is what it is
+# first -- it waits for the turns it is holding to reach a boundary -- and that
+# wait is only worth anything because systemd signals the server alone: the
+# server's unit carries KillMode=mixed, so the agents it is waiting for are not
+# sent the same SIGTERM in the same millisecond, and whatever is left in the
+# cgroup is SIGKILLed once the server exits. The drain and TimeoutStopSec lines
+# are the one number that bounds both halves of the drain: the daemon stops
+# waiting with the margin still to go, and systemd's SIGKILL is what it is
 # racing. A second SIGTERM means the operator is done waiting and skips to the
-# kill. The hub ignores the drain setting; both daemons share this unit template.
+# kill -- sent with `systemctl kill --kill-whom=main`, because a bare
+# `systemctl kill` signals every process in the unit whatever KillMode says.
+# The hub ignores the drain setting; both daemons share this unit template.
 Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=15
 TimeoutStopSec=20s
 
@@ -85,11 +91,18 @@ RestartSec=5s
 # message in a restart loop.
 RestartPreventExitStatus=2
 # SIGTERM is the default and the signal main.ts shuts down on. The server drains
-# first -- it waits for the turns it is holding to reach a boundary -- and the
-# two lines below are the one number that bounds both halves of that: the daemon
-# stops waiting with the margin still to go, and systemd's SIGKILL is what it is
+# first -- it waits for the turns it is holding to reach a boundary -- and that
+# wait is only worth anything because systemd signals the server alone: the
+# server's unit carries KillMode=mixed, so the agents it is waiting for are not
+# sent the same SIGTERM in the same millisecond, and whatever is left in the
+# cgroup is SIGKILLed once the server exits. The drain and TimeoutStopSec lines
+# are the one number that bounds both halves of the drain: the daemon stops
+# waiting with the margin still to go, and systemd's SIGKILL is what it is
 # racing. A second SIGTERM means the operator is done waiting and skips to the
-# kill. The hub ignores the drain setting; both daemons share this unit template.
+# kill -- sent with `systemctl kill --kill-whom=main`, because a bare
+# `systemctl kill` signals every process in the unit whatever KillMode says.
+# The hub ignores the drain setting; both daemons share this unit template.
+KillMode=mixed
 Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=15
 TimeoutStopSec=20s
 

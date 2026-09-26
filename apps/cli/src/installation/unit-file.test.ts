@@ -111,6 +111,26 @@ describe('renderUnit', () => {
     }
   });
 
+  it('signals the server alone on stop, in both scopes, so its agents wait for the drain', () => {
+    // systemd's default, control-group, sends SIGTERM to every process in the
+    // unit at once: the agents a session runs are in that cgroup, so they die
+    // in the same millisecond the server starts draining for them. mixed sends
+    // SIGTERM to the main process alone and SIGKILLs whatever is left once it
+    // has exited, which is what makes the drain a drain.
+    for (const layout of [USER, SYSTEM]) {
+      const lines = renderUnit('server', layout, '/usr/local/bin').split('\n');
+      expect(lines.filter((line) => line === 'KillMode=mixed')).toHaveLength(1);
+      expect(lines.filter((line) => line.startsWith('KillMode='))).toHaveLength(1);
+    }
+  });
+
+  it('gives the hub no KillMode in either scope, because it runs no children to spare', () => {
+    for (const layout of [USER, SYSTEM]) {
+      const lines = renderUnit('hub', layout, '/usr/local/bin').split('\n');
+      expect(lines.filter((line) => line.startsWith('KillMode='))).toEqual([]);
+    }
+  });
+
   it('names the unit file as the script does, one per daemon', () => {
     expect(unitFileName('hub')).toBe('agentplex-hub.service');
     expect(unitFileName('server')).toBe('agentplex-server.service');
