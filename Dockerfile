@@ -444,6 +444,100 @@ RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
     && grep -qx 'KillMode=mixed' "$HOME/.config/systemd/user/agentplex-server.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-server.service"
 
+# `agentplex install`, the bin doing what install.sh just did, on the one
+# machine here with a runtime install.sh really put in place and none of the
+# hub's packages yet.
+#
+# A second prefix, so the trees it fills are its own and nothing above is
+# replaced: the hub, the client and the command, staged and installed against
+# the shrinkwrap each tarball carries by the same step `agentplex update` runs,
+# then the settings file and the hub's unit. The runtime is the one install.sh
+# unpacked, on PATH here because nothing puts the prefix's on anybody's, and
+# that is the node the unit names for a prefix that holds none. AGENTPLEX_PACKAGE
+# is the seam it shares with the script: the tarballs this build packed.
+RUN export PATH="$HOME/.agentplex/bin:$HOME/.agentplex/node/bin:$PATH"; \
+    AGENTPLEX_PACKAGE=/package agentplex install --role=hub --prefix="$HOME/second" \
+    | tee /tmp/second-install.log
+
+# What it said it did, read back off the machine: the trees, nothing staged or
+# set aside beside them, the command linked on the prefix's bin, the settings
+# file created 0600 with this prefix in it, and the unit it wrote -- which is
+# byte for byte the unit `--print-unit` prints for the same role and prefix,
+# and which systemd itself accepts.
+RUN export PATH="$HOME/.agentplex/bin:$HOME/.agentplex/node/bin:$PATH"; \
+    second="$HOME/second"; root="$second/lib/node_modules/@softiesolutions"; \
+    unit="$HOME/.config/systemd/user/agentplex-hub.service"; \
+    ls -1a "$root" \
+    && test -d "$root/agentplex-hub" \
+    && test -d "$root/agentplex-web" \
+    && test -d "$root/agentplex" \
+    && ! test -e "$root/agentplex-server" \
+    && ! ls -1 "$root" | grep -E '[.](new|old)$' \
+    && test -x "$second/bin/agentplex" \
+    && test "$(stat -c '%a' "$second/agentplex.env")" = 600 \
+    && grep -qx 'AGENTPLEX_ROLE=hub' "$second/agentplex.env" \
+    && grep -qx "AGENTPLEX_PREFIX=$second" "$second/agentplex.env" \
+    && grep -qx "settings   $second/agentplex.env (create)" /tmp/second-install.log \
+    && grep -qx "unit       $unit (write, not enabled)" /tmp/second-install.log \
+    && agentplex install --print-unit --role=hub --prefix="$second" | diff - "$unit" \
+    && systemd-analyze verify "$unit"
+
+# AGX-324's comparison, for the trees this command installed: every non-root
+# entry of each package's npm-shrinkwrap.json against the version on disk and
+# against npm's own record, node_modules/.package-lock.json, failing on any
+# disagreement, on an entry npm recorded that the shrinkwrap does not name, and
+# on a declared dependency the shrinkwrap leaves out. `install-check` argues it
+# at length; it is repeated here rather than shared because that stage is kept
+# self-contained, and it is the claim that the bin's install step honours a
+# shrinkwrap exactly as the script's does.
+RUN SCOPE="$HOME/second/lib/node_modules/@softiesolutions" \
+    "$HOME/.agentplex/node/bin/node" <<'COMPARE'
+const fs = require('node:fs');
+const path = require('node:path');
+const scope = process.env.SCOPE;
+const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+const onDisk = (tree, key) => {
+  const file = path.join(tree, key, 'package.json');
+  return fs.existsSync(file) ? read(file).version : null;
+};
+let failed = false;
+for (const name of ['agentplex', 'agentplex-hub', 'agentplex-web']) {
+  const tree = path.join(scope, name);
+  const manifest = read(path.join(tree, 'package.json'));
+  const entries = Object.entries(read(path.join(tree, 'npm-shrinkwrap.json')).packages ?? {})
+    .filter(([key]) => key !== '');
+  const hiddenFile = path.join(tree, 'node_modules', '.package-lock.json');
+  const hidden = fs.existsSync(hiddenFile) ? (read(hiddenFile).packages ?? {}) : {};
+  let match = 0;
+  let mismatch = 0;
+  let absent = 0;
+  for (const [key, entry] of entries) {
+    const disk = onDisk(tree, key);
+    const recorded = hidden[key]?.version ?? null;
+    if (disk === entry.version && recorded === entry.version) match += 1;
+    else if (disk === null && recorded === null && entry.optional === true) absent += 1;
+    else {
+      mismatch += 1;
+      console.log(`MISMATCH ${name} ${key}: shrinkwrap=${entry.version} disk=${disk} hidden=${recorded}`);
+    }
+  }
+  const named = new Set(entries.map(([key]) => key));
+  const extra = Object.keys(hidden).filter((key) => key !== '' && !named.has(key));
+  for (const key of extra) console.log(`EXTRA ${name} ${key}: npm recorded it, the shrinkwrap does not name it`);
+  const declared = Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies });
+  const unnamed = declared.filter((dependency) => !named.has(`node_modules/${dependency}`));
+  for (const dependency of unnamed) console.log(`UNNAMED ${name} ${dependency}: the manifest declares it, the shrinkwrap does not`);
+  console.log(`${name}: ${entries.length} entries, ${match} match, ${mismatch} mismatch, ${absent} optional absent, ${extra.length} extra in hidden lockfile`);
+  if (mismatch > 0 || extra.length > 0 || unnamed.length > 0) failed = true;
+}
+if (failed) process.exit(1);
+COMPARE
+
+# Taken back out, so the machine the rest of this stage asserts about is the
+# one install.sh made: a hub unit in the user manager's directory would name a
+# second prefix to `status`, `start` and the uninstall below.
+RUN rm -rf "$HOME/second" "$HOME/.config/systemd/user/agentplex-hub.service"
+
 # The ticket's own verification: a stock container, and `doctor` at the end of
 # it reporting a provider it can find.
 #
