@@ -8,7 +8,7 @@ import {
   type TerminalSize,
 } from '@agentplex/protocol';
 import { DEFAULT_FEED_BYTES } from '../terminal/chunk-feed.js';
-import { rememberAnswer, type Reply } from './answers.js';
+import { NO_ANSWERS, rememberAnswer, type Answers, type Reply } from './answers.js';
 import { createCatalogueChannel } from './catalogue-replies.js';
 import {
   encodeClientFrame,
@@ -239,7 +239,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     commandQueue: { ...INITIAL_QUEUE, capacity },
     terminals: new Map(),
     terminalInput: INITIAL_TERMINAL,
-    answers: new Map(),
+    answers: NO_ANSWERS,
     starts: new Map(),
     approvalPolicies: new Map(),
     catalogue: null,
@@ -270,9 +270,24 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     for (const listener of [...listeners]) listener();
   }
 
+  /**
+   * `replies` with what is owed now: every frame sent and not answered, and
+   * every frame queued. Derived from `pending` and the queue rather than kept
+   * beside them, so there is one record of what is out and it cannot drift.
+   */
+  function answersWith(replies: ReadonlyMap<FrameId, Reply>): Answers {
+    return { replies, outstanding: new Set([...pending, ...queue.map(({ id }) => id)]) };
+  }
+
   /** Files the hub's answer under the frame it names, for whoever sent that frame. */
   function remember(reply: Reply): void {
-    update({ answers: rememberAnswer(snapshot.answers, reply) });
+    pending.delete(reply.replyTo);
+    update({ answers: answersWith(rememberAnswer(snapshot.answers.replies, reply)) });
+  }
+
+  /** A frame answered by something `answers` does not keep: it is owed nothing now. */
+  function settle(id: FrameId): void {
+    if (pending.delete(id)) update({ answers: answersWith(snapshot.answers.replies) });
   }
 
   const connection = createConnection({
@@ -329,6 +344,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       update({
         ...(heldRuns ? { runs: new Map() } : {}),
         ...(said !== null ? { problem: said } : {}),
+        // A frame stranded on this socket is not answered on the next one, so
+        // it is owed nothing: the screen that sent it stops waiting, and the
+        // line above is what says why. A queued frame is still owed.
+        ...(unanswered > 0 ? { answers: answersWith(snapshot.answers.replies) } : {}),
       });
     }
   }
@@ -399,11 +418,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         return;
       }
       case 'pane-layout-saved': {
-        pending.delete(frame.replyTo);
+        settle(frame.replyTo);
         return;
       }
       case 'session-started': {
-        pending.delete(frame.replyTo);
         remember(frame);
         sessions.started(frame);
         // The reply is also the moment a subscription by this start's handle
@@ -451,12 +469,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       case 'graph-run-started':
       case 'graph-run-cancelled':
       case 'graph-simulated': {
-        pending.delete(frame.replyTo);
         remember(frame);
         return;
       }
       case 'approval-policy': {
-        pending.delete(frame.replyTo);
         remember(frame);
         // Replaced whole, and by the project the frame names rather than by
         // whichever question was asked: list, add and remove all answer with
@@ -475,8 +491,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         return;
       }
       case 'graph-document': {
-        pending.delete(frame.replyTo);
+        // Filed before it is settled, so it is never owed nothing and nowhere.
         graphs.document(frame);
+        settle(frame.replyTo);
         return;
       }
       case 'graph-run-state': {
@@ -486,20 +503,18 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       case 'graph-run-latest': {
         // The answer to a read, and to an open of one run: either way it is
         // addressed, and the frame that asked is settled here.
-        pending.delete(frame.replyTo);
         remember(frame);
         graphs.latest(frame);
         return;
       }
       case 'graph-run-history': {
-        pending.delete(frame.replyTo);
         remember(frame);
         graphs.history(frame);
         return;
       }
       case 'session-transcript-read': {
-        pending.delete(frame.replyTo);
         sessions.transcript(frame);
+        settle(frame.replyTo);
         return;
       }
       case 'catalogue-page': {
@@ -535,7 +550,6 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       case 'refusal': {
         // A refusal about a terminal frame is said on its pane and nowhere else.
         if (terminals.refused(frame)) return;
-        pending.delete(frame.replyTo);
         remember(frame);
         // A refusal answers a request as surely as a reply does, and its words
         // are the hub's own: filed under the frame it refuses, like a yes.
@@ -631,7 +645,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       // may have been edited on its own machine meanwhile, and a simulated
       // path through a draft that may have moved: copies this store cannot
       // vouch for.
-      answers: new Map(),
+      answers: NO_ANSWERS,
       // A catalogue page is pinned to a version this hub run may not be at
       // when somebody looks again.
       catalogue: null,
@@ -683,6 +697,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       if (wire !== null) {
         const id = frameIds.next();
         pending.add(id);
+        // Owed from now, and replaced without a notification: the one reader
+        // is whoever sent it, who has the id only once this returns, and a
+        // listener that sends on a change would be told first and send again.
+        snapshot = { ...snapshot, answers: answersWith(snapshot.answers.replies) };
         sessions.asked(command, id);
         wire.send(encodeClientFrame({ ...command, id }));
         return { accepted: true, id, delivery: 'sent' };
@@ -696,8 +714,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       const id = frameIds.next();
       queue.push({ id, command });
+      update({
+        commandQueue: queueView(snapshot.commandQueue.overflowed),
+        answers: answersWith(snapshot.answers.replies),
+      });
       sessions.asked(command, id);
-      update({ commandQueue: queueView(snapshot.commandQueue.overflowed) });
       return { accepted: true, id, delivery: 'queued' };
     },
 

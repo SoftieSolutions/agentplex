@@ -6,7 +6,7 @@ import {
   type NodeId,
   type ServerRegistrationId,
 } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 import type { ConnectionPhase } from '../store/views.js';
 
@@ -131,21 +131,22 @@ export function docCreateBlockedReason(
  * `made` carries the node, because that is the one thing the client cannot work
  * out for itself and the one thing it immediately needs: every later frame
  * about this document names the node, and the form opens the editor on it.
+ *
+ * `idle` is a create nothing more is coming for, as `followUp` reads it, and
+ * leaves the control free for a second try.
  */
 export type DocCreateFollowUp =
+  | { readonly kind: 'idle' }
   | { readonly kind: 'waiting' }
   | { readonly kind: 'made'; readonly nodeId: NodeId }
   | { readonly kind: 'refused'; readonly words: string };
 
-export function docCreateFollowUp(
-  pending: FrameId,
-  answers: ReadonlyMap<FrameId, Reply>,
-): DocCreateFollowUp {
+export function docCreateFollowUp(pending: FrameId, answers: Answers): DocCreateFollowUp {
   const said = followUp(pending, answers, 'doc-created');
   switch (said.kind) {
     case 'idle':
     case 'waiting':
-      return { kind: 'waiting' };
+      return said;
     case 'refused':
       return { kind: 'refused', words: said.words };
     case 'answered':

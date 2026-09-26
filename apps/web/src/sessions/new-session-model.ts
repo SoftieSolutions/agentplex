@@ -10,7 +10,7 @@ import type {
   SessionRef,
   StoreId,
 } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 import type { ConnectionPhase } from '../store/views.js';
 import { sessionHash } from '../terminal/session-route.js';
@@ -355,8 +355,12 @@ export function sessionPaneHash(ref: SessionRef): string {
  * permanently wrong rather than merely early. That case is `started`: said in
  * words, naming the machine the hub picked, while the session's row arrives
  * with the scan that learns its id.
+ *
+ * `idle` is a start nothing more is coming for, as `followUp` reads it, and
+ * leaves the control free for a second try.
  */
 export type StartFollowUp =
+  | { readonly kind: 'idle' }
   | { readonly kind: 'waiting' }
   | { readonly kind: 'navigate'; readonly hash: string }
   | { readonly kind: 'started'; readonly words: string }
@@ -393,7 +397,7 @@ export interface HeldElsewhere {
 
 export function startFollowUp(
   pending: FrameId,
-  answers: ReadonlyMap<FrameId, Reply>,
+  answers: Answers,
   state: MachineState | null,
   /** The session the start named, or `null` for a fresh spawn. */
   asked: SessionRef | null,
@@ -402,7 +406,7 @@ export function startFollowUp(
   switch (said.kind) {
     case 'idle':
     case 'waiting':
-      return { kind: 'waiting' };
+      return said;
     case 'refused': {
       const { holder } = said.refusal;
       return {

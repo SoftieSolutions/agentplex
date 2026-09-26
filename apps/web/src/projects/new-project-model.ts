@@ -1,5 +1,5 @@
 import type { FrameId, Layout, MachineState, ServerRegistrationId } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 import { PROJECT_KIND } from './project-kind.js';
 
@@ -87,21 +87,22 @@ export function createBlockedReason(
  * `made` rather than a navigation, because there is nowhere to go: a project is
  * a node in a tree the sidebar draws, and this milestone has no route for one.
  * What the user needs is the confirmation and the form out of the way.
+ *
+ * `idle` is a create nothing more is coming for, as `followUp` reads it, and
+ * leaves the control free for a second try.
  */
 export type CreateFollowUp =
+  | { readonly kind: 'idle' }
   | { readonly kind: 'waiting' }
   | { readonly kind: 'made'; readonly words: string }
   | { readonly kind: 'refused'; readonly words: string };
 
-export function createFollowUp(
-  pending: FrameId,
-  answers: ReadonlyMap<FrameId, Reply>,
-): CreateFollowUp {
+export function createFollowUp(pending: FrameId, answers: Answers): CreateFollowUp {
   const said = followUp(pending, answers, 'project-created');
   switch (said.kind) {
     case 'idle':
     case 'waiting':
-      return { kind: 'waiting' };
+      return said;
     case 'refused':
       return { kind: 'refused', words: said.words };
     case 'answered':

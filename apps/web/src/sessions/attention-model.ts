@@ -1,5 +1,5 @@
 import type { FrameId } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 import { unseenPrompt, type SessionListItem } from './session-list-model.js';
 
@@ -75,10 +75,7 @@ export type AttentionFollowUp =
   | { readonly kind: 'refused'; readonly words: string };
 
 /** What the hub has said about the frame this control is waiting on. */
-export function attentionFollowUp(
-  pending: FrameId | null,
-  answers: ReadonlyMap<FrameId, Reply>,
-): AttentionFollowUp {
+export function attentionFollowUp(pending: FrameId | null, answers: Answers): AttentionFollowUp {
   const said = followUp(pending, answers, 'session-attention');
   switch (said.kind) {
     case 'idle':

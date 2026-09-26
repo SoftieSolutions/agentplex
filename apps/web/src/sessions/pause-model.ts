@@ -1,5 +1,5 @@
 import type { FrameId, SessionHolder, SessionPause, SessionRef } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 
 /**
@@ -73,10 +73,7 @@ export type PauseFollowUp =
   | { readonly kind: 'refused'; readonly words: string };
 
 /** What the hub has said about the pause or resume this control is waiting on. */
-export function pauseFollowUp(
-  pending: FrameId | null,
-  answers: ReadonlyMap<FrameId, Reply>,
-): PauseFollowUp {
+export function pauseFollowUp(pending: FrameId | null, answers: Answers): PauseFollowUp {
   const said = followUp(pending, answers, 'session-paused', 'session-resumed');
   switch (said.kind) {
     case 'idle':

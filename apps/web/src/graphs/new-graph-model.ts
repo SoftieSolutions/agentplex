@@ -1,5 +1,5 @@
 import { graphNameSchema, type FrameId, type NodeId } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { CommandOutcome, HubCommand } from '../store/commands.js';
 import type { ConnectionPhase } from '../store/views.js';
 
@@ -85,7 +85,7 @@ export interface GraphCreationHub {
   subscribe(listener: () => void): () => void;
   getSnapshot(): {
     readonly phase: ConnectionPhase;
-    readonly answers: ReadonlyMap<FrameId, Reply>;
+    readonly answers: Answers;
   };
   sendCommand(command: HubCommand): CommandOutcome;
 }

@@ -11,7 +11,7 @@ import {
   type MachineState,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   buildStart,
   deliveryWords,
@@ -345,12 +345,21 @@ describe('the follow-up to a start', () => {
   const started = replyFrom(hubFrames.sessionStarted, 'session-started');
 
   it('waits while no answer names the command', () => {
-    expect(startFollowUp(started.replyTo, answersOf(), single, null)).toEqual({ kind: 'waiting' });
+    const owed = withOutstanding(answersOf(), started.replyTo);
+    expect(startFollowUp(started.replyTo, owed, single, null)).toEqual({ kind: 'waiting' });
+  });
+
+  it('is idle once the start is neither answered nor owed an answer', () => {
+    // Its answer was pushed out by later ones, or the connection it went out
+    // on dropped: nothing is coming, and a form that went on waiting would
+    // stay disabled until it was closed.
+    expect(startFollowUp(started.replyTo, answersOf(), single, null)).toEqual({ kind: 'idle' });
   });
 
   it("ignores an answer to somebody else's command", () => {
     const other = frameIdSchema.parse(99);
-    expect(startFollowUp(other, answersOf(started), single, null)).toEqual({ kind: 'waiting' });
+    const owed = withOutstanding(answersOf(started), other);
+    expect(startFollowUp(other, owed, single, null)).toEqual({ kind: 'waiting' });
   });
 
   it('a fresh spawn is said in words, naming the machine the hub picked', () => {

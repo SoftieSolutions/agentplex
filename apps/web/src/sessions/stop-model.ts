@@ -1,5 +1,5 @@
 import type { FrameId, MachineState, SessionHolder, SessionRef } from '@agentplex/protocol';
-import { followUp, type Answer, type Reply } from '../store/answers.js';
+import { followUp, type Answer, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 import { findSessionRow } from '../terminal/presentation.js';
 import { serverLabel } from './session-list-model.js';
@@ -58,10 +58,7 @@ export type StopFollowUp =
   | { readonly kind: 'refused'; readonly words: string };
 
 /** What the hub has said about the stop this screen is waiting on. */
-export function stopFollowUp(
-  pending: FrameId | null,
-  answers: ReadonlyMap<FrameId, Reply>,
-): StopFollowUp {
+export function stopFollowUp(pending: FrameId | null, answers: Answers): StopFollowUp {
   const said = followUp(pending, answers, 'session-stopped');
   switch (said.kind) {
     case 'idle':

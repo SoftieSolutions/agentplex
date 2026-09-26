@@ -7,7 +7,7 @@ import type {
   SessionHolder,
   SessionRef,
 } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 import { FOLDER_KIND, PROJECT_KIND } from './node-kinds.js';
 
@@ -179,13 +179,17 @@ export function buildStop(ref: SessionRef): HubCommand {
  * stopping the machine named. `stoppable` on it is what decides whether a stop
  * is offered at all -- a server says no while an agent is mid-turn, and a
  * button that cannot work is worse than no button.
+ *
+ * `idle` is an edit nothing more is coming for, as `followUp` reads it, and
+ * leaves the control free for a second try.
  */
 export type TreeFollowUp =
+  | { readonly kind: 'idle' }
   | { readonly kind: 'waiting' }
   | { readonly kind: 'done' }
   | { readonly kind: 'refused'; readonly words: string; readonly holder: SessionHolder | null };
 
-export function treeFollowUp(pending: FrameId, answers: ReadonlyMap<FrameId, Reply>): TreeFollowUp {
+export function treeFollowUp(pending: FrameId, answers: Answers): TreeFollowUp {
   const said = followUp(
     pending,
     answers,
@@ -198,7 +202,7 @@ export function treeFollowUp(pending: FrameId, answers: ReadonlyMap<FrameId, Rep
   switch (said.kind) {
     case 'idle':
     case 'waiting':
-      return { kind: 'waiting' };
+      return said;
     case 'refused':
       return { kind: 'refused', words: said.words, holder: said.refusal.holder };
     case 'answered':

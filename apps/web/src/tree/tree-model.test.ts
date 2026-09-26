@@ -8,7 +8,7 @@ import {
   type NodeId,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   buildForgetRemoval,
   buildMove,
@@ -148,11 +148,18 @@ describe('what to do with the hub answer', () => {
   // A thin mapping over `followUp` across the five edits' answers.
   it('waits until something answers the id this menu sent', () => {
     const moved = replyFrom(hubFrames.nodeMoved, 'node-moved');
-    expect(treeFollowUp(11, answersOf())).toEqual({ kind: 'waiting' });
+    expect(treeFollowUp(11, withOutstanding(answersOf(), 11))).toEqual({ kind: 'waiting' });
     // Somebody else's reply, on the same socket. A menu that read it would be
     // closing itself on an answer to a question it did not ask.
-    expect(treeFollowUp(11, answersOf(moved))).toEqual({ kind: 'waiting' });
+    expect(treeFollowUp(11, withOutstanding(answersOf(moved), 11))).toEqual({ kind: 'waiting' });
     expect(treeFollowUp(moved.replyTo, answersOf(moved))).toEqual({ kind: 'done' });
+  });
+
+  it('is idle once the id this menu sent is neither answered nor owed an answer', () => {
+    // Its answer was pushed out by later ones, or the connection it went out
+    // on dropped: nothing is coming, and a form that went on waiting would
+    // stay disabled until it was closed.
+    expect(treeFollowUp(11, answersOf())).toEqual({ kind: 'idle' });
   });
 
   it('is done on any of the five edits the hub answers', () => {

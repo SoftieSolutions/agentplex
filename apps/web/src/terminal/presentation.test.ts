@@ -7,6 +7,7 @@ import {
   type ServerView,
   type SessionRow,
 } from '@agentplex/protocol';
+import { NO_ANSWERS } from '../store/answers.js';
 import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/views.js';
 import { createTerminalFeed } from './chunk-feed.js';
 import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
@@ -138,7 +139,7 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     commandQueue: { queued: 0, capacity: 32, overflowed: null },
     terminals: new Map(),
     terminalInput: { discarded: 0, notice: null },
-    answers: new Map(),
+    answers: NO_ANSWERS,
     starts: new Map(),
     approvalPolicies: new Map(),
     catalogue: null,

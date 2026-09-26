@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { serverRegistrationIdSchema, type DirectoryEntry } from '@agentplex/protocol';
 import type { Refusal } from '../store/answers.js';
-import { answersOf } from '../store/replies.fixture.js';
+import { answersOf, withOutstanding } from '../store/replies.fixture.js';
 import {
   breadcrumb,
   browseFor,
@@ -125,7 +125,7 @@ describe('pickerView', () => {
   });
 
   it('waits while the question has no answer', () => {
-    expect(pickerView(answersOf(), 2)).toEqual({ kind: 'waiting' });
+    expect(pickerView(withOutstanding(answersOf(), 2), 2)).toEqual({ kind: 'waiting' });
   });
 
   it('shows the listing that answers this question', () => {
@@ -139,7 +139,7 @@ describe('pickerView', () => {
   it('ignores an answer to an earlier question', () => {
     // A user who clicks twice while a slow disk answers must not see the first
     // directory rendered under the second one's breadcrumb.
-    expect(pickerView(answersOf(listing({ replyTo: 2 })), 3)).toEqual({
+    expect(pickerView(withOutstanding(answersOf(listing({ replyTo: 2 })), 3), 3)).toEqual({
       kind: 'waiting',
     });
   });
@@ -152,7 +152,9 @@ describe('pickerView', () => {
   });
 
   it('ignores a refusal about somebody else’s frame', () => {
-    expect(pickerView(answersOf(refusal({ replyTo: 9 })), 2).kind).toBe('waiting');
+    expect(pickerView(withOutstanding(answersOf(refusal({ replyTo: 9 })), 2), 2).kind).toBe(
+      'waiting',
+    );
   });
 });
 

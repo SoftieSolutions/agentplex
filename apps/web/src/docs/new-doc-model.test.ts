@@ -9,7 +9,7 @@ import {
   type MachineState,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   buildDocCreate,
   docCreateBlockedReason,
@@ -120,10 +120,20 @@ describe('what the hub said about the create', () => {
   const refusal = replyFrom(hubFrames.refusalDocAway, 'refusal');
 
   it('waits until an answer names this frame', () => {
-    expect(docCreateFollowUp(pending, answersOf())).toEqual({ kind: 'waiting' });
-    expect(
-      docCreateFollowUp(pending, answersOf({ ...created, replyTo: frameIdSchema.parse(99) })),
-    ).toEqual({ kind: 'waiting' });
+    const other = answersOf({ ...created, replyTo: frameIdSchema.parse(99) });
+    expect(docCreateFollowUp(pending, withOutstanding(answersOf(), pending))).toEqual({
+      kind: 'waiting',
+    });
+    expect(docCreateFollowUp(pending, withOutstanding(other, pending))).toEqual({
+      kind: 'waiting',
+    });
+  });
+
+  it('is idle once this create is neither answered nor owed an answer', () => {
+    // Its answer was pushed out by later ones, or the connection it went out
+    // on dropped: nothing is coming, and a form that went on waiting would
+    // stay disabled until it was closed.
+    expect(docCreateFollowUp(pending, answersOf())).toEqual({ kind: 'idle' });
   });
 
   it('carries the node a made document is named by from then on', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   acknowledgeCommand,
   attentionFollowUp,
@@ -91,7 +91,7 @@ describe('what the hub has said about the click', () => {
 
   it('waits until an answer to this frame arrives, not until any answer does', () => {
     // Two cards can each be waiting, and each reads the answer to its own frame.
-    expect(attentionFollowUp(99, answers)).toEqual({ kind: 'waiting' });
+    expect(attentionFollowUp(99, withOutstanding(answers, 99))).toEqual({ kind: 'waiting' });
   });
 
   it('is done when the hub answers the frame that was sent', () => {

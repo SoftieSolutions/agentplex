@@ -12,7 +12,7 @@ import {
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
 import type { ApprovalPolicyView } from '../store/views.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   allowAlwaysCommand,
   forgetRuleCommand,
@@ -224,9 +224,9 @@ describe('where a policy edit has got to', () => {
   });
 
   it('waits while the hub has said nothing about this frame', () => {
-    expect(policyFollowUp(7, answersOf())).toEqual({ kind: 'waiting' });
+    expect(policyFollowUp(7, withOutstanding(answersOf(), 7))).toEqual({ kind: 'waiting' });
     // A policy answered for somebody else's frame is not this one's answer.
-    expect(policyFollowUp(9, answers)).toEqual({ kind: 'waiting' });
+    expect(policyFollowUp(9, withOutstanding(answers, 9))).toEqual({ kind: 'waiting' });
   });
 
   it('is done when the policy the hub answered with is the answer to this frame', () => {

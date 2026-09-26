@@ -8,7 +8,7 @@ import {
   type MachineState,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   browsableServers,
   buildProjectCreate,
@@ -113,12 +113,21 @@ describe('what the form does with the answer', () => {
   const pending = created.replyTo;
 
   it('waits while nothing has answered this create', () => {
-    expect(createFollowUp(pending, answersOf()).kind).toBe('waiting');
+    expect(createFollowUp(pending, withOutstanding(answersOf(), pending)).kind).toBe('waiting');
+  });
+
+  it('is idle once this create is neither answered nor owed an answer', () => {
+    // Its answer was pushed out by later ones, or the connection it went out
+    // on dropped: nothing is coming, and a form that went on waiting would
+    // stay disabled until it was closed.
+    expect(createFollowUp(pending, answersOf()).kind).toBe('idle');
   });
 
   it('ignores an answer to somebody else’s frame', () => {
     const other = { ...created, replyTo: frameIdSchema.parse(9) };
-    expect(createFollowUp(pending, answersOf(other)).kind).toBe('waiting');
+    expect(createFollowUp(pending, withOutstanding(answersOf(other), pending)).kind).toBe(
+      'waiting',
+    );
   });
 
   it('says so when the project was made', () => {

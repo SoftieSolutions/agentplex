@@ -6,7 +6,7 @@ import type {
   ApprovalSubject,
   FrameId,
 } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 
 /**
@@ -75,10 +75,7 @@ export type ApprovalFollowUp =
   | { readonly kind: 'refused'; readonly words: string };
 
 /** What the hub has said about the frame this control is waiting on. */
-export function approvalFollowUp(
-  pending: FrameId | null,
-  answers: ReadonlyMap<FrameId, Reply>,
-): ApprovalFollowUp {
+export function approvalFollowUp(pending: FrameId | null, answers: Answers): ApprovalFollowUp {
   const said = followUp(pending, answers, 'approval-decided');
   switch (said.kind) {
     case 'idle':

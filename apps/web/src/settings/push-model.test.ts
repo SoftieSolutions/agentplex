@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FrameId } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   applicationServerKey,
   pushControlView,
@@ -146,7 +146,9 @@ describe('the follow-up to a frame this control sent', () => {
   });
 
   it('waits while the answer has not arrived', () => {
-    expect(pushFollowUp(9 as FrameId, answers)).toEqual({ kind: 'waiting' });
+    expect(pushFollowUp(9 as FrameId, withOutstanding(answers, 9 as FrameId))).toEqual({
+      kind: 'waiting',
+    });
   });
 
   it('carries the hub’s own sentence when it refused', () => {

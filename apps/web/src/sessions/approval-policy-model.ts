@@ -7,7 +7,7 @@ import {
   type SessionRef,
 } from '@agentplex/protocol';
 import { PROJECT_KIND } from '../projects/project-kind.js';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 import type { ApprovalPolicyView } from '../store/views.js';
 
@@ -249,10 +249,7 @@ export type PolicyFollowUp =
   | { readonly kind: 'done' }
   | { readonly kind: 'refused'; readonly words: string };
 
-export function policyFollowUp(
-  pending: FrameId | null,
-  answers: ReadonlyMap<FrameId, Reply>,
-): PolicyFollowUp {
+export function policyFollowUp(pending: FrameId | null, answers: Answers): PolicyFollowUp {
   const said = followUp(pending, answers, 'approval-policy');
   switch (said.kind) {
     case 'idle':

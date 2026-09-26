@@ -10,7 +10,7 @@ import type {
   NodeId,
   RouteInput,
 } from '@agentplex/protocol';
-import { followUp, refusalTo, type Reply } from '../store/answers.js';
+import { followUp, refusalTo, type Answers } from '../store/answers.js';
 import type { CommandOutcome, HubCommand } from '../store/commands.js';
 import type { ConnectionPhase, GraphDocumentView, RunHistoryView } from '../store/views.js';
 import type { GraphEdit } from './graph-model.js';
@@ -124,7 +124,7 @@ export interface GraphStoreHub {
   subscribe(listener: () => void): () => void;
   getSnapshot(): {
     readonly phase: ConnectionPhase;
-    readonly answers: ReadonlyMap<FrameId, Reply>;
+    readonly answers: Answers;
     readonly graphDocuments: ReadonlyMap<NodeId, GraphDocumentView>;
     readonly runs: ReadonlyMap<GraphRunId, GraphRunState>;
     readonly runHistories: ReadonlyMap<NodeId, RunHistoryView>;

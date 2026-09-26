@@ -8,7 +8,7 @@ import {
   type SessionHolder,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import { offersStop, stopCommand, stopFollowUp, stoppedNotice } from './stop-model.js';
 
 /**
@@ -92,12 +92,14 @@ describe('what the hub said about the stop this screen asked for', () => {
   });
 
   it('waits while nothing has answered it', () => {
-    expect(stopFollowUp(pending, answersOf())).toEqual({ kind: 'waiting' });
+    expect(stopFollowUp(pending, withOutstanding(answersOf(), pending))).toEqual({
+      kind: 'waiting',
+    });
   });
 
   it("ignores an answer to somebody else's command", () => {
     const other = frameIdSchema.parse(99);
-    expect(stopFollowUp(other, answers)).toEqual({ kind: 'waiting' });
+    expect(stopFollowUp(other, withOutstanding(answers, other))).toEqual({ kind: 'waiting' });
   });
 
   it('ends the wait when the stop lands', () => {

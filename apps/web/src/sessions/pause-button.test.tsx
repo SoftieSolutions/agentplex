@@ -12,6 +12,7 @@ import {
   type MachineState,
   type SessionHolder,
 } from '@agentplex/protocol';
+import { MAX_REMEMBERED_ANSWERS } from '../store/answers.js';
 import { createFakeSocketFactory, type FakeSocket } from '../store/fake-socket.js';
 import type { FrameIds } from '../store/frame-ids.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
@@ -164,9 +165,10 @@ describe('the pause button', () => {
     return socket;
   }
 
+  /** Draws the button, or draws it again with a new holder, keeping what it holds. */
   async function mountOn(sessionId: string, holder = holderOf(sessionId)): Promise<void> {
     await act(() => {
-      root = createRoot(container);
+      root ??= createRoot(container);
       root.render(
         withProvider(
           <PauseButton store={store} sessionRef={ref(sessionId)} holder={holder} scheme="dark" />,
@@ -266,6 +268,52 @@ describe('the pause button', () => {
     expect(status?.style.color).toBe(rgb(colorForTone('blocked', 'dark')));
     // Still Resume: the holder still says paused, and a refusal changed nothing.
     expect(button()?.textContent).toBe('Resume');
+    expect(button()?.disabled).toBe(false);
+  });
+
+  it('is enabled again once later replies have pushed its answer out', async () => {
+    // The scenario the bound on remembered answers would otherwise cost: the
+    // same button, still mounted and still holding the id it paused with,
+    // now offers Resume. A document saving itself every second and a half
+    // answers sixty-five other frames within minutes, and that pushes this
+    // button's answer out of the map. An id nobody still owes an answer to
+    // is nothing to wait for.
+    const socket = await connected();
+    await mountOn('session-fix-auth');
+    await press();
+    await act(() => {
+      socket.deliver(hubFrames.sessionPaused);
+    });
+    const held = holderOf('session-fix-auth');
+    if (held === null) throw new Error('fix-auth is not held');
+    await mountOn('session-fix-auth', { ...held, pause: 'paused' });
+    expect(button()?.textContent).toBe('Resume');
+
+    const saved = JSON.parse(hubFrames.docSaved) as Record<string, unknown>;
+    await act(() => {
+      for (let n = 0; n <= MAX_REMEMBERED_ANSWERS; n += 1) {
+        socket.deliver(JSON.stringify({ ...saved, replyTo: 100 + n }));
+      }
+    });
+
+    expect(button()?.textContent).toBe('Resume');
+    expect(button()?.disabled).toBe(false);
+  });
+
+  it('is enabled again when the connection drops before the hub answers', async () => {
+    // A frame stranded on a socket that went is never answered on the next
+    // one: the store says so on the connection line, and the button is
+    // pressable again rather than waiting on a reply nothing will send.
+    const socket = await connected();
+    await mountOn('session-fix-auth');
+    await press();
+    expect(button()?.disabled).toBe(true);
+
+    await act(() => {
+      socket.drop();
+    });
+
+    expect(button()?.textContent).toBe('Pause');
     expect(button()?.disabled).toBe(false);
   });
 

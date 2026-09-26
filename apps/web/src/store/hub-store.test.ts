@@ -24,7 +24,14 @@ import type { StoreSocket } from './connection.js';
 import { createHubStore, type HubStoreDependencies } from './hub-store.js';
 import { MAX_REMEMBERED_TRANSCRIPTS } from './session-replies.js';
 import { terminalKey } from './terminals.js';
-import { followUp, refusalTo, type Answer, type AnswerType, type Reply } from './answers.js';
+import {
+  MAX_REMEMBERED_ANSWERS,
+  followUp,
+  refusalTo,
+  type Answer,
+  type AnswerType,
+  type Reply,
+} from './answers.js';
 import { hubFrames } from './hub-frames.fixture.js';
 
 /**
@@ -111,7 +118,7 @@ type Harness = ReturnType<typeof harness>;
 
 /** What the store filed under one frame id, the way a screen reads it. */
 function answerTo(h: Harness, id: number): Reply | undefined {
-  return h.store.getSnapshot().answers.get(frameIdSchema.parse(id));
+  return h.store.getSnapshot().answers.replies.get(frameIdSchema.parse(id));
 }
 
 /** The yes filed under one frame id, read as `type` through `followUp`, or `null`. */
@@ -649,7 +656,7 @@ describe('commands', () => {
     // Captured from a real start: the hub names the machine it picked, and the
     // sessionId is null because the provider has not written one yet.
     socket.deliver(hubFrames.sessionStarted);
-    expect(h.store.getSnapshot().answers.get(outcome.id)).toEqual({
+    expect(h.store.getSnapshot().answers.replies.get(outcome.id)).toEqual({
       type: 'session-started',
       replyTo: outcome.id,
       storeId: 'store-agentplex',
@@ -672,7 +679,7 @@ describe('commands', () => {
     // roots listing carries no directory and its entries are the roots
     // themselves, absolute.
     socket.deliver(hubFrames.directoryRoots);
-    expect(h.store.getSnapshot().answers.get(roots.id)).toEqual({
+    expect(h.store.getSnapshot().answers.replies.get(roots.id)).toEqual({
       type: 'directory-listing',
       replyTo: roots.id,
       directory: null,
@@ -966,7 +973,7 @@ describe('answers', () => {
     const { socket } = await establish(h);
 
     socket.deliver(hubFrames.sessionStopped);
-    expect(h.store.getSnapshot().answers.get(frameIdSchema.parse(6))).toEqual({
+    expect(h.store.getSnapshot().answers.replies.get(frameIdSchema.parse(6))).toEqual({
       type: 'session-stopped',
       replyTo: 6,
       storeId: 'store-agentplex',
@@ -983,7 +990,7 @@ describe('answers', () => {
     // to somebody else's command leaves this "no" where its screen reads it.
     socket.deliver(hubFrames.refusalHeldBusy);
     socket.deliver(hubFrames.sessionStopped);
-    const answers = h.store.getSnapshot().answers;
+    const answers = h.store.getSnapshot().answers.replies;
     expect(answers.get(frameIdSchema.parse(4))).toMatchObject({
       type: 'refusal',
       message: 'that session is mid-turn; stopping it now could leave an edit half applied',
@@ -996,7 +1003,7 @@ describe('answers', () => {
     const { socket } = await establish(h);
     h.store.watchTerminal(CAPTURED_TARGET);
     socket.deliver(hubFrames.refusalTerminal);
-    expect(h.store.getSnapshot().answers.size).toBe(0);
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
   });
 
   it('files nothing for a pong or a pane layout save, which nobody waits on here', async () => {
@@ -1004,7 +1011,7 @@ describe('answers', () => {
     const { socket } = await establish(h);
     socket.deliver(hubFrames.pong);
     socket.deliver(hubFrames.paneLayoutSaved);
-    expect(h.store.getSnapshot().answers.size).toBe(0);
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
   });
 
   it('keeps its answers across a dropped connection and forgets them when nobody looks', async () => {
@@ -1013,9 +1020,117 @@ describe('answers', () => {
     socket.deliver(hubFrames.sessionStopped);
 
     socket.drop();
-    expect(h.store.getSnapshot().answers.size).toBe(1);
+    expect(h.store.getSnapshot().answers.replies.size).toBe(1);
     unsubscribe();
-    expect(h.store.getSnapshot().answers.size).toBe(0);
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
+  });
+});
+
+describe('what is still owed an answer', () => {
+  /** A captured reply, moved to answer `id`. */
+  function answering(text: string, id: FrameId): string {
+    return JSON.stringify({ ...(JSON.parse(text) as Record<string, unknown>), replyTo: id });
+  }
+
+  function stopFollowUp(h: Harness, id: FrameId) {
+    return followUp(id, h.store.getSnapshot().answers, 'session-stopped');
+  }
+
+  function accepted(h: Harness, command: HubCommand): FrameId {
+    const outcome = h.store.sendCommand(command);
+    if (!outcome.accepted) throw new Error(outcome.reason);
+    return outcome.id;
+  }
+
+  it('owes an answer to a sent command until the hub gives one', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const id = accepted(h, STOP);
+    expect(stopFollowUp(h, id)).toEqual({ kind: 'waiting' });
+
+    socket.deliver(answering(hubFrames.sessionStopped, id));
+
+    expect(stopFollowUp(h, id).kind).toBe('answered');
+    expect(h.store.getSnapshot().answers.outstanding.has(id)).toBe(false);
+  });
+
+  it('reads a command whose answer later ones pushed out as idle, not waiting', async () => {
+    // The bound forgets the answer; it must not bring back the wait. A control
+    // still holding this id would otherwise be disabled until remounted.
+    const h = harness();
+    const { socket } = await establish(h);
+    const id = accepted(h, STOP);
+    socket.deliver(answering(hubFrames.sessionStopped, id));
+
+    for (let n = 1; n <= MAX_REMEMBERED_ANSWERS; n += 1) {
+      socket.deliver(answering(hubFrames.docSaved, frameIdSchema.parse(1000 + n)));
+    }
+
+    expect(h.store.getSnapshot().answers.replies.has(id)).toBe(false);
+    expect(stopFollowUp(h, id)).toEqual({ kind: 'idle' });
+  });
+
+  it('owes nothing on a command a dropped connection stranded, and still owes a queued one', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const stranded = accepted(h, STOP);
+
+    socket.drop();
+    // Nothing on the next connection answers a frame sent on this one.
+    expect(stopFollowUp(h, stranded)).toEqual({ kind: 'idle' });
+
+    const queued = accepted(h, STOP);
+    expect(stopFollowUp(h, queued)).toEqual({ kind: 'waiting' });
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+    expect(stopFollowUp(h, queued)).toEqual({ kind: 'waiting' });
+    expect(stopFollowUp(h, stranded)).toEqual({ kind: 'idle' });
+
+    next.deliver(answering(hubFrames.sessionStopped, queued));
+    expect(stopFollowUp(h, queued).kind).toBe('answered');
+  });
+
+  it('owes nothing to a frame answered by a reply it does not keep', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const id = accepted(h, { type: 'pane-layout-save', layout: '{}' });
+    expect(h.store.getSnapshot().answers.outstanding.has(id)).toBe(true);
+
+    socket.deliver(answering(hubFrames.paneLayoutSaved, id));
+
+    expect(h.store.getSnapshot().answers.outstanding.size).toBe(0);
+  });
+
+  it('owes nothing once nobody is looking, queued commands included', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    accepted(h, STOP);
+    socket.drop();
+    accepted(h, STOP);
+
+    unsubscribe();
+
+    expect(h.store.getSnapshot().answers.outstanding.size).toBe(0);
+  });
+
+  it('tells no listener about a send, so a listener that sends on a change sends once', async () => {
+    // A graph screen asks for its history from inside its listener and keeps
+    // the id once the call returns. Told about its own send before then, it
+    // would ask again, and again, until the stack ran out.
+    const h = harness();
+    const { socket } = await establish(h);
+    let asked: FrameId | null = null;
+    const stop = h.store.subscribe(() => {
+      if (asked === null) asked = accepted(h, STOP);
+    });
+
+    socket.deliver(hubFrames.machineState);
+
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-stop')).toHaveLength(1);
+    expect(asked).not.toBeNull();
+    if (asked !== null) expect(stopFollowUp(h, asked)).toEqual({ kind: 'waiting' });
+    stop();
   });
 });
 
@@ -1120,7 +1235,7 @@ describe('terminal input', () => {
     expect(terminal?.attached).toBe(false);
     // Not filed with the other answers: nothing else on screen was told no,
     // and a pane is where a user can act on this one.
-    expect(h.store.getSnapshot().answers.size).toBe(0);
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
   });
 });
 
@@ -2583,7 +2698,7 @@ describe('one session’s transcript', () => {
     });
     // Held in `transcripts` and nowhere else: a transcript is large, and it
     // would cost a place in `answers` that a control's receipt needs.
-    expect(h.store.getSnapshot().answers.size).toBe(0);
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
   });
 
   it('keeps one pane’s answer when another pane’s answer lands', async () => {

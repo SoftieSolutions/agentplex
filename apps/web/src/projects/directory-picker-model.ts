@@ -1,5 +1,5 @@
 import type { DirectoryEntry, FrameId, ServerRegistrationId } from '@agentplex/protocol';
-import { followUp, type Answer, type Refusal, type Reply } from '../store/answers.js';
+import { followUp, type Answer, type Refusal, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
 
 /**
@@ -116,10 +116,7 @@ export type PickerView =
   | { readonly kind: 'listing'; readonly listing: DirectoryListing }
   | { readonly kind: 'refused'; readonly words: string };
 
-export function pickerView(
-  answers: ReadonlyMap<FrameId, Reply>,
-  pending: FrameId | null,
-): PickerView {
+export function pickerView(answers: Answers, pending: FrameId | null): PickerView {
   const said = followUp(pending, answers, 'directory-listing');
   switch (said.kind) {
     case 'idle':

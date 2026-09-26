@@ -6,7 +6,7 @@ import {
   type PendingApproval,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import { approvalFollowUp, decideCommand } from './approval-model.js';
 
 /**
@@ -105,7 +105,7 @@ describe('what the hub has said about the answer', () => {
 
   it('waits until an answer to this frame arrives, not until any answer does', () => {
     // Two cards can each be waiting, and each reads the answer to its own frame.
-    expect(approvalFollowUp(99, answers)).toEqual({ kind: 'waiting' });
+    expect(approvalFollowUp(99, withOutstanding(answers, 99))).toEqual({ kind: 'waiting' });
   });
 
   it('carries the outcome word, because the four endings are drawn differently', () => {

@@ -10,7 +10,7 @@ import {
   type Reply,
 } from './answers.js';
 import { hubFrames } from './hub-frames.fixture.js';
-import { answersOf, replyFrom } from './replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from './replies.fixture.js';
 
 /**
  * The one correlation every screen waiting on the hub shares, against captured
@@ -50,9 +50,9 @@ describe('rememberAnswer', () => {
   it('keeps an answer to one frame when another is answered', () => {
     // The behaviour the single slots could not have: a refusal to frame N
     // survives a yes to frame N + 1.
-    const answers = answersOf(refusal, { ...stopped, replyTo: id(99) });
-    expect(answers.get(refusal.replyTo)).toBe(refusal);
-    expect(answers.get(id(99))?.type).toBe('session-stopped');
+    const { replies } = answersOf(refusal, { ...stopped, replyTo: id(99) });
+    expect(replies.get(refusal.replyTo)).toBe(refusal);
+    expect(replies.get(id(99))?.type).toBe('session-stopped');
   });
 
   it(`forgets the oldest past ${String(MAX_REMEMBERED_ANSWERS)}`, () => {
@@ -72,10 +72,10 @@ describe('rememberAnswer', () => {
     // would be a memory bound nobody chose.
     const first = { ...docContent, replyTo: id(40) };
     const second = { ...docContent, replyTo: id(41) };
-    const answers = answersOf(first, stopped, second);
-    expect(answers.has(id(40))).toBe(false);
-    expect(answers.get(id(41))).toBe(second);
-    expect(answers.get(stopped.replyTo)).toBe(stopped);
+    const { replies } = answersOf(first, stopped, second);
+    expect(replies.has(id(40))).toBe(false);
+    expect(replies.get(id(41))).toBe(second);
+    expect(replies.get(stopped.replyTo)).toBe(stopped);
   });
 });
 
@@ -86,8 +86,29 @@ describe('followUp', () => {
     expect(followUp(null, answers, 'session-stopped')).toEqual({ kind: 'idle' });
   });
 
-  it('waits while nothing has answered the pending frame', () => {
-    expect(followUp(id(99), answers, 'session-stopped')).toEqual({ kind: 'waiting' });
+  it('waits while nothing has answered the pending frame and it is still owed one', () => {
+    expect(followUp(id(99), withOutstanding(answers, id(99)), 'session-stopped')).toEqual({
+      kind: 'waiting',
+    });
+  });
+
+  it('is idle for a frame that is neither answered nor owed an answer', () => {
+    // Its answer was pushed out by later ones, or the connection it went out
+    // on dropped before one came: either way nothing is coming, and a control
+    // that read this as waiting would stay disabled until it was remounted.
+    expect(followUp(id(99), answers, 'session-stopped')).toEqual({ kind: 'idle' });
+  });
+
+  it(`is idle once ${String(MAX_REMEMBERED_ANSWERS)} later replies have pushed its answer out`, () => {
+    const others = Array.from({ length: MAX_REMEMBERED_ANSWERS }, (_, n) => ({
+      ...stopped,
+      replyTo: id(100 + n),
+    }));
+    const later = answersOf(paused, ...others);
+    expect(later.replies.has(paused.replyTo)).toBe(false);
+    expect(followUp(paused.replyTo, later, 'session-paused', 'session-resumed')).toEqual({
+      kind: 'idle',
+    });
   });
 
   it("is refused, in the hub's own words, when a refusal names the pending frame", () => {
@@ -104,7 +125,7 @@ describe('followUp', () => {
   });
 
   it('waits when only a different frame has been answered', () => {
-    const other = answersOf({ ...stopped, replyTo: id(98) });
+    const other = withOutstanding(answersOf({ ...stopped, replyTo: id(98) }), stopped.replyTo);
     expect(followUp(stopped.replyTo, other, 'session-stopped')).toEqual({ kind: 'waiting' });
   });
 

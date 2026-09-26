@@ -5,11 +5,12 @@ import type { FrameId, HubFrame } from '@agentplex/protocol';
  * frame each answer names.
  *
  * Every command reply carries `replyTo`, and so does a refusal, so one map
- * keyed by it is the whole of the correlation: a screen holds the id it sent
- * and reads its own answer, and another screen's answer is an entry it never
- * looks at. The alternative this replaces was one slot per reply type plus one
- * for the newest refusal, which every screen then matched by hand -- and a
- * later yes to anybody cleared a refusal somebody was still showing.
+ * keyed by it -- beside the frames still owed one, `Answers` -- is the whole
+ * of the correlation: a screen holds the id it sent and reads its own answer,
+ * and another screen's answer is an entry it never looks at. The alternative
+ * this replaces was one slot per reply type plus one for the newest refusal,
+ * which every screen then matched by hand -- and a later yes to anybody
+ * cleared a refusal somebody was still showing.
  *
  * Not every frame with a `replyTo` is kept. The ones a screen never waits on
  * through this map stay out, because each would cost a place in a bounded map
@@ -59,16 +60,42 @@ export type Refusal = Extract<HubFrame, { type: 'refusal' }>;
 export type Reply = Answer | Refusal;
 
 /**
+ * What a screen reads its own answer out of: the replies, and which frames are
+ * still owed one.
+ *
+ * The second half is what lets a bounded map forget. An id with no reply in
+ * `replies` is either a frame the hub has not answered yet or one whose answer
+ * has gone -- pushed out by later ones, or never coming because the connection
+ * it went out on dropped. Only the first is worth waiting on, and only the
+ * store knows which is which, so it says: `outstanding` is every frame it has
+ * sent and not had answered on the connection it went out on, and every frame
+ * queued to go out on the next one.
+ */
+export interface Answers {
+  /** The replies, by the id of the frame each answers; bounded and ordered oldest first. */
+  readonly replies: ReadonlyMap<FrameId, Reply>;
+  /** The frames still owed an answer: sent on this connection, or queued for the next. */
+  readonly outstanding: ReadonlySet<FrameId>;
+}
+
+/** Nothing answered and nothing owed: a store before its first command, and after it stops. */
+export const NO_ANSWERS: Answers = { replies: new Map(), outstanding: new Set() };
+
+/**
  * How many replies a connection remembers, oldest first.
  *
  * The number `starts` is bounded by, and for the same reason: far above any
  * screen's worth of controls waiting at once, and small enough that a tab left
  * open all day cannot grow it without bound.
  *
- * The cost is real and narrow: a control that keeps its pending id after the
- * answer arrived -- a stop button that nobody presses again -- reads `waiting`
- * once sixty-four later replies have pushed its answer out. Nothing sends a
- * second frame on its behalf; it is a stale label until the next press.
+ * What forgetting costs is the answer and nothing else. A control that keeps
+ * its pending id after the answer arrived and stays mounted -- a pause button
+ * that now offers Resume, an Unmute beside a row that is still drawn -- reads
+ * `idle` once sixty-four later replies have pushed its answer out, because the
+ * id is not `outstanding` either: it is enabled and wears its resting label,
+ * and what it draws is decided by the state the hub publishes. A document
+ * saving itself every second and a half makes sixty-four replies in minutes,
+ * so a control that went on reading `waiting` would be disabled for good.
  */
 export const MAX_REMEMBERED_ANSWERS = 64;
 
@@ -107,9 +134,11 @@ export function rememberAnswer(
 /**
  * Where one frame a screen sent has got to.
  *
- * `idle` is nothing sent; `waiting` is sent and not answered; the other two are
- * the hub's answer to exactly that frame. A refusal carries the whole frame as
- * well as its words, because some screens act on its code or its holder.
+ * `idle` is nothing to wait for: nothing sent, or a frame whose answer has been
+ * forgotten or will never come (see `Answers`). `waiting` is a frame still
+ * owed an answer; the other two are the hub's answer to exactly that frame. A
+ * refusal carries the whole frame as well as its words, because some screens
+ * act on its code or its holder.
  */
 export type FollowUp<A extends Answer> =
   | { readonly kind: 'idle' }
@@ -130,24 +159,23 @@ function isAnswerOf<T extends AnswerType>(reply: Reply, types: readonly T[]): re
  */
 export function followUp<T extends AnswerType>(
   pending: FrameId | null,
-  answers: ReadonlyMap<FrameId, Reply>,
+  answers: Answers,
   ...types: readonly [T, ...T[]]
 ): FollowUp<Answer<T>> {
   if (pending === null) return { kind: 'idle' };
-  const reply = answers.get(pending);
-  if (reply === undefined) return { kind: 'waiting' };
+  const reply = answers.replies.get(pending);
+  if (reply === undefined) {
+    return answers.outstanding.has(pending) ? { kind: 'waiting' } : { kind: 'idle' };
+  }
   if (reply.type === 'refusal') return { kind: 'refused', words: reply.message, refusal: reply };
   if (isAnswerOf(reply, types)) return { kind: 'answered', answer: reply };
   return { kind: 'waiting' };
 }
 
 /** The refusal to `pending`, or `null` when there is none -- or nothing is pending. */
-export function refusalTo(
-  answers: ReadonlyMap<FrameId, Reply>,
-  pending: FrameId | null,
-): Refusal | null {
+export function refusalTo(answers: Answers, pending: FrameId | null): Refusal | null {
   if (pending === null) return null;
-  const reply = answers.get(pending);
+  const reply = answers.replies.get(pending);
   return reply?.type === 'refusal' ? reply : null;
 }
 
@@ -159,8 +187,8 @@ export function refusalTo(
  * but it is no longer what became of the last request, and saying it was
  * would be the line over-claiming a failure that has since been answered.
  */
-export function refusalToLatest(answers: ReadonlyMap<FrameId, Reply>): Refusal | null {
-  const held = [...answers.values()];
+export function refusalToLatest(answers: Answers): Refusal | null {
+  const held = [...answers.replies.values()];
   const latest = held[held.length - 1];
   return latest?.type === 'refusal' ? latest : null;
 }
@@ -173,10 +201,10 @@ export function refusalToLatest(answers: ReadonlyMap<FrameId, Reply>): Refusal |
  * reader asks by its own id through `followUp`.
  */
 export function newestAnswer<T extends Reply['type']>(
-  answers: ReadonlyMap<FrameId, Reply>,
+  answers: Answers,
   type: T,
 ): Extract<Reply, { type: T }> | null {
-  const held = [...answers.values()];
+  const held = [...answers.replies.values()];
   for (let index = held.length - 1; index >= 0; index -= 1) {
     const reply = held[index];
     if (reply !== undefined && isOfType(reply, type)) return reply;

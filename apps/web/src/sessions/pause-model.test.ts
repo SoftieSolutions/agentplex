@@ -8,7 +8,7 @@ import {
   type SessionHolder,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import { answersOf, replyFrom } from '../store/replies.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   PAUSE_REQUESTED_WORDS,
   offersPause,
@@ -98,9 +98,12 @@ describe('pauseFollowUp', () => {
   });
 
   it('waits until the answer to its own frame arrives', () => {
-    expect(pauseFollowUp(pending, answersOf())).toEqual({ kind: 'waiting' });
+    expect(pauseFollowUp(pending, withOutstanding(answersOf(), pending))).toEqual({
+      kind: 'waiting',
+    });
     // Somebody else's answers are not this one's.
-    expect(pauseFollowUp(frameIdSchema.parse(99), answers)).toEqual({ kind: 'waiting' });
+    const other = frameIdSchema.parse(99);
+    expect(pauseFollowUp(other, withOutstanding(answers, other))).toEqual({ kind: 'waiting' });
   });
 
   it('carries the server\u2019s pause word off the captured reply', () => {

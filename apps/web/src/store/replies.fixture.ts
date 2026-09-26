@@ -1,5 +1,5 @@
 import { parseHubFrame, parseTextFrame, type FrameId, type HubFrame } from '@agentplex/protocol';
-import { rememberAnswer, type Reply } from './answers.js';
+import { NO_ANSWERS, rememberAnswer, type Answers, type Reply } from './answers.js';
 
 /**
  * Captured hub replies as the values `answers` holds, for tests.
@@ -30,9 +30,14 @@ export function replyFrom<T extends Reply['type']>(
   return parsed.value;
 }
 
-/** The replies, remembered in order, as the store would hold them. */
-export function answersOf(...replies: readonly Reply[]): ReadonlyMap<FrameId, Reply> {
-  let answers: ReadonlyMap<FrameId, Reply> = new Map();
-  for (const reply of replies) answers = rememberAnswer(answers, reply);
-  return answers;
+/** The replies, remembered in order, as the store would hold them, with nothing owed. */
+export function answersOf(...replies: readonly Reply[]): Answers {
+  let held: ReadonlyMap<FrameId, Reply> = NO_ANSWERS.replies;
+  for (const reply of replies) held = rememberAnswer(held, reply);
+  return { replies: held, outstanding: NO_ANSWERS.outstanding };
+}
+
+/** The same answers with `ids` still owed one, as a store with those frames out would say. */
+export function withOutstanding(answers: Answers, ...ids: readonly FrameId[]): Answers {
+  return { replies: answers.replies, outstanding: new Set([...answers.outstanding, ...ids]) };
 }

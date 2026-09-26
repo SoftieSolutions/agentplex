@@ -22,7 +22,7 @@ import type {
   SubscriptionEndReason,
 } from '@agentplex/protocol';
 import type { TerminalFeed } from '../terminal/chunk-feed.js';
-import type { Reply } from './answers.js';
+import type { Answers } from './answers.js';
 
 /**
  * What the hub store publishes, as React reads it: the snapshot and every view
@@ -343,14 +343,16 @@ export interface HubSnapshot {
   readonly terminalInput: TerminalInputView;
   /**
    * What the hub has answered this client's commands with, by the id of the
-   * frame each answer names: every command reply, and every refusal that is
-   * not about a terminal. `answers.ts` says which replies are kept, bounds the
-   * map, and is how a screen reads its own answer out of it (`followUp`).
+   * frame each answer names -- every command reply, and every refusal that is
+   * not about a terminal -- and which commands are still owed an answer.
+   * `answers.ts` says which replies are kept, bounds them, and is how a screen
+   * reads its own answer out of them (`followUp`).
    *
-   * Kept across a dropped connection, like the answers themselves were, and
-   * emptied when nothing is looking any more.
+   * The replies are kept across a dropped connection; what was owed on it is
+   * not, because nothing on the next one will answer it. Both are emptied
+   * when nothing is looking any more.
    */
-  readonly answers: ReadonlyMap<FrameId, Reply>;
+  readonly answers: Answers;
   /**
    * What the hub has said about each start this client made, by the id of the
    * frame that carried it.

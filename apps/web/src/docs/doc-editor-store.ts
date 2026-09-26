@@ -1,5 +1,5 @@
-import { DOC_CONTENT_MAX_CHARS, type FrameId, type NodeId } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { DOC_CONTENT_MAX_CHARS, type NodeId } from '@agentplex/protocol';
+import { followUp, type Answers } from '../store/answers.js';
 import type { CommandOutcome, HubCommand } from '../store/commands.js';
 import type { ConnectionPhase } from '../store/views.js';
 import type { Timers } from '../store/timers.js';
@@ -53,7 +53,7 @@ export interface DocEditorHub {
   subscribe(listener: () => void): () => void;
   getSnapshot(): {
     readonly phase: ConnectionPhase;
-    readonly answers: ReadonlyMap<FrameId, Reply>;
+    readonly answers: Answers;
   };
   sendCommand(command: HubCommand): CommandOutcome;
 }

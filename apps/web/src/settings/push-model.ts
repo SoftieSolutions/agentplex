@@ -1,5 +1,5 @@
 import type { FrameId } from '@agentplex/protocol';
-import { followUp, type Reply } from '../store/answers.js';
+import { followUp, type Answers } from '../store/answers.js';
 import type { PushPermission } from './push-operations.js';
 
 /**
@@ -176,10 +176,7 @@ export type PushFollowUp =
  * another tab is waiting for. `done` carries which way it went, because the
  * hub answers a subscribe and an unsubscribe with the same view.
  */
-export function pushFollowUp(
-  pending: FrameId | null,
-  answers: ReadonlyMap<FrameId, Reply>,
-): PushFollowUp {
+export function pushFollowUp(pending: FrameId | null, answers: Answers): PushFollowUp {
   const said = followUp(pending, answers, 'push-subscribed', 'push-unsubscribed');
   switch (said.kind) {
     case 'idle':
