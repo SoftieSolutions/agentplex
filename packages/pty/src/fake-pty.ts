@@ -1,4 +1,4 @@
-import type { Pty, PtyExit, PtyFactory, PtyRequest } from './pty.js';
+import type { Pty, PtyExit, PtyFactory, PtyRequest, PtySignal } from './pty.js';
 
 /**
  * A pty a test can drive by hand.
@@ -23,6 +23,9 @@ export interface FakePty extends Pty {
   close(exit: PtyExit): void;
   readonly written: readonly string[];
   readonly resizes: readonly { readonly cols: number; readonly rows: number }[];
+  /** Every signal it was sent, in order, whether or not it died of one. */
+  readonly signals: readonly PtySignal[];
+  /** How many signals it was sent: `signals.length`, for a test that asks only that. */
   readonly kills: number;
 }
 
@@ -66,7 +69,31 @@ export interface FakeChild {
   readonly prints?: string;
   /** How it ends afterwards. Absent means it keeps running. */
   readonly exit?: PtyExit;
+  /**
+   * The signals it dies of. Any other is recorded and ignored.
+   *
+   * Absent, a signal ends nothing, which is the fake a test drives by hand and
+   * closes itself. `['SIGHUP', 'SIGKILL']` is a well-behaved agent that exits
+   * when its terminal hangs up; `['SIGKILL']` is one that catches the hangup
+   * and carries on, which is the child a stop has to escalate past.
+   *
+   * The exit arrives in a microtask, as `child` does: a real process dies after
+   * the signal is sent, never inside the call that sent it.
+   */
+  readonly diesOn?: readonly PtySignal[];
 }
+
+/**
+ * The numbers the kernel reports for the signals a child can die of here.
+ *
+ * What node-pty hands `onExit` for a child a signal ended, so the fake's exit
+ * reads the way the integration test proves a real one does.
+ */
+const SIGNAL_NUMBERS: Readonly<Record<PtySignal, number>> = {
+  SIGHUP: 1,
+  SIGKILL: 9,
+  SIGTERM: 15,
+};
 
 export function createFakePtyFactory(options: FakePtyFactoryOptions = {}): FakePtyFactory {
   const opened: PtyRequest[] = [];
@@ -77,7 +104,10 @@ export function createFakePtyFactory(options: FakePtyFactoryOptions = {}): FakeP
       if (options.failsToOpen !== undefined) throw new Error(options.failsToOpen);
 
       opened.push(request);
-      const pty = createFakePty(options.pids?.[ptys.length] ?? 1000 + ptys.length);
+      const pty = createFakePty(
+        options.pids?.[ptys.length] ?? 1000 + ptys.length,
+        options.child?.diesOn ?? [],
+      );
       ptys.push(pty);
 
       const child = options.child;
@@ -105,14 +135,16 @@ export function createFakePtyFactory(options: FakePtyFactoryOptions = {}): FakeP
   };
 }
 
-function createFakePty(pid: number): FakePty {
+function createFakePty(pid: number, diesOn: readonly PtySignal[]): FakePty {
   const dataListeners: ((chunk: Uint8Array) => void)[] = [];
   const exitListeners: ((exit: PtyExit) => void)[] = [];
   const written: string[] = [];
   const resizes: { cols: number; rows: number }[] = [];
-  let kills = 0;
+  const signals: PtySignal[] = [];
+  /** Set by the first exit, so a child that is signalled twice dies once. */
+  let exited = false;
 
-  return {
+  const pty: FakePty = {
     pid,
 
     onData(listener: (chunk: Uint8Array) => void): void {
@@ -131,8 +163,13 @@ function createFakePty(pid: number): FakePty {
       resizes.push({ cols, rows });
     },
 
-    kill(): void {
-      kills += 1;
+    kill(signal: PtySignal): void {
+      signals.push(signal);
+      if (!diesOn.includes(signal)) return;
+      queueMicrotask(() => {
+        if (exited) return;
+        pty.close({ exitCode: 0, signal: SIGNAL_NUMBERS[signal] });
+      });
     },
 
     emit(chunk: Uint8Array | string): void {
@@ -141,6 +178,7 @@ function createFakePty(pid: number): FakePty {
     },
 
     close(exit: PtyExit): void {
+      exited = true;
       for (const listener of exitListeners) listener(exit);
     },
 
@@ -152,8 +190,13 @@ function createFakePty(pid: number): FakePty {
       return resizes;
     },
 
+    get signals() {
+      return signals;
+    },
+
     get kills() {
-      return kills;
+      return signals.length;
     },
   };
+  return pty;
 }

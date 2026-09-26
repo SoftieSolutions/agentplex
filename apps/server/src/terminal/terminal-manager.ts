@@ -439,7 +439,7 @@ export function createTerminalManager({
   };
 
   const close = (record: TerminalRecord): void => {
-    record.run.kill();
+    record.run.kill('SIGHUP');
     // The supervisor is told to forget it as well, so that "how many are
     // running" has one answer rather than two that drift.
     supervisor.forget(record.terminalId);
@@ -586,7 +586,7 @@ export function createTerminalManager({
       // The terminal survives its process. A session that was just stopped is
       // the one somebody most wants to read, and the bytes are here rather than
       // in the transcript. It is the cheapest thing to evict from now on.
-      record.run.kill();
+      record.run.kill('SIGHUP');
       return { ok: true };
     },
 

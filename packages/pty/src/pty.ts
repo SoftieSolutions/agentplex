@@ -56,9 +56,26 @@ export interface Pty {
   /** Keystrokes, as the user typed them. */
   write(input: string): void;
   resize(cols: number, rows: number): void;
-  /** Signals the child. A pty that has already exited ignores it. */
-  kill(): void;
+  /**
+   * Signals the child. A pty that has already exited ignores it.
+   *
+   * The signal is required. node-pty defaults to SIGHUP, which a process may
+   * catch and carry on through, and a seam that chose for its caller would hide
+   * the one decision a stop has to make out loud: whether it is asking the
+   * child to go or making it.
+   */
+  kill(signal: PtySignal): void;
 }
+
+/**
+ * The signals anything in agentplex sends a child, and no others.
+ *
+ * SIGHUP is what a terminal closing sends, and what an agent's TUI is written
+ * to clean up on. SIGKILL is the one no process can catch, for a child that did
+ * not. SIGTERM is here because it is what a service manager sends, so a caller
+ * standing in for one can say so.
+ */
+export type PtySignal = 'SIGHUP' | 'SIGTERM' | 'SIGKILL';
 
 export interface PtyExit {
   readonly exitCode: number;

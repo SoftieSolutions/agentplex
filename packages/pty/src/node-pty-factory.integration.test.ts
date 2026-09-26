@@ -175,14 +175,63 @@ describe('nodePtyFactory', () => {
     async () => {
       const run = start('setInterval(() => {}, 1000)');
 
-      run.kill();
+      run.kill('SIGHUP');
       await output(run);
 
       expect(run.exit).not.toBeNull();
     },
     CHILD_TIMEOUT_MS,
   );
+
+  it(
+    'leaves a child that ignores a hangup running, and ends it with a kill',
+    async () => {
+      // The agent a stop has to escalate past. It catches SIGHUP, says so, and
+      // carries on; only SIGKILL, which no process can catch, ends it. Node
+      // rather than a shell for the reason at the top of this file, and because
+      // a `sh -c` child here would leave its own grandchild behind on macOS.
+      const run = start(
+        'process.on("SIGHUP", () => process.stdout.write("hup\\n"));' +
+          'setInterval(() => {}, 1000);' +
+          'process.stdout.write("ready\\n");',
+      );
+      // Before the handler is installed a hangup would end it, and the test
+      // would prove nothing about a child that ignores one.
+      await printed(run, 'ready');
+
+      run.kill('SIGHUP');
+      await printed(run, 'hup');
+
+      expect(run.exit).toBeNull();
+
+      run.kill('SIGKILL');
+      // The whole exit and not only the signal: the fake pty reports a child a
+      // signal ended in exactly this shape, and this is what makes it so.
+      expect(await run.whenExited()).toEqual({ exitCode: 0, signal: 9 });
+    },
+    CHILD_TIMEOUT_MS,
+  );
 });
+
+/** Waits until the run has printed this, or fails the test. */
+async function printed(run: PtyRun, text: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`the child never printed ${text}`)),
+      CHILD_TIMEOUT_MS,
+    );
+    const poll = setInterval(() => {
+      const soFar = run
+        .scrollback()
+        .map((chunk) => new TextDecoder().decode(chunk))
+        .join('');
+      if (!soFar.includes(text)) return;
+      clearTimeout(timer);
+      clearInterval(poll);
+      resolve();
+    }, 10);
+  });
+}
 
 /**
  * The same claim as in the process runner's integration test, on the seam that

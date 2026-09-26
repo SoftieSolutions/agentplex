@@ -114,7 +114,7 @@ describe('agentplex setup', { timeout: TEST_TIMEOUT_MS }, () => {
 
     // Killed either way: a test that leaves a child behind on failure is a
     // test that makes the next run stranger than this one.
-    pty.kill();
+    pty.kill('SIGHUP');
 
     expect(outcome).toEqual({ exitCode: 0, signal: null });
     expect(chunks.join('')).toContain('Usage: agentplex setup');

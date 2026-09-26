@@ -261,7 +261,7 @@ interface Pty {
     listener: (exit: { readonly exitCode: number; readonly signal: number | null }) => void,
   ): void;
   write(input: string): void;
-  kill(): void;
+  kill(signal: 'SIGHUP' | 'SIGTERM' | 'SIGKILL'): void;
 }
 
 interface PtyFactory {
@@ -506,7 +506,7 @@ function drive(factory: PtyFactory, invocation: Invocation): Promise<Driven> {
     // outlive the `RUN` step that started it.
     const giveUp = (why: string): void => {
       const prompt = pendingPrompt(seen());
-      pty.kill();
+      pty.kill('SIGHUP');
       finish({
         exitCode: -1,
         signal: null,
