@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react';
-import { defineConfig, type Plugin } from 'vite';
+import type { Plugin } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 import { pinTestEnvironment } from '../../scripts/test-env.js';
 import { MANIFEST_PATH, buildWebManifest } from './src/pwa/manifest.js';
@@ -113,4 +114,6 @@ export default defineConfig({
       '/health': { target: DEV_HUB },
     },
   },
+  // Runs before each suite in its own environment; see the file for why.
+  test: { setupFiles: ['./src/test-setup.ts'] },
 });

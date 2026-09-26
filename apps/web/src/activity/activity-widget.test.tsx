@@ -81,7 +81,7 @@ describe('an activity widget', () => {
 
   function draw(activity: Activity, form: 'collapsed' | 'full'): HTMLElement {
     act(() => {
-      root = createRoot(container);
+      root ??= createRoot(container);
       root.render(
         <MantineProvider
           theme={theme}

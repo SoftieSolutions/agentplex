@@ -65,7 +65,7 @@ afterEach(async () => {
 
 async function mount(element: JSX.Element): Promise<void> {
   await act(async () => {
-    root = createRoot(container);
+    root ??= createRoot(container);
     root.render(
       <MantineProvider
         theme={theme}

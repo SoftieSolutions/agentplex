@@ -128,7 +128,7 @@ describe('NodeInspector', () => {
     document = fixtureDocument(),
     lastOutput: LastOutput | null = null,
   ): Promise<void> {
-    root = createRoot(container);
+    root ??= createRoot(container);
     await show(node, document, lastOutput);
   }
 

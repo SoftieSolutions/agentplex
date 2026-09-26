@@ -95,7 +95,7 @@ describe('the summary line', () => {
 
   function render(what: React.ReactNode): void {
     act(() => {
-      root = createRoot(container);
+      root ??= createRoot(container);
       root.render(
         <MantineProvider
           theme={theme}
