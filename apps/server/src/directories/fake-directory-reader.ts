@@ -40,6 +40,8 @@ export interface FakeDirectoryReader extends DirectoryReader {
   readonly resolved: readonly string[];
   /** Every path `read` was asked about, in order. */
   readonly reads: readonly string[];
+  /** The `limit` each of those reads was given, in the same order. */
+  readonly readLimits: readonly number[];
 }
 
 export function createFakeDirectoryReader(
@@ -53,6 +55,7 @@ export function createFakeDirectoryReader(
 
   const resolved: string[] = [];
   const reads: string[] = [];
+  const readLimits: number[] = [];
 
   return {
     async realPath(path: string): Promise<RealPath> {
@@ -66,13 +69,16 @@ export function createFakeDirectoryReader(
       return { kind: 'directory', path: real };
     },
 
-    async read(path: string): Promise<DirectoryRead> {
+    async read(path: string, limit: number): Promise<DirectoryRead> {
       reads.push(path);
+      readLimits.push(limit);
       const problem = unreadable[path];
       if (problem !== undefined) return { kind: 'failed', reason: problem };
       const entries = directories[path];
       if (entries === undefined) return { kind: 'failed', reason: 'ENOENT: no such directory' };
-      return { kind: 'read', entries };
+      // The first `limit` in the order they were written down, standing in for
+      // the order a kernel hands entries back in: not sorted, and not all.
+      return { kind: 'read', entries: entries.slice(0, limit), more: entries.length > limit };
     },
 
     get resolved(): readonly string[] {
@@ -81,6 +87,10 @@ export function createFakeDirectoryReader(
 
     get reads(): readonly string[] {
       return reads;
+    },
+
+    get readLimits(): readonly number[] {
+      return readLimits;
     },
   };
 }

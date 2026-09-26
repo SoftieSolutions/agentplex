@@ -143,12 +143,14 @@ export function refusalWords(refusal: RefusalView): string {
  *
  * Said rather than left to be inferred from a round number of rows, because the
  * failure this prevents is somebody concluding a directory does not hold what
- * they are looking for after being shown a prefix of it.
+ * they are looking for after being shown part of it. It names no order: the
+ * server keeps whichever entries the disk returned first, so a missing name
+ * may sort anywhere among the rows shown.
  */
 export function truncationNotice(listing: DirectoryListingView): string | null {
   if (!listing.truncated) return null;
   return (
-    `only the first ${String(listing.entries.length)} entries are shown: ` +
+    `${String(listing.entries.length)} of its entries are shown: ` +
     'this directory holds more than one listing carries'
   );
 }

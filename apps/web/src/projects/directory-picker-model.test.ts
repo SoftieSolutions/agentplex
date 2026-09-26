@@ -212,9 +212,17 @@ describe('truncationNotice', () => {
     expect(truncationNotice(listing())).toBeNull();
   });
 
-  it('says how many are shown, so a prefix is not read as the whole', () => {
+  it('says how many are shown, so a part is not read as the whole', () => {
     const cut = listing({ truncated: true, entries: [directory('a'), directory('b')] });
-    expect(truncationNotice(cut)).toContain('first 2 entries');
+    expect(truncationNotice(cut)).toContain('2 of its entries');
+  });
+
+  it('claims no order for what was cut, because the server did not pick by name', () => {
+    // Above the cap the server reads whichever entries the disk returns first
+    // and sorts those, so a missing name can sort anywhere, not only after the
+    // last row shown.
+    const cut = listing({ truncated: true, entries: [directory('a'), directory('b')] });
+    expect(truncationNotice(cut)).not.toContain('first');
   });
 });
 

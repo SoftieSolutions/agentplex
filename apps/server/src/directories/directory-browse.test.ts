@@ -307,9 +307,27 @@ describe('the entry cap', () => {
     const outcome = await browser.list(WORK);
     expect(entries(outcome)).toHaveLength(DIRECTORY_ENTRIES_MAX);
     expect(outcome.ok && outcome.truncated).toBe(true);
-    // Sorted before it was cut, so what survives is the first page of one
-    // order rather than the first page of whatever the kernel handed back.
+    // Cut before it was sorted: the reader stops at the cap in the order the
+    // disk hands entries back, which here is the order they were written.
     expect(entries(outcome)[0]?.name).toBe('entry-00000');
+  });
+
+  it('asks the disk for at most the cap, and sorts what came back', async () => {
+    // Written in reverse, so a disk read that stops at the cap keeps the last
+    // MAX names and drops the first five, and the reply is only in order if
+    // this side sorted it.
+    const reader = createFakeDirectoryReader({
+      directories: { [WORK]: [...many(DIRECTORY_ENTRIES_MAX + 5)].reverse() },
+    });
+    const browser = createDirectoryBrowser({ roots: [WORK], reader });
+
+    const outcome = await browser.list(WORK);
+    expect(reader.readLimits).toEqual([DIRECTORY_ENTRIES_MAX]);
+    const names = entries(outcome).map((entry) => entry.name);
+    expect(names).toHaveLength(DIRECTORY_ENTRIES_MAX);
+    expect(names[0]).toBe('entry-00005');
+    expect(names).toEqual([...names].sort());
+    expect(outcome.ok && outcome.truncated).toBe(true);
   });
 });
 

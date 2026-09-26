@@ -1,4 +1,5 @@
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { opendir, realpath, stat } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import type { DirectoryEntry } from '@agentplex/protocol';
 import { errnoCode } from '@agentplex/node-shared';
 import type { DirectoryRead, DirectoryReader, RealPath } from './directory-browse.js';
@@ -19,18 +20,27 @@ import type { DirectoryRead, DirectoryReader, RealPath } from './directory-brows
  * from one this process may not read, and everything else is `failed` with
  * whatever the kernel said.
  *
- * `read` is `readdir` with `withFileTypes`, which is the one call that already
- * knows what each entry is: the kind comes back with the name, from the
- * directory entry itself, so a listing is one syscall rather than one `lstat`
- * per file. It is `lstat` semantics -- a `Dirent` describes the link and not
- * its target -- which is exactly what the rule wants, and is why a link is
+ * `read` is `opendir`, walked one entry at a time and abandoned at `limit`.
+ * `readdir` would be one call, and it would also be every entry of the
+ * directory in memory at once before anything could be cut: a picker pointed at
+ * a directory of a million files would cost the server a million `Dirent`s to
+ * show a thousand. Walking stops at the entry past the limit, which is what
+ * says `more` without reading a second one. The order is the kernel's, not the
+ * name's, so what comes back above the cap is some `limit` of the entries and
+ * not the first `limit` alphabetically; sorting is the caller's.
+ *
+ * Each `Dirent` already knows what its entry is: the kind comes back with the
+ * name, from the directory entry itself, so a listing is not one `lstat` per
+ * file. It is `lstat` semantics -- a `Dirent` describes the link and not its
+ * target -- which is exactly what the rule wants, and is why a link is
  * reported as `other` here without this file having to decide not to follow it.
  *
- * `withFileTypes` is not guaranteed to know: on filesystems that do not carry a
- * type in the directory entry the runtime falls back, and an entry can still
- * come back as none of the three. `other` is what those are, which is honest
- * and is the same word a link gets -- both mean "not something to descend into
- * or open", which is all a picker needs.
+ * A `Dirent` is not guaranteed to know: on filesystems that do not carry a type
+ * in the directory entry the runtime falls back to an `lstat` of its own, and
+ * an entry can still come back as none of the three. The cap bounds that
+ * fallback as it bounds everything else. `other` is what those entries are,
+ * which is honest and is the same word a link gets -- both mean "not something
+ * to descend into or open", which is all a picker needs.
  */
 export const nodeDirectoryReader: DirectoryReader = {
   async realPath(path: string): Promise<RealPath> {
@@ -58,26 +68,39 @@ export const nodeDirectoryReader: DirectoryReader = {
     }
   },
 
-  async read(path: string): Promise<DirectoryRead> {
+  async read(path: string, limit: number): Promise<DirectoryRead> {
+    const entries: DirectoryEntry[] = [];
+    let more = false;
     try {
-      const found = await readdir(path, { withFileTypes: true });
-      const entries: DirectoryEntry[] = found.map((entry) => ({
-        name: entry.name,
-        // Links first, before the two questions that would be true of what they
-        // point at. `Dirent` describes the link itself, so this is already the
-        // answer; asking in the other order would still be right and would read
-        // as though following one were an option.
-        kind: entry.isSymbolicLink()
-          ? 'other'
-          : entry.isDirectory()
-            ? 'directory'
-            : entry.isFile()
-              ? 'file'
-              : 'other',
-      }));
-      return { kind: 'read', entries };
+      // Nothing awaited between the open and the loop. `for await` closes the
+      // handle when it finishes, breaks or throws, and that is the only close
+      // there is: a handle opened and then left behind by a throw before the
+      // loop began would be a descriptor leaked per failed request. It is also
+      // why there is no read after the break -- the handle is already closed.
+      const directory = await opendir(path);
+      for await (const entry of directory) {
+        if (entries.length === limit) {
+          more = true;
+          break;
+        }
+        entries.push({ name: entry.name, kind: kindOf(entry) });
+      }
     } catch (error) {
       return { kind: 'failed', reason: String(error) };
     }
+    return { kind: 'read', entries, more };
   },
 };
+
+/**
+ * Links first, before the two questions that would be true of what they point
+ * at. `Dirent` describes the link itself, so this is already the answer; asking
+ * in the other order would still be right and would read as though following
+ * one were an option.
+ */
+function kindOf(entry: Dirent): DirectoryEntry['kind'] {
+  if (entry.isSymbolicLink()) return 'other';
+  if (entry.isDirectory()) return 'directory';
+  if (entry.isFile()) return 'file';
+  return 'other';
+}
