@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --config ../../scripts/vitest.config.ts --passWithNoTests",
-    "test:coverage": "vitest run --config ../../scripts/vitest.config.ts --coverage --passWithNoTests"
+    "test": "vitest run --config ../../scripts/vitest.config.ts",
+    "test:coverage": "vitest run --config ../../scripts/vitest.config.ts --coverage"
   },
   "dependencies": {
     "@agentplex/providers": "workspace:*"
