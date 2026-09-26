@@ -1,10 +1,12 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ApprovalHookConnection } from './approval-gate.js';
 import { connectToGate } from './approval-hook.js';
+import { APPROVAL_LAUNCH_PREFIX } from './approval-launch.js';
 import {
+  APPROVAL_DIRECTORY,
   APPROVAL_LINE_MAX_BYTES,
   APPROVAL_SOCKET_NAME,
   openApprovalListener,
@@ -91,6 +93,36 @@ describe('the socket a blocked hook connects to', () => {
     expect(closed).toBe(true);
   });
 
+  it('still tells the gate about a hook that went away before anybody asked for it', async () => {
+    // Opened by hand rather than through `listening`, which asks for
+    // connections at once: this is the connection that arrived, said its line
+    // and hung up while nothing was yet asking.
+    const root = await mkdtemp(join(tmpdir(), 'agentplex-approvals-'));
+    roots.push(root);
+    const opened = await openApprovalListener(root);
+    if (!opened.ok) throw new Error(opened.problem);
+    closers.push(() => opened.listener.close());
+
+    const channel = await connectToGate(opened.socketPath);
+    channel.send(`${JSON.stringify({ secret: 'a-launch-secret', payload: '{}' })}\n`);
+    const answer = channel.read();
+    channel.close();
+    // The hook's read ends when the socket is gone from both sides.
+    expect(await answer).toBe('');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const connections: ApprovalHookConnection[] = [];
+    opened.listener.onConnection((connection) => void connections.push(connection));
+    expect(connections).toHaveLength(1);
+
+    let closed = false;
+    connections[0]?.onClose(() => void (closed = true));
+    for (let attempt = 0; attempt < 200 && !closed; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(closed).toBe(true);
+  });
+
   it('never hands over a line longer than the bound', async () => {
     const { socketPath, connections } = await listening();
     const channel = await connectToGate(socketPath);
@@ -112,6 +144,23 @@ describe('the socket a blocked hook connects to', () => {
     // the socket's own mode is what some of them check as well.
     expect((await stat(directory)).mode & 0o777).toBe(0o700);
     expect((await stat(socketPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it('clears the launch folders a killed server left behind, and nothing else', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentplex-approvals-'));
+    roots.push(root);
+    const directory = join(root, APPROVAL_DIRECTORY);
+    // What a server killed mid-launch leaves: a folder whose settings file
+    // carries a secret that died with it.
+    await mkdir(join(directory, `${APPROVAL_LAUNCH_PREFIX}abc`), { recursive: true });
+    await writeFile(join(directory, `${APPROVAL_LAUNCH_PREFIX}abc`, 'settings.json'), '{}');
+    await writeFile(join(directory, 'other.txt'), 'not a launch');
+
+    const opened = await openApprovalListener(root);
+    if (!opened.ok) throw new Error(opened.problem);
+    closers.push(() => opened.listener.close());
+
+    expect((await readdir(directory)).sort()).toEqual([APPROVAL_SOCKET_NAME, 'other.txt']);
   });
 
   it('opens over a socket file a killed server left behind', async () => {

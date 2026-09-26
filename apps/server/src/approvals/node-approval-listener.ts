@@ -1,8 +1,8 @@
-import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname, join } from 'node:path';
 import type { ApprovalHookConnection, ApprovalHookListener } from './approval-gate.js';
-import type { ApprovalFileSystem } from './approval-launch.js';
+import { APPROVAL_LAUNCH_PREFIX, type ApprovalFileSystem } from './approval-launch.js';
 
 /**
  * The socket a blocked hook connects to, and the only thing in the approvals
@@ -82,11 +82,12 @@ export async function openApprovalListener(dataRoot: string): Promise<ApprovalLi
     // by an older build, or by a umask that was wider that day -- and `mkdir`
     // says nothing about one it did not create.
     await chmod(directory, 0o700);
+    await sweepLaunches(directory);
     // A socket file left behind by a process that was killed is not a listener
     // and cannot be bound over. Removing it is safe precisely because a live
     // one is not a file anybody else is using: a second server on this data
     // root would be a second server on one machine's state, which nothing here
-    // supports and the identity file already refuses.
+    // supports and nothing detects either.
     await rm(socketPath, { force: true });
     server = await listen(socketPath);
     await chmod(socketPath, 0o600);
@@ -149,6 +150,34 @@ export const nodeApprovalFiles: ApprovalFileSystem = {
   },
 };
 
+/**
+ * Removes every launch folder a previous process left behind.
+ *
+ * A launch's folder goes when its agent's process ends, and a server that was
+ * killed never saw that end: each folder it left holds a secret that died with
+ * it. Nothing can be using one -- this runs before any gate, launch or session
+ * exists -- so every one of them is litter.
+ *
+ * Never a reason not to open. An entry that will not go costs itself and the
+ * rest are still tried, and a directory that cannot be listed leaves the litter
+ * where it is: approvals are worth more than a tidy folder.
+ */
+async function sweepLaunches(directory: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .filter((name) => name.startsWith(APPROVAL_LAUNCH_PREFIX))
+      .map((name) =>
+        rm(join(directory, name), { recursive: true, force: true }).catch(() => undefined),
+      ),
+  );
+}
+
 function listen(socketPath: string): Promise<Server> {
   return new Promise<Server>((resolve, reject) => {
     const server = createServer();
@@ -195,6 +224,12 @@ function readLine(socket: Socket, deliver: (line: string) => void): void {
 }
 
 function hookConnection(socket: Socket, line: string): ApprovalHookConnection {
+  // Latched from the moment the line arrived, because the gate may not ask for
+  // this connection until later: a hook that hung up while it waited would
+  // otherwise have closed before anybody was listening, and nobody would learn.
+  let closed = false;
+  socket.once('close', () => void (closed = true));
+
   return {
     sent: line,
     write(answer: string): void {
@@ -207,7 +242,10 @@ function hookConnection(socket: Socket, line: string): ApprovalHookConnection {
       socket.end();
     },
     onClose(handler: () => void): void {
-      socket.once('close', handler);
+      // Deferred and not called in place: the gate registers this before it
+      // announces the request, and a withdrawal must never overtake it.
+      if (closed) queueMicrotask(handler);
+      else socket.once('close', handler);
     },
   };
 }

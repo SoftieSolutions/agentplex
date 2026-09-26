@@ -32,6 +32,16 @@ import { APPROVAL_SECRET_VARIABLE, APPROVAL_SOCKET_VARIABLE } from './approval-h
  */
 
 /**
+ * What every launch's folder name starts with, and so what a starting server
+ * may remove from the approvals directory on sight.
+ *
+ * One name for both sides: a folder made here under any other prefix would
+ * outlive the process that made it, and one swept under a looser prefix could
+ * be something that is not a launch's at all.
+ */
+export const APPROVAL_LAUNCH_PREFIX = 'launch-';
+
+/**
  * Everything a server needs to hold approvals, assembled where sockets may be
  * opened and handed over whole.
  *
@@ -124,7 +134,7 @@ export function createLaunchApprovals({
 
       // A folder per launch, so the file keeps the name the provider gave it
       // and the removal is one call on something nothing else is in.
-      const folder = join(directory, `launch-${ids.newId()}`);
+      const folder = join(directory, `${APPROVAL_LAUNCH_PREFIX}${ids.newId()}`);
       const settingsFile = join(folder, hook.settingsFileName);
       const admission = gate.admit(store.storeId);
 
