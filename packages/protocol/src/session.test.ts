@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { NODE_NAME_MAX_CHARS } from './layout.js';
 import {
+  boundedSessionText,
+  SESSION_BRANCH_MAX_CHARS,
+  SESSION_CWD_MAX_CHARS,
+  SESSION_MODEL_MAX_CHARS,
+  SESSION_TITLE_MAX_CHARS,
   sessionDescriptorSchema,
   sessionHoldSchema,
   sessionPauseSchema,
@@ -201,6 +207,102 @@ describe('sessionDescriptorSchema', () => {
 
   it('refuses an empty session id, so a missing id cannot read as a session', () => {
     expect(sessionDescriptorSchema.safeParse({ ...descriptor, sessionId: '' }).success).toBe(false);
+  });
+});
+
+describe('the free-text strings on a descriptor', () => {
+  // Every one of these is somebody else's word -- a provider's transcript, a
+  // git ref -- riding on a frame that carries every session in a store and is
+  // sent again on every scan. A bound on each is what keeps one session's
+  // oddity from being a cost the whole fleet pays, and the bound is checked
+  // here at the parser that every hop runs.
+  it('takes each string at its bound', () => {
+    const atBound = {
+      ...descriptor,
+      title: 't'.repeat(SESSION_TITLE_MAX_CHARS),
+      model: 'm'.repeat(SESSION_MODEL_MAX_CHARS),
+      branch: 'b'.repeat(SESSION_BRANCH_MAX_CHARS),
+      cwd: `/${'c'.repeat(SESSION_CWD_MAX_CHARS - 1)}`,
+    };
+
+    expect(sessionDescriptorSchema.parse(atBound)).toEqual(atBound);
+  });
+
+  it('refuses each string one past its bound', () => {
+    for (const over of [
+      { title: 't'.repeat(SESSION_TITLE_MAX_CHARS + 1) },
+      { model: 'm'.repeat(SESSION_MODEL_MAX_CHARS + 1) },
+      { branch: 'b'.repeat(SESSION_BRANCH_MAX_CHARS + 1) },
+      { cwd: `/${'c'.repeat(SESSION_CWD_MAX_CHARS)}` },
+    ]) {
+      expect(sessionDescriptorSchema.safeParse({ ...descriptor, ...over }).success).toBe(false);
+    }
+  });
+
+  it('refuses a title or model that is nothing but characters that cannot be drawn', () => {
+    // The same pipe an activity's text goes through, for the same reason: a
+    // string of control and bidi characters draws as nothing, and a title that
+    // draws as nothing is absence spelled as a value.
+    for (const blank of ['\u202e\u2066', '\u0007\u001b', ' \t ']) {
+      expect(sessionDescriptorSchema.safeParse({ ...descriptor, title: blank }).success).toBe(
+        false,
+      );
+      expect(sessionDescriptorSchema.safeParse({ ...descriptor, model: blank }).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it('draws a title and a model without the characters that reorder or control a line', () => {
+    const parsed = sessionDescriptorSchema.parse({
+      ...descriptor,
+      title: 'Fix\u202e the\tlogin',
+      model: 'opus\u0007-4.1',
+    });
+
+    expect(parsed.title).toBe('Fix the login');
+    expect(parsed.model).toBe('opus-4.1');
+  });
+
+  it('bounds a title by the name a catalogue node may carry, which is what it becomes', () => {
+    expect(SESSION_TITLE_MAX_CHARS).toBeLessThanOrEqual(NODE_NAME_MAX_CHARS);
+  });
+});
+
+describe('boundedSessionText', () => {
+  it('passes a displayable string within the bound through unchanged', () => {
+    expect(boundedSessionText('Docker compose without hub', 200)).toBe(
+      'Docker compose without hub',
+    );
+  });
+
+  it('clips a string past the bound to a prefix the schema takes', () => {
+    const clipped = boundedSessionText('word '.repeat(100), SESSION_TITLE_MAX_CHARS);
+
+    expect(clipped).not.toBeNull();
+    expect(clipped?.length).toBeLessThanOrEqual(SESSION_TITLE_MAX_CHARS);
+    // Clipped at a space and re-trimmed, so the parse on the other side does
+    // not move it: what the server sends is what the client draws.
+    expect(clipped).toBe(clipped?.trim());
+    expect(sessionDescriptorSchema.parse({ ...descriptor, title: clipped }).title).toBe(clipped);
+  });
+
+  it('never leaves half of a surrogate pair at the cut', () => {
+    // The bound counts UTF-16 units, as the schema does, but the cut is made
+    // between code points: a lone surrogate is not a character anybody wrote.
+    const clipped = boundedSessionText(`a${'\u{1f600}'.repeat(10)}`, 4) ?? '';
+
+    expect(clipped).toBe('a\u{1f600}');
+    expect(clipped.length).toBeLessThanOrEqual(4);
+  });
+
+  it('strips what cannot be drawn before it measures', () => {
+    expect(boundedSessionText(`\u202e${'x'.repeat(10)}`, 10)).toBe('x'.repeat(10));
+  });
+
+  it('answers null when nothing drawable survives', () => {
+    expect(boundedSessionText('\u202e\u2066\u0007', 10)).toBeNull();
+    expect(boundedSessionText('', 10)).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { activitySchema } from './activity.js';
+import { activitySchema, displayableActivityText } from './activity.js';
 import { providerSchema, sessionIdSchema, sessionRefSchema, startIdSchema } from './identity.js';
 
 /**
@@ -151,6 +151,93 @@ export const uncommittedDiffSchema = z.object({
 export type UncommittedDiff = z.infer<typeof uncommittedDiffSchema>;
 
 /**
+ * How long a session's title may be, in UTF-16 code units as zod counts them.
+ *
+ * A title is a provider's name for a session -- Claude Code's `ai-title`,
+ * codex's `thread_name` -- and it is written by a model, so its length is
+ * whatever that model felt like. It rides on every store report, and it is
+ * what a session's catalogue node is named, so the bound is the one
+ * `NODE_NAME_MAX_CHARS` already sets for a node name and
+ * `ACTIVITY_TEXT_MAX_CHARS` sets for the line under it: a title past it would
+ * be clipped the moment it became a node anyway. Pinned beneath the node bound
+ * by a test, so the two cannot drift apart silently.
+ */
+export const SESSION_TITLE_MAX_CHARS = 200;
+
+/**
+ * How long a model name may be.
+ *
+ * A model id is an identifier a vendor prints -- a family, a version, a date
+ * -- and the longest in use is a few dozen characters. A hundred is room for a
+ * vendor to get more verbose without a release here, and small enough that a
+ * record which put something else in the field is refused at the adapter
+ * rather than carried on every scan.
+ */
+export const SESSION_MODEL_MAX_CHARS = 100;
+
+/**
+ * How long a branch name may be.
+ *
+ * git itself sets no limit on a ref name, but a loose ref is a file under
+ * `.git/refs`, and each of its path components is a file name the filesystem
+ * bounds at 255 bytes. Five hundred and twelve is two components' worth, past
+ * anything a person types or a tool generates for a branch, and a name longer
+ * than it is not shown rather than shown cut: a prefix of a branch name is a
+ * different branch name, and the panel would be naming a ref that does not
+ * exist.
+ */
+export const SESSION_BRANCH_MAX_CHARS = 512;
+
+/**
+ * How long a working directory may be.
+ *
+ * Linux's `PATH_MAX`, 4096 bytes, is the longest path a system call accepts,
+ * and the other platforms a server runs on accept less. A UTF-16 code unit is
+ * never fewer than one UTF-8 byte, so a string past this many units is past
+ * that many bytes, and names a directory no process could have been in. It is
+ * refused rather than clipped: this one is not only drawn, it is resumed in
+ * and read by git, and a prefix of a path is a different directory.
+ */
+export const SESSION_CWD_MAX_CHARS = 4096;
+
+/**
+ * A title or model an adapter read, in the form the descriptor carries it:
+ * stripped to what can be drawn, clipped to `max`, and `null` when nothing is
+ * left.
+ *
+ * Clipped rather than refused, and the direction is the point. A transcript is
+ * somebody else's file, and a descriptor is parsed as part of the store report
+ * that carries every other session in the store, so a title one character too
+ * long would otherwise cost every session beside it. A prefix of a title is
+ * still a fair name for the session; nothing opens it.
+ *
+ * The cut is made between code points, so no half of a surrogate pair is left
+ * at the end, while the length is measured in the UTF-16 units the schema
+ * counts. The result is trimmed again after the cut, so it is a fixed point of
+ * the schema's own transform and the hub and the client read the string the
+ * server sent.
+ */
+export function boundedSessionText(raw: string, max: number): string | null {
+  const drawable = displayableActivityText(raw);
+  let clipped = '';
+  for (const character of drawable) {
+    if (clipped.length + character.length > max) break;
+    clipped += character;
+  }
+  const trimmed = clipped.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * A display string on a descriptor: bounded by what arrived, stripped to what
+ * can be drawn, and refused when nothing survives -- the pipe an activity's
+ * text goes through, with the descriptor's own bound.
+ */
+function sessionTextSchema(max: number) {
+  return z.string().max(max).transform(displayableActivityText).pipe(z.string().min(1));
+}
+
+/**
  * A session as a server reports it.
  *
  * `provider` is on here from day one, not added when the second adapter lands:
@@ -181,7 +268,7 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
    * It is a label, never an argument. Nothing sends it back, and no spawn
    * takes a cwd off a frame: that is the operation registry's job.
    */
-  cwd: z.string().min(1).nullable(),
+  cwd: z.string().min(1).max(SESSION_CWD_MAX_CHARS).nullable(),
   /**
    * The branch checked out in `cwd`, or `null` when there is no name to show.
    *
@@ -203,9 +290,9 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
    * and the diffstat on one descriptor are two answers about one checkout at
    * one moment, rather than two moments a client would have to reconcile.
    */
-  branch: z.string().min(1).nullable(),
+  branch: z.string().min(1).max(SESSION_BRANCH_MAX_CHARS).nullable(),
   /** What the provider calls this session, if it names its sessions at all. */
-  title: z.string().min(1).nullable(),
+  title: sessionTextSchema(SESSION_TITLE_MAX_CHARS).nullable(),
   /**
    * The model this session is running, as the provider's own record names it.
    *
@@ -228,7 +315,7 @@ export const sessionDescriptorSchema = sessionRefSchema.extend({
    * the session record it already opened for `usage`. As with those counts, the
    * strings are each provider's own and are not comparable across providers.
    */
-  model: z.string().min(1).optional(),
+  model: sessionTextSchema(SESSION_MODEL_MAX_CHARS).optional(),
   /**
    * What this session has spent, or nothing at all.
    *
