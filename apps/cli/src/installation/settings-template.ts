@@ -4,17 +4,15 @@ import { binDirectory, stateDirectory, type Layout } from './layout.js';
 import { DOCS_URL } from './unit-file.js';
 
 /**
- * The settings file an install writes once: `install.sh`'s
- * `write_environment_file`, restated in the program that takes the install
- * over.
+ * The settings file an install writes once.
  *
- * Restated rather than shared, for the reason the unit renderer gives: the
- * installer is a shell script with nothing to import. What holds the two
- * together is `settings-template.test.ts`, which compares this text byte for
- * byte with files the script wrote on machines it really installed, captured
- * under `fixtures/settings/`. Every comment in the file is the script's, word
- * for word -- including the sentence that says `install.sh` wrote it, which
- * changes when the script stops being the writer and not before.
+ * `agentplex install` is the writer; `install.sh` hands over to it and writes
+ * no settings file of its own. The text is what the script's
+ * `write_environment_file` wrote before the handover, word for word but for the
+ * sentence that names the writer, so a machine installed either side of it
+ * reads the same. `settings-template.test.ts` compares it byte for byte with
+ * files a real install wrote, captured under `fixtures/settings/` with the
+ * commands in `CAPTURE.txt`.
  *
  * Only the text is here. Writing it once and never again, the mode it is
  * created with and the owner it ends with are the install's, because they are
@@ -42,12 +40,12 @@ export function renderSettings(role: Role, layout: Layout): string {
     '# agentplex settings, read by the systemd units as an EnvironmentFile. Both',
     '# daemons read this one file, and each reads only the keys it needs.',
     '#',
-    '# install.sh wrote this file once and will not touch it again. Three lines are',
-    '# uncommented because they are the three facts the installer had: the role you',
-    '# asked for, the prefix it created, and the bin path inside it -- and on a',
-    "# --system install a fourth, the server's identity file. The rest is",
-    '# commented out because guessing a database path or a store path is worse than',
-    `# leaving one absent -- fill them in, or let \`${CLI_COMMAND} setup\` do it.`,
+    `# \`${CLI_COMMAND} install\` wrote this file once and will not touch it again.`,
+    '# Three lines are uncommented because they are the three facts the install',
+    '# had: the role you asked for, the prefix it created, and the bin path inside',
+    "# it -- and on a --system install a fourth, the server's identity file. The",
+    '# rest is commented out because guessing a database path or a store path is',
+    `# worse than leaving one absent -- fill them in, or let \`${CLI_COMMAND} setup\` do it.`,
     '#',
     '# Every setting here has a flag as well, and the flag wins. The whole table is',
     `# at ${DOCS_URL}`,
