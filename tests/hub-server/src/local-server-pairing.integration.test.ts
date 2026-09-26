@@ -1,17 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { serverAddressSchema, type HubId } from '@agentplex/protocol';
+import { createFakeProcessRunner, createFakeStoreFiles } from '@agentplex/providers/testing';
 import {
-  createFakeGrantFiles,
-  createFakeProcessRunner,
-  createFakeStoreFiles,
-  type FakeGrantFiles,
-} from '@agentplex/providers/testing';
-import {
-  createProviderRegistry,
-  openServerGrants,
   parseServerGrants,
   serverGrantsPath,
-} from '@agentplex/providers';
+} from '../../../apps/server/src/grants/server-grants.js';
+import { openServerGrants } from '../../../apps/server/src/grants/server-grant-store.js';
+import {
+  createFakeGrantFiles,
+  type FakeGrantFiles,
+} from '../../../apps/server/src/grants/fake-grant-files.js';
+import { createProviderRegistry } from '@agentplex/providers';
 import {
   DEFAULT_DRAIN_MS,
   createLogger,

@@ -1,5 +1,5 @@
 import type { MessageSocket } from '@agentplex/node-shared';
-import { createFakeGrantAuthority } from '@agentplex/providers/testing';
+import { createFakeGrantAuthority } from '../../../apps/server/src/grants/fake-grant-authority.js';
 import { createDirectoryBrowser } from '../../../apps/server/src/directories/directory-browse.js';
 import { createFakeDirectoryReader } from '../../../apps/server/src/directories/fake-directory-reader.js';
 import { createFakeProjectFiles } from '../../../apps/server/src/projects/fake-project-files.js';

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLogger, systemTimers } from '@agentplex/node-shared';
 import type { ServerToHubFrame, StoreId } from '@agentplex/protocol';
-import type { GrantId } from '@agentplex/providers';
+import type { GrantId } from '../grants/server-grants.js';
 import { createHubAudience, type HubMember } from '../hub/hub-audience.js';
 import { createFakeSessionController } from '../sessions/fake-session-controller.js';
 import { nodeStoreWatcher } from './node-store-watcher.js';

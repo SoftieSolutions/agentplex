@@ -3,12 +3,8 @@ import { ensureDataRoot, type DataRootFileSystem } from './data-root/data-root.j
 import type { DirectoryReader } from './directories/directory-browse.js';
 import type { OperationRegistry } from './operations/operation-registry.js';
 import type { ProjectFileSystem } from './projects/project-files.js';
-import type {
-  GrantFileSystem,
-  ProviderPreflight,
-  ProviderRegistry,
-  StoreFileSystem,
-} from '@agentplex/providers';
+import type { ProviderPreflight, ProviderRegistry, StoreFileSystem } from '@agentplex/providers';
+import type { GrantFileSystem } from './grants/server-grants.js';
 import type { BeaconNetwork } from './beacon/server-beacon.js';
 import type { StoreWatcher } from './store-watch/store-watch.js';
 import type { ApprovalHooks } from './approvals/approval-launch.js';

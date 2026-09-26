@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { createFakeTimers } from '@agentplex/node-shared/testing';
-import type { GrantId, ServerGrantStore, WithdrawnGrant } from '@agentplex/providers';
+import type { GrantId } from '../grants/server-grants.js';
+import type { ServerGrantStore, WithdrawnGrant } from '../grants/server-grant-store.js';
 import { GRANT_SWEEP_INTERVAL_MS, sweepGrants } from './grant-sweep.js';
 import type { HubAudience } from './hub-audience.js';
 

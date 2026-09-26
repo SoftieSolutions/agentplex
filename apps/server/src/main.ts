@@ -19,9 +19,9 @@ import {
   createProviderPreflight,
   createRegisteredProviders,
   nodeProviderFiles,
-  nodeGrantFileSystem,
   nodeStoreFileSystem,
 } from '@agentplex/providers';
+import { nodeGrantFileSystem } from './grants/node-grant-files.js';
 import { checkNodePty, createPtySupervisor, nodePtyFactory } from '@agentplex/pty';
 import type { ApprovalHooks } from './approvals/approval-launch.js';
 import { startRuntime } from './boot.js';

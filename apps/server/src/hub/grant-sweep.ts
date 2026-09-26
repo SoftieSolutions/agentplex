@@ -1,5 +1,6 @@
 import type { Logger, Timers } from '@agentplex/node-shared';
-import type { GrantRefusal, ServerGrantStore } from '@agentplex/providers';
+import type { GrantRefusal } from '../grants/server-grants.js';
+import type { ServerGrantStore } from '../grants/server-grant-store.js';
 import type { HubAudience } from './hub-audience.js';
 
 /**

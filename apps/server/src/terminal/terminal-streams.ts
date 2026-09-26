@@ -7,7 +7,7 @@ import type {
   TerminalSize,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
-import type { GrantId } from '@agentplex/providers';
+import type { GrantId } from '../grants/server-grants.js';
 import type { Terminal, TerminalManager, TerminalStart, WatcherId } from './terminal-manager.js';
 
 /**
