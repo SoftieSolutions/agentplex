@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { sessionRefSchema, type SessionRef } from '@agentplex/protocol';
+import { sessionRefKey, sessionRefSchema, type SessionRef } from '@agentplex/protocol';
 import { createLogger } from '@agentplex/node-shared';
 import { openMigratedSchema, type MigratedSchema } from '../db/test-migrated-schema.js';
 import { createAttention, UNATTENDED, type SessionAttention } from './attention.js';
@@ -41,17 +41,13 @@ function db(): MigratedSchema['database'] {
   return migrated.database;
 }
 
-function keyOf(ref: SessionRef): string {
-  return `${ref.storeId}/${ref.sessionId}`;
-}
-
 function feature(): ReturnType<typeof createAttention> {
   return createAttention({
     database: db(),
     clock: { now: () => now },
     logger,
     onChanged: (ref, attention) => announced.push({ ref, attention }),
-    sessionActivity: (ref) => activity.get(keyOf(ref)) ?? null,
+    sessionActivity: (ref) => activity.get(sessionRefKey(ref)) ?? null,
   });
 }
 
@@ -61,8 +57,8 @@ describe('the attention rows', () => {
     announced = [];
     now = START;
     activity = new Map([
-      [keyOf(PROMPTED), WROTE_AT],
-      [keyOf(OTHER), WROTE_AT],
+      [sessionRefKey(PROMPTED), WROTE_AT],
+      [sessionRefKey(OTHER), WROTE_AT],
     ]);
   });
 
@@ -89,7 +85,7 @@ describe('the attention rows', () => {
     await attention.acknowledge(PROMPTED);
 
     // The agent ran on and stopped again, and somebody looked at that too.
-    activity.set(keyOf(PROMPTED), WROTE_AT + 30_000);
+    activity.set(sessionRefKey(PROMPTED), WROTE_AT + 30_000);
     expect(await attention.acknowledge(PROMPTED)).toEqual({
       ok: true,
       attention: { acknowledgedThrough: WROTE_AT + 30_000, mutedAt: null },
@@ -133,7 +129,7 @@ describe('the attention rows', () => {
 
   it('refuses a session the hub cannot see, and writes nothing for it', async () => {
     const stranger = sessionRefSchema.parse({ storeId: 'store-work', sessionId: 'session-ghost' });
-    expect(activity.has(keyOf(stranger))).toBe(false);
+    expect(activity.has(sessionRefKey(stranger))).toBe(false);
     const outcome = await feature().acknowledge(stranger);
     expect(outcome).toEqual({
       ok: false,

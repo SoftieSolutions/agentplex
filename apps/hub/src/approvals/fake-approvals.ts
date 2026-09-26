@@ -1,12 +1,13 @@
-import type {
-  ApprovalOutcome,
-  ApprovalRequest,
-  ApprovalSubject,
-  GraphRunApproval,
-  GraphRunId,
-  PendingApproval,
-  ServerRegistrationId,
-  SessionRef,
+import {
+  sessionRefKey,
+  type ApprovalOutcome,
+  type ApprovalRequest,
+  type ApprovalSubject,
+  type GraphRunApproval,
+  type GraphRunId,
+  type PendingApproval,
+  type ServerRegistrationId,
+  type SessionRef,
 } from '@agentplex/protocol';
 import type {
   ApprovalAnswer,
@@ -61,7 +62,8 @@ export interface FakeApprovalsOptions {
 }
 
 export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApprovals {
-  const open = new Map<string, PendingApproval[]>();
+  /** Open requests by session, each beside the ref it is keyed by. */
+  const open = new Map<string, { ref: SessionRef; held: PendingApproval[] }>();
   const decided: DecideRequest[] = [];
   const announced: SessionRef[] = [];
   const waiting: ((answer: ApprovalAnswer) => void)[] = [];
@@ -72,7 +74,7 @@ export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApp
     { entry: GraphRunApproval; resolve: (o: ApprovalOutcome) => void }
   >();
 
-  const keyOf = (ref: SessionRef): string => JSON.stringify([ref.storeId, ref.sessionId]);
+  const heldFor = (ref: SessionRef): PendingApproval[] => open.get(sessionRefKey(ref))?.held ?? [];
   const subjectOf = (ref: SessionRef): ApprovalSubject => ({
     kind: 'session',
     storeId: ref.storeId,
@@ -86,27 +88,24 @@ export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApp
 
   const announce = (ref: SessionRef): void => {
     announced.push(ref);
-    options.onChanged?.(ref, open.get(keyOf(ref)) ?? []);
+    options.onChanged?.(ref, heldFor(ref));
   };
 
   const drop = (ref: SessionRef, approvalId: PendingApproval['approvalId']): void => {
-    const held = open.get(keyOf(ref));
-    if (held === undefined) return;
-    open.set(
-      keyOf(ref),
-      held.filter((pending) => pending.approvalId !== approvalId),
-    );
+    const entry = open.get(sessionRefKey(ref));
+    if (entry === undefined) return;
+    entry.held = entry.held.filter((pending) => pending.approvalId !== approvalId);
     announce(ref);
   };
 
   return {
     requested(_source: ServerRegistrationId, frame: ApprovalRequestedFrame): void {
       const ref: SessionRef = { storeId: frame.storeId, sessionId: frame.sessionId };
-      const held = open.get(keyOf(ref)) ?? [];
+      const held = heldFor(ref);
       // A fixed stamp, because a fake that read a clock would be a second
       // opinion about the one number the real feature is the source of.
       held.push({ ...frame.approval, subject: subjectOf(ref), requestedAt: 0, answeredBy: null });
-      open.set(keyOf(ref), held);
+      open.set(sessionRefKey(ref), { ref, held });
       announce(ref);
     },
 
@@ -119,14 +118,10 @@ export function createFakeApprovals(options: FakeApprovalsOptions = {}): FakeApp
     },
 
     serverGone(_registrationId: ServerRegistrationId): void {
-      for (const [key, held] of [...open]) {
-        if (held.length === 0) continue;
-        open.set(key, []);
-        const [storeId, sessionId] = JSON.parse(key) as [
-          SessionRef['storeId'],
-          SessionRef['sessionId'],
-        ];
-        announce({ storeId, sessionId });
+      for (const entry of [...open.values()]) {
+        if (entry.held.length === 0) continue;
+        entry.held = [];
+        announce(entry.ref);
       }
     },
 

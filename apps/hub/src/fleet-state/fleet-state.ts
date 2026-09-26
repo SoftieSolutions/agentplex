@@ -1,14 +1,15 @@
-import type {
-  GraphRunApproval,
-  MachineState,
-  NodeId,
-  PendingApproval,
-  ServerRegistrationId,
-  SessionDescriptor,
-  SessionHold,
-  SessionHolder,
-  SessionRef,
-  StoreId,
+import {
+  sessionRefKey,
+  type GraphRunApproval,
+  type MachineState,
+  type NodeId,
+  type PendingApproval,
+  type ServerRegistrationId,
+  type SessionDescriptor,
+  type SessionHold,
+  type SessionHolder,
+  type SessionRef,
+  type StoreId,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
 import { NO_RUN_WAITING, NOTHING_PENDING } from '../approvals/approvals.js';
@@ -336,7 +337,7 @@ export interface FleetState {
   applyAttention(ref: SessionRef, attention: SessionAttention): void;
   /**
    * Takes the whole of what the hub's tree says about where sessions sit,
-   * keyed by `sessionKey`.
+   * keyed by `sessionRefKey`.
    *
    * A whole reading rather than one placement at a time, for the reason a
    * session report is a whole list: a session leaves a project by being absent
@@ -675,7 +676,7 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
     },
 
     applyAttention(ref: SessionRef, next: SessionAttention): void {
-      const key = sessionKey(ref);
+      const key = sessionRefKey(ref);
       const previous = attention.get(key) ?? UNATTENDED;
       // A repeat says nothing new, and waking every client for it would make
       // the version mean "somebody clicked" rather than "something changed".
@@ -701,7 +702,7 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
     },
 
     applyApprovals(ref: SessionRef, next: readonly PendingApproval[]): void {
-      const key = sessionKey(ref);
+      const key = sessionRefKey(ref);
       const previous = approvals.get(key) ?? NOTHING_PENDING;
       // The same rule the reports follow: a list that says what the last one
       // said is a version bump that would mean "a machine spoke" rather than
@@ -731,7 +732,7 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
     },
 
     applyTask(ref: SessionRef, next: string | null): void {
-      const key = sessionKey(ref);
+      const key = sessionRefKey(ref);
       // The same rule the reports and the lists above follow. This one is told
       // the same thing twice for real: the tasks feature announces every row it
       // reads back at boot, and a second start on a session announces the task
@@ -773,22 +774,6 @@ export function createFleetState(dependencies: FleetStateDependencies): FleetSta
 function findRow(state: HubStateSnapshot, ref: SessionRef): SessionRow | undefined {
   const view = state.stores.find((candidate) => candidate.storeId === ref.storeId);
   return view?.sessions.find((session) => session.ref.sessionId === ref.sessionId);
-}
-
-/**
- * One session's key in the maps keyed by session rather than by store.
- *
- * JSON rather than a joined string, because a store id and a session id are
- * opaque and either may contain whatever separator was chosen -- two sessions
- * colliding on one key would put one person's mute, or one project's name, on
- * another session.
- *
- * Exported because `applyProjects` takes a whole map: its caller reads the
- * tree and has to build the same keys this file reads, and a caller spelling
- * the key itself would be a second definition of it waiting to drift.
- */
-export function sessionKey(ref: SessionRef): string {
-  return JSON.stringify([ref.storeId, ref.sessionId]);
 }
 
 /**
@@ -940,18 +925,18 @@ function buildSessionRows(
       // A session nobody has said anything about reads as unattended rather
       // than as a gap: there is no third state between "not acknowledged" and
       // "no row", and offering one would make every reader handle it.
-      attention: attention.get(sessionKey(ref)) ?? UNATTENDED,
+      attention: attention.get(sessionRefKey(ref)) ?? UNATTENDED,
       // A session the tree does not place is a session in no project, which is
       // an answer rather than a reading that has not happened yet.
-      project: projects.get(sessionKey(ref)) ?? null,
+      project: projects.get(sessionRefKey(ref)) ?? null,
       // Empty rather than absent, for the reason the wire's own field is:
       // "nothing is waiting" and "this hub cannot tell you" must not be one
       // value, and every codex row will say the first of them forever.
-      approvals: approvals.get(sessionKey(ref)) ?? NOTHING_PENDING,
+      approvals: approvals.get(sessionRefKey(ref)) ?? NOTHING_PENDING,
       // `null` rather than a reading of the transcript, for a session nobody
       // started from here. There is no substitute for this fact and the row
       // says so rather than offering the nearest thing to it.
-      task: tasks.get(sessionKey(ref)) ?? null,
+      task: tasks.get(sessionRefKey(ref)) ?? null,
     });
   }
 

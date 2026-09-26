@@ -271,7 +271,7 @@ export interface CatalogueDependencies {
 /**
  * One whole reading of where the tree puts sessions, and when it was taken.
  *
- * The map is keyed by `sessionKey`, which is the fleet state's own key: its
+ * The map is keyed by `sessionRefKey`, which is the fleet state's own key: its
  * reader files the placements under exactly the sessions it already holds, and
  * a second spelling of that key would be a second definition waiting to drift
  * -- two sessions colliding on one would put one project's name on another

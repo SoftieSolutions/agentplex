@@ -55,7 +55,7 @@ export interface FakeCatalogue extends Catalogue {
   answerPageWith(outcome: CataloguePageOutcome): void;
   /**
    * What every later reading of where sessions sit answers with, keyed by the
-   * fleet state's `sessionKey`.
+   * fleet state's `sessionRefKey`.
    *
    * The version on that reading is this fake's own, for the reason the real
    * one carries it: a reader drops a reading older than the one it applied,

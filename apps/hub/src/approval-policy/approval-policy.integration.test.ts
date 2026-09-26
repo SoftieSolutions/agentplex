@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   APPROVAL_PROPOSAL_MAX_CHARS,
   nodeIdSchema,
+  sessionRefKey,
   sessionRefSchema,
   type NodeId,
   type SessionRef,
@@ -54,8 +55,7 @@ function feature(overrides: { database?: Database } = {}): ApprovalPolicy {
     clock: { now: () => NOW },
     ids: { newId: () => `rule-${String((minted += 1))}` },
     logger,
-    projectOf: (ref: SessionRef) =>
-      Promise.resolve(placement.get(`${ref.storeId}/${ref.sessionId}`) ?? null),
+    projectOf: (ref: SessionRef) => Promise.resolve(placement.get(sessionRefKey(ref)) ?? null),
   });
 }
 
@@ -80,7 +80,7 @@ describe('the standing policy', () => {
     placement = new Map();
     await project(WORK, '/srv/work');
     await project(ATTIC, '/srv/attic');
-    placement.set(`${FIXING.storeId}/${FIXING.sessionId}`, WORK);
+    placement.set(sessionRefKey(FIXING), WORK);
   });
 
   afterEach(async () => {

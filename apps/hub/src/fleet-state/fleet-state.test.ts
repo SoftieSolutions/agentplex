@@ -6,6 +6,7 @@ import {
   serverAddressSchema,
   serverIdSchema,
   sessionIdSchema,
+  sessionRefKey,
   storeIdSchema,
   type GraphRunApproval,
   type PendingApproval,
@@ -19,7 +20,6 @@ import type { DiscoveredServer } from '../discovery/discovery.js';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import {
   createFleetState,
-  sessionKey,
   type FleetState,
   type SessionProject,
   type StoreView,
@@ -924,7 +924,7 @@ describe('what project a session is in', () => {
 
   /** The whole placement reading, with `session-1` in one project and nothing else in any. */
   function placements(project: SessionProject): ReadonlyMap<string, SessionProject> {
-    return new Map([[sessionKey(placed), project]]);
+    return new Map([[sessionRefKey(placed), project]]);
   }
 
   function rowFor(reducer: FleetState, sessionId: string) {

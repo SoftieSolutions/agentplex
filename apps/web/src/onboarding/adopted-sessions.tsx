@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import { sessionRefKey } from '@agentplex/protocol';
 import { ageLabel } from '../sessions/session-list-model.js';
 import { SessionSummaryLine } from '../sessions/session-summary-line.js';
 import { sessionHash } from '../terminal/session-route.js';
@@ -86,7 +87,7 @@ export function AdoptedSessions({
       <Stack gap={6}>
         {sessions.map((session) => (
           <AdoptedSessionRow
-            key={`${session.ref.storeId}/${session.ref.sessionId}`}
+            key={sessionRefKey(session.ref)}
             session={session}
             scheme={scheme}
             now={now}

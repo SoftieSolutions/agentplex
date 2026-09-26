@@ -1,10 +1,11 @@
-import type {
-  ServerTerminalTarget,
-  SessionId,
-  SessionStartTag,
-  StartId,
-  StoreId,
-  TerminalSize,
+import {
+  sessionRefKey,
+  type ServerTerminalTarget,
+  type SessionId,
+  type SessionStartTag,
+  type StartId,
+  type StoreId,
+  type TerminalSize,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
 import type { GrantId } from '../grants/server-grants.js';
@@ -237,9 +238,7 @@ export function createTerminalStreams({
 
   /** A target's name, so two frames naming one thing count as one subscriber. */
   const keyOf = (target: ServerTerminalTarget): string =>
-    target.by === 'start'
-      ? `start ${target.startId}`
-      : `session ${target.storeId} ${target.sessionId}`;
+    target.by === 'start' ? `start ${target.startId}` : `session:${sessionRefKey(target)}`;
 
   /**
    * The one place a watch is given back.

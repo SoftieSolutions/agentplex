@@ -86,6 +86,18 @@ export const sessionRefSchema = z.object({
 export type SessionRef = z.infer<typeof sessionRefSchema>;
 
 /**
+ * The one string a session is keyed by in a map, a set or a render key.
+ *
+ * Both ids are any 1-200 character string, so no separator is safe to join
+ * them with: `a/b` + `c` and `a` + `b/c` would meet. A JSON array escapes
+ * whatever the ids hold. The key is for in-memory lookup only and is never
+ * decoded back into a ref; a caller that needs the ref keeps it beside the key.
+ */
+export function sessionRefKey(ref: SessionRef): string {
+  return JSON.stringify([ref.storeId, ref.sessionId]);
+}
+
+/**
  * The coding-agent CLI behind a session.
  *
  * v2 ships the Claude Code adapter only. The other names are listed because

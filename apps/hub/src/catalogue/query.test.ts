@@ -6,6 +6,7 @@ import {
   serverAddressSchema,
   serverRegistrationIdSchema,
   sessionIdSchema,
+  sessionRefKey,
   storeIdSchema,
   type CatalogueItem,
   type CatalogueQuery,
@@ -17,7 +18,6 @@ import {
   type StoreId,
 } from '@agentplex/protocol';
 import { createFakeDatabase } from '../db/fake-database.js';
-import { sessionKey } from '../fleet-state/fleet-state.js';
 import { queryCatalogue, sessionProjectsIn, type CataloguePageOutcome } from './query.js';
 import { nodeRowSchema } from './rows.js';
 
@@ -818,7 +818,7 @@ describe('the project each session is filed under', () => {
     sessionProjectsIn(rows.map((row) => nodeRowSchema.parse(row)));
 
   const keyFor = (sessionId: string): string =>
-    sessionKey({ storeId: STORE, sessionId: sessionIdSchema.parse(sessionId) });
+    sessionRefKey({ storeId: STORE, sessionId: sessionIdSchema.parse(sessionId) });
 
   it('names the project above a session, however many folders are between them', () => {
     expect(placements().get(keyFor('session-bench'))).toEqual({

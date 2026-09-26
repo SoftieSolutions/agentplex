@@ -1,11 +1,12 @@
-import type {
-  FrameId,
-  Layout,
-  LayoutNode,
-  MachineState,
-  NodeId,
-  SessionHolder,
-  SessionRef,
+import {
+  sessionRefKey,
+  type FrameId,
+  type Layout,
+  type LayoutNode,
+  type MachineState,
+  type NodeId,
+  type SessionHolder,
+  type SessionRef,
 } from '@agentplex/protocol';
 import { followUp, type Answers } from '../store/answers.js';
 import type { HubCommand } from '../store/commands.js';
@@ -112,19 +113,19 @@ export function sessionsNotInTree(
   // flight would put the whole fleet in a list headed "not in your tree".
   if (state === null || layout === null) return [];
 
-  const anchored = new Set(
-    layout
-      .filter((node) => node.anchor !== null)
-      .map((node) => JSON.stringify([node.anchor?.storeId, node.anchor?.sessionId])),
-  );
+  const anchored = new Set<string>();
+  for (const node of layout) {
+    if (node.anchor !== null) anchored.add(sessionRefKey(node.anchor));
+  }
   const absent: AbsentSession[] = [];
   for (const store of state.stores) {
     for (const row of store.sessions) {
       const { descriptor } = row;
-      const key = JSON.stringify([descriptor.storeId, descriptor.sessionId]);
+      const ref = { storeId: descriptor.storeId, sessionId: descriptor.sessionId };
+      const key = sessionRefKey(ref);
       if (anchored.has(key)) continue;
       absent.push({
-        ref: { storeId: descriptor.storeId, sessionId: descriptor.sessionId },
+        ref,
         name: descriptor.title ?? descriptor.sessionId,
         key,
       });

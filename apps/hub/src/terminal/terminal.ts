@@ -1,15 +1,16 @@
-import type {
-  ClientTerminalTarget,
-  FrameId,
-  HubFrame,
-  ServerRegistrationId,
-  ServerTerminalTarget,
-  SessionId,
-  SessionStartTag,
-  StartId,
-  StoreId,
-  SubscriptionEndReason,
-  TerminalSize,
+import {
+  sessionRefKey,
+  type ClientTerminalTarget,
+  type FrameId,
+  type HubFrame,
+  type ServerRegistrationId,
+  type ServerTerminalTarget,
+  type SessionId,
+  type SessionStartTag,
+  type StartId,
+  type StoreId,
+  type SubscriptionEndReason,
+  type TerminalSize,
 } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
@@ -596,7 +597,7 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
         return;
       }
 
-      const key = `${routed.registrationId} ${serverKeyOf(routed.target)}`;
+      const key = upstreamKeyOf(routed.registrationId, routed.target);
       let upstream = upstreams.get(key);
       if (upstream === undefined) {
         upstream = {
@@ -694,14 +695,20 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
         if (tag.sessionId === null) continue;
         named.set(tag.startId, { storeId, sessionId: tag.sessionId });
 
-        const upstream = upstreams.get(`${registrationId} start ${tag.startId}`);
+        const upstream = upstreams.get(
+          upstreamKeyOf(registrationId, { by: 'start', startId: tag.startId }),
+        );
         if (upstream === undefined || upstream.bound !== null) continue;
 
         // The one exact moment a pending pane becomes a session's pane. The
         // upstream keeps its start-addressed key -- the server still answers to
         // it -- and gains a second name, so a chunk carrying only the session id
         // reaches the same client.
-        const key = `${registrationId} session ${storeId} ${tag.sessionId}`;
+        const key = upstreamKeyOf(registrationId, {
+          by: 'session',
+          storeId,
+          sessionId: tag.sessionId,
+        });
         upstream.bound = key;
         const bound = rebound.get(key) ?? new Set<Upstream>();
         bound.add(upstream);
@@ -773,12 +780,18 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
       const matched = new Set<Upstream>();
 
       if (output.startId !== null) {
-        const byStart = upstreams.get(`${registrationId} start ${output.startId}`);
+        const byStart = upstreams.get(
+          upstreamKeyOf(registrationId, { by: 'start', startId: output.startId }),
+        );
         if (byStart !== undefined) matched.add(byStart);
       }
 
       if (output.sessionId !== null) {
-        const key = `${registrationId} session ${output.storeId} ${output.sessionId}`;
+        const key = upstreamKeyOf(registrationId, {
+          by: 'session',
+          storeId: output.storeId,
+          sessionId: output.sessionId,
+        });
         const bySession = upstreams.get(key);
         if (bySession !== undefined) matched.add(bySession);
         for (const upstream of rebound.get(key) ?? []) matched.add(upstream);
@@ -805,18 +818,34 @@ export function createTerminal(dependencies: TerminalDependencies): Terminal {
   };
 }
 
-/** A client's name for a target, so two frames naming one terminal are one watch. */
+/**
+ * A client's name for a target, so two frames naming one terminal are one watch.
+ *
+ * Tagged by kind, because a start handle and a session key are both strings
+ * and nothing else stops one from spelling the other. The session half is
+ * `sessionRefKey`, the one encoding of a session as a string.
+ */
 function clientKeyOf(target: ClientTerminalTarget): string {
   return target.by === 'start'
-    ? `start ${target.startId}`
-    : `session ${target.storeId} ${target.sessionId}`;
+    ? `start\u0000${target.startId}`
+    : `session\u0000${sessionRefKey(target)}`;
 }
 
 /** The same, for the server leg's target, whose start handle is the hub's. */
 function serverKeyOf(target: ServerTerminalTarget): string {
   return target.by === 'start'
-    ? `start ${target.startId}`
-    : `session ${target.storeId} ${target.sessionId}`;
+    ? `start\u0000${target.startId}`
+    : `session\u0000${sessionRefKey(target)}`;
+}
+
+/**
+ * The key an upstream is filed under: one server's name for one terminal.
+ *
+ * Every lookup builds it here, so a subscription, a start that became a
+ * session and a chunk arriving under either name all spell it the same way.
+ */
+function upstreamKeyOf(registrationId: ServerRegistrationId, target: ServerTerminalTarget): string {
+  return `${registrationId}\u0000${serverKeyOf(target)}`;
 }
 
 /**

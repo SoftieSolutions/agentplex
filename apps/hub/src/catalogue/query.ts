@@ -10,11 +10,12 @@ import {
   type NodeId,
   type RefusalCode,
   type ServerRegistrationId,
+  sessionRefKey,
   type SessionRow,
 } from '@agentplex/protocol';
 import { z } from 'zod';
 import type { Queryable } from '../db/database.js';
-import { sessionKey, type SessionProject } from '../fleet-state/fleet-state.js';
+import type { SessionProject } from '../fleet-state/fleet-state.js';
 import { listNodeKinds, listNodes } from './reads.js';
 import { PROJECT_KIND, type TreeNode } from './rows.js';
 
@@ -293,7 +294,10 @@ function resolveAll(
   const sessions = new Map<string, SessionRow>();
   for (const store of context.fleet.stores) {
     for (const row of store.sessions) {
-      sessions.set(refKey(store.storeId, row.descriptor.sessionId), row);
+      sessions.set(
+        sessionRefKey({ storeId: store.storeId, sessionId: row.descriptor.sessionId }),
+        row,
+      );
     }
   }
   const labels = new Map(
@@ -303,9 +307,7 @@ function resolveAll(
   const resolved = new Map<NodeId, Resolved>();
   for (const node of nodes) {
     const session =
-      node.anchor === null
-        ? null
-        : (sessions.get(refKey(node.anchor.storeId, node.anchor.sessionId)) ?? null);
+      node.anchor === null ? null : (sessions.get(sessionRefKey(node.anchor)) ?? null);
     const server = session?.source ?? null;
     const named = nameOf(node, session);
     const projectId = projectAncestorOf(node, byId);
@@ -325,11 +327,6 @@ function resolveAll(
     });
   }
   return resolved;
-}
-
-/** A session ref as one key. JSON, because an opaque id may hold any separator. */
-function refKey(storeId: string, sessionId: string): string {
-  return JSON.stringify([storeId, sessionId]);
 }
 
 /**
@@ -428,7 +425,7 @@ export function sessionProjectsIn(nodes: readonly TreeNode[]): ReadonlyMap<strin
     if (projectId === null) continue;
     const name = byId.get(projectId)?.name ?? null;
     if (name === null) continue;
-    placements.set(sessionKey(node.anchor), { nodeId: projectId, name });
+    placements.set(sessionRefKey(node.anchor), { nodeId: projectId, name });
   }
   return placements;
 }

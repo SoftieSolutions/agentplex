@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { sessionRefSchema, type RefusalCode, type SessionRef } from '@agentplex/protocol';
+import {
+  sessionRefKey,
+  sessionRefSchema,
+  type RefusalCode,
+  type SessionRef,
+} from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
 import type { Database, Queryable } from '../db/database.js';
 
@@ -119,18 +124,6 @@ const storedRowSchema = z.object({
   muted_at: z.int().nonnegative().nullable(),
 });
 
-/**
- * The key both the table and the in-memory map are filed under.
- *
- * JSON rather than a joined string, for the reason the web's render key is
- * JSON: a store id and a session id are opaque, either may contain whatever
- * separator was chosen, and two different sessions colliding on one key would
- * put one session's mute on another.
- */
-function keyOf(ref: SessionRef): string {
-  return JSON.stringify([ref.storeId, ref.sessionId]);
-}
-
 export interface AttentionDependencies {
   readonly database: Database;
   readonly clock: Clock;
@@ -212,10 +205,10 @@ export function createAttention({
    */
   const rows = new Map<string, SessionAttention>();
 
-  const readOf = (ref: SessionRef): SessionAttention => rows.get(keyOf(ref)) ?? UNATTENDED;
+  const readOf = (ref: SessionRef): SessionAttention => rows.get(sessionRefKey(ref)) ?? UNATTENDED;
 
   const record = (ref: SessionRef, attention: SessionAttention): SessionAttention => {
-    rows.set(keyOf(ref), attention);
+    rows.set(sessionRefKey(ref), attention);
     onChanged(ref, attention);
     return attention;
   };
