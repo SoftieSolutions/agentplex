@@ -89,9 +89,8 @@ const EXIT_NO_VERSION = 1;
  * Not `../package.json`, which is this app's own manifest -- the file `bin` is
  * declared in, and the obvious answer. It is also a file that exists only where
  * this repository does: packaging copies `apps/cli/dist` and never the manifest
- * beside it, and the published `files` list does not name it, so on an
- * installed machine that path is an ENOENT and `--version` was a diagnostic and
- * an exit 1 rather than a version. It shipped that way because the one suite
+ * beside it, so on an installed machine that path is an ENOENT and `--version`
+ * was a diagnostic and an exit 1 rather than a version. It shipped that way because the one suite
  * that runs this bin runs it in a checkout, where the file is there.
  *
  * `../../..` is the one expression correct in every home, for the reason every
