@@ -19,14 +19,27 @@ export const INSTALL_SCRIPT = readFileSync(
 /**
  * The value of one `readonly NAME=value` line in the script.
  *
- * Quoted or bare, because the script declares both: a path is
- * `readonly SYSTEM_PREFIX='/opt/agentplex'` and a number is
- * `readonly STOP_TIMEOUT_SECONDS=20`. A constant that stopped being `readonly`
- * fails here rather than silently stop being checked.
+ * Single-quoted, double-quoted or bare, because the script declares all three:
+ * a path is `readonly SYSTEM_PREFIX='/opt/agentplex'`, a URL built from another
+ * constant is `readonly NODE_DIST_URL="https://.../latest-v${NODE_MAJOR}.x"`,
+ * and a number is bare. A double-quoted value is expanded the one way the
+ * script expands it here, `${NAME}` naming another `readonly` constant, and a
+ * `$` left over after that is a shape this does not read, so it fails rather
+ * than hand back text bash would have expanded differently. A constant that
+ * stopped being `readonly` fails here rather than silently stop being checked.
  */
 export function declared(name: string): string {
-  const match = new RegExp(`^readonly ${name}=(?:'([^']*)'|([^'\\s]+))$`, 'm').exec(INSTALL_SCRIPT);
-  const found = match?.[1] ?? match?.[2];
+  const match = new RegExp(`^readonly ${name}=(?:'([^']*)'|"([^"]*)"|([^'"\\s]+))$`, 'm').exec(
+    INSTALL_SCRIPT,
+  );
+  const quoted = match?.[2];
+  const found =
+    quoted === undefined
+      ? (match?.[1] ?? match?.[3])
+      : quoted.replaceAll(/\$\{([A-Z][A-Z0-9_]*)\}/g, (_, other: string) => declared(other));
   expect(found, `install.sh declares no ${name}`).toBeDefined();
+  expect(found, `install.sh declares ${name} with an expansion this does not read`).not.toContain(
+    '$',
+  );
   return found ?? '';
 }

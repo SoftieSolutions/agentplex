@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Installation } from '../../installation/installation.js';
 import { userLayout } from '../../installation/layout.js';
 import { createFakeNetwork } from '../../installation/fake-write-machine.js';
+import { NODE_MAJOR } from '../../installation/node-directory.js';
+import { declared } from '../../installation/test-install-script.js';
 import { NODE_DIST_URL, checkRuntime } from './runtime.js';
 
 /**
@@ -149,5 +151,22 @@ describe('when it cannot be asked', () => {
     );
 
     expect(decided).toMatchObject({ kind: 'unknown' });
+  });
+});
+
+/**
+ * The two runtimes, held together by their constants.
+ *
+ * `install.sh` unpacks a runtime on a machine that has none and this command
+ * replaces it once the bin is there, so each has to be its own code: the one
+ * runs before any Node exists and the other runs on the Node it replaces. What
+ * they cannot differ on is which major that is and where its current release is
+ * named, and this is what holds those to the script's `readonly` lines -- the
+ * URL is double-quoted there, with `${NODE_MAJOR}` inside it.
+ */
+describe('the runtime install.sh unpacks', () => {
+  it('is the major and the release URL the script declares', () => {
+    expect(NODE_MAJOR).toBe(declared('NODE_MAJOR'));
+    expect(NODE_DIST_URL).toBe(declared('NODE_DIST_URL'));
   });
 });
