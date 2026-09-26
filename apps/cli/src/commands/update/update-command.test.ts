@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProgramResolver } from '@agentplex/providers';
+import type { ProcessRunner, ProgramResolver } from '@agentplex/providers';
 import type { ReleaseProtocol } from '@agentplex/release';
 import {
   createFakeProcessRunner,
@@ -24,11 +24,13 @@ import { runUpdateCommand } from './update-command.js';
  * exists to get right -- an unreachable manifest, a compile that would fail, a
  * unit that was already stopped -- cannot be arranged against real ones at all.
  *
- * **The ordering assertions all read one list.** `runner.requests` is every
- * child this run would have started, in order, from `systemctl` through `tar`
- * to `npm` -- so "the runtime moved before the packages", "the command's own
- * package went last" and "only the units that were running came back" are
- * assertions about the sequence of argv that a real run would have produced.
+ * **The ordering assertions all read one list.** `journal` is every child this
+ * run would have started, every download and every change to the disk, in the
+ * one order they happened -- so "the runtime moved before the packages", "every
+ * package staged before any tree moved", "the command's own package went last"
+ * and "only the units that were running came back" are assertions about the
+ * sequence a real run would have produced. `runner.requests` alone would miss
+ * half of it: a swap is renames, and a rename is not a child process.
  */
 
 const HOME = '/home/alice';
@@ -107,6 +109,64 @@ function wholeMachine(): Record<string, string> {
 const OWNED_NPM = `${PREFIX}/node/bin/npm`;
 
 /**
+ * Where that npm says its global config is, asked without `--prefix`.
+ *
+ * `--prefix` would move the answer to `<staging>/etc/npmrc`, a file that does
+ * not exist, and the operator's mirror or proxy would silently stop applying.
+ */
+const GLOBALCONFIG = `${PREFIX}/node/etc/npmrc`;
+const ASK_GLOBALCONFIG = `${OWNED_NPM} config get globalconfig`;
+
+/** The one directory a run downloads into. The fake hands out the same one every time. */
+const WORK = '/tmp/agentplex-update';
+
+const PACKAGES = `${PREFIX}/lib/node_modules/@softiesolutions`;
+
+/** One component's tree under the prefix, as npm lays out a global package. */
+function tree(name: string): string {
+  return `${PACKAGES}/${name}`;
+}
+
+/** The unpack a component's tarball gets, into the staging directory beside its tree. */
+function unpack(component: string, name: string): string {
+  return (
+    `tar -xzf ${WORK}/${component}.tgz -C ${tree(name)}.new ` +
+    '--strip-components=1 --no-same-owner'
+  );
+}
+
+/** The install run in that staging directory, against the shrinkwrap it carries. */
+function npmInstall(name: string): string {
+  return (
+    `${OWNED_NPM} install --prefix ${tree(name)}.new --globalconfig=${GLOBALCONFIG} ` +
+    '--omit=dev --ignore-scripts=false --package-lock=true --no-save ' +
+    '--install-strategy=hoisted --no-audit --no-fund'
+  );
+}
+
+/** The swap that follows once every package in an invocation has staged. */
+function swap(name: string): readonly string[] {
+  return [
+    `rm ${tree(name)}.old`,
+    `mv ${tree(name)} ${tree(name)}.old`,
+    `mv ${tree(name)}.new ${tree(name)}`,
+    `rm ${tree(name)}.old`,
+  ];
+}
+
+const SERVER_TARBALL = `${DOWNLOAD}/server-v1.5.0/agentplex-server.tgz`;
+const CLI_TARBALL = `${DOWNLOAD}/cli-v1.5.0/agentplex.tgz`;
+
+/** Every release tarball any test below moves a machine to. */
+const RELEASES = [
+  SERVER_TARBALL,
+  CLI_TARBALL,
+  `${DOWNLOAD}/hub-v1.3.0/agentplex-hub.tgz`,
+  `${DOWNLOAD}/web-v1.2.0/agentplex-web.tgz`,
+  `${DOWNLOAD}/hub-v1.9.0/agentplex-hub.tgz`,
+];
+
+/**
  * What the release branch is serving, in the shape a release writes.
  *
  * Stated as one release per component and expanded into the `{current,
@@ -154,6 +214,8 @@ interface Run {
   readonly runner: FakeProcessRunner;
   readonly machine: FakeUpdateMachine;
   readonly network: FakeNetwork;
+  /** Every child started, every download and every change to the disk, in order. */
+  readonly journal: readonly string[];
 }
 
 interface World {
@@ -179,6 +241,7 @@ interface World {
 async function run(argv: readonly string[] = [], world: World = {}): Promise<Run> {
   const out: string[] = [];
   const errors: string[] = [];
+  const journal: string[] = [];
   const units = world.units ?? [HUB, SERVER];
   const running = world.running ?? units;
 
@@ -192,10 +255,17 @@ async function run(argv: readonly string[] = [], world: World = {}): Promise<Run
     'systemctl --user start agentplex-hub.service': printed(''),
     'systemctl --user stop agentplex-server.service': printed(''),
     'systemctl --user start agentplex-server.service': printed(''),
+    [ASK_GLOBALCONFIG]: printed(`${GLOBALCONFIG}\n`),
     ...(world.outcomes ?? {}),
   };
 
   const runner = createFakeProcessRunner({ outcomes, fallback: printed('') });
+  const journaled: ProcessRunner = {
+    run: async (request) => {
+      journal.push([request.file, ...request.args].join(' '));
+      return runner.run(request);
+    },
+  };
   const present = new Set(['systemctl']);
   if (world.toolchain ?? true) {
     present.add('python3');
@@ -223,6 +293,7 @@ async function run(argv: readonly string[] = [], world: World = {}): Promise<Run
     ...(world.unwritable === undefined ? {} : { unwritable: world.unwritable }),
     ...(world.unremovable === undefined ? {} : { unremovable: world.unremovable }),
     ...(world.refusedRenames === undefined ? {} : { refusedRenames: world.refusedRenames }),
+    journal,
   });
 
   const network = createFakeNetwork({
@@ -231,17 +302,22 @@ async function run(argv: readonly string[] = [], world: World = {}): Promise<Run
       ...(world.sums === null ? {} : { [SUMS]: world.sums ?? CHECKSUMS }),
       ...(world.served ?? {}),
     },
-    downloadable: world.downloadable ?? [NODE_ARCHIVE],
+    downloadable: world.downloadable ?? [NODE_ARCHIVE, ...RELEASES],
   });
 
   const code = await runUpdateCommand(argv, {
     home: HOME,
     machine,
-    systemd: createSystemd({ runner, programs }),
-    runner,
+    systemd: createSystemd({ runner: journaled, programs }),
+    runner: journaled,
     programs,
     reader: network,
-    downloader: network,
+    downloader: {
+      download: async (url, path) => {
+        journal.push(`download ${url} -> ${path}`);
+        return network.download(url, path);
+      },
+    },
     source: { kind: 'url', url: VERSIONS_URL },
     cacheFile: world.cacheFile === undefined ? CACHE : world.cacheFile,
     now: () => NOW,
@@ -251,7 +327,15 @@ async function run(argv: readonly string[] = [], world: World = {}): Promise<Run
     writeError: (line) => errors.push(line),
   });
 
-  return { code, out: out.join('\n'), errors: errors.join('\n'), runner, machine, network };
+  return {
+    code,
+    out: out.join('\n'),
+    errors: errors.join('\n'),
+    runner,
+    machine,
+    network,
+    journal,
+  };
 }
 
 /** Every child this run would have started, as one line each, in order. */
@@ -270,18 +354,92 @@ describe('the order things happen in', () => {
     const updated = await run(['--node']);
 
     expect(updated.code).toBe(0);
-    const acts = spawned(updated.runner).filter(
-      (line) => !line.includes('show') && !line.includes('daemon-reload'),
+    const acts = updated.journal.filter(
+      (line) =>
+        !line.includes(' show ') && !line.includes('daemon-reload') && !line.includes('/.cache/'),
     );
     expect(acts).toEqual([
+      // Asked before anything is stopped: an npm that cannot answer this is an
+      // npm that would not install anything either.
+      ASK_GLOBALCONFIG,
       `systemctl --user stop ${HUB} ${SERVER}`,
-      `tar -xzf /tmp/agentplex-update/node.tar.gz -C ${PREFIX}/node.new --strip-components=1 --no-same-owner`,
-      `${OWNED_NPM} install --global --prefix ${PREFIX} --ignore-scripts=false ` +
-        `${DOWNLOAD}/server-v1.5.0/agentplex-server.tgz`,
-      `${OWNED_NPM} install --global --prefix ${PREFIX} --ignore-scripts=false ` +
-        `${DOWNLOAD}/cli-v1.5.0/agentplex.tgz`,
+      // The runtime first: npm is about to build an addon against it.
+      `download ${NODE_ARCHIVE} -> ${WORK}/node.tar.gz`,
+      `rm ${PREFIX}/node.old`,
+      `rm ${PREFIX}/node.new`,
+      `mkdir ${PREFIX}/node.new`,
+      `tar -xzf ${WORK}/node.tar.gz -C ${PREFIX}/node.new --strip-components=1 --no-same-owner`,
+      `write ${PREFIX}/node.new/.agentplex-node-version`,
+      `mv ${PREFIX}/node ${PREFIX}/node.old`,
+      `mv ${PREFIX}/node.new ${PREFIX}/node`,
+      `rm ${PREFIX}/node.old`,
+      `rm ${WORK}`,
+      // The others, as one staged set: downloaded, unpacked beside the tree and
+      // installed against the shrinkwrap it carries, and only then moved in.
+      `download ${SERVER_TARBALL} -> ${WORK}/server.tgz`,
+      `rm ${tree('agentplex-server')}.new`,
+      `mkdir ${tree('agentplex-server')}.new`,
+      unpack('server', 'agentplex-server'),
+      npmInstall('agentplex-server'),
+      ...swap('agentplex-server'),
+      // Then the command's own package, last, and the link npm used to make.
+      `download ${CLI_TARBALL} -> ${WORK}/cli.tgz`,
+      `rm ${tree('agentplex')}.new`,
+      `mkdir ${tree('agentplex')}.new`,
+      unpack('cli', 'agentplex'),
+      npmInstall('agentplex'),
+      ...swap('agentplex'),
+      `mkdir ${PREFIX}/bin`,
+      `chmod 0755 ${tree('agentplex')}/apps/cli/dist/main.js`,
+      `link ../lib/node_modules/@softiesolutions/agentplex/apps/cli/dist/main.js ${PREFIX}/bin/agentplex`,
+      `rm ${WORK}`,
       `systemctl --user start ${HUB} ${SERVER}`,
     ]);
+  });
+
+  /**
+   * All or nothing is about a set, so it has to be seen on one: a hub and its
+   * client both staged before either tree moves, because a hub whose client
+   * failed to install is a hub serving 503.
+   */
+  it('stages every package of an invocation before it moves any tree', async () => {
+    const clientMoved = { client: 4, server: 3 };
+    const updated = await run(['hub', 'web', '--no-node'], {
+      served: {
+        [VERSIONS_URL]: published({
+          hub: { version: '1.3.0', protocol: clientMoved },
+          web: { version: '1.2.0', protocol: clientMoved },
+        }),
+      },
+    });
+
+    expect(updated.code).toBe(0);
+    const installed = updated.journal.indexOf(npmInstall('agentplex-web'));
+    const firstMove = updated.journal.findIndex((line) => line.startsWith('mv '));
+    expect(updated.journal.indexOf(npmInstall('agentplex-hub'))).toBeGreaterThan(-1);
+    expect(installed).toBeGreaterThan(-1);
+    expect(firstMove).toBeGreaterThan(installed);
+    expect(updated.journal.filter((line) => line.startsWith('mv '))).toEqual([
+      `mv ${tree('agentplex-hub')} ${tree('agentplex-hub')}.old`,
+      `mv ${tree('agentplex-hub')}.new ${tree('agentplex-hub')}`,
+      `mv ${tree('agentplex-web')} ${tree('agentplex-web')}.old`,
+      `mv ${tree('agentplex-web')}.new ${tree('agentplex-web')}`,
+    ]);
+    // No command package moved, so there is no link to remake.
+    expect(updated.journal.join('\n')).not.toContain('link ');
+  });
+
+  /**
+   * Nothing here is a global install. `npm install --global <tarball>` is the
+   * one form that ignores the packed shrinkwrap and resolves every range fresh
+   * against whatever the registry calls newest that day.
+   */
+  it('never hands npm --global', async () => {
+    const updated = await run(['--node']);
+
+    expect(updated.code).toBe(0);
+    expect(updated.runner.requests.length).toBeGreaterThan(0);
+    for (const request of updated.runner.requests) expect(request.args).not.toContain('--global');
   });
 
   /**
@@ -386,7 +544,7 @@ describe('what the manifest says', () => {
     });
 
     expect(updated.out).toContain('ahead of 1.5.0');
-    expect(spawned(updated.runner).join('\n')).not.toContain('cli-v');
+    expect(updated.journal.join('\n')).not.toContain('cli-v');
   });
 
   /**
@@ -428,10 +586,10 @@ describe('what the manifest says', () => {
     });
 
     expect(updated.out).not.toContain('do not agree');
-    const npm = spawned(updated.runner).join('\n');
-    expect(npm).toContain('hub-v1.3.0');
-    expect(npm).toContain('web-v1.2.0');
-    expect(npm).not.toContain('server-v');
+    const journal = updated.journal.join('\n');
+    expect(journal).toContain('hub-v1.3.0');
+    expect(journal).toContain('web-v1.2.0');
+    expect(journal).not.toContain('server-v');
   });
 
   /** And the hub alone across that change is refused: its client would still be the old one. */
@@ -454,10 +612,10 @@ describe('what was asked for', () => {
   it('updates only the component that was named', async () => {
     const updated = await run(['cli', '--no-node']);
 
-    const npm = spawned(updated.runner).filter((line) => line.includes('npm'));
-    expect(npm).toHaveLength(1);
-    expect(npm[0]).toContain('cli-v1.5.0');
-    expect(npm[0]).not.toContain('server-v');
+    const downloads = updated.journal.filter((line) => line.startsWith('download '));
+    expect(downloads).toEqual([`download ${CLI_TARBALL} -> ${WORK}/cli.tgz`]);
+    const installs = spawned(updated.runner).filter((line) => line.includes(' install '));
+    expect(installs).toEqual([npmInstall('agentplex')]);
   });
 
   /**
@@ -478,9 +636,10 @@ describe('what was asked for', () => {
   it('installs the exact release a pin names', async () => {
     const updated = await run(['hub@1.9.0', '--no-node']);
 
-    expect(spawned(updated.runner).join('\n')).toContain(
-      `${DOWNLOAD}/hub-v1.9.0/agentplex-hub.tgz`,
+    expect(updated.journal).toContain(
+      `download ${DOWNLOAD}/hub-v1.9.0/agentplex-hub.tgz -> ${WORK}/hub.tgz`,
     );
+    expect(spawned(updated.runner)).toContain(npmInstall('agentplex-hub'));
   });
 });
 
@@ -534,16 +693,43 @@ describe('--dry-run', () => {
     expect(planned.out).toContain('Nothing has been changed.');
     expect(spawned(planned.runner).join('\n')).not.toContain('npm');
     expect(spawned(planned.runner).join('\n')).not.toContain('tar');
+    expect(planned.journal.join('\n')).not.toContain('download');
+  });
+
+  /**
+   * What a real run does, described as that: a download, an unpack beside the
+   * tree, an install against the shrinkwrap it carries and a move into place.
+   * Not `npm install <url>`, which is a command this no longer runs and one
+   * that would ignore the shrinkwrap if somebody copied it out of the plan.
+   */
+  it('describes the download, the unpack, the install and the move', async () => {
+    const planned = await run(['--dry-run', '--no-node']);
+
+    expect(planned.code).toBe(0);
+    const server = tree('agentplex-server');
+    expect(planned.out).toContain(`download ${SERVER_TARBALL}`);
+    expect(planned.out).toContain(`unpack it into ${server}.new`);
+    expect(planned.out).toContain('npm install --omit=dev there');
+    expect(planned.out).toContain('npm-shrinkwrap.json');
+    expect(planned.out).toContain(`move ${server}.new into place as ${server}`);
+    expect(planned.out).toContain(`${PREFIX}/bin/agentplex`);
+    expect(planned.out).toContain('staged together, so this machine gets the set or none of it');
+    expect(planned.out).not.toMatch(/npm install https:/);
+    // The server is described before the command, which goes last.
+    expect(planned.out.indexOf(SERVER_TARBALL)).toBeLessThan(planned.out.indexOf(CLI_TARBALL));
   });
 });
 
 describe('the runtime', () => {
+  /** The runtime's unpack, told apart from a package's. */
+  const RUNTIME_UNPACK = `tar -xzf ${WORK}/node.tar.gz`;
+
   it('replaces it when the flag says so, and leaves it when the flag says not', async () => {
     const yes = await run(['--node']);
     const no = await run(['--no-node']);
 
-    expect(spawned(yes.runner).join('\n')).toContain('tar -xzf');
-    expect(spawned(no.runner).join('\n')).not.toContain('tar -xzf');
+    expect(spawned(yes.runner).join('\n')).toContain(RUNTIME_UNPACK);
+    expect(spawned(no.runner).join('\n')).not.toContain(RUNTIME_UNPACK);
     expect(no.out).toContain('left alone (--no-node)');
   });
 
@@ -552,8 +738,8 @@ describe('the runtime', () => {
     const no = await run([], { answer: 'no' });
 
     expect(yes.machine.questions[0]).toContain('v24.9.0 with v24.10.0');
-    expect(spawned(yes.runner).join('\n')).toContain('tar -xzf');
-    expect(spawned(no.runner).join('\n')).not.toContain('tar -xzf');
+    expect(spawned(yes.runner).join('\n')).toContain(RUNTIME_UNPACK);
+    expect(spawned(no.runner).join('\n')).not.toContain(RUNTIME_UNPACK);
   });
 
   /** Silence is not consent, and the line names the flag that answers in advance. */
@@ -562,7 +748,7 @@ describe('the runtime', () => {
 
     expect(unattended.out).toContain('nobody to ask');
     expect(unattended.out).toContain('--node');
-    expect(spawned(unattended.runner).join('\n')).not.toContain('tar -xzf');
+    expect(spawned(unattended.runner).join('\n')).not.toContain(RUNTIME_UNPACK);
     // The packages still move: a runtime nobody consented to is not a reason to
     // leave this machine on an old hub.
     expect(spawned(unattended.runner).join('\n')).toContain('npm install');
@@ -583,7 +769,7 @@ describe('the runtime', () => {
     const updated = await run(['--node'], { sums: null });
 
     expect(updated.out).toContain('whether a newer one exists is unknown');
-    expect(spawned(updated.runner).join('\n')).not.toContain('tar -xzf');
+    expect(spawned(updated.runner).join('\n')).not.toContain(RUNTIME_UNPACK);
   });
 
   /**
@@ -596,7 +782,7 @@ describe('the runtime', () => {
 
     expect(updated.code).toBe(1);
     expect(updated.out).toContain('hashed to');
-    expect(spawned(updated.runner).join('\n')).not.toContain('tar -xzf');
+    expect(spawned(updated.runner).join('\n')).not.toContain(RUNTIME_UNPACK);
     // And the units it stopped are running again: what is on this disk is what
     // was running a moment ago.
     expect(spawned(updated.runner).join('\n')).toContain(`systemctl --user start ${HUB}`);
@@ -718,17 +904,140 @@ describe('the preflight', () => {
 });
 
 describe('when something fails part way', () => {
+  /**
+   * A refused install costs its staging and nothing else: no tree has moved,
+   * so the units come back on exactly what they were running, and the line
+   * that says why is npm's own.
+   */
   it('starts the units again when npm refuses, and says what npm said', async () => {
     const failed = await run(['--no-node'], {
       outcomes: {
-        [`${OWNED_NPM} install --global --prefix ${PREFIX} --ignore-scripts=false ` +
-        `${DOWNLOAD}/server-v1.5.0/agentplex-server.tgz`]: refused(1, 'gyp ERR! build error'),
+        [npmInstall('agentplex-server')]: refused(1, 'npm error\ngyp ERR! build error'),
       },
     });
 
     expect(failed.code).toBe(1);
     expect(failed.out).toContain('gyp ERR! build error');
-    expect(spawned(failed.runner).join('\n')).toContain(`systemctl --user start ${HUB}`);
+    const acts = failed.machine.acts;
+    expect(acts.filter((act) => act.startsWith('mv '))).toEqual([]);
+    expect(acts.at(-2)).toBe(`rm ${tree('agentplex-server')}.new`);
+    // The command's own package was never staged: the set before it failed.
+    expect(failed.journal.join('\n')).not.toContain(CLI_TARBALL);
+    expect(acts.join('\n')).not.toContain(`${tree('agentplex')}.new`);
+    expect(spawned(failed.runner)).toContain(`systemctl --user start ${HUB} ${SERVER}`);
+  });
+
+  /** Every package of a set, including the ones that had already installed. */
+  it('removes every staged package of the set when one of them is refused', async () => {
+    const clientMoved = { client: 4, server: 3 };
+    const failed = await run(['hub', 'web', '--no-node'], {
+      served: {
+        [VERSIONS_URL]: published({
+          hub: { version: '1.3.0', protocol: clientMoved },
+          web: { version: '1.2.0', protocol: clientMoved },
+        }),
+      },
+      outcomes: { [npmInstall('agentplex-web')]: refused(1, 'npm error code ETARGET') },
+    });
+
+    expect(failed.code).toBe(1);
+    expect(failed.out).toContain('npm error code ETARGET');
+    const acts = failed.machine.acts;
+    expect(acts.filter((act) => act.startsWith('mv '))).toEqual([]);
+    expect(acts).toContain(`rm ${tree('agentplex-hub')}.new`);
+    expect(acts.lastIndexOf(`rm ${tree('agentplex-hub')}.new`)).toBeGreaterThan(
+      acts.indexOf(`mkdir ${tree('agentplex-web')}.new`),
+    );
+    expect(acts.lastIndexOf(`rm ${tree('agentplex-web')}.new`)).toBeGreaterThan(
+      acts.indexOf(`mkdir ${tree('agentplex-web')}.new`),
+    );
+  });
+
+  /**
+   * A download that fails costs the fetch. Nothing has been unpacked, so
+   * there is nothing to take back, and the line names the URL that failed.
+   */
+  it('names the URL that would not download and stages nothing', async () => {
+    const failed = await run(['--no-node'], { downloadable: [NODE_ARCHIVE] });
+
+    expect(failed.code).toBe(1);
+    expect(failed.out).toContain(SERVER_TARBALL);
+    expect(spawned(failed.runner).join('\n')).not.toContain('tar -xzf');
+    expect(spawned(failed.runner).join('\n')).not.toContain(' install ');
+    expect(failed.machine.acts.join('\n')).not.toContain('.new');
+    expect(spawned(failed.runner)).toContain(`systemctl --user start ${HUB} ${SERVER}`);
+  });
+
+  /**
+   * An archive that will not unpack is refused before npm is asked anything,
+   * and the staging directory it was going into is taken back.
+   */
+  it('takes back the staging directory when the archive will not unpack', async () => {
+    const failed = await run(['--no-node'], {
+      outcomes: {
+        [unpack('server', 'agentplex-server')]: refused(2, 'gzip: stdin: not in gzip format'),
+      },
+    });
+
+    expect(failed.code).toBe(1);
+    expect(failed.out).toContain('not in gzip format');
+    expect(spawned(failed.runner).join('\n')).not.toContain(' install ');
+    expect(failed.machine.acts.at(-2)).toBe(`rm ${tree('agentplex-server')}.new`);
+  });
+
+  /**
+   * The move is two renames per package, and the second failing is undone by
+   * a third: the tree that was set aside goes back, so the units restart on
+   * what they ran before.
+   */
+  it('puts a tree back when its new one will not move into place', async () => {
+    const server = tree('agentplex-server');
+    const failed = await run(['--no-node'], {
+      refusedRenames: { [`${server}.new -> ${server}`]: 'EXDEV: cross-device link' },
+    });
+
+    expect(failed.code).toBe(1);
+    expect(failed.out).toContain('EXDEV: cross-device link');
+    const acts = failed.machine.acts;
+    expect(acts).toContain(`mv ${server}.old ${server}`);
+    expect(
+      acts.indexOf(`rm ${server}.new`, acts.indexOf(`mv ${server}.old ${server}`)),
+    ).toBeGreaterThan(-1);
+    expect(failed.machine.contents.has(`${server}/package.json`)).toBe(true);
+    expect(failed.journal.join('\n')).not.toContain(CLI_TARBALL);
+  });
+
+  /**
+   * A run killed between the two renames leaves a package under a name
+   * nothing starts, and no tree where the units look. It goes back before
+   * anything is staged, which is also what stops the swap's first step --
+   * clearing an old tree -- from removing the only copy there is.
+   */
+  it('puts back a package an interrupted run set aside, before it stages anything', async () => {
+    const files = wholeMachine();
+    const hub = tree('agentplex-hub');
+    files[`${hub}.old/package.json`] = files[`${hub}/package.json`] ?? '';
+    delete files[`${hub}/package.json`];
+
+    const updated = await run(['--no-node'], { files });
+
+    expect(updated.code).toBe(0);
+    expect(updated.out).toContain(`restored ${hub}`);
+    const acts = updated.machine.acts;
+    expect(acts.indexOf(`mv ${hub}.old ${hub}`)).toBeLessThan(
+      acts.indexOf(`mkdir ${tree('agentplex-server')}.new`),
+    );
+    expect(updated.machine.contents.has(`${hub}/package.json`)).toBe(true);
+  });
+
+  it('refuses, having stopped nothing, when npm cannot say where its global config is', async () => {
+    const failed = await run(['--no-node'], {
+      outcomes: { [ASK_GLOBALCONFIG]: refused(1, 'npm error could not read config') },
+    });
+
+    expect(failed.code).toBe(1);
+    expect(failed.out).toContain('npm error could not read config');
+    expect(spawned(failed.runner).join('\n')).not.toContain('stop');
   });
 
   it('refuses when there is no npm at all, having changed nothing', async () => {

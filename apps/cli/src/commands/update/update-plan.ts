@@ -4,7 +4,12 @@ import {
   type ReleaseProtocol,
   type VersionsManifest,
 } from '@agentplex/release';
-import { COMPONENTS, releaseUrl, type Component } from '../../installation/components.js';
+import {
+  COMPONENTS,
+  COMPONENT_PACKAGES,
+  releaseUrl,
+  type Component,
+} from '../../installation/components.js';
 import {
   legDisagreements,
   type Installation,
@@ -24,20 +29,19 @@ import type { AskedComponent } from './update-flags.js';
  * ## The one that is not obvious: the command updates itself last
  *
  * `update` runs out of the CLI's own package and overwrites it. Modules already
- * loaded are safe -- Node has read them -- but anything imported *after* npm
- * has replaced the tree is not, and the subcommands here are deliberately lazy
- * imports. So the plan puts the CLI's own package in an npm invocation of its
- * own, after every other package, and the flow resolves everything it needs
- * before the first one runs. A single invocation carrying all four would work
- * exactly until the first time this command needed a module it had not loaded
- * yet, and the failure would be a half-updated machine reporting a module
- * resolution error.
+ * loaded are safe -- Node has read them -- but anything imported *after* the
+ * tree has been moved is not, and the subcommands here are deliberately lazy
+ * imports. So the plan puts the CLI's own package in an install of its own,
+ * after every other package, and the flow resolves everything it needs before
+ * the first one runs. One install carrying all four would work exactly until
+ * the first time this command needed a module it had not loaded yet, and the
+ * failure would be a half-updated machine reporting a module resolution error.
  *
- * Everything else is one invocation, which is `install.sh`'s rule and its
- * reason: npm resolves a set together, so a machine ends up with the set or
- * with none of it -- and a hub whose client package failed is a hub serving
- * 503, which is worse to arrive at halfway through a loop than at a failed
- * command.
+ * Everything else is one install, which is `install.sh`'s rule and its reason:
+ * every package of it is staged beside its tree before any tree is moved, so a
+ * machine ends up with the set or with none of it -- and a hub whose client
+ * package failed is a hub serving 503, which is worse to arrive at halfway
+ * through a loop than at a failed command.
  */
 
 /** What would happen to one component. */
@@ -70,14 +74,23 @@ export type ComponentAction =
   /** Not installed here. A hub machine has no server, and that is not a fault. */
   | 'absent';
 
-/** One npm invocation, in the order the flow runs them. */
+/**
+ * One set of packages staged together and then moved into place, in the order
+ * the flow runs them.
+ */
 export interface PackageInstall {
-  /** The tarball URLs npm is handed, as one resolution. */
-  readonly specs: readonly string[];
-  /** The components those URLs carry, for the line that announces it. */
-  readonly components: readonly Component[];
-  /** Why this is an invocation of its own. */
+  /** In the order they are staged and moved. */
+  readonly packages: readonly PackageTarball[];
+  /** Why this is an install of its own. */
   readonly reason: string;
+}
+
+/** One component's package, and the tarball a release publishes it as. */
+export interface PackageTarball {
+  readonly component: Component;
+  /** The package's name, which is also its directory under `lib/node_modules`. */
+  readonly package: string;
+  readonly url: string;
 }
 
 export interface UpdatePlan {
@@ -119,22 +132,24 @@ export function planUpdate({ installation, manifest, problem, asked }: PlanInput
     planComponent(component, installation, manifest, problem, asked.length === 0, wanted),
   );
 
-  const moving = components.filter((one) => one.action === 'update' && one.url !== null);
+  const moving = components.flatMap((one): PackageTarball[] =>
+    one.action === 'update' && one.url !== null
+      ? [{ component: one.component, package: COMPONENT_PACKAGES[one.component], url: one.url }]
+      : [],
+  );
   const others = moving.filter((one) => one.component !== SELF);
   const self = moving.filter((one) => one.component === SELF);
 
   const installs: PackageInstall[] = [];
   if (others.length > 0) {
     installs.push({
-      specs: others.map((one) => one.url ?? ''),
-      components: others.map((one) => one.component),
-      reason: 'npm resolves these together, so this machine gets the set or none of it',
+      packages: others,
+      reason: 'staged together, so this machine gets the set or none of it',
     });
   }
   if (self.length > 0) {
     installs.push({
-      specs: self.map((one) => one.url ?? ''),
-      components: self.map((one) => one.component),
+      packages: self,
       reason: 'last, because this command is running out of the package it replaces',
     });
   }

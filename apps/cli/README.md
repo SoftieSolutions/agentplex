@@ -210,11 +210,26 @@ unusual one, produces an install that reports success and leaves node-pty as
 source that cannot load, and then the server fails to start with a module
 error rather than anything about a pty.
 
-Override it:
+`install.sh` and `agentplex update` both override it, and neither installs
+with `npm install --global`: each unpacks the release tarball beside the tree
+it replaces and installs its dependencies there, against the
+`npm-shrinkwrap.json` it carries, so a machine gets the versions the release
+was tested with rather than whatever the registry calls newest that day. To do
+the same by hand, for the server package:
 
 ```sh
-npm install --global --ignore-scripts=false <the release URL above>
+tree="$PREFIX/lib/node_modules/@softiesolutions/agentplex-server"
+mkdir -p "$tree.new"
+tar -xzf agentplex-server.tgz -C "$tree.new" --strip-components=1 --no-same-owner
+(cd / && npm install --prefix "$tree.new" \
+  --globalconfig="$(cd / && npm config get globalconfig)" \
+  --omit=dev --ignore-scripts=false --package-lock=true --no-save \
+  --install-strategy=hoisted --no-audit --no-fund)
 ```
+
+then move `$tree.new` into place as `$tree`. `--globalconfig` is there because
+`--prefix` would otherwise hide your global npmrc, and `--package-lock=true`
+because `package-lock=false` in an npmrc makes npm ignore the shrinkwrap.
 
 Two scripts run under that flag, and they are the whole of what this package
 executes at install time:

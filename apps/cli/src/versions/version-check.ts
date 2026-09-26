@@ -117,7 +117,7 @@ export interface VersionCheckDependencies {
  *
  * Parsed and not read: this file comes off the network, or off a branch anybody
  * with write access can push to, and what an installed machine does with it is
- * hand npm a URL built out of it. A version that is not a version stops here
+ * download a URL built out of it. A version that is not a version stops here
  * rather than becoming a 404 halfway through an update that has already stopped
  * the daemons. The schema is the one the release job writes through, from
  * `@agentplex/release`, so the two cannot disagree about what a manifest is.
