@@ -216,6 +216,7 @@ export {
   serverIdSchema,
   serverRegistrationIdSchema,
   sessionIdSchema,
+  sessionRefKey,
   sessionRefSchema,
   startIdSchema,
   storeDescriptorSchema,
