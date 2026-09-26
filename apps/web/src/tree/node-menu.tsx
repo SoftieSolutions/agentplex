@@ -94,7 +94,7 @@ export function NodeMenu({
           <Button
             size="compact-xs"
             variant="subtle"
-            color="gray"
+            color={colorForRole('textMuted', scheme)}
             aria-label={`Actions for ${name}`}
           >
             {'...'}
