@@ -1,8 +1,14 @@
-import { open, readdir, readFile } from 'node:fs/promises';
+import { open, readdir, readFile, stat } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { errnoCode } from '@agentplex/node-shared';
 import type { FileRead } from './store-identity.js';
-import type { DirectoryEntry, DirectoryRead, ProviderFiles, TailRead } from './provider-files.js';
+import type {
+  DirectoryEntry,
+  DirectoryRead,
+  FileStatRead,
+  ProviderFiles,
+  TailRead,
+} from './provider-files.js';
 
 /**
  * The real store volume as an adapter sees it: reads and listings, no writes.
@@ -35,6 +41,19 @@ export const nodeProviderFiles: ProviderFiles = {
     } catch (error) {
       // ENOTDIR joins ENOENT: a plain file where a provider's directory should
       // be is that provider not being in this store, not a broken store.
+      return missingOrFailed(error, 'ENOTDIR');
+    }
+  },
+
+  async stat(path: string): Promise<FileStatRead> {
+    try {
+      // Followed rather than `lstat`, so the stamp is of the bytes `readFile`
+      // would read. Discovery never gets here with a link anyway: a listing
+      // reports one as `other`, and only `file` entries are looked at.
+      const { size, mtimeMs } = await stat(path);
+      return { kind: 'read', size, mtimeMs };
+    } catch (error) {
+      // ENOTDIR joins ENOENT for the reason it does in `listDirectory`.
       return missingOrFailed(error, 'ENOTDIR');
     }
   },
