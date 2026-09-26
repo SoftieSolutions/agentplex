@@ -24,15 +24,16 @@ import type { ManifestRead, ManifestReader, ManifestSource } from './version-che
  * a terminal somebody eventually interrupts -- possibly between the units being
  * stopped and the packages being installed.
  *
- * The archive gets longer, because it is fifty megabytes and the machine
- * downloading it may be a small instance on a bad link. It is still bounded:
- * an update that has stopped the daemons must not be able to wait for ever.
+ * A download gets longer, because a Node archive is fifty megabytes and the
+ * machine downloading it may be a small instance on a bad link. It is still
+ * bounded: an update that has stopped the daemons must not be able to wait for
+ * ever.
  */
 
 /** A manifest or a checksum file: small, and read before anything is decided. */
 const TEXT_TIMEOUT_MS = 15_000;
 
-/** A Node release archive. */
+/** A Node release archive, or one of the packages' release tarballs. */
 const ARCHIVE_TIMEOUT_MS = 300_000;
 
 /**
@@ -99,11 +100,12 @@ export const nodeNetwork: ManifestReader & Downloader = {
    * A file, written whole.
    *
    * Buffered rather than streamed to disk, which is a deliberate limit and not
-   * an oversight: the one thing downloaded here is a Node release archive of
-   * around fifty megabytes, it is verified against a checksum before anything
-   * is done with it, and a partial file on disk is exactly what a streamed
-   * write leaves behind when a connection drops. Holding it and writing it once
-   * means the file either is the download or is not there.
+   * an oversight: the largest thing downloaded here is a Node release archive
+   * of around fifty megabytes -- the packages' tarballs are a few megabytes
+   * each -- and a partial file on disk is exactly what a streamed write leaves
+   * behind when a connection drops. Holding it and writing it once means the
+   * file either is the download or is not there, so a tarball that did not
+   * arrive whole is never the one unpacked.
    */
   async download(url: string, path: string): Promise<FileOutcome> {
     const insecure = refuseInsecure(url);
