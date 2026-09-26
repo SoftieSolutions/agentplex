@@ -344,10 +344,13 @@ either leg or both. `packages/protocol/src/wire-shape.test.ts` renders each
 leg's schemas to JSON Schema and compares them with
 `wire-shape/<leg>-leg.v<version>.json`: change a shape without a bump and the
 file for the current number no longer matches; bump without committing the new
-file and CI fails, because vitest writes a missing file snapshot only when `CI`
-is unset (the check containers are handed `CI` for exactly this). Run the suite
-locally after the bump to write the new file, commit it, and delete the old one
-by hand: `toMatchFileSnapshot` never reports an obsolete file. What the guard
+file and the test fails, because it checks through `import.meta.glob` that the
+file was there before the run rather than trusting vitest, which writes a
+missing file snapshot and passes whenever `CI` is unset -- as it is in the check
+containers, where handing pnpm `CI` makes it write its store and trips the write
+guard. The first run after a bump writes the new file and fails naming it;
+commit it and delete the old one by hand: `toMatchFileSnapshot` never reports an
+obsolete file. What the guard
 cannot see is logic inside a `.refine` or `.transform`, which JSON Schema has no
 way to say; a change there needs the bump without the guard's help.
 

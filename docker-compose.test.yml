@@ -54,21 +54,11 @@ name: agentplex-test
 # is still one of those. The `-f` is load-bearing. Without it the command
 # resolves to docker-compose.yml instead, and stops the hub and removes its
 # image.
-#
-# `CI` is passed through, and only that. Vitest decides whether a missing
-# snapshot may be written by reading it: unset, a snapshot that does not exist
-# yet is written and the test passes; set, it fails. The wire-shape guard in
-# `packages/protocol` depends on the second behaviour -- a protocol bump without
-# its committed snapshot has to fail in CI -- and a container that dropped the
-# runner's `CI` would quietly write the file it was meant to demand. Empty on a
-# laptop, which vitest reads as unset.
 x-checks: &checks
   build:
     context: .
     target: build
   image: ${COMPOSE_PROJECT_NAME:-agentplex-test}-checks
-  environment:
-    CI: ${CI:-}
 
 services:
   # The whole set in one container, still. CI no longer runs this, but it is
