@@ -1,17 +1,18 @@
-import type {
-  Activity,
-  ApprovalId,
-  MachineState,
-  NodeId,
-  PendingApproval,
-  Provider,
-  ServerRegistrationId,
-  SessionHolder,
-  SessionRef,
-  SessionRow,
-  SessionStatus,
-  StoreId,
-  ApprovalSubject,
+import {
+  sessionRefKey,
+  type Activity,
+  type ApprovalId,
+  type MachineState,
+  type NodeId,
+  type PendingApproval,
+  type Provider,
+  type ServerRegistrationId,
+  type SessionHolder,
+  type SessionRef,
+  type SessionRow,
+  type SessionStatus,
+  type StoreId,
+  type ApprovalSubject,
 } from '@agentplex/protocol';
 import { activityWordsText } from '../activity/activity-words.js';
 import { destinationHash } from '../shell/destinations.js';
@@ -468,7 +469,7 @@ export function listSessions(state: MachineState): readonly SessionListItem[] {
       const ref = { storeId: descriptor.storeId, sessionId: descriptor.sessionId };
       items.push({
         ref,
-        key: JSON.stringify([descriptor.storeId, descriptor.sessionId]),
+        key: sessionRefKey(ref),
         name: descriptor.title ?? descriptor.sessionId,
         provider: descriptor.provider,
         status: descriptor.status,

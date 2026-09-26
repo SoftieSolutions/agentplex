@@ -6,6 +6,7 @@ import {
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
+  sessionRefKey,
   type ClientFrame,
   type MachineState,
 } from '@agentplex/protocol';
@@ -453,10 +454,10 @@ describe('the attention bell', () => {
     expect(
       sentFrames(socket)
         .filter((frame) => frame.type === 'session-acknowledge')
-        .map((frame) => `${frame.storeId}/${frame.sessionId}`),
+        .map((frame) => sessionRefKey(frame)),
     ).toEqual(
       twoWaiting.needsYou.map((row) =>
-        row.kind === 'session' ? `${row.item.ref.storeId}/${row.item.ref.sessionId}` : row.key,
+        row.kind === 'session' ? sessionRefKey(row.item.ref) : row.key,
       ),
     );
     // Muting is a per-session decision, and marking read is not a way to make
@@ -481,10 +482,10 @@ describe('the attention bell', () => {
     );
     expect(muted.length).toBeGreaterThan(0);
     const reached = sentFrames(socket).map((frame) =>
-      frame.type === 'session-acknowledge' ? `${frame.storeId}/${frame.sessionId}` : '',
+      frame.type === 'session-acknowledge' ? sessionRefKey(frame) : '',
     );
     for (const item of muted) {
-      expect(reached).not.toContain(`${item.ref.storeId}/${item.ref.sessionId}`);
+      expect(reached).not.toContain(sessionRefKey(item.ref));
     }
     expect(sentFrames(socket).filter((frame) => frame.type === 'session-mute')).toEqual([]);
   });

@@ -1,4 +1,4 @@
-import type { CatalogueItem, CatalogueQuery } from '@agentplex/protocol';
+import { sessionRefKey, type CatalogueItem, type CatalogueQuery } from '@agentplex/protocol';
 import {
   queryFor,
   withFilter,
@@ -290,7 +290,7 @@ function resultFor(item: CatalogueItem): PaletteResult | null {
       // `session-list-model.ts`'s key, so a session the client also holds
       // arrives here under the id the client-held half already gave it and the
       // dialog can drop the duplicate by id.
-      id: `session:${JSON.stringify([anchor.storeId, anchor.sessionId])}`,
+      id: `session:${sessionRefKey(anchor)}`,
       // The item's own kind, which `SESSION_KIND` is what it was matched
       // against: a row carries the hub's string rather than a second spelling
       // of it, so the dialog's heading for a kind is the kind the hub named.
