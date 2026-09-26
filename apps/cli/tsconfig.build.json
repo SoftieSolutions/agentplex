@@ -2,6 +2,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
+    // Emitting, so off again: the one module that needs it is a test's import.
+    "allowImportingTsExtensions": false,
     "declaration": true,
     "declarationMap": true,
     "rootDir": "src",
