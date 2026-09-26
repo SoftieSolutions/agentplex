@@ -65,6 +65,9 @@ function dependencies(
         environment: {},
       }),
       clock: { now: () => 1_756_000_000_000 },
+      // Its own, never the runtime's: the kill grace is not one of the timers
+      // this file counts.
+      timers: createFakeTimers(),
     }),
     // The real registry over a runner that starts nothing: this file is about
     // which halves come up and go down, and the operations are closed anyway —

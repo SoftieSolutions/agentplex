@@ -669,7 +669,7 @@ function buildLiveMachine(): LiveMachine {
     environment: { PATH: '/usr/bin' },
     scrollbackBytes: CAPTURE_SCROLLBACK_BYTES,
   });
-  const terminals = createTerminalManager({ supervisor, clock });
+  const terminals = createTerminalManager({ supervisor, clock, timers: createFakeTimers() });
   // The transcript the provider has already written, so the session exists to
   // be resumed and the store report names it.
   const sessionFiles = {

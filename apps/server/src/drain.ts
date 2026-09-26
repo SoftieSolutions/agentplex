@@ -102,17 +102,20 @@ export type DrainEnd =
 
 export interface DrainReport {
   readonly end: DrainEnd;
-  /** Terminals stopped at a boundary. */
+  /** Terminals whose process has exited: stopped at a boundary, or ended on its own. */
   readonly drained: number;
-  /** Terminals still mid-turn when the waiting stopped. The caller kills these. */
+  /**
+   * Terminals still running when the waiting stopped: mid-turn, or stopped at
+   * a boundary and not gone yet. The caller kills these.
+   */
   readonly killed: number;
   readonly elapsedMs: number;
 }
 
 export interface Drain {
   /**
-   * Waits, closing each terminal as it reaches a boundary, and answers with
-   * what it managed.
+   * Waits, stopping each terminal as it reaches a boundary and counting it
+   * once its process has gone, and answers with what it managed.
    *
    * It does not kill what is left. That is the caller's, and deliberately so:
    * this decides when to stop waiting, and `closeAll` is the one thing besides
@@ -136,17 +139,33 @@ export function createDrain({
   /** Cuts the current wait short, or nothing when the drain is not waiting. */
   let wake: (() => void) | null = null;
 
-  const sleep = (ms: number): Promise<void> =>
+  /**
+   * Waits `ms`, or less: until `until` settles or the drain is told to stop.
+   *
+   * `until` is the exit of every terminal this drain has stopped and is waiting
+   * on. A stop is a hangup, and the process takes its own time to go; waiting
+   * out a whole poll for one that went in a millisecond is time a shutdown
+   * spends for nothing.
+   */
+  const sleep = (ms: number, until: Promise<unknown> | null): Promise<void> =>
     new Promise<void>((resolve) => {
-      const cancel = timers.schedule(ms, () => {
-        wake = null;
-        resolve();
-      });
-      wake = () => {
-        cancel();
+      let done = false;
+      let cancel: (() => void) | null = null;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        cancel?.();
         wake = null;
         resolve();
       };
+      cancel = timers.schedule(ms, finish);
+      if (done) {
+        // Fired while it was being scheduled, which a timer is allowed to do.
+        cancel();
+        return;
+      }
+      wake = finish;
+      void until?.then(finish);
     });
 
   return {
@@ -159,8 +178,17 @@ export function createDrain({
       const startedAt = clock.now();
       const elapsed = (): number => clock.now() - startedAt;
 
-      /** Terminals this drain has already dealt with, by id. */
+      /** Terminals whose process has gone, by id. The drain is done with these. */
       const settled = new Set<string>();
+      /**
+       * Terminals this drain has stopped and whose process has not gone yet.
+       *
+       * Kept apart from `settled` because stopping a process is not the same
+       * as it having ended, and the report is about the second; and kept at
+       * all so that the next pass waits on one rather than hanging up on it
+       * again.
+       */
+      const signalled = new Set<string>();
       const outstanding = (): readonly string[] =>
         terminals.terminals
           .filter((terminal) => !settled.has(terminal.terminalId))
@@ -188,16 +216,18 @@ export function createDrain({
 
         for (const terminal of terminals.terminals) {
           if (settled.has(terminal.terminalId)) continue;
-          // Already gone: a session that ended on its own needs nothing.
+          // Gone: one that ended on its own, or one this drain stopped whose
+          // process has now exited.
           if (terminal.run.exit !== null) {
             settled.add(terminal.terminalId);
             continue;
           }
+          if (signalled.has(terminal.terminalId)) continue;
           // The manual stop rule, unchanged. A refusal here means "still
           // working", which is the whole thing this is waiting for.
           if (!terminals.stop(terminal.terminalId).ok) continue;
-          settled.add(terminal.terminalId);
-          logger.info('session closed at a turn boundary', {
+          signalled.add(terminal.terminalId);
+          logger.info('session stopped at a turn boundary', {
             terminalId: terminal.terminalId,
             sessionId: terminal.session?.sessionId ?? null,
           });
@@ -214,7 +244,7 @@ export function createDrain({
           break;
         }
 
-        await sleep(Math.min(pollMs, left));
+        await sleep(Math.min(pollMs, left), exitOfAny(terminals, signalled, settled));
         if (abandoned) {
           end = 'abandoned';
           break;
@@ -245,7 +275,27 @@ export function drainingSessions(terminals: TerminalManager): readonly SessionRe
   return sessions;
 }
 
-/** The distinct stores still holding a terminal this drain has not settled. */
+/**
+ * Settles when any terminal the drain stopped and is still waiting on exits,
+ * or `null` when there is none.
+ */
+function exitOfAny(
+  terminals: TerminalManager,
+  signalled: ReadonlySet<string>,
+  settled: ReadonlySet<string>,
+): Promise<unknown> | null {
+  const exits = terminals.terminals
+    .filter((terminal) => signalled.has(terminal.terminalId) && !settled.has(terminal.terminalId))
+    .map((terminal) => terminal.run.whenExited());
+  return exits.length === 0 ? null : Promise.race(exits);
+}
+
+/**
+ * The distinct stores still holding a terminal this drain has not settled.
+ *
+ * A stopped terminal whose process has not gone yet still counts: until it
+ * exits, it is an agent running in that store.
+ */
 function storesStillHolding(
   terminals: TerminalManager,
   settled: ReadonlySet<string>,

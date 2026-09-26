@@ -238,6 +238,9 @@ async function main(): Promise<void> {
           environment,
         }),
         clock: systemClock,
+        // Unref'd, which is safe here: the grace only matters while a pty is
+        // still open, and an open pty holds the process up on its own.
+        timers: systemTimers,
         cap: config.terminalCap,
       }),
       // The one place a UDP socket can be opened. Built whatever the setting,

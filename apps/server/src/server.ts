@@ -835,7 +835,13 @@ export async function startSessionServer(
       // stops new work arriving; anything still running would go on writing
       // into the store with nothing left to watch it, and on a laptop it would
       // outlive the terminal that started it.
-      terminals.closeAll();
+      //
+      // Awaited, because a hangup is a request: an agent that catches it runs
+      // on until the kill after the grace, and this process saying it has
+      // stopped and exiting before then would leave that agent to nobody. The
+      // hooks and sockets below stay up through the wait for the reason they
+      // stay up through the drain.
+      await terminals.closeAll();
       // And the hooks, before the sockets go: every request still open is
       // withdrawn and said out loud, so a hub that is still connected stops
       // showing approvals nobody can answer any more. A hook whose connection

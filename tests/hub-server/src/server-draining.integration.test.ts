@@ -157,7 +157,7 @@ function buildMachine(label: string): Machine {
 
   return {
     label,
-    terminals: createTerminalManager({ supervisor, clock }),
+    terminals: createTerminalManager({ supervisor, clock, timers: createFakeTimers() }),
     ptys,
     transcripts: transcripts(),
     connection: null,

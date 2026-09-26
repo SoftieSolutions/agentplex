@@ -173,7 +173,7 @@ function buildMachine(label: string, sessionFiles: Record<string, string>): Mach
 
   return {
     label,
-    terminals: createTerminalManager({ supervisor, clock }),
+    terminals: createTerminalManager({ supervisor, clock, timers: createFakeTimers() }),
     ptys,
     sessionFiles,
     live: undefined,

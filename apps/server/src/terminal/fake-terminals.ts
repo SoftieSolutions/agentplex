@@ -1,5 +1,6 @@
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
-import { createPtySupervisor } from '@agentplex/pty';
+import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
+import { createPtySupervisor, type PtySignal } from '@agentplex/pty';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createTerminalManager, type TerminalManager } from './terminal-manager.js';
 
@@ -21,12 +22,21 @@ export interface FakeTerminals {
   readonly terminals: TerminalManager;
   /** The pty underneath, so a test can emit output, exit, or read what was written. */
   readonly factory: FakePtyFactory;
+  /** The kill grace after a hangup, which fires when a test says and never before. */
+  readonly timers: FakeTimers;
 }
 
 export interface FakeTerminalsOptions {
   /** Small enough to make the scrollback drop something, when that is the point. */
   readonly scrollbackBytes?: number;
   readonly cap?: number;
+  /** A test that shares one set of timers across the manager and something else. */
+  readonly timers?: FakeTimers;
+  /**
+   * The signals the agents die of. Absent, none: the test closes each pty by
+   * hand, and a stop or a shutdown waits on it. See `FakeChild.diesOn`.
+   */
+  readonly diesOn?: readonly PtySignal[];
 }
 
 /** A clock that does not move: only the eviction rules care, and they set their own. */
@@ -38,7 +48,10 @@ function countingIds(): IdGenerator {
 }
 
 export function createFakeTerminals(options: FakeTerminalsOptions = {}): FakeTerminals {
-  const factory = createFakePtyFactory();
+  const factory = createFakePtyFactory(
+    options.diesOn === undefined ? {} : { child: { diesOn: options.diesOn } },
+  );
+  const timers = options.timers ?? createFakeTimers();
   const supervisor = createPtySupervisor({
     pty: factory,
     clock: fixedClock,
@@ -51,7 +64,8 @@ export function createFakeTerminals(options: FakeTerminalsOptions = {}): FakeTer
   const terminals = createTerminalManager({
     supervisor,
     clock: fixedClock,
+    timers,
     ...(options.cap === undefined ? {} : { cap: options.cap }),
   });
-  return { terminals, factory };
+  return { terminals, factory, timers };
 }

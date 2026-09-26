@@ -7,9 +7,9 @@ import type {
   StoreDescriptor,
   StoreId,
 } from '@agentplex/protocol';
-import { DEFAULT_TERMINAL_CAP, type Clock } from '@agentplex/node-shared';
+import { DEFAULT_TERMINAL_CAP, type Clock, type Timers } from '@agentplex/node-shared';
 import type { GrantId, Launch, SessionLiveness } from '@agentplex/providers';
-import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
+import type { LaunchOptions, PtyExit, PtyRun, PtySupervisor } from '@agentplex/pty';
 
 /**
  * The terminal manager: how many agents may be live at once, and who holds a
@@ -83,6 +83,27 @@ import type { LaunchOptions, PtyRun, PtySupervisor } from '@agentplex/pty';
  */
 
 /**
+ * How long a hung-up agent has to go before it is killed, in milliseconds.
+ *
+ * Every close sends SIGHUP first, because that is what a terminal closing
+ * sends and what an agent's TUI is written to clean up on: flush its
+ * transcript, restore the tty, take its children down. An agent that catches
+ * it and carries on would otherwise hold its session forever with no terminal
+ * left to reach it, so after this long it gets SIGKILL, which nothing can
+ * catch.
+ *
+ * Three seconds, and the number is chosen against the unit rather than for its
+ * own sake. `scripts/install.sh` writes `TimeoutStopSec=20s` and a drain budget
+ * of 15 s from one pair of numbers, and `DEFAULT_DRAIN_MS` in
+ * `daemon-settings.ts` matches it, so a shutdown that spends its whole budget
+ * waiting for turns has a five-second margin before systemd's own SIGKILL. The
+ * grace is spent inside that margin, and the exits have to be reported and the
+ * sockets closed after it. Five would be the whole margin and would race
+ * systemd's kill; three leaves two.
+ */
+export const KILL_GRACE_MS = 3_000;
+
+/**
  * Who is watching, rather than how many.
  *
  * One hub connection, identified by something the server minted. It is not a
@@ -119,7 +140,11 @@ export interface TerminalManagerDependencies {
   readonly supervisor: PtySupervisor;
   /** Every "how long unwatched" here is a value a test sets, never a `Date.now()`. */
   readonly clock: Clock;
+  /** Where the kill after a hangup is scheduled, so a test fires it rather than waits. */
+  readonly timers: Timers;
   readonly cap?: number;
+  /** How long a hangup is given before the kill. `KILL_GRACE_MS` unless a test says. */
+  readonly killGraceMs?: number;
 }
 
 /**
@@ -286,7 +311,13 @@ export interface TerminalManager extends SessionLiveness {
    * may never evict.
    */
   release(watcher: WatcherId): void;
-  /** Kills the process. The terminal stays, because its output is what to read next. */
+  /**
+   * Ends the process: a hangup, then a kill if it is still there after the
+   * grace. The terminal stays, because its output is what to read next.
+   *
+   * It answers once the hangup is sent, not once the process is gone. A caller
+   * that has to know when it is gone awaits `run.whenExited()`.
+   */
   stop(terminalId: string): StopOutcome;
   /**
    * Withholds the terminal's input from its next turn boundary, killing nothing.
@@ -318,8 +349,15 @@ export interface TerminalManager extends SessionLiveness {
    */
   seal(): void;
   readonly sealed: boolean;
-  /** Shutdown. The one thing besides the cap that closes a terminal. */
-  closeAll(): void;
+  /**
+   * Shutdown. The one thing besides the cap that closes a terminal.
+   *
+   * Every terminal is gone from the manager by the time this returns; the
+   * promise settles when every process has exited, the ones that ignored the
+   * hangup included, because a server that says it has stopped while its
+   * agents run on has left them to nobody.
+   */
+  closeAll(): Promise<void>;
 }
 
 interface TerminalRecord {
@@ -332,6 +370,8 @@ interface TerminalRecord {
   /** Watcher to how many times it attached: one hub may open two tabs on one terminal. */
   readonly watchers: Map<WatcherId, number>;
   unwatchedSince: number | null;
+  /** The one termination in flight, so a second stop neither hangs up nor schedules again. */
+  terminating: Promise<PtyExit> | null;
 }
 
 /**
@@ -350,24 +390,54 @@ interface TerminalEntry {
 export function createTerminalManager({
   supervisor,
   clock,
+  timers,
   cap = DEFAULT_TERMINAL_CAP,
+  killGraceMs = KILL_GRACE_MS,
 }: TerminalManagerDependencies): TerminalManager {
   const terminals = new Map<string, TerminalEntry>();
+  /**
+   * Terminals already closed whose process has not exited yet.
+   *
+   * Out of `terminals`, because a closed terminal is not one anybody may
+   * watch, stop or count against the cap. Still here, because until its
+   * process has gone it is the live holder of its session: an evicted agent
+   * that ignored the hangup is running on that transcript for the whole grace,
+   * and a resume let through in that window is two agents on one session.
+   */
+  const closing = new Set<TerminalRecord>();
   /** Every live start, by the grant that made it. Pruned when a terminal closes. */
   const startsByGrant = new Map<GrantId, Map<StartId, string>>();
   let sealed = false;
 
   const liveHolderOf = (session: SessionRef): TerminalRecord | undefined => {
-    for (const { record } of terminals.values()) {
-      if (
+    const records = [...[...terminals.values()].map((entry) => entry.record), ...closing];
+    return records.find(
+      (record) =>
         record.storeId === session.storeId &&
         record.sessionId === session.sessionId &&
-        record.run.exit === null
-      ) {
-        return record;
-      }
-    }
-    return undefined;
+        record.run.exit === null,
+    );
+  };
+
+  /**
+   * Ends a terminal's process: SIGHUP now, SIGKILL after the grace if it is
+   * still running, and the kill cancelled the moment it exits.
+   *
+   * Idempotent, because a drain stops a terminal and shutdown then closes the
+   * same one: the second caller gets the first one's promise rather than a
+   * second hangup and a second kill on the timer. It settles when the process
+   * has exited, and at once for one that already had.
+   */
+  const terminate = (record: TerminalRecord): Promise<PtyExit> => {
+    if (record.terminating !== null) return record.terminating;
+    const { run } = record;
+    record.terminating = run.whenExited();
+    if (run.exit !== null) return record.terminating;
+
+    run.kill('SIGHUP');
+    const cancel = timers.schedule(killGraceMs, () => run.kill('SIGKILL'));
+    void record.terminating.then(cancel);
+    return record.terminating;
   };
 
   const open = (
@@ -433,13 +503,24 @@ export function createTerminalManager({
       if (oldest === undefined) {
         return `the terminal cap of ${cap} is reached and every terminal is being watched`;
       }
-      close(oldest);
+      // Not awaited: the start that asked for room is not held up by the
+      // agent it displaced. `close` keeps that agent the holder of its session
+      // until it has gone, which is what makes not waiting safe.
+      void close(oldest);
     }
     return null;
   };
 
-  const close = (record: TerminalRecord): void => {
-    record.run.kill('SIGHUP');
+  /**
+   * Takes a terminal out of the manager at once, and answers when its process
+   * has exited.
+   */
+  const close = (record: TerminalRecord): Promise<PtyExit> => {
+    const exited = terminate(record);
+    if (record.run.exit === null) {
+      closing.add(record);
+      void exited.then(() => closing.delete(record));
+    }
     // The supervisor is told to forget it as well, so that "how many are
     // running" has one answer rather than two that drift.
     supervisor.forget(record.terminalId);
@@ -453,6 +534,7 @@ export function createTerminalManager({
       }
       if (held.size === 0) startsByGrant.delete(grantId);
     }
+    return exited;
   };
 
   const track = (
@@ -473,6 +555,7 @@ export function createTerminalManager({
       pause: 'none',
       watchers: new Map(),
       unwatchedSince: openedAt,
+      terminating: null,
     };
     return { record, view: viewOf(record, clock) };
   };
@@ -586,7 +669,7 @@ export function createTerminalManager({
       // The terminal survives its process. A session that was just stopped is
       // the one somebody most wants to read, and the bytes are here rather than
       // in the transcript. It is the cheapest thing to evict from now on.
-      record.run.kill('SIGHUP');
+      void terminate(record);
       return { ok: true };
     },
 
@@ -632,8 +715,12 @@ export function createTerminalManager({
       return sealed;
     },
 
-    closeAll(): void {
-      for (const { record } of [...terminals.values()]) close(record);
+    async closeAll(): Promise<void> {
+      // Every record out before the first await, so that a caller which does
+      // not wait -- a test tearing down, a shutdown that has other things to
+      // close in the meantime -- finds the manager already empty.
+      const exits = [...terminals.values()].map(({ record }) => close(record));
+      await Promise.all(exits);
     },
   };
 }

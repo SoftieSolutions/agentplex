@@ -21,6 +21,7 @@ import {
   type FakeProcessRunner,
 } from '@agentplex/providers/testing';
 import type { Launch, LaunchPlan } from '@agentplex/providers';
+import type { PtySignal } from '@agentplex/pty';
 import { startRuntime, type Runtime } from './boot.js';
 import type { ServerConfig } from './config.js';
 import { createOperationRegistry } from './operations/operation-registry.js';
@@ -167,11 +168,17 @@ afterEach(async () => {
   world = undefined;
 });
 
+/**
+ * `diesOn` is the agents this server holds: by default ones that go when they
+ * are hung up on, because a shutdown now waits for its agents to exit and a
+ * fake no signal ends would hold every test here open.
+ */
 async function start(
   reading: readonly ProviderReadiness[] = [],
   watcher: FakeStoreWatcher = createFakeStoreWatcher(),
+  diesOn: readonly PtySignal[] = ['SIGHUP', 'SIGKILL'],
 ): Promise<World> {
-  const terminals = createFakeTerminals();
+  const terminals = createFakeTerminals({ diesOn });
   const records: LogRecord[] = [];
   const preflight = createFakePreflight(reading);
   const runner = createFakeProcessRunner();
@@ -324,6 +331,40 @@ describe('a draining shutdown', () => {
     await stopping;
 
     expect(started.terminals.factory.ptys[0]?.kills).toBeGreaterThan(0);
+    expect(shutdownRecord(started.records)?.fields).toMatchObject({
+      end: 'abandoned',
+      drained: 0,
+      killed: 1,
+    });
+  });
+
+  it('says it has stopped only once the agents it hung up on have gone', async () => {
+    // An agent that catches the hangup and carries on. Until it has been
+    // killed it is still running in the store, and a server that logged its
+    // way out before then -- and exited, under systemd -- would be leaving it
+    // to nobody.
+    const started = await start([], createFakeStoreWatcher(), ['SIGKILL']);
+    const session = sessionRefSchema.parse({
+      storeId: storeOf(started).storeId,
+      sessionId: 'session-a',
+    });
+    started.terminals.terminals.resume(session, launch);
+    started.terminals.terminals.observe(session, 'awaiting-input');
+    const pty = started.terminals.factory.ptys[0];
+
+    const stopping = started.runtime.stop();
+    await vi.waitFor(() => expect(pty?.signals).toEqual(['SIGHUP']));
+    // The drain stops waiting on it, which leaves it to the shutdown's own
+    // close -- the step this test is about.
+    started.runtime.stopWaiting();
+    for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+
+    expect(shutdownRecord(started.records)).toBeUndefined();
+
+    started.terminals.timers.fireAll();
+    await stopping;
+
+    expect(pty?.signals).toEqual(['SIGHUP', 'SIGKILL']);
     expect(shutdownRecord(started.records)?.fields).toMatchObject({
       end: 'abandoned',
       drained: 0,
