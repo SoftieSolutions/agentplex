@@ -57,8 +57,11 @@ import type { Downloader, WriteMachine } from './write-machine.js';
  * a failure while staging removes every `.new` so far: the trees the machine was
  * running on are not touched. Only then is each moved in, as two renames on one
  * filesystem with the old tree set aside first, so a move that fails is undone
- * by a third. The command's own package is a set of its own, last, for the
- * reason `update-plan.ts` gives.
+ * by a third. Every tree set aside is kept until the whole set has moved: a
+ * later package that will not move in puts every earlier one of the set back
+ * too, so the set is all or nothing through the move as well as the staging,
+ * and only then are the set-aside trees removed. The command's own package is
+ * a set of its own, last, for the reason `update-plan.ts` gives.
  *
  * ## The flags that are not defaults, each added by a probe (AGX-322)
  *
@@ -356,9 +359,10 @@ async function recoverInterruptedSwaps(
  * One set of packages: every one staged, and only then every one moved in.
  *
  * A failure while staging costs the staging and nothing else. A failure while
- * moving leaves the packages already moved where they are -- they staged and
- * installed cleanly, and no rename undoes a set -- and names them, so the lines
- * say exactly what this machine is now running.
+ * moving puts back every package of the set that had already moved, because a
+ * set is what this machine runs or does not run -- a hub moved to a release its
+ * old client does not speak is the 503 the set exists to prevent. Only once
+ * the whole set is in place are the trees it set aside removed.
  */
 async function installComponents(
   install: PackageInstall,
@@ -384,21 +388,43 @@ async function installComponents(
     }
   }
 
-  const moved: string[] = [];
-  for (const [index, tarball] of install.packages.entries()) {
-    const swapped = await swapComponent(tarball, layout, machine);
+  const moved: Moved[] = [];
+  for (const tarball of install.packages) {
+    const swapped = await moveIn(tarball, layout, machine);
     if (!swapped.ok) {
-      const lines = [...swapped.lines, ...(await discard(staged.slice(index), machine))];
-      if (moved.length > 0)
-        lines.push(`${moved.join(', ')} had already moved into place, and stay.`);
+      const lines = [...swapped.lines];
+      for (const one of [...moved].reverse()) lines.push(...(await moveBack(one, machine)));
+      // Every `.new` of the set: the ones that never moved, and the new trees
+      // the ones that did were just moved back out as.
+      lines.push(...(await discard(staged, machine)));
+      if (moved.length > 0) {
+        lines.push(`Nothing of ${componentsOf(install)} was installed; the set moves together.`);
+      }
       return { ok: false, lines };
     }
-    for (const line of swapped.lines) dependencies.write(line);
-    moved.push(tarball.component);
+    moved.push(swapped.moved);
+  }
+
+  // The whole set is in place, so an old tree that will not go costs a line
+  // rather than the run, and the next run clears it before it sets one aside.
+  for (const one of moved) {
+    if (!one.setAside) continue;
+    const discarded = await machine.removeDirectory(`${one.tree}.old`);
+    if (!discarded.ok) {
+      dependencies.write(
+        `${one.tree}.old is still there: ${discarded.problem}; the next run removes it.`,
+      );
+    }
   }
 
   const self = install.packages.find((tarball) => tarball.component === 'cli');
   return self === undefined ? { ok: true } : await linkCommand(self, layout, machine);
+}
+
+/** One package moved into place, and whether a tree was set aside to make room. */
+interface Moved {
+  readonly tree: string;
+  readonly setAside: boolean;
 }
 
 /**
@@ -451,16 +477,19 @@ async function stageComponent(
 }
 
 /**
- * The tree set aside, the staged one moved in, and the old one removed -- the
- * runtime swap's order, for the runtime swap's reason: a move that fails is
- * undone by moving the old one back. The lines a success carries are the ones
- * worth reading anyway: an old tree that would not go.
+ * The tree set aside and the staged one moved in -- the runtime swap's order,
+ * for the runtime swap's reason: a move that fails is undone by moving the old
+ * one back. The old tree is *not* removed here: it is the way back for this
+ * package if a later one of its set will not move in.
  */
-async function swapComponent(
+async function moveIn(
   tarball: PackageTarball,
   layout: Layout,
   machine: WriteMachine,
-): Promise<{ readonly ok: boolean; readonly lines: readonly string[] }> {
+): Promise<
+  | { readonly ok: true; readonly moved: Moved }
+  | { readonly ok: false; readonly lines: readonly string[] }
+> {
   const tree = packageDirectory(layout, tarball.package);
   const staging = `${tree}.new`;
   const old = `${tree}.old`;
@@ -480,41 +509,68 @@ async function swapComponent(
   }
 
   const moved = await machine.rename(staging, tree);
-  if (!moved.ok) {
-    if (!present) {
-      return { ok: false, lines: [`${tree} would not move into place: ${moved.problem}`] };
-    }
-    const restored = await machine.rename(old, tree);
-    if (restored.ok) {
-      return {
-        ok: false,
-        lines: [
-          `${tree} put back as it was: the new one would not move into place: ${moved.problem}`,
-        ],
-      };
-    }
-    // The one way this leaves the machine worse than it was found, said with
-    // the command that fixes it.
+  if (moved.ok) return { ok: true, moved: { tree, setAside: present } };
+
+  if (!present) {
+    return { ok: false, lines: [`${tree} would not move into place: ${moved.problem}`] };
+  }
+  const restored = await machine.rename(old, tree);
+  if (restored.ok) {
     return {
       ok: false,
       lines: [
-        `this machine has no ${tarball.package} in ${tree}.`,
-        `  the new one would not move in from ${staging}: ${moved.problem}`,
-        `  the old one would not move back from ${old}: ${restored.problem}`,
-        `Put the old one back with: mv ${old} ${tree}`,
+        `${tree} put back as it was: the new one would not move into place: ${moved.problem}`,
       ],
     };
   }
-
-  // The new tree is in place, so an old one that will not go costs a line
-  // rather than the run, and the next run clears it before it sets one aside.
-  const discarded = await machine.removeDirectory(old);
+  // The one way this leaves the machine worse than it was found, said with
+  // the command that fixes it.
   return {
-    ok: true,
-    lines: discarded.ok
-      ? []
-      : [`${old} is still there: ${discarded.problem}; the next run removes it.`],
+    ok: false,
+    lines: [
+      `this machine has no ${tarball.package} in ${tree}.`,
+      `  the new one would not move in from ${staging}: ${moved.problem}`,
+      `  the old one would not move back from ${old}: ${restored.problem}`,
+      `Put the old one back with: mv ${old} ${tree}`,
+    ],
   };
+}
+
+/**
+ * A package of the set that had moved in, moved back out because a later one
+ * would not follow it. The new tree goes back to `.new`, where the discard
+ * after this removes it, and the old one comes back out of `.old`; a tree
+ * that was not there before is simply not there again.
+ */
+async function moveBack(moved: Moved, machine: WriteMachine): Promise<readonly string[]> {
+  const { tree, setAside } = moved;
+  const staging = `${tree}.new`;
+  const old = `${tree}.old`;
+
+  const out = await machine.rename(tree, staging);
+  if (!out.ok) {
+    return [
+      `${tree} is the new one, and stays: it would not move back out: ${out.problem}`,
+      ...(setAside
+        ? [`The old one is in ${old}; put it back with: rm -rf ${tree} && mv ${old} ${tree}`]
+        : []),
+    ];
+  }
+  if (!setAside) return [`${tree} taken back out: it was not there before this run`];
+
+  const restored = await machine.rename(old, tree);
+  if (restored.ok) return [`${tree} put back as it was: the set moves together or not at all`];
+  // Better the new tree than no tree: it staged and installed cleanly.
+  const again = await machine.rename(staging, tree);
+  return again.ok
+    ? [
+        `${tree} is the new one, and stays: the old one would not move back from ${old}: ${restored.problem}`,
+      ]
+    : [
+        `this machine has no package in ${tree}.`,
+        `  the old one would not move back from ${old}: ${restored.problem}`,
+        `Put the old one back with: mv ${old} ${tree}`,
+      ];
 }
 
 /**

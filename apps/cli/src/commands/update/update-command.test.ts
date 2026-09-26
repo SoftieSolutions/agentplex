@@ -1071,6 +1071,78 @@ describe('when something fails part way', () => {
     ).toBeGreaterThan(-1);
     expect(failed.machine.contents.has(`${server}/package.json`)).toBe(true);
     expect(failed.journal.join('\n')).not.toContain(CLI_TARBALL);
+    // The tree it put back is the one the units ran, so they come back on it.
+    expect(spawned(failed.runner)).toContain(`systemctl --user start ${HUB} ${SERVER}`);
+  });
+
+  /**
+   * All or nothing holds through the move as well as the staging: a set whose
+   * second package will not move in puts the first one back, because a hub
+   * moved to a release its old client does not speak is the 503 the set exists
+   * to prevent. So every tree set aside is kept until the whole set has moved.
+   */
+  it('moves the whole set back when a later package of it will not move in', async () => {
+    const hub = tree('agentplex-hub');
+    const web = tree('agentplex-web');
+    const clientMoved = { client: 4, server: 3 };
+    const failed = await run(['hub', 'web', '--no-node'], {
+      served: {
+        [VERSIONS_URL]: published({
+          hub: { version: '1.3.0', protocol: clientMoved },
+          web: { version: '1.2.0', protocol: clientMoved },
+        }),
+      },
+      refusedRenames: { [`${web}.new -> ${web}`]: 'EXDEV: cross-device link' },
+    });
+
+    expect(failed.code).toBe(1);
+    expect(failed.out).toContain('EXDEV: cross-device link');
+    const moves = failed.machine.acts.filter((act) => act.startsWith('mv '));
+    expect(moves).toEqual([
+      `mv ${hub} ${hub}.old`,
+      `mv ${hub}.new ${hub}`,
+      `mv ${web} ${web}.old`,
+      `mv ${web}.new ${web}`,
+      `mv ${web}.old ${web}`,
+      `mv ${hub} ${hub}.new`,
+      `mv ${hub}.old ${hub}`,
+    ]);
+    // What the machine runs afterwards is what it ran before: both old trees.
+    expect(failed.machine.contents.get(`${hub}/package.json`)).toBe(
+      wholeMachine()[packageAt('@softiesolutions/agentplex-hub')],
+    );
+    expect(failed.machine.contents.get(`${web}/package.json`)).toBe(
+      wholeMachine()[packageAt('@softiesolutions/agentplex-web')],
+    );
+    expect(failed.out).toContain(`${hub} put back as it was`);
+    for (const left of [`${hub}.old`, `${hub}.new`, `${web}.old`, `${web}.new`]) {
+      expect(await failed.machine.exists(left)).toBe(false);
+    }
+    expect(spawned(failed.runner)).toContain(`systemctl --user start ${HUB} ${SERVER}`);
+  });
+
+  /** And a set that moves cleanly removes what it set aside only once all of it has. */
+  it('keeps every tree it set aside until the whole set has moved', async () => {
+    const hub = tree('agentplex-hub');
+    const web = tree('agentplex-web');
+    const clientMoved = { client: 4, server: 3 };
+    const updated = await run(['hub', 'web', '--no-node'], {
+      served: {
+        [VERSIONS_URL]: published({
+          hub: { version: '1.3.0', protocol: clientMoved },
+          web: { version: '1.2.0', protocol: clientMoved },
+        }),
+      },
+    });
+
+    expect(updated.code).toBe(0);
+    const acts = updated.machine.acts;
+    const lastMove = acts.lastIndexOf(`mv ${web}.new ${web}`);
+    expect(acts.lastIndexOf(`rm ${hub}.old`)).toBeGreaterThan(lastMove);
+    expect(acts.lastIndexOf(`rm ${web}.old`)).toBeGreaterThan(lastMove);
+    expect(acts.slice(acts.indexOf(`mv ${hub}.new ${hub}`), lastMove)).not.toContain(
+      `rm ${hub}.old`,
+    );
   });
 
   /**
