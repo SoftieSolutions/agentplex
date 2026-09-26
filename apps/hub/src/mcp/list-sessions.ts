@@ -1,4 +1,10 @@
-import type { SessionRow } from '@agentplex/protocol';
+import {
+  providerSchema,
+  sessionStatusSchema,
+  type Provider,
+  type SessionRow,
+  type SessionStatus,
+} from '@agentplex/protocol';
 import { z } from 'zod';
 import { allSessions, sessionShape, toSessionRow, type FleetReads } from './fleet-view.js';
 import { answers, defineMcpTool, readOnly, type McpTool } from './tool-registry.js';
@@ -56,12 +62,8 @@ export function listSessionsTool({ state }: { readonly state: FleetReads }): Mcp
           'A machine registration id from list_servers. Keeps the sessions that machine reported.',
         ),
       store: z.string().optional().describe('A store id. Keeps the sessions filed under it.'),
-      provider: z
-        .enum(['claude', 'codex', 'opencode'])
-        .optional()
-        .describe('Keeps the sessions of one coding agent.'),
-      status: z
-        .enum(['working', 'awaiting-permission', 'awaiting-input', 'idle', 'unknown'])
+      provider: providerSchema.optional().describe('Keeps the sessions of one coding agent.'),
+      status: sessionStatusSchema
         .optional()
         .describe(
           'Keeps the sessions in one state. awaiting-permission is the one that wants a person.',
@@ -102,8 +104,8 @@ export function listSessionsTool({ state }: { readonly state: FleetReads }): Mcp
 interface SessionFilters {
   readonly server: string | undefined;
   readonly store: string | undefined;
-  readonly provider: string | undefined;
-  readonly status: string | undefined;
+  readonly provider: Provider | undefined;
+  readonly status: SessionStatus | undefined;
 }
 
 /**

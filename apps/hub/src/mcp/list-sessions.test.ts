@@ -1,6 +1,8 @@
 import {
+  providerSchema,
   serverRegistrationIdSchema,
   sessionIdSchema,
+  sessionStatusSchema,
   storeIdSchema,
   type MachineState,
   type SessionDescriptor,
@@ -197,6 +199,28 @@ describe('list_sessions', () => {
     expect(byStore.sessions.map((row) => row.sessionId)).toEqual(['d']);
     expect(byProvider.sessions.map((row) => row.sessionId)).toEqual(['b']);
     expect(byStatus.sessions.map((row) => row.sessionId)).toEqual(['c']);
+  });
+
+  // A regression guard rather than a red-first test: the filter enums are the
+  // protocol's own schemas, so a provider or status added there is a filter
+  // here with no edit. Were the list ever copied out again and fall behind, the
+  // SDK would refuse the missing member's call with `isError: true`.
+  it.each(providerSchema.options)('accepts the provider %s as a filter', async (provider) => {
+    const result = await listing(fleetOf([storeOf(WORK, [rowOf(descriptorOf('a'))])]), {
+      provider,
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.structured).toMatchObject({ matched: expect.any(Number) });
+  });
+
+  it.each(sessionStatusSchema.options)('accepts the status %s as a filter', async (status) => {
+    const result = await listing(fleetOf([storeOf(WORK, [rowOf(descriptorOf('a'))])]), {
+      status,
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.structured).toMatchObject({ matched: expect.any(Number) });
   });
 
   it('answers a filter that matches nothing with an empty list rather than a refusal', async () => {
