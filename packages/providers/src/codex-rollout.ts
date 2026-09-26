@@ -1,7 +1,10 @@
 import {
   ACTIVITY_TEXT_MAX_CHARS,
   activitySchema,
+  boundedSessionText,
   displayableActivityText,
+  SESSION_CWD_MAX_CHARS,
+  SESSION_MODEL_MAX_CHARS,
   type Activity,
   type SessionUsage,
 } from '@agentplex/protocol';
@@ -245,6 +248,17 @@ export interface CodexRollout {
 }
 
 /**
+ * A working directory as the descriptor may carry it, or `null`.
+ *
+ * Refused past the bound rather than clipped, and never cleaned: the cwd is
+ * resumed in and read by git as well as drawn, and a prefix of a path, or the
+ * path with characters taken out, is a different directory.
+ */
+function boundedCwd(cwd: string): string | null {
+  return cwd.length <= SESSION_CWD_MAX_CHARS ? cwd : null;
+}
+
+/**
  * Three answers, because a caller acts differently on each — the same split the
  * Claude transcript parser makes, for the same reason.
  *
@@ -299,7 +313,7 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
       const meta = sessionMetaSchema.safeParse(line.data.payload);
       if (meta.success) {
         sessionId = meta.data.session_id;
-        if (meta.data.cwd !== undefined) cwd = meta.data.cwd;
+        if (meta.data.cwd !== undefined) cwd = boundedCwd(meta.data.cwd);
       }
       continue;
     }
@@ -307,11 +321,15 @@ export function parseCodexRollout(contents: string): CodexRolloutParse {
     if (line.data.type === 'turn_context') {
       const context = turnContextSchema.safeParse(line.data.payload);
       if (context.success) {
-        if (context.data.cwd !== undefined) cwd = context.data.cwd;
+        if (context.data.cwd !== undefined) cwd = boundedCwd(context.data.cwd);
         // Last wins, like the cwd beside it and for the same reason: `/model`
         // mid-session is ordinary, and the question a reader is asking is what
         // this session is running now rather than what it opened on.
-        if (context.data.model !== undefined) model = context.data.model;
+        // Clipped to what the descriptor carries, so an over-long id costs its
+        // tail rather than the store report every other session rides on.
+        if (context.data.model !== undefined) {
+          model = boundedSessionText(context.data.model, SESSION_MODEL_MAX_CHARS);
+        }
       }
       continue;
     }

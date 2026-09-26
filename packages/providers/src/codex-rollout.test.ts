@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ACTIVITY_TEXT_MAX_CHARS } from '@agentplex/protocol';
+import {
+  ACTIVITY_TEXT_MAX_CHARS,
+  SESSION_CWD_MAX_CHARS,
+  SESSION_MODEL_MAX_CHARS,
+} from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
 import { codexRolloutActivities, parseCodexRollout } from './codex-rollout.js';
 
@@ -88,6 +92,39 @@ describe('parseCodexRollout', () => {
       ok: true,
       rollout: { model: 'gpt-5.6-terra-mini' },
     });
+  });
+
+  it('clips a model name longer than the descriptor carries, and keeps the session', () => {
+    // A string past the bound would fail the store report that carries every
+    // session beside this one. A prefix of a model id is still the vendor's
+    // family and version, which is what the segment is read for.
+    const long = `gpt-${'x'.repeat(SESSION_MODEL_MAX_CHARS * 2)}`;
+    const parsed = parseCodexRollout(
+      COMPLETED_TURN.replaceAll('"model":"gpt-5.6-terra"', `"model":"${long}"`),
+    );
+
+    expect(parsed.ok && parsed.rollout.model).toBe(long.slice(0, SESSION_MODEL_MAX_CHARS));
+  });
+
+  it('reports no model for one that is nothing but characters that cannot be drawn', () => {
+    const parsed = parseCodexRollout(
+      COMPLETED_TURN.replaceAll('"model":"gpt-5.6-terra"', '"model":"\\u202e\\u2066"'),
+    );
+
+    expect(parsed.ok && parsed.rollout.turns).toBeGreaterThan(0);
+    expect(parsed.ok && parsed.rollout.model).toBeNull();
+  });
+
+  it('reports no cwd rather than a prefix of one past the longest path there is', () => {
+    // Refused and not clipped: a cwd is resumed in and read by git, and a
+    // prefix of a path is somebody else's directory.
+    const long = `/${'d'.repeat(SESSION_CWD_MAX_CHARS)}`;
+    const parsed = parseCodexRollout(
+      COMPLETED_TURN.replaceAll('"cwd":"/Users/dev/Code/agentplex"', `"cwd":"${long}"`),
+    );
+
+    expect(parsed.ok && parsed.rollout.turns).toBeGreaterThan(0);
+    expect(parsed.ok && parsed.rollout.cwd).toBeNull();
   });
 
   it('reads the model off a turn context only, never off what a session_meta mentions', () => {

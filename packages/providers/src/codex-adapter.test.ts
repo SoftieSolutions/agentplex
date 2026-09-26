@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sessionRefSchema, storeDescriptorSchema } from '@agentplex/protocol';
+import {
+  SESSION_TITLE_MAX_CHARS,
+  sessionRefSchema,
+  storeDescriptorSchema,
+} from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
 import { CODEX_SESSIONS_DIRECTORY, createCodexAdapter } from './codex-adapter.js';
 import { CODEX_HOME, CODEX_SCRUB_PREFIXES } from './codex-launch.js';
@@ -162,6 +166,31 @@ describe('createCodexAdapter.discover', () => {
 
     expect(discovered.problems).toEqual([]);
     expect(discovered.sessions).toMatchObject([{ sessionId: ABORTED_ID, title: null }]);
+  });
+
+  it('lists a session whose name is too long for the wire, under a clipped name', async () => {
+    // The bound is the index parser's; this is the assertion that a long name
+    // costs its tail and not the session on the seam the store report is
+    // built from.
+    const long = 'Reply with pineapple '.repeat(20);
+    const adapter = adapterOver({
+      files: {
+        [COMPLETED_PATH]: COMPLETED_TURN,
+        [`${STORE.path}/${CODEX_SESSION_INDEX_FILE}`]: SESSION_INDEX.replace(
+          '"thread_name":"Reply with pineapple"',
+          `"thread_name":"${long}"`,
+        ),
+      },
+    });
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.problems).toEqual([]);
+    expect(discovered.sessions.map((session) => session.sessionId)).toEqual([COMPLETED_ID]);
+    const title = discovered.sessions[0]?.title ?? '';
+    expect(title.length).toBeGreaterThan(0);
+    expect(title.length).toBeLessThanOrEqual(SESSION_TITLE_MAX_CHARS);
+    expect(long.startsWith(title)).toBe(true);
   });
 
   it('never claims a session is running, because codex gives it no way to know', async () => {
