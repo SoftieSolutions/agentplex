@@ -19,6 +19,7 @@ import { z } from 'zod';
 import {
   serializeVersionsManifest,
   updateVersionsManifest,
+  type ReleaseProtocol,
   type VersionsManifest,
 } from '@agentplex/release';
 import { PACKAGES } from './assemble-package.js';
@@ -157,9 +158,9 @@ function scratch(named = 'agentplex-install-'): {
  * Four versions that differ from each other, because the failure worth catching
  * is a component resolved through another component's entry, and four equal
  * numbers would hide every one of those. The protocol is a number with no
- * meaning here beyond "they agree": this script never compares it with
- * `PROTOCOL_VERSION`, it only asks whether the components a machine installs
- * say the same thing.
+ * meaning here beyond "they agree": this script never compares it with either
+ * leg's constant, it only asks whether the components a machine installs say
+ * the same thing on each leg.
  */
 const CURRENT: Readonly<Record<string, string>> = {
   cli: '1.4.0',
@@ -169,6 +170,27 @@ const CURRENT: Readonly<Record<string, string>> = {
 };
 
 const FIXTURE_PROTOCOL = 3;
+
+/**
+ * The legs each component's package records, as `assemble-package.ts` writes
+ * them: the hub and the client both, the server its own, the CLI none.
+ */
+const COMPONENT_LEGS: Readonly<Record<string, readonly ('client' | 'server')[]>> = {
+  cli: [],
+  hub: ['client', 'server'],
+  server: ['server'],
+  web: ['client', 'server'],
+};
+
+/**
+ * What a component's release records, given either its legs outright or one
+ * number for every leg it speaks -- which is what a release that bumped nothing
+ * but its own version looks like, and what most of these tests mean.
+ */
+function legsOf(component: string, protocol: number | ReleaseProtocol): ReleaseProtocol {
+  if (typeof protocol !== 'number') return protocol;
+  return Object.fromEntries((COMPONENT_LEGS[component] ?? []).map((leg) => [leg, protocol]));
+}
 
 /**
  * The manifest a run of releases leaves on the `v1` branch, as a fixture.
@@ -193,20 +215,23 @@ function writeVersions(
   directory: string,
   latest: Readonly<Record<string, string>> = CURRENT,
   options: {
-    /** The protocol each component's last release speaks. */
-    readonly protocols?: Readonly<Record<string, number>>;
+    /** The protocol each component's last release speaks; see `legsOf`. */
+    readonly protocols?: Readonly<Record<string, number | ReleaseProtocol>>;
     /** Releases published before it, as `<version>: <protocol>`. */
-    readonly history?: Readonly<Record<string, Readonly<Record<string, number>>>>;
+    readonly history?: Readonly<Record<string, Readonly<Record<string, number | ReleaseProtocol>>>>;
   } = {},
 ): void {
   let manifest: VersionsManifest = {};
   for (const [component, version] of Object.entries(latest)) {
     for (const [older, protocol] of Object.entries(options.history?.[component] ?? {})) {
-      manifest = updateVersionsManifest(manifest, component, { version: older, protocol });
+      manifest = updateVersionsManifest(manifest, component, {
+        version: older,
+        protocol: legsOf(component, protocol),
+      });
     }
     manifest = updateVersionsManifest(manifest, component, {
       version,
-      protocol: options.protocols?.[component] ?? FIXTURE_PROTOCOL,
+      protocol: legsOf(component, options.protocols?.[component] ?? FIXTURE_PROTOCOL),
     });
   }
   writeFile(join(directory, 'versions.json'), serializeVersionsManifest(manifest).trimEnd());
@@ -215,7 +240,7 @@ function writeVersions(
 /** The same manifest, with releases published before each component's last one. */
 function writeHistory(
   directory: string,
-  history: Readonly<Record<string, Readonly<Record<string, number>>>>,
+  history: Readonly<Record<string, Readonly<Record<string, number | ReleaseProtocol>>>>,
 ): void {
   writeVersions(directory, CURRENT, { history });
 }
@@ -2225,7 +2250,30 @@ describe('the versions manifest, which is read off the network and parsed', () =
     expect(planned(result.stdout, 'release')).toBe(
       `cli 1.4.0, hub 1.2.0, web 1.1.0 (from ${versions}/versions.json)`,
     );
-    expect(planned(result.stdout, 'protocol')).toContain(`${FIXTURE_PROTOCOL},`);
+    expect(planned(result.stdout, 'client protocol')).toBe(
+      `${FIXTURE_PROTOCOL}, which hub and web agree on`,
+    );
+    expect(planned(result.stdout, 'server protocol')).toBe(
+      `${FIXTURE_PROTOCOL}, which hub and web agree on`,
+    );
+  });
+
+  /**
+   * A leg nothing on this machine records is not a leg anything here could
+   * disagree about, and the plan says so rather than printing a number that
+   * came from nowhere.
+   */
+  it('says when nothing this machine installs speaks a leg', () => {
+    const { script, home } = scratch();
+    const result = run(script, home, ['--dry-run', '--role=server']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'client protocol')).toBe(
+      'not spoken by anything this machine installs',
+    );
+    expect(planned(result.stdout, 'server protocol')).toBe(
+      `${FIXTURE_PROTOCOL}, which server agrees on`,
+    );
   });
 
   it('refuses something that is not a JSON object at all', () => {
@@ -2266,9 +2314,9 @@ describe('the versions manifest, which is read off the network and parsed', () =
     writeFile(
       join(versions, 'versions.json'),
       JSON.stringify({
-        cli: { current: 'latest', releases: { latest: FIXTURE_PROTOCOL } },
-        hub: { current: '1.2.0', releases: { '1.2.0': FIXTURE_PROTOCOL } },
-        web: { current: '1.1.0', releases: { '1.1.0': FIXTURE_PROTOCOL } },
+        cli: { current: 'latest', releases: { latest: {} } },
+        hub: { current: '1.2.0', releases: { '1.2.0': legsOf('hub', FIXTURE_PROTOCOL) } },
+        web: { current: '1.1.0', releases: { '1.1.0': legsOf('web', FIXTURE_PROTOCOL) } },
       }),
     );
 
@@ -2289,9 +2337,9 @@ describe('the versions manifest, which is read off the network and parsed', () =
     writeFile(
       join(versions, 'versions.json'),
       JSON.stringify({
-        cli: { current: '1.4.0', releases: { '1.3.0': FIXTURE_PROTOCOL } },
-        hub: { current: '1.2.0', releases: { '1.2.0': FIXTURE_PROTOCOL } },
-        web: { current: '1.1.0', releases: { '1.1.0': FIXTURE_PROTOCOL } },
+        cli: { current: '1.4.0', releases: { '1.3.0': {} } },
+        hub: { current: '1.2.0', releases: { '1.2.0': legsOf('hub', FIXTURE_PROTOCOL) } },
+        web: { current: '1.1.0', releases: { '1.1.0': legsOf('web', FIXTURE_PROTOCOL) } },
       }),
     );
 
@@ -2325,22 +2373,152 @@ describe('the versions manifest, which is read off the network and parsed', () =
   });
 
   /**
-   * The tripwire, and the reason it is a tripwire rather than a resolver. A
-   * protocol change releases every affected component together, so the entries
-   * always agree; a set that does not is a release process that broke, and
-   * working out "the newest set that happens to agree" would paper over exactly
-   * the mistake this is here to report.
+   * Nothing was ever published in the bare-number form the file had while
+   * there was one protocol, so a release that is one number is a malformed
+   * file rather than an old one, and it is refused naming the file rather than
+   * read as a release that speaks nothing.
    */
-  it('refuses a set whose components disagree, naming both numbers', () => {
+  it('refuses a release that is one bare number, naming the file', () => {
     const { script, home, versions } = scratch();
-    writeVersions(versions, CURRENT, { protocols: { hub: FIXTURE_PROTOCOL + 1 } });
+    writeFile(
+      join(versions, 'versions.json'),
+      JSON.stringify({
+        cli: { current: '1.4.0', releases: { '1.4.0': FIXTURE_PROTOCOL } },
+        hub: { current: '1.2.0', releases: { '1.2.0': legsOf('hub', FIXTURE_PROTOCOL) } },
+        web: { current: '1.1.0', releases: { '1.1.0': legsOf('web', FIXTURE_PROTOCOL) } },
+      }),
+    );
 
     const result = run(script, home, ['--dry-run', '--role=hub']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`cli speaking protocol ${FIXTURE_PROTOCOL}`);
-    expect(result.stderr).toContain(`hub speaking protocol ${FIXTURE_PROTOCOL + 1}`);
+    expect(result.stderr).toContain(`${versions}/versions.json`);
+    expect(result.stderr).toContain('cli release 1.4.0');
+  });
+
+  /**
+   * Each of these is a leg the grammar does not read as a leg. A quoted number
+   * is the one worth naming: a reader that skipped what it could not parse
+   * would call that release one that speaks no client leg, and check nothing.
+   */
+  it.each([
+    ['a leg that is a string', { client: '3', server: 3 }],
+    ['a leg nobody named', { client: 3, server: 3, browser: 3 }],
+    ['a leg of zero', { client: 0, server: 3 }],
+    ['a leg that is negative', { client: -3, server: 3 }],
+    ['a leg that nests', { client: { major: 3 }, server: 3 }],
+  ])('refuses %s, naming the file and the release', (_name, legs) => {
+    const { script, home, versions } = scratch();
+    writeFile(
+      join(versions, 'versions.json'),
+      JSON.stringify({
+        cli: { current: '1.4.0', releases: { '1.4.0': {} } },
+        hub: { current: '1.2.0', releases: { '1.2.0': legs } },
+        web: { current: '1.1.0', releases: { '1.1.0': legsOf('web', FIXTURE_PROTOCOL) } },
+      }),
+    );
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${versions}/versions.json`);
+    expect(result.stderr).toContain('hub release 1.2.0');
+  });
+
+  /**
+   * The legs are read by name, not by position, so a file that names them in
+   * the other order reads the same. The writer emits client first; a mirror
+   * that re-serialised the file need not.
+   */
+  it('reads the legs in either order', () => {
+    const { script, home, versions } = scratch();
+    writeFile(
+      join(versions, 'versions.json'),
+      JSON.stringify({
+        cli: { current: '1.4.0', releases: { '1.4.0': {} } },
+        hub: { current: '1.2.0', releases: { '1.2.0': { server: 5, client: 4 } } },
+        web: { current: '1.1.0', releases: { '1.1.0': { client: 4, server: 5 } } },
+      }),
+    );
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'client protocol')).toBe('4, which hub and web agree on');
+    expect(planned(result.stdout, 'server protocol')).toBe('5, which hub and web agree on');
+  });
+
+  /**
+   * The tripwire, and the reason it is a tripwire rather than a resolver. A
+   * change to a leg releases every component that records it together, so the
+   * entries always agree on it; a set that does not is a release process that
+   * broke, and working out "the newest set that happens to agree" would paper
+   * over exactly the mistake this is here to report.
+   */
+  it('refuses a hub whose client leg differs from the client it serves, naming both', () => {
+    const { script, home, versions } = scratch();
+    writeVersions(versions, CURRENT, {
+      protocols: { hub: { client: FIXTURE_PROTOCOL + 1, server: FIXTURE_PROTOCOL } },
+    });
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`hub speaking client protocol ${FIXTURE_PROTOCOL + 1}`);
+    expect(result.stderr).toContain(`web speaking client protocol ${FIXTURE_PROTOCOL}`);
     expect(result.stderr).toContain('nothing has been installed');
+  });
+
+  /** The server leg is checked the same way, between the two daemons. */
+  it('refuses a hub and a server that disagree on the server leg, on --role=both', () => {
+    const { script, home, versions } = scratch();
+    const moved = { client: FIXTURE_PROTOCOL, server: FIXTURE_PROTOCOL + 1 };
+    writeVersions(versions, CURRENT, { protocols: { hub: moved, web: moved } });
+
+    const result = run(script, home, ['--dry-run', '--role=both']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`hub speaking server protocol ${FIXTURE_PROTOCOL + 1}`);
+    expect(result.stderr).toContain(`server speaking server protocol ${FIXTURE_PROTOCOL}`);
+  });
+
+  /**
+   * The same release set, on a machine that installs no server: nothing here
+   * speaks the server leg to anything else here, so there is nothing to refuse.
+   * A server elsewhere at the old number is refused at its own handshake.
+   */
+  it('lets a hub install whose server leg differs from the server release it does not take', () => {
+    const { script, home, versions } = scratch();
+    const moved = { client: FIXTURE_PROTOCOL, server: FIXTURE_PROTOCOL + 1 };
+    writeVersions(versions, CURRENT, { protocols: { hub: moved, web: moved } });
+
+    const result = run(script, home, ['--dry-run', '--role=hub']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'server protocol')).toBe(
+      `${FIXTURE_PROTOCOL + 1}, which hub and web agree on`,
+    );
+  });
+
+  /**
+   * Numbers on different legs are never compared. A client-only change leaves
+   * the hub at client 4 and server 3 beside a server at 3, and that is the set
+   * the split exists to allow.
+   */
+  it('accepts legs that differ from each other, when each leg agrees', () => {
+    const { script, home, versions } = scratch();
+    const clientMoved = { client: FIXTURE_PROTOCOL + 1, server: FIXTURE_PROTOCOL };
+    writeVersions(versions, CURRENT, { protocols: { hub: clientMoved, web: clientMoved } });
+
+    const result = run(script, home, ['--dry-run', '--role=both']);
+
+    expect(result.status).toBe(0);
+    expect(planned(result.stdout, 'client protocol')).toBe(
+      `${FIXTURE_PROTOCOL + 1}, which hub and web agree on`,
+    );
+    expect(planned(result.stdout, 'server protocol')).toBe(
+      `${FIXTURE_PROTOCOL}, which hub, web and server agree on`,
+    );
   });
 
   /**
@@ -2370,7 +2548,8 @@ describe('the versions manifest, which is read off the network and parsed', () =
 
     expect(result.status).toBe(0);
     expect(planned(result.stdout, 'release')).toContain('a dry run downloads nothing');
-    expect(planned(result.stdout, 'protocol')).toContain('not checked');
+    expect(planned(result.stdout, 'client protocol')).toContain('not checked');
+    expect(planned(result.stdout, 'server protocol')).toContain('not checked');
     // No URL was built for a version this run never learned: the download root
     // is named, and no tag inside it is. Asked of what npm is handed, because
     // the rest of the line is a prefix this suite chose and nothing the script
@@ -2426,7 +2605,9 @@ describe('the versions manifest, which is read off the network and parsed', () =
 
     expect(result.status).toBe(0);
     expect(planned(result.stdout, 'release')).toContain(join(versions, 'versions.json'));
-    expect(planned(result.stdout, 'protocol')).toContain(String(FIXTURE_PROTOCOL));
+    expect(planned(result.stdout, 'server protocol')).toBe(
+      `${FIXTURE_PROTOCOL}, which server agrees on`,
+    );
     expect(planned(result.stdout, 'package')).toBe(
       `${packageSpecs('server', { cli: '1.2.3', server: '1.4.0' })} into ${home}/.agentplex`,
     );
@@ -2463,8 +2644,8 @@ describe('the protocol a pinned release speaks, checked before anything is insta
     const result = run(script, home, ['--dry-run', '--role=hub@1.3.0']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`cli speaking protocol ${FIXTURE_PROTOCOL}`);
-    expect(result.stderr).toContain(`hub speaking protocol ${FIXTURE_PROTOCOL + 1}`);
+    expect(result.stderr).toContain(`hub speaking client protocol ${FIXTURE_PROTOCOL + 1}`);
+    expect(result.stderr).toContain(`web speaking client protocol ${FIXTURE_PROTOCOL}`);
   });
 
   /**

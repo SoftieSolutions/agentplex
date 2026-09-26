@@ -181,27 +181,36 @@ RUN cd "$(npm root -g)/@softiesolutions/agentplex-hub/apps/hub/dist" \
     && root="$(node --input-type=module --eval 'import {fileURLToPath} from "node:url"; process.stdout.write(fileURLToPath(new URL("./dist", import.meta.resolve("@softiesolutions/agentplex-web/package.json"))))')" \
     && echo "resolved web root: $root" \
     && test -f "$root/index.html"
-# The protocol every published manifest carries, read back off an installed
-# machine.
+# The protocol legs every published manifest carries, read back off an
+# installed machine.
 #
-# This is the fact four independent release trains rest on: `PROTOCOL_VERSION`
-# is the single compatibility constant, packaging writes it into each manifest
-# after `pnpm build`, and `versions.json` and `install.sh` both work from it. A
-# machine is where the claim has to be true, and a claim that only a workflow
-# makes is one nothing checks.
+# This is the fact four independent release trains rest on. The protocol has
+# two legs, each counted by its own constant -- the client leg a browser speaks
+# to the hub, the server leg the hub speaks to a server -- and packaging writes
+# into each manifest, after `pnpm build`, the legs that package speaks: the hub
+# and the web client both, the server its own, the CLI none. `versions.json`
+# and `install.sh` both work from those objects. A machine is where the claim
+# has to be true, and a claim that only a workflow makes is one nothing checks.
 #
-# All four are read and compared to each other rather than to a literal. The
-# number changes whenever a frame or an on-disk format does, so writing it here
-# would be a second place to bump it; what matters is that every package
-# declares one and that the four cut from one build say the same thing.
+# Each leg is compared across the packages that declare it, and to nothing
+# else: not to a literal, because the numbers change whenever a leg's frames do
+# and writing them here would be a second place to bump them, and not across
+# legs, because the legs moving independently is why there are two. What
+# matters is that every package declares an object, that each leg some package
+# speaks is declared by at least one, and that the four cut from one build agree
+# on each leg they share.
 RUN root="$(npm root -g)/@softiesolutions"; \
-    first=''; \
-    for name in agentplex agentplex-hub agentplex-server agentplex-web; do \
-      protocol="$(node -p "require('$root/$name/package.json').agentplex.protocol")"; \
-      printf '%-24s protocol %s\n' "$name" "$protocol"; \
-      case "$protocol" in ''|*[!0-9]*) echo "$name declares no protocol number" >&2; exit 1 ;; esac; \
-      [ -n "$first" ] || first="$protocol"; \
-      [ "$protocol" = "$first" ] || { echo "$name says $protocol and the first package said $first" >&2; exit 1; }; \
+    for leg in client server; do \
+      first=''; first_name=''; \
+      for name in agentplex agentplex-hub agentplex-server agentplex-web; do \
+        protocol="$(node -p "const p = require('$root/$name/package.json').agentplex?.protocol; p !== null && typeof p === 'object' && !Array.isArray(p) ? String(p['$leg'] ?? '') : 'no protocol object'")"; \
+        printf '%-24s %s protocol %s\n' "$name" "$leg" "${protocol:-(not spoken)}"; \
+        [ -n "$protocol" ] || continue; \
+        case "$protocol" in *[!0-9]*) echo "$name declares a $leg protocol that is not a number: $protocol" >&2; exit 1 ;; esac; \
+        [ -n "$first" ] || { first="$protocol"; first_name="$name"; }; \
+        [ "$protocol" = "$first" ] || { echo "$name says $leg protocol $protocol and $first_name said $first" >&2; exit 1; }; \
+      done; \
+      [ -n "$first" ] || { echo "no package declares the $leg protocol" >&2; exit 1; }; \
     done
 
 # `--version`, against what the installed manifest declares rather than against

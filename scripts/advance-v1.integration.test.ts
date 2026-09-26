@@ -37,6 +37,13 @@ const identity = {
   GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
 };
 
+/**
+ * The protocol argument as the release job passes it: the JSON text of the
+ * `agentplex.protocol` object in the package it assembled, one entry per leg.
+ */
+const LEGS = '{"client":3,"server":3}';
+const BOTH = { client: 3, server: 3 };
+
 const temporaries: string[] = [];
 
 afterEach(() => {
@@ -148,10 +155,10 @@ describe('advance-v1.sh', () => {
     const repos = repositories();
     const first = commitOnMaster(repos, 'first');
 
-    advanced(repos, 'hub', '1.0.0', '3', first);
+    advanced(repos, 'hub', '1.0.0', LEGS, first);
 
     expect(installerOnV1(repos)).toBe('first');
-    expect(manifestOnV1(repos)).toEqual({ hub: { current: '1.0.0', releases: { '1.0.0': 3 } } });
+    expect(manifestOnV1(repos)).toEqual({ hub: { current: '1.0.0', releases: { '1.0.0': BOTH } } });
     expect(trailerOnV1(repos)).toBe(first);
   });
 
@@ -161,12 +168,12 @@ describe('advance-v1.sh', () => {
     const second = commitOnMaster(repos, 'second');
     const head = git(repos.work, ['rev-parse', 'HEAD']);
 
-    advanced(repos, 'hub', '1.0.0', '3', first);
-    advanced(repos, 'cli', '1.1.0', '3', second);
+    advanced(repos, 'hub', '1.0.0', LEGS, first);
+    advanced(repos, 'cli', '1.1.0', LEGS, second);
 
     expect(manifestOnV1(repos)).toEqual({
-      hub: { current: '1.0.0', releases: { '1.0.0': 3 } },
-      cli: { current: '1.1.0', releases: { '1.1.0': 3 } },
+      hub: { current: '1.0.0', releases: { '1.0.0': BOTH } },
+      cli: { current: '1.1.0', releases: { '1.1.0': BOTH } },
     });
     expect(installerOnV1(repos)).toBe('second');
     expect(trailerOnV1(repos)).toBe(second);
@@ -197,13 +204,13 @@ describe('advance-v1.sh', () => {
     const repos = repositories();
     const first = commitOnMaster(repos, 'first');
     const second = commitOnMaster(repos, 'second');
-    advanced(repos, 'hub', '1.0.0', '3', first);
+    advanced(repos, 'hub', '1.0.0', LEGS, first);
 
     const competing = join(repos.root, 'competing.json');
     writeFileSync(
       competing,
       serializeVersionsManifest(
-        updateVersionsManifest(manifestOnV1(repos), 'server', { version: '1.2.0', protocol: 3 }),
+        updateVersionsManifest(manifestOnV1(repos), 'server', { version: '1.2.0', protocol: BOTH }),
       ),
     );
     const marker = join(repos.root, 'raced');
@@ -232,13 +239,13 @@ describe('advance-v1.sh', () => {
     );
     chmodSync(hook, 0o755);
 
-    advanced(repos, 'cli', '1.1.0', '3', second);
+    advanced(repos, 'cli', '1.1.0', LEGS, second);
 
     expect(existsSync(marker)).toBe(true);
     expect(manifestOnV1(repos)).toEqual({
-      hub: { current: '1.0.0', releases: { '1.0.0': 3 } },
-      server: { current: '1.2.0', releases: { '1.2.0': 3 } },
-      cli: { current: '1.1.0', releases: { '1.1.0': 3 } },
+      hub: { current: '1.0.0', releases: { '1.0.0': BOTH } },
+      server: { current: '1.2.0', releases: { '1.2.0': BOTH } },
+      cli: { current: '1.1.0', releases: { '1.1.0': BOTH } },
     });
     expect(installerOnV1(repos)).toBe('second');
     expect(git(repos.origin, ['log', '-1', '--format=%s', 'refs/heads/v1^'])).toBe(
@@ -249,16 +256,16 @@ describe('advance-v1.sh', () => {
   it('records a tag cut from a commit not on master, and leaves the tree alone', () => {
     const repos = repositories();
     const first = commitOnMaster(repos, 'first');
-    advanced(repos, 'hub', '1.0.0', '3', first);
+    advanced(repos, 'hub', '1.0.0', LEGS, first);
 
     git(repos.work, ['checkout', '--quiet', '-b', 'side']);
     const side = commit(repos, 'side');
     git(repos.work, ['checkout', '--quiet', 'master']);
 
-    advanced(repos, 'hub', '1.0.1', '3', side);
+    advanced(repos, 'hub', '1.0.1', LEGS, side);
 
     expect(manifestOnV1(repos)).toEqual({
-      hub: { current: '1.0.1', releases: { '1.0.0': 3, '1.0.1': 3 } },
+      hub: { current: '1.0.1', releases: { '1.0.0': BOTH, '1.0.1': BOTH } },
     });
     expect(installerOnV1(repos)).toBe('first');
     expect(trailerOnV1(repos)).toBe('');
@@ -268,13 +275,13 @@ describe('advance-v1.sh', () => {
     const repos = repositories();
     const first = commitOnMaster(repos, 'first');
     const second = commitOnMaster(repos, 'second');
-    advanced(repos, 'hub', '1.0.0', '3', second);
+    advanced(repos, 'hub', '1.0.0', LEGS, second);
 
-    advanced(repos, 'server', '1.0.0', '3', first);
+    advanced(repos, 'server', '1.0.0', LEGS, first);
 
     expect(manifestOnV1(repos)).toEqual({
-      hub: { current: '1.0.0', releases: { '1.0.0': 3 } },
-      server: { current: '1.0.0', releases: { '1.0.0': 3 } },
+      hub: { current: '1.0.0', releases: { '1.0.0': BOTH } },
+      server: { current: '1.0.0', releases: { '1.0.0': BOTH } },
     });
     expect(installerOnV1(repos)).toBe('second');
   });
@@ -290,17 +297,17 @@ describe('advance-v1.sh', () => {
     const older = commitOnMaster(repos, 'older');
     const released = commitOnMaster(repos, 'released');
     const candidate = commitOnMaster(repos, 'candidate');
-    advanced(repos, 'hub', '1.0.0', '3', released);
+    advanced(repos, 'hub', '1.0.0', LEGS, released);
 
-    advanced(repos, 'hub', '1.1.0-rc1', '3', candidate);
+    advanced(repos, 'hub', '1.1.0-rc1', LEGS, candidate);
 
     expect(manifestOnV1(repos)).toEqual({
-      hub: { current: '1.0.0', releases: { '1.0.0': 3, '1.1.0-rc1': 3 } },
+      hub: { current: '1.0.0', releases: { '1.0.0': BOTH, '1.1.0-rc1': BOTH } },
     });
     expect(installerOnV1(repos)).toBe('released');
     expect(trailerOnV1(repos)).toBe('');
 
-    advanced(repos, 'cli', '1.0.0', '3', older);
+    advanced(repos, 'cli', '1.0.0', LEGS, older);
 
     expect(installerOnV1(repos)).toBe('released');
   });
@@ -316,7 +323,7 @@ describe('advance-v1.sh', () => {
     git(repos.work, ['push', '--quiet', 'origin', `${first}:refs/heads/v1`]);
     const second = commitOnMaster(repos, 'second');
 
-    advanced(repos, 'cli', '1.1.0', '3', second);
+    advanced(repos, 'cli', '1.1.0', LEGS, second);
 
     expect(installerOnV1(repos)).toBe('second');
     expect(trailerOnV1(repos)).toBe(second);
@@ -327,7 +334,7 @@ describe('advance-v1.sh', () => {
     const repos = repositories();
     const first = commitOnMaster(repos, 'first');
 
-    const run = spawnSync('bash', [script, 'hub', '1.0.0', '3', first], {
+    const run = spawnSync('bash', [script, 'hub', '1.0.0', LEGS, first], {
       cwd: repos.work,
       encoding: 'utf8',
     });

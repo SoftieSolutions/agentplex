@@ -2,6 +2,10 @@
 #
 # advance-v1.sh <component> <version> <protocol> <sha> <remote>
 #
+# <protocol> is the JSON text of the released package's `agentplex.protocol`,
+# the legs it speaks: `{"client":39,"server":39}` for a hub, `{}` for the CLI.
+# It is passed through to the manifest writer untouched and parsed there.
+#
 # Records one release in `versions.json` on the `v1` branch of <remote>, and
 # moves the branch's tree to the released commit when that is safe. Run by the
 # release workflow's `v1` job from its checkout of the tagged commit, which has
@@ -194,13 +198,13 @@ while :; do
 
   if [ "$take_tree" = 'yes' ]; then
     subject="$component $version: the installer and the manifest for the released commit"
-    body="$tag published $component at $version, speaking protocol $protocol.
+    body="$tag published $component at $version, declaring protocol $protocol.
 This branch is what \`curl | bash\` fetches install.sh from and what an
 install reads versions.json from, so both move to the commit the release
 was cut from."
   else
     subject="$component $version: recorded in the manifest, without moving the tree"
-    body="$tag published $component at $version, speaking protocol $protocol.
+    body="$tag published $component at $version, declaring protocol $protocol.
 It is listed in versions.json so that --role=$component@$version can
 install it. The tree is untouched, because $held: install.sh on this
 branch stays the one from the last release that moved it."

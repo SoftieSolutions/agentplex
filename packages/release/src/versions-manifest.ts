@@ -56,7 +56,7 @@ import { compareVersions } from './version-order.js';
  * ## Why it carries history
  *
  * Every release this component has ever published, not only the current one,
- * as `<version>: <protocol>`. Two things need it and neither could be had from
+ * as `<version>: <protocol legs>`. Two things need it and neither could be had from
  * the file that described only what is current.
  *
  * A partial pin is the first. `--role=hub@1.3` is the shape a fleet operator
@@ -81,13 +81,23 @@ import { compareVersions } from './version-order.js';
  *
  * ## Why the protocol is in it
  *
- * It is the whole reason independent versions are safe. `PROTOCOL_VERSION` is
- * the single compatibility constant, packaging writes it into every published
- * manifest, and the release copies it in here -- so `install.sh` can ask one
- * question, before it installs anything, about a set of components it has not
- * downloaded. A protocol change releases every affected component together, so
- * these numbers always agree; `install.sh` refuses loudly with both named if
- * they ever do not.
+ * It is the whole reason independent versions are safe. The protocol has two
+ * legs, each with its own constant -- `CLIENT_PROTOCOL_VERSION` for the browser
+ * and MCP side of the hub, `SERVER_PROTOCOL_VERSION` for the hub-to-server
+ * side -- and packaging writes into every published manifest the legs that
+ * package speaks: the hub and the web client both, the server only its own,
+ * the CLI neither. The release copies that object in here, so `install.sh` can
+ * ask one question per leg, before it installs anything, about a set of
+ * components it has not downloaded. A change to a leg releases every component
+ * that records it together, so the numbers on one leg always agree; `install.sh`
+ * refuses loudly with both named if they ever do not. Numbers on different legs
+ * are not compared: a hub at client 40 and server 39 beside a server at 39 is
+ * the whole point of having two.
+ *
+ * A release value is always the object. Nothing was ever published in the
+ * bare-number form the file had while there was one protocol, so there is no
+ * old file to read and a bare number is refused like any other malformed
+ * release rather than guessed at.
  */
 
 /**
@@ -130,7 +140,55 @@ export function isReleaseVersion(value: string): boolean {
 const versionSchema = z.string().regex(SEMVER);
 
 /**
- * One release: the version its tag names and the protocol its tarball declares.
+ * The protocol legs one release speaks, each a positive integer, each absent
+ * when the package does not speak that leg.
+ *
+ * `strict`, so a leg nobody named stops the release rather than being carried
+ * into a file `install.sh` reads with a grammar that would not know it. The
+ * legs are positive because neither constant ever takes the value 0 -- a falsy
+ * version is indistinguishable from a missing one in anything that tests it
+ * before comparing.
+ *
+ * The leg names are restated here rather than imported from the protocol
+ * package, for the reason the whole package imports nothing: the release job
+ * that advances `v1` builds this package alone.
+ */
+const releaseProtocolSchema = z
+  .object({
+    client: z.int().positive().optional(),
+    server: z.int().positive().optional(),
+  })
+  .strict();
+
+export type ReleaseProtocol = z.infer<typeof releaseProtocolSchema>;
+
+/**
+ * The legs a release job was handed, as the JSON text the workflow read out of
+ * the package's own manifest.
+ *
+ * It throws naming `source`, because both callers want a failed job that says
+ * which word was wrong: the release job reads it off argv, and packaging reads
+ * it back off a manifest it has just written.
+ */
+export function parseReleaseProtocol(source: string, text: string): ReleaseProtocol {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${source} is not JSON: ${error instanceof Error ? error.message : ''}`);
+  }
+  const parsed = releaseProtocolSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(
+      `${source} is not a release protocol, an object of client and server legs: ${parsed.error.message}`,
+    );
+  }
+  return parsed.data;
+}
+
+/**
+ * One release: the version its tag names and the protocol legs its tarball
+ * declares.
  *
  * What a release job knows and hands to `updateVersionsManifest`, and what
  * `currentRelease` hands back to a reader that wants the current one as a pair
@@ -139,7 +197,7 @@ const versionSchema = z.string().regex(SEMVER);
 const releaseSchema = z
   .object({
     version: versionSchema,
-    protocol: z.int().positive(),
+    protocol: releaseProtocolSchema,
   })
   .strict();
 
@@ -148,10 +206,8 @@ const releaseSchema = z
  * been.
  *
  * `strict`, so a field nobody listed stops the release rather than being
- * carried forward into a file every installing machine reads. The protocol is a
- * positive integer because `PROTOCOL_VERSION` never takes the value 0 -- a
- * falsy version is indistinguishable from a missing one in anything that tests
- * it before comparing.
+ * carried forward into a file every installing machine reads. Each release's
+ * value is the legs it speaks; see `releaseProtocolSchema`.
  *
  * The keys of `releases` are checked as versions too. They are what a partial
  * pin is resolved against, so a key that is not a version is a candidate
@@ -167,7 +223,7 @@ const releaseSchema = z
 const entrySchema = z
   .object({
     current: versionSchema,
-    releases: z.record(versionSchema, z.int().positive()),
+    releases: z.record(versionSchema, releaseProtocolSchema),
   })
   .strict()
   .refine((entry) => entry.current in entry.releases, {
@@ -264,7 +320,7 @@ export function currentRelease(entry: VersionsEntry): PublishedRelease {
  * the only case where a prerelease is current, and it stops being one the
  * moment anything else ships.
  */
-function newestInstallable(releases: Readonly<Record<string, number>>): string {
+function newestInstallable(releases: Readonly<Record<string, ReleaseProtocol>>): string {
   const versions = Object.keys(releases);
   const released = versions.filter((one) => !isPrerelease(one));
   const candidates = released.length > 0 ? released : versions;
@@ -289,7 +345,9 @@ function isPrerelease(version: string): boolean {
 }
 
 /** Newest first, by precedence and not by text. */
-function sortReleases(releases: Readonly<Record<string, number>>): Record<string, number> {
+function sortReleases(
+  releases: Readonly<Record<string, ReleaseProtocol>>,
+): Record<string, ReleaseProtocol> {
   return Object.fromEntries(
     Object.entries(releases).sort(([a], [b]) => -(compareVersions(a, b) ?? 0)),
   );

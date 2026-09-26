@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { PROTOCOL_VERSION } from '@agentplex/protocol';
+import { CLIENT_PROTOCOL_VERSION, SERVER_PROTOCOL_VERSION } from '@agentplex/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assemblePackage,
@@ -830,29 +830,51 @@ describe('releaseFromTag', () => {
 });
 
 describe('what a published manifest says about the protocol', () => {
+  const both = { client: CLIENT_PROTOCOL_VERSION, server: SERVER_PROTOCOL_VERSION };
+
   /**
    * The fact four release trains rest on. Every published manifest carries the
-   * compiled constant, so a component's protocol is a property of the artifact
-   * rather than of the workflow that built it -- which is what lets
-   * `install.sh` refuse a set that does not agree before it installs any of it.
+   * compiled constants of the legs it speaks, so a component's protocol is a
+   * property of the artifact rather than of the workflow that built it -- which
+   * is what lets `install.sh` refuse a set that does not agree on a leg before
+   * it installs any of it.
    */
-  it.each(PACKAGES.map((target) => [target.component, target] as const))(
-    'writes PROTOCOL_VERSION into the %s manifest',
-    (_component, target) => {
-      expect(manifestFor(target)['agentplex']).toEqual({ protocol: PROTOCOL_VERSION });
-    },
-  );
+  it.each([
+    ['cli', CLI, {}],
+    ['hub', HUB, both],
+    ['server', SERVER, { server: SERVER_PROTOCOL_VERSION }],
+    ['web', WEB, both],
+  ] as const)('writes the legs the %s speaks into its manifest', (_component, target, legs) => {
+    expect(manifestFor(target)['agentplex']).toEqual({ protocol: legs });
+  });
+
+  /**
+   * The hub speaks both legs, and the server only its own: a client-only change
+   * releases the hub and the client and leaves every server installed where it
+   * is. The CLI speaks neither -- it opens no socket to either daemon -- so a
+   * number in its manifest would be a claim nothing checks.
+   */
+  it('names each target by the legs it speaks', () => {
+    expect(PACKAGES.map((target) => [target.component, target.legs])).toEqual([
+      ['cli', []],
+      ['hub', ['client', 'server']],
+      ['server', ['server']],
+      ['web', ['client', 'server']],
+    ]);
+  });
 
   /**
    * The client declares nothing at all and still declares this. It is the one
    * package with no dependency set to carry the protocol in, and it is exactly
-   * the package a later `agentplex update web` would replace on its own -- so
-   * it is the one whose protocol most needs stating.
+   * the package `agentplex update web` would replace on its own -- so it is the
+   * one whose protocol most needs stating. Both legs, not only the one its
+   * `hello` speaks: it judges a discovered server's beacon against its own
+   * server-leg constant, so that number has to be held equal to the hub's.
    */
-  it('states it on the client too, which declares nothing else', () => {
+  it('states both legs on the client too, which declares nothing else', () => {
     const manifest = manifestFor(WEB);
     expect(manifest['dependencies']).toEqual({});
-    expect(manifest['agentplex']).toEqual({ protocol: PROTOCOL_VERSION });
+    expect(manifest['agentplex']).toEqual({ protocol: both });
   });
 });
 
@@ -882,12 +904,26 @@ describe('the assets a release publishes', () => {
     expect(releaseDescription(HUB, '1.2.0')).toEqual({
       component: 'hub',
       version: '1.2.0',
-      protocol: PROTOCOL_VERSION,
+      protocol: { client: CLIENT_PROTOCOL_VERSION, server: SERVER_PROTOCOL_VERSION },
       package: '@softiesolutions/agentplex-hub',
       directory: 'apps/hub/release',
       asset: 'agentplex-hub.tgz',
     });
   });
+
+  /**
+   * The same legs the manifest states, because the workflow copies this into
+   * `versions.json` and a release line that disagreed with its own tarball
+   * would be the one thing `install.sh` checks getting it wrong.
+   */
+  it.each(PACKAGES.map((target) => [target.component, target] as const))(
+    'describes the %s release with the legs its manifest states',
+    (_component, target) => {
+      expect({ protocol: releaseDescription(target, '1.2.0').protocol }).toEqual(
+        manifestFor(target)['agentplex'],
+      );
+    },
+  );
 });
 
 describe('parseManifest', () => {
