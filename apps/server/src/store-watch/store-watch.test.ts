@@ -13,6 +13,7 @@ import type { SessionController, StoreReport } from '../sessions/session-control
 import {
   STORE_WATCH_BACKOFF_MS,
   STORE_WATCH_DEBOUNCE_MS,
+  STORE_WATCH_HEALTHY_MS,
   watchStores,
   type StoreWatchers,
 } from './store-watch.js';
@@ -245,6 +246,67 @@ describe('a store that cannot be watched', () => {
     world.watcher.change(STORE.path);
     await settle(world);
     expect(only.sent).toHaveLength(1);
+  });
+
+  it('backs off a watch that keeps dying as soon as it is established', () => {
+    const world = start();
+    const seen: number[] = [];
+
+    // A watch that is granted and then dies straight away is failing as surely
+    // as one that is refused, so establishing it must not wipe the count.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      world.watcher.fail(STORE.path, 'EBADF: the volume went away');
+      seen.push(...world.timers.delays);
+      world.timers.fireAll();
+    }
+
+    expect(seen).toEqual([...STORE_WATCH_BACKOFF_MS]);
+  });
+
+  it('starts the ladder again once a watch has stayed up', () => {
+    const world = start();
+
+    world.watcher.fail(STORE.path, 'EBADF: the volume went away');
+    world.timers.fireAll();
+    world.watcher.fail(STORE.path, 'EBADF: the volume went away');
+    expect(world.timers.delays).toEqual([STORE_WATCH_BACKOFF_MS[1]]);
+    world.timers.fireAll();
+
+    // Re-established after two failures, so what is pending is the wait that
+    // decides whether this watch has recovered.
+    expect(world.timers.delays).toEqual([STORE_WATCH_HEALTHY_MS]);
+    world.timers.fireAll();
+
+    world.watcher.fail(STORE.path, 'EBADF: the volume went away');
+    expect(world.timers.delays).toEqual([STORE_WATCH_BACKOFF_MS[0]]);
+  });
+
+  it('starts the ladder again once a watch has reported a change', () => {
+    const world = start();
+
+    world.watcher.fail(STORE.path, 'EBADF: the volume went away');
+    world.timers.fireAll();
+    expect(world.timers.delays).toEqual([STORE_WATCH_HEALTHY_MS]);
+
+    // An event is proof the watch works, and it takes the pending healthy wait
+    // with it: what is left is the burst window alone.
+    world.watcher.change(STORE.path);
+    expect(world.timers.delays).toEqual([STORE_WATCH_DEBOUNCE_MS]);
+
+    world.watcher.fail(STORE.path, 'EBADF: the volume went away');
+    expect(world.timers.delays).toEqual([STORE_WATCH_DEBOUNCE_MS, STORE_WATCH_BACKOFF_MS[0]]);
+  });
+
+  it('leaves no healthy wait behind once the server has stopped', () => {
+    const world = start();
+
+    world.watcher.fail(STORE.path, 'EBADF: the volume went away');
+    world.timers.fireAll();
+    expect(world.timers.pending).toBe(1);
+
+    world.watchers.stop();
+
+    expect(world.timers.pending).toBe(0);
   });
 
   it('stops trying once the server has stopped', () => {

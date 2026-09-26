@@ -85,6 +85,29 @@ export const STORE_WATCH_POLL_MS = 30_000;
 export const STORE_WATCH_BACKOFF_MS = [1_000, 5_000, 15_000, 60_000] as const;
 
 /**
+ * How long a re-established watch has to stay up before its failures are
+ * forgiven, in milliseconds.
+ *
+ * Establishing a watch is not the same as having one. A volume on its way out
+ * can grant `fs.watch` and fail it a moment later, and if that grant counted as
+ * a recovery the backoff would start again at its first step on every attempt:
+ * a watch dying on a loop would be retried every second for as long as the
+ * volume stayed broken. So the count survives an establish and is cleared by
+ * evidence instead -- a minute without an error, or an event, which only a
+ * working watch produces.
+ *
+ * An event clears it outright, so a watch that reports one change and then
+ * dies starts again at the 1000 ms step. That is deliberate: it did work, and
+ * a watch that works for as long as it takes to see one write is not the loop
+ * this guards against.
+ *
+ * A minute because it is the top of `STORE_WATCH_BACKOFF_MS`: a watch that has
+ * outlived the longest wait the ladder would impose has earned its first rung
+ * back.
+ */
+export const STORE_WATCH_HEALTHY_MS = 60_000;
+
+/**
  * How long to wait after this many consecutive failures, which stops growing at
  * the last step rather than running off the end of the list.
  *
@@ -220,11 +243,20 @@ function watchStore({
   let window: (() => void) | null = null;
   /** Cancels the wait before the next attempt, or `null` when none is waiting. */
   let waiting: (() => void) | null = null;
+  /**
+   * Cancels the wait that forgives past failures, or `null` when none is
+   * pending: nothing has failed, or the watch has not been re-established.
+   */
+  let healthy: (() => void) | null = null;
   /** Whether a report is in flight. Two scans of one store at once are one too many. */
   let reporting = false;
   /** Whether something changed while that report was being made. */
   let again = false;
-  /** How many attempts have failed in a row, which is where the backoff is read. */
+  /**
+   * How many attempts have failed without a working watch in between, which is
+   * where the backoff is read. An establish alone does not clear it; see
+   * `STORE_WATCH_HEALTHY_MS` for what does.
+   */
   let failures = 0;
   let stopped = false;
 
@@ -263,8 +295,16 @@ function watchStore({
     }
   };
 
+  const forgive = (): void => {
+    healthy?.();
+    healthy = null;
+  };
+
   const onChange = (): void => {
     if (stopped) return;
+    // Only a working watch reports an event, so this one has recovered.
+    failures = 0;
+    forgive();
     if (reporting) {
       again = true;
       return;
@@ -273,8 +313,10 @@ function watchStore({
   };
 
   const onError = (problem: string): void => {
-    // The watch is over by contract, so there is nothing here to close.
+    // The watch is over by contract, so there is nothing here to close. It did
+    // not stay up long enough to be forgiven, so the count stands.
     watch = null;
+    forgive();
     retry(problem);
   };
 
@@ -305,8 +347,16 @@ function watchStore({
       retry(String(error));
       return;
     }
-    failures = 0;
     logger.info('watching a store', { storeId, path, mode: watch.mode, debounceMs });
+    // Armed only after a failure, so a store that was watched cleanly at boot
+    // holds no timer at all.
+    if (failures > 0) {
+      healthy = timers.schedule(STORE_WATCH_HEALTHY_MS, () => {
+        healthy = null;
+        if (stopped) return;
+        failures = 0;
+      });
+    }
   };
 
   establish();
@@ -319,6 +369,7 @@ function watchStore({
       window = null;
       waiting?.();
       waiting = null;
+      forgive();
       watch?.close();
       watch = null;
     },

@@ -1,5 +1,5 @@
-import { watch, type FSWatcher } from 'node:fs';
-import { errnoCode } from '@agentplex/node-shared';
+import { watch as fsWatch, type FSWatcher } from 'node:fs';
+import { errnoCode, systemTimers, type Timers } from '@agentplex/node-shared';
 import {
   STORE_WATCH_POLL_MS,
   type StoreWatch,
@@ -30,59 +30,115 @@ import {
  * beacon is unref'd for the same reason: a shutdown that has closed everything
  * it serves should exit, not sit in the event loop because something is
  * watching a directory.
+ *
+ * **`fs.watch` and the clock are injected**, so the fallback -- which no
+ * platform agentplex ships on reaches -- is tested by a refusal a test throws
+ * rather than by a platform nobody has. The composition root still injects the
+ * watcher itself; only `nodeStoreWatcher`, the module default, binds the real
+ * `fs.watch` and the system timers.
  */
 
 /** Node's answer when `recursive` is not available on this platform. */
 const UNAVAILABLE = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM';
 
-export const nodeStoreWatcher: StoreWatcher = {
-  watch(path: string, events: StoreWatchEvents): StoreWatch {
-    let watcher: FSWatcher;
-    try {
-      watcher = watch(path, { recursive: true, persistent: false });
-    } catch (error) {
-      // Only the one refusal falls back. Anything else -- the directory is
-      // gone, the process is out of watch descriptors -- is a failure to
-      // establish, and the caller's backoff is what that is for. Turning every
-      // error into a poll would quietly report a store nobody can read.
-      if (errnoCode(error) !== UNAVAILABLE) throw error;
-      return pollInstead(events);
-    }
+/**
+ * The one call this file makes of `fs.watch`, as a single signature.
+ *
+ * Narrower than `typeof fs.watch`, whose overloads a test double would have to
+ * satisfy all of, for a call that only ever takes these two options.
+ */
+export type FsWatch = (
+  path: string,
+  options: { readonly recursive: boolean; readonly persistent: boolean },
+) => FSWatcher;
 
-    watcher.on('change', () => events.onChange());
-    watcher.on('error', (error) => {
-      // Closed here rather than left to the caller, because the seam promises
-      // that a watch which reported an error is over: an `FSWatcher` that
-      // errored may still hold a descriptor, and the caller is about to
-      // establish a second one.
+export interface NodeStoreWatcherDependencies {
+  /** Schedules the fallback's ticks. */
+  readonly timers: Timers;
+  /** Defaults to Node's own `fs.watch`. */
+  readonly watch?: FsWatch;
+}
+
+export function createNodeStoreWatcher({
+  timers,
+  watch = fsWatch,
+}: NodeStoreWatcherDependencies): StoreWatcher {
+  return {
+    watch(path: string, events: StoreWatchEvents): StoreWatch {
+      return establish(watch, timers, path, events);
+    },
+  };
+}
+
+/** The real filesystem and the real clock, which is what the server runs on. */
+export const nodeStoreWatcher: StoreWatcher = createNodeStoreWatcher({ timers: systemTimers });
+
+function establish(
+  watch: FsWatch,
+  timers: Timers,
+  path: string,
+  events: StoreWatchEvents,
+): StoreWatch {
+  let watcher: FSWatcher;
+  try {
+    watcher = watch(path, { recursive: true, persistent: false });
+  } catch (error) {
+    // Only the one refusal falls back. Anything else -- the directory is
+    // gone, the process is out of watch descriptors -- is a failure to
+    // establish, and the caller's backoff is what that is for. Turning every
+    // error into a poll would quietly report a store nobody can read.
+    if (errnoCode(error) !== UNAVAILABLE) throw error;
+    return pollInstead(timers, events);
+  }
+
+  watcher.on('change', () => events.onChange());
+  watcher.on('error', (error) => {
+    // Closed here rather than left to the caller, because the seam promises
+    // that a watch which reported an error is over: an `FSWatcher` that
+    // errored may still hold a descriptor, and the caller is about to
+    // establish a second one.
+    watcher.close();
+    events.onError(String(error));
+  });
+
+  return {
+    mode: 'recursive',
+    close(): void {
       watcher.close();
-      events.onError(String(error));
-    });
-
-    return {
-      mode: 'recursive',
-      close(): void {
-        watcher.close();
-      },
-    };
-  },
-};
+    },
+  };
+}
 
 /**
  * The fallback: say the store changed every interval, and let the report say
  * whether it did.
  *
  * A tick rather than a crawl of the tree -- see `STORE_WATCH_POLL_MS` for why
- * walking it would cost about what the scan it is deciding about costs. The
- * handle is unref'd for the same reason the watch above is not persistent.
+ * walking it would cost about what the scan it is deciding about costs.
+ *
+ * A chain of single timers on the seam rather than an interval: the system
+ * timers already unref, for the same reason the watch above is not persistent,
+ * and a test can fire a tick by hand. The next tick is scheduled before this
+ * one reports, so a change handler that throws costs its own tick and not the
+ * poll; `closed` is what stops a close from inside that handler being undone
+ * by the tick it just scheduled.
  */
-function pollInstead(events: StoreWatchEvents): StoreWatch {
-  const handle = setInterval(() => events.onChange(), STORE_WATCH_POLL_MS);
-  handle.unref?.();
+function pollInstead(timers: Timers, events: StoreWatchEvents): StoreWatch {
+  let closed = false;
+  let cancel = (): void => {};
+
+  const tick = (): void => {
+    if (closed) return;
+    cancel = timers.schedule(STORE_WATCH_POLL_MS, tick);
+    events.onChange();
+  };
+
+  cancel = timers.schedule(STORE_WATCH_POLL_MS, tick);
   return {
     mode: 'polling',
     close(): void {
-      clearInterval(handle);
+      closed = true;
+      cancel();
     },
   };
 }
