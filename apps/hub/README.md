@@ -7,16 +7,14 @@ This is not a command. There is no `agentplex hub` to type: the package carries
 a compiled program, and what starts it is a systemd unit naming an interpreter
 and that file.
 
-```sh
-npm install --global \
-  https://github.com/SoftieSolutions/agentplex/releases/download/hub-v1.0.0/agentplex-hub.tgz \
-  https://github.com/SoftieSolutions/agentplex/releases/download/web-v1.0.0/agentplex-web.tgz
-node "$(npm root -g)/@softiesolutions/agentplex-hub/apps/hub/dist/main.js" --help
-```
-
 Nothing here is on npm. Every release is a GitHub Release carrying one tarball,
-and npm installs it from that URL -- so the version in it is a release tag and
-not a range. `install.sh` is what resolves a version for you.
+so the version in it is a release tag and not a range, and `agentplex install`
+is what resolves a version for you. The tarball carries an
+`npm-shrinkwrap.json`, the dependency versions it was tested with, and npm
+reads that only when the package is the project it installs into -- so it is
+unpacked and installed in place, never with `npm install --global <url>`, which
+ignores the shrinkwrap. [The procedure by hand](https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md#if-your-npm-is-configured-with-ignore-scripts) is in the command's
+README.
 
 The hub and the client are separate release trains, so their versions move
 independently; what is current for each is published as `versions.json` on the
@@ -25,8 +23,10 @@ carries an `agentplex.protocol` number, and a hub only talks to a server and a
 client that declare the same one.
 
 Install it with [the `agentplex` command](https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md),
-which is what configures and checks a machine, and let `install.sh --role=hub`
-write the unit:
+which is what configures and checks a machine: `agentplex install --role=hub`
+installs this package and the client beside it and writes the unit, and on a
+machine with nothing on it yet `install.sh` puts a runtime and the command
+there and hands over to it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SoftieSolutions/agentplex/v1/scripts/install.sh | bash -s -- --role=hub

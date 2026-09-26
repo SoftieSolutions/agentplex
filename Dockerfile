@@ -396,10 +396,16 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # AGENTPLEX_PACKAGE is the seam. It points the install at the directory of
 # tarballs the `package` stage just built, which is the only way to run this
 # against a build that has never been published. A directory rather than a spec,
-# because the release is four packages: the script picks out the ones this role
-# needs, and stops naming the missing one if the directory does not hold them.
+# because the release is four packages: the script takes the command's out of
+# it, and the command, handed the same variable, the ones this role needs.
+#
+# The script installs the runtime, the toolchain and the command, then hands the
+# rest to `agentplex install` -- the server's package, the settings file and the
+# unit. So everything below about those is what the bin wrote through the
+# handover, asserted exactly as it was when the script wrote them itself.
 RUN AGENTPLEX_PACKAGE=/package \
     bash /install.sh --role=server --no-setup | tee /tmp/install.log
+RUN grep -Eq '^install +/home/alice/\.agentplex/bin/agentplex install --role=server$' /tmp/install.log
 
 # What the script said it would do, read back off the machine.
 #
@@ -444,7 +450,7 @@ RUN test -f "$HOME/.config/systemd/user/agentplex-server.service" \
     && grep -qx 'KillMode=mixed' "$HOME/.config/systemd/user/agentplex-server.service" \
     && systemd-analyze verify "$HOME/.config/systemd/user/agentplex-server.service"
 
-# `agentplex install`, the bin doing what install.sh just did, on the one
+# `agentplex install` run by hand, as the handover above ran it, on the one
 # machine here with a runtime install.sh really put in place and none of the
 # hub's packages yet.
 #
@@ -690,8 +696,20 @@ RUN cat /tmp/pin.log && grep -q 'cli@9.7' /tmp/pin.log
 # installed to make this possible -- no tcl, no `script(1)` -- so the box is
 # still the operator's box, and loading that seam is one more assertion rather
 # than one more dependency. `scripts/drive-setup.ts` argues the choice in full.
+#
+# The trees are copied into this layer first, and that is the one line here
+# about Docker rather than about the machine. Every RUN is a layer, and overlayfs
+# refuses to rename a directory that lives in a lower one -- EXDEV, unless the
+# kernel's redirect_dir is on -- so `agentplex install` setting the server's tree
+# aside as `.old` fails where the first run put it. `mv` falls back to copying
+# on EXDEV and the command's swap deliberately renames and never copies
+# (`WriteMachine.rename`), so the re-run needs its trees in the layer it runs
+# in, which a machine's own filesystem, having no layers, always has.
 COPY scripts/drive-setup.ts /drive-setup.ts
-RUN AGENTPLEX_PACKAGE=/package node /drive-setup.ts \
+RUN for tree in "$HOME/.agentplex/lib/node_modules/@softiesolutions"/*; do \
+      cp -a "$tree" "$tree.layer" && rm -rf "$tree" && mv "$tree.layer" "$tree"; \
+    done \
+    && AGENTPLEX_PACKAGE=/package node /drive-setup.ts \
       --pty "$HOME/.agentplex/lib/node_modules/@softiesolutions/agentplex/node_modules/@agentplex/pty/dist/index.js" \
       -- bash /install.sh --role=server \
     | tee /tmp/wizard.log
@@ -771,7 +789,7 @@ RUN node -p "const plan = JSON.parse(require('fs').readFileSync(process.env.HOME
 RUN grep -qx 'server /home/alice/.agentplex /home/alice/.agentplex/bin /home/alice/.claude /home/alice/.agentplex/server.json claude' /tmp/plan-fields.log
 
 # The identity file recorded where the server reads it, in place of the line
-# install.sh left commented. The prefix here is the default one, so the path is
+# the install left commented. The prefix here is the default one, so the path is
 # also the server's default -- which is exactly why this has to be asserted
 # rather than inferred: under any other prefix the default is a second identity.
 RUN grep -qx 'AGENTPLEX_SERVER_IDENTITY_FILE=/home/alice/.agentplex/server.json' "$HOME/.agentplex/agentplex.env" \
@@ -790,7 +808,7 @@ RUN grep -qx 'AGENTPLEX_SERVER_IDENTITY_FILE=/home/alice/.agentplex/server.json'
 #
 # No --bin-path and no --server-identity-file, and that is the other half of
 # the assertion: the doctor reads the settings file the units name, which
-# carries AGENTPLEX_BIN_PATH from install.sh and AGENTPLEX_SERVER_IDENTITY_FILE
+# carries AGENTPLEX_BIN_PATH from the install and AGENTPLEX_SERVER_IDENTITY_FILE
 # from setup. A doctor that needed them retyped was reporting on a machine
 # nobody runs. The report names the file it read, the data root it would write
 # into, and the identity file the server would read its token from.
@@ -925,10 +943,17 @@ RUN su agentplex -s /bin/sh -c 'touch /opt/agentplex/bin/probe /opt/agentplex/li
 # The two-unit shape, which is the one this epic exists for on a single box:
 # `--role=both` renders both units, and each starts one daemon. One KillMode
 # between them, because only the server has agents to leave to its drain.
-RUN bash /install.sh --system --role=both --print-unit >/tmp/both-units.txt \
+#
+# The units are the command's to render, so the command is asked outright, by
+# naming the interpreter the units name: this PATH has no node on it for the
+# bin's shebang to find. install.sh's own --print-unit asks the same command,
+# and prints the same bytes.
+RUN /opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex/apps/cli/dist/main.js \
+      install --print-unit --system --role=both >/tmp/both-units.txt \
     && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-hub/apps/hub/dist/main.js' /tmp/both-units.txt \
     && grep -qx 'ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-server/apps/server/dist/main.js' /tmp/both-units.txt \
-    && test "$(grep -cx 'KillMode=mixed' /tmp/both-units.txt)" = 1
+    && test "$(grep -cx 'KillMode=mixed' /tmp/both-units.txt)" = 1 \
+    && bash /install.sh --system --role=both --print-unit | diff /tmp/both-units.txt -
 
 # The fleet uninstall, which is a different scope, a different prefix and a
 # different set of things to leave alone. The service account stays: it owns
@@ -1067,15 +1092,15 @@ ENV PATH=/home/alice/.agentplex/bin:/home/alice/.agentplex/node/bin:/usr/local/s
 #
 # The two hub settings are supplied on the command line, the way the server
 # stage above supplies the identity file its role cannot do without. They are
-# what a hub has *after setup* and not what `install.sh` leaves behind: the
-# script writes both keys commented out, because guessing a database path is
+# what a hub has *after setup* and not what an install leaves behind: the
+# settings file has both keys commented out, because guessing a database path is
 # worse than leaving one absent, so a machine that has only been bootstrapped
 # genuinely has neither. `agentplex doctor` reports that as two findings and
 # exits 1, which is a true statement about a half-finished hub (AGX-228) and the
 # wrong machine for this stage to be describing -- what is under test here is a
 # packaging claim, and it needs a hub configured the way a running one is.
 #
-# The database is named at the path `install.sh` suggests in that file, under
+# The database is named at the path the install suggests in that file, under
 # the prefix it created, so the check that answers `ready` is answering about a
 # directory this install really made. The token is a fake with no secret in it;
 # what the hub requires of one is a length.

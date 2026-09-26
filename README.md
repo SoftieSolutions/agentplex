@@ -32,7 +32,8 @@ MCP agent  ─┘                │             SERVER ────────
 
 One bin, `agentplex`. Its subcommands are what `agentplex help` lists. `hub` and
 `server` are daemons rather than subcommands, and nobody types either:
-`install.sh` writes a systemd unit per daemon the machine's role runs, and
+`agentplex install` writes a systemd unit per daemon the machine's role runs --
+`install.sh` hands over to it once a machine has the command -- and
 `pnpm -C apps/hub start` is the same thing in a checkout. A machine that runs
 both daemons starts one of each.
 
