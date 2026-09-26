@@ -184,6 +184,7 @@ export function AppShell({ hub, tokens, now = Date.now }: AppShellProps): JSX.El
         hasToken: tokens.read() !== null,
       })}
       scheme={scheme}
+      onRetry={() => hub.retry()}
     />
   );
   /**

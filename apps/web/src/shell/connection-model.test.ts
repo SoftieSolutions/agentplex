@@ -51,8 +51,10 @@ describe('the connection line in the chrome', () => {
     expect(view.words).toBe('this client speaks protocol 21 and the hub speaks 20');
     expect(view.tone).toBe('blocked');
     // Nothing on the Settings screen changes which protocol either side
-    // speaks, so there is no next action to name.
+    // speaks, so there is no next action to name -- only a retry, for after
+    // a new build has changed that.
     expect(view.action).toBeNull();
+    expect(view.canRetry).toBe(true);
   });
 
   it('keeps a protocol refusal in its own words, whatever this device has stored', () => {
@@ -120,5 +122,15 @@ describe('the connection line in the chrome', () => {
     expect(toneForPhase('connected')).toBe('running');
     expect(toneForPhase('reconnecting')).toBe('needs-you');
     expect(toneForPhase('failed')).toBe('blocked');
+  });
+
+  it('offers a retry only on a failure, which is the one thing the store will not retry', () => {
+    const phases = ['idle', 'connecting', 'connected', 'reconnecting', 'failed'] as const;
+    for (const phase of phases) {
+      for (const hasToken of [true, false]) {
+        const view = connectionView({ phase, problem: null, hasState: false, hasToken });
+        expect(view.canRetry, `${phase}, token ${String(hasToken)}`).toBe(phase === 'failed');
+      }
+    }
   });
 });

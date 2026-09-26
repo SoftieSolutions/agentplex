@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { Group, Text } from '../ui/components.js';
+import { Button, Group, Text } from '../ui/components.js';
 import { ToneDot } from '../ui/tone-dot.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import type { ConnectionView } from './connection-model.js';
@@ -24,18 +24,30 @@ import { NextActionLink } from './next-action.js';
  * that overflowed would push the selector off the edge, and one that wrapped
  * would change the height of the chrome every time the socket blinked. What
  * gives is the middle of the sentence, with the whole of it on the element's
- * `title` and, unshortened, in the live region a reader hears. The link keeps
- * its own width because it is the half that is actionable -- a truncated
- * "Settings" would be the one thing worth reading made unreadable.
+ * `title` and, unshortened, in the live region a reader hears. The link and
+ * the retry button keep their own width because they are the half that is
+ * actionable -- a truncated "Settings" would be the one thing worth reading
+ * made unreadable.
  *
  * Every decision is `connection-model.ts`. This draws what it decided.
  */
 export interface ConnectionStatusProps {
   readonly view: ConnectionView;
   readonly scheme: Scheme;
+  /**
+   * Asks the store to dial again; the button is drawn only when the view
+   * offers a retry and this is given.
+   *
+   * A callback where `view.action` is an address, because the two answer
+   * different questions. An address is somewhere to go, and belongs in the
+   * pure model as data a link can draw. A retry is something the store does,
+   * and the model has no store to call -- it decides only whether the offer
+   * stands, and the shell, which holds the store, says what pressing it does.
+   */
+  readonly onRetry?: () => void;
 }
 
-export function ConnectionStatus({ view, scheme }: ConnectionStatusProps): JSX.Element {
+export function ConnectionStatus({ view, scheme, onRetry }: ConnectionStatusProps): JSX.Element {
   return (
     <Group
       // Marked because it is no longer the only live region in the chrome: the
@@ -69,6 +81,11 @@ export function ConnectionStatus({ view, scheme }: ConnectionStatusProps): JSX.E
           <NextActionLink action={view.action} scheme={scheme} />
         </Text>
       )}
+      {view.canRetry && onRetry !== undefined ? (
+        <Button size="compact-xs" variant="default" style={{ flex: 'none' }} onClick={onRetry}>
+          Retry
+        </Button>
+      ) : null}
     </Group>
   );
 }
