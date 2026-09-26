@@ -4,6 +4,7 @@ import {
   createFakeProviderFiles,
   createFakeProcessRunner,
   printed,
+  refused,
 } from '@agentplex/providers/testing';
 import {
   createClaudeAdapter,
@@ -24,12 +25,19 @@ import { createOperationRegistry } from './operation-registry.js';
  */
 
 const DIRECTORY = '/srv/work';
-const GIT_STATUS = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch`;
+const GIT_PREFIX = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY}`;
+const FILTER_READ = `${GIT_PREFIX} config --null --show-scope --get-regexp ^filter\\.`;
+const GIT_STATUS = `${GIT_PREFIX} status --porcelain=v2 --branch --ignore-submodules=dirty`;
+const GIT_DIFF = `${GIT_PREFIX} diff-index --ignore-submodules=dirty -M --numstat -z HEAD --`;
+/** `--get-regexp` matching nothing: a repository with no filter of its own. */
+const NO_FILTERS = refused(1, '');
 const CLEAN = '# branch.oid abc\n# branch.head main\n';
 
 describe('the operation registry', () => {
   it('runs an operation it knows by name', async () => {
-    const runner = createFakeProcessRunner({ outcomes: { [GIT_STATUS]: printed(CLEAN) } });
+    const runner = createFakeProcessRunner({
+      outcomes: { [FILTER_READ]: NO_FILTERS, [GIT_STATUS]: printed(CLEAN) },
+    });
     const registry = createOperationRegistry(runner);
 
     const outcome = await registry.execute('git.status', { directory: DIRECTORY });
@@ -38,6 +46,28 @@ describe('the operation registry', () => {
       ok: true,
       result: { branch: 'main', upstream: null, ahead: 0, behind: 0, changes: 0 },
     });
+  });
+
+  it('reads the repository filter names before either git probe, by name too', async () => {
+    const runner = createFakeProcessRunner({
+      outcomes: { [FILTER_READ]: printed('local\0filter.evil.clean\ncat\0') },
+    });
+    const registry = createOperationRegistry(runner);
+
+    await registry.execute('git.status', { directory: DIRECTORY });
+    await registry.execute('git.diff', { directory: DIRECTORY });
+
+    // The name-keyed path is the one a caller from outside reaches, so it is
+    // the one that must not have an unguarded probe behind it.
+    const lines = runner.requests.map((request) => [request.file, ...request.args].join(' '));
+    const off =
+      '-c filter.evil.clean= -c filter.evil.smudge= -c filter.evil.process= -c filter.evil.required=false';
+    expect(lines).toEqual([
+      FILTER_READ,
+      GIT_STATUS.replace('/dev/null', `/dev/null ${off}`),
+      FILTER_READ,
+      GIT_DIFF.replace('/dev/null', `/dev/null ${off}`),
+    ]);
   });
 
   it('refuses a name it does not have, and starts nothing', async () => {
@@ -99,7 +129,9 @@ describe('the operation registry', () => {
   });
 
   it('builds every spawn as a bare argv, with no cwd and no environment', async () => {
-    const runner = createFakeProcessRunner();
+    // The filter read is answered, so that each git probe gets as far as its
+    // own argv and comes under the assertions below with the read.
+    const runner = createFakeProcessRunner({ outcomes: { [FILTER_READ]: NO_FILTERS } });
     const registry = createOperationRegistry(runner);
 
     // One valid request per operation, listed here rather than derived, so that
@@ -120,7 +152,9 @@ describe('the operation registry', () => {
       await registry.execute(name, request);
     }
 
-    expect(runner.requests).toHaveLength(registry.operations.length);
+    // One child per operation, and one more for each git probe: its read.
+    const gitProbes = registry.operations.filter(({ name }) => name.startsWith('git.'));
+    expect(runner.requests).toHaveLength(registry.operations.length + gitProbes.length);
     for (const request of runner.requests) {
       // Three fields, and these three. A cwd, an env or a shell flag on a spawn
       // would have to appear here first, and this is where it fails.

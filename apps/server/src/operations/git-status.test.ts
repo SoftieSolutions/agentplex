@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFakeProcessRunner, printed, refused } from '@agentplex/providers/testing';
 import { runOperation } from '@agentplex/providers';
-import { gitStatusOperation } from './git-status.js';
+import { createGitStatusOperation } from './git-status.js';
 
 /**
  * The fixtures are captured `git status --porcelain=v2 --branch` output, taken
@@ -36,7 +36,15 @@ const DIRECTORY = '/Users/dev/Code/agentplex';
  * checks nothing. The directory is here, in the arguments, and this line is
  * what fails if it ever moves to a spawn cwd.
  */
-const COMMAND_LINE = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch`;
+const COMMAND_LINE = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch --ignore-submodules=dirty`;
+
+/**
+ * The probe with no repository filter to switch off, which is what these tests
+ * are about: what it builds and what it makes of git's answer. Which names it
+ * is handed, and that it is only ever run after they were read, is
+ * `git-probe.test.ts`.
+ */
+const statusWithNoFilters = createGitStatusOperation([]);
 
 function runner(stdout: string) {
   return createFakeProcessRunner({ outcomes: { [COMMAND_LINE]: printed(stdout) } });
@@ -44,7 +52,11 @@ function runner(stdout: string) {
 
 describe('git.status', () => {
   it('reads the branch, its upstream and a clean tree out of real git output', async () => {
-    const outcome = await runOperation(gitStatusOperation, { directory: DIRECTORY }, runner(CLEAN));
+    const outcome = await runOperation(
+      statusWithNoFilters,
+      { directory: DIRECTORY },
+      runner(CLEAN),
+    );
 
     expect(outcome).toEqual({
       ok: true,
@@ -62,13 +74,21 @@ describe('git.status', () => {
     // Captured from this branch one commit after the registry landed, so the
     // `+1 -0` below is a state a real repository was actually in rather than a
     // shape written to make the parser look right.
-    const outcome = await runOperation(gitStatusOperation, { directory: DIRECTORY }, runner(AHEAD));
+    const outcome = await runOperation(
+      statusWithNoFilters,
+      { directory: DIRECTORY },
+      runner(AHEAD),
+    );
 
     expect(outcome).toMatchObject({ ok: true, result: { ahead: 1, behind: 0 } });
   });
 
   it('counts the entries git reports for a dirty tree', async () => {
-    const outcome = await runOperation(gitStatusOperation, { directory: DIRECTORY }, runner(DIRTY));
+    const outcome = await runOperation(
+      statusWithNoFilters,
+      { directory: DIRECTORY },
+      runner(DIRTY),
+    );
 
     // Three, not four: git collapses the untracked directory into one entry,
     // and this is the count of what git said rather than a claim about how many
@@ -88,7 +108,7 @@ describe('git.status', () => {
 
   it('reports a detached head as no branch and no upstream', async () => {
     const outcome = await runOperation(
-      gitStatusOperation,
+      statusWithNoFilters,
       { directory: DIRECTORY },
       runner(DETACHED),
     );
@@ -103,9 +123,48 @@ describe('git.status', () => {
     });
   });
 
+  it('switches off each filter it was built with, after the two -c pairs', async () => {
+    const fake = createFakeProcessRunner();
+    await runOperation(createGitStatusOperation(['evil', 'a.b']), { directory: DIRECTORY }, fake);
+
+    // An empty driver is no driver, and `required=false` is what stops git
+    // dying over a required one that is now empty.
+    expect(fake.requests.map((request) => request.args)).toEqual([
+      [
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        '-c',
+        'filter.evil.clean=',
+        '-c',
+        'filter.evil.smudge=',
+        '-c',
+        'filter.evil.process=',
+        '-c',
+        'filter.evil.required=false',
+        '-c',
+        'filter.a.b.clean=',
+        '-c',
+        'filter.a.b.smudge=',
+        '-c',
+        'filter.a.b.process=',
+        '-c',
+        'filter.a.b.required=false',
+        '--no-optional-locks',
+        '-C',
+        DIRECTORY,
+        'status',
+        '--porcelain=v2',
+        '--branch',
+        '--ignore-submodules=dirty',
+      ],
+    ]);
+  });
+
   it('puts the directory in the argv and never in the spawn', async () => {
     const fake = runner(CLEAN);
-    await runOperation(gitStatusOperation, { directory: DIRECTORY }, fake);
+    await runOperation(statusWithNoFilters, { directory: DIRECTORY }, fake);
 
     const [request] = fake.requests;
     // The two `-c` pairs lead: a repository's `core.fsmonitor` is a program
@@ -123,8 +182,9 @@ describe('git.status', () => {
         'status',
         '--porcelain=v2',
         '--branch',
+        '--ignore-submodules=dirty',
       ],
-      timeoutMs: gitStatusOperation.timeoutMs,
+      timeoutMs: statusWithNoFilters.timeoutMs,
     });
     // The point of the assertion above, stated as itself: a directory is
     // something git parses out of its own arguments, never state the kernel
@@ -134,7 +194,7 @@ describe('git.status', () => {
 
   it('refuses a directory that is not absolute without running anything', async () => {
     const fake = runner(CLEAN);
-    const outcome = await runOperation(gitStatusOperation, { directory: 'Code/agentplex' }, fake);
+    const outcome = await runOperation(statusWithNoFilters, { directory: 'Code/agentplex' }, fake);
 
     expect(outcome.ok).toBe(false);
     expect(outcome).toMatchObject({ refusal: 'invalid-request' });
@@ -145,7 +205,7 @@ describe('git.status', () => {
 
   it('refuses a directory carrying a null byte', async () => {
     const fake = runner(CLEAN);
-    const outcome = await runOperation(gitStatusOperation, { directory: '/tmp/a\0/etc' }, fake);
+    const outcome = await runOperation(statusWithNoFilters, { directory: '/tmp/a\0/etc' }, fake);
 
     // A NUL truncates the path at the syscall, so what gets opened is a prefix
     // of what was checked.
@@ -157,7 +217,7 @@ describe('git.status', () => {
     const fake = runner(CLEAN);
 
     for (const request of [null, 'git status', { directory: 7 }, {}]) {
-      expect(await runOperation(gitStatusOperation, request, fake)).toMatchObject({
+      expect(await runOperation(statusWithNoFilters, request, fake)).toMatchObject({
         ok: false,
         refusal: 'invalid-request',
       });
@@ -170,7 +230,7 @@ describe('git.status', () => {
       outcomes: { [COMMAND_LINE]: refused(128, NOT_A_REPOSITORY) },
     });
 
-    const outcome = await runOperation(gitStatusOperation, { directory: DIRECTORY }, fake);
+    const outcome = await runOperation(statusWithNoFilters, { directory: DIRECTORY }, fake);
 
     expect(outcome).toMatchObject({ ok: false, refusal: 'failed' });
     expect(outcome.ok).toBe(false);
@@ -185,7 +245,7 @@ describe('git.status', () => {
     // a container without git must say so rather than report a session as
     // having no branch.
     const outcome = await runOperation(
-      gitStatusOperation,
+      statusWithNoFilters,
       { directory: DIRECTORY },
       createFakeProcessRunner(),
     );
@@ -197,7 +257,7 @@ describe('git.status', () => {
     // An empty answer is not a clean repository: something else ran, or ran
     // differently. Reporting "no changes, no branch" would be a claim about a
     // directory nobody looked at.
-    const outcome = await runOperation(gitStatusOperation, { directory: DIRECTORY }, runner(''));
+    const outcome = await runOperation(statusWithNoFilters, { directory: DIRECTORY }, runner(''));
 
     expect(outcome).toMatchObject({ ok: false, refusal: 'failed' });
   });

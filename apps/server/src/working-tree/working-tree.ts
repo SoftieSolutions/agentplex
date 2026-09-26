@@ -1,8 +1,8 @@
 import type { UncommittedDiff } from '@agentplex/protocol';
 import type { ProcessRunner } from '@agentplex/providers';
-import { runOperation } from '@agentplex/providers';
-import { gitDiffOperation } from '../operations/git-diff.js';
-import { gitStatusOperation } from '../operations/git-status.js';
+import { createGitDiffOperation } from '../operations/git-diff.js';
+import { runGuardedGitProbe } from '../operations/git-probe.js';
+import { createGitStatusOperation } from '../operations/git-status.js';
 
 /**
  * What the store report asks when it wants to know about a session's checkout.
@@ -45,14 +45,16 @@ export interface GitWorkingTreeDependencies {
    * The one-shot process seam, from the one place allowed to build it. This is
    * the reason the reader is composed in `main` rather than here: the runner
    * fixes what a child inherits, and only the entrypoint has read this
-   * process's environment.
+   * process's environment. It is the probes' runner, whose children have lazy
+   * fetching off; `withoutLazyFetch` says why.
    */
   readonly runner: ProcessRunner;
 }
 
 /**
- * The real reader: `git.status` and `git.diff`, through the same `runOperation`
- * the registry uses.
+ * The real reader: `git.status` and `git.diff`, through the same
+ * `runGuardedGitProbe` the registry uses, so each reads the repository's filter
+ * names before it runs.
  *
  * Not `registry.execute('git.diff', ...)`, which would hand back `unknown` and
  * need a parser here to get the type back. A caller that knows which operation
@@ -69,12 +71,12 @@ export interface GitWorkingTreeDependencies {
 export function createGitWorkingTree({ runner }: GitWorkingTreeDependencies): WorkingTree {
   return {
     async branch(directory: string): Promise<string | null> {
-      const outcome = await runOperation(gitStatusOperation, { directory }, runner);
+      const outcome = await runGuardedGitProbe(createGitStatusOperation, { directory }, runner);
       return outcome.ok ? outcome.result.branch : null;
     },
 
     async uncommitted(directory: string): Promise<UncommittedDiff | null> {
-      const outcome = await runOperation(gitDiffOperation, { directory }, runner);
+      const outcome = await runGuardedGitProbe(createGitDiffOperation, { directory }, runner);
       return outcome.ok ? outcome.result : null;
     },
   };
@@ -90,12 +92,14 @@ export function createGitWorkingTree({ runner }: GitWorkingTreeDependencies): Wo
  * store of worktrees is the case this cap exists for, and there the sessions
  * past the cap report `null` rather than the report taking seconds.
  *
- * The cap counts directories and not children, and a directory now costs two
- * children rather than one. That is the right unit to bound: both are short
- * questions to git about the same checkout, both pass `--no-optional-locks` so
- * neither can take a lock from the agent working there, and they are started
- * together -- so what a report costs in the time a person waits is unchanged,
- * and what it costs the machine is bounded by the same number it always was.
+ * The cap counts directories and not children, and a directory costs four
+ * children: each of the two probes reads the repository's filter names and
+ * then asks its question. That is the right unit to bound: all four are short
+ * questions to git about the same checkout, all pass `--no-optional-locks` so
+ * none can take a lock from the agent working there, and the two pairs are
+ * started together -- so what a report costs in the time a person waits is two
+ * short children in a row rather than one, and what it costs the machine is
+ * bounded by the same number of directories it always was.
  */
 export const DIRECTORIES_PER_REPORT = 8;
 

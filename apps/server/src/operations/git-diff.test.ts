@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createFakeProcessRunner, printed, refused } from '@agentplex/providers/testing';
 import { runOperation } from '@agentplex/providers';
 import { UNCOMMITTED_FILES_LISTED } from '@agentplex/protocol';
-import { gitDiffOperation } from './git-diff.js';
+import { createGitDiffOperation } from './git-diff.js';
 
 /**
  * Every fixture here is the stdout or the stderr of a real
@@ -49,7 +49,15 @@ const DIRECTORY = '/Users/dev/Code/agentplex';
  * checks nothing. The directory is here, in the arguments, and this line is
  * what fails if it ever moves to a spawn cwd.
  */
-const COMMAND_LINE = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} diff-index -M --numstat -z HEAD --`;
+const COMMAND_LINE = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} diff-index --ignore-submodules=dirty -M --numstat -z HEAD --`;
+
+/**
+ * The probe with no repository filter to switch off, which is what these tests
+ * are about: what it builds and what it makes of git's answer. Which names it
+ * is handed, and that it is only ever run after they were read, is
+ * `git-probe.test.ts`.
+ */
+const diffWithNoFilters = createGitDiffOperation([]);
 
 function runner(stdout: string) {
   return createFakeProcessRunner({ outcomes: { [COMMAND_LINE]: printed(stdout) } });
@@ -57,7 +65,7 @@ function runner(stdout: string) {
 
 describe('git.diff', () => {
   it('reports a clean tree as no files and no lines', async () => {
-    const outcome = await runOperation(gitDiffOperation, { directory: DIRECTORY }, runner(CLEAN));
+    const outcome = await runOperation(diffWithNoFilters, { directory: DIRECTORY }, runner(CLEAN));
 
     // Empty output is an answer here, unlike a status: a diff with nothing to
     // say prints nothing at all, so this must not be read as unparseable.
@@ -68,7 +76,7 @@ describe('git.diff', () => {
   });
 
   it('reads every record shape out of one real dirty tree', async () => {
-    const outcome = await runOperation(gitDiffOperation, { directory: DIRECTORY }, runner(DIRTY));
+    const outcome = await runOperation(diffWithNoFilters, { directory: DIRECTORY }, runner(DIRTY));
 
     expect(outcome).toEqual({
       ok: true,
@@ -98,7 +106,7 @@ describe('git.diff', () => {
   });
 
   it('counts every file but lists only a bounded prefix of them', async () => {
-    const outcome = await runOperation(gitDiffOperation, { directory: DIRECTORY }, runner(WIDE));
+    const outcome = await runOperation(diffWithNoFilters, { directory: DIRECTORY }, runner(WIDE));
 
     // The totals are over all twenty-five files and the rows stop at the cap.
     // A client with fewer rows than files has a list that was cut, which it can
@@ -112,7 +120,7 @@ describe('git.diff', () => {
 
   it('counts a file whose name it cannot represent, and shows no name for it', async () => {
     const outcome = await runOperation(
-      gitDiffOperation,
+      diffWithNoFilters,
       { directory: DIRECTORY },
       runner(UNREPRESENTABLE),
     );
@@ -136,9 +144,51 @@ describe('git.diff', () => {
     });
   });
 
+  it('switches off each filter it was built with, after the two -c pairs', async () => {
+    const fake = createFakeProcessRunner();
+    await runOperation(createGitDiffOperation(['evil', 'a.b']), { directory: DIRECTORY }, fake);
+
+    // An empty driver is no driver, and `required=false` is what stops git
+    // dying over a required one that is now empty.
+    expect(fake.requests.map((request) => request.args)).toEqual([
+      [
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        '-c',
+        'filter.evil.clean=',
+        '-c',
+        'filter.evil.smudge=',
+        '-c',
+        'filter.evil.process=',
+        '-c',
+        'filter.evil.required=false',
+        '-c',
+        'filter.a.b.clean=',
+        '-c',
+        'filter.a.b.smudge=',
+        '-c',
+        'filter.a.b.process=',
+        '-c',
+        'filter.a.b.required=false',
+        '--no-optional-locks',
+        '-C',
+        DIRECTORY,
+        'diff-index',
+        '--ignore-submodules=dirty',
+        '-M',
+        '--numstat',
+        '-z',
+        'HEAD',
+        '--',
+      ],
+    ]);
+  });
+
   it('puts the directory in the argv and never in the spawn', async () => {
     const fake = runner(CLEAN);
-    await runOperation(gitDiffOperation, { directory: DIRECTORY }, fake);
+    await runOperation(diffWithNoFilters, { directory: DIRECTORY }, fake);
 
     const [request] = fake.requests;
     // The two `-c` pairs lead: `diff-index` runs a repository's
@@ -154,13 +204,14 @@ describe('git.diff', () => {
         '-C',
         DIRECTORY,
         'diff-index',
+        '--ignore-submodules=dirty',
         '-M',
         '--numstat',
         '-z',
         'HEAD',
         '--',
       ],
-      timeoutMs: gitDiffOperation.timeoutMs,
+      timeoutMs: diffWithNoFilters.timeoutMs,
     });
     // The point of the assertion above, stated as itself: a directory is
     // something git parses out of its own arguments, never state the kernel
@@ -172,7 +223,7 @@ describe('git.diff', () => {
     const fake = runner(CLEAN);
 
     for (const directory of ['Code/agentplex', '/tmp/a\0/etc', '']) {
-      expect(await runOperation(gitDiffOperation, { directory }, fake)).toMatchObject({
+      expect(await runOperation(diffWithNoFilters, { directory }, fake)).toMatchObject({
         ok: false,
         refusal: 'invalid-request',
       });
@@ -192,7 +243,7 @@ describe('git.diff', () => {
       {},
       { directory: DIRECTORY, x: 1 },
     ]) {
-      expect(await runOperation(gitDiffOperation, request, fake)).toMatchObject({
+      expect(await runOperation(diffWithNoFilters, request, fake)).toMatchObject({
         ok: false,
         refusal: 'invalid-request',
       });
@@ -216,7 +267,7 @@ describe('git.diff', () => {
         outcomes: { [COMMAND_LINE]: refused(128, stderr) },
       });
 
-      const outcome = await runOperation(gitDiffOperation, { directory: DIRECTORY }, fake);
+      const outcome = await runOperation(diffWithNoFilters, { directory: DIRECTORY }, fake);
 
       expect(outcome).toMatchObject({ ok: false, refusal: 'failed' });
       expect(outcome.ok).toBe(false);
@@ -232,7 +283,7 @@ describe('git.diff', () => {
     // a container without git must say so rather than report a working tree
     // with nothing outstanding in it.
     const outcome = await runOperation(
-      gitDiffOperation,
+      diffWithNoFilters,
       { directory: DIRECTORY },
       createFakeProcessRunner(),
     );
@@ -256,7 +307,7 @@ describe('git.diff', () => {
 
     for (const stdout of unreadable) {
       expect(
-        await runOperation(gitDiffOperation, { directory: DIRECTORY }, runner(stdout)),
+        await runOperation(diffWithNoFilters, { directory: DIRECTORY }, runner(stdout)),
       ).toMatchObject({ ok: false, refusal: 'failed' });
     }
   });

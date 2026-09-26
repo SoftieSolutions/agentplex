@@ -7,8 +7,16 @@ import { createFakeWorkingTree } from './fake-working-tree.js';
 import { createGitWorkingTree, readWorkingTrees, DIRECTORIES_PER_REPORT } from './working-tree.js';
 
 const DIRECTORY = '/volumes/work/project';
-const DIFF_COMMAND = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} diff-index -M --numstat -z HEAD --`;
-const STATUS_COMMAND = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch`;
+const READ_COMMAND = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} config --null --show-scope --get-regexp ^filter\\.`;
+const DIFF_COMMAND = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} diff-index --ignore-submodules=dirty -M --numstat -z HEAD --`;
+const STATUS_COMMAND = `git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C ${DIRECTORY} status --porcelain=v2 --branch --ignore-submodules=dirty`;
+
+/**
+ * `git config --get-regexp` matching nothing: exit 1, nothing printed. What a
+ * repository with no filter of its own answers, so every probe below runs with
+ * no filter to switch off.
+ */
+const NO_FILTERS = refused(1, '');
 
 const ONE_FILE: UncommittedDiff = {
   files: 1,
@@ -34,7 +42,9 @@ const NOT_A_REPOSITORY = fixture('git-not-a-repository.txt');
 describe('the real reader', () => {
   it('answers with the branch git says is checked out', async () => {
     const trees = createGitWorkingTree({
-      runner: createFakeProcessRunner({ outcomes: { [STATUS_COMMAND]: printed(ON_A_BRANCH) } }),
+      runner: createFakeProcessRunner({
+        outcomes: { [READ_COMMAND]: NO_FILTERS, [STATUS_COMMAND]: printed(ON_A_BRANCH) },
+      }),
     });
 
     // The branch this repository's own checkout was on when the fixture was
@@ -44,7 +54,9 @@ describe('the real reader', () => {
 
   it('answers null for a detached head, because there is no name to show', async () => {
     const trees = createGitWorkingTree({
-      runner: createFakeProcessRunner({ outcomes: { [STATUS_COMMAND]: printed(DETACHED) } }),
+      runner: createFakeProcessRunner({
+        outcomes: { [READ_COMMAND]: NO_FILTERS, [STATUS_COMMAND]: printed(DETACHED) },
+      }),
     });
 
     expect(await trees.branch(DIRECTORY)).toBeNull();
@@ -53,7 +65,10 @@ describe('the real reader', () => {
   it('answers with what git counted', async () => {
     const trees = createGitWorkingTree({
       runner: createFakeProcessRunner({
-        outcomes: { [DIFF_COMMAND]: printed('3\t1\tsrc/auth/refresh.ts\0') },
+        outcomes: {
+          [READ_COMMAND]: NO_FILTERS,
+          [DIFF_COMMAND]: printed('3\t1\tsrc/auth/refresh.ts\0'),
+        },
       }),
     });
 
@@ -70,6 +85,7 @@ describe('the real reader', () => {
     const notARepository = createGitWorkingTree({
       runner: createFakeProcessRunner({
         outcomes: {
+          [READ_COMMAND]: NO_FILTERS,
           [DIFF_COMMAND]: refused(128, NOT_A_REPOSITORY),
           [STATUS_COMMAND]: refused(128, NOT_A_REPOSITORY),
         },
@@ -91,9 +107,23 @@ describe('the real reader', () => {
     expect(runner.requests).toEqual([]);
   });
 
-  it('reads the branch and the diffstat with two separate questions to git', async () => {
+  it('answers null without asking when a filter cannot be switched off', async () => {
+    const runner = createFakeProcessRunner({
+      outcomes: { [READ_COMMAND]: printed('local\0filter.a=b.clean\ncat\0') },
+    });
+    const trees = createGitWorkingTree({ runner });
+
+    expect(await trees.branch(DIRECTORY)).toBeNull();
+    expect(await trees.uncommitted(DIRECTORY)).toBeNull();
+    // The two reads and nothing after them: a probe with that filter still on
+    // would run the program the read is there to keep from running.
+    expect(runner.requests).toHaveLength(2);
+  });
+
+  it('reads the branch and the diffstat with two separate questions, each after its own read', async () => {
     const runner = createFakeProcessRunner({
       outcomes: {
+        [READ_COMMAND]: NO_FILTERS,
         [STATUS_COMMAND]: printed(ON_A_BRANCH),
         [DIFF_COMMAND]: printed('3\t1\tsrc/auth/refresh.ts\0'),
       },
@@ -103,10 +133,27 @@ describe('the real reader', () => {
     await trees.branch(DIRECTORY);
     await trees.uncommitted(DIRECTORY);
 
-    // Two children, and both of them `--no-optional-locks`: this runs against a
+    // Four children, all of them `--no-optional-locks`: this runs against a
     // directory an agent is actively writing in, and a probe that takes
-    // `.git/index.lock` can lose a race with the thing it is watching.
+    // `.git/index.lock` can lose a race with the thing it is watching. Each
+    // probe reads the filter names itself rather than sharing one read, so
+    // neither can be run with names read for somebody else's question.
+    const read = [
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.hooksPath=/dev/null',
+      '--no-optional-locks',
+      '-C',
+      DIRECTORY,
+      'config',
+      '--null',
+      '--show-scope',
+      '--get-regexp',
+      '^filter\\.',
+    ];
     expect(runner.requests.map((request) => request.args)).toEqual([
+      read,
       [
         '-c',
         'core.fsmonitor=false',
@@ -118,7 +165,9 @@ describe('the real reader', () => {
         'status',
         '--porcelain=v2',
         '--branch',
+        '--ignore-submodules=dirty',
       ],
+      read,
       [
         '-c',
         'core.fsmonitor=false',
@@ -128,6 +177,7 @@ describe('the real reader', () => {
         '-C',
         DIRECTORY,
         'diff-index',
+        '--ignore-submodules=dirty',
         '-M',
         '--numstat',
         '-z',
@@ -148,7 +198,7 @@ describe('one reading per directory in a report', () => {
     const found = await readWorkingTrees([DIRECTORY, DIRECTORY, DIRECTORY], trees);
 
     // Both questions answer for the whole repository whichever directory inside
-    // it was named, so three sessions in one checkout are two children and not
+    // it was named, so three sessions in one checkout are two readings and not
     // six.
     expect(trees.askedUncommitted).toEqual([DIRECTORY]);
     expect(trees.askedBranch).toEqual([DIRECTORY]);

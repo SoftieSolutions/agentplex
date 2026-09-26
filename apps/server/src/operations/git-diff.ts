@@ -7,6 +7,7 @@ import {
 import type { CompletedProcess, Operation, OperationOutcome } from '@agentplex/providers';
 import { firstLine } from '@agentplex/node-shared';
 import { directorySchema } from './directory.js';
+import { filterSwitches } from './git-filter-names.js';
 
 /**
  * The line counts behind "files changed": what is in a working tree now and is
@@ -23,7 +24,7 @@ import { directorySchema } from './directory.js';
  * `uncommittedDiffSchema` in the protocol: the short version is that the branch
  * sense needs a base ref nobody can choose honestly for an arbitrary checkout.
  *
- * Five deliberate choices in the argv:
+ * Six deliberate choices in the argv:
  *
  * - **`diff-index` rather than `diff`.** Plumbing, so the output format is a
  *   contract rather than a convenience, and — the reason it actually matters —
@@ -48,61 +49,78 @@ import { directorySchema } from './directory.js';
  * - **`-c core.fsmonitor=false -c core.hooksPath=/dev/null`.** `diff-index`
  *   refreshes stat information through the fsmonitor just as `status` does, so
  *   a repository's `core.fsmonitor` is a program this would otherwise run, and
- *   `core.hooksPath` closes the same door for any hook. `git.status` says what
- *   these leave open, and both apply here: a filter driver the repository
- *   configures still runs on a stat-dirty file. In a partial clone this argv
- *   lazily fetches any HEAD blob of a changed file that the clone never
- *   fetched: `--numstat` needs both sides to count lines, so a plain
- *   modification fetches with no rename in sight, and `-M` adds the blobs
- *   rename detection compares. The child fetch runs whatever the
- *   repository's config names for reaching its remote, the same list
- *   `git.status` gives: among others `remote.<name>.uploadpack`,
- *   `core.sshCommand`, `core.gitProxy`, `core.askPass`, a credential helper,
- *   an `ext::` URL where the repository allows that protocol, or any of these
- *   through a `url.<base>.insteadOf` rewrite. Probed on git 2.50.1, this argv
- *   ran a marker-writing `uploadpack`. `--numstat`
- *   fires no textconv and no external diff, so `--no-textconv` and
- *   `--no-ext-diff` would change nothing.
+ *   `core.hooksPath` closes the same door for any hook. `--numstat` fires no
+ *   textconv and no external diff, so `--no-textconv` and `--no-ext-diff`
+ *   would change nothing.
+ * - **`--ignore-submodules=dirty`.** Without it `diff-index` starts a child git
+ *   in each populated submodule to ask whether it is dirty, and that child runs
+ *   the submodule's own filters, which nobody read. A submodule with
+ *   uncommitted work inside it is then not listed; one whose checked-out commit
+ *   moved still is.
+ *
+ * The rest of what a repository can make this run is closed the way
+ * `git.status` closes it, and it says how. A filter driver the repository
+ * configures runs on a stat-dirty file, so this is a factory over the filter
+ * names and only ever run through `runGuardedGitProbe`, which reads them first;
+ * a filter written between that read and this probe still runs. In a partial
+ * clone this argv would lazily fetch any HEAD blob of a changed file that the
+ * clone never fetched -- `--numstat` needs both sides to count lines, so a
+ * plain modification fetches with no rename in sight, and `-M` adds the blobs
+ * rename detection compares -- and the fetch runs whatever the repository's
+ * config names for reaching its remote. The probes' runner sets
+ * `GIT_NO_LAZY_FETCH=1`, so such a diff exits 128 instead and reads as nothing
+ * read.
  */
 export const gitDiffRequestSchema = z.strictObject({ directory: directorySchema });
 export type GitDiffRequest = z.infer<typeof gitDiffRequestSchema>;
 
-export const gitDiffOperation: Operation<GitDiffRequest, UncommittedDiff> = {
-  name: 'git.diff',
-  summary: 'Uncommitted line counts, per file and in total, for a directory',
-  request: gitDiffRequestSchema,
+/**
+ * The probe, built for the filter names one repository configures. There is no
+ * exported probe built for none, for the reason `createGitStatusOperation`
+ * gives.
+ */
+export function createGitDiffOperation(
+  filterNames: readonly string[],
+): Operation<GitDiffRequest, UncommittedDiff> {
+  return {
+    name: 'git.diff',
+    summary: 'Uncommitted line counts, per file and in total, for a directory',
+    request: gitDiffRequestSchema,
 
-  argv: ({ directory }) => ({
-    file: 'git',
-    args: [
-      '-c',
-      'core.fsmonitor=false',
-      '-c',
-      'core.hooksPath=/dev/null',
-      '--no-optional-locks',
-      '-C',
-      directory,
-      'diff-index',
-      '-M',
-      '--numstat',
-      '-z',
-      'HEAD',
-      // Nothing follows, said out loud. Everything after `--` would be a
-      // pathspec, and there is no request field that could put one there.
-      '--',
-    ],
-  }),
+    argv: ({ directory }) => ({
+      file: 'git',
+      args: [
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        ...filterSwitches(filterNames),
+        '--no-optional-locks',
+        '-C',
+        directory,
+        'diff-index',
+        '--ignore-submodules=dirty',
+        '-M',
+        '--numstat',
+        '-z',
+        'HEAD',
+        // Nothing follows, said out loud. Everything after `--` would be a
+        // pathspec, and there is no request field that could put one there.
+        '--',
+      ],
+    }),
 
-  /**
-   * Two seconds, the same budget `git.status` takes, and for the same reason: a
-   * diff against `HEAD` on a warm repository is milliseconds, and one that is
-   * slower than this is on a network mount or behind a lock. A session list
-   * that blocks on it is worse than one that says it does not know.
-   */
-  timeoutMs: 2_000,
+    /**
+     * Two seconds, the same budget `git.status` takes, and for the same reason: a
+     * diff against `HEAD` on a warm repository is milliseconds, and one that is
+     * slower than this is on a network mount or behind a lock. A session list
+     * that blocks on it is worse than one that says it does not know.
+     */
+    timeoutMs: 2_000,
 
-  read: readGitDiff,
-};
+    read: readGitDiff,
+  };
+}
 
 /**
  * The `-z --numstat` record stream.
