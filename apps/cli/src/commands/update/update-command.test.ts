@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import type { ProcessRunner, ProgramResolver } from '@agentplex/providers';
 import type { ReleaseProtocol } from '@agentplex/release';
 import {
@@ -196,6 +197,24 @@ function published(
       ]),
     ),
   );
+}
+
+/**
+ * The same manifest with more of the hub's history in it: releases published
+ * before the current one, which is what a series pin resolves against. The
+ * current release stays `1.2.0`, so an unpinned run is unchanged by them.
+ */
+function publishedWithHub(...older: readonly string[]): string {
+  const manifest = z
+    .record(
+      z.string(),
+      z.object({ current: z.string(), releases: z.record(z.string(), z.unknown()) }),
+    )
+    .parse(JSON.parse(published()));
+  const hub = manifest['hub'];
+  if (hub === undefined) throw new Error('the published manifest has no hub');
+  for (const version of older) hub.releases[version] = legsOf('hub', 3);
+  return JSON.stringify(manifest);
 }
 
 /** What nodejs.org serves, cut to the two lines that matter. */
@@ -641,6 +660,53 @@ describe('what was asked for', () => {
     );
     expect(spawned(updated.runner)).toContain(npmInstall('agentplex-hub'));
   });
+
+  /**
+   * `install.sh`'s series, resolved by the same rule: the newest release the
+   * manifest lists under it, compared as numbers and never a prerelease.
+   */
+  it('resolves a series to the newest release the manifest lists under it', async () => {
+    const updated = await run(['hub@1.3', '--dry-run', '--no-node'], {
+      served: { [VERSIONS_URL]: publishedWithHub('1.3.9', '1.3.10', '1.3.2', '1.3.11-rc1') },
+    });
+
+    expect(updated.code).toBe(0);
+    expect(updated.out).toMatch(/^ {2}hub +1\.2\.0 +-> 1\.3\.10$/m);
+    expect(updated.out).toContain(`${DOWNLOAD}/hub-v1.3.10/agentplex-hub.tgz`);
+  });
+
+  /**
+   * A series nothing is published under stops the run before anything is
+   * stopped, naming the component and the series -- where `install.sh` stops
+   * too, and with its words.
+   */
+  it('refuses a series the manifest lists nothing under, and stops nothing', async () => {
+    const updated = await run(['hub@1.3', '--no-node'], {
+      served: { [VERSIONS_URL]: publishedWithHub('1.30.0') },
+    });
+
+    expect(updated.code).toBe(1);
+    expect(updated.errors).toContain(`${VERSIONS_URL} offers no hub release under 1.3`);
+    expect(updated.errors).toContain('hub@1.3');
+    expect(updated.out).toBe('');
+    expect(spawned(updated.runner).join('\n')).not.toContain('stop');
+  });
+
+  /**
+   * Resolving a series is exactly what needed the file, so a run that could not
+   * read it has no answer to give -- and says which file, rather than guessing.
+   */
+  it('refuses a series when the manifest could not be read, naming the source', async () => {
+    const updated = await run(['hub@1.3', '--no-node'], {
+      served: { [VERSIONS_URL]: 'not a manifest' },
+    });
+
+    expect(updated.code).toBe(1);
+    expect(updated.errors).toContain('hub@1.3');
+    expect(updated.errors).toContain(VERSIONS_URL);
+    expect(updated.out).toBe('');
+    expect(spawned(updated.runner).join('\n')).not.toContain('stop');
+  });
 });
 
 describe('--check', () => {
@@ -1058,11 +1124,11 @@ describe('what update refuses to do', () => {
   });
 
   /** The whole grammar of a pin, refused at the flag rather than at a 404. */
-  it('refuses a partial pin, naming the shape it takes', async () => {
-    const updated = await run(['hub@1.3']);
+  it('refuses a word that is neither a release nor a series, before reading anything', async () => {
+    const updated = await run(['hub@latest']);
 
     expect(updated.code).toBe(2);
-    expect(updated.errors).toContain('1.3.0 rather than 1.3');
+    expect(updated.errors).toContain('<major>.<minor> or <major>');
     expect(updated.network.requests).toEqual([]);
   });
 });

@@ -22,29 +22,43 @@ describe('what was named', () => {
     const flags = read('hub', 'web');
 
     expect(flags.ok && flags.asked).toEqual([
-      { component: 'hub', version: null },
-      { component: 'web', version: null },
+      { component: 'hub', pin: null },
+      { component: 'web', pin: null },
     ]);
   });
 
-  it('takes a pin as an exact release', () => {
-    expect(read('hub@1.3.0').ok && read('hub@1.3.0')).toMatchObject({
-      asked: [{ component: 'hub', version: '1.3.0' }],
+  it('takes a pin to an exact release', () => {
+    expect(read('hub@1.3.0')).toMatchObject({
+      ok: true,
+      asked: [{ component: 'hub', pin: { kind: 'exact', version: '1.3.0' } }],
     });
   });
 
   /**
-   * A pin names a release tag, and `versions.json` describes only what is
-   * current -- so there is nothing here to resolve a range against. Refused at
-   * the flag with the shape named, which is where `install.sh` refuses it too.
-   * AGX-198 is the ticket that would make it resolvable.
+   * The series `install.sh` takes, read here as a series and resolved against
+   * the manifest's history once it has been read -- see `resolve-pins.ts`.
    */
-  it.each(['hub@1.3', 'hub@1', 'hub@latest', 'hub@v1.3.0', 'hub@'])('refuses %s', (argument) => {
-    const flags = read(argument);
-
-    expect(flags.ok).toBe(false);
-    expect(flags.ok === false && flags.problems.join('')).toContain('1.3.0 rather than 1.3');
+  it.each([
+    ['hub@1.3', '1.3'],
+    ['hub@1', '1'],
+  ])('takes %s as a series', (argument, series) => {
+    expect(read(argument)).toMatchObject({
+      ok: true,
+      asked: [{ component: 'hub', pin: { kind: 'series', series } }],
+    });
   });
+
+  it.each(['hub@latest', 'hub@v1.3.0', 'hub@', 'hub@1.3.x', 'hub@1.2.3-01'])(
+    'refuses %s, naming both shapes a pin takes',
+    (argument) => {
+      const flags = read(argument);
+
+      expect(flags.ok).toBe(false);
+      const problems = flags.ok === false ? flags.problems.join('') : '';
+      expect(problems).toContain('exact <major>.<minor>.<patch>');
+      expect(problems).toContain('<major>.<minor> or <major>');
+    },
+  );
 
   it('refuses a word that is not a component, listing the ones that are', () => {
     const flags = read('hubb');
@@ -96,7 +110,7 @@ describe('the flags', () => {
   it('does not read the value after --prefix as a component', () => {
     const flags = read('--prefix', '/srv/agentplex', 'hub');
 
-    expect(flags.ok && flags.asked).toEqual([{ component: 'hub', version: null }]);
+    expect(flags.ok && flags.asked).toEqual([{ component: 'hub', pin: null }]);
   });
 
   it('refuses a flag nobody knows rather than ignoring it', () => {
@@ -108,12 +122,13 @@ describe('the flags', () => {
 });
 
 describe('the usage', () => {
-  it('names the grammar, the flags and why a pin is exact', () => {
+  it('names the grammar, the flags and the series a pin may name', () => {
     const usage = updateUsage();
 
     expect(usage).toContain('agentplex update [<component>[@<version>] ...]');
     expect(usage).toContain('--check');
     expect(usage).toContain('--no-node');
-    expect(usage).toContain('hub@1.3 is refused');
+    expect(usage).toContain('hub@1.3.0');
+    expect(usage).toContain('hub@1.3 takes the newest 1.3.x');
   });
 });

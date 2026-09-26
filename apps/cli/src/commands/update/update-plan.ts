@@ -16,6 +16,7 @@ import {
   type InstalledPackage,
   type ProtocolDisagreement,
 } from '../../installation/installation.js';
+import type { ResolvedComponent } from './resolve-pins.js';
 import type { AskedComponent } from './update-flags.js';
 
 /**
@@ -122,8 +123,11 @@ export interface PlanInputs {
   readonly manifest: VersionsManifest | null;
   /** Why there is no manifest, when there is none. */
   readonly problem: string | null;
-  /** The components named on the command line. Empty means everything installed. */
-  readonly asked: readonly AskedComponent[];
+  /**
+   * The components named on the command line, each pin already resolved to a
+   * release. Empty means everything installed.
+   */
+  readonly asked: readonly ResolvedComponent[];
 }
 
 export function planUpdate({ installation, manifest, problem, asked }: PlanInputs): UpdatePlan {
