@@ -153,7 +153,7 @@ const versionSchema = z.string().regex(SEMVER);
  * package, for the reason the whole package imports nothing: the release job
  * that advances `v1` builds this package alone.
  */
-const releaseProtocolSchema = z
+export const releaseProtocolSchema = z
   .object({
     client: z.int().positive().optional(),
     server: z.int().positive().optional(),

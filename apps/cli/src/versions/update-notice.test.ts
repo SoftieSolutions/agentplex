@@ -24,7 +24,7 @@ function cached(age: number, cliVersion = '1.5.0'): string {
   return serializeCachedVersions({
     checkedAt: NOW - age,
     source: 'https://example.invalid/versions.json',
-    manifest: { cli: { current: cliVersion, releases: { [cliVersion]: 3 } } },
+    manifest: { cli: { current: cliVersion, releases: { [cliVersion]: {} } } },
   });
 }
 

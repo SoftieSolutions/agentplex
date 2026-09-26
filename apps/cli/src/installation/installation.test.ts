@@ -1,3 +1,4 @@
+import type { ReleaseProtocol } from '@agentplex/release';
 import { describe, expect, it } from 'vitest';
 import { createFakeInstallationFiles } from './fake-installation-files.js';
 import { protocolDisagreement, readInstallation, type Installation } from './installation.js';
@@ -17,11 +18,14 @@ const HOME = '/home/alice';
 const PREFIX = `${HOME}/.agentplex`;
 const UNITS = `${HOME}/.config/systemd/user`;
 
-function manifest(name: string, version: string, protocol: number | null): string {
+function manifest(name: string, version: string, protocol: ReleaseProtocol | null): string {
   return JSON.stringify(
     protocol === null ? { name, version } : { name, version, agentplex: { protocol } },
   );
 }
+
+/** Both legs at one number, as a hub or a web client built at one commit records them. */
+const both = (n: number): ReleaseProtocol => ({ client: n, server: n });
 
 function packageAt(prefix: string, name: string): string {
   return `${prefix}/lib/node_modules/${name}/package.json`;
@@ -34,22 +38,22 @@ function wholeMachine(): Record<string, string> {
     [packageAt(PREFIX, '@softiesolutions/agentplex')]: manifest(
       '@softiesolutions/agentplex',
       '1.4.0',
-      3,
+      {},
     ),
     [packageAt(PREFIX, '@softiesolutions/agentplex-hub')]: manifest(
       '@softiesolutions/agentplex-hub',
       '1.2.0',
-      3,
+      both(3),
     ),
     [packageAt(PREFIX, '@softiesolutions/agentplex-server')]: manifest(
       '@softiesolutions/agentplex-server',
       '1.5.0',
-      3,
+      { server: 3 },
     ),
     [packageAt(PREFIX, '@softiesolutions/agentplex-web')]: manifest(
       '@softiesolutions/agentplex-web',
       '1.1.0',
-      3,
+      both(3),
     ),
     [`${PREFIX}/node/.agentplex-node-version`]: 'v24.9.0\n',
   };
@@ -156,7 +160,7 @@ describe('finding an installation', () => {
 });
 
 describe('what is installed under a prefix', () => {
-  it('reports every package with the version and protocol its manifest declares', async () => {
+  it('reports every package with the version and protocol legs its manifest declares', async () => {
     const installation = await read(createFakeInstallationFiles({ files: wholeMachine() }));
 
     expect(installation.packages).toEqual([
@@ -165,7 +169,7 @@ describe('what is installed under a prefix', () => {
         name: '@softiesolutions/agentplex',
         state: 'installed',
         version: '1.4.0',
-        protocol: 3,
+        protocol: {},
         problem: null,
       },
       {
@@ -173,7 +177,7 @@ describe('what is installed under a prefix', () => {
         name: '@softiesolutions/agentplex-hub',
         state: 'installed',
         version: '1.2.0',
-        protocol: 3,
+        protocol: { client: 3, server: 3 },
         problem: null,
       },
       {
@@ -181,7 +185,7 @@ describe('what is installed under a prefix', () => {
         name: '@softiesolutions/agentplex-server',
         state: 'installed',
         version: '1.5.0',
-        protocol: 3,
+        protocol: { server: 3 },
         problem: null,
       },
       {
@@ -189,7 +193,7 @@ describe('what is installed under a prefix', () => {
         name: '@softiesolutions/agentplex-web',
         state: 'installed',
         version: '1.1.0',
-        protocol: 3,
+        protocol: { client: 3, server: 3 },
         problem: null,
       },
     ]);
@@ -238,6 +242,31 @@ describe('what is installed under a prefix', () => {
     expect(web?.state).toBe('unreadable');
     expect(web?.version).toBeNull();
   });
+
+  /**
+   * Nothing was ever published with one number for both legs, so a manifest
+   * that carries one is not a manifest this reads -- and reading it as "no legs"
+   * would be the one reading that makes a disagreement disappear.
+   */
+  it.each([
+    ['one bare number', 3],
+    ['a leg nobody named', { client: 3, browser: 3 }],
+    ['a leg that is a string', { client: '3' }],
+  ])('refuses a protocol that is %s rather than guessing at it', async (_name, protocol) => {
+    const files = createFakeInstallationFiles({
+      files: {
+        ...wholeMachine(),
+        [packageAt(PREFIX, '@softiesolutions/agentplex-hub')]: JSON.stringify({
+          version: '1.2.0',
+          agentplex: { protocol },
+        }),
+      },
+    });
+
+    const hub = (await read(files)).packages.find((one) => one.component === 'hub');
+    expect(hub?.state).toBe('unreadable');
+    expect(hub?.problem).toContain('agentplex.protocol');
+  });
 });
 
 describe('the units and the runtime', () => {
@@ -277,48 +306,96 @@ describe('the units and the runtime', () => {
 });
 
 describe('whether the components can talk to each other', () => {
+  function withManifests(
+    overrides: Readonly<Record<string, ReleaseProtocol | null>>,
+  ): Record<string, string> {
+    const files = wholeMachine();
+    for (const [name, protocol] of Object.entries(overrides)) {
+      files[packageAt(PREFIX, name)] = manifest(name, '2.0.0', protocol);
+    }
+    return files;
+  }
+
   it('says nothing when they agree', async () => {
     expect(
       protocolDisagreement(await read(createFakeInstallationFiles({ files: wholeMachine() }))),
     ).toBeNull();
   });
 
-  it('names every component that declared one when they do not', async () => {
-    // A hub upgraded on its own, across a protocol change. The two would
-    // connect and refuse each other's frames with nothing in either log naming
-    // the cause, which is why this command is the one that says so.
+  it('names the leg, and every component that declared it, when they do not', async () => {
+    // A hub upgraded on its own, across a client-leg change. Every open tab
+    // would be refused at hello with nothing on the server side wrong at all,
+    // which is why the leg is named and not only the components.
     const files = createFakeInstallationFiles({
-      files: {
-        ...wholeMachine(),
-        [packageAt(PREFIX, '@softiesolutions/agentplex-hub')]: manifest(
-          '@softiesolutions/agentplex-hub',
-          '2.0.0',
-          4,
-        ),
-      },
+      files: withManifests({
+        '@softiesolutions/agentplex-hub': { client: 4, server: 3 },
+      }),
     });
 
     const disagreement = protocolDisagreement(await read(files));
-    expect(disagreement?.map((one) => [one.component, one.protocol])).toEqual([
-      ['cli', 3],
-      ['hub', 4],
-      ['server', 3],
-      ['web', 3],
+    expect(
+      disagreement?.map((one) => [
+        one.leg,
+        one.declared.map((installed) => [installed.component, installed.protocol?.[one.leg]]),
+      ]),
+    ).toEqual([
+      [
+        'client',
+        [
+          ['hub', 4],
+          ['web', 3],
+        ],
+      ],
     ]);
+  });
+
+  it('compares the server leg over the packages that speak it', async () => {
+    const files = createFakeInstallationFiles({
+      files: withManifests({
+        '@softiesolutions/agentplex-hub': { client: 3, server: 4 },
+        '@softiesolutions/agentplex-web': { client: 3, server: 4 },
+      }),
+    });
+
+    const disagreement = protocolDisagreement(await read(files));
+    expect(
+      disagreement?.map((one) => [
+        one.leg,
+        one.declared.map((installed) => [installed.component, installed.protocol?.[one.leg]]),
+      ]),
+    ).toEqual([
+      [
+        'server',
+        [
+          ['hub', 4],
+          ['server', 3],
+          ['web', 4],
+        ],
+      ],
+    ]);
+  });
+
+  /**
+   * The two legs are never compared with each other. A client-only change
+   * leaves the hub at client 4 and server 3 beside a server at 3, and that
+   * machine is exactly what the split exists to allow.
+   */
+  it('does not call legs that differ from each other a disagreement', async () => {
+    const files = createFakeInstallationFiles({
+      files: withManifests({
+        '@softiesolutions/agentplex-hub': { client: 4, server: 3 },
+        '@softiesolutions/agentplex-web': { client: 4, server: 3 },
+      }),
+    });
+
+    expect(protocolDisagreement(await read(files))).toBeNull();
   });
 
   it('does not count a package that declares no protocol as a disagreement', async () => {
     // A build from before the field existed, or a local one. "This one does not
     // say" is a smaller fact than "these two say different things".
     const files = createFakeInstallationFiles({
-      files: {
-        ...wholeMachine(),
-        [packageAt(PREFIX, '@softiesolutions/agentplex-web')]: manifest(
-          '@softiesolutions/agentplex-web',
-          '1.1.0',
-          null,
-        ),
-      },
+      files: withManifests({ '@softiesolutions/agentplex-web': null }),
     });
 
     expect(protocolDisagreement(await read(files))).toBeNull();

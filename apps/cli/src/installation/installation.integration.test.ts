@@ -84,10 +84,18 @@ async function run(...argv: readonly string[]): Promise<Run> {
  * in the user manager's directory.
  *
  * The manifests carry `agentplex.protocol` because the published ones do --
- * packaging writes it into every one of them, which is the whole reason
- * `status` can read the claim back off an installed machine.
+ * packaging writes into every one of them the legs that package speaks, which
+ * is the whole reason `status` can read the claim back off an installed
+ * machine.
  */
-async function assemblePrefix(protocols: Readonly<Record<string, number>>): Promise<void> {
+const SPOKEN: Readonly<Record<string, object>> = {
+  '@softiesolutions/agentplex': {},
+  '@softiesolutions/agentplex-hub': { client: 3, server: 3 },
+  '@softiesolutions/agentplex-server': { server: 3 },
+  '@softiesolutions/agentplex-web': { client: 3, server: 3 },
+};
+
+async function assemblePrefix(protocols: Readonly<Record<string, object>>): Promise<void> {
   await writeFile(
     join(prefix, 'agentplex.env'),
     [
@@ -103,7 +111,11 @@ async function assemblePrefix(protocols: Readonly<Record<string, number>>): Prom
     await mkdir(directory, { recursive: true });
     await writeFile(
       join(directory, 'package.json'),
-      JSON.stringify({ name, version, agentplex: { protocol: protocols[name] ?? 3 } }),
+      JSON.stringify({
+        name,
+        version,
+        agentplex: { protocol: protocols[name] ?? SPOKEN[name] ?? {} },
+      }),
     );
   }
 
@@ -164,13 +176,13 @@ describe('agentplex status against a real prefix', () => {
     'reports a protocol disagreement it could only have read off the manifests',
     { timeout: RUN_TIMEOUT_MS },
     async () => {
-      await assemblePrefix({ '@softiesolutions/agentplex-hub': 4 });
+      await assemblePrefix({ '@softiesolutions/agentplex-hub': { client: 3, server: 4 } });
       const status = await run('status');
       await assemblePrefix({});
 
-      expect(status.stdout).toContain('these components do not agree');
-      expect(status.stdout).toContain('hub      protocol 4');
-      expect(status.stdout).toContain('server   protocol 3');
+      expect(status.stdout).toContain('these components do not agree on the server protocol');
+      expect(status.stdout).toContain('    hub      server 4');
+      expect(status.stdout).toContain('    server   server 3');
       // Reported, not failed: the exit code answers "did anything fail to run".
       expect(status.code).toBe(0);
     },

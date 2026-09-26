@@ -3,6 +3,7 @@ export {
   isReleaseVersion,
   parseReleaseProtocol,
   parseVersionsManifest,
+  releaseProtocolSchema,
   serializeVersionsManifest,
   updateVersionsManifest,
 } from './versions-manifest.js';
