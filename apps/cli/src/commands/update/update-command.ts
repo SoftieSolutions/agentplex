@@ -22,6 +22,7 @@ import {
   installPackages,
   resolveGlobalConfig,
   resolveNpm,
+  tarballLocation,
   type Installer,
 } from '../../installation/package-install.js';
 import type { Downloader } from '../../installation/write-machine.js';
@@ -467,7 +468,7 @@ function dryRunLines(
   for (const install of plan.installs) {
     for (const tarball of install.packages) {
       const tree = packageDirectory(installation.layout, tarball.package);
-      lines.push(`  download ${tarball.url}, unpack it into ${tree}.new`);
+      lines.push(`  download ${tarballLocation(tarball.source)}, unpack it into ${tree}.new`);
       lines.push(
         '    and npm install --omit=dev there, against the npm-shrinkwrap.json it carries',
       );

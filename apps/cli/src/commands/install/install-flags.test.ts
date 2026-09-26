@@ -146,6 +146,20 @@ describe('readInstallFlags', () => {
     expect(request(['--prefix=/srv/agentplex//']).prefix).toBe('/srv/agentplex');
   });
 
+  /**
+   * One spelling of the prefix, so that every path built out of it agrees: the
+   * unit names some paths by joining and some by writing the prefix out, and a
+   * doubled slash would otherwise come out two ways in one file.
+   */
+  it('normalizes a prefix to one spelling before anything is built from it', () => {
+    expect(request(['--prefix=/srv//agentplex']).prefix).toBe('/srv/agentplex');
+    expect(request(['--prefix=/srv/./agentplex/']).prefix).toBe('/srv/agentplex');
+    expect(refusal(['--prefix=//opt'])).toBe(
+      '--prefix must be at least two directories deep, and "/opt" is not: this is the directory ' +
+        'an install fills and --uninstall empties',
+    );
+  });
+
   it('refuses an unknown flag, and a known one spelled as two words', () => {
     expect(refusal(['--rle=hub'])).toBe('unknown option --rle=hub');
     expect(refusal(['--prefix', '/srv/agentplex'])).toBe('unknown option --prefix');

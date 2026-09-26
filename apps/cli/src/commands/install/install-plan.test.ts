@@ -320,6 +320,76 @@ describe('AGENTPLEX_PACKAGE', () => {
   });
 });
 
+describe('the packages it would install', () => {
+  function packages(planned: InstallPlanInput): unknown {
+    const plan = planInstall(planned);
+    if (!plan.ok) throw new Error(`stopped: ${plan.problem}`);
+    return plan.packages;
+  }
+
+  it('are the release tarballs the manifest resolves, each with its version', () => {
+    expect(packages(input(['--role=hub@1.1', '--dry-run']))).toEqual([
+      {
+        component: 'cli',
+        package: '@softiesolutions/agentplex',
+        version: '1.4.0',
+        source: { kind: 'download', url: url('cli', '1.4.0', 'agentplex.tgz') },
+      },
+      {
+        component: 'hub',
+        package: '@softiesolutions/agentplex-hub',
+        version: '1.1.0',
+        source: { kind: 'download', url: url('hub', '1.1.0', 'agentplex-hub.tgz') },
+      },
+      {
+        component: 'web',
+        package: '@softiesolutions/agentplex-web',
+        version: '1.1.0',
+        source: { kind: 'download', url: url('web', '1.1.0', 'agentplex-web.tgz') },
+      },
+    ]);
+  });
+
+  it('are the files AGENTPLEX_PACKAGE holds, versioned by the name npm packed them under', () => {
+    const planned = packages(
+      input(['--role=server', '--dry-run'], {
+        release: {
+          kind: 'tarballs',
+          directory: '/build/packages',
+          entries: [
+            'softiesolutions-agentplex-server-0.0.0.tgz',
+            'softiesolutions-agentplex-1.4.0.tgz',
+          ],
+        },
+      }),
+    );
+
+    expect(planned).toEqual([
+      {
+        component: 'cli',
+        package: '@softiesolutions/agentplex',
+        version: '1.4.0',
+        source: { kind: 'file', path: '/build/packages/softiesolutions-agentplex-1.4.0.tgz' },
+      },
+      {
+        component: 'server',
+        package: '@softiesolutions/agentplex-server',
+        version: '0.0.0',
+        source: {
+          kind: 'file',
+          path: '/build/packages/softiesolutions-agentplex-server-0.0.0.tgz',
+        },
+      },
+    ]);
+  });
+
+  it('are unknown when a dry run left a version unresolved', () => {
+    expect(packages(input(['--role=hub', '--dry-run'], { release: { kind: 'unread' } }))).toBe(
+      null,
+    );
+  });
+});
+
 describe('what the plan says about the machine', () => {
   const system: Layout = systemLayout();
 

@@ -120,7 +120,13 @@ export function planUpdate({ installation, manifest, problem, asked }: PlanInput
 
   const moving = components.flatMap((one): PackageTarball[] =>
     one.action === 'update' && one.url !== null
-      ? [{ component: one.component, package: COMPONENT_PACKAGES[one.component], url: one.url }]
+      ? [
+          {
+            component: one.component,
+            package: COMPONENT_PACKAGES[one.component],
+            source: { kind: 'download', url: one.url },
+          },
+        ]
       : [],
   );
   const others = moving.filter((one) => one.component !== SELF);

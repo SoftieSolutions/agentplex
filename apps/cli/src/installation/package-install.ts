@@ -93,12 +93,26 @@ export interface PackageInstall {
   readonly reason: string;
 }
 
-/** One component's package, and the tarball a release publishes it as. */
+/** One component's package, and the tarball it is installed from. */
 export interface PackageTarball {
   readonly component: Component;
   /** The package's name, which is also its directory under `lib/node_modules`. */
   readonly package: string;
-  readonly url: string;
+  readonly source: TarballSource;
+}
+
+/**
+ * Where a tarball is: a release asset to download, or a file already on this
+ * machine -- `AGENTPLEX_PACKAGE`'s packed build, which `install_package`
+ * unpacks where it lies rather than fetching.
+ */
+export type TarballSource =
+  | { readonly kind: 'download'; readonly url: string }
+  | { readonly kind: 'file'; readonly path: string };
+
+/** The URL or the path, for a line that has to say where a package came from. */
+export function tarballLocation(source: TarballSource): string {
+  return source.kind === 'download' ? source.url : source.path;
 }
 
 /**
@@ -441,14 +455,20 @@ async function stageComponent(
   { machine, downloader, runner }: PackageInstallDependencies,
 ): Promise<Step> {
   const staging = `${packageDirectory(layout, tarball.package)}.new`;
-  const archive = join(work, `${tarball.component}.tgz`);
+  const from = tarballLocation(tarball.source);
   const failed = (problem: string): Step => ({ ok: false, lines: [problem] });
 
-  const downloaded = await downloader.download(tarball.url, archive);
-  if (!downloaded.ok) {
-    return failed(
-      `could not download the ${tarball.component} package from ${tarball.url}: ${downloaded.problem}`,
-    );
+  let archive: string;
+  if (tarball.source.kind === 'file') {
+    archive = tarball.source.path;
+  } else {
+    archive = join(work, `${tarball.component}.tgz`);
+    const downloaded = await downloader.download(tarball.source.url, archive);
+    if (!downloaded.ok) {
+      return failed(
+        `could not download the ${tarball.component} package from ${from}: ${downloaded.problem}`,
+      );
+    }
   }
 
   staged.push(staging);
@@ -460,7 +480,7 @@ async function stageComponent(
 
   const unpacked = await runOperation(unpackOperation, { archive, directory: staging }, runner);
   if (!unpacked.ok) {
-    return failed(`the ${tarball.component} package from ${tarball.url}: ${unpacked.problem}`);
+    return failed(`the ${tarball.component} package from ${from}: ${unpacked.problem}`);
   }
 
   const installed = await runOperation(
