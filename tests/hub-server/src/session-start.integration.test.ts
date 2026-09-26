@@ -259,7 +259,7 @@ function buildMachine(label: string, providers: readonly ProviderReadiness[]): M
     ids: { newId: () => `${label}-run-${ptys.ptys.length}` },
     environment: { PATH: '/usr/bin' },
   });
-  const terminals = createTerminalManager({ supervisor, clock });
+  const terminals = createTerminalManager({ supervisor, clock, timers: createFakeTimers() });
 
   return {
     label,

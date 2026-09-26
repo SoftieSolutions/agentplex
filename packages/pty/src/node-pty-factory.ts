@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import type * as NodePty from 'node-pty';
-import type { Pty, PtyExit, PtyFactory, PtyRequest } from './pty.js';
+import type { Pty, PtyExit, PtyFactory, PtyRequest, PtySignal } from './pty.js';
 
 /**
  * The real pseudoterminal, through node-pty.
@@ -161,8 +161,11 @@ export const nodePtyFactory: PtyFactory = {
         terminal.resize(cols, rows);
       },
 
-      kill(): void {
-        terminal.kill();
+      kill(signal: PtySignal): void {
+        // node-pty 1.1.0 signals `this.pid` and nothing else: the child, not
+        // its process group. A grandchild the agent started is the agent's to
+        // take down with it.
+        terminal.kill(signal);
       },
     };
   },

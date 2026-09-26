@@ -22,6 +22,7 @@ import {
   systemTimers,
   createWebSocketDialer,
 } from '@agentplex/node-shared';
+import { createFakeTimers } from '@agentplex/node-shared/testing';
 import {
   handshakeWithServer,
   type DialTarget,
@@ -94,6 +95,7 @@ async function startServer(storePaths: readonly string[] = []) {
         environment: {},
       }),
       clock,
+      timers: createFakeTimers(),
     }),
     // Nothing to drain: no session in this suite is ever mid-turn, so a budget
     // here would only be a number the shutdown does not reach for.

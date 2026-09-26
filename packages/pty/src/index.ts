@@ -1,4 +1,4 @@
-export type { Pty, PtyExit, PtyFactory, PtyRequest } from './pty.js';
+export type { Pty, PtyExit, PtyFactory, PtyRequest, PtySignal } from './pty.js';
 
 export { createPtySupervisor, scrubEnvironment } from './pty-supervisor.js';
 export type {

@@ -7,10 +7,11 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { SessionRef, SessionStatus } from '@agentplex/protocol';
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
+import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
-import { createPtySupervisor, type PtySupervisor } from '@agentplex/pty';
+import { createPtySupervisor, type PtySignal, type PtySupervisor } from '@agentplex/pty';
 import type { GrantId, Launch, LaunchPlan } from '@agentplex/providers';
-import { createTerminalManager, type TerminalManager } from './terminal-manager.js';
+import { createTerminalManager, KILL_GRACE_MS, type TerminalManager } from './terminal-manager.js';
 
 const STORE = storeDescriptorSchema.parse({ storeId: 'store-a', path: '/volumes/claude' });
 
@@ -52,11 +53,18 @@ interface Harness {
   readonly supervisor: PtySupervisor;
   readonly factory: FakePtyFactory;
   readonly clock: Clock & { advance(ms: number): void };
+  /** The kill grace. Nothing escalates until a test fires it. */
+  readonly timers: FakeTimers;
 }
 
-function harness(cap?: number): Harness {
-  const factory = createFakePtyFactory();
+/**
+ * `diesOn` is the agent the pty stands in for: absent, one that no signal ends
+ * and a test closes by hand; `['SIGKILL']`, one that ignores a hangup.
+ */
+function harness(cap?: number, diesOn?: readonly PtySignal[]): Harness {
+  const factory = createFakePtyFactory(diesOn === undefined ? {} : { child: { diesOn } });
   const clock = windableClock();
+  const timers = createFakeTimers();
   const supervisor = createPtySupervisor({
     pty: factory,
     clock,
@@ -68,9 +76,15 @@ function harness(cap?: number): Harness {
   const manager = createTerminalManager({
     supervisor,
     clock,
+    timers,
     ...(cap === undefined ? {} : { cap }),
   });
-  return { manager, supervisor, factory, clock };
+  return { manager, supervisor, factory, clock, timers };
+}
+
+/** Lets every exit the fake pty queued behind a signal arrive. */
+async function settled(): Promise<void> {
+  for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
 }
 
 /** Opens a terminal or fails the test: every eviction test needs several. */
@@ -137,7 +151,7 @@ describe('createTerminalManager start tags', () => {
     const terminalId = open(manager);
     manager.noteStart(terminalId, A_START, A_GRANT);
 
-    manager.closeAll();
+    void manager.closeAll();
 
     expect(manager.starts(A_GRANT)).toEqual([]);
   });
@@ -145,7 +159,7 @@ describe('createTerminalManager start tags', () => {
   it('records nothing for a terminal that is already gone', () => {
     const { manager } = harness();
     const terminalId = open(manager);
-    manager.closeAll();
+    void manager.closeAll();
 
     manager.noteStart(terminalId, A_START, A_GRANT);
 
@@ -477,6 +491,30 @@ describe('createTerminalManager cap and eviction', () => {
     expect(manager.terminal(only)).toBeDefined();
   });
 
+  it('kills an evicted agent that ignores the hangup, and holds its session until it has gone', async () => {
+    // Eviction is fire and forget: the start that asked for room does not wait
+    // for the old agent to go. It is not forget-and-hope either. Until the
+    // process has actually exited it is still the live holder of its session,
+    // so a resume in the grace is refused rather than starting a second agent
+    // on the same transcript.
+    const { manager, factory, timers } = harness(1, ['SIGKILL']);
+    const session = sessionRef('session-a');
+    manager.resume(session, launch);
+
+    open(manager);
+
+    expect(factory.ptys[0]?.signals).toEqual(['SIGHUP']);
+    await settled();
+    expect(manager.isRunning(session)).toBe(true);
+    expect(manager.resume(session, launch).ok).toBe(false);
+
+    timers.fireAll();
+    await settled();
+
+    expect(factory.ptys[0]?.signals).toEqual(['SIGHUP', 'SIGKILL']);
+    expect(manager.isRunning(session)).toBe(false);
+  });
+
   it('drops an evicted run from the supervisor, so shutdown does not count it', () => {
     const { manager, supervisor } = harness(1);
     open(manager);
@@ -534,6 +572,68 @@ describe('createTerminalManager stop', () => {
 
     expect(manager.terminal(terminalId)?.status).toBe('unknown');
     expect(manager.stop(terminalId).ok).toBe(true);
+  });
+
+  it('hangs up first, and kills a child still running when the grace is up', async () => {
+    // The agent that catches SIGHUP and carries on. A stop that only ever hung
+    // up would report success and leave it running, holding its session.
+    const { manager, factory, timers } = harness(undefined, ['SIGKILL']);
+    const terminalId = open(manager);
+
+    expect(manager.stop(terminalId).ok).toBe(true);
+    expect(factory.last?.signals).toEqual(['SIGHUP']);
+    expect(timers.delays).toEqual([KILL_GRACE_MS]);
+
+    await settled();
+    expect(manager.terminal(terminalId)?.run.exit).toBeNull();
+
+    timers.fireAll();
+
+    expect(factory.last?.signals).toEqual(['SIGHUP', 'SIGKILL']);
+    expect(await manager.terminal(terminalId)?.run.whenExited()).toEqual({
+      exitCode: 0,
+      signal: 9,
+    });
+  });
+
+  it('sends nothing more to a child that went on the hangup', async () => {
+    const { manager, factory, timers } = harness(undefined, ['SIGHUP', 'SIGKILL']);
+    const terminalId = open(manager);
+
+    manager.stop(terminalId);
+    await manager.terminal(terminalId)?.run.whenExited();
+
+    // The kill was cancelled, not merely never fired: a pid the kernel has
+    // handed to somebody else is exactly what a late SIGKILL would land on.
+    expect(timers.pending).toBe(0);
+    expect(factory.last?.signals).toEqual(['SIGHUP']);
+  });
+
+  it('hangs up once on a terminal stopped twice, and schedules one kill', () => {
+    const { manager, factory, timers } = harness(undefined, ['SIGKILL']);
+    const terminalId = open(manager);
+
+    manager.stop(terminalId);
+    manager.stop(terminalId);
+
+    expect(factory.last?.signals).toEqual(['SIGHUP']);
+    expect(timers.pending).toBe(1);
+  });
+
+  it('waits the grace it was given', () => {
+    const factory = createFakePtyFactory();
+    const clock = windableClock();
+    const timers = createFakeTimers();
+    const manager = createTerminalManager({
+      supervisor: createPtySupervisor({ pty: factory, clock, ids: countingIds(), environment: {} }),
+      clock,
+      timers,
+      killGraceMs: 250,
+    });
+
+    manager.stop(open(manager));
+
+    expect(timers.delays).toEqual([250]);
   });
 
   it('refuses a stop for a terminal it does not have', () => {
@@ -727,10 +827,42 @@ describe('createTerminalManager shutdown', () => {
     manager.terminal(watched)?.watch('a-hub', () => {});
     open(manager);
 
-    manager.closeAll();
+    void manager.closeAll();
 
     expect(factory.ptys.map((pty) => pty.kills)).toEqual([1, 1]);
     expect(manager.terminals).toEqual([]);
+  });
+
+  it('answers only once every process has exited or been killed', async () => {
+    // What the server waits on before it says it has stopped. One agent goes
+    // on the hangup; the other ignores it and has to be killed at the grace.
+    const { manager, factory, timers } = harness(undefined, ['SIGKILL']);
+    open(manager);
+    open(manager);
+
+    let closed = false;
+    const closing = manager.closeAll().then(() => {
+      closed = true;
+    });
+    factory.ptys[0]?.close({ exitCode: 0, signal: 1 });
+    await settled();
+
+    expect(closed).toBe(false);
+
+    timers.fireAll();
+    await closing;
+
+    expect(factory.ptys.map((pty) => pty.signals)).toEqual([['SIGHUP'], ['SIGHUP', 'SIGKILL']]);
+  });
+
+  it('answers at once when there is nothing running', async () => {
+    const { manager, factory } = harness();
+    open(manager);
+    factory.last?.close({ exitCode: 0, signal: null });
+
+    await manager.closeAll();
+
+    expect(factory.last?.kills).toBe(0);
   });
 
   it('names a holder for a session the hub asks about', () => {

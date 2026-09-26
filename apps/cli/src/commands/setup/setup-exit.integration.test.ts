@@ -360,7 +360,7 @@ describe('a finished setup run', () => {
 
       // Killed either way: a test that leaves a child behind on failure is a
       // test that makes the next run stranger than this one.
-      pty.kill();
+      pty.kill('SIGHUP');
 
       expect(outcome).toEqual({ exitCode: 0, signal: null });
     },
@@ -381,7 +381,7 @@ describe('a finished setup run', () => {
       const driven = driveOnAPty(['--role', 'server'], asAnOperatorWould);
 
       const outcome = await driven.exited;
-      driven.pty.kill();
+      driven.pty.kill('SIGHUP');
 
       // The transcript on failure, because a run that never exited is a run
       // that stopped somewhere, and where is the whole of the answer.

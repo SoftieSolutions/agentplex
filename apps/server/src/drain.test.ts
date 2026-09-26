@@ -2,7 +2,9 @@ import { sessionRefSchema, storeDescriptorSchema, type StoreId } from '@agentple
 import { describe, expect, it } from 'vitest';
 import type { Clock, Timers } from '@agentplex/node-shared';
 import { createLogger } from '@agentplex/node-shared';
+import { createFakeTimers } from '@agentplex/node-shared/testing';
 import type { Launch, LaunchPlan } from '@agentplex/providers';
+import type { PtySignal } from '@agentplex/pty';
 import { createDrain, drainingSessions, DRAIN_POLL_MS } from './drain.js';
 import { createFakeTerminals, type FakeTerminals } from './terminal/fake-terminals.js';
 
@@ -80,11 +82,25 @@ interface Harness {
   readonly asked: StoreId[];
 }
 
-function harness(): Harness {
+interface HarnessOptions {
+  /**
+   * The agents' signals. A well-behaved agent by default, one that exits on
+   * the hangup a stop sends, because what most of this file is about is when
+   * the drain stops rather than whether the stop is obeyed.
+   */
+  readonly diesOn?: readonly PtySignal[];
+  /** The drain's own timers, when instant ones would hide what is being shown. */
+  readonly timers?: Timers & { readonly delays: readonly number[] };
+}
+
+function harness({
+  diesOn = ['SIGHUP', 'SIGKILL'],
+  timers = instantTimers(),
+}: HarnessOptions = {}): Harness {
   return {
-    fake: createFakeTerminals(),
+    fake: createFakeTerminals({ diesOn }),
     clock: windableClock(),
-    timers: instantTimers(),
+    timers,
     asked: [],
   };
 }
@@ -120,8 +136,12 @@ function drainOf(
 }
 
 describe('the drain', () => {
-  it('closes a session that is already at a boundary, without waiting for it', async () => {
-    const world = harness();
+  it('closes a session that is already at a boundary, and waits only for it to exit', async () => {
+    // Timers that never fire: the only thing that can end the wait below is
+    // the process going, so a drain that sat out the poll instead would hang
+    // here rather than pass.
+    const timers = createFakeTimers();
+    const world = harness({ timers });
     const ref = session(STORE.storeId, 'session-1');
     const opened = world.fake.terminals.resume(ref, launch);
     expect(opened.ok).toBe(true);
@@ -132,9 +152,30 @@ describe('the drain', () => {
     expect(report.end).toBe('drained');
     expect(report.drained).toBe(1);
     expect(report.killed).toBe(0);
-    expect(world.fake.factory.ptys[0]?.kills).toBe(1);
-    // One pass. Nothing was waited for, so nothing was scheduled.
-    expect(world.timers.delays).toEqual([]);
+    expect(world.fake.factory.ptys[0]?.signals).toEqual(['SIGHUP']);
+    // One wait was asked for, and the exit took it back rather than letting a
+    // poll nobody needs fire into a drain that has finished.
+    expect(timers.pending).toBe(0);
+  });
+
+  it('counts a stopped session drained only once its process has exited', async () => {
+    // An agent that catches the hangup. It was stopped at a boundary, and it is
+    // still running when the budget runs out: that is a session the caller has
+    // to kill, and the report says so rather than calling it drained.
+    const world = harness({ diesOn: ['SIGKILL'] });
+    const ref = session(STORE.storeId, 'session-1');
+    world.fake.terminals.resume(ref, launch);
+    world.fake.terminals.observe(ref, 'awaiting-input');
+
+    const report = await drainOf(world, 2 * DRAIN_POLL_MS).run();
+
+    expect(report).toMatchObject({ end: 'expired', drained: 0, killed: 1 });
+    // Hung up on once, not once a pass: the second pass found it stopped
+    // already and waited on it.
+    expect(world.fake.factory.ptys[0]?.signals).toEqual(['SIGHUP']);
+    // And its store is still read, because the clock the budget is spent on
+    // moves only when a store is read.
+    expect(world.asked).toEqual([STORE.storeId, STORE.storeId]);
   });
 
   it('waits for a session that is working, and closes it at the boundary', async () => {
@@ -151,8 +192,10 @@ describe('the drain', () => {
     expect(report.end).toBe('drained');
     expect(report.drained).toBe(1);
     expect(report.killed).toBe(0);
-    // Two waits between three scans, each for the poll interval.
-    expect(world.timers.delays).toEqual([DRAIN_POLL_MS, DRAIN_POLL_MS]);
+    // Two waits between three scans, each for the poll interval, and a third
+    // for the process to go once it was stopped. That one is cut short by the
+    // exit, which the first test here shows with timers that never fire.
+    expect(world.timers.delays).toEqual([DRAIN_POLL_MS, DRAIN_POLL_MS, DRAIN_POLL_MS]);
   });
 
   it('gives up when the budget runs out, and says how many it did not release', async () => {
@@ -251,16 +294,20 @@ describe('the drain', () => {
     world.fake.terminals.observe(readable, 'awaiting-input');
     world.fake.terminals.observe(unreadable, 'working');
 
+    // One wait's worth of budget beyond the first pass, so the session that
+    // was stopped has somewhere to exit in.
     const drain = createDrain({
       terminals: world.fake.terminals,
-      observe: (storeId: StoreId) =>
-        storeId === OTHER_STORE.storeId
+      observe: (storeId: StoreId) => {
+        world.clock.advance(DRAIN_POLL_MS);
+        return storeId === OTHER_STORE.storeId
           ? Promise.reject(new Error('the volume is gone'))
-          : Promise.resolve(),
+          : Promise.resolve();
+      },
       timers: world.timers,
       clock: world.clock,
       logger,
-      budgetMs: 0,
+      budgetMs: 3 * DRAIN_POLL_MS,
     });
     const report = await drain.run();
 

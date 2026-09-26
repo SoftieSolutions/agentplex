@@ -166,6 +166,7 @@ async function start(): Promise<Harness> {
       environment: {},
     }),
     clock,
+    timers: createFakeTimers(),
   });
 
   await registerServer(

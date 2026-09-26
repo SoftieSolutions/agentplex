@@ -134,7 +134,7 @@ function buildMachine(): Machine {
     environment: { PATH: '/usr/bin' },
   });
   return {
-    terminals: createTerminalManager({ supervisor, clock }),
+    terminals: createTerminalManager({ supervisor, clock, timers: createFakeTimers() }),
     ptys,
     transcripts: {},
     sentToHub: [],

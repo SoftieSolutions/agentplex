@@ -317,7 +317,7 @@ describe('createPtySupervisor runs', () => {
 
     factory.last?.close({ exitCode: 0, signal: null });
     started.run.write('anyone there?');
-    started.run.kill();
+    started.run.kill('SIGKILL');
 
     expect(factory.last?.written).toEqual([]);
     expect(factory.last?.kills).toBe(0);
@@ -345,5 +345,53 @@ describe('createPtySupervisor runs', () => {
     supervisor.stopAll();
 
     expect(factory.ptys.map((pty) => pty.kills)).toEqual([1, 1]);
+  });
+
+  it('hands the pty the signal it was asked for, and nothing it was not', () => {
+    // The signal is the caller's decision and never a default underneath it:
+    // a hangup asks, a kill does not, and a stop escalates from one to the
+    // other. A seam that picked its own would make the escalation invisible.
+    const { supervisor, factory } = supervisorOver();
+    const started = supervisor.launch(launch());
+    if (!started.ok) throw new Error('the launch should have started');
+
+    started.run.kill('SIGHUP');
+    started.run.kill('SIGKILL');
+
+    expect(factory.last?.signals).toEqual(['SIGHUP', 'SIGKILL']);
+    expect(factory.last?.kills).toBe(2);
+  });
+
+  it('keeps a child that ignores a hangup running until it is killed', async () => {
+    // The agent this ticket is about: one that catches SIGHUP and goes on. The
+    // fake dies only on the signals it is told to, so a stop that never
+    // escalated would leave this run alive, which is what it would do for real.
+    const factory = createFakePtyFactory({ child: { diesOn: ['SIGKILL'] } });
+    const { supervisor } = supervisorOver(factory);
+    const started = supervisor.launch(launch());
+    if (!started.ok) throw new Error('the launch should have started');
+
+    started.run.kill('SIGHUP');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started.run.exit).toBeNull();
+
+    started.run.kill('SIGKILL');
+
+    expect(await started.run.whenExited()).toEqual({ exitCode: 0, signal: 9 });
+  });
+
+  it('ends a well-behaved child on the hangup, the first thing it is sent', async () => {
+    const factory = createFakePtyFactory({ child: { diesOn: ['SIGHUP', 'SIGKILL'] } });
+    const { supervisor } = supervisorOver(factory);
+    const started = supervisor.launch(launch());
+    if (!started.ok) throw new Error('the launch should have started');
+
+    started.run.kill('SIGHUP');
+
+    expect(await started.run.whenExited()).toEqual({ exitCode: 0, signal: 1 });
+    // Once, however often it is asked: a real process exits once.
+    started.run.kill('SIGKILL');
+    expect(factory.last?.signals).toEqual(['SIGHUP']);
   });
 });

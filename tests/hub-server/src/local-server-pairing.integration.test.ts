@@ -20,6 +20,7 @@ import {
   systemTimers,
   type SocketDialer,
 } from '@agentplex/node-shared';
+import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createFakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createOperationRegistry } from '../../../apps/server/src/operations/operation-registry.js';
@@ -107,6 +108,7 @@ async function startServer({
     terminals: createTerminalManager({
       supervisor: createPtySupervisor({ pty: createFakePtyFactory(), clock, ids, environment: {} }),
       clock,
+      timers: createFakeTimers(),
     }),
     operations: createOperationRegistry(createFakeProcessRunner()),
     // Nothing in this file runs a session, so the drain has nothing to wait

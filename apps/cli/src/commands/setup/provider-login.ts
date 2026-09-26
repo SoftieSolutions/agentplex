@@ -131,7 +131,7 @@ export async function offerProviderLogin(
     // Killed rather than left running. A login nobody is at is a child holding a
     // pty on a prompt that will never be answered, and setup is about to exit
     // and stop being anybody's parent.
-    started.run.kill();
+    started.run.kill('SIGHUP');
     if (attached.kind === 'unavailable') {
       return { kind: 'not-driven', problem: attached.problem, command };
     }

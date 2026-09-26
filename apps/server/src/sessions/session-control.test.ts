@@ -6,6 +6,7 @@ import {
   type UncommittedDiff,
 } from '@agentplex/protocol';
 import { createLogger } from '@agentplex/node-shared';
+import { createFakeTimers } from '@agentplex/node-shared/testing';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor } from '@agentplex/pty';
 import { createFakeProviderAdapter, createFakeProviderFiles } from '@agentplex/providers/testing';
@@ -146,6 +147,7 @@ function machine(options: MachineOptions = {}): Machine {
       environment: {},
     }),
     clock,
+    timers: createFakeTimers(),
     ...(options.cap === undefined ? {} : { cap: options.cap }),
   });
 
@@ -948,6 +950,7 @@ describe('the session controller reading one transcript', () => {
           environment: {},
         }),
         clock,
+        timers: createFakeTimers(),
       }),
       workingTree: createFakeWorkingTree(),
       browse: createDirectoryBrowser({ roots: [], reader: DISK }),

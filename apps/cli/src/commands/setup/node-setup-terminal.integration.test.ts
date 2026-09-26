@@ -325,7 +325,7 @@ describe('the real setup terminal, handed to a real child on a pty', () => {
       const run = start('setInterval(() => {}, 1000)');
 
       const attached = await terminal.attach(run);
-      run.kill();
+      run.kill('SIGHUP');
 
       expect(attached).toEqual({
         kind: 'unavailable',
@@ -352,7 +352,7 @@ describe('the real setup terminal, handed to a real child on a pty', () => {
 
       expect(await attaching).toEqual({ kind: 'abandoned' });
       expect(run.exit).toBeNull();
-      run.kill();
+      run.kill('SIGHUP');
     },
     CHILD_TIMEOUT_MS,
   );

@@ -143,7 +143,7 @@ async function start(): Promise<Harness> {
     ids: { newId: () => `attic-run-${String(ptys.ptys.length)}` },
     environment: { PATH: '/usr/bin' },
   });
-  const terminals = createTerminalManager({ supervisor, clock });
+  const terminals = createTerminalManager({ supervisor, clock, timers: createFakeTimers() });
 
   await registerServer(
     database,

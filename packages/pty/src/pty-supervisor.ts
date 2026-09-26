@@ -1,6 +1,6 @@
 import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import type { Launch } from '@agentplex/providers';
-import type { Pty, PtyExit, PtyFactory } from './pty.js';
+import type { Pty, PtyExit, PtyFactory, PtySignal } from './pty.js';
 import { createScrollback, type Scrollback } from './scrollback.js';
 
 /**
@@ -143,7 +143,8 @@ export interface PtyRun {
   subscribe(listener: (chunk: Uint8Array) => void): () => void;
   write(input: string): void;
   resize(cols: number, rows: number): void;
-  kill(): void;
+  /** Signals the child, or does nothing to one that has already exited. */
+  kill(signal: PtySignal): void;
 }
 
 export interface PtySupervisor {
@@ -152,7 +153,7 @@ export interface PtySupervisor {
   readonly runs: readonly PtyRun[];
   /** Drops a run this server no longer has to answer for. Does not kill it. */
   forget(runId: string): void;
-  /** Kills everything still running. For shutdown, where orphans outlive us. */
+  /** Hangs up on everything still running. For shutdown, where orphans outlive us. */
   stopAll(): void;
 }
 
@@ -211,7 +212,7 @@ export function createPtySupervisor({
     },
 
     stopAll(): void {
-      for (const run of runs.values()) run.kill();
+      for (const run of runs.values()) run.kill('SIGHUP');
     },
   };
 }
@@ -312,10 +313,10 @@ function trackRun(pty: Pty, runId: string, startedAt: number, scrollbackBytes: n
       pty.resize(cols, rows);
     },
 
-    kill(): void {
+    kill(signal: PtySignal): void {
       // Signalling a dead pid is how a recycled pid gets killed instead.
       if (exit !== null) return;
-      pty.kill();
+      pty.kill(signal);
     },
   };
 }
