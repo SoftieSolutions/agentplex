@@ -20,10 +20,11 @@ import { memberRootOf } from './member-root.js';
  *
  * What is judged: `import`, `export ... from`, `export * from`, and `import()`
  * with a literal specifier. A type-only declaration -- `import type`,
- * `export type` -- is erased before anything runs and names nothing an
- * installation has to find, so it passes on a devDependency. An inline
- * `import { type X }` does not: under `verbatimModuleSyntax` it still emits an
- * import of the module.
+ * `export type` -- is judged like any other, with one allowance: it is erased
+ * before anything runs and names nothing an installation has to find, so a
+ * devDependency serves it from any file, and so does `@types/<name>` declared
+ * in place of the package. An inline `import { type X }` gets no allowance:
+ * under `verbatimModuleSyntax` it still emits an import of the module.
  *
  * What is not: a builtin, with or without `node:`; a relative or absolute path,
  * which is `stay-in-member`'s question; a `#` subpath import, which the member
@@ -149,6 +150,17 @@ function packageNameOf(specifier) {
 }
 
 /**
+ * The DefinitelyTyped package that carries a package's types: `estree` is
+ * `@types/estree`, `@scope/pkg` is `@types/scope__pkg`.
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+function typesPackageOf(name) {
+  return `@types/${name.startsWith('@') ? name.slice(1).replace('/', '__') : name}`;
+}
+
+/**
  * Whether a specifier names a package at all.
  *
  * @param {string} specifier
@@ -184,8 +196,11 @@ export const declaredDependency = {
     const manifest = manifestOf(root);
     const isTest = TEST_FILE.some((pattern) => pattern.test(basename(filename)));
 
-    /** @param {Literal} source */
-    const check = (source) => {
+    /**
+     * @param {Literal} source
+     * @param {boolean} typeOnly Whether the declaration is erased from the output.
+     */
+    const check = (source, typeOnly) => {
       const specifier = source.value;
       if (typeof specifier !== 'string' || !namesPackage(specifier)) return;
       if (!manifest.ok) {
@@ -197,7 +212,11 @@ export const declaredDependency = {
         return;
       }
       const name = packageNameOf(specifier);
-      if (manifest.runtime.has(name) || (isTest && manifest.dev.has(name))) return;
+      if (manifest.runtime.has(name) || ((isTest || typeOnly) && manifest.dev.has(name))) return;
+      if (typeOnly) {
+        const types = typesPackageOf(name);
+        if (manifest.runtime.has(types) || manifest.dev.has(types)) return;
+      }
       context.report({
         node: source,
         messageId: manifest.dev.has(name) ? 'devOnly' : 'undeclared',
@@ -207,20 +226,17 @@ export const declaredDependency = {
 
     return {
       ImportDeclaration(node) {
-        if ('importKind' in node && node.importKind === 'type') return;
-        check(node.source);
+        check(node.source, 'importKind' in node && node.importKind === 'type');
       },
       ExportNamedDeclaration(node) {
         if (node.source === null || node.source === undefined) return;
-        if ('exportKind' in node && node.exportKind === 'type') return;
-        check(node.source);
+        check(node.source, 'exportKind' in node && node.exportKind === 'type');
       },
       ExportAllDeclaration(node) {
-        if ('exportKind' in node && node.exportKind === 'type') return;
-        check(node.source);
+        check(node.source, 'exportKind' in node && node.exportKind === 'type');
       },
       ImportExpression(node) {
-        if (node.source.type === 'Literal') check(node.source);
+        if (node.source.type === 'Literal') check(node.source, false);
       },
     };
   },

@@ -31,7 +31,12 @@ const files: Readonly<Record<string, string>> = {
   'member/package.json': JSON.stringify({
     name: MEMBER,
     dependencies: { zod: '>=4.5.4 <5.0.0', '@scope/pkg': '1.0.0' },
-    devDependencies: { vitest: '>=3.2.7 <4.0.0', ws: '>=8.21.3 <9.0.0' },
+    devDependencies: {
+      vitest: '>=3.2.7 <4.0.0',
+      ws: '>=8.21.3 <9.0.0',
+      '@types/estree': '1.0.8',
+      '@types/scope__typed': '1.0.0',
+    },
     optionalDependencies: { 'node-pty': '1.1.0' },
     peerDependencies: { react: '>=19.0.0 <20.0.0' },
   }),
@@ -79,10 +84,16 @@ ruleTester.run('declared-dependency', declaredDependency, {
       { filename, code: "import 'zod';" },
     ]),
     // A type-only import is erased before anything runs: it names no module
-    // the installed package has to be able to find.
+    // the installed package has to be able to find, so a devDependency serves
+    // it from any file.
     { filename: source, code: "import type { WebSocket } from 'ws';" },
     { filename: source, code: "export type { WebSocket } from 'ws';" },
     { filename: source, code: "export type * from 'ws';" },
+    { filename: source, code: "import type { ZodType } from 'zod';" },
+    // A package that ships no types is declared by its `@types/` package alone.
+    { filename: source, code: "import type { Node } from 'estree';" },
+    { filename: source, code: "export type { Node } from 'estree';" },
+    { filename: source, code: "import type { Typed } from '@scope/typed';" },
     { filename: source, code: "import { readFile } from 'node:fs/promises';" },
     { filename: source, code: "import { readFile } from 'fs/promises';" },
     { filename: source, code: "import { b } from './b.js';" },
@@ -133,6 +144,34 @@ ruleTester.run('declared-dependency', declaredDependency, {
       filename: source,
       code: "import { other } from '@scope/other/sub';",
       errors: [{ messageId: 'undeclared', data: { name: '@scope/other', member: MEMBER } }],
+    },
+    {
+      // Erased or not, a type names a package the member has to declare.
+      filename: source,
+      code: "import type { Linter } from 'eslint';",
+      errors: [{ messageId: 'undeclared', data: { name: 'eslint', member: MEMBER } }],
+    },
+    {
+      filename: source,
+      code: "export type { Linter } from 'eslint';",
+      errors: [{ messageId: 'undeclared', data: { name: 'eslint', member: MEMBER } }],
+    },
+    {
+      filename: source,
+      code: "export type * from 'eslint';",
+      errors: [{ messageId: 'undeclared', data: { name: 'eslint', member: MEMBER } }],
+    },
+    {
+      filename: source,
+      code: "import type { ProcessRunner } from '@agentplex/providers';",
+      errors: [{ messageId: 'undeclared', data: { name: '@agentplex/providers', member: MEMBER } }],
+    },
+    {
+      // `@types/estree` declares the types, not the module: a value import
+      // still needs `estree` installed beside the package.
+      filename: source,
+      code: "import { walk } from 'estree';",
+      errors: [{ messageId: 'undeclared', data: { name: 'estree', member: MEMBER } }],
     },
     ...testFiles.map((filename) => ({
       filename,
