@@ -1,5 +1,6 @@
-import type { FrameId, SessionHolder, SessionRef } from '@agentplex/protocol';
-import type { HubCommand, PausedView, RefusalView, ResumedView } from '../store/hub-store.js';
+import type { FrameId, SessionHolder, SessionPause, SessionRef } from '@agentplex/protocol';
+import { followUp, type Answers } from '../store/answers.js';
+import type { HubCommand } from '../store/commands.js';
 
 /**
  * Everything pausing and resuming a session decides, as pure functions:
@@ -67,32 +68,24 @@ export function pauseNote(holder: SessionHolder | null): string | null {
 export type PauseFollowUp =
   | { readonly kind: 'idle' }
   | { readonly kind: 'waiting' }
-  | { readonly kind: 'paused'; readonly pause: PausedView['pause'] }
+  | { readonly kind: 'paused'; readonly pause: SessionPause }
   | { readonly kind: 'resumed' }
   | { readonly kind: 'refused'; readonly words: string };
 
-/**
- * What the hub has said about the command this control is waiting on.
- *
- * Correlated by `replyTo` and never by "the most recent answer": the snapshot
- * holds one of each for the whole page, and a card that read the newest would
- * show another card's answer beside its own button.
- */
-export function pauseFollowUp(
-  pending: FrameId | null,
-  lastPaused: PausedView | null,
-  lastResumed: ResumedView | null,
-  lastRefusal: RefusalView | null,
-): PauseFollowUp {
-  if (pending === null) return { kind: 'idle' };
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message };
+/** What the hub has said about the pause or resume this control is waiting on. */
+export function pauseFollowUp(pending: FrameId | null, answers: Answers): PauseFollowUp {
+  const said = followUp(pending, answers, 'session-paused', 'session-resumed');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return said;
+    case 'refused':
+      return { kind: 'refused', words: said.words };
+    case 'answered':
+      return said.answer.type === 'session-paused'
+        ? { kind: 'paused', pause: said.answer.pause }
+        : { kind: 'resumed' };
   }
-  if (lastPaused !== null && lastPaused.replyTo === pending) {
-    return { kind: 'paused', pause: lastPaused.pause };
-  }
-  if (lastResumed !== null && lastResumed.replyTo === pending) return { kind: 'resumed' };
-  return { kind: 'waiting' };
 }
 
 /**

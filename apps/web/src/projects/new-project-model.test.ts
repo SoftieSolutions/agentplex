@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   frameIdSchema,
-  nodeIdSchema,
   parseClientFrame,
   parseHubFrame,
   parseTextFrame,
@@ -9,7 +8,7 @@ import {
   type MachineState,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { ProjectCreatedView, RefusalView } from '../store/hub-store.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   browsableServers,
   buildProjectCreate,
@@ -109,35 +108,37 @@ describe('why submit is disabled', () => {
 });
 
 describe('what the form does with the answer', () => {
-  const pending = frameIdSchema.parse(5);
-  const created: ProjectCreatedView = {
-    replyTo: pending,
-    nodeId: nodeIdSchema.parse('hub-5'),
-  };
+  // A thin mapping over `followUp`: each of its answers, renamed.
+  const created = replyFrom(hubFrames.projectCreated, 'project-created');
+  const pending = created.replyTo;
 
   it('waits while nothing has answered this create', () => {
-    expect(createFollowUp(pending, null, null).kind).toBe('waiting');
+    expect(createFollowUp(pending, withOutstanding(answersOf(), pending)).kind).toBe('waiting');
+  });
+
+  it('is idle once this create is neither answered nor owed an answer', () => {
+    // Its answer was pushed out by later ones, or the connection it went out
+    // on dropped: nothing is coming, and a form that went on waiting would
+    // stay disabled until it was closed.
+    expect(createFollowUp(pending, answersOf()).kind).toBe('idle');
   });
 
   it('ignores an answer to somebody else’s frame', () => {
-    const other: ProjectCreatedView = { ...created, replyTo: frameIdSchema.parse(9) };
-    expect(createFollowUp(pending, other, null).kind).toBe('waiting');
+    const other = { ...created, replyTo: frameIdSchema.parse(9) };
+    expect(createFollowUp(pending, withOutstanding(answersOf(other), pending)).kind).toBe(
+      'waiting',
+    );
   });
 
   it('says so when the project was made', () => {
-    expect(createFollowUp(pending, created, null).kind).toBe('made');
+    expect(createFollowUp(pending, answersOf(created)).kind).toBe('made');
   });
 
   it('shows the hub’s own words when it refused', () => {
-    const refusal: RefusalView = {
-      replyTo: pending,
-      code: 'refused',
-      message: 'there is already a project at /srv/work',
-      holder: null,
-    };
-    expect(createFollowUp(pending, null, refusal)).toEqual({
+    const refusal = replyFrom(hubFrames.refusal, 'refusal');
+    expect(createFollowUp(refusal.replyTo, answersOf(refusal))).toEqual({
       kind: 'refused',
-      words: 'there is already a project at /srv/work',
+      words: refusal.message,
     });
   });
 });

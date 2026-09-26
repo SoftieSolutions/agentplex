@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Activity, FrameId } from '@agentplex/protocol';
-import type { TranscriptView } from '../store/hub-store.js';
+import type { TranscriptView } from '../store/views.js';
 import { transcriptState, TRANSCRIPT_COUNT } from './transcript-model.js';
 
 /**

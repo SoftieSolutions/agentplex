@@ -1,5 +1,6 @@
 import type { FrameId, MachineState, SessionHolder, SessionRef } from '@agentplex/protocol';
-import type { HubCommand, RefusalView, StoppedView } from '../store/hub-store.js';
+import { followUp, type Answer, type Answers } from '../store/answers.js';
+import type { HubCommand } from '../store/commands.js';
 import { findSessionRow } from '../terminal/presentation.js';
 import { serverLabel } from './session-list-model.js';
 
@@ -56,24 +57,18 @@ export type StopFollowUp =
   | { readonly kind: 'stopped' }
   | { readonly kind: 'refused'; readonly words: string };
 
-/**
- * What the hub has said about the stop this screen is waiting on.
- *
- * Correlated by `replyTo` and never by "the most recent answer": the snapshot
- * holds one refusal and one stop for the whole page, and a card that read the
- * newest of either would show another card's answer beside its own button.
- */
-export function stopFollowUp(
-  pending: FrameId | null,
-  lastStopped: StoppedView | null,
-  lastRefusal: RefusalView | null,
-): StopFollowUp {
-  if (pending === null) return { kind: 'idle' };
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message };
+/** What the hub has said about the stop this screen is waiting on. */
+export function stopFollowUp(pending: FrameId | null, answers: Answers): StopFollowUp {
+  const said = followUp(pending, answers, 'session-stopped');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return said;
+    case 'refused':
+      return { kind: 'refused', words: said.words };
+    case 'answered':
+      return { kind: 'stopped' };
   }
-  if (lastStopped !== null && lastStopped.replyTo === pending) return { kind: 'stopped' };
-  return { kind: 'waiting' };
 }
 
 /**
@@ -91,7 +86,7 @@ export function stopFollowUp(
  */
 export function stoppedNotice(
   state: MachineState | null,
-  stopped: StoppedView | null,
+  stopped: Answer<'session-stopped'> | null,
 ): string | null {
   if (stopped === null) return null;
   const row = findSessionRow(state, { storeId: stopped.storeId, sessionId: stopped.sessionId });

@@ -145,13 +145,7 @@ export function NewSessionForm({
   const followUp: StartFollowUp | null =
     pending === null || !pending.outcome.accepted
       ? null
-      : startFollowUp(
-          pending.outcome.id,
-          snapshot.lastStarted,
-          snapshot.lastRefusal,
-          state,
-          pending.asked,
-        );
+      : startFollowUp(pending.outcome.id, snapshot.answers, state, pending.asked);
 
   const paneHash = followUp?.kind === 'navigate' ? followUp.hash : null;
   // useEffect, justified: entering the pane route is an imperative browser

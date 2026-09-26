@@ -10,7 +10,8 @@ import {
   type PolicyRow,
   type SessionProject,
 } from '../sessions/approval-policy-model.js';
-import type { ApprovalPolicyView, HubStore } from '../store/hub-store.js';
+import type { HubStore } from '../store/hub-store.js';
+import type { ApprovalPolicyView } from '../store/views.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Stack, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
@@ -119,7 +120,7 @@ export function ApprovalsBlock({ project, store, scheme }: ApprovalsBlockProps):
     (row): row is Extract<PolicyRow, { kind: 'auto' }> => row.kind === 'auto',
   );
   const sentences = rows.filter((row) => row.kind !== 'auto');
-  const followUp = policyFollowUp(edit?.frameId ?? null, policy, snapshot.lastRefusal);
+  const followUp = policyFollowUp(edit?.frameId ?? null, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : (edit?.refusal ?? null);
 
   function forget(ruleId: ApprovalPolicyRuleId): void {

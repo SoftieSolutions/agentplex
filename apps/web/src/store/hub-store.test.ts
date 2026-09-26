@@ -19,14 +19,19 @@ import {
 import { createFrameIdCounter } from './frame-ids.js';
 import { createFakeSocketFactory, type FakeSocket } from './fake-socket.js';
 import { createFakeTimers } from './timers.js';
+import type { HubCommand } from './commands.js';
+import type { StoreSocket } from './connection.js';
+import { createHubStore, type HubStoreDependencies } from './hub-store.js';
+import { MAX_REMEMBERED_TRANSCRIPTS } from './session-replies.js';
+import { terminalKey } from './terminals.js';
 import {
-  createHubStore,
-  MAX_REMEMBERED_TRANSCRIPTS,
-  terminalKey,
-  type HubCommand,
-  type HubStoreDependencies,
-  type StoreSocket,
-} from './hub-store.js';
+  MAX_REMEMBERED_ANSWERS,
+  followUp,
+  refusalTo,
+  type Answer,
+  type AnswerType,
+  type Reply,
+} from './answers.js';
 import { hubFrames } from './hub-frames.fixture.js';
 
 /**
@@ -110,6 +115,17 @@ function sentFrames(socket: FakeSocket): ClientFrame[] {
 }
 
 type Harness = ReturnType<typeof harness>;
+
+/** What the store filed under one frame id, the way a screen reads it. */
+function answerTo(h: Harness, id: number): Reply | undefined {
+  return h.store.getSnapshot().answers.replies.get(frameIdSchema.parse(id));
+}
+
+/** The yes filed under one frame id, read as `type` through `followUp`, or `null`. */
+function answeredWith<T extends AnswerType>(h: Harness, id: number, type: T): Answer<T> | null {
+  const said = followUp(frameIdSchema.parse(id), h.store.getSnapshot().answers, type);
+  return said.kind === 'answered' ? said.answer : null;
+}
 
 /** Subscribes, and walks the first connection through to established. */
 async function establish(h: Harness): Promise<{ socket: FakeSocket; unsubscribe: () => void }> {
@@ -622,7 +638,8 @@ describe('commands', () => {
     h.store.sendCommand(START);
 
     socket.deliver(hubFrames.refusal);
-    expect(h.store.getSnapshot().lastRefusal).toEqual({
+    expect(answerTo(h, 6)).toEqual({
+      type: 'refusal',
       replyTo: 6,
       code: 'refused',
       message: 'no server the hub is paired with has that store mounted',
@@ -639,7 +656,8 @@ describe('commands', () => {
     // Captured from a real start: the hub names the machine it picked, and the
     // sessionId is null because the provider has not written one yet.
     socket.deliver(hubFrames.sessionStarted);
-    expect(h.store.getSnapshot().lastStarted).toEqual({
+    expect(h.store.getSnapshot().answers.replies.get(outcome.id)).toEqual({
+      type: 'session-started',
       replyTo: outcome.id,
       storeId: 'store-agentplex',
       sessionId: null,
@@ -661,7 +679,8 @@ describe('commands', () => {
     // roots listing carries no directory and its entries are the roots
     // themselves, absolute.
     socket.deliver(hubFrames.directoryRoots);
-    expect(h.store.getSnapshot().lastListing).toEqual({
+    expect(h.store.getSnapshot().answers.replies.get(roots.id)).toEqual({
+      type: 'directory-listing',
       replyTo: roots.id,
       directory: null,
       roots: ['/Users/robert/code'],
@@ -672,7 +691,7 @@ describe('commands', () => {
     // And one step down, where an entry is a single segment and the kinds the
     // server reports include the one it will not follow.
     socket.deliver(hubFrames.directoryListing);
-    expect(h.store.getSnapshot().lastListing).toMatchObject({
+    expect(answerTo(h, 4)).toMatchObject({
       directory: '/Users/robert/code',
       entries: [
         { name: '.config', kind: 'directory' },
@@ -683,27 +702,27 @@ describe('commands', () => {
     });
   });
 
-  it('a directory listing clears the refusal that preceded it', async () => {
+  it('the refusal to frame N survives a later directory listing', async () => {
     const h = harness();
     const { socket } = await establish(h);
     h.store.sendCommand(START);
     h.store.sendCommand(BROWSE);
 
     socket.deliver(hubFrames.refusal);
-    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
     socket.deliver(hubFrames.directoryRoots);
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 6)?.type).toBe('refusal');
+    expect(answerTo(h, 3)?.type).toBe('directory-listing');
   });
 
-  it('a session-started reply clears the refusal that preceded it', async () => {
+  it('the refusal to frame N survives a later session-started reply', async () => {
     const h = harness();
     const { socket } = await establish(h);
     h.store.sendCommand(START);
 
     socket.deliver(hubFrames.refusal);
-    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
     socket.deliver(hubFrames.sessionStarted);
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 6)?.type).toBe('refusal');
+    expect(answerTo(h, 2)?.type).toBe('session-started');
   });
 
   it('a session-stopped reply is kept whole, not dropped for its side effects', async () => {
@@ -713,7 +732,8 @@ describe('commands', () => {
     // Captured from a real stop: the reply names the session it landed on and
     // the machine the hub resolved it to, neither of which the client sent.
     socket.deliver(hubFrames.sessionStopped);
-    expect(h.store.getSnapshot().lastStopped).toEqual({
+    expect(answerTo(h, 6)).toEqual({
+      type: 'session-stopped',
       replyTo: 6,
       storeId: 'store-agentplex',
       sessionId: 'session-migrate-db',
@@ -728,30 +748,30 @@ describe('commands', () => {
     // Captured from a real pause on a working session: the server recorded
     // the request for the next boundary, and the word travelled as it said it.
     socket.deliver(hubFrames.sessionPaused);
-    expect(h.store.getSnapshot().lastPaused).toEqual({
+    expect(answerTo(h, 7)).toEqual({
+      type: 'session-paused',
       replyTo: 7,
       storeId: 'store-agentplex',
       sessionId: 'session-fix-auth',
       server: 'registration-mbp-robert',
       pause: 'requested',
     });
-    expect(h.store.getSnapshot().lastResumed).toBeNull();
   });
 
-  it('a session-resumed reply is kept as a receipt, and clears a refusal before it', async () => {
+  it('a session-resumed reply is kept as a receipt, and the refusal to frame N survives it', async () => {
     const h = harness();
     const { socket } = await establish(h);
 
     socket.deliver(hubFrames.refusalHeldBusy);
-    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
     socket.deliver(hubFrames.sessionResumed);
-    expect(h.store.getSnapshot().lastResumed).toEqual({
+    expect(answerTo(h, 8)).toEqual({
+      type: 'session-resumed',
       replyTo: 8,
       storeId: 'store-agentplex',
       sessionId: 'session-fix-auth',
       server: 'registration-mbp-robert',
     });
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 4)?.type).toBe('refusal');
   });
 
   it('queues a pause and a resume as commands, shaped exactly as the frame is', async () => {
@@ -775,7 +795,8 @@ describe('commands', () => {
     // Captured from a real hub answering a real acknowledgement. One reply
     // shape for two frames: the answer is the row, not the field that moved.
     socket.deliver(hubFrames.sessionAcknowledged);
-    expect(h.store.getSnapshot().lastAttention).toEqual({
+    expect(answerTo(h, 2)).toEqual({
+      type: 'session-attention',
       replyTo: 2,
       storeId: 'store-agentplex',
       sessionId: 'session-migrate-db',
@@ -786,7 +807,8 @@ describe('commands', () => {
     });
 
     socket.deliver(hubFrames.sessionUnmuted);
-    expect(h.store.getSnapshot().lastAttention).toEqual({
+    expect(answerTo(h, 5)).toEqual({
+      type: 'session-attention',
       replyTo: 5,
       storeId: 'store-universe',
       sessionId: 'session-docs-sweep',
@@ -833,7 +855,8 @@ describe('commands', () => {
     // answers, and the outcome is about the request -- the answer that took
     // effect may have been another client's.
     socket.deliver(hubFrames.approvalDecided);
-    expect(h.store.getSnapshot().lastApproval).toEqual({
+    expect(answerTo(h, 2)).toEqual({
+      type: 'approval-decided',
       replyTo: 2,
       outcome: 'granted',
       answeredBy: null,
@@ -855,14 +878,14 @@ describe('commands', () => {
     expect(held?.rules[0]?.rule.proposal).toContain('prisma migrate deploy');
   });
 
-  it('a policy answer clears the refusal that preceded it', async () => {
+  it('the refusal to frame N survives a later policy answer', async () => {
     const h = harness();
     const { socket } = await establish(h);
 
     socket.deliver(hubFrames.refusal);
-    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
     socket.deliver(hubFrames.approvalPolicy);
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 6)?.type).toBe('refusal');
+    expect(answerTo(h, 4)?.type).toBe('approval-policy');
   });
 
   it('queues a rule while the connection is down, because it is still what the person meant', async () => {
@@ -875,14 +898,14 @@ describe('commands', () => {
     expect(outcome).toEqual({ accepted: true, id: 1, delivery: 'queued' });
   });
 
-  it('an approval-decided reply clears the refusal that preceded it', async () => {
+  it('the refusal to frame N survives a later approval-decided reply', async () => {
     const h = harness();
     const { socket } = await establish(h);
 
     socket.deliver(hubFrames.refusal);
-    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
     socket.deliver(hubFrames.approvalDecided);
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 6)?.type).toBe('refusal');
+    expect(answerTo(h, 2)?.type).toBe('approval-decided');
   });
 
   it('queues a decision while the connection is down, and sends it whole', async () => {
@@ -908,15 +931,15 @@ describe('commands', () => {
     expect(sentFrames(socket).at(-1)).toEqual({ ...decide, id: 1 });
   });
 
-  it('a session-stopped reply clears the refusal that preceded it', async () => {
+  it('the refusal to frame N survives a later session-stopped reply', async () => {
     const h = harness();
     const { socket } = await establish(h);
     h.store.sendCommand(STOP);
 
     socket.deliver(hubFrames.refusalHeldBusy);
-    expect(h.store.getSnapshot().lastRefusal).not.toBeNull();
     socket.deliver(hubFrames.sessionStopped);
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 4)?.type).toBe('refusal');
+    expect(answerTo(h, 6)?.type).toBe('session-stopped');
   });
 
   it('keeps the holder a refusal names, which is what makes it more than a no', async () => {
@@ -924,7 +947,7 @@ describe('commands', () => {
     const { socket } = await establish(h);
 
     socket.deliver(hubFrames.refusalHeldStoppable);
-    expect(h.store.getSnapshot().lastRefusal?.holder).toEqual({
+    expect(refusalTo(h.store.getSnapshot().answers, frameIdSchema.parse(5))?.holder).toEqual({
       server: 'registration-mbp-robert',
       stoppable: true,
       pause: 'none',
@@ -941,6 +964,173 @@ describe('commands', () => {
     unsubscribe();
     expect(h.store.getSnapshot().commandQueue.queued).toBe(0);
     expect(h.store.getSnapshot().phase).toBe('idle');
+  });
+});
+
+describe('answers', () => {
+  it('files a reply under the id of the frame it answers', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.sessionStopped);
+    expect(h.store.getSnapshot().answers.replies.get(frameIdSchema.parse(6))).toEqual({
+      type: 'session-stopped',
+      replyTo: 6,
+      storeId: 'store-agentplex',
+      sessionId: 'session-migrate-db',
+      server: 'registration-mbp-robert',
+    });
+  });
+
+  it('keeps a refusal to one frame when a later frame is answered yes', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    // The captured refusal answers frame 4 and the captured stop frame 6: a yes
+    // to somebody else's command leaves this "no" where its screen reads it.
+    socket.deliver(hubFrames.refusalHeldBusy);
+    socket.deliver(hubFrames.sessionStopped);
+    const answers = h.store.getSnapshot().answers.replies;
+    expect(answers.get(frameIdSchema.parse(4))).toMatchObject({
+      type: 'refusal',
+      message: 'that session is mid-turn; stopping it now could leave an edit half applied',
+    });
+    expect(answers.get(frameIdSchema.parse(6))?.type).toBe('session-stopped');
+  });
+
+  it('files no refusal about a terminal, which the pane says instead', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.watchTerminal(CAPTURED_TARGET);
+    socket.deliver(hubFrames.refusalTerminal);
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
+  });
+
+  it('files nothing for a pong or a pane layout save, which nobody waits on here', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.deliver(hubFrames.pong);
+    socket.deliver(hubFrames.paneLayoutSaved);
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
+  });
+
+  it('keeps its answers across a dropped connection and forgets them when nobody looks', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.sessionStopped);
+
+    socket.drop();
+    expect(h.store.getSnapshot().answers.replies.size).toBe(1);
+    unsubscribe();
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
+  });
+});
+
+describe('what is still owed an answer', () => {
+  /** A captured reply, moved to answer `id`. */
+  function answering(text: string, id: FrameId): string {
+    return JSON.stringify({ ...(JSON.parse(text) as Record<string, unknown>), replyTo: id });
+  }
+
+  function stopFollowUp(h: Harness, id: FrameId) {
+    return followUp(id, h.store.getSnapshot().answers, 'session-stopped');
+  }
+
+  function accepted(h: Harness, command: HubCommand): FrameId {
+    const outcome = h.store.sendCommand(command);
+    if (!outcome.accepted) throw new Error(outcome.reason);
+    return outcome.id;
+  }
+
+  it('owes an answer to a sent command until the hub gives one', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const id = accepted(h, STOP);
+    expect(stopFollowUp(h, id)).toEqual({ kind: 'waiting' });
+
+    socket.deliver(answering(hubFrames.sessionStopped, id));
+
+    expect(stopFollowUp(h, id).kind).toBe('answered');
+    expect(h.store.getSnapshot().answers.outstanding.has(id)).toBe(false);
+  });
+
+  it('reads a command whose answer later ones pushed out as idle, not waiting', async () => {
+    // The bound forgets the answer; it must not bring back the wait. A control
+    // still holding this id would otherwise be disabled until remounted.
+    const h = harness();
+    const { socket } = await establish(h);
+    const id = accepted(h, STOP);
+    socket.deliver(answering(hubFrames.sessionStopped, id));
+
+    for (let n = 1; n <= MAX_REMEMBERED_ANSWERS; n += 1) {
+      socket.deliver(answering(hubFrames.docSaved, frameIdSchema.parse(1000 + n)));
+    }
+
+    expect(h.store.getSnapshot().answers.replies.has(id)).toBe(false);
+    expect(stopFollowUp(h, id)).toEqual({ kind: 'idle' });
+  });
+
+  it('owes nothing on a command a dropped connection stranded, and still owes a queued one', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const stranded = accepted(h, STOP);
+
+    socket.drop();
+    // Nothing on the next connection answers a frame sent on this one.
+    expect(stopFollowUp(h, stranded)).toEqual({ kind: 'idle' });
+
+    const queued = accepted(h, STOP);
+    expect(stopFollowUp(h, queued)).toEqual({ kind: 'waiting' });
+    const next = await redial(h);
+    next.open();
+    next.deliver(hubFrames.welcome);
+    expect(stopFollowUp(h, queued)).toEqual({ kind: 'waiting' });
+    expect(stopFollowUp(h, stranded)).toEqual({ kind: 'idle' });
+
+    next.deliver(answering(hubFrames.sessionStopped, queued));
+    expect(stopFollowUp(h, queued).kind).toBe('answered');
+  });
+
+  it('owes nothing to a frame answered by a reply it does not keep', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    const id = accepted(h, { type: 'pane-layout-save', layout: '{}' });
+    expect(h.store.getSnapshot().answers.outstanding.has(id)).toBe(true);
+
+    socket.deliver(answering(hubFrames.paneLayoutSaved, id));
+
+    expect(h.store.getSnapshot().answers.outstanding.size).toBe(0);
+  });
+
+  it('owes nothing once nobody is looking, queued commands included', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    accepted(h, STOP);
+    socket.drop();
+    accepted(h, STOP);
+
+    unsubscribe();
+
+    expect(h.store.getSnapshot().answers.outstanding.size).toBe(0);
+  });
+
+  it('tells no listener about a send, so a listener that sends on a change sends once', async () => {
+    // A graph screen asks for its history from inside its listener and keeps
+    // the id once the call returns. Told about its own send before then, it
+    // would ask again, and again, until the stack ran out.
+    const h = harness();
+    const { socket } = await establish(h);
+    let asked: FrameId | null = null;
+    const stop = h.store.subscribe(() => {
+      if (asked === null) asked = accepted(h, STOP);
+    });
+
+    socket.deliver(hubFrames.machineState);
+
+    expect(sentFrames(socket).filter((frame) => frame.type === 'session-stop')).toHaveLength(1);
+    expect(asked).not.toBeNull();
+    if (asked !== null) expect(stopFollowUp(h, asked)).toEqual({ kind: 'waiting' });
+    stop();
   });
 });
 
@@ -1043,9 +1233,9 @@ describe('terminal input', () => {
     const terminal = h.store.getSnapshot().terminals.get(CAPTURED_KEY);
     expect(terminal?.problem).toBe('the hub cannot reach mbp-robert right now');
     expect(terminal?.attached).toBe(false);
-    // Not the screen-wide refusal: nothing else on screen was told no, and a
-    // pane is where a user can act on this one.
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    // Not filed with the other answers: nothing else on screen was told no,
+    // and a pane is where a user can act on this one.
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
   });
 });
 
@@ -1484,11 +1674,9 @@ describe('terminal frames from the hub', () => {
     socket.deliver(hubFrames.sessionStarted);
 
     const snapshot = h.store.getSnapshot();
-    // The shared slot behaves as it always has: the newest answer on the
-    // connection is a yes, so there is no "no" left to show beside it.
-    expect(snapshot.lastRefusal).toBeNull();
-    // And the start that was refused still carries its own refusal, because a
-    // pane waiting on it needs the answer it was given and not the newest one.
+    // The start that was refused still carries its own refusal after the
+    // other one's yes, because a pane waiting on it needs the answer it was
+    // given and not the newest one.
     expect(snapshot.starts.get(refused.id)?.refusal).toMatchObject({
       replyTo: refused.id,
       message: 'no server the hub is paired with has that store mounted',
@@ -1684,8 +1872,7 @@ describe('projects and the tree', () => {
 
     socket.deliver(hubFrames.projectCreated);
 
-    expect(h.store.getSnapshot().lastProjectCreated).toEqual({ replyTo: 5, nodeId: 'hub-5' });
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 5)).toEqual({ type: 'project-created', replyTo: 5, nodeId: 'hub-5' });
   });
 
   it('asks for the tree again when the hub says the tree changed', async () => {
@@ -1734,16 +1921,16 @@ describe('projects and the tree', () => {
     const { socket } = await establish(h);
 
     socket.deliver(hubFrames.nodeCreated);
-    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 8, nodeId: 'hub-7' });
+    expect(answerTo(h, 8)).toEqual({ type: 'node-created', replyTo: 8, nodeId: 'hub-7' });
 
     socket.deliver(hubFrames.nodeMoved);
-    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 9, nodeId: null });
+    expect(answerTo(h, 9)).toEqual({ type: 'node-moved', replyTo: 9 });
 
     socket.deliver(hubFrames.nodeRemoved);
-    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 11, nodeId: null });
+    expect(answerTo(h, 11)).toEqual({ type: 'node-removed', replyTo: 11 });
 
     socket.deliver(hubFrames.nodeRemovalForgotten);
-    expect(h.store.getSnapshot().lastTreeChange).toEqual({ replyTo: 12, nodeId: null });
+    expect(answerTo(h, 12)).toEqual({ type: 'node-removal-forgotten', replyTo: 12 });
   });
 
   it('keeps the machine on a refusal that names one, so a stop can be offered', async () => {
@@ -1752,16 +1939,19 @@ describe('projects and the tree', () => {
 
     socket.deliver(hubFrames.refusalHolder);
 
-    expect(h.store.getSnapshot().lastRefusal).toEqual({
+    const refusal = {
+      type: 'refusal',
       replyTo: 10,
       code: 'refused',
       message: 'this session is still running; stop it first, and then remove it',
       holder: { server: 'registration-mbp-robert', stoppable: false, pause: 'none' },
-    });
+    };
+    expect(answerTo(h, 10)).toEqual(refusal);
 
-    // A later yes clears it: the last thing the hub said is no longer a no.
+    // The refusal to frame N survives a later yes: the menu that sent frame 10
+    // still reads its own answer.
     socket.deliver(hubFrames.nodeRemoved);
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 10)).toEqual(refusal);
   });
 
   it('queues a tree edit while the connection is down, like any other once-only intent', async () => {
@@ -1978,11 +2168,12 @@ describe('the catalogue query', () => {
     const { socket } = await establish(h);
 
     const asking = h.store.queryCatalogue(CATALOGUE);
-    socket.deliver(addressedTo(hubFrames.refusalStaleCursor, lastSentId(socket)));
+    const asked = lastSentId(socket);
+    socket.deliver(addressedTo(hubFrames.refusalStaleCursor, asked));
 
     await expect(asking).rejects.toThrow(/stale/);
     // And the sentence is on the snapshot too, like every other no.
-    expect(h.store.getSnapshot().lastRefusal?.code).toBe('bad-request');
+    expect(refusalTo(h.store.getSnapshot().answers, asked)?.code).toBe('bad-request');
   });
 
   it('rejects at once while the connection is down rather than queueing a read of now', async () => {
@@ -2244,8 +2435,7 @@ describe('documents', () => {
 
     socket.deliver(hubFrames.docCreated);
 
-    expect(h.store.getSnapshot().lastDocCreated).toEqual({ replyTo: 8, nodeId: 'hub-6' });
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 8)).toEqual({ type: 'doc-created', replyTo: 8, nodeId: 'hub-6' });
   });
 
   it('asks nothing on a create, because the broadcast is what says the tree moved', async () => {
@@ -2269,7 +2459,7 @@ describe('documents', () => {
 
     socket.deliver(hubFrames.docSaved);
 
-    expect(h.store.getSnapshot().lastDocSaved).toEqual({ replyTo: 9, updatedAt: 3 });
+    expect(answerTo(h, 9)).toEqual({ type: 'doc-saved', replyTo: 9, updatedAt: 3 });
     // A save changed a file on a machine and the hub's note of when. It changed
     // no node, so the tree is the same tree.
     expect(sentFrames(socket).slice(before)).toEqual([]);
@@ -2281,7 +2471,8 @@ describe('documents', () => {
 
     socket.deliver(hubFrames.docContent);
 
-    expect(h.store.getSnapshot().lastDocContent).toEqual({
+    expect(answerTo(h, 10)).toEqual({
+      type: 'doc-content',
       replyTo: 10,
       content: '# Plan\n\n- read the failing test\n- fix the refresh loop\n- write it up\n',
       updatedAt: 3,
@@ -2292,23 +2483,23 @@ describe('documents', () => {
     const h = harness();
     const { socket, unsubscribe } = await establish(h);
     socket.deliver(hubFrames.docContent);
-    expect(h.store.getSnapshot().lastDocContent).not.toBeNull();
+    expect(answerTo(h, 10)).toBeDefined();
 
     unsubscribe();
 
     // The file may be edited on its own machine while nothing here is
     // connected, so characters kept across a disconnection would be a copy
     // this store cannot vouch for.
-    expect(h.store.getSnapshot().lastDocContent).toBeNull();
+    expect(answerTo(h, 10)).toBeUndefined();
   });
 
   it('renders a refusal for a document whose machine is away, like any other no', async () => {
     const h = harness();
     const { socket } = await establish(h);
 
-    socket.deliver(hubFrames.refusal);
+    socket.deliver(hubFrames.refusalDocAway);
 
-    expect(h.store.getSnapshot().lastRefusal).toMatchObject({ code: 'refused', holder: null });
+    expect(answerTo(h, 12)).toMatchObject({ type: 'refusal', code: 'refused', holder: null });
   });
 });
 
@@ -2408,16 +2599,16 @@ describe('web push', () => {
 
     socket.deliver(hubFrames.pushSubscribed);
 
-    expect(h.store.getSnapshot().lastPush).toEqual({ replyTo: 2, subscribed: true });
+    expect(answerTo(h, 2)).toEqual({ type: 'push-subscribed', replyTo: 2 });
   });
 
-  it('keeps the yes to an unsubscribe under the same view, the other way round', async () => {
+  it('keeps the yes to an unsubscribe the same way, under its own type', async () => {
     const h = harness();
     const socket = await establishWithPush(h);
 
     socket.deliver(hubFrames.pushUnsubscribed);
 
-    expect(h.store.getSnapshot().lastPush).toEqual({ replyTo: 3, subscribed: false });
+    expect(answerTo(h, 3)).toEqual({ type: 'push-unsubscribed', replyTo: 3 });
   });
 
   it('renders the hub refusing a subscribe in the hub words', async () => {
@@ -2426,8 +2617,9 @@ describe('web push', () => {
 
     socket.deliver(hubFrames.refusalNoPush);
 
-    expect(h.store.getSnapshot().lastRefusal).toMatchObject({ replyTo: 2, code: 'refused' });
-    expect(h.store.getSnapshot().lastRefusal?.message).toContain('attention floor');
+    const refusal = refusalTo(h.store.getSnapshot().answers, frameIdSchema.parse(2));
+    expect(refusal).toMatchObject({ replyTo: 2, code: 'refused' });
+    expect(refusal?.message).toContain('attention floor');
   });
 
   it('queues a subscribe made while the connection is down, and sends it on the next one', async () => {
@@ -2504,7 +2696,9 @@ describe('one session’s transcript', () => {
       ],
       olderExist: true,
     });
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    // Held in `transcripts` and nowhere else: a transcript is large, and it
+    // would cost a place in `answers` that a control's receipt needs.
+    expect(h.store.getSnapshot().answers.replies.size).toBe(0);
   });
 
   it('keeps one pane’s answer when another pane’s answer lands', async () => {
@@ -2662,19 +2856,18 @@ describe('graphs', () => {
 
     socket.deliver(hubFrames.graphCreated);
 
-    expect(h.store.getSnapshot().lastGraphCreated).toEqual({ replyTo: 20, nodeId: 'hub-10' });
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 20)).toEqual({ type: 'graph-created', replyTo: 20, nodeId: 'hub-10' });
     // The broadcast is what says the tree moved, to this client too.
     expect(sentFrames(socket).slice(before)).toEqual([]);
   });
 
-  it('keeps a graph whole, filed by the node as well as by the frame', async () => {
+  it('keeps a graph whole, filed by the node it is', async () => {
     const h = harness();
     const { socket } = await establish(h);
 
     socket.deliver(hubFrames.graphDocument);
 
-    const view = h.store.getSnapshot().lastGraphDocument;
+    const view = h.store.getSnapshot().graphDocuments.get(nodeIdSchema.parse('hub-10'));
     expect(view).toMatchObject({
       replyTo: 23,
       nodeId: 'hub-10',
@@ -2699,7 +2892,8 @@ describe('graphs', () => {
 
     socket.deliver(hubFrames.graphSaved);
 
-    expect(h.store.getSnapshot().lastGraphSaved).toEqual({
+    expect(answerTo(h, 21)).toEqual({
+      type: 'graph-saved',
       replyTo: 21,
       version: 1,
       updatedAt: 1_756_000_000_000,
@@ -2715,7 +2909,7 @@ describe('graphs', () => {
 
     socket.deliver(hubFrames.graphPublished);
 
-    expect(h.store.getSnapshot().lastGraphPublished).toEqual({ replyTo: 22, version: 1 });
+    expect(answerTo(h, 22)).toEqual({ type: 'graph-published', replyTo: 22, version: 1 });
     expect(sentFrames(socket).slice(before)).toEqual([]);
   });
 
@@ -2723,14 +2917,14 @@ describe('graphs', () => {
     const h = harness();
     const { socket, unsubscribe } = await establish(h);
     socket.deliver(hubFrames.graphDocument);
-    expect(h.store.getSnapshot().lastGraphDocument).not.toBeNull();
+    expect(h.store.getSnapshot().graphDocuments.size).toBe(1);
 
     unsubscribe();
 
     // Another client may have saved the draft while nothing here was
     // connected, so a document kept across a disconnection would be a copy
     // this store cannot vouch for -- the same rule a document's content keeps.
-    expect(h.store.getSnapshot().lastGraphDocument).toBeNull();
+    expect(h.store.getSnapshot().graphDocuments.size).toBe(0);
   });
 });
 
@@ -2761,12 +2955,12 @@ describe('graph runs', () => {
 
     socket.deliver(hubFrames.graphRunStarted);
 
-    expect(h.store.getSnapshot().lastRunStarted).toEqual({
+    expect(answerTo(h, 24)).toEqual({
+      type: 'graph-run-started',
       replyTo: 24,
       runId: 'hub-11',
       number: 1,
     });
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
   });
 
   it('files each run state by its run, whole, replacing the one before', async () => {
@@ -2840,12 +3034,12 @@ describe('graph runs', () => {
 
     // The graph the fixture's read named is the one its succeeded run is of.
     const succeeded = JSON.parse(hubFrames.graphRunStateSucceeded) as { nodeId: string };
-    expect(h.store.getSnapshot().lastRunLatest).toEqual({
+    expect(answerTo(h, 30)).toEqual({
+      type: 'graph-run-latest',
       replyTo: 30,
       nodeId: succeeded.nodeId,
       run: null,
     });
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
   });
 
   it('takes a read answered with a run as answered: the run is filed, and nothing is left waiting', async () => {
@@ -2857,7 +3051,7 @@ describe('graph runs', () => {
     socket.deliver(hubFrames.graphRunLatestFound);
 
     const snapshot = h.store.getSnapshot();
-    expect(snapshot.lastRunLatest).toMatchObject({
+    expect(answeredWith(h, 32, 'graph-run-latest')).toMatchObject({
       replyTo: 32,
       nodeId: 'hub-14',
       run: { runId: 'hub-15', status: 'succeeded' },
@@ -2901,7 +3095,7 @@ describe('graph runs', () => {
 
     socket.deliver(hubFrames.graphRunCancelled);
 
-    expect(h.store.getSnapshot().lastRunCancelled).toEqual({ replyTo: 25, runId: 'hub-11' });
+    expect(answerTo(h, 25)).toEqual({ type: 'graph-run-cancelled', replyTo: 25, runId: 'hub-11' });
   });
 
   it('forgets the runs it holds when the store is torn down: the next state is whole', async () => {
@@ -2952,7 +3146,7 @@ describe('graph runs', () => {
     const history = h.store.getSnapshot().runHistories.get(parsed.nodeId as never);
     expect(history?.replyTo).toBe(42);
     expect(history?.runs.map((run) => run.number)).toEqual([2, 1]);
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
+    expect(answerTo(h, 42)?.type).toBe('graph-run-history');
   });
 
   it('keeps the child a SUB-GRAPH step names on the run it files', async () => {
@@ -2985,7 +3179,7 @@ describe('graph runs', () => {
 
     socket.deliver(hubFrames.graphSimulated);
 
-    const simulated = h.store.getSnapshot().lastSimulated;
+    const simulated = answeredWith(h, 43, 'graph-simulated');
     expect(simulated?.replyTo).toBe(43);
     expect(simulated?.reason).toBeNull();
     expect(simulated?.path.map((step) => `${step.nodeId}:${step.outcome}`)).toEqual([
@@ -2996,20 +3190,19 @@ describe('graph runs', () => {
     expect(simulated?.path.at(-1)?.why).toMatch(/^would run claude on mbp-robert/);
     // Nothing ran, so nothing is filed as a run.
     expect(h.store.getSnapshot().runs.size).toBe(0);
-    expect(h.store.getSnapshot().lastRefusal).toBeNull();
   });
 
   it('forgets a simulation when the connection goes, like the draft it was of', async () => {
     const h = harness();
     const { socket, unsubscribe } = await establish(h);
     socket.deliver(hubFrames.graphSimulated);
-    expect(h.store.getSnapshot().lastSimulated).not.toBeNull();
+    expect(answerTo(h, 43)).toBeDefined();
 
     unsubscribe();
 
     // The draft may have been saved by another client meanwhile, and the
     // fleet placement read may have moved: an old path is not this graph's.
-    expect(h.store.getSnapshot().lastSimulated).toBeNull();
+    expect(answerTo(h, 43)).toBeUndefined();
   });
 
   it('forgets the histories it holds when the connection goes', async () => {

@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
 import type { Layout, MachineState, SessionRef } from '@agentplex/protocol';
-import type { CommandOutcome, HubStore } from '../store/hub-store.js';
+import type { CommandOutcome } from '../store/commands.js';
+import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Box, Button, Group, Stack, Text, Title } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
@@ -42,9 +43,7 @@ export function AbsentSessions({
   if (absent.length === 0) return null;
 
   const followUp =
-    pending === null || !pending.accepted
-      ? null
-      : treeFollowUp(pending.id, snapshot.lastTreeChange, snapshot.lastRefusal);
+    pending === null || !pending.accepted ? null : treeFollowUp(pending.id, snapshot.answers);
   const refused = followUp?.kind === 'refused' ? followUp.words : null;
 
   function putBack(ref: SessionRef): void {

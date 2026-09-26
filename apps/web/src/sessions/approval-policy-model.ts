@@ -7,7 +7,9 @@ import {
   type SessionRef,
 } from '@agentplex/protocol';
 import { PROJECT_KIND } from '../projects/project-kind.js';
-import type { ApprovalPolicyView, HubCommand, RefusalView } from '../store/hub-store.js';
+import { followUp, type Answers } from '../store/answers.js';
+import type { HubCommand } from '../store/commands.js';
+import type { ApprovalPolicyView } from '../store/views.js';
 
 /**
  * The standing policy as a screen reads it: the three commands, and the rows
@@ -238,10 +240,8 @@ export function projectForSession(layout: Layout | null, ref: SessionRef): Sessi
  * both are refused the same way. What they end in is the same receipt, so
  * telling them apart here would be a distinction the hub does not draw.
  *
- * Correlated by `replyTo` for the reason `approvalFollowUp` is: one snapshot
- * holds one refusal and one policy per project, and a control reading the
- * newest of either would report the answer to somebody else's frame as its own
- * -- two remove buttons in one block are exactly that case.
+ * Correlated by `replyTo` for the reason `approvalFollowUp` is: two remove
+ * buttons in one block each read the answer to their own frame.
  */
 export type PolicyFollowUp =
   | { readonly kind: 'idle' }
@@ -249,15 +249,15 @@ export type PolicyFollowUp =
   | { readonly kind: 'done' }
   | { readonly kind: 'refused'; readonly words: string };
 
-export function policyFollowUp(
-  pending: FrameId | null,
-  policy: ApprovalPolicyView | null,
-  lastRefusal: RefusalView | null,
-): PolicyFollowUp {
-  if (pending === null) return { kind: 'idle' };
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message };
+export function policyFollowUp(pending: FrameId | null, answers: Answers): PolicyFollowUp {
+  const said = followUp(pending, answers, 'approval-policy');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return said;
+    case 'refused':
+      return { kind: 'refused', words: said.words };
+    case 'answered':
+      return { kind: 'done' };
   }
-  if (policy !== null && policy.replyTo === pending) return { kind: 'done' };
-  return { kind: 'waiting' };
 }

@@ -1,6 +1,8 @@
 import { useState, type JSX } from 'react';
 import type { ServerRegistrationId } from '@agentplex/protocol';
-import type { HubSnapshot, HubStore } from '../store/hub-store.js';
+import { refusalToLatest } from '../store/answers.js';
+import type { HubStore } from '../store/hub-store.js';
+import type { HubSnapshot } from '../store/views.js';
 import type { TokenStore } from '../auth/token.js';
 // The chrome's connection line owns this mapping now (AGX-119). Imported
 // rather than kept here as a second copy: this screen and the top bar draw
@@ -129,6 +131,7 @@ function HubAccessSection({
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const stored = tokens.read();
+  const refused = refusalToLatest(snapshot.answers);
 
   function saveToken(): void {
     const token = draft.trim();
@@ -199,9 +202,9 @@ function HubAccessSection({
           {snapshot.problem}
         </Text>
       )}
-      {snapshot.lastRefusal !== null && (
+      {refused !== null && (
         <Text size="sm" style={{ color: colorForTone('blocked', scheme) }}>
-          The hub refused the last request: {snapshot.lastRefusal.message}
+          The hub refused the last request: {refused.message}
         </Text>
       )}
       {/* The way back to the wizard, which opens by itself only while no

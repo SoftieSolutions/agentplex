@@ -16,7 +16,10 @@ import {
   type TerminalSize,
 } from '@agentplex/protocol';
 
-import { terminalKey, type HubStore, type TerminalWatchView } from '../store/hub-store.js';
+import { refusalTo } from '../store/answers.js';
+import type { HubStore } from '../store/hub-store.js';
+import { terminalKey } from '../store/terminals.js';
+import type { TerminalWatchView } from '../store/views.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import {
   Box,
@@ -699,7 +702,11 @@ export function SessionPane({
   // name a tab this session is not offering.
   const shown: ShownTab =
     shownTab === TRANSCRIPT_TAB || shownTab === APPROVALS_TAB ? shownTab : TERMINAL_TAB;
-  const transcript = transcriptState(transcriptAsks, snapshot.transcripts, snapshot.lastRefusal);
+  const transcript = transcriptState(
+    transcriptAsks,
+    snapshot.transcripts,
+    refusalTo(snapshot.answers, transcriptAsks?.latest ?? null),
+  );
   /**
    * The replay window over that list, resolved at render against the count
    * as it stands now. `null` for the position means live, which it also is on

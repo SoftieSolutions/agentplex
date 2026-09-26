@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseHubFrame, parseTextFrame, type MachineState } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { AttentionView, RefusalView } from '../store/hub-store.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   acknowledgeCommand,
   attentionFollowUp,
@@ -22,15 +22,6 @@ function stateFrom(text: string): MachineState {
     throw new Error('the fixture is not a machine-state frame');
   }
   return parsed.value.state;
-}
-
-function attentionFrom(text: string): AttentionView {
-  const parsed = parseTextFrame(parseHubFrame, text);
-  if (!parsed.ok || parsed.value.type !== 'session-attention') {
-    throw new Error('the fixture is not a session-attention frame');
-  }
-  const { replyTo, storeId, sessionId, acknowledgedThrough, mutedAt } = parsed.value;
-  return { replyTo, storeId, sessionId, acknowledgedThrough, mutedAt };
 }
 
 const populated = stateFrom(hubFrames.machineStatePopulated);
@@ -89,30 +80,26 @@ describe('when acknowledging is offered', () => {
 });
 
 describe('what the hub has said about the click', () => {
-  const acknowledged = attentionFrom(hubFrames.sessionAcknowledged);
-  const refusal: RefusalView = {
-    replyTo: 7,
-    code: 'refused',
-    message: 'this hub knows no session by that id',
-    holder: null,
-  };
+  // A thin mapping over `followUp`: each of its four answers, renamed.
+  const acknowledged = replyFrom(hubFrames.sessionAcknowledged, 'session-attention');
+  const refusal = replyFrom(hubFrames.refusalAttention, 'refusal');
+  const answers = answersOf(acknowledged, refusal);
 
   it('says nothing while nothing has been sent', () => {
-    expect(attentionFollowUp(null, acknowledged, null)).toEqual({ kind: 'idle' });
+    expect(attentionFollowUp(null, answers)).toEqual({ kind: 'idle' });
   });
 
   it('waits until an answer to this frame arrives, not until any answer does', () => {
-    // The snapshot holds one reply for the whole page. A card that read the
-    // newest of either would show another card's answer beside its own button.
-    expect(attentionFollowUp(99, acknowledged, refusal)).toEqual({ kind: 'waiting' });
+    // Two cards can each be waiting, and each reads the answer to its own frame.
+    expect(attentionFollowUp(99, withOutstanding(answers, 99))).toEqual({ kind: 'waiting' });
   });
 
   it('is done when the hub answers the frame that was sent', () => {
-    expect(attentionFollowUp(acknowledged.replyTo, acknowledged, null)).toEqual({ kind: 'done' });
+    expect(attentionFollowUp(acknowledged.replyTo, answers)).toEqual({ kind: 'done' });
   });
 
   it("carries the hub's own words when it says no", () => {
-    expect(attentionFollowUp(refusal.replyTo, acknowledged, refusal)).toEqual({
+    expect(attentionFollowUp(refusal.replyTo, answers)).toEqual({
       kind: 'refused',
       words: 'this hub knows no session by that id',
     });

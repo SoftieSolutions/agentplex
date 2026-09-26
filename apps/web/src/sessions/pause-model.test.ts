@@ -8,7 +8,7 @@ import {
   type SessionHolder,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { PausedView, RefusalView, ResumedView } from '../store/hub-store.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   PAUSE_REQUESTED_WORDS,
   offersPause,
@@ -34,33 +34,6 @@ function stateFrom(text: string): MachineState {
   return parsed.value.state;
 }
 
-function pausedFrom(text: string): PausedView {
-  const parsed = parseTextFrame(parseHubFrame, text);
-  if (!parsed.ok || parsed.value.type !== 'session-paused') {
-    throw new Error('the fixture is not a session-paused frame');
-  }
-  const { replyTo, storeId, sessionId, server, pause } = parsed.value;
-  return { replyTo, storeId, sessionId, server, pause };
-}
-
-function resumedFrom(text: string): ResumedView {
-  const parsed = parseTextFrame(parseHubFrame, text);
-  if (!parsed.ok || parsed.value.type !== 'session-resumed') {
-    throw new Error('the fixture is not a session-resumed frame');
-  }
-  const { replyTo, storeId, sessionId, server } = parsed.value;
-  return { replyTo, storeId, sessionId, server };
-}
-
-function refusalFrom(text: string): RefusalView {
-  const parsed = parseTextFrame(parseHubFrame, text);
-  if (!parsed.ok || parsed.value.type !== 'refusal') {
-    throw new Error('the fixture is not a refusal frame');
-  }
-  const { replyTo, code, message, holder } = parsed.value;
-  return { replyTo, code, message, holder };
-}
-
 function holderOf(state: MachineState, sessionId: string): SessionHolder | null {
   for (const store of state.stores) {
     for (const row of store.sessions) {
@@ -71,9 +44,9 @@ function holderOf(state: MachineState, sessionId: string): SessionHolder | null 
 }
 
 const withPaused = stateFrom(hubFrames.machineStatePaused);
-const paused = pausedFrom(hubFrames.sessionPaused);
-const resumed = resumedFrom(hubFrames.sessionResumed);
-const refusal = refusalFrom(hubFrames.refusalHeldBusy);
+const paused = replyFrom(hubFrames.sessionPaused, 'session-paused');
+const resumed = replyFrom(hubFrames.sessionResumed, 'session-resumed');
+const refusal = replyFrom(hubFrames.refusalHeldBusy, 'refusal');
 const REF = sessionRefSchema.parse({ storeId: 'store-agentplex', sessionId: 'session-fix-auth' });
 
 describe('offersPause and offersResume', () => {
@@ -116,36 +89,33 @@ describe('the commands', () => {
 });
 
 describe('pauseFollowUp', () => {
+  // A thin mapping over `followUp` across the two answers a toggle can get.
   const pending = frameIdSchema.parse(paused.replyTo);
+  const answers = answersOf(paused, resumed, refusal);
 
   it('is idle with nothing pending', () => {
-    expect(pauseFollowUp(null, paused, resumed, refusal)).toEqual({ kind: 'idle' });
+    expect(pauseFollowUp(null, answers)).toEqual({ kind: 'idle' });
   });
 
   it('waits until the answer to its own frame arrives', () => {
-    expect(pauseFollowUp(pending, null, null, null)).toEqual({ kind: 'waiting' });
-    // Somebody else's answers are not this one's.
-    expect(pauseFollowUp(frameIdSchema.parse(99), paused, resumed, refusal)).toEqual({
+    expect(pauseFollowUp(pending, withOutstanding(answersOf(), pending))).toEqual({
       kind: 'waiting',
     });
+    // Somebody else's answers are not this one's.
+    const other = frameIdSchema.parse(99);
+    expect(pauseFollowUp(other, withOutstanding(answers, other))).toEqual({ kind: 'waiting' });
   });
 
   it('carries the server\u2019s pause word off the captured reply', () => {
-    expect(pauseFollowUp(pending, paused, null, null)).toEqual({
-      kind: 'paused',
-      pause: 'requested',
-    });
+    expect(pauseFollowUp(pending, answers)).toEqual({ kind: 'paused', pause: 'requested' });
   });
 
   it('says resumed off the captured reply', () => {
-    expect(pauseFollowUp(frameIdSchema.parse(resumed.replyTo), null, resumed, null)).toEqual({
-      kind: 'resumed',
-    });
+    expect(pauseFollowUp(resumed.replyTo, answers)).toEqual({ kind: 'resumed' });
   });
 
-  it('shows a refusal in the hub\u2019s words, and a refusal wins over a stale yes', () => {
-    const refused = { ...refusal, replyTo: pending };
-    expect(pauseFollowUp(pending, paused, null, refused)).toEqual({
+  it('shows a refusal in the hub\u2019s words', () => {
+    expect(pauseFollowUp(refusal.replyTo, answers)).toEqual({
       kind: 'refused',
       words: refusal.message,
     });

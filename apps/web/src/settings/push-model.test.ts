@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FrameId } from '@agentplex/protocol';
-import type { RefusalView } from '../store/hub-store.js';
+import { hubFrames } from '../store/hub-frames.fixture.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import {
   applicationServerKey,
   pushControlView,
@@ -134,40 +135,34 @@ describe('what the push control says', () => {
 });
 
 describe('the follow-up to a frame this control sent', () => {
-  const PENDING = 7 as FrameId;
+  // A thin mapping over `followUp`, saying which way a yes went.
+  const subscribed = replyFrom(hubFrames.pushSubscribed, 'push-subscribed');
+  const unsubscribed = replyFrom(hubFrames.pushUnsubscribed, 'push-unsubscribed');
+  const refusal = { ...replyFrom(hubFrames.refusalNoPush, 'refusal'), replyTo: 7 as FrameId };
+  const answers = answersOf(subscribed, unsubscribed, refusal);
 
   it('is idle while nothing is out', () => {
-    expect(pushFollowUp(null, null, null)).toEqual({ kind: 'idle' });
+    expect(pushFollowUp(null, answers)).toEqual({ kind: 'idle' });
   });
 
   it('waits while the answer has not arrived', () => {
-    expect(pushFollowUp(PENDING, null, null)).toEqual({ kind: 'waiting' });
+    expect(pushFollowUp(9 as FrameId, withOutstanding(answers, 9 as FrameId))).toEqual({
+      kind: 'waiting',
+    });
   });
 
   it('carries the hub’s own sentence when it refused', () => {
-    const refusal: RefusalView = {
-      replyTo: PENDING,
-      code: 'refused',
-      message: 'no key pair here',
-      holder: null,
-    };
-
-    expect(pushFollowUp(PENDING, null, refusal)).toEqual({
+    expect(pushFollowUp(refusal.replyTo, answers)).toEqual({
       kind: 'refused',
-      words: 'no key pair here',
+      words: refusal.message,
     });
   });
 
   it('is done, and says which way, when the answer is the one it waited for', () => {
-    expect(pushFollowUp(PENDING, { replyTo: PENDING, subscribed: true }, null)).toEqual({
+    expect(pushFollowUp(subscribed.replyTo, answers)).toEqual({ kind: 'done', subscribed: true });
+    expect(pushFollowUp(unsubscribed.replyTo, answers)).toEqual({
       kind: 'done',
-      subscribed: true,
+      subscribed: false,
     });
-  });
-
-  it('ignores an answer to somebody else’s frame', () => {
-    const other = { replyTo: 9 as FrameId, subscribed: true };
-
-    expect(pushFollowUp(PENDING, other, null)).toEqual({ kind: 'waiting' });
   });
 });

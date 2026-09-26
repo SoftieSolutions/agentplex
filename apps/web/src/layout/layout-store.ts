@@ -1,5 +1,6 @@
 import type { FrameId, NodeId, SessionRef } from '@agentplex/protocol';
-import { terminalKey, type StartView } from '../store/hub-store.js';
+import { terminalKey } from '../store/terminals.js';
+import type { StartView } from '../store/views.js';
 import type { Timers } from '../store/timers.js';
 import { pendingSession, type NamedTerminal } from '../terminal/pending-pane-model.js';
 import {

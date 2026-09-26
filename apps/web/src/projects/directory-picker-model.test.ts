@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { serverRegistrationIdSchema, type DirectoryEntry } from '@agentplex/protocol';
-import type { DirectoryListingView, HubSnapshot, RefusalView } from '../store/hub-store.js';
+import type { Refusal } from '../store/answers.js';
+import { answersOf, withOutstanding } from '../store/replies.fixture.js';
 import {
   breadcrumb,
   browseFor,
@@ -9,13 +10,15 @@ import {
   pickerView,
   refusalWords,
   truncationNotice,
+  type DirectoryListing,
 } from './directory-picker-model.js';
 
 const WORK = '/srv/work';
 const SERVER = serverRegistrationIdSchema.parse('registration-mbp');
 
-function listing(over: Partial<DirectoryListingView> = {}): DirectoryListingView {
+function listing(over: Partial<DirectoryListing> = {}): DirectoryListing {
   return {
+    type: 'directory-listing',
     replyTo: 2,
     directory: WORK,
     roots: [WORK],
@@ -25,52 +28,9 @@ function listing(over: Partial<DirectoryListingView> = {}): DirectoryListingView
   };
 }
 
-function snapshot(over: Partial<HubSnapshot> = {}): HubSnapshot {
+function refusal(over: Partial<Refusal> = {}): Refusal {
   return {
-    phase: 'connected',
-    problem: null,
-    hubId: null,
-    machineState: null,
-    layout: null,
-    paneLayout: null,
-    commandQueue: { queued: 0, capacity: 32, overflowed: null },
-    terminals: new Map(),
-    terminalInput: { discarded: 0, notice: null },
-    lastRefusal: null,
-    lastStarted: null,
-    starts: new Map(),
-    lastStopped: null,
-    lastPaused: null,
-    lastResumed: null,
-    lastAttention: null,
-    lastApproval: null,
-    approvalPolicies: new Map(),
-    lastListing: null,
-    lastTreeChange: null,
-    catalogue: null,
-    lastProjectCreated: null,
-    lastDocCreated: null,
-    lastDocSaved: null,
-    lastDocContent: null,
-    lastGraphCreated: null,
-    lastGraphDocument: null,
-    lastGraphSaved: null,
-    lastGraphPublished: null,
-    lastRunStarted: null,
-    lastRunCancelled: null,
-    lastRunLatest: null,
-    lastSimulated: null,
-    runs: new Map(),
-    runHistories: new Map(),
-    lastPush: null,
-    pushPublicKey: null,
-    transcripts: new Map(),
-    ...over,
-  };
-}
-
-function refusal(over: Partial<RefusalView> = {}): RefusalView {
-  return {
+    type: 'refusal',
     replyTo: 2,
     code: 'refused',
     message: '/etc is not under a directory this server will browse',
@@ -159,17 +119,18 @@ describe('browseFor', () => {
 });
 
 describe('pickerView', () => {
+  // A thin mapping over `followUp`, with the refusal put into words.
   it('is idle before anything has been asked', () => {
-    expect(pickerView(snapshot(), null)).toEqual({ kind: 'idle' });
+    expect(pickerView(answersOf(), null)).toEqual({ kind: 'idle' });
   });
 
   it('waits while the question has no answer', () => {
-    expect(pickerView(snapshot(), 2)).toEqual({ kind: 'waiting' });
+    expect(pickerView(withOutstanding(answersOf(), 2), 2)).toEqual({ kind: 'waiting' });
   });
 
   it('shows the listing that answers this question', () => {
     const answer = listing({ replyTo: 2 });
-    expect(pickerView(snapshot({ lastListing: answer }), 2)).toEqual({
+    expect(pickerView(answersOf(answer), 2)).toEqual({
       kind: 'listing',
       listing: answer,
     });
@@ -178,20 +139,22 @@ describe('pickerView', () => {
   it('ignores an answer to an earlier question', () => {
     // A user who clicks twice while a slow disk answers must not see the first
     // directory rendered under the second one's breadcrumb.
-    expect(pickerView(snapshot({ lastListing: listing({ replyTo: 2 }) }), 3)).toEqual({
+    expect(pickerView(withOutstanding(answersOf(listing({ replyTo: 2 })), 3), 3)).toEqual({
       kind: 'waiting',
     });
   });
 
   it('shows a refusal that answers this question', () => {
-    expect(pickerView(snapshot({ lastRefusal: refusal({ replyTo: 2 }) }), 2)).toEqual({
+    expect(pickerView(answersOf(refusal({ replyTo: 2 })), 2)).toEqual({
       kind: 'refused',
       words: '/etc is not under a directory this server will browse',
     });
   });
 
   it('ignores a refusal about somebody else’s frame', () => {
-    expect(pickerView(snapshot({ lastRefusal: refusal({ replyTo: 9 }) }), 2).kind).toBe('waiting');
+    expect(pickerView(withOutstanding(answersOf(refusal({ replyTo: 9 })), 2), 2).kind).toBe(
+      'waiting',
+    );
   });
 });
 

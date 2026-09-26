@@ -12,6 +12,7 @@ import {
 } from '../ui/components.js';
 import { colorForRole, type Scheme } from '../ui/tokens.js';
 import type { ShellForm } from '../shell/shell-form.js';
+import { newestAnswer } from '../store/answers.js';
 import type { HubStore } from '../store/hub-store.js';
 import { useHubLayout, useHubSnapshot } from '../store/use-hub-store.js';
 import { NextActionLink } from '../shell/next-action.js';
@@ -181,7 +182,7 @@ export function SessionListScreen({
   // What the last stop landed on, from the reply's own payload. Kept brief and
   // kept at all because the answer reaches the client that asked: without it a
   // session stopped in another tab is a row that quietly stops being held.
-  const stopped = stoppedNotice(state, snapshot.lastStopped);
+  const stopped = stoppedNotice(state, newestAnswer(snapshot.answers, 'session-stopped'));
 
   return (
     <Stack p="md" gap="sm">

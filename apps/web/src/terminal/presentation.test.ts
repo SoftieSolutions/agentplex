@@ -7,7 +7,8 @@ import {
   type ServerView,
   type SessionRow,
 } from '@agentplex/protocol';
-import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/hub-store.js';
+import { NO_ANSWERS } from '../store/answers.js';
+import type { ConnectionPhase, HubSnapshot, TerminalWatchView } from '../store/views.js';
 import { createTerminalFeed } from './chunk-feed.js';
 import { EMULATOR_SCROLLBACK_LINES } from './emulator.js';
 import {
@@ -138,33 +139,13 @@ function snapshotWith(overrides: Partial<HubSnapshot>): HubSnapshot {
     commandQueue: { queued: 0, capacity: 32, overflowed: null },
     terminals: new Map(),
     terminalInput: { discarded: 0, notice: null },
-    lastRefusal: null,
-    lastStarted: null,
+    answers: NO_ANSWERS,
     starts: new Map(),
-    lastStopped: null,
-    lastPaused: null,
-    lastResumed: null,
-    lastAttention: null,
-    lastApproval: null,
     approvalPolicies: new Map(),
-    lastListing: null,
-    lastTreeChange: null,
     catalogue: null,
-    lastProjectCreated: null,
-    lastDocCreated: null,
-    lastDocSaved: null,
-    lastDocContent: null,
-    lastGraphCreated: null,
-    lastGraphDocument: null,
-    lastGraphSaved: null,
-    lastGraphPublished: null,
-    lastRunStarted: null,
-    lastRunCancelled: null,
-    lastRunLatest: null,
-    lastSimulated: null,
+    graphDocuments: new Map(),
     runs: new Map(),
     runHistories: new Map(),
-    lastPush: null,
     pushPublicKey: null,
     transcripts: new Map(),
     ...overrides,

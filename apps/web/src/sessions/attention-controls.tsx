@@ -1,6 +1,7 @@
 import { useState, type JSX, type MouseEvent } from 'react';
 import type { FrameId } from '@agentplex/protocol';
-import type { HubCommand, HubStore } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
+import type { HubStore } from '../store/hub-store.js';
 import { useHubSnapshot } from '../store/use-hub-store.js';
 import { Button, Group, Text } from '../ui/components.js';
 import { colorForTone, type Scheme } from '../ui/tokens.js';
@@ -56,7 +57,7 @@ export function AttentionControls({
   const mutes = offersMute(item);
   if (!acknowledges && !mutes) return null;
 
-  const followUp = attentionFollowUp(pending, snapshot.lastAttention, snapshot.lastRefusal);
+  const followUp = attentionFollowUp(pending, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : rejected;
   const waiting = followUp.kind === 'waiting';
 

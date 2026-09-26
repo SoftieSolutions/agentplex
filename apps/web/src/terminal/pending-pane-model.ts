@@ -1,5 +1,5 @@
 import type { MachineState, SessionRef } from '@agentplex/protocol';
-import type { StartView } from '../store/hub-store.js';
+import type { StartView } from '../store/views.js';
 import { serverLabel } from '../sessions/session-list-model.js';
 
 /**

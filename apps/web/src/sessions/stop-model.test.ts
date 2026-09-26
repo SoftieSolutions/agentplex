@@ -8,7 +8,7 @@ import {
   type SessionHolder,
 } from '@agentplex/protocol';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { RefusalView, StoppedView } from '../store/hub-store.js';
+import { answersOf, replyFrom, withOutstanding } from '../store/replies.fixture.js';
 import { offersStop, stopCommand, stopFollowUp, stoppedNotice } from './stop-model.js';
 
 /**
@@ -25,38 +25,10 @@ function stateFrom(text: string): MachineState {
   return parsed.value.state;
 }
 
-function refusalFrom(text: string): RefusalView {
-  const parsed = parseTextFrame(parseHubFrame, text);
-  if (!parsed.ok || parsed.value.type !== 'refusal') {
-    throw new Error('the fixture is not a refusal frame');
-  }
-  const frame = parsed.value;
-  return {
-    replyTo: frame.replyTo,
-    code: frame.code,
-    message: frame.message,
-    holder: frame.holder,
-  };
-}
-
-function stoppedFrom(text: string): StoppedView {
-  const parsed = parseTextFrame(parseHubFrame, text);
-  if (!parsed.ok || parsed.value.type !== 'session-stopped') {
-    throw new Error('the fixture is not a session-stopped frame');
-  }
-  const frame = parsed.value;
-  return {
-    replyTo: frame.replyTo,
-    storeId: frame.storeId,
-    sessionId: frame.sessionId,
-    server: frame.server,
-  };
-}
-
 const populated = stateFrom(hubFrames.machineStatePopulated);
-const stopped = stoppedFrom(hubFrames.sessionStopped);
-const busy = refusalFrom(hubFrames.refusalHeldBusy);
-const heldElsewhere = refusalFrom(hubFrames.refusalHeldStoppable);
+const stopped = replyFrom(hubFrames.sessionStopped, 'session-stopped');
+const busy = replyFrom(hubFrames.refusalHeldBusy, 'refusal');
+const heldElsewhere = replyFrom(hubFrames.refusalHeldStoppable, 'refusal');
 
 /** The holder a captured state published for one session, by id. */
 function holderOf(state: MachineState, sessionId: string): SessionHolder | null {
@@ -111,27 +83,31 @@ describe('the stop command', () => {
 });
 
 describe('what the hub said about the stop this screen asked for', () => {
+  // A thin mapping over `followUp`: each of its four answers, renamed.
   const pending = stopped.replyTo;
+  const answers = answersOf(stopped, busy);
 
   it('says nothing at all until one has been asked for', () => {
-    expect(stopFollowUp(null, stopped, busy)).toEqual({ kind: 'idle' });
+    expect(stopFollowUp(null, answers)).toEqual({ kind: 'idle' });
   });
 
   it('waits while nothing has answered it', () => {
-    expect(stopFollowUp(pending, null, null)).toEqual({ kind: 'waiting' });
+    expect(stopFollowUp(pending, withOutstanding(answersOf(), pending))).toEqual({
+      kind: 'waiting',
+    });
   });
 
   it("ignores an answer to somebody else's command", () => {
     const other = frameIdSchema.parse(99);
-    expect(stopFollowUp(other, stopped, busy)).toEqual({ kind: 'waiting' });
+    expect(stopFollowUp(other, withOutstanding(answers, other))).toEqual({ kind: 'waiting' });
   });
 
   it('ends the wait when the stop lands', () => {
-    expect(stopFollowUp(pending, stopped, null)).toEqual({ kind: 'stopped' });
+    expect(stopFollowUp(pending, answers)).toEqual({ kind: 'stopped' });
   });
 
   it("ends the wait on a refusal, in the hub's own words", () => {
-    expect(stopFollowUp(busy.replyTo, null, busy)).toEqual({
+    expect(stopFollowUp(busy.replyTo, answers)).toEqual({
       kind: 'refused',
       words: 'that session is mid-turn; stopping it now could leave an edit half applied',
     });

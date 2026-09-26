@@ -10,7 +10,8 @@ import {
 } from '@agentplex/protocol';
 import { NO_FILTERS, visibleSessions } from '../sessions/session-list-model.js';
 import { hubFrames } from '../store/hub-frames.fixture.js';
-import type { HubSnapshot, HubStore } from '../store/hub-store.js';
+import type { HubStore } from '../store/hub-store.js';
+import type { HubSnapshot } from '../store/views.js';
 import { destinationHash } from '../shell/destinations.js';
 import { sessionHash } from '../terminal/session-route.js';
 import { MantineProvider } from '../ui/components.js';

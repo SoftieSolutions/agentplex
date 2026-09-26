@@ -78,9 +78,7 @@ export function NewDocForm({
 
   const blocked = docCreateBlockedReason(snapshot.phase, name, chosen);
   const followUp: DocCreateFollowUp | null =
-    pending === null || !pending.accepted
-      ? null
-      : docCreateFollowUp(pending.id, snapshot.lastDocCreated, snapshot.lastRefusal);
+    pending === null || !pending.accepted ? null : docCreateFollowUp(pending.id, snapshot.answers);
 
   const made = followUp?.kind === 'made' ? followUp.nodeId : null;
   // useEffect, justified, and the same justification the new-session form

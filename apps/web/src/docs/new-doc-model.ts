@@ -6,12 +6,9 @@ import {
   type NodeId,
   type ServerRegistrationId,
 } from '@agentplex/protocol';
-import type {
-  ConnectionPhase,
-  DocCreatedView,
-  HubCommand,
-  RefusalView,
-} from '../store/hub-store.js';
+import { followUp, type Answers } from '../store/answers.js';
+import type { HubCommand } from '../store/commands.js';
+import type { ConnectionPhase } from '../store/views.js';
 
 /**
  * Every rule the New doc action follows, as functions of values.
@@ -134,22 +131,25 @@ export function docCreateBlockedReason(
  * `made` carries the node, because that is the one thing the client cannot work
  * out for itself and the one thing it immediately needs: every later frame
  * about this document names the node, and the form opens the editor on it.
+ *
+ * `idle` is a create nothing more is coming for, as `followUp` reads it, and
+ * leaves the control free for a second try.
  */
 export type DocCreateFollowUp =
+  | { readonly kind: 'idle' }
   | { readonly kind: 'waiting' }
   | { readonly kind: 'made'; readonly nodeId: NodeId }
   | { readonly kind: 'refused'; readonly words: string };
 
-export function docCreateFollowUp(
-  pending: FrameId,
-  lastCreated: DocCreatedView | null,
-  lastRefusal: RefusalView | null,
-): DocCreateFollowUp {
-  if (lastRefusal !== null && lastRefusal.replyTo === pending) {
-    return { kind: 'refused', words: lastRefusal.message };
+export function docCreateFollowUp(pending: FrameId, answers: Answers): DocCreateFollowUp {
+  const said = followUp(pending, answers, 'doc-created');
+  switch (said.kind) {
+    case 'idle':
+    case 'waiting':
+      return said;
+    case 'refused':
+      return { kind: 'refused', words: said.words };
+    case 'answered':
+      return { kind: 'made', nodeId: said.answer.nodeId };
   }
-  if (lastCreated !== null && lastCreated.replyTo === pending) {
-    return { kind: 'made', nodeId: lastCreated.nodeId };
-  }
-  return { kind: 'waiting' };
 }

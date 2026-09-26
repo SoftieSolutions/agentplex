@@ -1,7 +1,8 @@
 import type { ParseResult } from '@agentplex/protocol';
 import type { TokenStore } from '../auth/token.js';
 import { createFrameIdCounter } from './frame-ids.js';
-import type { HubStoreDependencies, StoreSocket } from './hub-store.js';
+import type { StoreSocket } from './connection.js';
+import type { HubStoreDependencies } from './hub-store.js';
 import { browserTimers } from './timers.js';
 
 /**

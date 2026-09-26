@@ -8,7 +8,8 @@ import {
   type FrameId,
   type SessionRef,
 } from '@agentplex/protocol';
-import { terminalKey, type StartedView, type StartView } from '../store/hub-store.js';
+import { terminalKey } from '../store/terminals.js';
+import type { StartedView, StartView } from '../store/views.js';
 import { createFakeTimers } from '../store/timers.js';
 import { createLayoutStore, type LayoutHub } from './layout-store.js';
 import {

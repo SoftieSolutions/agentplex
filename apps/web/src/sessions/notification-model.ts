@@ -1,7 +1,7 @@
 import type { GraphRunApproval } from '@agentplex/protocol';
 import { graphHash } from '../graphs/graph-route.js';
 import { sessionHash } from '../terminal/session-route.js';
-import type { HubCommand } from '../store/hub-store.js';
+import type { HubCommand } from '../store/commands.js';
 import type { Tone } from '../ui/tokens.js';
 import { acknowledgeCommand, offersAcknowledge } from './attention-model.js';
 import {

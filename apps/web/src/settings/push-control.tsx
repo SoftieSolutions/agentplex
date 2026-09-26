@@ -143,7 +143,7 @@ export function PushControl({ store, push }: PushControlProps): JSX.Element | nu
   // have been there.
   if (browser === null) return null;
 
-  const followUp = pushFollowUp(sent?.id ?? null, snapshot.lastPush, snapshot.lastRefusal);
+  const followUp = pushFollowUp(sent?.id ?? null, snapshot.answers);
   // What the browser and hub are agreed on. A frame in flight shows the state
   // from before the press rather than the one being asked for: nothing has
   // happened yet, and a label that changed on the press would be claiming the
