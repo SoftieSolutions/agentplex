@@ -4,6 +4,10 @@
     "noEmit": true,
     "allowJs": true,
     "checkJs": true,
+    // `pnpm package` runs `node assemble-package.ts` under Node's type
+    // stripping, which resolves a specifier as written: a module it imports
+    // from beside it has to be named `./x.ts`, not `./x.js`.
+    "allowImportingTsExtensions": true,
     "types": ["node"]
   },
   "include": ["*.ts", "eslint/*.ts", "eslint/*.js"]

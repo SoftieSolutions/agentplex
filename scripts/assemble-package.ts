@@ -14,7 +14,7 @@ import {
   SHRINKWRAP_FILE,
   WORKSPACE_FILE,
   type Shrinkwrap,
-} from './shrinkwrap.js';
+} from './shrinkwrap.ts';
 
 /**
  * Assemble the trees that get published, one per package.
