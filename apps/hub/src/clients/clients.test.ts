@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   APPROVAL_PROPOSAL_MAX_CHARS,
+  clientFrameSchema,
+  type ClientFrame,
   parseHubFrame,
   parseTextFrame,
   CLIENT_PROTOCOL_VERSION,
@@ -25,7 +27,7 @@ import {
   createFakeTimers,
   type FakeTimers,
 } from '@agentplex/node-shared/testing';
-import { closure, CLOSE_NORMAL, createLogger } from '@agentplex/node-shared';
+import { closure, CLOSE_NORMAL, CLOSE_POLICY, createLogger } from '@agentplex/node-shared';
 import { readyProvider } from '@agentplex/providers/testing';
 import type { ServerConnectionPhase, ServerConnectionReport } from '../servers/servers.js';
 import { createFleetState, type FleetState } from '../fleet-state/fleet-state.js';
@@ -2842,4 +2844,381 @@ describe('a graph run', () => {
     expect(client.received.at(-1)).toMatchObject({ type: 'refusal', replyTo: 1 });
     expect(graphRuns.opens).toEqual([]);
   });
+});
+
+/**
+ * The gate, as one rule over every frame the protocol carries.
+ *
+ * A connection that has not said hello may say one other thing -- that it
+ * could not read what the hub sent -- and nothing else reaches a feature. The
+ * samples are keyed by frame type so that a frame added to the protocol fails
+ * the first assertion here until somebody writes it a sample, and with it the
+ * proof that it too is refused before hello and touches nothing on the way.
+ */
+describe('every frame but a hello, before one', () => {
+  const STORE = 'store-work';
+  const SESSION = 'session-1';
+  const NODE = 'node-1';
+  const TARGET = { by: 'session', storeId: STORE, sessionId: SESSION };
+
+  const SAMPLES: Record<Exclude<ClientFrame['type'], 'hello' | 'protocol-error'>, ClientFrame> = {
+    ping: clientFrameSchema.parse({ type: 'ping', id: 1 }),
+    'layout-request': clientFrameSchema.parse({ type: 'layout-request', id: 1 }),
+    'pane-layout-request': clientFrameSchema.parse({ type: 'pane-layout-request', id: 1 }),
+    'pane-layout-save': clientFrameSchema.parse({
+      type: 'pane-layout-save',
+      id: 1,
+      layout: '{}',
+    }),
+    'session-start': clientFrameSchema.parse({
+      type: 'session-start',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+      provider: 'claude',
+      prompt: null,
+      server: null,
+      project: null,
+    }),
+    'session-stop': clientFrameSchema.parse({
+      type: 'session-stop',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+    }),
+    'session-pause': clientFrameSchema.parse({
+      type: 'session-pause',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+    }),
+    'session-resume': clientFrameSchema.parse({
+      type: 'session-resume',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+    }),
+    'session-transcript': clientFrameSchema.parse({
+      type: 'session-transcript',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+      count: 50,
+    }),
+    'session-acknowledge': clientFrameSchema.parse({
+      type: 'session-acknowledge',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+    }),
+    'session-mute': clientFrameSchema.parse({
+      type: 'session-mute',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+      muted: true,
+    }),
+    'server-pair': clientFrameSchema.parse({ ...A_PAIRING, id: 1 }),
+    'server-unpair': clientFrameSchema.parse({
+      type: 'server-unpair',
+      id: 1,
+      registrationId: 'registration-1',
+    }),
+    'directory-list': clientFrameSchema.parse({
+      type: 'directory-list',
+      id: 1,
+      server: 'registration-1',
+      directory: null,
+    }),
+    'project-create': clientFrameSchema.parse({
+      type: 'project-create',
+      id: 1,
+      name: 'work',
+      directory: '/srv/work',
+    }),
+    'node-create-folder': clientFrameSchema.parse({
+      type: 'node-create-folder',
+      id: 1,
+      parentId: null,
+      name: 'this week',
+    }),
+    'node-rename': clientFrameSchema.parse({
+      type: 'node-rename',
+      id: 1,
+      nodeId: NODE,
+      name: 'the checkout',
+    }),
+    'node-move': clientFrameSchema.parse({
+      type: 'node-move',
+      id: 1,
+      nodeId: NODE,
+      parentId: 'node-folder',
+      position: 3,
+    }),
+    'node-remove': clientFrameSchema.parse({ type: 'node-remove', id: 1, nodeId: NODE }),
+    'node-forget-removal': clientFrameSchema.parse({
+      type: 'node-forget-removal',
+      id: 1,
+      storeId: STORE,
+      sessionId: SESSION,
+    }),
+    'catalogue-query': clientFrameSchema.parse({
+      type: 'catalogue-query',
+      id: 1,
+      view: 'list',
+      groupBy: 'server',
+      sort: { key: 'name', direction: 'asc' },
+      filter: { search: 'auth' },
+      cursor: null,
+      limit: 25,
+    }),
+    'doc-create': clientFrameSchema.parse({
+      type: 'doc-create',
+      id: 1,
+      projectId: 'project-1',
+      server: 'registration-attic',
+      name: 'plan.md',
+      content: '# Plan\n',
+    }),
+    'doc-save': clientFrameSchema.parse({
+      type: 'doc-save',
+      id: 1,
+      nodeId: NODE,
+      content: '# Plan\n',
+    }),
+    'doc-open': clientFrameSchema.parse({ type: 'doc-open', id: 1, nodeId: NODE }),
+    'graph-create': clientFrameSchema.parse({
+      type: 'graph-create',
+      id: 1,
+      projectId: 'project-1',
+      name: 'triage',
+    }),
+    'graph-open': clientFrameSchema.parse({ type: 'graph-open', id: 1, nodeId: NODE }),
+    'graph-save': clientFrameSchema.parse({
+      type: 'graph-save',
+      id: 1,
+      nodeId: NODE,
+      document: { nodes: [], edges: [] },
+    }),
+    'graph-publish': clientFrameSchema.parse({ type: 'graph-publish', id: 1, nodeId: NODE }),
+    'graph-run': clientFrameSchema.parse({ type: 'graph-run', id: 1, nodeId: NODE, input: {} }),
+    'graph-run-cancel': clientFrameSchema.parse({
+      type: 'graph-run-cancel',
+      id: 1,
+      runId: 'run-1',
+    }),
+    'graph-run-read': clientFrameSchema.parse({ type: 'graph-run-read', id: 1, nodeId: NODE }),
+    'graph-run-history-request': clientFrameSchema.parse({
+      type: 'graph-run-history-request',
+      id: 1,
+      nodeId: NODE,
+    }),
+    'graph-run-open': clientFrameSchema.parse({
+      type: 'graph-run-open',
+      id: 1,
+      nodeId: NODE,
+      runId: 'run-1',
+    }),
+    'graph-simulate': clientFrameSchema.parse({
+      type: 'graph-simulate',
+      id: 1,
+      nodeId: NODE,
+      input: {},
+    }),
+    'session-subscribe': clientFrameSchema.parse({
+      type: 'session-subscribe',
+      id: 1,
+      target: TARGET,
+    }),
+    'session-unsubscribe': clientFrameSchema.parse({
+      type: 'session-unsubscribe',
+      id: 1,
+      target: TARGET,
+    }),
+    'terminal-input': clientFrameSchema.parse({
+      type: 'terminal-input',
+      id: 1,
+      target: TARGET,
+      data: 'yes\r',
+    }),
+    'terminal-resize': clientFrameSchema.parse({
+      type: 'terminal-resize',
+      id: 1,
+      target: TARGET,
+      size: { cols: 96, rows: 30 },
+    }),
+    'approval-decide': clientFrameSchema.parse({
+      type: 'approval-decide',
+      id: 1,
+      subject: { kind: 'session', storeId: STORE, sessionId: SESSION },
+      approvalId: 'approval-1',
+      decision: 'grant',
+    }),
+    'push-subscribe': clientFrameSchema.parse({
+      type: 'push-subscribe',
+      id: 1,
+      subscription: {
+        endpoint: 'https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bHxN0-example',
+        keys: {
+          p256dh:
+            'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM',
+          auth: 'tBHItJI5svbpez7KI4CCXg',
+        },
+      },
+    }),
+    'push-unsubscribe': clientFrameSchema.parse({
+      type: 'push-unsubscribe',
+      id: 1,
+      endpoint: 'https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bHxN0-example',
+    }),
+    'approval-policy-list': clientFrameSchema.parse({
+      type: 'approval-policy-list',
+      id: 1,
+      projectId: 'node-project-work',
+    }),
+    'approval-policy-add': clientFrameSchema.parse({
+      type: 'approval-policy-add',
+      id: 1,
+      projectId: 'node-project-work',
+      rule: { tool: 'Bash', proposal: 'command: pnpm test' },
+    }),
+    'approval-policy-remove': clientFrameSchema.parse({
+      type: 'approval-policy-remove',
+      id: 1,
+      projectId: 'node-project-work',
+      ruleId: 'rule-1',
+    }),
+  };
+
+  /**
+   * Every seam a connection can reach, each one counting.
+   *
+   * Its own wiring rather than the harness, because the harness keeps the
+   * graphs fake and the four plain functions to itself: what this asserts is
+   * that none of them was reached, and a seam that cannot be read back cannot
+   * be shown untouched.
+   */
+  function wired() {
+    const calls = { layoutReads: 0, paneReads: 0, paneWrites: 0, syncs: 0 };
+    const sessions = createFakeSessions();
+    const attention = createFakeAttention();
+    const approvals = createFakeApprovals();
+    const approvalPolicy = createFakeApprovalPolicy();
+    const pairing = createFakePairing();
+    const projects = createFakeProjects();
+    const catalogue = createFakeCatalogue();
+    const docs = createFakeDocs();
+    const graphs = createFakeGraphs();
+    const graphRuns = createFakeGraphRuns();
+    const terminal = createFakeTerminal();
+    const push = createFakePush();
+    const broadcast = createClients({
+      hubId: HUB_ID,
+      state: createFleetState({ logger }),
+      timers: createFakeTimers(),
+      logger,
+      readLayout: async () => {
+        calls.layoutReads += 1;
+        return [];
+      },
+      readPaneLayout: async () => {
+        calls.paneReads += 1;
+        return null;
+      },
+      writePaneLayout: async () => {
+        calls.paneWrites += 1;
+      },
+      sessions,
+      attention,
+      approvals,
+      approvalPolicy,
+      pairing,
+      syncServers: async () => {
+        calls.syncs += 1;
+      },
+      projects,
+      catalogue,
+      docs,
+      graphs,
+      graphRuns,
+      terminal,
+      push,
+    });
+    const records = {
+      starts: sessions.starts,
+      placements: sessions.placements,
+      stops: sessions.stops,
+      pauses: sessions.pauses,
+      resumes: sessions.resumes,
+      transcripts: sessions.transcripts,
+      acknowledged: attention.acknowledged,
+      mutes: attention.mutes,
+      registered: pairing.registered,
+      revoked: pairing.revoked,
+      listed: projects.listed,
+      projectsCreated: projects.created,
+      asked: catalogue.asked,
+      queried: catalogue.queried,
+      docsCreated: docs.created,
+      docsSaved: docs.saved,
+      docsOpened: docs.opened,
+      graphsCreated: graphs.created,
+      graphsSaved: graphs.saved,
+      publishes: graphs.publishes,
+      graphsOpened: graphs.opened,
+      runStarts: graphRuns.starts,
+      cancels: graphRuns.cancels,
+      reads: graphRuns.reads,
+      histories: graphRuns.histories,
+      opens: graphRuns.opens,
+      simulations: graphRuns.simulations,
+      subscribed: terminal.subscribed,
+      unsubscribed: terminal.unsubscribed,
+      typed: terminal.typed,
+      resized: terminal.resized,
+      noted: terminal.noted,
+      decided: approvals.decided,
+      stored: push.stored,
+      held: [...approvalPolicy.held.entries()],
+    };
+    return { broadcast, calls, records, terminal };
+  }
+
+  it('has a sample for every frame the protocol carries', () => {
+    const carried = clientFrameSchema.options
+      .map((option) => option.shape.type.value)
+      .filter((type) => type !== 'hello' && type !== 'protocol-error');
+
+    expect(Object.keys(SAMPLES).sort()).toEqual(carried.sort());
+  });
+
+  it.each(Object.entries(SAMPLES))(
+    'refuses %s, closes, and reaches nothing',
+    async (key, sample) => {
+      expect(sample.type).toBe(key);
+      const { broadcast, calls, records, terminal } = wired();
+      const client = attach(broadcast);
+
+      await client.say(sample);
+      await settle();
+
+      expect(client.received).toEqual([
+        {
+          type: 'refusal',
+          replyTo: 1,
+          code: 'bad-request',
+          message: 'the first frame on a connection is a hello',
+          holder: null,
+        },
+      ]);
+      expect(client.socket.closure).toMatchObject({ code: CLOSE_POLICY, reason: 'hello first' });
+      expect(calls).toEqual({ layoutReads: 0, paneReads: 0, paneWrites: 0, syncs: 0 });
+      for (const [name, record] of Object.entries(records)) {
+        expect({ [name]: record }).toEqual({ [name]: [] });
+      }
+      // The one thing a closed socket does touch: the relay is told this
+      // watcher is gone, which is the same detach every close takes.
+      expect(terminal.forgotten).toHaveLength(1);
+    },
+  );
 });
