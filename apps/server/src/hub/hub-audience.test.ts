@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createLogger } from '@agentplex/node-shared';
 import type { ServerToHubFrame, StoreId } from '@agentplex/protocol';
-import type { GrantId } from '@agentplex/providers';
+import type { GrantId } from '../grants/server-grants.js';
 import { createHubAudience, type HubMember } from './hub-audience.js';
 import { createFakeSessionController } from '../sessions/fake-session-controller.js';
 

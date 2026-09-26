@@ -10,7 +10,8 @@ import type { Clock, IdGenerator } from '@agentplex/node-shared';
 import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
 import { createFakePtyFactory, type FakePtyFactory } from '@agentplex/pty/testing';
 import { createPtySupervisor, type PtySignal, type PtySupervisor } from '@agentplex/pty';
-import type { GrantId, Launch, LaunchPlan } from '@agentplex/providers';
+import type { Launch, LaunchPlan } from '@agentplex/providers';
+import type { GrantId } from '../grants/server-grants.js';
 import { createTerminalManager, KILL_GRACE_MS, type TerminalManager } from './terminal-manager.js';
 
 const STORE = storeDescriptorSchema.parse({ storeId: 'store-a', path: '/volumes/claude' });

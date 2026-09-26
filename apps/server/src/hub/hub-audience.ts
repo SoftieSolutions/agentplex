@@ -1,6 +1,6 @@
 import type { FrameId, ServerToHubFrame, SessionStartTag, StoreId } from '@agentplex/protocol';
 import type { Logger } from '@agentplex/node-shared';
-import type { GrantId } from '@agentplex/providers';
+import type { GrantId } from '../grants/server-grants.js';
 import type { SessionController } from '../sessions/session-control.js';
 
 /**

@@ -1,4 +1,4 @@
-import type { FileRead } from './store-identity.js';
+import type { FileRead } from '@agentplex/providers';
 import type { FileWrite, GrantFileSystem } from './server-grants.js';
 
 export interface FakeGrantFilesOptions {

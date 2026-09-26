@@ -13,13 +13,13 @@ import { createLogger, type LogRecord } from '@agentplex/node-shared';
 import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
 import { createProviderRegistry, type ProviderPreflight } from '@agentplex/providers';
 import {
-  createFakeGrantFiles,
   createFakeProcessRunner,
   createFakeStoreFiles,
   missingProvider,
   readyProvider,
   type FakeProcessRunner,
 } from '@agentplex/providers/testing';
+import { createFakeGrantFiles } from './grants/fake-grant-files.js';
 import type { Launch, LaunchPlan } from '@agentplex/providers';
 import type { PtySignal } from '@agentplex/pty';
 import { startRuntime, type Runtime } from './boot.js';

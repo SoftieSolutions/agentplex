@@ -24,7 +24,9 @@ import {
   type MessageSocket,
   type Logger,
 } from '@agentplex/node-shared';
-import type { GrantAuthority, GrantId, ServerIdentity } from '@agentplex/providers';
+import type { ServerIdentity } from '@agentplex/providers';
+import type { GrantId } from '../grants/server-grants.js';
+import type { GrantAuthority } from '../grants/server-grant-store.js';
 import type { ApprovalGate } from '../approvals/approval-gate.js';
 import type { DirectoryBrowser } from '../directories/directory-browse.js';
 import type { HubAudience, HubMember } from './hub-audience.js';
