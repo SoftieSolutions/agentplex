@@ -1,10 +1,11 @@
-import { existsSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import js from '@eslint/js';
 import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
+import { declaredDependency } from './scripts/eslint/declared-dependency.js';
+import { memberRootOf } from './scripts/eslint/member-root.js';
 
 /**
  * Workspace boundaries (AGX-9).
@@ -14,6 +15,11 @@ import tseslint from 'typescript-eslint';
  * nothing else crosses a package line. Enforcing it here
  * means a violation fails on the contributor's machine and in CI, rather than
  * being discovered when someone tries to split the packages apart.
+ *
+ * The manifest is the list (AGX-301): `agentplex/declared-dependency`, in
+ * `scripts/eslint/`, reads each member's `package.json` and refuses a bare
+ * import of anything it does not declare, and of a devDependency outside a
+ * test. The blocks below add only what a manifest cannot say.
  */
 // The client took its publishable name, `@softiesolutions/agentplex-web`, so
 // that the hub can name one specifier that resolves in a checkout, in the image
@@ -45,18 +51,6 @@ const forbidAppInternals = {
  * Static imports only: a dynamic `import()` is seen neither here nor by
  * no-restricted-imports.
  */
-const memberRoots = new Map();
-const memberRootOf = (path) => {
-  if (!memberRoots.has(path)) {
-    const parent = dirname(path);
-    memberRoots.set(
-      path,
-      existsSync(join(path, 'package.json')) ? path : parent === path ? null : memberRootOf(parent),
-    );
-  }
-  return memberRoots.get(path);
-};
-
 const stayInMember = {
   meta: {
     type: 'problem',
@@ -260,9 +254,14 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
     },
-    plugins: { agentplex: { rules: { 'stay-in-member': stayInMember } } },
+    plugins: {
+      agentplex: {
+        rules: { 'stay-in-member': stayInMember, 'declared-dependency': declaredDependency },
+      },
+    },
     rules: {
       'agentplex/stay-in-member': 'error',
+      'agentplex/declared-dependency': 'error',
       '@typescript-eslint/consistent-type-imports': ['error', { fixStyle: 'inline-type-imports' }],
       '@typescript-eslint/no-unused-vars': [
         'error',
@@ -281,6 +280,12 @@ export default tseslint.config(
     // tests hold it to. Code that ships may not, because nothing under
     // `scripts` is in a published package for it to find at runtime.
     files: ['**/*.test.ts', '**/*.test.tsx', '**/vite.config.ts', '**/vitest.config.ts'],
+    rules: { 'agentplex/stay-in-member': ['error', { reachable: ['scripts'] }] },
+  },
+  {
+    // This file, for the same reason: its own rules live in `scripts/eslint`,
+    // and like a test configuration it runs in a checkout and ships nowhere.
+    files: ['eslint.config.js'],
     rules: { 'agentplex/stay-in-member': ['error', { reachable: ['scripts'] }] },
   },
   {
@@ -352,20 +357,15 @@ export default tseslint.config(
     },
   },
   {
-    // A package's dependency list is its allowed import set (AGX-91). This one
-    // is the seam the hub and the server share -- clocks, ids, the logger, the
-    // message socket -- and it may reach only `protocol` in the workspace: a
-    // dependency on `providers` or `pty` would put the seam above the things
-    // that are supposed to sit on it.
+    // The seam the hub and the server share -- clocks, ids, the logger, the
+    // message socket. Its manifest names `protocol` and no other workspace
+    // package, and `declared-dependency` holds it to that: a dependency on
+    // `providers` or `pty` would put the seam above the things that are
+    // supposed to sit on it.
     files: ['packages/node-shared/**/*.ts'],
     languageOptions: { globals: globals.node },
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports([
-        {
-          group: ['@agentplex/*', '!@agentplex/protocol'],
-          message:
-            'packages/node-shared may import @agentplex/protocol and no other workspace package.',
-        },
         {
           group: ['node:child_process', 'child_process'],
           message:
@@ -384,11 +384,6 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports([
         {
-          group: ['@agentplex/*', '!@agentplex/protocol', '!@agentplex/node-shared'],
-          message:
-            'packages/providers may import @agentplex/protocol and @agentplex/node-shared and no other workspace package.',
-        },
-        {
           group: ['node:child_process', 'child_process'],
           message:
             'Starting a child directly bypasses the operation registry. Add an operation and run it through the injected ProcessRunner.',
@@ -405,16 +400,6 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
     rules: {
       '@typescript-eslint/no-restricted-imports': restrictedImports([
-        {
-          group: [
-            '@agentplex/*',
-            '!@agentplex/protocol',
-            '!@agentplex/node-shared',
-            '!@agentplex/providers',
-          ],
-          message:
-            'packages/pty may import @agentplex/protocol, @agentplex/node-shared and @agentplex/providers and no other workspace package.',
-        },
         {
           group: ['node:child_process', 'child_process'],
           message:
@@ -573,15 +558,7 @@ export default tseslint.config(
     // convenience. Nothing here is reachable from a socket, a frame or a
     // running daemon.
     files: ['packages/providers/src/capture-claude-permission-fixture.test.ts'],
-    rules: {
-      '@typescript-eslint/no-restricted-imports': restrictedImports([
-        {
-          group: ['@agentplex/*', '!@agentplex/protocol', '!@agentplex/node-shared'],
-          message:
-            'packages/providers may import @agentplex/protocol and @agentplex/node-shared and no other workspace package.',
-        },
-      ]),
-    },
+    rules: { '@typescript-eslint/no-restricted-imports': restrictedImports([]) },
   },
   {
     // The other exceptions, which are not service code at all. One suite's
