@@ -1,0 +1,60 @@
+[Unit]
+Description=agentplex server
+Documentation=https://github.com/SoftieSolutions/agentplex/blob/master/apps/cli/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentplex
+Group=agentplex
+WorkingDirectory=/var/lib/agentplex
+EnvironmentFile=/etc/agentplex/agentplex.env
+# The prefix goes first, and the directory holding the node this install
+# settled on comes with it when that is somewhere a service would never look --
+# /opt/agentplex/node/bin, or a version manager's shims.
+#
+# The reason is no longer ExecStart. That line names the interpreter and the
+# script outright, so it resolves nothing through this PATH and cannot be the
+# #!/usr/bin/env node failure it used to be. What is left is everything the
+# daemon starts afterwards, and it is reason enough on its own: a session is not
+# only the agent, it shells out to git, rg and whatever else the project needs,
+# and the coding agents agentplex setup installs into the prefix's bin are
+# themselves scripts whose first line is #!/usr/bin/env node, which finds
+# nothing unless the runtime's own directory is named here. In front of the rest
+# of the machine rather than instead of it.
+Environment=PATH=/opt/agentplex/bin:/opt/agentplex/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/agentplex/node/bin/node /opt/agentplex/lib/node_modules/@softiesolutions/agentplex-server/apps/server/dist/main.js
+ExecReload=/bin/sh -c 'kill -HUP $MAINPID'
+Restart=on-failure
+RestartSec=5s
+# Exit 2 is the daemon saying the configuration is wrong. Restarting will not
+# help and the operator has to act, so the unit stops instead of hiding the
+# message in a restart loop.
+RestartPreventExitStatus=2
+# SIGTERM is the default and the signal main.ts shuts down on. The server drains
+# first -- it waits for the turns it is holding to reach a boundary -- and that
+# wait is only worth anything because systemd signals the server alone: the
+# server's unit carries KillMode=mixed, so the agents it is waiting for are not
+# sent the same SIGTERM in the same millisecond, and whatever is left in the
+# cgroup is SIGKILLed once the server exits. The drain and TimeoutStopSec lines
+# are the one number that bounds both halves of the drain: the daemon stops
+# waiting with the margin still to go, and systemd's SIGKILL is what it is
+# racing. A second SIGTERM means the operator is done waiting and skips to the
+# kill -- sent with `systemctl kill --kill-whom=main`, because a bare
+# `systemctl kill` signals every process in the unit whatever KillMode says.
+# The hub ignores the drain setting; both daemons share this unit template.
+KillMode=mixed
+Environment=AGENTPLEX_SERVER_DRAIN_SECONDS=15
+TimeoutStopSec=20s
+
+# There is deliberately no sandboxing here -- no ProtectHome, no
+# ProtectSystem=strict, no NoNewPrivileges. This service's job is to run a
+# developer's own tooling as that developer, against their home directory and
+# their checkouts, and every one of those directives turns that job into a
+# failure that reads like a bug in the agent. The isolation that matters is the
+# account this runs as, and that is settled by where this unit lives: a user
+# unit runs as its user, and the system unit carries User=.
+
+[Install]
+WantedBy=multi-user.target

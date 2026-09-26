@@ -1,46 +1,32 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   SETTINGS_FILE_NAME,
+  SYSTEM_ACCOUNT,
   SYSTEM_CONFIG_DIR,
   SYSTEM_PREFIX,
   SYSTEM_STATE_DIR,
   SYSTEM_UNIT_DIR,
+  binDirectory,
   nodeBinary,
   nodeStampFile,
   packageDirectory,
+  stateDirectory,
   systemLayout,
   unitFile,
   userLayout,
 } from './layout.js';
+import { INSTALL_SCRIPT, declared } from './test-install-script.js';
 
 /**
  * The two layouts, held against the script that creates them.
  *
- * This is the only tie there can be. `install.sh` is fetched over HTTPS and run
- * on a machine with nothing on it, so it can import nothing and nothing can
- * import it -- which leaves its own source text, read here the way
- * `install.sh.integration.test.ts` reads the assembler's table to hold the
- * script against it. The failure this stops is a rename in one of the two
- * places: an installer that writes `/etc/agentplex/agentplex.env` and a `status`
- * that looks in `/etc/agentplex.env` is a command that reports every correctly
- * installed fleet machine as having no agentplex on it.
- *
- * Read as `readonly NAME='value'` because that is the one shape the script
- * declares these in, and a constant that stopped being `readonly` would fail
- * here rather than silently stop being checked.
+ * The failure this stops is a rename in one of the two places: an installer
+ * that writes `/etc/agentplex/agentplex.env` and a `status` that looks in
+ * `/etc/agentplex.env` is a command that reports every correctly installed
+ * fleet machine as having no agentplex on it. How the script is read is
+ * `test-install-script.ts`.
  */
-const SCRIPT = readFileSync(
-  fileURLToPath(new URL('../../../../scripts/install.sh', import.meta.url)),
-  'utf8',
-);
-
-function declared(name: string): string {
-  const found = new RegExp(`^readonly ${name}='([^']*)'$`, 'm').exec(SCRIPT)?.[1];
-  expect(found, `install.sh declares no ${name}`).toBeDefined();
-  return found ?? '';
-}
+const SCRIPT = INSTALL_SCRIPT;
 
 describe('the layouts', () => {
   it('put the fleet install where install.sh puts it', () => {
@@ -104,5 +90,22 @@ describe('the layouts', () => {
     // The stamp's name, and the directory it goes in, both out of the script.
     expect(declared('NODE_STAMP')).toBe('.agentplex-node-version');
     expect(SCRIPT).toContain('NODE_HOME="$PREFIX/node"');
+  });
+
+  it('keep state where resolve_layout does: in the prefix, or under /var/lib for the fleet', () => {
+    expect(stateDirectory(userLayout('/home/alice'))).toBe('/home/alice/.agentplex');
+    expect(stateDirectory(userLayout('/home/alice', '/srv/agentplex'))).toBe('/srv/agentplex');
+    // Moving the fleet prefix does not move its state: the account's home is
+    // the state directory, and `useradd` was told so.
+    expect(stateDirectory(systemLayout('/srv/agentplex'))).toBe(SYSTEM_STATE_DIR);
+    expect(SCRIPT).toContain('STATE_DIR="$PREFIX"');
+    expect(SCRIPT).toContain('STATE_DIR="$SYSTEM_STATE_DIR"');
+  });
+
+  it('put the bin directory inside the prefix, and name the fleet account as the script does', () => {
+    expect(binDirectory(userLayout('/home/alice'))).toBe('/home/alice/.agentplex/bin');
+    expect(binDirectory(systemLayout())).toBe('/opt/agentplex/bin');
+    expect(SCRIPT).toContain('BIN_DIR="$PREFIX/bin"');
+    expect(SYSTEM_ACCOUNT).toBe(declared('SYSTEM_ACCOUNT'));
   });
 });

@@ -119,7 +119,7 @@ describe('the agentplex bin', { timeout: RUN_TIMEOUT_MS }, () => {
     expect(result.stdout).toContain('Usage: agentplex <command> [options]');
     // The table is the words that do something, and `hub` and `server` are not
     // among them.
-    for (const name of ['setup', 'start', 'stop', 'status', 'doctor', 'help']) {
+    for (const name of ['setup', 'install', 'start', 'stop', 'status', 'doctor', 'help']) {
       expect(result.stdout).toMatch(new RegExp(`^ {2}${name} {2,}\\S`, 'm'));
     }
     for (const daemon of ['hub', 'server']) {

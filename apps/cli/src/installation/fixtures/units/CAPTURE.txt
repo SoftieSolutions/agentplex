@@ -1,0 +1,53 @@
+The units scripts/install.sh --print-unit prints, captured from the script
+itself so that unit-file.ts is held against real output rather than against a
+copy somebody typed.
+
+Script: scripts/install.sh at 1b91a6c2ffaa2d8a982a1f11e60c33d7604df140
+  (AGX-321: the server unit stops with KillMode=mixed so its agents are left to
+  the drain), master's, which is the render_unit this branch has once it is
+  rebased onto it. A change to render_unit re-captures every file here.
+
+Captured on 2026-09-26 from the repository root, with docker. The script was
+taken out of that commit rather than the working tree,
+
+  git show 1b91a6c:scripts/install.sh >install.sh
+
+and that file is what the commands below mount as $PWD/scripts/install.sh.
+
+The six user and system fixtures, in debian:bookworm-slim
+(debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251).
+The image has no node, so resolve_node_directory answers <prefix>/node/bin.
+User fixtures run as a non-root user alice and system fixtures as root, because
+resolve_layout refuses root without --system and --system without root:
+
+  docker run --rm \
+    -v "$PWD/scripts/install.sh:/src/install.sh:ro" \
+    -v "$PWD/apps/cli/src/installation/fixtures/units:/out" \
+    -v "$PWD/capture.sh:/capture.sh:ro" \
+    debian:bookworm-slim bash /capture.sh
+
+where capture.sh is:
+
+  set -euo pipefail
+  useradd --create-home --home-dir /home/alice alice
+  for role in hub server both; do
+    runuser -u alice -- env -i HOME=/home/alice PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+      bash /src/install.sh --print-unit --role="$role" >"/out/$role-user.service"
+    env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+      bash /src/install.sh --print-unit --role="$role" --system >"/out/$role-system.service"
+  done
+
+The adopted-runtime fixture, server-user-adopted.service, in
+node:24-bookworm-slim
+(node@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6,
+node v24.21.0 at /usr/local/bin/node). No runtime under the prefix, so
+resolve_node_directory adopts the node on PATH, and /usr/local/bin is one of
+the directories unit_search_path already lists, so it is not named twice:
+
+  docker run --rm \
+    -v "$PWD/scripts/install.sh:/src/install.sh:ro" \
+    -v "$PWD/apps/cli/src/installation/fixtures/units:/out" \
+    node:24-bookworm-slim bash -c 'set -euo pipefail;
+      useradd --create-home --home-dir /home/alice alice;
+      runuser -u alice -- env -i HOME=/home/alice PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        bash /src/install.sh --print-unit --role=server >/out/server-user-adopted.service'
