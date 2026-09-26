@@ -13,7 +13,11 @@ import {
   resolveWithRegistry,
   type ClaudeRegistry,
 } from './claude-registry.js';
-import { claudeTranscriptActivities, parseClaudeTranscript } from './claude-transcript.js';
+import {
+  claudeTranscriptActivities,
+  parseClaudeTranscript,
+  type ClaudeTranscriptParse,
+} from './claude-transcript.js';
 import {
   TRANSCRIPT_TAIL_MAX_BYTES,
   type DiscoveredSession,
@@ -28,6 +32,7 @@ import {
   type TranscriptRequest,
 } from './provider-adapter.js';
 import type { ProviderFiles } from './provider-files.js';
+import { createTranscriptCache, type TranscriptScan } from './scan-cache.js';
 
 /**
  * The Claude Code adapter.
@@ -72,6 +77,13 @@ export interface ClaudeAdapterDependencies {
 }
 
 export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies): ProviderAdapter {
+  // Held for the life of the adapter, which is the life of the server: what a
+  // transcript parsed to last scan is the answer this scan too, until its size
+  // or mtime moves. The parse is what is kept and not the session built from
+  // it, because the registry half of a session is re-read every scan and is
+  // exactly the part that changes while the file stays still.
+  const transcripts = createTranscriptCache({ files, parse: parseClaudeTranscript });
+
   return {
     provider: 'claude',
 
@@ -86,11 +98,14 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
         files,
         probe,
       );
+      const scan = transcripts.scan(store.path);
       const found = await discoverSessions(
         join(store.path, CLAUDE_PROJECTS_DIRECTORY),
         files,
+        scan,
         registry,
       );
+      scan.finish();
 
       return { sessions: found.sessions, problems: [...registry.problems, ...found.problems] };
     },
@@ -149,6 +164,7 @@ export function createClaudeAdapter({ files, probe }: ClaudeAdapterDependencies)
 async function discoverSessions(
   projects: string,
   files: ProviderFiles,
+  scan: TranscriptScan<ClaudeTranscriptParse>,
   registry: ClaudeRegistry,
 ): Promise<ProviderDiscovery> {
   const listing = await files.listDirectory(projects);
@@ -164,7 +180,7 @@ async function discoverSessions(
 
   for (const entry of listing.entries) {
     if (entry.kind !== 'directory') continue;
-    await readProject(join(projects, entry.name), files, registry, sessions, problems);
+    await readProject(join(projects, entry.name), files, scan, registry, sessions, problems);
   }
 
   return { sessions, problems };
@@ -173,6 +189,7 @@ async function discoverSessions(
 async function readProject(
   project: string,
   files: ProviderFiles,
+  scan: TranscriptScan<ClaudeTranscriptParse>,
   registry: ClaudeRegistry,
   sessions: DiscoveredSession[],
   problems: DiscoveryProblem[],
@@ -196,7 +213,7 @@ async function readProject(
       continue;
     }
 
-    const read = await files.readFile(path);
+    const read = await scan.read(path);
     if (read.kind === 'failed') {
       problems.push({ subject: path, problem: `cannot read transcript: ${read.reason}` });
       continue;
@@ -205,7 +222,7 @@ async function readProject(
     // session this server failed to report.
     if (read.kind === 'missing') continue;
 
-    const parsed = parseClaudeTranscript(read.contents);
+    const parsed = read.parse;
     if (parsed.ok) {
       // Registry first, transcript as the fallback. The file says what was
       // written; the verified registry entry says what is happening, and only
