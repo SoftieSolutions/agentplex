@@ -229,11 +229,15 @@ module or a test runner's configuration.
 `pnpm lint` enforces it by reading each member's manifest, so declaring a
 dependency is the whole of allowing one.
 
-No app imports another. Lint refuses reaching into another app's source by
-path, and any import of the web client's package, which the hub declares only
-to find the files it serves. Any other app is refused by name only because no
-manifest declares it, so a dependency on an app is the change review has to
-catch.
+No app imports another. For a static import -- `import`, `import type`,
+`export ... from` -- lint refuses reaching into another app's source by path,
+and naming the web client's package, which the hub declares only to find the
+files it serves. Neither check sees a dynamic `import()`:
+`import('../../hub/src/hub.js')` in the server and
+`import('@softiesolutions/agentplex-web')` in the hub both lint clean. Any other
+app named by its package name, statically or not, is refused only because no
+manifest declares it. Those are the changes review has to catch: a dynamic
+import that crosses into another app, and a dependency on an app.
 
 `packages/protocol` is shared by a Node service and a browser bundle, so it may
 use neither Node builtins nor another workspace package.

@@ -79,7 +79,8 @@ tests/hub-server/      the hub driven against the real server end, both in one p
 
 A package is a seam with at least two consumers, and no app imports another.
 Lint holds every package import to the importing member's own `package.json`,
-and refuses one app reaching into another's source by path.
+and refuses a static import that reaches into another app's source by path; a
+dynamic `import()` by path it does not see.
 
 ## Running it
 
