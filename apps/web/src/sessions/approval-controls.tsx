@@ -1,7 +1,7 @@
 import { useState, type JSX, type MouseEvent } from 'react';
 import type { ApprovalDecision, ApprovalId, ApprovalOutcome, FrameId } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
-import { useHubSnapshot } from '../store/use-hub-store.js';
+import { shallowEqual, useHubSelector } from '../store/use-hub-store.js';
 import { Box, Button, Group, Text } from '../ui/components.js';
 import { colorForRole, colorForTone, type Scheme } from '../ui/tokens.js';
 import { approvalFollowUp, decideCommand } from './approval-model.js';
@@ -155,9 +155,28 @@ export function ApprovalControls({
   project,
   size = 'sm',
 }: ApprovalControlsProps): JSX.Element | null {
-  const snapshot = useHubSnapshot(store);
   const [answer, setAnswer] = useState<ApprovalAnswer | null>(null);
   const [rule, setRule] = useState<ApprovalAnswer | null>(null);
+  // An answer to some other request is not this one's business. Not cleared
+  // either: there is nothing to clear it from, and a stale object that matches
+  // nothing is already idle. Read before the guard below because the hooks
+  // that select on them must be, with `null` standing in for no request.
+  const current = approval?.approvalId ?? null;
+  const sent = answer !== null && answer.approvalId === current ? answer : null;
+  const written = rule !== null && rule.approvalId === current ? rule : null;
+  // The two answers this control draws and nothing else off the snapshot, one
+  // selection each so each compares one level deep. Inline because they read
+  // component state.
+  const followUp = useHubSelector(
+    store,
+    (snapshot) => approvalFollowUp(sent?.frameId ?? null, snapshot.answers),
+    shallowEqual,
+  );
+  const ruleFollowUp = useHubSelector(
+    store,
+    (snapshot) => policyFollowUp(written?.frameId ?? null, snapshot.answers),
+    shallowEqual,
+  );
 
   if (approval === null) return null;
   // Read out here rather than inside the handler: a function declaration is
@@ -169,11 +188,6 @@ export function ApprovalControls({
   // from can be an id or a suggestion.
   const request = { tool: approval.tool, proposal: approval.proposal };
 
-  // An answer to some other request is not this one's business. Not cleared
-  // either: there is nothing to clear it from, and a stale object that matches
-  // nothing is already idle.
-  const sent = answer !== null && answer.approvalId === approvalId ? answer : null;
-  const followUp = approvalFollowUp(sent?.frameId ?? null, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : (sent?.refusal ?? null);
   // Disabled while the hub has not answered, and once it has: a request that
   // has ended has ended, and a live Allow over a settled one would be a button
@@ -202,8 +216,6 @@ export function ApprovalControls({
    * rule over a granted request must not read as a request that went nowhere,
    * and a granted request must not imply a rule was saved.
    */
-  const written = rule !== null && rule.approvalId === approvalId ? rule : null;
-  const ruleFollowUp = policyFollowUp(written?.frameId ?? null, snapshot.answers);
   const ruleWords =
     ruleFollowUp.kind === 'refused'
       ? `the rule was not added: ${ruleFollowUp.words}`

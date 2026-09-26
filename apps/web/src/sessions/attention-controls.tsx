@@ -2,7 +2,7 @@ import { useState, type JSX, type MouseEvent } from 'react';
 import type { FrameId } from '@agentplex/protocol';
 import type { HubCommand } from '../store/commands.js';
 import type { HubStore } from '../store/hub-store.js';
-import { useHubSnapshot } from '../store/use-hub-store.js';
+import { shallowEqual, useHubSelector } from '../store/use-hub-store.js';
 import { Button, Group, Text } from '../ui/components.js';
 import { colorForTone, type Scheme } from '../ui/tokens.js';
 import {
@@ -47,17 +47,22 @@ export function AttentionControls({
   scheme,
   size = 'xs',
 }: AttentionControlsProps): JSX.Element | null {
-  const snapshot = useHubSnapshot(store);
   /** The frame awaiting an answer, or `null` while none is. */
   const [pending, setPending] = useState<FrameId | null>(null);
   /** The store's own "no" -- an overflowed queue, a failed connection. */
   const [rejected, setRejected] = useState<string | null>(null);
+  // Only the answer these buttons draw; the session's facts come in on `item`.
+  // Inline because it reads `pending`.
+  const followUp = useHubSelector(
+    store,
+    (snapshot) => attentionFollowUp(pending, snapshot.answers),
+    shallowEqual,
+  );
 
   const acknowledges = offersAcknowledge(item);
   const mutes = offersMute(item);
   if (!acknowledges && !mutes) return null;
 
-  const followUp = attentionFollowUp(pending, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : rejected;
   const waiting = followUp.kind === 'waiting';
 

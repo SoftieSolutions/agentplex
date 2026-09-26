@@ -1,7 +1,7 @@
 import { useState, type JSX, type MouseEvent } from 'react';
 import type { FrameId, SessionHolder, SessionRef } from '@agentplex/protocol';
 import type { HubStore } from '../store/hub-store.js';
-import { useHubSnapshot } from '../store/use-hub-store.js';
+import { shallowEqual, useHubSelector } from '../store/use-hub-store.js';
 import { Button, Group, Text } from '../ui/components.js';
 import { colorForTone, type Scheme } from '../ui/tokens.js';
 import {
@@ -45,15 +45,20 @@ export function PauseButton({
   scheme,
   size = 'xs',
 }: PauseButtonProps): JSX.Element | null {
-  const snapshot = useHubSnapshot(store);
   /** The pause or resume awaiting an answer, or `null` while none is. */
   const [pending, setPending] = useState<FrameId | null>(null);
   /** The store's own "no" -- an overflowed queue, a failed connection. */
   const [rejected, setRejected] = useState<string | null>(null);
+  // Only the answer this button draws; the holder is a prop. Inline because
+  // it reads `pending`.
+  const followUp = useHubSelector(
+    store,
+    (snapshot) => pauseFollowUp(pending, snapshot.answers),
+    shallowEqual,
+  );
 
   if (!offersPause(holder) && !offersResume(holder)) return null;
 
-  const followUp = pauseFollowUp(pending, snapshot.answers);
   const refused = followUp.kind === 'refused' ? followUp.words : rejected;
   const resuming = offersResume(holder);
   const note = pauseNote(holder);
