@@ -77,9 +77,10 @@ describe('the program names', () => {
     }
   });
 
-  it('carry the six commands this app holds, and no daemon among them', () => {
+  it('carry the seven commands this app holds, and no daemon among them', () => {
     expect(namesOfKind('command')).toEqual([
       'doctor',
+      'install',
       'setup',
       'start',
       'status',
