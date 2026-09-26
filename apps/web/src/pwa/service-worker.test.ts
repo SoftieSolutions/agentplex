@@ -13,9 +13,10 @@ import { parseSessionHash, sessionHash } from '../terminal/session-route.js';
  * can import it. That leaves one honest seam: read the shipped file and run it
  * as a script in a context whose globals are fakes -- a `self` that collects
  * handlers, a `registration` that collects notifications, a `clients` that
- * says which windows are open, and a `caches` that records every touch. The
- * worker is exercised exactly as it will be: by dispatching a `push` and a
- * `notificationclick` at the handlers it registered.
+ * says which windows are open, a `caches` that records every touch, a `fetch`
+ * the test decides the fate of, and timers that fire only when the test says
+ * so. The worker is exercised exactly as it will be: by dispatching a `push`,
+ * a `notificationclick` and a navigation `fetch` at the handlers it registered.
  *
  * That the file runs at all is half of what this suite is for. It is outside
  * the module graph and outside `tsc`, so a syntax error in it is invisible to
@@ -42,6 +43,30 @@ interface FakeWindow {
   readonly refusesNavigation?: boolean;
 }
 
+/** A timer the worker scheduled and the test has not yet fired or seen cleared. */
+interface FakeTimer {
+  readonly delay: number;
+  readonly fire: () => void;
+}
+
+interface WorkerOptions {
+  /**
+   * What the worker's `fetch` does. The default throws, which no existing
+   * suite reaches: only a navigation calls it.
+   */
+  readonly fetch?: () => Promise<unknown>;
+  /** What `caches.match` answers: the shell a previous visit left behind. */
+  readonly cachedShell?: unknown;
+}
+
+/** One navigation handed to the worker without waiting on anything it started. */
+interface Navigation {
+  /** The promise the worker passed to `respondWith`. */
+  readonly response: Promise<unknown>;
+  /** Everything the worker passed to `waitUntil`. */
+  readonly background: readonly Promise<unknown>[];
+}
+
 interface Harness {
   /**
    * Sends one event to the handler the worker registered for `type` and waits
@@ -50,6 +75,21 @@ interface Harness {
    * shows nothing, and browsers penalise that.
    */
   dispatch(type: string, event: Record<string, unknown>): Promise<void>;
+  /**
+   * Sends a navigation `fetch` and returns at once. `dispatch` would wait on
+   * the worker's `waitUntil`, which for a network that never answers is never.
+   */
+  navigate(): Navigation;
+  /** Fires every timer still scheduled, in the order they were set. */
+  fireTimers(): void;
+  /** The delay of every timer the worker ever scheduled. */
+  readonly scheduledDelays: readonly number[];
+  /** How many scheduled timers have neither fired nor been cleared. */
+  readonly liveTimers: number;
+  /** How many times the worker called `fetch`. */
+  readonly fetches: number;
+  /** The worker's own `SHELL_NETWORK_TIMEOUT_MS`, read out of its realm. */
+  readonly shellNetworkTimeoutMs: number;
   readonly shown: ShownNotification[];
   readonly opened: readonly string[];
   readonly windows: readonly FakeWindow[];
@@ -80,12 +120,19 @@ function windowClient(scope: { windows: FakeWindow[] }, entry: FakeWindow): obje
   };
 }
 
-async function loadServiceWorker(windows: FakeWindow[] = []): Promise<Harness> {
+async function loadServiceWorker(
+  windows: FakeWindow[] = [],
+  options: WorkerOptions = {},
+): Promise<Harness> {
   const source = await readFile(WORKER_SOURCE, 'utf8');
   const handlers = new Map<string, (event: unknown) => void>();
   const shown: ShownNotification[] = [];
   const opened: string[] = [];
   const cacheTouches: string[] = [];
+  const timers = new Map<number, FakeTimer>();
+  const scheduledDelays: number[] = [];
+  let nextTimer = 1;
+  let fetches = 0;
 
   const caches = {
     keys: (): Promise<string[]> => {
@@ -94,11 +141,16 @@ async function loadServiceWorker(windows: FakeWindow[] = []): Promise<Harness> {
     },
     open: (): Promise<unknown> => {
       cacheTouches.push('open');
-      return Promise.resolve({ put: () => Promise.resolve(undefined) });
+      return Promise.resolve({
+        put: (): Promise<undefined> => {
+          cacheTouches.push('put');
+          return Promise.resolve(undefined);
+        },
+      });
     },
     match: (): Promise<unknown> => {
       cacheTouches.push('match');
-      return Promise.resolve(undefined);
+      return Promise.resolve(options.cachedShell);
     },
     delete: (): Promise<boolean> => {
       cacheTouches.push('delete');
@@ -112,6 +164,21 @@ async function loadServiceWorker(windows: FakeWindow[] = []): Promise<Harness> {
     URL,
     caches,
     console,
+    fetch: (): Promise<unknown> => {
+      fetches += 1;
+      if (options.fetch === undefined) throw new Error('this test gave the worker no network');
+      return options.fetch();
+    },
+    setTimeout: (fire: () => void, delay: number): number => {
+      const id = nextTimer;
+      nextTimer += 1;
+      scheduledDelays.push(delay);
+      timers.set(id, { delay, fire });
+      return id;
+    },
+    clearTimeout: (id: number): void => {
+      timers.delete(id);
+    },
     addEventListener: (type: string, handler: (event: unknown) => void): void => {
       handlers.set(type, handler);
     },
@@ -153,6 +220,43 @@ async function loadServiceWorker(windows: FakeWindow[] = []): Promise<Harness> {
         waitUntil: (promise: Promise<unknown>) => pending.push(promise),
       });
       await Promise.all(pending);
+    },
+    navigate() {
+      const handler = handlers.get('fetch');
+      if (handler === undefined) throw new Error('sw.js registered no fetch handler');
+      let response: Promise<unknown> | undefined;
+      const background: Promise<unknown>[] = [];
+      handler({
+        request: { mode: 'navigate' },
+        respondWith: (promise: Promise<unknown>) => {
+          response = promise;
+        },
+        waitUntil: (promise: Promise<unknown>) => background.push(promise),
+      });
+      if (response === undefined) throw new Error('sw.js did not answer a navigation');
+      return { response, background };
+    },
+    fireTimers() {
+      const due = [...timers.entries()];
+      timers.clear();
+      for (const [, timer] of due) timer.fire();
+    },
+    scheduledDelays,
+    get liveTimers() {
+      return timers.size;
+    },
+    get fetches() {
+      return fetches;
+    },
+    get shellNetworkTimeoutMs() {
+      // A top-level `const` is a binding in the script's scope, not a property
+      // of its global, so it is read by evaluating its name in that realm.
+      const value: unknown = runInContext(
+        "typeof SHELL_NETWORK_TIMEOUT_MS === 'number' ? SHELL_NETWORK_TIMEOUT_MS : undefined",
+        sandbox,
+      );
+      if (typeof value !== 'number') throw new Error('sw.js declares no SHELL_NETWORK_TIMEOUT_MS');
+      return value;
     },
     shown,
     opened,
@@ -292,6 +396,183 @@ describe('the service worker on a push', () => {
     const worker = await loadServiceWorker();
 
     expect(worker.source).toContain("'agentplex-shell-v1'");
+  });
+});
+
+/** A promise that never settles: a network that has stopped answering. */
+function never(): Promise<unknown> {
+  return new Promise(() => {});
+}
+
+/** A fetch the test settles by hand, after whatever the worker has done by then. */
+function deferred(): {
+  readonly promise: Promise<unknown>;
+  readonly resolve: (value: unknown) => void;
+  readonly reject: (error: unknown) => void;
+} {
+  let resolve: (value: unknown) => void = () => {};
+  let reject: (error: unknown) => void = () => {};
+  const promise = new Promise<unknown>((settle, fail) => {
+    resolve = settle;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+/**
+ * Lets every callback already queued in either realm run. Uses this realm's
+ * real timer: the worker's is a fake that fires only when told to.
+ */
+function flush(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+const PENDING = Symbol('pending');
+
+/**
+ * What a promise has done so far, without waiting for it to do more.
+ *
+ * Not a `Promise.race` against a resolved sentinel: the sentinel wins that by
+ * a microtask even over a promise that has already settled, and a promise
+ * from the worker's realm is adopted as a foreign thenable, one hop later
+ * still. Handlers recorded first and read after a real macrotask see every
+ * settlement both realms had queued.
+ */
+async function stateOf(promise: Promise<unknown>): Promise<unknown> {
+  let state: unknown = PENDING;
+  promise.then(
+    () => {
+      state = 'resolved';
+    },
+    () => {
+      state = 'rejected';
+    },
+  );
+  await flush();
+  return state;
+}
+
+function networkResponse(): { ok: true; clone: () => object } {
+  return { ok: true, clone: () => ({}) };
+}
+
+describe('the service worker on a navigation', () => {
+  it('serves the cached shell once the network misses the deadline', async () => {
+    const cachedShell = { shell: 'the last one the network served' };
+    const worker = await loadServiceWorker([], { fetch: never, cachedShell });
+
+    const { response } = worker.navigate();
+    expect(worker.scheduledDelays).toEqual([worker.shellNetworkTimeoutMs]);
+    worker.fireTimers();
+
+    await expect(response).resolves.toBe(cachedShell);
+    expect(worker.cacheTouches).toContain('match');
+  });
+
+  it('serves the network response when it arrives first, keeps it, and clears the timer', async () => {
+    const fromNetwork = networkResponse();
+    const worker = await loadServiceWorker([], {
+      fetch: () => Promise.resolve(fromNetwork),
+      cachedShell: { shell: 'stale' },
+    });
+
+    const { response, background } = worker.navigate();
+
+    await expect(response).resolves.toBe(fromNetwork);
+    await Promise.all(background);
+    expect(worker.cacheTouches).toEqual(['open', 'put']);
+    expect(worker.scheduledDelays).toHaveLength(1);
+    expect(worker.liveTimers).toBe(0);
+  });
+
+  it('keeps waiting on the network past the deadline when there is no cached shell', async () => {
+    const worker = await loadServiceWorker([], { fetch: never });
+
+    const { response } = worker.navigate();
+    worker.fireTimers();
+
+    expect(await stateOf(response)).toBe(PENDING);
+    expect(worker.cacheTouches).toContain('match');
+  });
+
+  it('still answers with the late network response when there is no cached shell', async () => {
+    const network = deferred();
+    const fromNetwork = networkResponse();
+    const worker = await loadServiceWorker([], { fetch: () => network.promise });
+
+    const { response, background } = worker.navigate();
+    worker.fireTimers();
+    await flush();
+    network.resolve(fromNetwork);
+
+    await expect(response).resolves.toBe(fromNetwork);
+    await Promise.all(background);
+    expect(worker.cacheTouches).toContain('put');
+  });
+
+  it('keeps the late response in the cache after serving the cached shell', async () => {
+    const network = deferred();
+    const worker = await loadServiceWorker([], {
+      fetch: () => network.promise,
+      cachedShell: { shell: 'stale' },
+    });
+
+    const { response, background } = worker.navigate();
+    worker.fireTimers();
+    await response;
+    expect(worker.cacheTouches).not.toContain('put');
+
+    network.resolve(networkResponse());
+    await Promise.all(background);
+    expect(worker.cacheTouches).toContain('put');
+  });
+
+  it('surfaces the failure when the network fails after the deadline and nothing is cached', async () => {
+    const network = deferred();
+    const worker = await loadServiceWorker([], { fetch: () => network.promise });
+    const offline = new Error('offline');
+
+    const { response, background } = worker.navigate();
+    worker.fireTimers();
+    await flush();
+    network.reject(offline);
+
+    await expect(response).rejects.toBe(offline);
+    // The branch kept alive for the cache write swallows the same failure, so
+    // nothing escapes the worker as an unhandled rejection.
+    await expect(Promise.all(background)).resolves.toBeDefined();
+  });
+
+  it('serves the cached shell at once when the network fails before the deadline', async () => {
+    const cachedShell = { shell: 'the last one the network served' };
+    const worker = await loadServiceWorker([], {
+      fetch: () => Promise.reject(new Error('offline')),
+      cachedShell,
+    });
+
+    const { response } = worker.navigate();
+
+    await expect(response).resolves.toBe(cachedShell);
+    expect(worker.liveTimers).toBe(0);
+  });
+
+  it('answers nothing but navigations', async () => {
+    const worker = await loadServiceWorker([], { fetch: never });
+    let answered = 0;
+
+    await worker.dispatch('fetch', {
+      request: { mode: 'no-cors' },
+      respondWith: () => {
+        answered += 1;
+      },
+    });
+
+    expect(answered).toBe(0);
+    expect(worker.fetches).toBe(0);
+    expect(worker.scheduledDelays).toEqual([]);
+    expect(worker.cacheTouches).toEqual([]);
   });
 });
 

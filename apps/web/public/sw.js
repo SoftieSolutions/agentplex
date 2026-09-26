@@ -7,10 +7,20 @@
  * the bottom, which is the only thing here that reaches a person who has the
  * page shut.
  *
- * Shell strategy is network-first for navigations only — while the hub is
- * reachable the browser always gets the live shell, so a deploy is never
- * masked by a silently stale cache. Assets are fingerprinted by the vite build
- * and need no worker to be cache-correct; the worker leaves them alone.
+ * Shell strategy is network-first for navigations only, with a deadline. While
+ * the hub answers within `SHELL_NETWORK_TIMEOUT_MS` the browser gets the live
+ * shell. A stale shell is served only when the network misses that deadline
+ * and a previous visit left one behind; the late response still replaces it
+ * in the cache, so the next load is current. Assets are fingerprinted by the
+ * vite build and need no worker to be cache-correct; the worker leaves them
+ * alone.
+ *
+ * The accepted risk: on a link slower than the deadline right after a deploy,
+ * the old shell may name fingerprinted assets the hub no longer has
+ * (`apps/hub/src/web/web.ts` serves only the current build's), and the page
+ * fails to load them until the late response has updated the cache and the
+ * person reloads. The alternative is a phone that shows a blank screen for as
+ * long as a sleeping laptop's TCP retry takes, on every open.
  *
  * The cache name is versioned so a future strategy change can abandon old
  * entries in activate rather than trusting them. Push is not such a change:
@@ -30,9 +40,20 @@
 const SHELL_CACHE = 'agentplex-shell-v1';
 const SHELL_URL = '/';
 
+/**
+ * How long a navigation waits on the network before a cached shell is served.
+ *
+ * A hub on the LAN answers a navigation in well under a second. Three seconds
+ * covers a laptop's first TCP retry after waking from sleep, when the socket
+ * it had is dead and the next one has not yet been tried. Much longer than
+ * that reads as a hang to a person standing with a phone in hand.
+ */
+const SHELL_NETWORK_TIMEOUT_MS = 3000;
+
 self.addEventListener('install', () => {
   // Take over on the next load instead of waiting for every tab to close.
-  // Safe because nothing here serves stale content while online.
+  // Safe because nothing here serves stale content while the hub answers in
+  // time, and a stale shell served past the deadline is replaced behind it.
   self.skipWaiting();
 });
 
@@ -54,17 +75,52 @@ self.addEventListener('fetch', (event) => {
   if (event.request.mode !== 'navigate') {
     return;
   }
-  event.respondWith(shellNetworkFirst(event.request));
+  const network = fetchShell(event.request);
+  // Kept alive past the response: when the cached shell wins the race, the
+  // network's late answer still has to reach the cache, and a worker the
+  // browser may stop once `respondWith` settles is only held open by
+  // `waitUntil`. Its failure is swallowed here because the navigation below
+  // reports it; this branch exists only to finish the write.
+  event.waitUntil(network.catch(() => undefined));
+  event.respondWith(shellNetworkFirst(network));
 });
 
-async function shellNetworkFirst(request) {
+/** The live shell, written to the cache before it is handed on when it is good. */
+async function fetchShell(request) {
+  const response = await fetch(request);
+  if (response.ok) {
+    const cache = await caches.open(SHELL_CACHE);
+    await cache.put(SHELL_URL, response.clone());
+  }
+  return response;
+}
+
+/** What the deadline resolves to, so the race can tell it from any response. */
+const DEADLINE_PASSED = Symbol('deadline passed');
+
+async function shellNetworkFirst(network) {
+  let timer;
+  // Scheduled before the first await, so the deadline counts from the
+  // navigation and not from whenever this function next runs.
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(DEADLINE_PASSED), SHELL_NETWORK_TIMEOUT_MS);
+  });
+  const stopDeadline = () => clearTimeout(timer);
+  network.then(stopDeadline, stopDeadline);
   try {
-    const response = await fetch(request);
-    if (response.ok) {
-      const cache = await caches.open(SHELL_CACHE);
-      await cache.put(SHELL_URL, response.clone());
+    const first = await Promise.race([network, deadline]);
+    if (first !== DEADLINE_PASSED) {
+      return first;
     }
-    return response;
+    // Too slow: the last shell the network produced, if there is one. The
+    // response still on its way updates the cache when it lands.
+    const cached = await caches.match(SHELL_URL);
+    if (cached !== undefined) {
+      return cached;
+    }
+    // Nothing cached means nothing better to show than whatever the network
+    // eventually says, so keep waiting on it rather than fail early.
+    return await network;
   } catch (error) {
     // Offline: serve the last shell the network really produced, if any.
     // No cached shell means the failure surfaces as the browser's own error
