@@ -61,6 +61,13 @@ export interface ConnectionView {
   readonly words: string;
   /** Where to go about it, or `null` when nothing on offer would help. */
   readonly action: NextAction | null;
+  /**
+   * Whether dialling again is something a person has to ask for: true only
+   * for `failed`, the one phase the store does not retry on its own. Every
+   * other down phase is already retrying, and a button that did what the
+   * backoff is about to would be a button that seems to do nothing.
+   */
+  readonly canRetry: boolean;
 }
 
 /**
@@ -79,8 +86,10 @@ export interface ConnectionView {
  * hub's own sentence is the honest one here, and it is the one that stays: a
  * line reading "no hub token on this device" over a protocol mismatch would
  * name a cause that is not the cause and bury the one the hub gave. It gets no
- * action either, because what resolves a version mismatch is a new build of
- * one side or the other, and neither is an address this app can offer.
+ * address either, because what resolves a version mismatch is a new build of
+ * one side or the other, and neither is a screen this app can send anyone to.
+ * What it gets instead is `canRetry`: the store does not redial a failure on
+ * its own, and a person who has just deployed that new build can.
  */
 function tokenIsWhatIsMissing(facts: ConnectionFacts): boolean {
   return !facts.hasToken && facts.phase !== 'connected' && facts.phase !== 'failed';
@@ -92,6 +101,7 @@ export function connectionView(facts: ConnectionFacts): ConnectionView {
       tone: 'blocked',
       words: 'no hub token on this device',
       action: { label: 'Settings', hash: destinationHash('settings') },
+      canRetry: false,
     };
   }
   return {
@@ -101,5 +111,6 @@ export function connectionView(facts: ConnectionFacts): ConnectionView {
     // nobody can tell from a broken one.
     words: connectionNotice(facts.phase, facts.problem, facts.hasState) ?? 'connected',
     action: null,
+    canRetry: facts.phase === 'failed',
   };
 }

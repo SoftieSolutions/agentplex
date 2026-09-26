@@ -96,7 +96,11 @@ export type ConnectionPhase =
   | 'connected'
   /** Down, and either waiting out a backoff delay or mid-redial. */
   | 'reconnecting'
-  /** Down for a reason retrying cannot fix — a protocol version mismatch. */
+  /**
+   * Down for a reason the store will not retry on its own -- a protocol
+   * version mismatch, or a frame the hub could not read. A person can
+   * (`HubStore.retry`), once one side's build has changed.
+   */
   | 'failed';
 
 export interface CommandQueueView {
@@ -910,6 +914,15 @@ export interface HubStore {
    */
   subscribe(listener: () => void): () => void;
   getSnapshot(): HubSnapshot;
+  /**
+   * Dials again, now, after a `failed` connection; does nothing otherwise.
+   *
+   * The store never retries a failure on its own -- the same build against the
+   * same hub gets the same refusal -- but the build on one side may have
+   * changed since, and a person who knows that should not have to reload the
+   * tab to say so. Anything else is the store's own backoff, left alone.
+   */
+  retry(): void;
   /** Sends now, or queues while the connection is down. Never silently drops. */
   sendCommand(command: HubCommand): CommandOutcome;
   /**
@@ -1237,7 +1250,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   /** Bumped on every dial and on teardown, so a stale callback can tell. */
   let generation = 0;
   let established = false;
-  /** True once a protocol mismatch has made retrying pointless. */
+  /** True once a protocol mismatch has stopped the store's own retrying. */
   let failed = false;
   /** Consecutive failed attempts since the connection last held. */
   let attempt = 0;
@@ -1626,11 +1639,21 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
    * The connection is gone, whether the socket said so or the heartbeat
    * decided it: everything that was waiting on it is answered, and a retry is
    * scheduled.
+   */
+  function lose(problem: string | null): void {
+    drop(problem);
+    scheduleRetry();
+  }
+
+  /**
+   * Forgets the connection and answers everything that was waiting on it,
+   * without deciding what comes next: `lose` schedules the backoff, and
+   * `retry` dials at once.
    *
    * `problem` is why, when the store knows better than "it closed"; a close
    * the socket reported words only the commands it stranded.
    */
-  function lose(problem: string | null): void {
+  function drop(problem: string | null): void {
     socket = null;
     established = false;
     stopHeartbeat();
@@ -1658,7 +1681,26 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         ...(said !== null ? { problem: said } : {}),
       });
     }
-    scheduleRetry();
+  }
+
+  function retry(): void {
+    if (!failed) return;
+    failed = false;
+    attempt = 0;
+    cancelRetry?.();
+    cancelRetry = null;
+    // `failed` is set on the frame, not on the close: the hub may not have
+    // hung up yet, and a failure after a welcome leaves the socket, the
+    // heartbeat and `established` all in place. Given up here, with the bump
+    // first because a socket's `close()` may report synchronously, so the old
+    // socket's close is the stale one and nothing more goes out on it.
+    const lingering = socket;
+    if (lingering !== null) {
+      generation += 1;
+      drop(null);
+      lingering.close();
+    }
+    connect();
   }
 
   /** Waits out one quiet interval, then asks. Replaces whatever was pending. */
@@ -2326,8 +2368,10 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // it; a pane waiting on this start needs the one that was said to it.
         noteStartAnswer(frame.replyTo, { started: null, refusal });
         if (!established && frame.code === 'protocol-version') {
-          // Redialling cannot change which protocol either side speaks, and a
-          // capped backoff against a hub that will refuse forever is noise.
+          // Redialling on a timer cannot change which protocol either side
+          // speaks, and a capped backoff against a hub that will refuse
+          // forever is noise. A new build can, and it arrives when somebody
+          // deploys one: so the store stops here and a person retries.
           failed = true;
           update({ phase: 'failed', problem: frame.message });
         }
@@ -2337,7 +2381,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // The hub could not read something this client sent. The hub closes
         // the socket after saying so, and a client that produced one
         // unreadable frame will produce the same one again — a build mismatch,
-        // not weather — so retrying is pointless here too.
+        // not weather — so the store does not retry this on its own either;
+        // a person can, through `retry`, once a build has changed.
         failed = true;
         update({
           phase: 'failed',
@@ -2544,6 +2589,8 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     getSnapshot(): HubSnapshot {
       return snapshot;
     },
+
+    retry,
 
     sendCommand(command: HubCommand): CommandOutcome {
       if (failed) {
