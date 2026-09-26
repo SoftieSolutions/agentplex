@@ -8,8 +8,9 @@ import {
   type StartId,
   type StoreId,
 } from '@agentplex/protocol';
-import type { Logger } from '@agentplex/node-shared';
+import type { Logger, Timers } from '@agentplex/node-shared';
 import type { Database } from '../db/database.js';
+import { createStartNaming } from '../start-naming/start-naming.js';
 
 /**
  * Tasks: what a session was started to do, in the words somebody typed.
@@ -62,12 +63,13 @@ import type { Database } from '../db/database.js';
  * the task of every session started on a machine that scans quickly, which is
  * the failure that reads as "it works on my laptop".
  *
- * Each half is one short string per start. A start that is never named keeps
- * its prompt, and a naming nobody claims keeps a session ref -- a provider that
- * died before writing a transcript, a hub that was not the one that started it.
- * That is the same bargain the relay's own map of named starts makes, and the
- * alternative is a timeout that would have to guess how long a provider may
- * take to write its first line.
+ * Holding both halves, and letting go of them, is `start-naming`'s, shared with
+ * the graph executor that waits on the same fact. Either half is dropped at
+ * `START_NAMING_TTL_MS`: a start that is never named -- a provider that died
+ * before writing a transcript -- and a naming nobody claims -- a start made
+ * with no prompt, or by another hub -- would otherwise each cost an entry for
+ * the life of the hub. A spawn named later than that loses its label, which
+ * is argued where the constant is.
  */
 
 /** A start this hub made, as this feature is told about it. */
@@ -83,6 +85,8 @@ export interface StartedSession {
 export interface TasksDependencies {
   readonly database: Database;
   readonly logger: Logger;
+  /** What bounds how long a spawn's prompt, or a naming nobody claims, is held. */
+  readonly timers: Timers;
   /**
    * Called with every task recorded, including each row read at boot.
    *
@@ -171,7 +175,12 @@ export function taskFromPrompt(prompt: string | null): string | null {
   return orphaned ? cut.slice(0, -1) : cut;
 }
 
-export function createTasks({ database, logger: parent, onChanged }: TasksDependencies): Tasks {
+export function createTasks({
+  database,
+  logger: parent,
+  timers,
+  onChanged,
+}: TasksDependencies): Tasks {
   const logger = parent.child({ part: 'tasks' });
 
   /**
@@ -185,42 +194,11 @@ export function createTasks({ database, logger: parent, onChanged }: TasksDepend
    */
   const rows = new Map<string, string>();
   /**
-   * What each spawn was started to do, until the provider names the session.
-   *
-   * Keyed by the start handle, which is the only name a spawn has in that
-   * stretch, and holding the store the hub asked for so that a tag reported
-   * under a different one can be refused rather than filed.
+   * Which session each spawn turned out to be, joined with its prompt in
+   * whichever order the two arrive. This feature's own instance: the graph
+   * executor hears the same tags and pairs its own starts.
    */
-  const awaitingId = new Map<StartId, { readonly storeId: StoreId; readonly task: string }>();
-  /**
-   * Which session each start turned out to be, for the starts named before
-   * their prompt got here.
-   *
-   * The other half of the same pair, held for the same reason and in the same
-   * shape. A server that has already scanned reports the naming while the hub
-   * is still returning from the answer that made the start, so this arrives
-   * first at least as often as it arrives second.
-   */
-  const named = new Map<StartId, SessionRef>();
-
-  /**
-   * Whether the store a start was made for is the store its naming came back
-   * under.
-   *
-   * The row a client reads is filed under the store the report was about, so a
-   * tag reported under another one has nowhere to go that would not be a task
-   * shown on a session it is not about. A server disagreeing with the start it
-   * was sent costs the label and nothing else.
-   */
-  const sameStore = (startId: StartId, asked: StoreId, named: SessionRef): boolean => {
-    if (asked === named.storeId) return true;
-    logger.warn('a start was reported under a store it was not made for', {
-      startId,
-      asked,
-      reported: named.storeId,
-    });
-    return false;
-  };
+  const naming = createStartNaming({ timers, logger });
 
   const record = async (ref: SessionRef, task: string): Promise<void> => {
     if (rows.has(keyOf(ref))) {
@@ -289,38 +267,30 @@ export function createTasks({ database, logger: parent, onChanged }: TasksDepend
 
       // A spawn, which may already have been named: the server reports the
       // pair as soon as it has scanned, and that frequently lands before the
-      // answer this call is walking back from.
-      const already = named.get(started.startId);
-      if (already === undefined) {
-        awaitingId.set(started.startId, { storeId: started.storeId, task });
+      // answer this call is walking back from. Otherwise the prompt waits for
+      // the naming, and a naming that never comes costs the label.
+      const already = naming.claim(started.startId, started.storeId);
+      if (already !== null) {
+        await record(already, task);
         return;
       }
-      if (!sameStore(started.startId, started.storeId, already)) return;
-
-      named.delete(started.startId);
-      await record(already, task);
+      naming.expect(started.startId, started.storeId, async (ref) => {
+        if (ref === null) {
+          logger.debug('a spawn was not named in time; its task is dropped', {
+            startId: started.startId,
+          });
+          return;
+        }
+        await record(ref, task);
+      });
     },
 
     async noteStarts(storeId: StoreId, starts: readonly SessionStartTag[]): Promise<void> {
-      for (const tag of starts) {
-        if (tag.sessionId === null) continue;
-        const ref = { storeId, sessionId: tag.sessionId };
-        const waiting = awaitingId.get(tag.startId);
-
-        // Nothing waiting: either the prompt is still on its way here, or this
-        // start was made with no prompt, or it was not this hub's start at all.
-        // The naming is kept for the first of those, and costs a session ref
-        // for the other two.
-        if (waiting === undefined) {
-          named.set(tag.startId, ref);
-          continue;
-        }
-
-        if (!sameStore(tag.startId, waiting.storeId, ref)) continue;
-
-        awaitingId.delete(tag.startId);
-        await record(ref, waiting.task);
-      }
+      // A naming with a prompt waiting writes its row; any other is held in
+      // case the prompt is still on its way here, and costs a session ref
+      // until the deadline when it was a start with no prompt, or not this
+      // hub's at all.
+      await naming.named(storeId, starts);
     },
   };
 }

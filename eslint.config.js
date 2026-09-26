@@ -185,6 +185,7 @@ const HUB_FEATURES = [
   'push',
   'servers',
   'sessions',
+  'start-naming',
   'tasks',
   'terminal',
   'web',

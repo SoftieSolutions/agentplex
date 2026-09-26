@@ -361,6 +361,28 @@ describe('the AGENT executor', () => {
     await expect(pending).resolves.toMatchObject({ ok: true });
   });
 
+  it('refuses a naming that arrived first under a store the start was not made for', async () => {
+    const pending = run();
+    await settle();
+    // Named under another store before the start answered: the step must not
+    // go on to watch a session in a store its node does not name.
+    executor.noteStarts(storeIdSchema.parse('store-other'), [
+      { startId: START_ID, sessionId: sessionIdSchema.parse('session-elsewhere') },
+    ]);
+    sessions.answer(started(START_ID));
+    await settle();
+
+    // Refused, and the start waits for a naming under its own store for the
+    // one deadline it has; the refused naming holds nothing of its own.
+    expect(timers.delays).toEqual([30_000]);
+    timers.fireAll();
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      problem: 'Rust reviewer started on attic but no session was named within 30 seconds',
+    });
+    expect(sessions.stops).toEqual([]);
+  });
+
   it('fails a spawn that never names a session at the injected deadline, in a sentence', async () => {
     const pending = run();
     await settle();
@@ -479,6 +501,10 @@ describe('the AGENT executor', () => {
       await settle();
 
       expect(sessions.stops).toEqual([]);
+      // What the late tag leaves is a naming nobody will claim, held for its
+      // own deadline like any other and gone after it.
+      expect(timers.delays).toEqual([30_000]);
+      timers.fireAll();
       expect(timers.pending).toBe(0);
     });
   });

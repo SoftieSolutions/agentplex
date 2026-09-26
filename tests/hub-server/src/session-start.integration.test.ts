@@ -489,6 +489,7 @@ async function start(
   const tasks = createTasks({
     database,
     logger,
+    timers,
     onChanged: (ref, task) => state.applyTask(ref, task),
   });
 

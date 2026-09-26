@@ -298,6 +298,7 @@ async function start(): Promise<Harness> {
   const tasks = createTasks({
     database,
     logger,
+    timers,
     onChanged: (ref, task) => state.applyTask(ref, task),
   });
   const sessions = createSessions({
