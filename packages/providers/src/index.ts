@@ -93,7 +93,13 @@ export { parseCodexRollout } from './codex-rollout.js';
 export type { CodexRollout, CodexRolloutParse } from './codex-rollout.js';
 export { CODEX_SESSION_INDEX_FILE, parseCodexSessionIndex } from './codex-session-index.js';
 
-export type { DirectoryEntry, DirectoryRead, ProviderFiles, TailRead } from './provider-files.js';
+export type {
+  DirectoryEntry,
+  DirectoryRead,
+  FileStatRead,
+  ProviderFiles,
+  TailRead,
+} from './provider-files.js';
 export { nodeProviderFiles } from './node-provider-files.js';
 
 export { parseWorkingDirectory } from './working-directory.js';

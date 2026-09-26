@@ -615,3 +615,214 @@ describe('createClaudeAdapter.transcript', () => {
     expect(read).toEqual({ ok: true, transcript: { activities: [], olderExist: true } });
   });
 });
+
+describe('createClaudeAdapter.discover, scan after scan', () => {
+  const TRANSCRIPT = `${PROJECT}/${SESSION_ID}.jsonl`;
+  const ENTRY = `${SESSIONS}/${PID}.json`;
+
+  /**
+   * The first `count` lines of a captured transcript, as the file stood when
+   * Claude Code had written only those. A transcript is appended one line at a
+   * time, so a prefix of a capture is a capture of an earlier moment.
+   */
+  function firstLines(contents: string, count: number): string {
+    return `${contents.split('\n').slice(0, count).join('\n')}\n`;
+  }
+
+  /** Up to the first assistant response; the second one is what gets appended. */
+  const EARLIER = firstLines(COMPLETED_TURN, 7);
+
+  /** The transcripts a scan read whole, as opposed to the registry files it also reads. */
+  function transcriptReads(reads: readonly string[]): string[] {
+    return reads.filter((path) => path.startsWith(PROJECTS));
+  }
+
+  async function freshAnswer(files: Record<string, string>) {
+    return await adapterOver({ files }).discover(STORE);
+  }
+
+  it('reads no transcript on a second scan of a store where nothing changed', async () => {
+    const files = createFakeProviderFiles({
+      files: {
+        [TRANSCRIPT]: COMPLETED_TURN,
+        [`${PROJECT}/40839ba3-652f-4c07-8404-43fcd03ba122.jsonl`]: NO_TURNS,
+      },
+    });
+    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+
+    const first = await adapter.discover(STORE);
+    const readBefore = files.reads.length;
+    const second = await adapter.discover(STORE);
+
+    // The one with no turns included: "not a session" is an answer about the
+    // file, and it is as settled as a parse that found one.
+    expect(transcriptReads(files.reads.slice(readBefore))).toEqual([]);
+    expect(second).toEqual(first);
+  });
+
+  it('reads a transcript again once a turn is appended, and reports what it added', async () => {
+    const files = createFakeProviderFiles({ files: { [TRANSCRIPT]: EARLIER } });
+    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const [before] = (await adapter.discover(STORE)).sessions;
+
+    files.write(TRANSCRIPT, COMPLETED_TURN);
+    const readBefore = files.reads.length;
+    const after = await adapter.discover(STORE);
+
+    expect(transcriptReads(files.reads.slice(readBefore))).toEqual([TRANSCRIPT]);
+    expect(after).toEqual(await freshAnswer({ [TRANSCRIPT]: COMPLETED_TURN }));
+    const [session] = after.sessions;
+    expect(session?.updatedAt).toBeGreaterThan(before?.updatedAt ?? Number.POSITIVE_INFINITY);
+    expect(session?.usage?.outputTokens).toBeGreaterThan(before?.usage?.outputTokens ?? 0);
+  });
+
+  it('reads a truncated transcript again in full, and answers as if seeing it first', async () => {
+    // Shorter is not an append, so nothing about the last parse can be kept.
+    // The answer has to be the one an adapter that never saw the longer file
+    // would give.
+    const files = createFakeProviderFiles({ files: { [TRANSCRIPT]: COMPLETED_TURN } });
+    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    await adapter.discover(STORE);
+
+    files.write(TRANSCRIPT, EARLIER);
+    const readBefore = files.reads.length;
+    const after = await adapter.discover(STORE);
+
+    expect(transcriptReads(files.reads.slice(readBefore))).toEqual([TRANSCRIPT]);
+    expect(after).toEqual(await freshAnswer({ [TRANSCRIPT]: EARLIER }));
+  });
+
+  it('reads a transcript again when only its mtime moved', async () => {
+    const files = createFakeProviderFiles({
+      files: { [TRANSCRIPT]: COMPLETED_TURN },
+      mtimes: { [TRANSCRIPT]: 1_000 },
+    });
+    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    await adapter.discover(STORE);
+
+    files.write(TRANSCRIPT, COMPLETED_TURN, 2_000);
+    const readBefore = files.reads.length;
+    await adapter.discover(STORE);
+
+    expect(transcriptReads(files.reads.slice(readBefore))).toEqual([TRANSCRIPT]);
+  });
+
+  it('still resolves an unchanged transcript against this scan’s registry', async () => {
+    // What is remembered is the parse of the file, not the session built from
+    // it. The registry says what is happening now, and a cached answer that
+    // froze it would keep a session waiting for a permission long answered.
+    const files = createFakeProviderFiles({
+      files: {
+        [TRANSCRIPT]: PENDING_TOOL_USE,
+        [ENTRY]: JSON.stringify({ ...JSON.parse(REGISTRY_ENTRY), status: 'waiting' }),
+      },
+    });
+    const adapter = createClaudeAdapter({
+      files,
+      probe: createFakeProcessProbe({ processes: { [PID]: PROCESS_STARTED_AT } }),
+    });
+    const [waiting] = (await adapter.discover(STORE)).sessions;
+
+    files.write(ENTRY, REGISTRY_ENTRY);
+    const readBefore = files.reads.length;
+    const [busy] = (await adapter.discover(STORE)).sessions;
+
+    expect(transcriptReads(files.reads.slice(readBefore))).toEqual([]);
+    expect(waiting?.signal).toBe('awaiting-permission');
+    expect(busy?.signal).toBe('progressing');
+    expect(busy?.running).toBe(true);
+  });
+
+  it('names a damaged transcript on every scan, without reading it again', async () => {
+    const damaged = `${PROJECT}/dddddddd-0000-4000-8000-000000000000.jsonl`;
+    const files = createFakeProviderFiles({ files: { [damaged]: 'not json at all\n' } });
+    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    const first = await adapter.discover(STORE);
+
+    const readBefore = files.reads.length;
+    const second = await adapter.discover(STORE);
+
+    expect(transcriptReads(files.reads.slice(readBefore))).toEqual([]);
+    expect(second.problems).toEqual(first.problems);
+    expect(second.problems).toEqual([
+      { subject: damaged, problem: expect.stringContaining('JSON') },
+    ]);
+  });
+
+  it('tries an unreadable transcript again on every scan rather than remembering it failed', async () => {
+    // A permission fixed without touching the file leaves its size and mtime
+    // where they were, so a remembered failure would outlive the fault.
+    const unreadable = `${PROJECT}/badbadba-0000-4000-8000-000000000000.jsonl`;
+    const files = createFakeProviderFiles({
+      files: { [unreadable]: COMPLETED_TURN },
+      unreadable: [unreadable],
+    });
+    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    await adapter.discover(STORE);
+
+    const readBefore = files.reads.length;
+    const second = await adapter.discover(STORE);
+
+    expect(transcriptReads(files.reads.slice(readBefore))).toEqual([unreadable]);
+    expect(second.problems).toEqual([
+      { subject: unreadable, problem: expect.stringContaining('EACCES') },
+    ]);
+  });
+
+  it('names a transcript it cannot stat, and reads nothing it cannot stamp', async () => {
+    const unstatable = `${PROJECT}/eeeeeeee-0000-4000-8000-000000000000.jsonl`;
+    const files = createFakeProviderFiles({
+      files: { [TRANSCRIPT]: COMPLETED_TURN, [unstatable]: COMPLETED_TURN },
+      unstatable: [unstatable],
+    });
+    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(transcriptReads(files.reads)).toEqual([TRANSCRIPT]);
+    expect(discovered.sessions.map((session) => session.sessionId)).toEqual([SESSION_ID]);
+    expect(discovered.problems).toEqual([
+      { subject: unstatable, problem: expect.stringContaining('EACCES') },
+    ]);
+  });
+
+  it('forgets a deleted transcript, so a file put back in its place is read afresh', async () => {
+    const files = createFakeProviderFiles({
+      files: { [TRANSCRIPT]: COMPLETED_TURN },
+      mtimes: { [TRANSCRIPT]: 1_000 },
+    });
+    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+    await adapter.discover(STORE);
+
+    files.remove(TRANSCRIPT);
+    expect((await adapter.discover(STORE)).sessions).toEqual([]);
+
+    // Back with the very same size and mtime, so only a cache that let go of
+    // the path when it disappeared reads it again.
+    files.write(TRANSCRIPT, COMPLETED_TURN, 1_000);
+    const readBefore = files.reads.length;
+    const back = await adapter.discover(STORE);
+
+    expect(transcriptReads(files.reads.slice(readBefore))).toEqual([TRANSCRIPT]);
+    expect(back.sessions.map((session) => session.sessionId)).toEqual([SESSION_ID]);
+  });
+
+  it('keeps one store’s transcripts remembered while it scans another', async () => {
+    // One adapter serves every store on the server. A scan of B forgetting
+    // everything it did not see would forget all of A.
+    const storeB = storeDescriptorSchema.parse({ storeId: 'store-b', path: '/volumes/other' });
+    const inB = `${storeB.path}/${CLAUDE_PROJECTS_DIRECTORY}/-Users-dev-Code-other/${SESSION_ID}.jsonl`;
+    const files = createFakeProviderFiles({
+      files: { [TRANSCRIPT]: COMPLETED_TURN, [inB]: PENDING_TOOL_USE },
+    });
+    const adapter = createClaudeAdapter({ files, probe: createFakeProcessProbe() });
+
+    await adapter.discover(STORE);
+    await adapter.discover(storeB);
+    const readBefore = files.reads.length;
+    await adapter.discover(STORE);
+    await adapter.discover(storeB);
+
+    expect(files.reads.slice(readBefore).filter((path) => path.endsWith('.jsonl'))).toEqual([]);
+  });
+});

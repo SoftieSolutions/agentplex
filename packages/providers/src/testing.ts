@@ -15,7 +15,7 @@ export {
 export type { FakeProviderAdapter, FakeProviderAdapterOptions } from './fake-provider-adapter.js';
 
 export { createFakeProviderFiles } from './fake-provider-files.js';
-export type { FakeProviderFilesOptions } from './fake-provider-files.js';
+export type { FakeProviderFiles, FakeProviderFilesOptions } from './fake-provider-files.js';
 
 export { createFakeStoreFiles } from './fake-store-files.js';
 export type { FakeStoreFiles, FakeStoreFilesOptions } from './fake-store-files.js';
