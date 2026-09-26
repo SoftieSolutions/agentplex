@@ -17,3 +17,8 @@ packages/providers/fixtures
 # would tidy away are the ones under test: `ps` pads its columns with trailing
 # spaces, and `git status --porcelain=v2` is defined line by line.
 apps/server/src/operations/fixtures
+# The wire-shape snapshots are captured output too: vitest writes them from
+# `JSON.stringify` and compares them byte for byte. Prettier would collapse
+# their short arrays onto one line, and the next run would read that as the
+# protocol changing shape.
+packages/protocol/src/wire-shape
