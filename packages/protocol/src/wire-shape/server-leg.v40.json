@@ -1220,7 +1220,8 @@
                     "anyOf": [
                       {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 4096
                       },
                       {
                         "type": "null"
@@ -1231,7 +1232,8 @@
                     "anyOf": [
                       {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 512
                       },
                       {
                         "type": "null"
@@ -1242,7 +1244,7 @@
                     "anyOf": [
                       {
                         "type": "string",
-                        "minLength": 1
+                        "maxLength": 200
                       },
                       {
                         "type": "null"
@@ -1251,7 +1253,7 @@
                   },
                   "model": {
                     "type": "string",
-                    "minLength": 1
+                    "maxLength": 100
                   },
                   "usage": {
                     "type": "object",

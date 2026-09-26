@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sessionRefSchema, storeDescriptorSchema } from '@agentplex/protocol';
+import {
+  SESSION_TITLE_MAX_CHARS,
+  sessionRefSchema,
+  storeDescriptorSchema,
+} from '@agentplex/protocol';
 import { describe, expect, it } from 'vitest';
 import { createFakeProcessProbe } from './fake-process-probe.js';
 import { CLAUDE_PROJECTS_DIRECTORY, createClaudeAdapter } from './claude-adapter.js';
@@ -124,6 +128,30 @@ describe('createClaudeAdapter.discover', () => {
 
     expect(discovered.sessions.map((session) => session.model)).toEqual([null]);
     expect(discovered.problems).toEqual([]);
+  });
+
+  it('lists a session whose title is too long for the wire, under a clipped title', async () => {
+    // The bound is the parser's; this is the assertion that it costs the
+    // title its tail and nothing else on the seam the store report is built
+    // from -- the session is listed, and nobody is told something is wrong.
+    const long = 'Docker compose without hub '.repeat(20);
+    const adapter = adapterOver({
+      files: {
+        [`${PROJECT}/${SESSION_ID}.jsonl`]: COMPLETED_TURN.replace(
+          '"aiTitle":"Docker compose without hub"',
+          `"aiTitle":"${long}"`,
+        ),
+      },
+    });
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(discovered.problems).toEqual([]);
+    expect(discovered.sessions.map((session) => session.sessionId)).toEqual([SESSION_ID]);
+    const title = discovered.sessions[0]?.title ?? '';
+    expect(title.length).toBeGreaterThan(0);
+    expect(title.length).toBeLessThanOrEqual(SESSION_TITLE_MAX_CHARS);
+    expect(long.startsWith(title)).toBe(true);
   });
 
   it('takes the session id from the file name, not from inside the file', async () => {

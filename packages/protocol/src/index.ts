@@ -303,7 +303,12 @@ export {
 export type { ProviderReadiness, ProviderReadinessState } from './readiness.js';
 
 export {
+  boundedSessionText,
   changedFileSchema,
+  SESSION_BRANCH_MAX_CHARS,
+  SESSION_CWD_MAX_CHARS,
+  SESSION_MODEL_MAX_CHARS,
+  SESSION_TITLE_MAX_CHARS,
   sessionDescriptorSchema,
   sessionHoldSchema,
   pauseTakenSchema,

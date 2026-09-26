@@ -10,6 +10,7 @@ import type {
   StoreDescriptor,
   StoreId,
 } from '@agentplex/protocol';
+import { SESSION_BRANCH_MAX_CHARS } from '@agentplex/protocol';
 import type { Clock, Logger } from '@agentplex/node-shared';
 import {
   type ProviderRegistry,
@@ -663,7 +664,7 @@ export function createSessionController(
       const reading = found.get(directoryOf(store, session));
       return {
         ...session,
-        branch: reading?.branch ?? null,
+        branch: boundedBranch(reading?.branch ?? null),
         uncommitted: reading?.uncommitted ?? null,
       };
     });
@@ -802,4 +803,16 @@ export function createSessionController(
     logger.info('spawned terminal bound to its session', { storeId, sessionId, by });
     return true;
   }
+}
+
+/**
+ * A branch name as the descriptor may carry it, or `null`.
+ *
+ * git bounds a ref name nowhere and the descriptor does, so a name past the
+ * bound is possible and has to cost something smaller than the store report.
+ * It costs the branch: a clipped prefix is not the branch the checkout is on,
+ * and `null` already means "no name to show", which claims nothing.
+ */
+function boundedBranch(branch: string | null): string | null {
+  return branch !== null && branch.length <= SESSION_BRANCH_MAX_CHARS ? branch : null;
 }
