@@ -533,14 +533,16 @@ export const serverCandidateSchema = z.object({
   /** The port it says the hub would dial. Never the beacon port it was heard on. */
   port: z.int().min(1).max(65535),
   /**
-   * The protocol the beacon claimed, carried rather than judged.
+   * The server-leg protocol the beacon claimed, carried rather than judged.
    *
    * The verdict is not a second field, because a second field is a second copy
-   * of one fact free to disagree with the first. `checkProtocolVersion` is the
-   * verdict and every reader of this frame can reach it: a client is only
-   * reading a machine state at all because its own `hello` was accepted, and a
-   * hello is checked with `===`, so the client's `PROTOCOL_VERSION` and the
-   * hub's are already known to be the same number.
+   * of one fact free to disagree with the first. `checkServerProtocolVersion`
+   * is the verdict and every reader of this frame can reach it. The client's
+   * accepted `hello` does not prove that on its own — it matched only the
+   * client leg — but the web package records the server leg as well, and every
+   * install and update refuses a web whose server leg differs from the hub's,
+   * so the client's `SERVER_PROTOCOL_VERSION` and the hub's are the same
+   * number.
    */
   protocolVersion: z.int().positive(),
 });

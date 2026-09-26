@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION } from '@agentplex/protocol';
+import { CLIENT_PROTOCOL_VERSION, SERVER_PROTOCOL_VERSION } from '@agentplex/protocol';
 import { sendBytes, sendJson, type Logger, type RequestHandler } from '@agentplex/node-shared';
 import { requestPath, CLIENT_TICKET_PATH, type ClientAuth } from '../client-auth/client-auth.js';
 import { MCP_PATH, type Mcp } from '../mcp/mcp.js';
@@ -54,7 +54,15 @@ export function createHubRoutes({
     const path = requestPath(request.url);
 
     if (path === '/health') {
-      sendJson(response, 200, { status: 'ok', role: 'hub', protocolVersion: PROTOCOL_VERSION });
+      // Both legs, each by name: a hub speaks one version to its clients and
+      // another to its servers, and a probe that saw one number could not
+      // tell which peer it describes.
+      sendJson(response, 200, {
+        status: 'ok',
+        role: 'hub',
+        clientProtocolVersion: CLIENT_PROTOCOL_VERSION,
+        serverProtocolVersion: SERVER_PROTOCOL_VERSION,
+      });
       return;
     }
 

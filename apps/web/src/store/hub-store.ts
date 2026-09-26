@@ -3,7 +3,7 @@ import {
   decodeTerminalChunk,
   parseHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   type Activity,
   type ApprovalAnsweredBy,
   type ApprovalOutcome,
@@ -1621,7 +1621,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         encodeClientFrame({
           type: 'hello',
           id: frameIds.next(),
-          protocolVersion: PROTOCOL_VERSION,
+          protocolVersion: CLIENT_PROTOCOL_VERSION,
         }),
       );
     });

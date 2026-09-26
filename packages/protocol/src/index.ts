@@ -1,5 +1,11 @@
-export { PROTOCOL_VERSION, checkProtocolVersion } from './version.js';
-export type { ProtocolVersionMismatch } from './version.js';
+export {
+  CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSIONS,
+  SERVER_PROTOCOL_VERSION,
+  checkClientProtocolVersion,
+  checkServerProtocolVersion,
+} from './version.js';
+export type { ProtocolLeg, ProtocolVersionMismatch } from './version.js';
 
 export { acknowledgementHolds, wantsAttention, wantsHuman } from './attention.js';
 export type { AttentionSubject } from './attention.js';

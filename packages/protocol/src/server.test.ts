@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TRANSCRIPT_ACTIVITIES_MAX } from './activity.js';
 import { approvalIdSchema } from './approval.js';
-import { PROTOCOL_VERSION } from './version.js';
+import { SERVER_PROTOCOL_VERSION } from './version.js';
 import {
   parseHubToServerFrame,
   parseServerToHubFrame,
@@ -38,7 +38,7 @@ describe('parseHubToServerFrame', () => {
     const result = parseHubToServerFrame({
       type: 'handshake',
       id: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       hubId: HUB_ID,
       token: 'a-server-token',
     });
@@ -49,7 +49,7 @@ describe('parseHubToServerFrame', () => {
     const result = parseHubToServerFrame({
       type: 'handshake',
       id: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       token: 'a-server-token',
     });
     expect(result.ok).toBe(false);
@@ -59,7 +59,7 @@ describe('parseHubToServerFrame', () => {
     const result = parseHubToServerFrame({
       type: 'handshake',
       id: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       hubId: HUB_ID,
       token: '',
     });
@@ -70,7 +70,7 @@ describe('parseHubToServerFrame', () => {
     const result = parseHubToServerFrame({
       type: 'handshake',
       id: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       hubId: HUB_ID,
       token: 't',
       command: 'ls',
@@ -464,7 +464,7 @@ describe('parseServerToHubFrame', () => {
     const result = parseServerToHubFrame({
       type: 'handshake-accepted',
       replyTo: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       serverId: 'server-1',
       stores: [{ storeId: 'store-1', path: '/data/store' }],
       providers: [READY_CLAUDE],
@@ -478,7 +478,7 @@ describe('parseServerToHubFrame', () => {
     const result = parseServerToHubFrame({
       type: 'handshake-accepted',
       replyTo: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       serverId: 'server-1',
       stores: [],
       providers: [],
@@ -490,7 +490,7 @@ describe('parseServerToHubFrame', () => {
     const result = parseServerToHubFrame({
       type: 'handshake-accepted',
       replyTo: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       serverId: 'server-1',
       stores: [],
       providers: [
@@ -515,7 +515,7 @@ describe('parseServerToHubFrame', () => {
     const result = parseServerToHubFrame({
       type: 'handshake-accepted',
       replyTo: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       serverId: 'server-1',
       stores: [],
     });
@@ -762,7 +762,7 @@ describe('hub and server round trips', () => {
     {
       type: 'handshake',
       id: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       hubId: HUB_ID,
       token: 'a-server-token',
     },
@@ -864,7 +864,7 @@ describe('hub and server round trips', () => {
     {
       type: 'handshake-accepted',
       replyTo: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       serverId: serverIdSchema.parse('server-1'),
       stores: [{ storeId: storeIdSchema.parse('store-1'), path: '/data/store' }],
       providers: [READY_CLAUDE],

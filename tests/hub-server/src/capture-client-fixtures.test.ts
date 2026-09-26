@@ -11,7 +11,8 @@ import {
   serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   type Activity,
   type ProviderReadiness,
   type SessionDescriptor,
@@ -107,7 +108,7 @@ import { createFakeMachineLoadReader } from '../../../apps/server/src/machine-lo
  * resolves `.js` specifiers to `.ts` sources; gated on an environment variable
  * so an ordinary test run never rewrites a fixture behind anyone's back. To
  * re-capture -- after any change to the hub-to-client frames, in the same
- * commit that bumps PROTOCOL_VERSION -- run, from tests/hub-server:
+ * commit that bumps CLIENT_PROTOCOL_VERSION -- run, from tests/hub-server:
  *
  *   CAPTURE_FIXTURES=1 pnpm vitest run src/capture-client-fixtures.test.ts
  */
@@ -866,7 +867,7 @@ function sessionCount(hub: Hub): number {
 /** Opens a client, says hello, and returns the machine-state frame it was sent. */
 async function captureState(hub: Hub): Promise<string> {
   const client = await openClient(hub);
-  client.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+  client.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
   await client.framesReceived(2);
   const text = client.received[1];
   if (text === undefined) throw new Error('the hub closed before sending a state');
@@ -918,7 +919,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // (answered by a refusal), and finally something that is not JSON at all,
     // which earns the unsolicited protocol-error and a close.
     const first = await openClient(hub);
-    first.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    first.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await first.framesReceived(2);
     first.send({ type: 'ping', id: 2 });
     await first.framesReceived(3);
@@ -950,7 +951,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // The second conversation is one frame long: a hello claiming a protocol
     // this hub does not speak, refused with the code retrying cannot fix.
     const second = await openClient(hub);
-    second.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION + 1 });
+    second.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION + 1 });
     await second.framesReceived(1);
     await second.closed();
 
@@ -1003,7 +1004,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       files: createFakeStoreFiles(),
     });
     const third = await openClient(pairedHub);
-    third.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    third.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     // Wait until a broadcast shows the pairing as stale, however the dial
     // failure raced the hello: the last machine-state captured is that one.
     for (let count = 2; ; count += 1) {
@@ -1189,7 +1190,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // at that point is move the sessions into it, and this is that, over the
     // real frames.
     const filer = await openClient(populated.hub);
-    filer.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    filer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await filer.framesReceived(2);
     filer.send({
       type: 'project-create',
@@ -1298,7 +1299,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     );
 
     const attender = await openClient(attentive.hub);
-    attender.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    attender.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await attender.framesReceived(2);
     attender.send({
       type: 'session-acknowledge',
@@ -1444,7 +1445,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // about the tap: it says what became of the approval, and it arrives only
     // once the machine holding the blocked process has said so.
     const answering = await openClient(asked.hub);
-    answering.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    answering.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await answering.framesReceived(2);
     answering.send({
       type: 'approval-decide',
@@ -1603,7 +1604,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // spawn has no id until the provider writes one -- the reply the web form's
     // follow-up logic has to read honestly rather than invent an address from.
     const starter = await openClient(singleHub.hub);
-    starter.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    starter.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await starter.framesReceived(2);
     starter.send({
       type: 'session-start',
@@ -2514,7 +2515,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the holding machine to connect and report',
     );
     const stopper = await openClient(heldHub.hub);
-    stopper.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    stopper.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await stopper.framesReceived(2);
     // The two frames a real client sends next, and the reason they are here:
     // the session list asks for the tree and for a page of the catalogue as
@@ -2774,7 +2775,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       },
     );
     const pairer = await openClient(pairingHub.hub);
-    pairer.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    pairer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await pairer.framesReceived(2);
     pairer.send({
       type: 'server-pair',
@@ -2916,14 +2917,14 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // the function an announcing server calls -- and travel the whole real
     // path: the listener parses them, the reducer holds them in a collection
     // of their own, and the broadcast publishes the frame captured here. One
-    // speaks this build's protocol and one does not, which is the pair of rows
+    // speaks this build's server protocol and one does not, which is the pair of rows
     // the settings screen has to draw differently.
     const network = createFakeBeaconSource();
     const listeningHub = await startFleetHub(new Map(), [], new Map(), network);
     network.send(
       formatServerBeacon({
         type: 'agentplex-server-beacon',
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
         serverId: serverIdSchema.parse('server-mbp'),
         address: '192.168.1.24',
         port: 8443,
@@ -2932,7 +2933,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     network.send(
       formatServerBeacon({
         type: 'agentplex-server-beacon',
-        protocolVersion: PROTOCOL_VERSION - 1,
+        protocolVersion: SERVER_PROTOCOL_VERSION - 1,
         serverId: serverIdSchema.parse('server-old-build'),
         address: '192.168.1.31',
         port: 8443,
@@ -2991,7 +2992,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // subscribe is the second frame on the watching socket -- which is what a
     // pane's first subscribe is, and therefore the id these fixtures carry.
     const runner = await openClient(terminalHub.hub);
-    runner.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    runner.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await runner.framesReceived(2);
     runner.send({
       type: 'session-start',
@@ -3020,7 +3021,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     live.ptys.last?.emit('still building\r\n');
 
     const watcher = await openClient(terminalHub.hub);
-    watcher.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    watcher.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await watcher.framesReceived(2);
     watcher.send({ type: 'session-subscribe', id: 2, target: watched });
     await until(
@@ -3076,7 +3077,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // above overflowed the terminal's scrollback, so this is the reply that
     // says outright how much of the beginning is gone.
     const latecomer = await openClient(terminalHub.hub);
-    latecomer.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    latecomer.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await latecomer.framesReceived(2);
     latecomer.send({ type: 'session-subscribe', id: 2, target: watched });
     await until(
@@ -3093,7 +3094,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
     // again -- because a client's start handle *is* the id of its own
     // `session-start` frame, and these fixtures have to drive that store.
     const spawning = await openClient(terminalHub.hub);
-    spawning.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    spawning.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await spawning.framesReceived(2);
     spawning.send({
       type: 'session-start',
@@ -3180,7 +3181,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       'the watching pane to be told that its feed ended',
     );
     const orphan = await openClient(terminalHub.hub);
-    orphan.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    orphan.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await orphan.framesReceived(2);
     orphan.send({ type: 'session-subscribe', id: 2, target: watched });
     await until(
@@ -3220,7 +3221,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       timers: createFakeTimers(),
     });
     const fourth = await openClient(stored);
-    fourth.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    fourth.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await fourth.framesReceived(2);
     fourth.send({ type: 'pane-layout-request', id: 2 });
     await fourth.framesReceived(3);
@@ -3256,7 +3257,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       timers: createFakeTimers(),
     });
     const fifth = await openClient(pushing);
-    fifth.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    fifth.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await fifth.framesReceived(2);
     fifth.send({
       type: 'push-subscribe',
@@ -3286,7 +3287,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
       timers: createFakeTimers(),
     });
     const sixth = await openClient(unpushing);
-    sixth.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    sixth.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await sixth.framesReceived(2);
     sixth.send({
       type: 'push-subscribe',
@@ -3407,7 +3408,7 @@ describe.runIf(process.env.CAPTURE_FIXTURES === '1')('capturing client fixtures'
  * and these exist to test that it can read what the hub actually sends.
  * Re-capture after any change to the hub-to-client frames.
  *
- * Captured at protocol version ${PROTOCOL_VERSION}.
+ * Captured at client protocol version ${CLIENT_PROTOCOL_VERSION}.
  */
 export const hubFrames = {
 ${entries}

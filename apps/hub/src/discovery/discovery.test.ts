@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BEACON_EXPIRY_MS,
   BEACON_ANNOUNCE_INTERVAL_MS,
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   formatServerBeacon,
   serverIdSchema,
   type ServerId,
@@ -34,7 +34,7 @@ const START = 1_756_000_000_000;
 function beaconText(overrides: Partial<Parameters<typeof formatServerBeacon>[0]> = {}): string {
   return formatServerBeacon({
     type: 'agentplex-server-beacon',
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: SERVER_PROTOCOL_VERSION,
     serverId: serverIdSchema.parse('server-gpu-box'),
     address: '192.168.1.24',
     port: 8443,
@@ -109,7 +109,7 @@ describe('the hub beacon listener', () => {
         serverId: 'server-gpu-box',
         address: '192.168.1.24',
         port: 8443,
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
         heardAt: START,
         heardFrom: '192.168.1.24',
       },
@@ -227,7 +227,7 @@ describe('the hub beacon listener', () => {
     hub.send(
       JSON.stringify({
         type: 'agentplex-server-beacon',
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
         serverId: 'server-gpu-box',
         address: '192.168.1.24',
         port: 8443,
@@ -239,13 +239,13 @@ describe('the hub beacon listener', () => {
 
   it('keeps a machine speaking another protocol, and carries the version it claimed', () => {
     const hub = listening();
-    hub.send(beaconText({ protocolVersion: PROTOCOL_VERSION + 1 }));
+    hub.send(beaconText({ protocolVersion: SERVER_PROTOCOL_VERSION + 1 }));
 
     // Kept, because the honest report is "a machine is there and this hub
     // cannot speak to it". Dropping it would report silence, which is a
     // different and untrue thing.
     expect(hub.listener.candidates).toHaveLength(1);
-    expect(hub.listener.candidates[0]?.protocolVersion).toBe(PROTOCOL_VERSION + 1);
+    expect(hub.listener.candidates[0]?.protocolVersion).toBe(SERVER_PROTOCOL_VERSION + 1);
     expect(hub.lines.some((line) => line.message.includes('another protocol'))).toBe(true);
   });
 

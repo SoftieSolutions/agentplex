@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   parseHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   serverIdSchema,
   storeIdSchema,
   type HubFrame,
@@ -211,7 +211,7 @@ async function pairedFleet(): Promise<{ running: Fleet; client: Client }> {
   const running = await startFleet();
   fleet = running;
   const client = await openClient(running.hub);
-  client.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+  client.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
   await until(() => reply(client, 'welcome') !== undefined, 'the welcome');
 
   client.send({
@@ -334,7 +334,7 @@ describe('a client pairing a server', () => {
     const running = await startFleet();
     fleet = running;
     const client = await openClient(running.hub);
-    client.send({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+    client.send({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
     await until(() => reply(client, 'welcome') !== undefined, 'the welcome');
 
     client.send({

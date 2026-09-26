@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseHubToServerFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   type HubId,
   type ServerAddress,
   type StoreDescriptor,
@@ -129,7 +129,7 @@ describe('handshakeWithServer', () => {
     expect(parsed.value).toEqual({
       type: 'handshake',
       id: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       hubId,
       token: target.token,
     });
@@ -161,7 +161,7 @@ describe('handshakeWithServer', () => {
       JSON.stringify({
         type: 'handshake-accepted',
         replyTo: 1,
-        protocolVersion: PROTOCOL_VERSION + 1,
+        protocolVersion: SERVER_PROTOCOL_VERSION + 1,
         serverId: 'server-under-test',
         stores: [],
         providers: [],
@@ -191,7 +191,7 @@ describe('handshakeWithServer', () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.problem).toContain('99');
-    expect(outcome.problem).toContain(String(PROTOCOL_VERSION));
+    expect(outcome.problem).toContain(String(SERVER_PROTOCOL_VERSION));
   });
 
   it('closes a connection it refused, rather than leaving it open', async () => {
@@ -216,7 +216,7 @@ describe('handshakeWithServer', () => {
       JSON.stringify({
         type: 'handshake-accepted',
         replyTo: 99,
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
         serverId: 'somebody-else',
         stores: [],
       }),
@@ -309,7 +309,7 @@ describe('handshakeWithServer', () => {
       JSON.stringify({
         type: 'handshake-accepted',
         replyTo: 1,
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
         serverId: 'too-late',
         stores: [],
       }),

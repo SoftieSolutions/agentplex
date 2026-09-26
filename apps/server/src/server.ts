@@ -1,5 +1,5 @@
 import {
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   sameReadiness,
   type ProviderReadiness,
   type ServerId,
@@ -640,7 +640,7 @@ export async function startSessionServer(
         sendJson(response, 200, {
           status: 'ok',
           role: 'server',
-          protocolVersion: PROTOCOL_VERSION,
+          protocolVersion: SERVER_PROTOCOL_VERSION,
         });
         return;
       }

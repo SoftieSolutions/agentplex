@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { sendJson, type Logger, type Timers } from '@agentplex/node-shared';
-import { PROTOCOL_VERSION, type HubId } from '@agentplex/protocol';
+import { CLIENT_PROTOCOL_VERSION, SERVER_PROTOCOL_VERSION, type HubId } from '@agentplex/protocol';
 import { NOT_AUTHORIZED } from '../client-auth/client-auth.js';
 import { docCreateTool, type DocCreates } from './doc-create.js';
 import { docListTool, type DocIndex } from './doc-list.js';
@@ -79,15 +79,19 @@ const STOPPING = 'the hub is stopping';
 /**
  * How this hub names itself in the answer to `initialize`.
  *
- * The version is the wire contract this hub speaks and not the package it was
- * built from. The package's version is a fact nothing in this process currently
- * has -- it would take a seam through `main.ts` to learn one -- and the number
- * that actually decides whether this hub and a peer can talk is this one.
+ * The version is the pair of wire contracts this hub speaks, one per leg, and
+ * not the package it was built from. The package's version is a fact nothing in
+ * this process currently has -- it would take a seam through `main.ts` to learn
+ * one -- and the numbers that actually decide whether this hub and a peer can
+ * talk are these.
  * `serverInfo` is a display string either way: a caller that wants these facts
  * to compare rather than to print asks `hub_info`, where each of them is in a
  * field that says what it is.
  */
-const SERVER_INFO = { name: 'agentplex-hub', version: String(PROTOCOL_VERSION) };
+const SERVER_INFO = {
+  name: 'agentplex-hub',
+  version: `client ${String(CLIENT_PROTOCOL_VERSION)} server ${String(SERVER_PROTOCOL_VERSION)}`,
+};
 
 /**
  * The SDK's own transport, as the SDK's own `Transport`.

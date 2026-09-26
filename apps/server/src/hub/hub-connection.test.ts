@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseServerToHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   type ApprovalId,
   type ProviderReadiness,
   type ServerToHubFrame,
@@ -80,7 +80,7 @@ function handshake(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     type: 'handshake',
     id: 1,
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: SERVER_PROTOCOL_VERSION,
     hubId: 'hub-under-test',
     token: TOKEN,
     ...overrides,
@@ -177,7 +177,7 @@ describe('serveHubConnection', () => {
       {
         type: 'handshake-accepted',
         replyTo: 1,
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
         serverId: 'server-under-test',
         stores: [{ storeId: 'store-a', path: '/volumes/claude' }],
         providers: [readyProvider()],
@@ -251,7 +251,7 @@ describe('serveHubConnection', () => {
     // Order matters: a peer with no valid token learns only that it was wrong.
     const { socket } = connect();
 
-    socket.receive(handshake({ token: 'a-guess', protocolVersion: PROTOCOL_VERSION + 1 }));
+    socket.receive(handshake({ token: 'a-guess', protocolVersion: SERVER_PROTOCOL_VERSION + 1 }));
     await settle();
 
     expect(replies(socket.sent)[0]).toMatchObject({ reason: 'unauthorized' });
@@ -260,7 +260,7 @@ describe('serveHubConnection', () => {
   it('refuses a protocol version that is not exactly its own', async () => {
     const { socket, connection } = connect();
 
-    socket.receive(handshake({ protocolVersion: PROTOCOL_VERSION + 1 }));
+    socket.receive(handshake({ protocolVersion: SERVER_PROTOCOL_VERSION + 1 }));
     await settle();
 
     expect(replies(socket.sent)).toEqual([
@@ -272,7 +272,7 @@ describe('serveHubConnection', () => {
   it('refuses an older protocol version too, because the match is exact and not a floor', async () => {
     const { socket } = connect();
 
-    socket.receive(handshake({ protocolVersion: PROTOCOL_VERSION - 1 }));
+    socket.receive(handshake({ protocolVersion: SERVER_PROTOCOL_VERSION - 1 }));
     await settle();
 
     expect(replies(socket.sent)[0]).toMatchObject({ reason: 'protocol-version' });

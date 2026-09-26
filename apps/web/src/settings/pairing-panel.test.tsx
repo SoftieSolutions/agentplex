@@ -277,7 +277,7 @@ describe('the pairing panel', () => {
 
     const mismatched = candidateRows()[1];
     expect(mismatched?.textContent).toContain('server-old-build');
-    expect(mismatched?.textContent).toContain('this hub speaks protocol');
+    expect(mismatched?.textContent).toContain('this hub speaks server protocol');
     expect(mismatched?.querySelector('button')?.disabled).toBe(true);
   });
 });

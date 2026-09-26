@@ -6,7 +6,7 @@ import {
   nodeIdSchema,
   parseClientFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   pushSubscriptionSchema,
   serverRegistrationIdSchema,
   sessionIdSchema,
@@ -148,7 +148,7 @@ describe('connection lifecycle', () => {
     const socket = h.sockets.sockets[0];
     socket?.open();
     expect(sentFrames(socket as FakeSocket)).toEqual([
-      { type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION },
+      { type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION },
     ]);
     unsubscribe();
   });
@@ -580,7 +580,7 @@ describe('commands', () => {
     next.deliver(hubFrames.welcome);
 
     const frames = sentFrames(next);
-    expect(frames[0]).toEqual({ type: 'hello', id: 4, protocolVersion: PROTOCOL_VERSION });
+    expect(frames[0]).toEqual({ type: 'hello', id: 4, protocolVersion: CLIENT_PROTOCOL_VERSION });
     expect(frames.slice(1)).toEqual([
       { ...START, id: 2 },
       { type: 'session-stop', storeId: SESSION.storeId, sessionId: SESSION.sessionId, id: 3 },
@@ -1590,7 +1590,7 @@ describe('subscriptions', () => {
     next.open();
     next.deliver(hubFrames.welcome);
     expect(sentFrames(next)).toEqual([
-      { type: 'hello', id: 3, protocolVersion: PROTOCOL_VERSION },
+      { type: 'hello', id: 3, protocolVersion: CLIENT_PROTOCOL_VERSION },
       { type: 'layout-request', id: 4 },
     ]);
     unsubscribe();

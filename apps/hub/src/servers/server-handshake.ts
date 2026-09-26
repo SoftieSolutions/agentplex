@@ -1,8 +1,8 @@
 import {
-  checkProtocolVersion,
+  checkServerProtocolVersion,
   parseServerToHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   type HubId,
   type HubToServerFrame,
   type ProviderReadiness,
@@ -182,11 +182,11 @@ export async function handshakeWithServer(
           // compares the version the hub sent; this compares the version the
           // server claims. Either check alone leaves one direction of the
           // mismatch undetected.
-          const mismatch = checkProtocolVersion(frame.protocolVersion);
+          const mismatch = checkServerProtocolVersion(frame.protocolVersion);
           if (mismatch !== null) {
             fail(
               'protocol-version',
-              `the server speaks protocol version ${mismatch.received}; this hub speaks ${mismatch.expected}`,
+              `the server speaks server protocol version ${mismatch.received}; this hub speaks ${mismatch.expected}`,
             );
             return;
           }
@@ -248,7 +248,7 @@ export async function handshakeWithServer(
     send({
       type: 'handshake',
       id: frameId,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
       hubId,
       token: target.token,
     });
@@ -263,5 +263,5 @@ export async function handshakeWithServer(
 function refusalText(reason: 'unauthorized' | 'protocol-version'): string {
   return reason === 'unauthorized'
     ? "the server refused this hub's token; pair again with the token the server printed"
-    : `the server does not speak protocol version ${PROTOCOL_VERSION}`;
+    : `the server does not speak server protocol version ${SERVER_PROTOCOL_VERSION}`;
 }

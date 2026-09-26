@@ -9,7 +9,7 @@ import {
   serverIdSchema,
   sessionIdSchema,
   storeIdSchema,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   type HubFrame,
   type Layout,
   type MachineState,
@@ -284,7 +284,7 @@ async function openClient(hub: Hub): Promise<Client> {
   };
 
   serverEnd.send(
-    JSON.stringify({ type: 'hello', id: (nextId += 1), protocolVersion: PROTOCOL_VERSION }),
+    JSON.stringify({ type: 'hello', id: (nextId += 1), protocolVersion: CLIENT_PROTOCOL_VERSION }),
   );
 
   /** The first frame that answers this id, whatever kind of answer it is. */

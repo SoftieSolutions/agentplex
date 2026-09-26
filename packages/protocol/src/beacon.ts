@@ -16,6 +16,11 @@ import { frameParser } from './parse.js';
  * server formats it (AGX-45) and the hub parses it (AGX-46). The socket does
  * not — a datagram is bytes, and this package is bundled into a browser that
  * has no such thing. Both sides hand text in and out.
+ *
+ * It belongs to the server leg. The version it carries is the one a hub
+ * would meet at the handshake, `SERVER_PROTOCOL_VERSION`, and its shape is
+ * snapshotted with the hub-to-server frames: a change here bumps the server
+ * leg, never the client one.
  */
 
 /**
@@ -86,8 +91,8 @@ export const serverBeaconSchema = z.strictObject({
   /**
    * Read, never enforced here. A hub that could not parse a beacon from a
    * mismatched build could only report silence, when what it can report is a
-   * machine it can see and cannot speak to. `checkProtocolVersion` is the
-   * verdict, and it belongs to whoever is deciding what to show.
+   * machine it can see and cannot speak to. `checkServerProtocolVersion` is
+   * the verdict, and it belongs to whoever is deciding what to show.
    */
   protocolVersion: z.int().positive(),
   serverId: serverIdSchema,

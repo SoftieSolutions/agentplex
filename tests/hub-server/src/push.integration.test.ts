@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   parseHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   type HubFrame,
 } from '@agentplex/protocol';
 import {
@@ -169,7 +169,7 @@ function openClient(hub: Hub): Client {
 
   let nextId = 0;
   serverEnd.send(
-    JSON.stringify({ type: 'hello', id: (nextId += 1), protocolVersion: PROTOCOL_VERSION }),
+    JSON.stringify({ type: 'hello', id: (nextId += 1), protocolVersion: CLIENT_PROTOCOL_VERSION }),
   );
 
   const find = async (match: (frame: HubFrame) => boolean): Promise<HubFrame> => {

@@ -5,7 +5,7 @@ import {
   approvalIdSchema,
   approvalPolicyRuleIdSchema,
 } from './approval.js';
-import { PROTOCOL_VERSION } from './version.js';
+import { CLIENT_PROTOCOL_VERSION } from './version.js';
 import { parseClientFrame, parseHubFrame, type ClientFrame, type HubFrame } from './client.js';
 import { pairedServerAddressSchema } from './pairing.js';
 import {
@@ -27,7 +27,7 @@ describe('parseClientFrame', () => {
     const result = parseClientFrame({
       type: 'hello',
       id: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
     });
     expect(result.ok).toBe(true);
   });
@@ -400,7 +400,7 @@ describe('parseHubFrame', () => {
     const result = parseHubFrame({
       type: 'welcome',
       replyTo: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
       hubId: 'hub-1',
       pushPublicKey: null,
     });
@@ -413,7 +413,7 @@ describe('parseHubFrame', () => {
     const withKey = parseHubFrame({
       type: 'welcome',
       replyTo: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
       hubId: 'hub-1',
       pushPublicKey: key,
     });
@@ -422,7 +422,7 @@ describe('parseHubFrame', () => {
       value: {
         type: 'welcome',
         replyTo: 1,
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: CLIENT_PROTOCOL_VERSION,
         hubId: 'hub-1',
         pushPublicKey: key,
       },
@@ -437,7 +437,7 @@ describe('parseHubFrame', () => {
       parseHubFrame({
         type: 'welcome',
         replyTo: 1,
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: CLIENT_PROTOCOL_VERSION,
         hubId: 'hub-1',
       }).ok,
     ).toBe(false);
@@ -448,7 +448,7 @@ describe('parseHubFrame', () => {
       parseHubFrame({
         type: 'welcome',
         replyTo: 1,
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: CLIENT_PROTOCOL_VERSION,
         hubId: 'hub-1',
         pushPublicKey: '',
       }).ok,
@@ -503,7 +503,7 @@ describe('parseHubFrame', () => {
  */
 describe('client and hub round trips', () => {
   const clientFrames: readonly ClientFrame[] = [
-    { type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION },
+    { type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION },
     { type: 'ping', id: 2 },
     { type: 'layout-request', id: 3 },
     {
@@ -690,14 +690,14 @@ describe('client and hub round trips', () => {
     {
       type: 'welcome',
       replyTo: 1,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
       hubId: hubIdSchema.parse('hub-1'),
       pushPublicKey: null,
     },
     {
       type: 'welcome',
       replyTo: 2,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: CLIENT_PROTOCOL_VERSION,
       hubId: hubIdSchema.parse('hub-1'),
       pushPublicKey:
         'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM',

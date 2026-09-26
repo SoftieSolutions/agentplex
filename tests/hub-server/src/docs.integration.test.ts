@@ -4,7 +4,7 @@ import {
   parseHubFrame,
   parseHubToServerFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   serverIdSchema,
   type ClientFrame,
   type HubFrame,
@@ -304,7 +304,7 @@ async function attach(): Promise<Client> {
     },
   };
 
-  await client.say({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
   return client;
 }
 

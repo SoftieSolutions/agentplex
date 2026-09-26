@@ -4,7 +4,7 @@ import {
   nodeIdSchema,
   parseHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   serverIdSchema,
   serverRegistrationIdSchema,
   storeIdSchema,
@@ -445,7 +445,7 @@ async function attach(): Promise<Client> {
     said,
     socket,
   };
-  await client.say({ type: 'hello', id: 1, protocolVersion: PROTOCOL_VERSION });
+  await client.say({ type: 'hello', id: 1, protocolVersion: CLIENT_PROTOCOL_VERSION });
   return client;
 }
 

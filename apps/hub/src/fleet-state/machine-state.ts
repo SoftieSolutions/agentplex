@@ -75,11 +75,13 @@ function toGraphRunApproval(entry: GraphRunApproval): GraphRunApproval {
  * reads in a log; a client handed both addresses has been handed a decision the
  * hub could not make either.
  *
- * The protocol version is carried rather than judged. `checkProtocolVersion` is
- * the verdict, and the client reading this frame is running the same protocol
- * number as this hub -- its `hello` was compared with `===` before it was sent
- * any of this -- so the verdict it reaches is the one the hub would reach, and
- * a second field saying so could only ever disagree with the first.
+ * The protocol version is carried rather than judged. `checkServerProtocolVersion`
+ * is the verdict, and the client reading this frame holds the same server-leg
+ * number as this hub -- not because its `hello` matched, which proves only the
+ * client leg, but because the web package records the server leg too and every
+ * install and update refuses a web that disagrees with the hub on it -- so the
+ * verdict it reaches is the one the hub would reach, and a second field saying
+ * so could only ever disagree with the first.
  */
 function toServerCandidate(candidate: DiscoveredServer): ServerCandidate {
   return {

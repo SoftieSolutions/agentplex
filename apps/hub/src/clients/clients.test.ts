@@ -3,7 +3,7 @@ import {
   APPROVAL_PROPOSAL_MAX_CHARS,
   parseHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  CLIENT_PROTOCOL_VERSION,
   hubIdSchema,
   nodeIdSchema,
   nodeKindSchema,
@@ -261,7 +261,7 @@ function attach(broadcast: Clients): Client {
 
   const client: Client = {
     socket,
-    async hello(protocolVersion = PROTOCOL_VERSION): Promise<void> {
+    async hello(protocolVersion = CLIENT_PROTOCOL_VERSION): Promise<void> {
       await client.say({ type: 'hello', id: 1, protocolVersion });
     },
     async say(frame: Record<string, unknown>): Promise<void> {
@@ -609,14 +609,14 @@ describe('a refusal', () => {
   it('answers a client that speaks another protocol, then closes', async () => {
     const { broadcast } = harness();
     const client = attach(broadcast);
-    await client.hello(PROTOCOL_VERSION + 1);
+    await client.hello(CLIENT_PROTOCOL_VERSION + 1);
 
     expect(client.received).toEqual([
       {
         type: 'refusal',
         replyTo: 1,
         code: 'protocol-version',
-        message: `this hub speaks protocol ${PROTOCOL_VERSION}, not ${PROTOCOL_VERSION + 1}`,
+        message: `this hub speaks client protocol ${CLIENT_PROTOCOL_VERSION}, not ${CLIENT_PROTOCOL_VERSION + 1}`,
         holder: null,
       },
     ]);

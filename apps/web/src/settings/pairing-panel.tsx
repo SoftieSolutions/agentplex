@@ -207,7 +207,7 @@ function CandidateRow({
             {candidate.serverId}
           </Text>
           <Text size="xs" ff="monospace" c="dimmed">
-            {candidate.host}:{candidate.port} · protocol {candidate.protocolVersion}
+            {candidate.host}:{candidate.port} · server protocol {candidate.protocolVersion}
           </Text>
           {candidate.unusable !== null && (
             <Text size="xs" style={{ color: colorForTone('blocked', scheme) }}>

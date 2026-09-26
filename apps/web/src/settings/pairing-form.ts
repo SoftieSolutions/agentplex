@@ -1,5 +1,5 @@
 import {
-  checkProtocolVersion,
+  checkServerProtocolVersion,
   serverAddressSchema,
   serverLabelSchema,
   serverTokenSchema,
@@ -104,7 +104,7 @@ export interface DiscoveredCandidate {
   /** The address the beacon named, exactly as it named it. */
   readonly host: string;
   readonly port: number;
-  /** The protocol that machine claimed to speak. */
+  /** The server-leg protocol that machine claimed to speak. */
   readonly protocolVersion: number;
   /**
    * The `wss://` address selecting this candidate would put in the form, or
@@ -152,11 +152,15 @@ export function prefillFromCandidate(
  * server, so no amount of broadcasting can make one appear in this list.
  *
  * The version verdict is reached here rather than read off the frame. The hub
- * publishes what the beacon claimed and no boolean beside it, because a client
- * reading a machine state has already had its own `hello` compared with `===`
- * against that hub's `PROTOCOL_VERSION` — so the number this build compares
- * against is the number the hub would have compared against, and a field
- * carrying the answer could only ever be a second copy free to disagree.
+ * publishes what the beacon claimed and no boolean beside it, and this build
+ * compares it against its own `SERVER_PROTOCOL_VERSION`. The `hello` this
+ * client sent proves only that its client leg matches the hub's; the server
+ * leg is held equal another way. The web package records both legs, and every
+ * place that decides what runs together — `install.sh`, the image and
+ * `agentplex update` — refuses a web whose server leg differs from the hub's.
+ * So the number this build compares against is the number the hub would have
+ * compared against, and a field carrying the answer could only ever be a
+ * second copy free to disagree.
  */
 export function discoveredCandidates(state: MachineState | null): readonly DiscoveredCandidate[] {
   if (state === null) return [];
@@ -181,9 +185,9 @@ function toCandidate(candidate: ServerCandidate): DiscoveredCandidate {
  * machine this build cannot speak to.
  */
 function unusableBecause(candidate: ServerCandidate, address: string | null): string | null {
-  const mismatch = checkProtocolVersion(candidate.protocolVersion);
+  const mismatch = checkServerProtocolVersion(candidate.protocolVersion);
   if (mismatch !== null) {
-    return `this hub speaks protocol ${String(mismatch.expected)} and that machine speaks ${String(mismatch.received)}`;
+    return `this hub speaks server protocol ${String(mismatch.expected)} and that machine speaks ${String(mismatch.received)}`;
   }
   if (address === null) {
     return 'the address this machine announced is not one that can be dialled';

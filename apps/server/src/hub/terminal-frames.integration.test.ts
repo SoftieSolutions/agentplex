@@ -3,7 +3,7 @@ import {
   decodeTerminalChunk,
   parseServerToHubFrame,
   parseTextFrame,
-  PROTOCOL_VERSION,
+  SERVER_PROTOCOL_VERSION,
   sessionIdSchema,
   startIdSchema,
   storeDescriptorSchema,
@@ -160,7 +160,7 @@ async function handshaken(
   await test.send({
     type: 'handshake',
     id: 1,
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: SERVER_PROTOCOL_VERSION,
     hubId: 'hub-under-test' as never,
     token: identity.token,
   });
