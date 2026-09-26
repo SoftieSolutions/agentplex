@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseClientFrame } from './client.js';
+import { parseClientFrame } from './client-to-hub.js';
 import { parseTextFrame } from './parse.js';
 
 describe('parseTextFrame', () => {

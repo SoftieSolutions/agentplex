@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseClientFrame, parseHubFrame } from './client.js';
+import { parseClientFrame } from './client-to-hub.js';
+import { parseHubFrame } from './hub-to-client.js';
 import {
   GRAPH_RUN_HISTORY_MAX,
   GRAPH_RUN_OUTPUT_MAX_CHARS,

@@ -354,15 +354,13 @@ export type {
   TerminalSize,
 } from './terminal.js';
 
-export {
-  clientFrameSchema,
-  hubFrameSchema,
-  PANE_LAYOUT_MAX_CHARS,
-  paneLayoutTextSchema,
-  parseClientFrame,
-  parseHubFrame,
-} from './client.js';
-export type { ClientFrame, HubFrame } from './client.js';
+export { PANE_LAYOUT_MAX_CHARS, paneLayoutTextSchema } from './pane-layout.js';
+
+export { clientFrameSchema, parseClientFrame } from './client-to-hub.js';
+export type { ClientFrame } from './client-to-hub.js';
+
+export { hubFrameSchema, parseHubFrame } from './hub-to-client.js';
+export type { HubFrame } from './hub-to-client.js';
 
 export {
   hubToServerFrameSchema,

@@ -19,9 +19,9 @@ import { refuses, type McpAnswer } from './tool-registry.js';
  * `docs.ts` for a write -- and what it resolves comes out of this hub's own
  * rows, which hold only directories somebody picked by browsing a machine. A
  * tool that took a path would be an agent choosing where a process runs or a
- * file lands, which is the one thing `client.ts` shapes these frames to make
- * unrepresentable; the MCP endpoint is a projection of what a client may ask
- * for, and a client may not ask for that either.
+ * file lands, which is the one thing `client-to-hub.ts` shapes these frames to
+ * make unrepresentable; the MCP endpoint is a projection of what a client may
+ * ask for, and a client may not ask for that either.
  *
  * ## Why a parse and not a cast
  *

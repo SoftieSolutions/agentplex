@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { serverBeaconSchema } from './beacon.js';
-import { clientFrameSchema, hubFrameSchema } from './client.js';
+import { clientFrameSchema } from './client-to-hub.js';
+import { hubFrameSchema } from './hub-to-client.js';
 import { hubToServerFrameSchema, serverToHubFrameSchema } from './server.js';
 import { CLIENT_PROTOCOL_VERSION, SERVER_PROTOCOL_VERSION } from './version.js';
 
