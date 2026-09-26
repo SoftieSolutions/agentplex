@@ -81,9 +81,14 @@ export type RealPath =
   | { readonly kind: 'missing' }
   | { readonly kind: 'failed'; readonly reason: string };
 
-/** What one directory holds, or why it could not be read. */
+/** What one directory holds, up to a limit, or why it could not be read. */
 export type DirectoryRead =
-  | { readonly kind: 'read'; readonly entries: readonly DirectoryEntry[] }
+  | {
+      readonly kind: 'read';
+      readonly entries: readonly DirectoryEntry[];
+      /** At least one entry beyond `limit` exists and was not read. */
+      readonly more: boolean;
+    }
   | { readonly kind: 'failed'; readonly reason: string };
 
 /**
@@ -98,12 +103,18 @@ export interface DirectoryReader {
   /** Resolves every link in the path and says what is at the end of it. */
   realPath(path: string): Promise<RealPath>;
   /**
-   * The entries of a directory, unsorted, uncapped, links reported as links.
+   * The entries of a directory, unsorted, capped at `limit`, links reported as
+   * links.
+   *
+   * Capped here rather than by the caller, so that a directory with a million
+   * files costs `limit` entries of memory and not a million: the read stops
+   * once it has `limit` and reports only whether there was another. Which
+   * `limit` entries is the disk's choice, not an order.
    *
    * Never followed: an implementation that resolved an entry would make the
    * kind on the frame a claim about somewhere else.
    */
-  read(path: string): Promise<DirectoryRead>;
+  read(path: string, limit: number): Promise<DirectoryRead>;
 }
 
 export interface DirectoryBrowseDependencies {
@@ -258,7 +269,7 @@ export function createDirectoryBrowser({
       const resolved = await resolve(directory);
       if (!resolved.ok) return resolved;
 
-      const read = await reader.read(resolved.real);
+      const read = await reader.read(resolved.real, DIRECTORY_ENTRIES_MAX);
       if (read.kind === 'failed') {
         // `internal` and not `refused`: the rule said yes, this machine failed
         // on its own side, and a fixed permission makes the same request work.
@@ -269,13 +280,19 @@ export function createDirectoryBrowser({
         };
       }
 
-      const sorted = [...read.entries].sort(byName);
+      // Sorted over what the reader returned, which above the cap is the
+      // first entries the kernel handed back and not the first by name. So
+      // `truncated: true` means names may be missing from anywhere in the
+      // order, not only after the last one shown. That is the price of never
+      // holding a whole huge directory in memory, and it is one the picker can
+      // pay: a user narrows a big directory by descending into a known child,
+      // not by scrolling to the end of it.
       return {
         ok: true,
         directory,
         roots,
-        entries: sorted.slice(0, DIRECTORY_ENTRIES_MAX),
-        truncated: sorted.length > DIRECTORY_ENTRIES_MAX,
+        entries: [...read.entries].sort(byName),
+        truncated: read.more,
       };
     },
   };
