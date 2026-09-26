@@ -210,10 +210,11 @@ export interface WebSocketListenerOptions {
 const DEFAULT_MAX_PAYLOAD_BYTES = 1_000_000;
 
 /**
- * The listening side. Only the server role has one — a hub dials and is never
- * dialled by a server — and it hangs off the role's existing HTTP listener so
- * that the machine needs exactly one inbound port open, which is the promise
- * the connectivity design makes to anyone opening a firewall.
+ * The listening side. Both daemons have one: the hub listens for clients and
+ * the server for hubs, and no server ever dials a hub. Each hangs off its
+ * daemon's one HTTP listener so that the machine needs exactly one inbound
+ * port open per daemon, which is the promise the connectivity design makes to
+ * anyone opening a firewall.
  */
 export function createWebSocketListener(options: WebSocketListenerOptions): WebSocketListener {
   const server = new WebSocketServer({
