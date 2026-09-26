@@ -711,6 +711,7 @@ function buildLiveMachine(): LiveMachine {
     listDirectory: (path) => createFakeProviderFiles({ files: sessionFiles }).listDirectory(path),
     readFileTail: (path, maxBytes) =>
       createFakeProviderFiles({ files: sessionFiles }).readFileTail(path, maxBytes),
+    stat: (path) => createFakeProviderFiles({ files: sessionFiles }).stat(path),
   };
   const stores = [LIVE_STORE];
   return {

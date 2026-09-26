@@ -136,6 +136,7 @@ function machine(options: MachineOptions = {}): Machine {
     listDirectory: (path) => createFakeProviderFiles({ files: transcripts }).listDirectory(path),
     readFileTail: (path, maxBytes) =>
       createFakeProviderFiles({ files: transcripts }).readFileTail(path, maxBytes),
+    stat: (path) => createFakeProviderFiles({ files: transcripts }).stat(path),
   };
 
   const ptys = createFakePtyFactory(options.pids === undefined ? {} : { pids: options.pids });
