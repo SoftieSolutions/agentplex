@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SESSION_TITLE_MAX_CHARS } from '@agentplex/protocol';
 import { parseCodexSessionIndex } from './codex-session-index.js';
 
 /** Captured codex output; see the note in `codex-rollout.test.ts`. */
@@ -40,6 +41,46 @@ describe('parseCodexSessionIndex', () => {
       ['s-1', 'Before'],
       ['s-3', 'After'],
     ]);
+  });
+
+  it('clips a name longer than the descriptor carries, rather than losing it', () => {
+    // codex names a session with a model, so the length is the model's to
+    // choose. Past the bound it would fail the store report every other
+    // session rides on; clipped it is still a fair name.
+    const long = 'Reply with pineapple '.repeat(20);
+    const names = parseCodexSessionIndex(
+      SESSION_INDEX.replace('"thread_name":"Reply with pineapple"', `"thread_name":"${long}"`),
+    );
+    const title = names.get('01a09386-f378-7b23-83a7-6c263ed59701');
+
+    expect(title?.length).toBeLessThanOrEqual(SESSION_TITLE_MAX_CHARS);
+    expect(title).toBe(title?.trim());
+    expect(long.startsWith(title ?? '-')).toBe(true);
+  });
+
+  it('gives no name to a session whose name is nothing that can be drawn', () => {
+    const names = parseCodexSessionIndex(
+      SESSION_INDEX.replace(
+        '"thread_name":"Reply with pineapple"',
+        '"thread_name":"\\u202e\\u2066\\u200f"',
+      ),
+    );
+
+    expect(names.has('01a09386-f378-7b23-83a7-6c263ed59701')).toBe(false);
+  });
+
+  it('forgets an earlier name when the rename that replaced it draws as nothing', () => {
+    // Last wins, and the last name codex gave is one there is nothing to show
+    // for. Keeping the older name would be showing a name codex has replaced.
+    const renamed = [
+      SESSION_INDEX.trim(),
+      SESSION_INDEX.trim().replace(
+        '"thread_name":"Reply with pineapple"',
+        '"thread_name":"\\u202e"',
+      ),
+    ].join('\n');
+
+    expect(parseCodexSessionIndex(renamed).has('01a09386-f378-7b23-83a7-6c263ed59701')).toBe(false);
   });
 
   it('is empty for a store where codex has named nothing', () => {
