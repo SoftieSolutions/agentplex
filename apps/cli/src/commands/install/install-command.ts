@@ -1,6 +1,7 @@
 import { dirname, join } from 'node:path';
 import { parseVersionsManifest } from '@agentplex/release';
 import { runOperation, type ProcessRunner, type ProgramResolver } from '@agentplex/providers';
+import { z } from 'zod';
 import { CLI_COMMAND } from '../../installation/components.js';
 import {
   SYSTEM_ACCOUNT,
@@ -53,7 +54,7 @@ import {
  * resolve the release (the manifest, or AGENTPLEX_PACKAGE's tarballs)
  *   -> the service account is there, under --system
  *   -> the role's packages, staged together and moved in together
- *   -> the command's own package, last, when it is not already the one running
+ *   -> the command's own package, last, unless the prefix already holds it
  *   -> what the service account owns, under --system
  *   -> the settings file, if there is none
  *   -> each daemon's unit, if there is none; never enabled
@@ -68,11 +69,13 @@ import {
  *
  * Run by hand on an installed machine, this command runs out of the package it
  * would overwrite -- the reason `update` gives for installing that package
- * last and importing everything statically. The same holds here, and the same
- * rule decides whether it is installed at all: only when the release names a
- * version other than the one running, or when the prefix has no command
- * package in it. Under the handover `install.sh` has just put exactly that
- * version there, so the step is a no-op then.
+ * last and importing everything statically. The same holds here. Whether it
+ * is installed at all is the target prefix's answer, not this process's: it is
+ * left alone only when the tree in the prefix says it is the resolved version
+ * and the prefix's link to run it is there. Under the handover `install.sh` has
+ * just put exactly that there, so the step is a no-op then. From
+ * `AGENTPLEX_PACKAGE` it is always installed, as the script installs it,
+ * because every local build is `0.0.0` and a version cannot tell two apart.
  *
  * Exit codes are the bin's rather than the script's: a wrong invocation -- a
  * flag the grammar refuses, a scope the account cannot take -- is 2, as every
@@ -104,12 +107,6 @@ export interface InstallCommandDependencies {
   readonly reader: ManifestReader;
   /** What downloads a release's tarballs. */
   readonly downloader: Downloader;
-  /**
-   * The version of the package this process runs from, read off its manifest,
-   * or `null` when it could not be. The command's own package is installed
-   * only when the release names another one.
-   */
-  readonly runningVersion: string | null;
   /** `process.platform`: a machine that is not Linux holds no systemd unit. */
   readonly platform: string;
   /** Where the manifest is. A dry run reads only a file; a real run reads either. */
@@ -239,7 +236,12 @@ export async function runInstallCommand(
 
   report(byLabel('release', 'client protocol', 'server protocol', 'package'));
 
-  const installed = await installRoleComponents(plan.packages, layout, dependencies);
+  const installed = await installRoleComponents(
+    plan.packages,
+    release.value.kind,
+    layout,
+    dependencies,
+  );
   if (!installed.ok) return stop(installed.problem);
 
   if (layout.scope === 'system') {
@@ -280,6 +282,7 @@ export async function runInstallCommand(
  */
 async function installRoleComponents(
   packages: readonly PlannedPackage[],
+  from: ReleaseInput['kind'],
   layout: Layout,
   dependencies: InstallCommandDependencies,
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly problem: string }> {
@@ -288,6 +291,7 @@ async function installRoleComponents(
 
   const others = packages.filter((one) => one.component !== SELF);
   const self = packages.find((one) => one.component === SELF);
+  const command = join(binDirectory(layout), CLI_COMMAND);
   const installs: PackageInstall[] = [];
   if (others.length > 0) {
     installs.push({
@@ -296,10 +300,15 @@ async function installRoleComponents(
     });
   }
   if (self !== undefined) {
-    const inPlace = await machine.exists(packageDirectory(layout, self.package));
-    if (self.version !== null && self.version === dependencies.runningVersion && inPlace) {
+    const tree = packageDirectory(layout, self.package);
+    if (
+      from !== 'tarballs' &&
+      self.version !== null &&
+      (await installedVersion(tree, machine)) === self.version &&
+      (await machine.exists(command))
+    ) {
       line(
-        `${CLI_COMMAND} ${self.version} is the version running this, and it is in place: left as it is`,
+        `${CLI_COMMAND} ${self.version} is already in ${tree}, and ${command} is there: left as it is`,
       );
     } else {
       installs.push({
@@ -347,11 +356,31 @@ async function installRoleComponents(
     }
   }
 
-  const command = join(binDirectory(layout), CLI_COMMAND);
   if (!(await machine.exists(command))) {
     return { ok: false, problem: `installed the packages and there is no ${command} to run` };
   }
   return { ok: true };
+}
+
+const installedManifestSchema = z.object({ version: z.string().min(1) });
+
+/**
+ * The version a package tree in the prefix says it is, or `null` when it
+ * cannot say: no manifest, one that will not read, or one that does not parse.
+ * Each of those is a tree that is not known to be the release, so it is
+ * installed over rather than trusted.
+ */
+async function installedVersion(tree: string, machine: InstallMachine): Promise<string | null> {
+  const read = await machine.readFile(`${tree}/package.json`);
+  if (read.kind !== 'read') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(read.contents);
+  } catch {
+    return null;
+  }
+  const manifest = installedManifestSchema.safeParse(parsed);
+  return manifest.success ? manifest.data.version : null;
 }
 
 /**

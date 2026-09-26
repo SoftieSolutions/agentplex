@@ -74,8 +74,6 @@ interface Setup {
   readonly served?: Readonly<Record<string, string>>;
   /** The URLs a download succeeds from. */
   readonly downloadable?: readonly string[];
-  /** The version this process runs from, as `main.ts` reads it off its manifest. */
-  readonly runningVersion?: string | null;
   /** What any child with no answer above says. Nothing, by default: no program is there. */
   readonly fallback?: ProcessOutcome;
 }
@@ -114,7 +112,6 @@ async function run(argv: readonly string[], setup: Setup = {}): Promise<Ran> {
         return network.download(url, path);
       },
     },
-    runningVersion: setup.runningVersion === undefined ? '1.3.0' : setup.runningVersion,
     platform: setup.platform ?? 'linux',
     source: setup.source ?? { kind: 'file', path: VERSIONS },
     packageDirectory: setup.packageDirectory ?? null,
@@ -391,6 +388,26 @@ function freshMachine(prefix = PREFIX): Setup {
   };
 }
 
+/** A fresh machine whose prefix already holds the command's package and the link that runs it. */
+function cliInPrefix(manifest: string): Setup {
+  const setup = freshMachine();
+  return {
+    ...setup,
+    machine: {
+      ...setup.machine,
+      files: { [VERSIONS]: CURRENT, [`${tree('agentplex')}/package.json`]: manifest },
+      present: [...(setup.machine?.present ?? []), `${PREFIX}/bin/agentplex`],
+    },
+  };
+}
+
+/** What `pnpm pack` leaves for a hub from a checkout: every package named 0.0.0. */
+const LOCAL_BUILD = [
+  'softiesolutions-agentplex-0.0.0.tgz',
+  'softiesolutions-agentplex-hub-0.0.0.tgz',
+  'softiesolutions-agentplex-web-0.0.0.tgz',
+];
+
 /** The lines of the journal that change something: downloads, moves, links, writes, owners. */
 function changes(journal: readonly string[]): readonly string[] {
   return journal.filter((line) => /^(download|mv|link|write|chown|chmod) /.test(line));
@@ -448,34 +465,101 @@ describe('agentplex install, the run', () => {
     expect(result.probes.join('\n')).not.toContain('systemctl');
   });
 
-  it('leaves its own package alone when it is the version running and it is in place', async () => {
-    const setup = freshMachine();
+  /**
+   * Whether the command's own package moves is the target prefix's answer: the
+   * version its tree says it is, and the link that runs it. The process running
+   * this may be another install's, or a local build every one of which is
+   * 0.0.0, so its own version says nothing about what is in the prefix.
+   */
+  it('leaves its own package alone when the prefix holds that version and links it', async () => {
     const result = await run(['--role=hub'], {
-      ...setup,
-      runningVersion: '1.4.0',
-      machine: {
-        ...setup.machine,
-        files: {
-          [VERSIONS]: CURRENT,
-          [`${tree('agentplex')}/package.json`]: '{"version":"1.4.0"}',
-        },
-        present: [...(setup.machine?.present ?? []), `${PREFIX}/bin/agentplex`],
-      },
+      ...cliInPrefix('{"version":"1.4.0"}'),
     });
 
+    expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
     expect(result.journal.join('\n')).not.toContain(CLI_TARBALL);
     expect(result.journal.join('\n')).not.toContain('link ');
-    expect(result.stdout).toContain('agentplex 1.4.0 is the version running this');
+    expect(result.stdout).toContain(
+      `agentplex 1.4.0 is already in ${tree('agentplex')}, and ${PREFIX}/bin/agentplex is there: ` +
+        'left as it is\n',
+    );
     expect(result.journal.join('\n')).toContain(HUB_TARBALL);
   });
 
-  it('installs its own package when the version differs, or when the prefix has none', async () => {
-    const differs = await run(['--role=hub'], { ...freshMachine(), runningVersion: '1.3.0' });
-    const absent = await run(['--role=hub'], { ...freshMachine(), runningVersion: '1.4.0' });
+  it('installs its own package when the prefix holds another version', async () => {
+    const result = await run(['--role=hub'], {
+      ...cliInPrefix('{"version":"1.2.0"}'),
+    });
 
-    expect(differs.journal.join('\n')).toContain(CLI_TARBALL);
-    expect(absent.journal.join('\n')).toContain(CLI_TARBALL);
+    expect(result.code).toBe(0);
+    expect(changes(result.journal)).toContain(`download ${CLI_TARBALL} -> ${WORK}/cli.tgz`);
+    expect(changes(result.journal)).toContain(`mv ${tree('agentplex')}.new ${tree('agentplex')}`);
+    expect(result.stdout).not.toContain('left as it is');
+  });
+
+  it('installs its own package when the prefix has none', async () => {
+    const result = await run(['--role=hub'], freshMachine());
+
+    expect(result.code).toBe(0);
+    expect(result.journal.join('\n')).toContain(CLI_TARBALL);
+  });
+
+  it('installs its own package when the prefix holds that version and no link to run it', async () => {
+    const setup = cliInPrefix('{"version":"1.4.0"}');
+    const result = await run(['--role=hub'], {
+      ...setup,
+      machine: { ...setup.machine, present: freshMachine().machine?.present ?? [] },
+    });
+
+    expect(result.stderr).toBe('');
+    expect(result.code).toBe(0);
+    expect(changes(result.journal)).toContain(`download ${CLI_TARBALL} -> ${WORK}/cli.tgz`);
+    expect(changes(result.journal)).toContain(
+      `link ../lib/node_modules/@softiesolutions/agentplex/apps/cli/dist/main.js ` +
+        `${PREFIX}/bin/agentplex`,
+    );
+  });
+
+  it('installs its own package when the tree in the prefix cannot say what version it is', async () => {
+    const malformed = await run(['--role=hub'], {
+      ...cliInPrefix('{"name":"@softiesolutions/agentplex"}'),
+    });
+    const garbled = await run(['--role=hub'], {
+      ...cliInPrefix('1.4.0'),
+    });
+    const setup = cliInPrefix('{"version":"1.4.0"}');
+    const unreadable = await run(['--role=hub'], {
+      ...setup,
+      machine: {
+        ...setup.machine,
+        files: { [VERSIONS]: CURRENT },
+        unreadable: { [`${tree('agentplex')}/package.json`]: 'EACCES: permission denied' },
+      },
+    });
+
+    for (const result of [malformed, garbled, unreadable]) {
+      expect(result.code).toBe(0);
+      expect(result.journal.join('\n')).toContain(CLI_TARBALL);
+    }
+  });
+
+  it('always installs its own package from AGENTPLEX_PACKAGE, whose builds are all 0.0.0', async () => {
+    const setup = cliInPrefix('{"version":"0.0.0"}');
+    const result = await run(['--role=hub'], {
+      ...setup,
+      packageDirectory: '/build/packages',
+      machine: { ...setup.machine, directories: { '/build/packages': LOCAL_BUILD } },
+    });
+
+    expect(result.stderr).toBe('');
+    expect(result.code).toBe(0);
+    expect(result.probes).toContain(
+      `tar -xzf /build/packages/softiesolutions-agentplex-0.0.0.tgz -C ` +
+        `${tree('agentplex')}.new --strip-components=1 --no-same-owner`,
+    );
+    expect(changes(result.journal)).toContain(`mv ${tree('agentplex')}.new ${tree('agentplex')}`);
+    expect(result.stdout).not.toContain('left as it is');
   });
 
   it('leaves the trees it found, and writes no settings file and no unit, when npm refuses', async () => {
