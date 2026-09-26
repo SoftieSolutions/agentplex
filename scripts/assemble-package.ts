@@ -5,6 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { PROTOCOL_VERSIONS, type ProtocolLeg } from '@agentplex/protocol';
 import type { ReleaseProtocol } from '@agentplex/release';
 import { z } from 'zod';
+import {
+  allowedScripts,
+  deriveShrinkwrap,
+  LOCKFILE,
+  parseAllowBuilds,
+  parseLockfile,
+  SHRINKWRAP_FILE,
+  WORKSPACE_FILE,
+  type Shrinkwrap,
+} from './shrinkwrap.ts';
 
 /**
  * Assemble the trees that get published, one per package.
@@ -86,6 +96,14 @@ import { z } from 'zod';
  * them, and an entry whose source was never built stops the assembly with the
  * paths named, rather than shipping a package that installs and then serves 503
  * forever.
+ *
+ * ## And the versions CI installed
+ *
+ * Every package also carries an `npm-shrinkwrap.json`, derived from
+ * `pnpm-lock.yaml` by `shrinkwrap.ts`: the third-party versions this build was
+ * tested against, transitive ones included. An install into the unpacked
+ * package reads it. `npm install --global <tarball>` does not (AGX-322, Q8), so
+ * packing it changes nothing about an install that goes that way.
  */
 
 /**
@@ -902,15 +920,8 @@ export function publishedManifest(input: {
     ...(target.bin === undefined
       ? {}
       : { bin: { [target.bin.command]: `./${target.bin.entrypoint}` } }),
-    // A staging directory holds only what belongs in the package, so this
-    // changes nothing about what npm packs. It is here so that the contents are
-    // legible from the manifest -- and reviewable in a diff to it -- without
-    // running `npm pack`. A bundled dependency is not listed: npm always
-    // excludes `node_modules` from a tarball and then adds the bundled subtrees
-    // back, and `files` has no say either way.
-    files: target.entries
-      .map((entry) => entry.to)
-      .filter((path) => !path.startsWith('node_modules/')),
+    // No `files`: with it, `npm pack` leaves out `npm-shrinkwrap.json`
+    // (npm/cli#6803), and the staging directory holds nothing else to exclude.
     ...(carriesPostinstall ? { scripts: { postinstall: `node ${POSTINSTALL_SCRIPT}` } } : {}),
     dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
     optionalDependencies: Object.fromEntries(Object.entries(optional).sort()),
@@ -1091,13 +1102,19 @@ export async function assemblePackage(options: {
     }),
   );
 
-  const manifest = publishedManifest({
+  const published = publishedManifest({
     target,
     root: rootManifest,
     manifests,
     bundled: bundled.map((entry) => entry.manifest),
     ...(options.version === undefined ? {} : { version: options.version }),
   });
+  const shrinkwrap = await shrinkwrapFor(workspaceRoot, target, published);
+  // See `allowedScripts`: npm 12 runs no dependency install script the
+  // package's own manifest does not allow, and says nothing when it skips one.
+  const allowScripts = allowedScripts(shrinkwrap);
+  const manifest =
+    Object.keys(allowScripts).length === 0 ? published : { ...published, allowScripts };
 
   const directory = join(workspaceRoot, target.output);
   await rm(directory, { recursive: true, force: true });
@@ -1119,9 +1136,47 @@ export async function assemblePackage(options: {
       bundledManifest(entry.path, entry.text),
     );
   }
+  await writeJson(join(directory, SHRINKWRAP_FILE), shrinkwrap);
   await writeJson(join(directory, 'package.json'), manifest);
 
   return { target, directory, manifest };
+}
+
+/**
+ * The shrinkwrap a target is packed with, from the lockfile CI installed from.
+ *
+ * Read here rather than listed among the target's entries: the lockfile is not
+ * copied into any package, it is an input to one file that is. It is read
+ * before the staging directory is touched, so a lockfile that cannot be read
+ * or is refused stops the assembly with the path named and yesterday's staged
+ * tree where it was. The versions it pins are resolved through the target's own
+ * importer and through every package it bundles, because the published
+ * manifest carries a bundled package's third-party dependencies up.
+ */
+async function shrinkwrapFor(
+  workspaceRoot: string,
+  target: PackageTarget,
+  manifest: Record<string, unknown>,
+): Promise<Shrinkwrap> {
+  const lockfilePath = join(workspaceRoot, LOCKFILE);
+  const workspacePath = join(workspaceRoot, WORKSPACE_FILE);
+  return deriveShrinkwrap({
+    lockfile: parseLockfile(lockfilePath, await readInput(lockfilePath)),
+    lockfilePath,
+    manifest,
+    importers: [...target.declares, ...target.bundled.map((item) => item.directory)],
+    installScripts: parseAllowBuilds(workspacePath, await readInput(workspacePath)),
+  });
+}
+
+/** A file the assembly cannot go on without, refused with its path in the message. */
+async function readInput(path: string): Promise<string> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${path} could not be read, and the packages are pinned from it: ${reason}`);
+  }
 }
 
 /**

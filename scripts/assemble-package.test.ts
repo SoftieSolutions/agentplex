@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -24,130 +24,20 @@ import {
   type Manifest,
   type PackageTarget,
 } from './assemble-package.js';
-
-// The workspace root, named so that a `--filter` cannot match it beside the
-// app it would otherwise be a homonym of. Nothing publishes under this name.
-const rootManifest: Manifest = {
-  name: 'agentplex-workspace',
-  version: '1.2.3',
-  description: 'Watch and drive coding-agent sessions across machines',
-  license: 'Apache-2.0',
-  type: 'module',
-  engines: { node: '>=24', pnpm: '>=11' },
-  repository: { type: 'git', url: 'git+https://example.invalid/agentplex.git' },
-  dependencies: {},
-};
-
-/**
- * The bin's own manifest. It holds `setup` and `doctor` itself, so what those
- * two commands import is what this app declares -- `pty` included, for the
- * wizard that opens a terminal and the doctor that asks whether one could be
- * opened. The daemons are packages of their own and declare their own.
- */
-const cliManifest: Manifest = {
-  name: '@softiesolutions/agentplex',
-  version: '1.2.3',
-  license: 'Apache-2.0',
-  type: 'module',
-  dependencies: {
-    '@agentplex/node-shared': 'workspace:*',
-    '@agentplex/protocol': 'workspace:*',
-    '@agentplex/providers': 'workspace:*',
-    '@agentplex/pty': 'workspace:*',
-    '@agentplex/release': 'workspace:*',
-    zod: '>=4.5.4 <5.0.0',
-  },
-};
-
-const protocolManifest: Manifest = {
-  name: '@agentplex/protocol',
-  version: '1.2.3',
-  license: 'Apache-2.0',
-  type: 'module',
-  dependencies: { zod: '>=4.5.4 <5.0.0' },
-};
-
-const nodeSharedManifest: Manifest = {
-  name: '@agentplex/node-shared',
-  version: '1.2.3',
-  license: 'Apache-2.0',
-  type: 'module',
-  dependencies: { ws: '>=8.21.3 <9.0.0' },
-};
-
-const providersManifest: Manifest = {
-  name: '@agentplex/providers',
-  version: '1.2.3',
-  license: 'Apache-2.0',
-  type: 'module',
-  dependencies: {
-    '@agentplex/node-shared': 'workspace:*',
-    '@agentplex/protocol': 'workspace:*',
-    zod: '>=4.5.4 <5.0.0',
-  },
-};
-
-/** The `versions.json` schema, which only the command has a reason to read. */
-const releaseManifest: Manifest = {
-  name: '@agentplex/release',
-  version: '1.2.3',
-  license: 'Apache-2.0',
-  type: 'module',
-  dependencies: { zod: '>=4.5.4 <5.0.0' },
-};
-
-const ptyManifest: Manifest = {
-  name: '@agentplex/pty',
-  version: '1.2.3',
-  license: 'Apache-2.0',
-  type: 'module',
-  dependencies: {
-    '@agentplex/node-shared': 'workspace:*',
-    '@agentplex/providers': 'workspace:*',
-    'node-pty': '1.1.0',
-  },
-};
-
-/** The hub, which depends on the client and bundles no pty. */
-const hubManifest: Manifest = {
-  name: '@agentplex/hub',
-  version: '1.2.3',
-  license: 'Apache-2.0',
-  type: 'module',
-  dependencies: {
-    '@agentplex/node-shared': 'workspace:*',
-    '@agentplex/protocol': 'workspace:*',
-    '@agentplex/providers': 'workspace:*',
-    '@softiesolutions/agentplex-web': 'workspace:*',
-    zod: '>=4.5.4 <5.0.0',
-  },
-};
-
-const serverAppManifest: Manifest = {
-  name: '@agentplex/server',
-  version: '1.2.3',
-  license: 'Apache-2.0',
-  type: 'module',
-  dependencies: {
-    '@agentplex/node-shared': 'workspace:*',
-    '@agentplex/protocol': 'workspace:*',
-    '@agentplex/providers': 'workspace:*',
-    '@agentplex/pty': 'workspace:*',
-    zod: '>=4.5.4 <5.0.0',
-  },
-};
-
-/** The client: a vite app, whose build-time tree must reach no published manifest. */
-const webManifest: Manifest = {
-  name: '@softiesolutions/agentplex-web',
-  version: '1.2.3',
-  license: 'Apache-2.0',
-  type: 'module',
-  dependencies: {
-    '@agentplex/protocol': 'workspace:*',
-    react: '>=19.2.8 <20.0.0',
-  },
-};
+import { LOCKFILE, SHRINKWRAP_FILE } from './shrinkwrap.js';
+import {
+  cliManifest,
+  hubManifest,
+  nodeSharedManifest,
+  protocolManifest,
+  providersManifest,
+  ptyManifest,
+  releaseManifest,
+  rootManifest,
+  serverAppManifest,
+  webManifest,
+  writeWorkspace,
+} from './test-workspace.js';
 
 const shared = [protocolManifest, nodeSharedManifest, providersManifest];
 const sharedWithPty = [...shared, ptyManifest];
@@ -514,15 +404,16 @@ describe('publishedManifest', () => {
     });
   });
 
-  it('lists every copied path in files, and no bundled one', () => {
-    expect(manifestFor(HUB)['files']).toEqual([
-      'apps/hub/dist',
-      'apps/hub/migrations',
-      'LICENSE',
-      'README.md',
-    ]);
-    expect(manifestFor(WEB)['files']).toEqual(['dist', 'LICENSE', 'README.md']);
-    expect(manifestFor(CLI)['files']).not.toContain('node_modules/@agentplex/protocol/dist');
+  /**
+   * npm/cli#6803: with `files` present, `npm pack` leaves `npm-shrinkwrap.json`
+   * out of the tarball. Without it the shrinkwrap is the one path added and the
+   * bundled packages stay (AGX-322, Q7), and the staging directory already
+   * holds nothing else.
+   */
+  it('declares no files, so npm packs the shrinkwrap', () => {
+    for (const target of [HUB, WEB, CLI]) {
+      expect(manifestFor(target)['files'], target.name).toBeUndefined();
+    }
   });
 });
 
@@ -959,77 +850,7 @@ describe('the assembled packages', { timeout: 60_000 }, () => {
   async function workspace(options: { readonly client: boolean }): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'agentplex-package-'));
     temporary.push(root);
-
-    const write = async (path: string, contents: string): Promise<void> => {
-      await mkdir(join(root, path, '..'), { recursive: true });
-      await writeFile(join(root, path), contents, 'utf8');
-    };
-
-    /**
-     * What `tsc` leaves beside every emitted module: the map it points at, the
-     * declaration, and the map for that. The fixture carries them because the
-     * assembly is supposed to drop them, and a fixture that never held them
-     * would pass whether it dropped them or not.
-     */
-    const compiled = async (directory: string, name: string, body: string): Promise<void> => {
-      await write(`${directory}/${name}.js`, `${body}\n//# sourceMappingURL=${name}.js.map\n`);
-      await write(`${directory}/${name}.js.map`, '{"sources":["../src/x.ts"]}\n');
-      await write(`${directory}/${name}.d.ts`, 'export {};\n');
-      await write(`${directory}/${name}.d.ts.map`, '{"sources":["../src/x.ts"]}\n');
-    };
-
-    await write('package.json', JSON.stringify(rootManifest));
-    await write('LICENSE', 'Apache License, Version 2.0\n');
-    await write('apps/cli/package.json', JSON.stringify(cliManifest));
-    await write('apps/cli/README.md', '# agentplex\n');
-    await compiled('apps/cli/dist', 'main', '#!/usr/bin/env node\nawait main();');
-    await write('apps/hub/package.json', JSON.stringify(hubManifest));
-    await write('apps/hub/README.md', '# agentplex-hub\n');
-    await compiled('apps/hub/dist', 'main', '#!/usr/bin/env node\nawait main();');
-    await write('apps/server/package.json', JSON.stringify(serverAppManifest));
-    await write('apps/server/README.md', '# agentplex-server\n');
-    await compiled('apps/server/dist', 'main', '#!/usr/bin/env node\nawait main();');
-    await write('apps/hub/migrations/0001_hub_identity.sql', 'create table hub (id text);\n');
-    await write('packages/protocol/package.json', JSON.stringify(protocolManifest));
-    await compiled('packages/protocol/dist', 'index', 'export const version = 7;');
-    await write('packages/node-shared/package.json', JSON.stringify(nodeSharedManifest));
-    await compiled('packages/node-shared/dist', 'index', 'export const clock = 8;');
-    await compiled('packages/node-shared/dist', 'testing', "export * from './fake-socket.js';");
-    await compiled('packages/node-shared/dist', 'fake-socket', 'export const socket = 11;');
-    await write('packages/providers/package.json', JSON.stringify(providersManifest));
-    await compiled('packages/providers/dist', 'index', 'export const claude = 9;');
-    await compiled('packages/providers/dist', 'testing', "export * from './fake-files.js';");
-    await compiled('packages/providers/dist', 'fake-files', 'export const files = 12;');
-    // A directory whose name an exclusion matches. `cp`'s filter prunes the
-    // whole subtree under a `false`, so this is the shape that turns a dropped
-    // file into a dropped program.
-    await compiled('packages/providers/dist/fake-parent', 'kept', 'export const kept = 13;');
-    await write('packages/release/package.json', JSON.stringify(releaseManifest));
-    await compiled('packages/release/dist', 'index', 'export const versions = 14;');
-    await write('packages/pty/package.json', JSON.stringify(ptyManifest));
-    await compiled('packages/pty/dist', 'index', 'export const pty = 10;');
-    await write('packages/pty/scripts/node-pty-postinstall.js', 'main();\n');
-    await write('apps/web/package.json', JSON.stringify(webManifest));
-    await write('apps/web/README.md', '# agentplex-web\n');
-    if (options.client) {
-      // What vite leaves in `apps/web/dist`: the shell, the fingerprinted
-      // bundle and the map it points at, the stylesheet, a font, and the three
-      // unfingerprinted files the PWA is installed from. All of it but the map
-      // ships, so the fixture holds all of it -- a client fixture that were
-      // only a bundle and a map would pass under a filter that took the fonts
-      // and the icons with it.
-      await write('apps/web/dist/index.html', '<!doctype html>\n');
-      await write(
-        'apps/web/dist/assets/index-abc123.js',
-        'export {};\n//# sourceMappingURL=index-abc123.js.map\n',
-      );
-      await write('apps/web/dist/assets/index-abc123.js.map', '{"sourcesContent":["x"]}\n');
-      await write('apps/web/dist/assets/index-abc123.css', 'body{}\n');
-      await write('apps/web/dist/assets/manrope-latin-400-normal-abc123.woff2', 'woff2\n');
-      await write('apps/web/dist/manifest.webmanifest', '{"name":"agentplex"}\n');
-      await write('apps/web/dist/sw.js', 'self.addEventListener();\n');
-      await write('apps/web/dist/icons/icon-192.png', 'png\n');
-    }
+    await writeWorkspace(root, options);
     return root;
   }
 
@@ -1155,8 +976,8 @@ describe('the assembled packages', { timeout: 60_000 }, () => {
    *
    * `--version` is read out of a manifest resolved against `main.js`'s own URL,
    * and there are two manifests it could mean. `apps/cli/package.json` is the
-   * one `bin` is declared in, and it is a workspace file: no entry copies it
-   * and `files` never names it, so in the package it is not there at all. The
+   * one `bin` is declared in, and it is a workspace file: no entry copies it,
+   * so in the package it is not there at all. The
    * manifest that exists in every home of the bin is the package root's -- the
    * one this module writes, carrying the version the release tag named, and the
    * workspace's own `0.0.0` in a checkout.
@@ -1418,5 +1239,126 @@ describe('the assembled packages', { timeout: 60_000 }, () => {
     await expect(
       readFile(join(second.directory, 'apps/cli/dist/stale.js'), 'utf8'),
     ).rejects.toThrow();
+  });
+
+  /** A shrinkwrap as written to disk, read back as far as these tests look. */
+  async function shrinkwrapIn(directory: string): Promise<{
+    name: string;
+    version: string;
+    lockfileVersion: number;
+    requires: boolean;
+    packages: Record<string, Record<string, unknown>>;
+  }> {
+    return JSON.parse(await readFile(join(directory, SHRINKWRAP_FILE), 'utf8')) as {
+      name: string;
+      version: string;
+      lockfileVersion: number;
+      requires: boolean;
+      packages: Record<string, Record<string, unknown>>;
+    };
+  }
+
+  /**
+   * npm reads the shrinkwrap beside the manifest it installs, and when the two
+   * disagree it takes the manifest and rewrites the lockfile without a word
+   * (AGX-322, Q4). So the root entry is held to the manifest actually written,
+   * at the version the release named.
+   */
+  it('writes a shrinkwrap whose root entry is the manifest beside it', async () => {
+    const root = await workspace({ client: true });
+
+    const directories = await assembleAll(root, '3.1.0-rc.2');
+
+    for (const [name, directory] of directories) {
+      const manifest = JSON.parse(
+        await readFile(join(directory, 'package.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      const shrinkwrap = await shrinkwrapIn(directory);
+      expect(shrinkwrap, name).toMatchObject({
+        name,
+        version: '3.1.0-rc.2',
+        lockfileVersion: 3,
+        requires: true,
+      });
+      const entry = shrinkwrap.packages[''] ?? {};
+      for (const field of ['dependencies', 'optionalDependencies', 'bundleDependencies']) {
+        const value = manifest[field] as object;
+        const empty = Object.keys(value).length === 0;
+        expect(entry[field], `${name} ${field}`).toEqual(empty ? undefined : value);
+      }
+    }
+  });
+
+  /**
+   * A bundled entry is not fetched, so its version has to be the one on disk:
+   * the bundled manifest keeps its own version whatever the release is called.
+   */
+  it('pins each bundled package at the version its bundled manifest carries', async () => {
+    const root = await workspace({ client: true });
+
+    const directory = (await assembleAll(root, '3.1.0-rc.2')).get(CLI.name) ?? '';
+
+    const shrinkwrap = await shrinkwrapIn(directory);
+    for (const bundle of CLI.bundled) {
+      const onDisk = JSON.parse(
+        await readFile(join(directory, 'node_modules', bundle.name, 'package.json'), 'utf8'),
+      ) as { version: string };
+      expect(shrinkwrap.packages[`node_modules/${bundle.name}`], bundle.name).toEqual({
+        version: onDisk.version,
+        inBundle: true,
+      });
+    }
+  });
+
+  it('writes the client a shrinkwrap with nothing in it but itself', async () => {
+    const root = await workspace({ client: true });
+
+    const directory = (await assembleAll(root)).get(WEB.name) ?? '';
+
+    expect(Object.keys((await shrinkwrapIn(directory)).packages)).toEqual(['']);
+  });
+
+  /**
+   * npm 12 runs no dependency install script the package's own manifest does
+   * not allow, and exits 0 with node-pty unbuilt; npm 11.19 accepts the field
+   * too (AGX-322). The two packages that carry node-pty allow it, and nothing
+   * else has a script to allow.
+   */
+  it('lets node-pty build in the two packages that carry it', async () => {
+    const root = await workspace({ client: true });
+
+    const directories = await assembleAll(root);
+
+    for (const target of PACKAGES) {
+      const manifest = JSON.parse(
+        await readFile(join(directories.get(target.name) ?? '', 'package.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      const carriesPty = target.bundled.some((bundle) => bundle.name === '@agentplex/pty');
+      expect(manifest['allowScripts'], target.name).toEqual(
+        carriesPty ? { 'node-pty': true } : undefined,
+      );
+    }
+  });
+
+  it('refuses to assemble without a lockfile, naming where it looked', async () => {
+    const root = await workspace({ client: true });
+    await rm(join(root, LOCKFILE));
+
+    await expect(assemblePackage({ target: HUB, workspaceRoot: root })).rejects.toThrow(
+      join(root, LOCKFILE),
+    );
+  });
+
+  it('refuses a lockfile it cannot read, naming it and the reason', async () => {
+    const root = await workspace({ client: true });
+    const path = join(root, LOCKFILE);
+    await writeFile(path, "lockfileVersion: '6.0'\nimporters: {}\n", 'utf8');
+
+    const attempt = assemblePackage({ target: HUB, workspaceRoot: root });
+
+    await expect(attempt).rejects.toThrow(path);
+    await expect(assemblePackage({ target: HUB, workspaceRoot: root })).rejects.toThrow(
+      'lockfileVersion',
+    );
   });
 });

@@ -98,11 +98,19 @@ RUN pnpm build
 # directory rather than a spec precisely because there are four of them and a
 # check that installed three of ours beside one from a registry would be
 # reporting on a build it had not installed.
+#
+# Each tarball has to hold its `npm-shrinkwrap.json`, and that is asked of the
+# tarball rather than of the staging directory: npm/cli#6803 is `npm pack`
+# leaving the file out of a tarball whose staging directory plainly holds it.
 FROM build AS package
 RUN pnpm --filter ./scripts package \
     && mkdir -p /package \
     && for release in apps/*/release; do (cd "$release" && npm pack --pack-destination /package); done \
-    && ls -1 /package
+    && ls -1 /package \
+    && for tarball in /package/*.tgz; do \
+         tar -tzf "$tarball" | grep -qx 'package/npm-shrinkwrap.json' \
+           || { echo "$tarball holds no npm-shrinkwrap.json" >&2; exit 1; }; \
+       done
 
 # The clean-install check. Stock `debian:bookworm-slim` with nothing but Node
 # added, which is the machine `install.sh` will meet.

@@ -582,9 +582,14 @@ export default tseslint.config(
     // The `v1` suite's subject is a shell script too, and a pair of git
     // repositories it pushes between: whether a push was refused and retried is
     // a fact about the remote, which only real git on both ends can supply.
+    //
+    // The assembly's suite asks `npm pack` what each tarball would hold:
+    // npm/cli#6803 is npm leaving out a file the staging directory plainly
+    // holds, and only npm can answer for npm.
     files: [
       'scripts/install.sh.integration.test.ts',
       'scripts/advance-v1.integration.test.ts',
+      'scripts/assemble-package.integration.test.ts',
       'apps/cli/src/main.integration.test.ts',
       'apps/cli/src/installation/installation.integration.test.ts',
       'apps/cli/src/commands/update/update.integration.test.ts',

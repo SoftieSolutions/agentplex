@@ -2,6 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    // Two suites here read `scripts/assemble-package.ts`, which names the
+    // module beside it `./shrinkwrap.ts` because `pnpm package` runs it under
+    // Node's type stripping. This config emits nothing, so it can accept that.
+    "allowImportingTsExtensions": true,
     "types": ["node"]
   },
   "include": ["src/**/*.ts"]
