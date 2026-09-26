@@ -292,6 +292,15 @@ export function createTerminalStreams({
       if (terminal === undefined) return { ok: false, problem: describe(target) };
 
       const key = keyOf(target);
+      // A session target outlives its terminal: once the agent exits and the
+      // session is resumed, the same key resolves to a new one. The old watch
+      // is given back first, or the exited terminal stays watched and the cap
+      // can never evict it. Kept to a moved target so a repeat subscribe to
+      // the same terminal does not re-watch it and reset its dropped count.
+      const previous = byTarget.get(key);
+      if (previous !== undefined && previous.terminal.terminalId !== terminal.terminalId) {
+        release(key);
+      }
       const existing = streams.get(terminal.terminalId);
       if (existing !== undefined) {
         // A second target on a stream that is already running joins it, and is

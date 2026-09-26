@@ -10,7 +10,7 @@ import {
 import { createLogger } from '@agentplex/node-shared';
 import type { FakePtyFactory } from '@agentplex/pty/testing';
 import type { GrantId, Launch, LaunchPlan } from '@agentplex/providers';
-import { createFakeTerminals } from './fake-terminals.js';
+import { createFakeTerminals, type FakeTerminalsOptions } from './fake-terminals.js';
 import type { TerminalManager } from './terminal-manager.js';
 import {
   createTerminalStreams,
@@ -78,10 +78,8 @@ interface Harness {
   congest(congested: boolean): void;
 }
 
-function harness(scrollbackBytes?: number): Harness {
-  const { terminals, factory } = createFakeTerminals(
-    scrollbackBytes === undefined ? {} : { scrollbackBytes },
-  );
+function harness(options: FakeTerminalsOptions = {}): Harness {
+  const { terminals, factory } = createFakeTerminals(options);
   const output: TerminalOutput[] = [];
   const refused: TerminalOutput[] = [];
   let congested = false;
@@ -254,7 +252,7 @@ describe('createTerminalStreams subscribing', () => {
   });
 
   it('says how much of the beginning is gone rather than passing a tail off as all of it', () => {
-    const { terminals, streams, factory } = harness(8);
+    const { terminals, streams, factory } = harness({ scrollbackBytes: 8 });
     const terminalId = spawn(terminals);
     terminals.bind(terminalId, SESSION_A);
     factory.last?.emit('the first line, long gone\r\n');
@@ -270,7 +268,7 @@ describe('createTerminalStreams subscribing', () => {
     // The two opposite facts. Both attachments replay less than the whole
     // session; only one of them is missing anything, and an attachment that
     // could not say which would make a pane guess.
-    const { terminals, streams } = harness(8);
+    const { terminals, streams } = harness({ scrollbackBytes: 8 });
     const terminalId = spawn(terminals);
     terminals.bind(terminalId, SESSION_A);
 
@@ -306,6 +304,53 @@ describe('createTerminalStreams subscribing', () => {
 
     factory.last?.emit('once\r\n');
 
+    expect(output).toHaveLength(1);
+  });
+
+  it('lets go of the old terminal when a session target now names a new one', () => {
+    // A session whose agent exited and was resumed is a second terminal under
+    // the same target. A subscription that moved to it but kept the first
+    // watched would leave a dead terminal the cap can never evict.
+    const { terminals, streams, factory } = harness({ cap: 2 });
+    const first = terminals.resume({ storeId: STORE.storeId, sessionId: SESSION_A }, launch);
+    if (!first.ok) throw new Error(`the first resume should have opened: ${first.problem}`);
+    streams.subscribe(bySession(SESSION_A));
+    factory.ptys[0]?.close({ exitCode: 0, signal: null });
+
+    const second = terminals.resume({ storeId: STORE.storeId, sessionId: SESSION_A }, launch);
+    if (!second.ok) throw new Error(`the second resume should have opened: ${second.problem}`);
+    const attached = streams.subscribe(bySession(SESSION_A));
+
+    const idA = first.terminal.terminalId;
+    const idB = second.terminal.terminalId;
+    expect(attached.ok).toBe(true);
+    expect(terminals.terminal(idA)?.watchers).toEqual([]);
+    expect(terminals.terminal(idB)?.watchers).toEqual([WATCHER]);
+    expect(factory.ptys).toHaveLength(2);
+
+    const third = terminals.resume(
+      { storeId: STORE.storeId, sessionId: sessionIdSchema.parse('session-b') },
+      launch,
+    );
+
+    expect(third.ok).toBe(true);
+    expect(factory.ptys).toHaveLength(3);
+    expect(terminals.terminal(idA)).toBeUndefined();
+  });
+
+  it('keeps one watch when the same target subscribes to the same terminal again', () => {
+    // Re-subscribing is not moving: detaching and watching again would reset
+    // the dropped count and read the replay a second time for nothing.
+    const { terminals, streams, factory, output } = harness();
+    const terminalId = spawn(terminals);
+    terminals.bind(terminalId, SESSION_A);
+    streams.subscribe(bySession(SESSION_A));
+
+    const again = streams.subscribe(bySession(SESSION_A));
+    factory.last?.emit('once\r\n');
+
+    expect(again.ok).toBe(true);
+    expect(terminals.terminal(terminalId)?.watchers).toEqual([WATCHER]);
     expect(output).toHaveLength(1);
   });
 });
