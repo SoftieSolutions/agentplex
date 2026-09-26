@@ -272,7 +272,10 @@ async function apply(
     if (!swapped.ok) {
       // The packages are not installed against a runtime that is half replaced.
       // The units are started again, because what is on this disk is what was
-      // running five seconds ago.
+      // running five seconds ago -- the swap puts the old runtime back when the
+      // new one will not move in. The one exception is a runtime that would not
+      // move back either, which the lines above name with the command that
+      // restores it; starting units then costs nothing that is not already lost.
       await restart(installation, running.units, dependencies);
       return EXIT_NOT_DONE;
     }

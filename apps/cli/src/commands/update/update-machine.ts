@@ -18,6 +18,8 @@
  * `mktemp -d`, `download` its `fetch`, `sha256` its `verify_checksum`,
  * `makeDirectory`/`removeDirectory`/`rename` the `rm -rf`/`mv` that put an
  * unpacked runtime into place, and `writeFile` the stamp it leaves behind.
+ * The primitives pair; the order does not. `ensure_node` removes the old
+ * runtime before the move, and the swap in `runtime.ts` sets it aside first.
  *
  * The unpacking itself is not here: it is `tar`, and every program agentplex
  * starts goes through the operation registry.
@@ -47,8 +49,9 @@ export interface UpdateMachine extends InstallationFiles {
    * Moves a directory into place.
    *
    * A rename and not a copy, because the window in which this machine has no
-   * runtime at all should be one syscall long. `ensure_node` unpacks beside the
-   * old runtime and moves for exactly that reason.
+   * runtime at all should lie between two syscalls: the old runtime moved aside
+   * and the new one moved in. A rename that fails can be undone by another, and
+   * a copy that fails half way cannot.
    */
   rename(from: string, to: string): Promise<FileOutcome>;
   /** Writes a file whole. What is written through this is the runtime's stamp. */
