@@ -177,6 +177,40 @@ export async function readProjectDirectories(
 }
 
 /**
+ * The project holding each of these directories, keyed by the directory as it
+ * was asked; a directory no project holds is absent.
+ *
+ * What a store's pass asks, once for every session in its reading, and the
+ * reason it is one statement: a lookup per `cwd` is one round trip per session,
+ * so a report's cost would grow with the report while the table it asks stays a
+ * few rows. The whole table is read -- the statement `readProjectDirectories`
+ * already issues -- and matched here, which is the same trade that function
+ * argues. Only the asked side is normalised: the stored side was normalised on
+ * its way in by `insertProject`, and the unique index says one directory is one
+ * row.
+ *
+ * Keyed by the caller's own spelling rather than the normalised one, so a
+ * caller holding a `cwd` off a report looks it up as it holds it and never
+ * learns how this table is keyed. Asked for nothing, it asks nothing.
+ */
+export async function findProjectsByDirectories(
+  database: Queryable,
+  directories: readonly string[],
+): Promise<ReadonlyMap<string, NodeId>> {
+  const found = new Map<string, NodeId>();
+  if (directories.length === 0) return found;
+  const byDirectory = new Map<string, NodeId>();
+  for (const [nodeId, directory] of await readProjectDirectories(database)) {
+    byDirectory.set(directory, nodeId);
+  }
+  for (const directory of directories) {
+    const nodeId = byDirectory.get(normaliseDirectory(directory));
+    if (nodeId !== undefined) found.set(directory, nodeId);
+  }
+  return found;
+}
+
+/**
  * A project, whole: the node's name beside the row that makes it a project.
  *
  * The join this table was always going to cost, and it is read here rather

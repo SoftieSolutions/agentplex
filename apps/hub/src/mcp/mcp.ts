@@ -166,12 +166,13 @@ export interface McpDependencies {
   /**
    * Projects, narrowed to the listing and nothing else.
    *
-   * One method of a feature with five, and the four it is denied are the
+   * One method of a feature with seven, and the six it is denied are the
    * point. `create` would let an agent add a row that names a directory, which
    * is the one way a path could reach this hub from outside a browse;
-   * `directoryOf` and `findByDirectory` are how a node becomes a path, and the
-   * only caller that may make that turn is the sessions feature, on its way to
-   * the machine that will check it again. `listDirectory` is the browse, and
+   * `directoryOf`, `directories` and the two `findBy` lookups are how a node
+   * and a path become each other, and the only callers that may make that
+   * turn are the sessions feature, on its way to the machine that will check
+   * it again, and the tree placing what a server reported. `listDirectory` is the browse, and
    * an agent that could list a disk is the capability this endpoint exists not
    * to have.
    *

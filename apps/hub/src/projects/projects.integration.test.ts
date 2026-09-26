@@ -29,9 +29,29 @@ function db(): Database {
   return migrated.database;
 }
 
-function projects(): Projects {
+/**
+ * The migrated database with every statement counted, for the one question
+ * whose subject is how many it took. The transaction is the real one's, bound
+ * to it, so a write still opens exactly what it would.
+ */
+function countingDatabase(): { readonly database: Database; issued(): number } {
+  let issued = 0;
+  return {
+    database: {
+      query: (text, values) => {
+        issued += 1;
+        return db().query(text, values);
+      },
+      transaction: (body) => db().transaction(body),
+      close: () => db().close(),
+    },
+    issued: () => issued,
+  };
+}
+
+function projects(database: Database = db()): Projects {
   return createProjects({
-    database: db(),
+    database,
     ids: { newId: () => `node-${String((minted += 1))}` },
     clock,
     // Nothing here browses, and the fleet is what a browse asks about. An empty
@@ -194,6 +214,40 @@ describe('reading a project back', () => {
     // that reorders itself as somebody makes a project is one it has to read
     // twice.
     expect((await feature.list()).map((project) => project.name)).toEqual(['agentplex', 'web']);
+  });
+
+  /**
+   * The question a store's pass asks, once for all its sessions: a report of
+   * twenty sessions is one statement and not twenty, so the cost of placing a
+   * report does not grow with the report.
+   */
+  it('answers many directories in one statement, keyed as they were asked', async () => {
+    const feature = projects();
+    const a = await feature.create({ name: 'a', directory: '/a' });
+    const b = await feature.create({ name: 'b', directory: '/b' });
+    if (!a.ok || !b.ok) throw new Error('both projects should have been made');
+
+    const counting = countingDatabase();
+
+    const found = await projects(counting.database).findByDirectories(['/a/', '/b', '/none']);
+
+    // Keyed by the spelling the caller holds, so it can look its own `cwd` up
+    // without knowing how this feature normalises -- and the trailing slash
+    // matched, as `findByDirectory` would have matched it.
+    expect(found).toEqual(
+      new Map([
+        ['/a/', a.nodeId],
+        ['/b', b.nodeId],
+      ]),
+    );
+    expect(counting.issued()).toBe(1);
+  });
+
+  it('answers no directories without asking the table', async () => {
+    const counting = countingDatabase();
+
+    expect(await projects(counting.database).findByDirectories([])).toEqual(new Map());
+    expect(counting.issued()).toBe(0);
   });
 
   it('answers a hub with no projects with an empty list', async () => {

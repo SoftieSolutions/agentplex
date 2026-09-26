@@ -58,9 +58,9 @@ export interface FakeCatalogue extends Catalogue {
    * fleet state's `sessionKey`.
    *
    * The version on that reading is this fake's own, for the reason the real
-   * one carries it: its reader drops a reading older than the one it applied,
+   * one carries it: a reader drops a reading older than the one it applied,
    * and a fake that answered a constant would be a seam that cannot show the
-   * drop happening.
+   * drop happening. `followSessionProjects` hands on the same map.
    */
   answerProjectsWith(placements: ReadonlyMap<string, SessionProject>): void;
   /** Bumps the version and tells every watcher, as a real change would. */
@@ -91,6 +91,16 @@ export function createFakeCatalogue(options: FakeCatalogueOptions = {}): FakeCat
   let minted = 0;
   let page: CataloguePageOutcome = { ok: true, items: [], nextCursor: null, total: 0, version: 0 };
   let placements: ReadonlyMap<string, SessionProject> = new Map();
+
+  const subscribe = (listener: (version: number) => void): (() => void) => {
+    watchers.add(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      watchers.delete(listener);
+    };
+  };
 
   const bump = (): void => {
     version += 1;
@@ -134,14 +144,18 @@ export function createFakeCatalogue(options: FakeCatalogueOptions = {}): FakeCat
 
     changed: bump,
 
-    subscribe(listener: (version: number) => void): () => void {
-      watchers.add(listener);
-      let active = true;
-      return () => {
-        if (!active) return;
-        active = false;
-        watchers.delete(listener);
-      };
+    subscribe,
+
+    followSessionProjects(
+      listener: (placements: ReadonlyMap<string, SessionProject>) => void,
+    ): () => void {
+      // Once now and once per change, and on the caller's stack rather than
+      // coalesced: a suite about the socket drives each change by hand, and
+      // what it asserts is what was handed on, not how many reads it cost.
+      // The coalescing is the real catalogue's, tested where it lives.
+      const stop = subscribe(() => listener(placements));
+      listener(placements);
+      return stop;
     },
 
     async createFolder(request: NewFolderRequest): Promise<NodeCreated> {

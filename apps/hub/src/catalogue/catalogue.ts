@@ -242,7 +242,7 @@ export interface CatalogueDependencies {
    * projects, projects reads nothing here -- which is what keeps two features
    * writing `nodes` from being two features writing each other.
    */
-  readonly projects: Pick<Projects, 'findByDirectory' | 'directories'>;
+  readonly projects: Pick<Projects, 'findByDirectories' | 'directories'>;
   /**
    * Who is running a session right now, read when a removal is decided.
    *
@@ -294,7 +294,7 @@ export interface Catalogue extends ClientCatalogue {
    * The project one session is filed under, or `null` for one filed nowhere.
    *
    * Here rather than on `projects` because the answer is the tree's and not the
-   * project rows': `projects.findByDirectory` says which project a *directory*
+   * project rows': `projects.findByDirectories` says which project a *directory*
    * is, which is the rule discovery places a new session by, and this says
    * where a session actually sits now -- including after somebody moved it, and
    * including through a folder they moved it into.
@@ -340,6 +340,29 @@ export interface Catalogue extends ClientCatalogue {
    * newest reading wins and an older one that lands late is dropped.
    */
   sessionProjects(): Promise<SessionProjectReading>;
+  /**
+   * Hands `listener` where the tree puts each session: once now, and again
+   * after every change, for as long as the answer is not stopped.
+   *
+   * Once now because a tree that already exists is a tree that may not change
+   * for a while: after a restart every store's first pass finds its sessions
+   * already placed, bumps nothing, and a follower waiting on a change would
+   * leave every session in no project until somebody moved one.
+   *
+   * Coalesced, because a change is not one event: a pass bumps the version per
+   * store and a person dragging nodes bumps it per drop, and each read is the
+   * whole tree. One read is out at a time, and every change that lands while
+   * it is out is one more read after it -- started only once the first has
+   * answered, so the readings arrive in the order they were taken and the last
+   * one handed on was taken after the last change. A change on a turn when
+   * nothing is out waits for the end of that turn, so a burst is one read.
+   *
+   * A read that fails is logged and costs itself: the listener keeps what it
+   * last had, and the next change reads again.
+   */
+  followSessionProjects(
+    listener: (placements: ReadonlyMap<string, SessionProject>) => void,
+  ): () => void;
   /**
    * Says the tree changed under another writer's hand.
    *
@@ -499,10 +522,18 @@ export function createCatalogue({
     sessions: readonly SessionDescriptor[],
   ): Promise<SessionPlacements> => {
     const placements = new Map<SessionId, NodeId>();
+    const directories = sessions.flatMap((descriptor) =>
+      descriptor.cwd === null ? [] : [descriptor.cwd],
+    );
+    // One question for the whole reading rather than one per session, so the
+    // cost of placing a report does not grow with how many sessions it names.
+    // A reading in which no session said where it ran has nothing to ask.
+    if (directories.length === 0) return placements;
+    const found = await projects.findByDirectories(directories);
     for (const descriptor of sessions) {
       if (descriptor.cwd === null) continue;
-      const project = await projects.findByDirectory(descriptor.cwd);
-      if (project !== null) placements.set(descriptor.sessionId, project);
+      const project = found.get(descriptor.cwd);
+      if (project !== undefined) placements.set(descriptor.sessionId, project);
     }
     return placements;
   };
@@ -569,6 +600,23 @@ export function createCatalogue({
     return catchingUp;
   };
 
+  const sessionProjects = async (): Promise<SessionProjectReading> => {
+    // Read before the statement and not after it: see the interface for why
+    // a reading may be labelled older than what it holds but never newer.
+    const at = version;
+    return { version: at, placements: sessionProjectsIn(await listNodes(database)) };
+  };
+
+  const subscribe = (listener: (version: number) => void): (() => void) => {
+    watchers.add(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      watchers.delete(listener);
+    };
+  };
+
   // Built on this entry's own seams rather than given the dependencies twice:
   // `observe` above is the one a forgotten removal runs, and `changed` is the
   // one number every writer of this tree bumps.
@@ -611,23 +659,77 @@ export function createCatalogue({
 
     observe,
 
-    async sessionProjects(): Promise<SessionProjectReading> {
-      // Read before the statement and not after it: see the interface for why
-      // a reading may be labelled older than what it holds but never newer.
-      const at = version;
-      return { version: at, placements: sessionProjectsIn(await listNodes(database)) };
+    sessionProjects,
+
+    followSessionProjects(
+      listener: (placements: ReadonlyMap<string, SessionProject>) => void,
+    ): () => void {
+      let active = true;
+      /** A read scheduled or out. At most one, which is the coalescing. */
+      let reading = false;
+      /** A change landed since the read now out was taken. */
+      let again = false;
+      /** The version of the reading last handed on. */
+      let delivered = -1;
+
+      const read = async (): Promise<void> => {
+        // The rest of this turn first, so a burst of changes on it is one read
+        // and not a read of the first change followed by one of the others.
+        await Promise.resolve();
+        try {
+          do {
+            again = false;
+            if (!active) return;
+            try {
+              const next = await sessionProjects();
+              // Readings are taken one after another, so this never drops one
+              // in practice. It stays as the rule the order is relied on for:
+              // a reading older than the one handed on is never handed on.
+              if (!active || next.version < delivered) continue;
+              delivered = next.version;
+              handOn(next.placements);
+            } catch (error) {
+              // The listener keeps the last good reading rather than losing
+              // the projects it had, and the next change reads again.
+              log.warn('the tree could not be read for the projects its sessions are in', {
+                problem: String(error),
+              });
+            }
+          } while (again);
+        } finally {
+          reading = false;
+        }
+      };
+
+      const handOn = (placements: ReadonlyMap<string, SessionProject>): void => {
+        // Caught here as a watcher's throw is in `changed`: nothing awaits this
+        // read, so a throw left to escape would be an unhandled rejection.
+        try {
+          listener(placements);
+        } catch (error) {
+          log.warn('a follower of where sessions sit threw', { problem: String(error) });
+        }
+      };
+
+      const request = (): void => {
+        if (reading) {
+          again = true;
+          return;
+        }
+        reading = true;
+        void read();
+      };
+
+      const unsubscribe = subscribe(request);
+      request();
+      return () => {
+        active = false;
+        unsubscribe();
+      };
     },
 
     changed,
 
-    subscribe(listener: (version: number) => void): () => void {
-      watchers.add(listener);
-      let active = true;
-      return () => {
-        if (!active) return;
-        active = false;
-        watchers.delete(listener);
-      };
-    },
+    subscribe,
   };
 }
