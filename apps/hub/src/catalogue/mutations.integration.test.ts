@@ -60,7 +60,13 @@ function catalogue(): Catalogue {
     logger,
     readStore: (storeId) => stores.get(storeId) ?? null,
     projects: {
-      findByDirectory: async (directory) => projectDirectories.get(directory) ?? null,
+      findByDirectories: async (directories) =>
+        new Map(
+          directories.flatMap((directory) => {
+            const project = projectDirectories.get(directory);
+            return project === undefined ? [] : [[directory, project] as const];
+          }),
+        ),
       directories: async () => new Map(),
     },
     readFleet: () => ({

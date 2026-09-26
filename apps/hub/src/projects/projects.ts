@@ -14,6 +14,7 @@ import {
 import type { HubStateSnapshot } from '../fleet-state/fleet-state.js';
 import {
   findProjectByDirectory,
+  findProjectsByDirectories,
   insertProject,
   readProjectDirectories,
   readProjectDirectory,
@@ -162,11 +163,22 @@ export interface Projects {
   /**
    * The project whose directory this is, or `null` when none is.
    *
-   * What the catalogue asks as it places a session: a session whose reported
-   * `cwd` is a project's directory belongs in that project. Normalisation is
-   * this feature's, so a caller hands over whatever a server reported.
+   * The rule a session is placed by, one directory at a time: a session whose
+   * reported `cwd` is a project's directory belongs in that project.
+   * Normalisation is this feature's, so a caller hands over whatever a server
+   * reported. The catalogue asks `findByDirectories` instead, for a whole
+   * reading at once.
    */
   findByDirectory(directory: string): Promise<NodeId | null>;
+  /**
+   * The project each of these directories is, keyed by the directory as it was
+   * handed over; one no project holds is absent.
+   *
+   * What the catalogue asks as it places a whole store's reading: one read for
+   * every session in it, so placing a report costs the same whether it names
+   * one session or a hundred. Normalised here, as `findByDirectory` is.
+   */
+  findByDirectories(directories: readonly string[]): Promise<ReadonlyMap<string, NodeId>>;
   /**
    * Every project's directory, by node, in one read.
    *
@@ -240,6 +252,8 @@ export function createProjects(dependencies: ProjectsDependencies): Projects {
     directoryOf: (nodeId: NodeId) => readProjectDirectory(database, nodeId),
 
     findByDirectory: (directory: string) => findProjectByDirectory(database, directory),
+    findByDirectories: (directories: readonly string[]) =>
+      findProjectsByDirectories(database, directories),
 
     directories: () => readProjectDirectories(database),
 

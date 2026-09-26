@@ -1,4 +1,9 @@
-import { nodeIdSchema, type NodeId, type ServerRegistrationId } from '@agentplex/protocol';
+import {
+  nodeIdSchema,
+  normaliseDirectory,
+  type NodeId,
+  type ServerRegistrationId,
+} from '@agentplex/protocol';
 import type { DirectoryOutcome, ProjectOutcome, ProjectSummary, Projects } from './projects.js';
 
 /**
@@ -13,8 +18,8 @@ import type { DirectoryOutcome, ProjectOutcome, ProjectSummary, Projects } from 
  * This is for the tests whose subject is the socket.
  *
  * The projects it holds are a map rather than a table, and the lookups read it
- * both ways: `findByDirectory` is what the catalogue asks as it places a
- * session, so a suite about placement can say "this directory is that project"
+ * both ways: `findByDirectories` is what the catalogue asks as it places a
+ * store's sessions, so a suite about placement can say "this directory is that project"
  * in one line without a migrated schema.
  */
 export interface FakeProjects extends Projects {
@@ -22,8 +27,13 @@ export interface FakeProjects extends Projects {
   readonly listed: readonly { server: ServerRegistrationId; directory: string | null }[];
   /** Every project made through this fake, newest last. */
   readonly created: readonly { nodeId: NodeId; name: string; directory: string }[];
-  /** Every directory looked up, in order: what the tree asked as it placed. */
-  readonly looked: readonly string[];
+  /**
+   * Every lookup, in order, as the directories it asked about: what the tree
+   * asked as it placed. One entry per call rather than per directory, because
+   * how many times the tree asked is the question a suite about placement
+   * cost has to be able to answer.
+   */
+  readonly looked: readonly (readonly string[])[];
   /** What every later browse answers with. */
   answerWith(outcome: DirectoryOutcome): void;
   /**
@@ -44,9 +54,20 @@ export interface FakeProjectsOptions {
 export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProjects {
   const listed: { server: ServerRegistrationId; directory: string | null }[] = [];
   const created: { nodeId: NodeId; name: string; directory: string }[] = [];
-  const looked: string[] = [];
+  const looked: (readonly string[])[] = [];
   const held = new Map<NodeId, { readonly name: string; readonly directory: string }>();
   let minted = 0;
+
+  // Both sides normalised, as the real lookup compares a normalised question
+  // with a row that was normalised on its way in: a suite that holds `/srv/a`
+  // and reports `/srv/a/` is asking what the hub would answer.
+  const holding = (directory: string): NodeId | null => {
+    const asked = normaliseDirectory(directory);
+    for (const [nodeId, project] of held) {
+      if (normaliseDirectory(project.directory) === asked) return nodeId;
+    }
+    return null;
+  };
 
   let outcome: DirectoryOutcome = options.outcome ?? {
     ok: false,
@@ -94,9 +115,18 @@ export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProje
     },
 
     async findByDirectory(directory: string): Promise<NodeId | null> {
-      looked.push(directory);
-      for (const [nodeId, project] of held) if (project.directory === directory) return nodeId;
-      return null;
+      looked.push([directory]);
+      return holding(directory);
+    },
+
+    async findByDirectories(directories: readonly string[]): Promise<ReadonlyMap<string, NodeId>> {
+      looked.push([...directories]);
+      const found = new Map<string, NodeId>();
+      for (const directory of directories) {
+        const nodeId = holding(directory);
+        if (nodeId !== null) found.set(directory, nodeId);
+      }
+      return found;
     },
 
     async listDirectory(
@@ -123,7 +153,7 @@ export function createFakeProjects(options: FakeProjectsOptions = {}): FakeProje
       return created;
     },
 
-    get looked(): readonly string[] {
+    get looked(): readonly (readonly string[])[] {
       return looked;
     },
   };

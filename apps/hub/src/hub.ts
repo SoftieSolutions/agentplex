@@ -382,7 +382,7 @@ async function composeHub(
     // out over a connection. Nothing asks this question until a store has been
     // reported, which is after `sync` far below.
     projects: {
-      findByDirectory: (directory) => projects.findByDirectory(directory),
+      findByDirectories: (directories) => projects.findByDirectories(directories),
       directories: () => projects.directories(),
     },
     // Who is running a session, asked at the moment a removal is decided. The
@@ -398,48 +398,14 @@ async function composeHub(
     readFleet: () => state.published(),
   });
 
-  /**
-   * The highest catalogue version whose reading of the tree is on the rows.
-   *
-   * Held because the two places below both start a read without waiting for it:
-   * one is a synchronous watcher, the other runs behind a store's tree write,
-   * and two reads in flight can settle in either order. Without this the older
-   * one landing last would publish the tree as it was before the change that
-   * started the newer -- a project the user had just renamed, or a session back
-   * in the folder they had just moved it out of, with nothing to correct it
-   * until the next change.
-   */
-  let projectsReadThrough = -1;
-  /**
-   * Asks the tree where it puts each session, and hands the answer to the
-   * reducer.
-   *
-   * Not awaited by either caller and deliberately not awaitable: a server's
-   * report is answered by the fleet state and the broadcast, and this is one of
-   * the things that happens after that. A failed read costs this reading and
-   * nothing else -- the next change starts another, and the rows keep saying
-   * what the last good reading said rather than losing the projects they had.
-   */
-  const followProjects = (): void => {
-    void catalogue
-      .sessionProjects()
-      .then((reading) => {
-        if (reading.version < projectsReadThrough) return;
-        projectsReadThrough = reading.version;
-        state.applyProjects(reading.placements);
-      })
-      .catch((error: unknown) => {
-        logger.warn('the tree could not be read for the projects its sessions are in', {
-          problem: String(error),
-        });
-      });
-  };
-
-  // Every change to the tree, whoever made it: a project created, a node
-  // moved, a rename, or a store's own discovery pass. The version is already
-  // the one number every writer of this tree bumps, so following it is one
-  // subscription rather than a hook per writer, each free to be forgotten.
-  catalogue.subscribe(() => followProjects());
+  // Where the tree puts each session, handed to the reducer now and after
+  // every change to the tree, whoever made it: a project created, a node moved,
+  // a rename, or a store's own discovery pass. The version is already the one
+  // number every writer of this tree bumps, so following it is one
+  // subscription rather than a hook per writer, each free to be forgotten. The
+  // catalogue coalesces a burst into one read and keeps the readings in order,
+  // and a failed read costs itself: the rows keep what the last good one said.
+  catalogue.followSessionProjects((placements) => state.applyProjects(placements));
 
   // Constructed here and dialling nothing yet. That is what the split between
   // building this and calling `sync` below buys: everything that has to see a
@@ -489,25 +455,18 @@ async function composeHub(
       // what happens after that. A failed one costs this store's tree update
       // and is logged where it happened.
       //
-      // Read again once that write has settled, on top of the subscription
-      // above. A pass bumps the version from inside itself, store by store, so
-      // a reading started by one of those bumps may be taken between two
-      // stores' transactions; this one is taken after the whole pass and
-      // carries the version to prove it, which is what makes the drop above
-      // settle on the newest reading rather than on whichever landed last.
+      // Where the tree then puts each session is the follower's above, which
+      // hears every bump a pass makes and reads again after the last of them.
       // `observe` swallows a failed store by contract, and the catch is the
       // backstop for the contract breaking: left unawaited here, a rejection
       // would otherwise be unhandled, and an unhandled rejection ends the hub.
       if (accepted) {
-        void catalogue
-          .observe(report.storeId)
-          .then(followProjects)
-          .catch((error: unknown) => {
-            logger.warn('the tree could not follow a store', {
-              storeId: report.storeId,
-              problem: String(error),
-            });
+        void catalogue.observe(report.storeId).catch((error: unknown) => {
+          logger.warn('the tree could not follow a store', {
+            storeId: report.storeId,
+            problem: String(error),
           });
+        });
       }
       // The one part of a report the reducer wants nothing to do with: a start
       // is not a session and a tag is not a row. It goes to the relay, which is
