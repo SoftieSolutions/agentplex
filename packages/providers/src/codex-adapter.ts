@@ -2,7 +2,11 @@ import { join } from 'node:path';
 import { sessionIdSchema, type SessionStatus, type StoreDescriptor } from '@agentplex/protocol';
 import { CODEX_DEFAULT_STORE_DIRECTORY, planCodexLaunch } from './codex-launch.js';
 import { createCodexProvisioning } from './codex-provisioning.js';
-import { codexRolloutActivities, parseCodexRollout } from './codex-rollout.js';
+import {
+  codexRolloutActivities,
+  parseCodexRollout,
+  type CodexRolloutParse,
+} from './codex-rollout.js';
 import { CODEX_SESSION_INDEX_FILE, parseCodexSessionIndex } from './codex-session-index.js';
 import {
   TRANSCRIPT_TAIL_MAX_BYTES,
@@ -18,6 +22,7 @@ import {
   type TranscriptRequest,
 } from './provider-adapter.js';
 import type { ProviderFiles } from './provider-files.js';
+import { createTranscriptCache, type TranscriptScan } from './scan-cache.js';
 
 /**
  * The codex adapter.
@@ -84,6 +89,13 @@ export interface CodexAdapterDependencies {
 }
 
 export function createCodexAdapter({ files }: CodexAdapterDependencies): ProviderAdapter {
+  // Held for the life of the adapter, which is the life of the server: what a
+  // rollout parsed to last scan is the answer this scan too, until its size or
+  // mtime moves. The parse is what is kept and not the session built from it,
+  // because the title comes from the index, which is re-read every scan and
+  // changes when codex renames a session without touching its rollout.
+  const rollouts = createTranscriptCache({ files, parse: parseCodexRollout });
+
   return {
     provider: 'codex',
 
@@ -95,7 +107,15 @@ export function createCodexAdapter({ files }: CodexAdapterDependencies): Provide
       // same snapshot of it.
       const names = await readSessionNames(join(store.path, CODEX_SESSION_INDEX_FILE), files);
 
-      return await discoverSessions(join(store.path, CODEX_SESSIONS_DIRECTORY), files, names);
+      const scan = rollouts.scan(store.path);
+      const found = await discoverSessions(
+        join(store.path, CODEX_SESSIONS_DIRECTORY),
+        files,
+        scan,
+        names,
+      );
+      scan.finish();
+      return found;
     },
 
     spawn(request: SpawnRequest): Launch {
@@ -163,12 +183,13 @@ async function readSessionNames(
 async function discoverSessions(
   sessions: string,
   files: ProviderFiles,
+  scan: TranscriptScan<CodexRolloutParse>,
   names: ReadonlyMap<string, string>,
 ): Promise<ProviderDiscovery> {
   const found: DiscoveredSession[] = [];
   const problems: DiscoveryProblem[] = [];
 
-  await walk(sessions, CODEX_PARTITION_DEPTH, files, names, found, problems);
+  await walk(sessions, CODEX_PARTITION_DEPTH, files, scan, names, found, problems);
 
   return { sessions: found, problems };
 }
@@ -184,6 +205,7 @@ async function walk(
   directory: string,
   depth: number,
   files: ProviderFiles,
+  scan: TranscriptScan<CodexRolloutParse>,
   names: ReadonlyMap<string, string>,
   found: DiscoveredSession[],
   problems: DiscoveryProblem[],
@@ -199,23 +221,23 @@ async function walk(
     const path = join(directory, entry.name);
 
     if (entry.kind === 'directory') {
-      if (depth > 0) await walk(path, depth - 1, files, names, found, problems);
+      if (depth > 0) await walk(path, depth - 1, files, scan, names, found, problems);
       continue;
     }
 
     if (entry.kind !== 'file' || !entry.name.endsWith(ROLLOUT_SUFFIX)) continue;
-    await readRollout(path, files, names, found, problems);
+    await readRollout(path, scan, names, found, problems);
   }
 }
 
 async function readRollout(
   path: string,
-  files: ProviderFiles,
+  scan: TranscriptScan<CodexRolloutParse>,
   names: ReadonlyMap<string, string>,
   found: DiscoveredSession[],
   problems: DiscoveryProblem[],
 ): Promise<void> {
-  const read = await files.readFile(path);
+  const read = await scan.read(path);
   if (read.kind === 'failed') {
     problems.push({ subject: path, problem: `cannot read rollout: ${read.reason}` });
     return;
@@ -224,7 +246,7 @@ async function readRollout(
   // session this server failed to report.
   if (read.kind === 'missing') return;
 
-  const parsed = parseCodexRollout(read.contents);
+  const parsed = read.parse;
   if (!parsed.ok) {
     if (parsed.reason === 'damaged') {
       problems.push({ subject: path, problem: `cannot read rollout: ${parsed.problem}` });

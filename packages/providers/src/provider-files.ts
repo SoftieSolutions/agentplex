@@ -39,7 +39,28 @@ export interface ProviderFiles {
    * tail as the whole.
    */
   readFileTail(path: string, maxBytes: number): Promise<TailRead>;
+  /**
+   * A file's size in bytes and its mtime, without reading it.
+   *
+   * What lets a discovery scan skip a transcript that has not changed since
+   * the last one. Nearly every transcript in a store is finished, and a scan
+   * runs on every report: reading and parsing all of them each time was the
+   * whole cost of a scan, spent on files whose answer was already known.
+   */
+  stat(path: string): Promise<FileStatRead>;
 }
+
+/**
+ * A file's size and mtime, or why there are none.
+ *
+ * The same three kinds `FileRead` has, for the same reason: a transcript
+ * deleted between a listing and its stat is not a fault, and one that will not
+ * be looked at is.
+ */
+export type FileStatRead =
+  | { readonly kind: 'read'; readonly size: number; readonly mtimeMs: number }
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'failed'; readonly reason: string };
 
 /**
  * The end of a file, and whether it was the whole of it.

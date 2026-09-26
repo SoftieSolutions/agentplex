@@ -156,6 +156,7 @@ async function start(): Promise<Harness> {
     listDirectory: (path) => createFakeProviderFiles({ files: disk }).listDirectory(path),
     readFileTail: (path, maxBytes) =>
       createFakeProviderFiles({ files: disk }).readFileTail(path, maxBytes),
+    stat: (path) => createFakeProviderFiles({ files: disk }).stat(path),
   };
   const ptys = createFakePtyFactory();
   const terminals = createTerminalManager({

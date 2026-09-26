@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -91,6 +91,47 @@ describe('nodeProviderFiles.readFile', () => {
     const read = await nodeProviderFiles.readFile(join(root, 'session'));
 
     expect(read.kind).toBe('failed');
+  });
+});
+
+describe('nodeProviderFiles.stat', () => {
+  it('reports the size in bytes and the mtime the filesystem keeps', async () => {
+    // Bytes, not characters: the size is compared against the last one seen,
+    // and a transcript is UTF-8 with no promise of staying ASCII.
+    const path = join(root, 'session.jsonl');
+    await writeFile(path, '{"text":"caf\u00e9"}\n');
+    const mtime = new Date('2026-09-20T10:00:00Z');
+    await utimes(path, mtime, mtime);
+
+    const stat = await nodeProviderFiles.stat(path);
+
+    expect(stat).toEqual({ kind: 'read', size: 17, mtimeMs: mtime.getTime() });
+  });
+
+  it('reports a larger size once a turn is appended', async () => {
+    const path = join(root, 'session.jsonl');
+    await writeFile(path, '{"a":1}\n');
+    const before = await nodeProviderFiles.stat(path);
+
+    await appendFile(path, '{"b":2}\n');
+    const after = await nodeProviderFiles.stat(path);
+
+    expect(before.kind === 'read' && before.size).toBe(8);
+    expect(after.kind === 'read' && after.size).toBe(16);
+  });
+
+  it('calls a file that is gone missing rather than failing over it', async () => {
+    const stat = await nodeProviderFiles.stat(join(root, 'gone.jsonl'));
+
+    expect(stat).toEqual({ kind: 'missing' });
+  });
+
+  it('calls a path under a plain file missing too', async () => {
+    await writeFile(join(root, 'projects'), 'not a directory');
+
+    const stat = await nodeProviderFiles.stat(join(root, 'projects', 'session.jsonl'));
+
+    expect(stat).toEqual({ kind: 'missing' });
   });
 });
 
