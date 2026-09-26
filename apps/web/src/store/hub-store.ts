@@ -40,6 +40,7 @@ import {
   DEFAULT_FEED_BYTES,
   type TerminalFeed,
 } from '../terminal/chunk-feed.js';
+import { rememberAnswer, type Reply } from './answers.js';
 import type { FrameIds } from './frame-ids.js';
 import type { Timers } from './timers.js';
 
@@ -683,6 +684,16 @@ export interface HubSnapshot {
    */
   readonly terminals: ReadonlyMap<string, TerminalWatchView>;
   readonly terminalInput: TerminalInputView;
+  /**
+   * What the hub has answered this client's commands with, by the id of the
+   * frame each answer names: every command reply, and every refusal that is
+   * not about a terminal. `answers.ts` says which replies are kept, bounds the
+   * map, and is how a screen reads its own answer out of it (`followUp`).
+   *
+   * Kept across a dropped connection, like the answers themselves were, and
+   * emptied when nothing is looking any more.
+   */
+  readonly answers: ReadonlyMap<FrameId, Reply>;
   /** The hub's most recent "no", kept until a later command is answered yes. */
   readonly lastRefusal: RefusalView | null;
   /** The hub's most recent yes to a start, kept until the next one. */
@@ -1215,6 +1226,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
     commandQueue: { ...INITIAL_QUEUE, capacity },
     terminals: new Map(),
     terminalInput: INITIAL_TERMINAL,
+    answers: new Map(),
     lastRefusal: null,
     lastStarted: null,
     starts: new Map(),
@@ -1361,6 +1373,11 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
   function update(changes: Partial<HubSnapshot>): void {
     snapshot = { ...snapshot, ...changes };
     for (const listener of [...listeners]) listener();
+  }
+
+  /** Files the hub's answer under the frame it names, for whoever sent that frame. */
+  function remember(reply: Reply): void {
+    update({ answers: rememberAnswer(snapshot.answers, reply) });
   }
 
   /**
@@ -1848,6 +1865,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'session-started': {
         pending.delete(frame.replyTo);
+        remember(frame);
         const started: StartedView = {
           replyTo: frame.replyTo,
           storeId: frame.storeId,
@@ -1874,6 +1892,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'session-stopped': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastStopped: {
@@ -1887,6 +1906,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'session-paused': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastPaused: {
@@ -1901,6 +1921,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'session-resumed': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastResumed: {
@@ -1914,6 +1935,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'session-attention': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastAttention: {
@@ -1928,6 +1950,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'approval-decided': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // Kept the way an attention reply is kept, and clearing the refusal
         // for the same reason: the last thing the hub said about this client's
         // frames is now a yes, and a card showing both would put a sentence
@@ -1947,6 +1970,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       case 'push-subscribed':
       case 'push-unsubscribed': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // The refusal is cleared for the reason a start clears it: the last
         // thing the hub said is now a yes, and a control showing both would be
         // showing a sentence about a question that has since been answered.
@@ -1958,6 +1982,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'approval-policy': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // Replaced whole, and by the project the frame names rather than by
         // whichever question was asked: list, add and remove all answer with
         // the policy as it now stands, so there is nothing here to apply and
@@ -1976,6 +2001,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'directory-listing': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // The refusal is cleared for the reason a start clears it: the last
         // thing the hub said is now a yes, and a picker showing both would be
         // showing a sentence about a question that has since been answered.
@@ -1993,6 +2019,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'project-created': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // No re-request here, and there used to be one. The hub now broadcasts
         // `catalogue-changed` after every change to the tree, this one
         // included, so asking again on the reply as well would be two requests
@@ -2006,6 +2033,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'node-created': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastTreeChange: { replyTo: frame.replyTo, nodeId: frame.nodeId },
@@ -2014,6 +2042,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'doc-created': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastDocCreated: { replyTo: frame.replyTo, nodeId: frame.nodeId },
@@ -2026,6 +2055,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'doc-saved': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // Nothing about the tree changed. A save changes the file on a machine
         // and the hub's index of when; it changes no row the layout carries,
         // so there is nothing here for a re-read of the tree to find.
@@ -2037,6 +2067,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'doc-content': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastDocContent: {
@@ -2049,6 +2080,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'graph-created': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // No re-request, for the reason a document create has none: a graph is
         // a node, the hub broadcasts `catalogue-changed` after making one, and
         // this client hears it like every other.
@@ -2060,6 +2092,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'graph-document': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastGraphDocument: {
@@ -2075,6 +2108,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'graph-saved': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // A save changes the draft and nothing the tree carries.
         update({
           lastRefusal: null,
@@ -2088,6 +2122,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'graph-published': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // A publish changes which versions exist and nothing the tree carries.
         update({
           lastRefusal: null,
@@ -2097,6 +2132,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'graph-run-started': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastRunStarted: { replyTo: frame.replyTo, runId: frame.runId, number: frame.number },
@@ -2113,6 +2149,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'graph-run-cancelled': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastRunCancelled: { replyTo: frame.replyTo, runId: frame.runId },
@@ -2123,6 +2160,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
         // The answer to a read, and to an open of one run: either way it is
         // addressed, and the frame that asked is settled here.
         pending.delete(frame.replyTo);
+        remember(frame);
         // A run in the answer is filed like any state, so that a screen
         // reading its graph's newest out of `runs` finds it there too.
         if (frame.run !== null) fileRun(frame.run);
@@ -2135,6 +2173,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'graph-simulated': {
         pending.delete(frame.replyTo);
+        remember(frame);
         update({
           lastRefusal: null,
           lastSimulated: {
@@ -2148,6 +2187,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       }
       case 'graph-run-history': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // Filed by the graph and replacing the list held for it: the answer
         // is whole, newest first, as the hub read it.
         const histories = new Map(snapshot.runHistories);
@@ -2180,6 +2220,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       case 'node-removed':
       case 'node-removal-forgotten': {
         pending.delete(frame.replyTo);
+        remember(frame);
         // One case for four frames, because the answer is the same: the tree
         // did what was asked, and what is on screen comes from the layout the
         // broadcast is about to make this client re-read.
@@ -2344,6 +2385,7 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
           return;
         }
         pending.delete(frame.replyTo);
+        remember(frame);
         // A refusal answers a request as surely as a reply does, and its words
         // are the hub's own. It still goes into `lastRefusal`: the connection
         // line shows the newest "no" whoever asked for it.
@@ -2511,6 +2553,9 @@ export function createHubStore(dependencies: HubStoreDependencies): HubStore {
       phase: 'idle',
       commandQueue: queueView(null),
       terminalInput: INITIAL_TERMINAL,
+      // An answer is to a frame some screen sent on a connection that is now
+      // over, and the next one to look sends its own.
+      answers: new Map(),
       // A listing describes somebody else's disk as it was; nothing is looking
       // any more, and the next page to look will ask again.
       lastListing: null,

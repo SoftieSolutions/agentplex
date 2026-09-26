@@ -36,6 +36,7 @@ function snapshot(over: Partial<HubSnapshot> = {}): HubSnapshot {
     commandQueue: { queued: 0, capacity: 32, overflowed: null },
     terminals: new Map(),
     terminalInput: { discarded: 0, notice: null },
+    answers: new Map(),
     lastRefusal: null,
     lastStarted: null,
     starts: new Map(),

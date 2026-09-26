@@ -944,6 +944,65 @@ describe('commands', () => {
   });
 });
 
+describe('answers', () => {
+  it('files a reply under the id of the frame it answers', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    socket.deliver(hubFrames.sessionStopped);
+    expect(h.store.getSnapshot().answers.get(frameIdSchema.parse(6))).toEqual({
+      type: 'session-stopped',
+      replyTo: 6,
+      storeId: 'store-agentplex',
+      sessionId: 'session-migrate-db',
+      server: 'registration-mbp-robert',
+    });
+  });
+
+  it('keeps a refusal to one frame when a later frame is answered yes', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+
+    // The captured refusal answers frame 4 and the captured stop frame 6: a yes
+    // to somebody else's command leaves this "no" where its screen reads it.
+    socket.deliver(hubFrames.refusalHeldBusy);
+    socket.deliver(hubFrames.sessionStopped);
+    const answers = h.store.getSnapshot().answers;
+    expect(answers.get(frameIdSchema.parse(4))).toMatchObject({
+      type: 'refusal',
+      message: 'that session is mid-turn; stopping it now could leave an edit half applied',
+    });
+    expect(answers.get(frameIdSchema.parse(6))?.type).toBe('session-stopped');
+  });
+
+  it('files no refusal about a terminal, which the pane says instead', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    h.store.watchTerminal(CAPTURED_TARGET);
+    socket.deliver(hubFrames.refusalTerminal);
+    expect(h.store.getSnapshot().answers.size).toBe(0);
+  });
+
+  it('files nothing for a pong or a pane layout save, which nobody waits on here', async () => {
+    const h = harness();
+    const { socket } = await establish(h);
+    socket.deliver(hubFrames.pong);
+    socket.deliver(hubFrames.paneLayoutSaved);
+    expect(h.store.getSnapshot().answers.size).toBe(0);
+  });
+
+  it('keeps its answers across a dropped connection and forgets them when nobody looks', async () => {
+    const h = harness();
+    const { socket, unsubscribe } = await establish(h);
+    socket.deliver(hubFrames.sessionStopped);
+
+    socket.drop();
+    expect(h.store.getSnapshot().answers.size).toBe(1);
+    unsubscribe();
+    expect(h.store.getSnapshot().answers.size).toBe(0);
+  });
+});
+
 describe('requests', () => {
   const A_PAIRING = {
     type: 'server-pair',
