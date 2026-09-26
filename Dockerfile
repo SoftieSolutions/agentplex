@@ -29,8 +29,15 @@ ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /app
 COPY package.json .npmrc ./
 # `corepack install` reads the version out of packageManager, so the pinned
-# pnpm lives in exactly one place.
-RUN corepack enable && corepack install
+# pnpm lives in exactly one place. It has no retry setting, so it is retried
+# here. This RUN has no `-e`: without the explicit `exit 1`, a fifth failure
+# would build as a success with no pnpm in it.
+RUN corepack enable \
+    && for attempt in 1 2 3 4 5; do \
+        corepack install && break; \
+        [ "$attempt" = 5 ] && exit 1; \
+        sleep $((attempt * 5)); \
+    done
 
 # Manifests before sources: the install layer is then reused across every edit
 # that does not touch a dependency.
@@ -50,6 +57,9 @@ RUN apt-get update \
     && apt-get install --no-install-recommends --yes python3 make g++ git \
     && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+# pnpm 11 silently ignores fetch settings in .npmrc, so the retries in
+# pnpm-workspace.yaml are asserted where that file first exists.
+RUN pnpm config get fetch-retries | grep -qx 5
 COPY apps/hub/package.json ./apps/hub/
 COPY apps/cli/package.json ./apps/cli/
 COPY apps/server/package.json ./apps/server/
