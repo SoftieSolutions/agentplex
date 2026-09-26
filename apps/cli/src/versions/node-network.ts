@@ -1,7 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import { Buffer } from 'node:buffer';
-import type { Downloader } from '../commands/update/runtime.js';
-import type { FileOutcome } from '../commands/update/update-machine.js';
+import type { Downloader, FileOutcome } from '../installation/write-machine.js';
 import { nodeInstallationFiles } from '../installation/node-installation-files.js';
 import type { ManifestRead, ManifestReader, ManifestSource } from './version-check.js';
 

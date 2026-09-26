@@ -11,8 +11,8 @@ import {
 import { createSystemd } from '../../installation/systemd.js';
 import { VERSIONS_URL } from '../../versions/version-check.js';
 import { NODE_DIST_URL } from './runtime.js';
-import { createFakeNetwork, createFakeUpdateMachine } from './fake-update-machine.js';
-import type { FakeNetwork, FakeUpdateMachine } from './fake-update-machine.js';
+import { createFakeNetwork, type FakeNetwork } from '../../installation/fake-write-machine.js';
+import { createFakeUpdateMachine, type FakeUpdateMachine } from './fake-update-machine.js';
 import { runUpdateCommand } from './update-command.js';
 
 /**

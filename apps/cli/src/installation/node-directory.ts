@@ -40,9 +40,9 @@ const versionRequestSchema = z.strictObject({
 /**
  * `node_major_is_recent`'s `"$1" --version`, as the one operation that asks it.
  *
- * The file is a path rather than a program name, as `npm-install.ts` hands npm
- * its own: the prefix's runtime is on no search path, so naming it is the only
- * way to ask it anything. The answer is the major, read the way the script
+ * The file is a path rather than a program name, as `package-install.ts` hands
+ * npm its own: the prefix's runtime is on no search path, so naming it is the
+ * only way to ask it anything. The answer is the major, read the way the script
  * reads it -- a leading `v` dropped, everything from the first `.` dropped, and
  * what is left refused unless it is all digits.
  */

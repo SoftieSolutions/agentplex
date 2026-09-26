@@ -18,11 +18,16 @@ import {
   serializeCachedVersions,
   versionsCacheDirectory,
 } from '../../versions/versions-cache.js';
-import { installPackages, resolveGlobalConfig, resolveNpm, type Installer } from './npm-install.js';
+import {
+  installPackages,
+  resolveGlobalConfig,
+  resolveNpm,
+  type Installer,
+} from '../../installation/package-install.js';
+import type { Downloader } from '../../installation/write-machine.js';
 import {
   checkRuntime,
   swapRuntime,
-  type Downloader,
   type RuntimeArchitecture,
   type RuntimeDecision,
   type RuntimePlatform,

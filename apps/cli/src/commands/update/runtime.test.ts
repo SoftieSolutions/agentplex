@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Installation } from '../../installation/installation.js';
 import { userLayout } from '../../installation/layout.js';
-import { createFakeNetwork } from './fake-update-machine.js';
+import { createFakeNetwork } from '../../installation/fake-write-machine.js';
 import { NODE_DIST_URL, checkRuntime } from './runtime.js';
 
 /**

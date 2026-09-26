@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { createFakeNetwork } from '../commands/update/fake-update-machine.js';
+import { createFakeNetwork } from '../installation/fake-write-machine.js';
 import {
   VERSIONS_DIRECTORY_VARIABLE,
   VERSIONS_URL,

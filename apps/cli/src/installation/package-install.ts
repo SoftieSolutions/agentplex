@@ -12,23 +12,25 @@ import {
   CLI_ENTRYPOINT,
   COMPONENTS,
   COMPONENT_PACKAGES,
-} from '../../installation/components.js';
+  type Component,
+} from './components.js';
 import {
   NODE_DIRECTORY,
   PACKAGE_DIRECTORY,
+  binDirectory,
   packageDirectory,
   type Layout,
-} from '../../installation/layout.js';
-import type { Downloader } from './runtime.js';
-import type { UpdateMachine } from './update-machine.js';
-import type { PackageInstall, PackageTarball } from './update-plan.js';
+} from './layout.js';
+import type { Downloader, WriteMachine } from './write-machine.js';
 
 /**
  * How a released package is put into the prefix, which is `install.sh`'s
  * `install_package` restated -- and the point of restating it rather than doing
- * something simpler is that a package installed by an update has to be
- * indistinguishable from one installed by the installer, or the next install is
- * the one that discovers the difference.
+ * something simpler is that a package installed by `agentplex update` or
+ * `agentplex install` has to be indistinguishable from one installed by the
+ * installer, or the next install is the one that discovers the difference.
+ * Both commands call this one step; it lives here, beside the layout it
+ * writes into, so neither owns it.
  *
  * ## Unpacked, then installed against its own shrinkwrap
  *
@@ -76,6 +78,25 @@ import type { PackageInstall, PackageTarball } from './update-plan.js';
  * shrinkwrap it read, and `--install-strategy=hoisted` because that is the
  * layout the shrinkwrap was written in, whatever an npmrc prefers.
  */
+
+/**
+ * One set of packages staged together and then moved into place, in the order
+ * the flow runs them.
+ */
+export interface PackageInstall {
+  /** In the order they are staged and moved. */
+  readonly packages: readonly PackageTarball[];
+  /** Why this is an install of its own. */
+  readonly reason: string;
+}
+
+/** One component's package, and the tarball a release publishes it as. */
+export interface PackageTarball {
+  readonly component: Component;
+  /** The package's name, which is also its directory under `lib/node_modules`. */
+  readonly package: string;
+  readonly url: string;
+}
 
 /**
  * Long, and it is the one operation here that deserves to be. A server's
@@ -234,7 +255,7 @@ export interface Installer {
 
 /** Everything the package installs need that is not a decision. */
 export interface PackageInstallDependencies {
-  readonly machine: UpdateMachine;
+  readonly machine: WriteMachine;
   readonly downloader: Downloader;
   readonly runner: ProcessRunner;
   readonly write: (line: string) => void;
@@ -300,7 +321,7 @@ export async function installPackages(
  */
 async function recoverInterruptedSwaps(
   layout: Layout,
-  machine: UpdateMachine,
+  machine: WriteMachine,
   write: (line: string) => void,
 ): Promise<Step> {
   for (const component of COMPONENTS) {
@@ -438,7 +459,7 @@ async function stageComponent(
 async function swapComponent(
   tarball: PackageTarball,
   layout: Layout,
-  machine: UpdateMachine,
+  machine: WriteMachine,
 ): Promise<{ readonly ok: boolean; readonly lines: readonly string[] }> {
   const tree = packageDirectory(layout, tarball.package);
   const staging = `${tree}.new`;
@@ -506,9 +527,9 @@ async function swapComponent(
 async function linkCommand(
   self: PackageTarball,
   layout: Layout,
-  machine: UpdateMachine,
+  machine: WriteMachine,
 ): Promise<Step> {
-  const bin = join(layout.prefix, 'bin');
+  const bin = binDirectory(layout);
   const entrypoint = join(packageDirectory(layout, self.package), CLI_ENTRYPOINT);
   const target = join('..', PACKAGE_DIRECTORY, self.package, CLI_ENTRYPOINT);
   const command = join(bin, CLI_COMMAND);
@@ -534,7 +555,7 @@ async function linkCommand(
  * Every staged directory given, removed. One this cannot remove costs a line:
  * nothing starts a `.new`, and the next run clears it before it unpacks.
  */
-async function discard(staged: readonly string[], machine: UpdateMachine): Promise<string[]> {
+async function discard(staged: readonly string[], machine: WriteMachine): Promise<string[]> {
   const lines: string[] = [];
   for (const staging of staged) {
     const removed = await machine.removeDirectory(staging);
@@ -567,7 +588,7 @@ function componentsOf(install: PackageInstall): string {
  */
 export async function resolveNpm(
   layout: Layout,
-  machine: UpdateMachine,
+  machine: WriteMachine,
   programs: ProgramResolver,
 ): Promise<string | null> {
   const owned = join(layout.prefix, NODE_DIRECTORY, 'bin', 'npm');
