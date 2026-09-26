@@ -34,11 +34,19 @@ export interface FakeUpdateMachineOptions extends FakeInstallationFilesOptions {
   readonly temporary?: string | null;
   /** What whoever is at this machine says, or nothing for a machine with nobody at it. */
   readonly answer?: 'yes' | 'no';
+  /**
+   * A list every act is also appended to, for a test that has to order what
+   * happened to the disk against what else happened -- a child started, a file
+   * downloaded -- rather than against the other acts alone.
+   */
+  readonly journal?: string[];
 }
 
 export interface FakeUpdateMachine extends UpdateMachine {
-  /** Every path written, made, removed and renamed, in the order it happened. */
+  /** Every path written, made, removed, renamed, chmodded and linked, in order. */
   readonly acts: readonly string[];
+  /** The links this run made, by path, to what each points at. */
+  readonly links: ReadonlyMap<string, string>;
   /** What is on the disk now, for reading back what this run wrote. */
   readonly contents: ReadonlyMap<string, string>;
   /** Every question put to a person, in order. */
@@ -53,7 +61,14 @@ export function createFakeUpdateMachine(options: FakeUpdateMachineOptions = {}):
   const unremovable = new Map(Object.entries(options.unremovable ?? {}));
   const refusedRenames = new Map(Object.entries(options.refusedRenames ?? {}));
   const hashes = new Map(Object.entries(options.hashes ?? {}));
-  const acts: string[] = [];
+  const recorded: string[] = [];
+  const acts = {
+    push(act: string): void {
+      recorded.push(act);
+      options.journal?.push(act);
+    },
+  };
+  const links = new Map<string, string>();
   const questions: string[] = [];
 
   const refusal = (table: ReadonlyMap<string, string>, path: string): string | undefined =>
@@ -63,7 +78,8 @@ export function createFakeUpdateMachine(options: FakeUpdateMachineOptions = {}):
     [...contents.keys()].some((held) => held === path || held.startsWith(`${path}/`));
 
   return {
-    acts,
+    acts: recorded,
+    links,
     contents,
     questions,
 
@@ -94,7 +110,9 @@ export function createFakeUpdateMachine(options: FakeUpdateMachineOptions = {}):
       acts.push(`rm ${path}`);
       const problem = holds(path) ? refusal(unremovable, path) : undefined;
       if (problem !== undefined) return { ok: false, problem };
-      directories.delete(path);
+      for (const held of [...directories]) {
+        if (held === path || held.startsWith(`${path}/`)) directories.delete(held);
+      }
       for (const held of [...contents.keys()]) {
         if (held === path || held.startsWith(`${path}/`)) contents.delete(held);
       }
@@ -119,6 +137,30 @@ export function createFakeUpdateMachine(options: FakeUpdateMachineOptions = {}):
           contents.set(`${to}${held.slice(from.length)}`, text);
         }
       }
+      for (const held of [...directories]) {
+        if (held === from || held.startsWith(`${from}/`)) {
+          directories.delete(held);
+          directories.add(`${to}${held.slice(from.length)}`);
+        }
+      }
+      return { ok: true };
+    },
+
+    async exists(path: string): Promise<boolean> {
+      return holds(path) || links.has(path) || (await reads.isFile(path));
+    },
+
+    async chmod(path: string, mode: number): Promise<FileOutcome> {
+      acts.push(`chmod ${mode.toString(8).padStart(4, '0')} ${path}`);
+      const problem = refusal(unwritable, path);
+      return problem === undefined ? { ok: true } : { ok: false, problem };
+    },
+
+    async link(target: string, path: string): Promise<FileOutcome> {
+      acts.push(`link ${target} ${path}`);
+      const problem = refusal(unwritable, path);
+      if (problem !== undefined) return { ok: false, problem };
+      links.set(path, target);
       return { ok: true };
     },
 

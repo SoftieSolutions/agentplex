@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CLI,
   CLI_PACKAGE,
   DAEMONS as PACKAGED_DAEMONS,
   HUB_PACKAGE,
@@ -8,6 +9,8 @@ import {
   WEB_PACKAGE,
 } from '../../../../scripts/assemble-package.js';
 import {
+  CLI_COMMAND,
+  CLI_ENTRYPOINT,
   COMPONENTS,
   COMPONENT_ASSETS,
   COMPONENT_PACKAGES,
@@ -52,7 +55,7 @@ describe('the components', () => {
 
   it('name the asset every release publishes each component under', () => {
     // A rename here and not on the publishing side is an `agentplex update`
-    // that hands npm a URL nothing is served at -- and unlike the package
+    // that downloads a URL nothing is served at -- and unlike the package
     // names, nothing on the machine can notice: the 404 arrives at install
     // time, after the units have been stopped.
     expect(COMPONENT_ASSETS).toEqual(
@@ -74,5 +77,13 @@ describe('the components', () => {
     // package is the workspace's, so one expression is right everywhere.
     expect(daemonEntrypoint('hub')).toBe('apps/hub/dist/main.js');
     expect(daemonEntrypoint('server')).toBe('apps/server/dist/main.js');
+  });
+
+  it('link the command the assembler names, at the file its manifest points bin at', () => {
+    // `agentplex update` makes the link npm used to make, so it has to agree
+    // with the manifest's `bin` about both halves: a rename in the assembler
+    // and not here is an update that leaves a dangling `agentplex` behind, on
+    // a machine whose only way to run the next update was that link.
+    expect({ command: CLI_COMMAND, entrypoint: CLI_ENTRYPOINT }).toEqual(CLI.bin);
   });
 });

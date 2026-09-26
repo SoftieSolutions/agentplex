@@ -1,4 +1,7 @@
+import { join } from 'node:path';
+import { CLI_COMMAND } from '../../installation/components.js';
 import { readInstallation, type Installation } from '../../installation/installation.js';
+import { packageDirectory } from '../../installation/layout.js';
 import { lookupFor } from '../../installation/lookup-flags.js';
 import type { Systemd, UnitState } from '../../installation/systemd.js';
 import { readUnitStates } from '../../installation/units.js';
@@ -15,7 +18,7 @@ import {
   serializeCachedVersions,
   versionsCacheDirectory,
 } from '../../versions/versions-cache.js';
-import { installPackages, resolveNpm } from './npm-install.js';
+import { installPackages, resolveGlobalConfig, resolveNpm, type Installer } from './npm-install.js';
 import {
   checkRuntime,
   swapRuntime,
@@ -48,7 +51,7 @@ import type { UpdateMachine } from './update-machine.js';
  *   -> plan, and stop here if --dry-run
  *   -> stop only the units that are running, remembering which
  *   -> swap the runtime, if consented
- *   -> npm install each package
+ *   -> stage each set of packages against its shrinkwrap, then move it in
  *   -> start exactly the units from before
  * ```
  *
@@ -61,9 +64,9 @@ import type { UpdateMachine } from './update-machine.js';
  * ## It is replacing its own code
  *
  * This command runs out of the package it overwrites. Modules already loaded
- * are safe, and anything imported *after* npm has replaced the tree is not --
- * so everything this path needs is imported statically at the top of this file
- * and resolved before the first npm invocation. The laziness in `programs.ts`
+ * are safe, and anything imported *after* its tree has been moved is not -- so
+ * everything this path needs is imported statically at the top of this file
+ * and resolved before the first package is staged. The laziness in `programs.ts`
  * stops at this module's boundary on purpose.
  *
  * ## What it will not do
@@ -237,13 +240,25 @@ async function apply(
   write('');
 
   // Resolved before anything is stopped and before anything is replaced: after
-  // npm has overwritten this package, a lookup that needed a module this
-  // process has not loaded would be a lookup into a tree that moved.
-  const npm =
-    plan.installs.length === 0 ? null : await resolveNpm(installation.layout, machine, programs);
-  if (plan.installs.length > 0 && npm === null) {
-    write('there is no npm here and nothing else installs a package: nothing has been changed.');
-    return EXIT_NOT_DONE;
+  // this package has been moved, a lookup that needed a module this process
+  // has not loaded would be a lookup into a tree that moved. The global config
+  // is asked here too, where an npm that cannot answer costs nothing: it is
+  // the same npm that would be installing.
+  let installer: Installer | null = null;
+  if (plan.installs.length > 0) {
+    const npm = await resolveNpm(installation.layout, machine, programs);
+    if (npm === null) {
+      write('there is no npm here and nothing else installs a package: nothing has been changed.');
+      return EXIT_NOT_DONE;
+    }
+    const config = await resolveGlobalConfig(npm, runner);
+    if (!config.ok) {
+      write(
+        `npm could not say where its global config is, so nothing has been changed: ${config.problem}`,
+      );
+      return EXIT_NOT_DONE;
+    }
+    installer = { npm, globalconfig: config.path };
   }
 
   const running = await runningUnits(installation, systemd);
@@ -281,14 +296,20 @@ async function apply(
     }
   }
 
-  for (const install of plan.installs) {
-    const installed = await installPackages(npm ?? '', installation.layout, install.specs, runner);
-    if (!installed.ok) {
-      write(`npm could not install ${install.components.join(', ')}: ${installed.problem}`);
+  if (installer !== null) {
+    const installed = await installPackages(plan.installs, installation.layout, installer, {
+      machine,
+      downloader: dependencies.downloader,
+      runner,
+      write,
+    });
+    if (!installed) {
+      // A set that failed to stage left every tree where it was, and one that
+      // failed to move put its tree back; the lines above say which. Either
+      // way the units come back on what is now in place.
       await restart(installation, running.units, dependencies);
       return EXIT_NOT_DONE;
     }
-    write(`installed ${install.components.join(', ')} (${install.reason})`);
   }
 
   return (await restart(installation, running.units, dependencies)) ? EXIT_OK : EXIT_NOT_DONE;
@@ -427,7 +448,20 @@ function dryRunLines(
     lines.push(`  replace ${runtime.installed} with ${runtime.available} in the prefix`);
   }
   for (const install of plan.installs) {
-    lines.push(`  npm install ${install.specs.join(' ')}`);
+    for (const tarball of install.packages) {
+      const tree = packageDirectory(installation.layout, tarball.package);
+      lines.push(`  download ${tarball.url}, unpack it into ${tree}.new`);
+      lines.push(
+        '    and npm install --omit=dev there, against the npm-shrinkwrap.json it carries',
+      );
+    }
+    for (const tarball of install.packages) {
+      const tree = packageDirectory(installation.layout, tarball.package);
+      lines.push(`  move ${tree}.new into place as ${tree}`);
+    }
+    if (install.packages.some((tarball) => tarball.component === 'cli')) {
+      lines.push(`  link ${join(installation.layout.prefix, 'bin', CLI_COMMAND)} to its entry`);
+    }
     lines.push(`    ${install.reason}`);
   }
   lines.push('  start exactly the units it stopped');

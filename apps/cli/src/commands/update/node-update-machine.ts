@@ -1,10 +1,21 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, mkdtemp, open, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
+import { errnoCode } from '@agentplex/node-shared';
 import { nodeInstallationFiles } from '../../installation/node-installation-files.js';
 import type { FileOutcome, UpdateMachine } from './update-machine.js';
 
@@ -43,6 +54,36 @@ export const nodeUpdateMachine: UpdateMachine = {
 
   async rename(from: string, to: string): Promise<FileOutcome> {
     return attempt(async () => void (await rename(from, to)), `${from} -> ${to}`);
+  },
+
+  async exists(path: string): Promise<boolean> {
+    try {
+      // `lstat`, so a link is something even when what it points at is not.
+      await lstat(path);
+      return true;
+    } catch (error) {
+      const code = errnoCode(error);
+      return code !== 'ENOENT' && code !== 'ENOTDIR';
+    }
+  },
+
+  async chmod(path: string, mode: number): Promise<FileOutcome> {
+    return attempt(async () => void (await chmod(path, mode)), path);
+  },
+
+  /**
+   * A link made beside the one it replaces and renamed over it, which is `ln
+   * -sfn` done without its gap: `symlink` refuses a path that already holds
+   * one (EEXIST), and removing the old link first would leave a moment with
+   * no command on the prefix's `bin`. A rename replaces a link in one step.
+   */
+  async link(target: string, path: string): Promise<FileOutcome> {
+    const staged = `${path}.new`;
+    return attempt(async () => {
+      await rm(staged, { force: true });
+      await symlink(target, staged);
+      await rename(staged, path);
+    }, `${path} -> ${target}`);
   },
 
   async writeFile(path: string, contents: string): Promise<FileOutcome> {

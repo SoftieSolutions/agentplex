@@ -56,11 +56,24 @@ export function daemonEntrypoint(daemon: string): string {
 }
 
 /**
+ * The command the CLI's package puts on a machine's PATH, and the file inside
+ * that package it runs.
+ *
+ * `install.sh`'s `PACKAGE_NAME` and `CLI_ENTRYPOINT`, restated for the one
+ * other program that makes the link: npm made it while packages were installed
+ * with `--global`, and now that each is installed against its own shrinkwrap
+ * nothing makes it but the installer and `agentplex update`.
+ * `components.test.ts` holds both against the manifest's `bin`.
+ */
+export const CLI_COMMAND = 'agentplex';
+export const CLI_ENTRYPOINT = 'apps/cli/dist/main.js';
+
+/**
  * Where a release's tarballs are published, and the name each component's is
  * published under.
  *
  * This is the second half of the table above, and it exists for the same reason
- * the first half does: `agentplex update` hands npm a URL, and a URL is built
+ * the first half does: `agentplex update` downloads a URL, and a URL is built
  * from a component, a version and an asset name. `install.sh` builds the same
  * URL out of `RELEASE_DOWNLOAD_URL` and `component_asset`, and this is that
  * pair restated in the one other program that installs a released package.
