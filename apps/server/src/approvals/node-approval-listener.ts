@@ -1,6 +1,7 @@
 import { chmod, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname, join } from 'node:path';
+import { systemTimers, type Timers } from '@agentplex/node-shared';
 import type { ApprovalHookConnection, ApprovalHookListener } from './approval-gate.js';
 import { APPROVAL_LAUNCH_PREFIX, type ApprovalFileSystem } from './approval-launch.js';
 
@@ -24,11 +25,12 @@ import { APPROVAL_LAUNCH_PREFIX, type ApprovalFileSystem } from './approval-laun
  * Neither is the access control on its own -- anything running as this user
  * still reaches it, which is why the per-launch secret exists.
  *
- * **The read bound is here and nowhere else.** One line per connection, and a
- * connection that has not produced one by the time the bound is reached is
- * dropped without the gate ever seeing it. It is where the bound belongs
- * because this is the only place that has read anything: above here a payload
- * is a string that already arrived whole.
+ * **The read bounds are here and nowhere else.** One line per connection, and
+ * a connection that has not produced one by the time either bound is reached --
+ * too many bytes, or too long without a newline -- is dropped without the gate
+ * ever seeing it. It is where the bounds belong because this is the only place
+ * that has read anything: above here a payload is a string that already
+ * arrived whole.
  */
 
 /** The server's own directory for everything a launch's hook needs. */
@@ -49,6 +51,36 @@ export const APPROVAL_SOCKET_NAME = 'hook.sock';
  * connection and never stops writing to it.
  */
 export const APPROVAL_LINE_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * How long a connection may sit without finishing its line.
+ *
+ * A hook writes its one line straight after it connects, so this is far longer
+ * than any real one takes and exists only against a local process that opens a
+ * connection and then says nothing, or half a line, and holds the socket open.
+ *
+ * It covers the phase before the line and never the one after: once the line
+ * is handed to the gate the connection is waiting on a person, and how long a
+ * person takes to answer is not this file's to bound.
+ */
+export const APPROVAL_IDLE_MS = 30_000;
+
+/** What a test needs to say differently from production. Every field has the shipped default. */
+export interface ApprovalListenerOptions {
+  /** Defaults to {@link APPROVAL_LINE_MAX_BYTES}. */
+  readonly lineMaxBytes?: number;
+  /** Defaults to {@link APPROVAL_IDLE_MS}. */
+  readonly idleMs?: number;
+  /** Defaults to the system's own timers. */
+  readonly timers?: Timers;
+}
+
+/** The bounds one connection's read runs under, with every default filled in. */
+interface LineBounds {
+  readonly lineMaxBytes: number;
+  readonly idleMs: number;
+  readonly timers: Timers;
+}
 
 export type ApprovalListenerOpen =
   | {
@@ -71,7 +103,15 @@ export type ApprovalListenerOpen =
  * agent asks at its own terminal -- which is what a machine running no
  * agentplex at all does.
  */
-export async function openApprovalListener(dataRoot: string): Promise<ApprovalListenerOpen> {
+export async function openApprovalListener(
+  dataRoot: string,
+  options: ApprovalListenerOptions = {},
+): Promise<ApprovalListenerOpen> {
+  const bounds: LineBounds = {
+    lineMaxBytes: options.lineMaxBytes ?? APPROVAL_LINE_MAX_BYTES,
+    idleMs: options.idleMs ?? APPROVAL_IDLE_MS,
+    timers: options.timers ?? systemTimers,
+  };
   const directory = join(dataRoot, APPROVAL_DIRECTORY);
   const socketPath = join(directory, APPROVAL_SOCKET_NAME);
 
@@ -107,7 +147,7 @@ export async function openApprovalListener(dataRoot: string): Promise<ApprovalLi
   let accept: ((connection: ApprovalHookConnection) => void) | null = null;
 
   server.on('connection', (socket: Socket) => {
-    readLine(socket, (line) => {
+    readLine(socket, bounds, (line) => {
       const connection = hookConnection(socket, line);
       if (accept === null) waiting.push(connection);
       else accept(connection);
@@ -196,26 +236,50 @@ function listen(socketPath: string): Promise<Server> {
 /**
  * Reads exactly one line, then stops.
  *
- * Nothing after the newline is read, because there is nothing after it: a hook
- * says one thing and then waits. A connection that reaches the bound without
- * producing a line is destroyed rather than handed on -- the gate's refusals
- * are silences toward the hook, and so is this one.
+ * Nothing after the newline is handed on, because there is nothing after it: a
+ * hook says one thing and then waits. The socket is still drained after that --
+ * not paused -- because the end of the stream is how the gate learns a hook
+ * went away, and a paused socket never reads its end.
+ *
+ * A connection that reaches either bound without producing a line is destroyed
+ * rather than handed on -- the gate's refusals are silences toward the hook,
+ * and so is this one. The idle bound is armed on connection and cancelled the
+ * moment the line is delivered or the socket closes: it limits how long a
+ * connection may take to say its line, never how long it may then wait for a
+ * person to answer it.
+ *
+ * Bytes, not text, until the newline: each chunk is searched once and on its
+ * own, so a line that arrives in many pieces costs its length and not its
+ * length times the number of pieces, and the bound is a count of what was
+ * actually received rather than of what it decoded to.
  */
-function readLine(socket: Socket, deliver: (line: string) => void): void {
-  socket.setEncoding('utf8');
-  let read = '';
+function readLine(socket: Socket, bounds: LineBounds, deliver: (line: string) => void): void {
+  let chunks: Buffer[] = [];
+  let bytes = 0;
   let delivered = false;
 
-  socket.on('data', (chunk: string) => {
+  const cancelIdle = bounds.timers.schedule(bounds.idleMs, () => void socket.destroy());
+  socket.once('close', cancelIdle);
+
+  socket.on('data', (chunk: Buffer) => {
     if (delivered) return;
-    read += chunk;
-    const newline = read.indexOf('\n');
+    const newline = chunk.indexOf(0x0a);
     if (newline === -1) {
-      if (Buffer.byteLength(read, 'utf8') > APPROVAL_LINE_MAX_BYTES) socket.destroy();
+      chunks.push(chunk);
+      bytes += chunk.length;
+      if (bytes > bounds.lineMaxBytes) socket.destroy();
+      return;
+    }
+    if (bytes + newline > bounds.lineMaxBytes) {
+      socket.destroy();
       return;
     }
     delivered = true;
-    deliver(read.slice(0, newline));
+    cancelIdle();
+    chunks.push(chunk.subarray(0, newline));
+    const line = Buffer.concat(chunks, bytes + newline).toString('utf8');
+    chunks = [];
+    deliver(line);
   });
 
   // A hook that closed without sending a line is a hook that is no longer
