@@ -268,6 +268,173 @@ describe('createCodexAdapter.discover', () => {
   });
 });
 
+describe('createCodexAdapter.discover, scan after scan', () => {
+  const INDEX = `${STORE.path}/${CODEX_SESSION_INDEX_FILE}`;
+
+  /**
+   * The first `count` lines of a captured rollout, as the file stood when
+   * codex had written only those. A rollout is appended one line at a time,
+   * so a prefix of a capture is a capture of an earlier moment.
+   */
+  function firstLines(contents: string, count: number): string {
+    return `${contents.split('\n').slice(0, count).join('\n')}\n`;
+  }
+
+  /** The turn up to its last message, before codex counted its tokens and closed it. */
+  const EARLIER = firstLines(COMPLETED_TURN, 12);
+
+  /** The rollouts a scan read whole, as opposed to the index it also reads. */
+  function rolloutReads(reads: readonly string[]): string[] {
+    return reads.filter((path) => path.startsWith(SESSIONS));
+  }
+
+  async function freshAnswer(files: Record<string, string>) {
+    return await adapterOver({ files }).discover(STORE);
+  }
+
+  it('reads no rollout on a second scan of a store where nothing changed', async () => {
+    const files = createFakeProviderFiles({
+      files: {
+        [COMPLETED_PATH]: COMPLETED_TURN,
+        [PENDING_PATH]: PENDING_TOOL_CALL,
+        [`${SESSIONS}/2026/09/11/rollout-x-y.jsonl`]: NO_TURNS,
+        [INDEX]: SESSION_INDEX,
+      },
+    });
+    const adapter = createCodexAdapter({ files });
+
+    const first = await adapter.discover(STORE);
+    const readBefore = files.reads.length;
+    const second = await adapter.discover(STORE);
+
+    expect(rolloutReads(files.reads.slice(readBefore))).toEqual([]);
+    expect(second).toEqual(first);
+  });
+
+  it('reads a rollout again once codex appends to it, and reports what it added', async () => {
+    const files = createFakeProviderFiles({ files: { [COMPLETED_PATH]: EARLIER } });
+    const adapter = createCodexAdapter({ files });
+    const [before] = (await adapter.discover(STORE)).sessions;
+
+    files.write(COMPLETED_PATH, COMPLETED_TURN);
+    const readBefore = files.reads.length;
+    const after = await adapter.discover(STORE);
+
+    expect(rolloutReads(files.reads.slice(readBefore))).toEqual([COMPLETED_PATH]);
+    expect(after).toEqual(await freshAnswer({ [COMPLETED_PATH]: COMPLETED_TURN }));
+    const [session] = after.sessions;
+    expect(session?.updatedAt).toBeGreaterThan(before?.updatedAt ?? Number.POSITIVE_INFINITY);
+    // No token count had been written yet, so the append is what gives the
+    // session a usage figure at all.
+    expect(before?.usage).toBeNull();
+    expect(session?.usage).not.toBeNull();
+  });
+
+  it('reads a truncated rollout again in full, and answers as if seeing it first', async () => {
+    const files = createFakeProviderFiles({ files: { [COMPLETED_PATH]: COMPLETED_TURN } });
+    const adapter = createCodexAdapter({ files });
+    await adapter.discover(STORE);
+
+    files.write(COMPLETED_PATH, EARLIER);
+    const readBefore = files.reads.length;
+    const after = await adapter.discover(STORE);
+
+    expect(rolloutReads(files.reads.slice(readBefore))).toEqual([COMPLETED_PATH]);
+    expect(after).toEqual(await freshAnswer({ [COMPLETED_PATH]: EARLIER }));
+  });
+
+  it('still names an unchanged rollout from this scan’s index', async () => {
+    // The title lives in the index, not the rollout, and codex renames a
+    // session without touching its rollout. What is remembered is the parse
+    // of the rollout, so the name is looked up afresh every time.
+    const files = createFakeProviderFiles({
+      files: { [COMPLETED_PATH]: COMPLETED_TURN, [INDEX]: SESSION_INDEX },
+    });
+    const adapter = createCodexAdapter({ files });
+    const [named] = (await adapter.discover(STORE)).sessions;
+
+    const renamed = JSON.stringify({
+      ...JSON.parse(SESSION_INDEX.split('\n')[0] ?? ''),
+      thread_name: 'Renamed',
+    });
+    files.write(INDEX, `${renamed}\n`);
+    const readBefore = files.reads.length;
+    const [again] = (await adapter.discover(STORE)).sessions;
+
+    expect(rolloutReads(files.reads.slice(readBefore))).toEqual([]);
+    expect(named?.title).toBe('Reply with pineapple');
+    expect(again?.title).toBe('Renamed');
+  });
+
+  it('names a damaged rollout on every scan, without reading it again', async () => {
+    const path = `${SESSIONS}/2026/09/11/rollout-2026-09-11T23-00-00-broken.jsonl`;
+    const files = createFakeProviderFiles({ files: { [path]: 'not json at all\n' } });
+    const adapter = createCodexAdapter({ files });
+    const first = await adapter.discover(STORE);
+
+    const readBefore = files.reads.length;
+    const second = await adapter.discover(STORE);
+
+    expect(rolloutReads(files.reads.slice(readBefore))).toEqual([]);
+    expect(second.problems).toEqual(first.problems);
+    expect(second.problems).toEqual([
+      { subject: path, problem: 'cannot read rollout: none of 1 lines is JSON' },
+    ]);
+  });
+
+  it('tries an unreadable rollout again on every scan rather than remembering it failed', async () => {
+    const files = createFakeProviderFiles({
+      files: { [PENDING_PATH]: PENDING_TOOL_CALL },
+      unreadable: [PENDING_PATH],
+    });
+    const adapter = createCodexAdapter({ files });
+    await adapter.discover(STORE);
+
+    const readBefore = files.reads.length;
+    const second = await adapter.discover(STORE);
+
+    expect(rolloutReads(files.reads.slice(readBefore))).toEqual([PENDING_PATH]);
+    expect(second.problems).toEqual([
+      { subject: PENDING_PATH, problem: `cannot read rollout: EACCES: ${PENDING_PATH}` },
+    ]);
+  });
+
+  it('names a rollout it cannot stat, and reads nothing it cannot stamp', async () => {
+    const files = createFakeProviderFiles({
+      files: { [COMPLETED_PATH]: COMPLETED_TURN, [PENDING_PATH]: PENDING_TOOL_CALL },
+      unstatable: [PENDING_PATH],
+    });
+    const adapter = createCodexAdapter({ files });
+
+    const discovered = await adapter.discover(STORE);
+
+    expect(rolloutReads(files.reads)).toEqual([COMPLETED_PATH]);
+    expect(discovered.sessions.map((session) => session.sessionId)).toEqual([COMPLETED_ID]);
+    expect(discovered.problems).toEqual([
+      { subject: PENDING_PATH, problem: `cannot read rollout: EACCES: ${PENDING_PATH}` },
+    ]);
+  });
+
+  it('keeps one store’s rollouts remembered while it scans another', async () => {
+    // One adapter serves every store on the server. A scan of B forgetting
+    // everything it did not see would forget all of A.
+    const storeB = storeDescriptorSchema.parse({ storeId: 'store-b', path: '/volumes/other' });
+    const inB = `${storeB.path}/${CODEX_SESSIONS_DIRECTORY}/2026/09/11/rollout-2026-09-11T23-37-24-${PENDING_ID}.jsonl`;
+    const files = createFakeProviderFiles({
+      files: { [COMPLETED_PATH]: COMPLETED_TURN, [inB]: PENDING_TOOL_CALL },
+    });
+    const adapter = createCodexAdapter({ files });
+
+    await adapter.discover(STORE);
+    await adapter.discover(storeB);
+    const readBefore = files.reads.length;
+    await adapter.discover(STORE);
+    await adapter.discover(storeB);
+
+    expect(files.reads.slice(readBefore).filter((path) => path.includes('/rollout-'))).toEqual([]);
+  });
+});
+
 describe('createCodexAdapter.spawn', () => {
   it('starts codex in the store it was asked about, with the prompt as one argument', () => {
     const adapter = adapterOver({ files: {} });
