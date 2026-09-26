@@ -9,10 +9,12 @@
     "test": "vitest run --config ../../scripts/vitest.config.ts --passWithNoTests",
     "test:coverage": "vitest run --config ../../scripts/vitest.config.ts --coverage --passWithNoTests"
   },
+  "dependencies": {
+    "@agentplex/providers": "workspace:*"
+  },
   "devDependencies": {
     "@agentplex/node-shared": "workspace:*",
     "@agentplex/protocol": "workspace:*",
-    "@agentplex/providers": "workspace:*",
     "@agentplex/pty": "workspace:*",
     "@types/node": ">=24.13.3 <25.0.0",
     "@types/ws": ">=8.18.1 <9.0.0",
