@@ -50,6 +50,12 @@ RUN apt-get update \
     && apt-get install --no-install-recommends --yes python3 make g++ git \
     && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+# The registry retry settings in pnpm-workspace.yaml are all that stands
+# between one slow tarball and a red install, and nothing else notices them
+# gone: pnpm 11 reads no fetch setting out of .npmrc, so moving them back there
+# would be silently ignored. Asserted where the file first exists, so the stage
+# that runs `pnpm install` cannot be built without them.
+RUN pnpm config get fetch-retries | grep -qx 5
 COPY apps/hub/package.json ./apps/hub/
 COPY apps/cli/package.json ./apps/cli/
 COPY apps/server/package.json ./apps/server/
