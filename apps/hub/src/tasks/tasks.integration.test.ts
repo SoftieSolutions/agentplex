@@ -6,7 +6,8 @@ import {
   storeIdSchema,
   type SessionRef,
 } from '@agentplex/protocol';
-import { createLogger } from '@agentplex/node-shared';
+import { createLogger, type LogRecord } from '@agentplex/node-shared';
+import { createFakeTimers, type FakeTimers } from '@agentplex/node-shared/testing';
 import { openMigratedSchema, type MigratedSchema } from '../db/test-migrated-schema.js';
 import { createTasks } from './tasks.js';
 
@@ -20,7 +21,8 @@ import { createTasks } from './tasks.js';
  * handed could not tell an upsert from an insert that does nothing.
  */
 
-const logger = createLogger('error', () => {});
+let records: LogRecord[] = [];
+const logger = createLogger('warn', (record) => void records.push(record));
 
 const WORK = storeIdSchema.parse('store-work');
 const ATTIC = storeIdSchema.parse('store-attic');
@@ -32,6 +34,7 @@ const A_PROMPT = 'fix the auth refresh loop and open a PR against main';
 
 let migrated: MigratedSchema | null = null;
 let announced: { ref: SessionRef; task: string | null }[] = [];
+let timers: FakeTimers = createFakeTimers();
 
 function db(): MigratedSchema['database'] {
   if (migrated === null) throw new Error('no database: beforeEach did not run');
@@ -42,6 +45,7 @@ function feature(): ReturnType<typeof createTasks> {
   return createTasks({
     database: db(),
     logger,
+    timers,
     onChanged: (ref, task) => announced.push({ ref, task }),
   });
 }
@@ -57,6 +61,8 @@ describe('the task rows', () => {
   beforeEach(async () => {
     migrated = await openMigratedSchema('tasks-probe');
     announced = [];
+    records = [];
+    timers = createFakeTimers();
   });
 
   afterEach(async () => {
@@ -144,6 +150,47 @@ describe('the task rows', () => {
     await tasks.noteStarts(ATTIC, [{ startId: START, sessionId: SPAWNED }]);
     expect(await storedTasks()).toEqual([]);
     expect(announced).toEqual([]);
+  });
+
+  it('refuses a start named for a store it was not made for, says so, and holds nothing after', async () => {
+    const tasks = feature();
+    await tasks.noteStarts(ATTIC, [{ startId: START, sessionId: SPAWNED }]);
+    await tasks.noteStart({ startId: START, storeId: WORK, sessionId: null, prompt: A_PROMPT });
+
+    expect(await storedTasks()).toEqual([]);
+    expect(records.map((record) => record.message)).toEqual([
+      'a start was reported under a store it was not made for',
+    ]);
+    // The prompt still waits for a naming under its own store, for as long as
+    // any spawn's does, and not a moment longer.
+    timers.fireAll();
+    expect(timers.pending).toBe(0);
+  });
+
+  it('lets a spawn nobody names go at the deadline, so a late naming writes nothing', async () => {
+    // A provider that died before writing a line: its prompt is not held for
+    // the life of the hub. A naming this late costs the label, which is the
+    // direction that does not over-claim.
+    const tasks = feature();
+    await tasks.noteStart({ startId: START, storeId: WORK, sessionId: null, prompt: A_PROMPT });
+    expect(timers.pending).toBe(1);
+    timers.fireAll();
+
+    await tasks.noteStarts(WORK, [{ startId: START, sessionId: SPAWNED }]);
+    expect(await storedTasks()).toEqual([]);
+    expect(announced).toEqual([]);
+  });
+
+  it('lets a naming nobody claims go at the deadline', async () => {
+    const tasks = feature();
+    await tasks.noteStarts(WORK, [{ startId: START, sessionId: SPAWNED }]);
+    expect(timers.pending).toBe(1);
+    timers.fireAll();
+
+    await tasks.noteStart({ startId: START, storeId: WORK, sessionId: null, prompt: A_PROMPT });
+    expect(await storedTasks()).toEqual([]);
+    timers.fireAll();
+    expect(timers.pending).toBe(0);
   });
 
   it('records nothing for a start made at the provider’s own prompt', async () => {

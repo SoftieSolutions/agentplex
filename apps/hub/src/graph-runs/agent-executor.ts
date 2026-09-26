@@ -10,6 +10,7 @@ import type {
 import type { Logger, Timers } from '@agentplex/node-shared';
 import type { FleetState, HubStateSnapshot, SessionRow } from '../fleet-state/fleet-state.js';
 import type { Sessions, StartPlacement } from '../sessions/sessions.js';
+import { createStartNaming } from '../start-naming/start-naming.js';
 import { placeNode } from './placement.js';
 import { nameOf, type Executor, type StepResult } from './walker.js';
 
@@ -31,14 +32,18 @@ import { nameOf, type Executor, type StepResult } from './walker.js';
  * writes it, and the hub learns the pair from the start tag a server reports
  * -- which lands on another socket, and more often than not before the start's
  * own answer has walked back up here. `tasks.ts` argues the race at length;
- * this file resolves it the same way, with two maps: a naming that arrives
- * first waits in `named` for its start, and a start that arrives first waits in
- * `awaiting` for its naming. Whichever completes the pair moves on.
+ * this file resolves it with the same join, `start-naming`, in an instance of
+ * its own: a naming that arrives first is held for its start to claim, and a
+ * start that arrives first waits for its naming. Whichever completes the pair
+ * moves on.
  *
  * A spawn that dies before its provider writes anything never gets a name,
  * and a step that waited on one would wait forever. So the wait has a
  * deadline, injected, and passing it is a failed attempt with a sentence --
- * which the node's own retry policy may then try again.
+ * which the node's own retry policy may then try again. The deadline is the
+ * join's own, given this executor's naming deadline, so a start waits on one
+ * timer and not two; a naming held for nobody is dropped at the same one,
+ * since no attempt here waits longer for it than that.
  *
  * ## A spawn nobody is waiting for any more
  *
@@ -47,7 +52,7 @@ import { nameOf, type Executor, type StepResult } from './walker.js';
  * process with nobody watching it. It is stopped through `Sessions.stop`, the
  * path every client's stop takes, and the naming is not kept: `abandoned`
  * remembers each start that was given up on so that its late tag is a stop
- * and not an entry in `named` for a start that will never ask again. A spawn
+ * and not a naming held for a start that will never ask again. A spawn
  * that was named before its start answered, on a run cancelled meanwhile, is
  * the same process by an earlier road, and it is stopped the same way at once.
  *
@@ -138,8 +143,8 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
   const logger = dependencies.logger.child({ part: 'graph-runs/agent' });
   const deadlineMs = dependencies.namingDeadlineMs ?? DEFAULT_NAMING_DEADLINE_MS;
 
-  /** Namings that arrived before their start did. */
-  const named = new Map<StartId, SessionRef>();
+  /** Each spawn's naming, joined with its start in whichever order they come. */
+  const naming = createStartNaming({ timers, logger, ttlMs: deadlineMs });
   /**
    * Starts whose attempt gave up on them, the session each was later stopped
    * as, if any, and the cancel of the deadline after which it is forgotten.
@@ -171,47 +176,30 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
       },
     );
   }
-  /** Starts waiting to be named, with what to do when they are. */
-  const awaiting = new Map<
-    StartId,
-    { readonly storeId: StoreId; readonly name: (ref: SessionRef) => void }
-  >();
-
-  const sameStore = (startId: StartId, asked: StoreId, ref: SessionRef): boolean => {
-    if (asked === ref.storeId) return true;
-    logger.warn('a start was reported under a store it was not made for', {
-      startId,
-      asked,
-      reported: ref.storeId,
-    });
-    return false;
-  };
-
   /** The session a start became, once a server says so, or `null` at the deadline or on cancel. */
   function awaitNaming(
     startId: StartId,
     storeId: StoreId,
     onCancel: (listener: () => void) => () => void,
   ): Promise<SessionRef | null> {
-    const already = named.get(startId);
-    if (already !== undefined) {
-      named.delete(startId);
-      return Promise.resolve(sameStore(startId, storeId, already) ? already : null);
-    }
+    const already = naming.claim(startId, storeId);
+    if (already !== null) return Promise.resolve(already);
     return new Promise((resolve) => {
       let settled = false;
+      let stopWaiting: (() => void) | null = null;
+      let detach: (() => void) | null = null;
       const finish = (ref: SessionRef | null): void => {
         if (settled) return;
         settled = true;
-        awaiting.delete(startId);
-        cancelDeadline();
-        detach();
+        stopWaiting?.();
+        detach?.();
         if (ref === null) abandon(startId, storeId);
         resolve(ref);
       };
-      const cancelDeadline = timers.schedule(deadlineMs, () => finish(null));
-      const detach = onCancel(() => finish(null));
-      awaiting.set(startId, { storeId, name: (ref) => finish(ref) });
+      stopWaiting = naming.expect(startId, storeId, finish);
+      // A run already cancelled answers at once, before this returns.
+      detach = onCancel(() => finish(null));
+      if (settled) detach();
     });
   }
 
@@ -379,42 +367,39 @@ export function createAgentExecutor(dependencies: AgentExecutorDependencies): Ag
     },
 
     noteStarts(storeId: StoreId, starts: readonly SessionStartTag[]): void {
+      const live: SessionStartTag[] = [];
       for (const tag of starts) {
         if (tag.sessionId === null) continue;
-        const ref: SessionRef = { storeId, sessionId: tag.sessionId };
         const givenUp = abandoned.get(tag.startId);
-        if (givenUp !== undefined) {
-          // Named too late: the attempt has failed or was cancelled, and a
-          // PTY is running with nobody watching it. Stopped once, through
-          // the path every stop takes; a scan that reports the tag again
-          // finds it already stopped here.
-          if (givenUp.stopped === tag.sessionId) continue;
-          givenUp.stopped = tag.sessionId;
-          logger.warn('a spawn named itself after its step gave up on it; stopping it', {
-            startId: tag.startId,
-            ...ref,
-          });
-          const startId = tag.startId;
-          // Forgotten once the stop is answered, whichever way: the session
-          // it named is gone or refused, and either way nothing here will
-          // stop it again.
-          stopSpawn(ref, () => {
-            givenUp.forget();
-            abandoned.delete(startId);
-          });
+        if (givenUp === undefined) {
+          live.push(tag);
           continue;
         }
-        const waiting = awaiting.get(tag.startId);
-        if (waiting === undefined) {
-          // Nothing waiting: the start's answer is still on its way here, or
-          // this was not a graph's start at all. Kept for the first case; the
-          // second costs one session ref, which is the bargain `tasks.ts` makes.
-          named.set(tag.startId, ref);
-          continue;
-        }
-        if (!sameStore(tag.startId, waiting.storeId, ref)) continue;
-        waiting.name(ref);
+        // Named too late: the attempt has failed or was cancelled, and a
+        // PTY is running with nobody watching it. Stopped once, through
+        // the path every stop takes; a scan that reports the tag again
+        // finds it already stopped here.
+        if (givenUp.stopped === tag.sessionId) continue;
+        givenUp.stopped = tag.sessionId;
+        const ref: SessionRef = { storeId, sessionId: tag.sessionId };
+        logger.warn('a spawn named itself after its step gave up on it; stopping it', {
+          startId: tag.startId,
+          ...ref,
+        });
+        const startId = tag.startId;
+        // Forgotten once the stop is answered, whichever way: the session
+        // it named is gone or refused, and either way nothing here will
+        // stop it again.
+        stopSpawn(ref, () => {
+          givenUp.forget();
+          abandoned.delete(startId);
+        });
       }
+      // Every other naming goes to the join: to the start waiting on it, or
+      // held for one whose answer is still on its way here. One that was not
+      // a graph's start at all costs a session ref until the deadline. Not
+      // awaited: what a naming sets going here is a step's own promise.
+      void naming.named(storeId, live);
     },
   };
 }

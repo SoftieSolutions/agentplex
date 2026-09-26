@@ -588,6 +588,7 @@ async function composeHub(
   const tasks = createTasks({
     database,
     logger,
+    timers,
     onChanged: (ref, task) => state.applyTask(ref, task),
   });
 
