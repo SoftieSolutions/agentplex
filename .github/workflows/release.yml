@@ -82,9 +82,11 @@ jobs:
   #
   # One container for the four checks rather than CI's matrix: a pull request
   # wants three separate answers so a lint failure does not hide a test
-  # failure, and a release wants one answer to one question -- is this
-  # publishable -- so `pnpm check` in a single container is the shorter way to
-  # get it.
+  # failure, and a release wants one answer to one question -- does this
+  # workspace hold up -- so `pnpm check` in a single container is the shorter
+  # way to get it. It is one of three jobs the release waits on: this one for
+  # the workspace, `install` for the tarballs on a bare machine, and
+  # `bootstrap` for the script that installs them.
   check:
     name: check
     runs-on: ubuntu-latest
@@ -149,9 +151,51 @@ jobs:
       - name: Install the published package on a bare machine
         run: pnpm docker:install
 
+  # The other artifact a release publishes. The `v1` job below moves
+  # `install.sh` to this commit and writes `versions.json` with
+  # `scripts/advance-v1.sh`, and a release that publishes a tarball first and
+  # then trips on either script is worse than one that never starts: the tag
+  # exists, the tarball is downloadable, and with no line in `versions.json` no
+  # pin can install it. So both scripts are checked before `release`, the same
+  # two ways CI checks them -- shellcheck over both, then `install.sh` run on
+  # stock Debian containers for a server and for a hub with no compiler.
+  #
+  # The bootstrap stages install the packages this commit packs, not ones
+  # downloaded from a release, so checking them here is not circular with the
+  # release that follows. There is no build cache to restore, because no job in
+  # this workflow writes one: the stages build from nothing, as `check` does.
+  bootstrap:
+    name: bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      # So that the command run here is the command in package.json, which is
+      # the command a contributor runs. shellcheck itself is on the runner.
+      - name: Install pnpm
+        run: corepack enable && corepack install
+
+      - name: Lint install.sh and advance-v1.sh
+        run: pnpm lint:shell
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Building the two stages is running them: every assertion is a RUN line
+      # inside one. ci.yml's bootstrap job carries the argument for why they are
+      # two stages rather than one.
+      - name: Bootstrap stock Debian containers with install.sh
+        run: pnpm docker:bootstrap
+
   release:
     name: release
-    needs: [check, install]
+    needs: [check, install, bootstrap]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
