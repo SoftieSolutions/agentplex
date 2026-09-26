@@ -92,12 +92,12 @@ readonly INSTALL_SH_URL='https://raw.githubusercontent.com/SoftieSolutions/agent
 # that mapping has to match the package it arrives in, so the rename stops at
 # the registry.
 #
-# NPM_PACKAGE is what `npm install` is handed and the directory npm then writes
-# under `lib/node_modules`. PACKAGE_NAME is everything else: the binary in the
-# prefix, the stem of the unit file names, and the word in every line an
-# operator reads. Splitting them is the whole of this: passing the scoped name
-# where the plain one belongs renames the units and the binary, which is a
-# machine an upgrade no longer recognises.
+# NPM_PACKAGE is the directory its package is unpacked into under
+# `lib/node_modules`, where npm itself would put it. PACKAGE_NAME is everything
+# else: the binary in the prefix, the stem of the unit file names, and the word
+# in every line an operator reads. Splitting them is the whole of this: passing
+# the scoped name where the plain one belongs renames the units and the binary,
+# which is a machine an upgrade no longer recognises.
 readonly NPM_PACKAGE='@softiesolutions/agentplex'
 readonly PACKAGE_NAME='agentplex'
 
@@ -120,9 +120,15 @@ readonly NPM_PACKAGE_HUB='@softiesolutions/agentplex-hub'
 readonly NPM_PACKAGE_SERVER='@softiesolutions/agentplex-server'
 readonly NPM_PACKAGE_WEB='@softiesolutions/agentplex-web'
 
-# The scope all four are published under, which is the one directory npm makes
-# under lib/node_modules for the lot of them.
+# The scope all four are published under, which is the one directory under
+# lib/node_modules that holds the lot of them.
 readonly NPM_SCOPE='@softiesolutions'
+
+# The command's entry inside its package: the file the bin links to, and the
+# one `bin` in the published manifest names. The path is the workspace's, which
+# packaging keeps on purpose; the suite holds this against the assembler's own
+# constant, so a move there fails here rather than as a dangling link.
+readonly CLI_ENTRYPOINT='apps/cli/dist/main.js'
 
 # ---------------------------------------------------------------------------
 # Where the packages come from
@@ -133,11 +139,11 @@ readonly NPM_SCOPE='@softiesolutions'
 #
 # Each component has its own release train -- a CLI fix must stop forcing every
 # server on the fleet to recompile a native addon -- and a release is a GitHub
-# Release carrying one tarball. npm is still what installs it: `npm install
-# <https tarball url>` unpacks the tarball and then resolves that tarball's own
-# registry dependencies from npm in the ordinary way. Verified rather than
-# assumed. So npm is used on this machine, and nothing of ours is published
-# there.
+# Release carrying one tarball. npm is still what installs it: the tarball is
+# downloaded and unpacked, and npm then fetches that package's own registry
+# dependencies from npm, at the versions the shrinkwrap inside it names -- see
+# `install_package`. So npm is used on this machine, and nothing of ours is
+# published there.
 #
 # The asset name in that URL is a constant, per component, for ever. GitHub's
 # `releases/latest/download/<asset>` redirect substitutes the tag and copies the
@@ -292,8 +298,10 @@ DAEMONS=''
 INSTALL_COMPONENTS=''
 SERVICE_USER=''
 STATE_DIR=''
-# What npm is handed, one spec per component in INSTALL_COMPONENTS, and empty
-# when a dry run could not resolve one. Set by resolve_release.
+# Where each component's tarball comes from -- a release URL, or a file under
+# AGENTPLEX_PACKAGE -- one per component in INSTALL_COMPONENTS, and empty when a
+# dry run could not resolve one. The plan prints it; `install_package` fetches
+# and unpacks the same list. Set by resolve_release.
 PACKAGE_SPECS=''
 # The versions manifest as text, and where it was read from -- empty when it was
 # not read at all, which is every dry run that would have had to download it.
@@ -712,8 +720,8 @@ resolve_layout() {
 # Which release this machine installs
 # ---------------------------------------------------------------------------
 
-# What npm is handed, one entry per component this role installs, and the one
-# check made before anything is downloaded.
+# Where each package this role installs comes from, one entry per component,
+# and the one check made before anything is downloaded.
 #
 # Two sources, and only one of them is a release.
 #
@@ -922,7 +930,7 @@ check_leg_agreement() {
 # The URL for each component, or nothing at all.
 #
 # All or none: a plan that named three URLs and left the fourth as a shrug would
-# be handed to npm as three packages, and a machine missing one of them is the
+# install three packages, and a machine missing one of them is the
 # half-installed machine every check above exists to prevent.
 build_package_specs() {
   local component version
@@ -1631,7 +1639,7 @@ ensure_node() {
 
   # The tarball is laid out as a prefix -- bin/, include/, lib/, share/ -- so it
   # unpacks whole into one directory of its own. That directory is not $PREFIX:
-  # npm still installs globally into $PREFIX, and the prefix root also holds the
+  # the packages still go under $PREFIX/lib, and the prefix root also holds the
   # settings file, the server identity and, for --system, the hub database. A
   # runtime spread over those is a directory with two lifetimes in it, and
   # neither "what did this install put here" nor "what is safe to delete" has an
@@ -1710,21 +1718,91 @@ fetch() {
 # The package
 # ---------------------------------------------------------------------------
 
+# The packages, each installed against the versions CI tested it with.
+#
+# Every tarball carries an `npm-shrinkwrap.json`: the third-party versions this
+# build was tested against, transitive ones included. `npm install --global
+# <tarball>` ignores it (AGX-322, Q8) and resolves every range afresh against
+# whatever the registry calls newest that day, so two machines installed a week
+# apart ran different code under one version number. npm reads a shrinkwrap only
+# when the package is the project it installs into, so each tarball is unpacked
+# first and npm is pointed at the unpacked directory.
+#
+# `npm install` and not `npm ci`, although `ci` is the command that sounds like
+# this. `ci` deletes node_modules before it starts, which takes the bundled
+# `@agentplex/*` packages with it, and then asks the registry for them under
+# names nothing is published as -- E404 (AGX-322, Q1). `install` keeps what the
+# tarball brought and fetches the rest at the shrinkwrap's versions.
+#
+# Staged beside the tree it replaces, as `<tree>.new`, and every package the role
+# needs is staged before any tree is moved. A hub whose client failed to install
+# is a hub serving 503, so a machine ends up with the new set or keeps the old
+# one whole: any failure while staging removes every `.new` so far, and the
+# trees and the link the machine was running on are not touched. Only after the
+# last one has staged does each swap happen, as two renames on one filesystem.
 install_package() {
+  local component staged=''
+  for component in $INSTALL_COMPONENTS; do
+    staged="$staged $(package_tree "$component").new"
+  done
+  local method
+  method="unpack into${staged}; npm install --omit=dev in each, against the npm-shrinkwrap.json it carries; then move each into place and link $BIN_DIR/$PACKAGE_NAME -> $(command_link_target)"
+
   # The one shape the plan has two of, and the second one is a dry run that
   # declined to download. It names what would be installed and where from, and
   # not a URL it would have had to invent a version for.
   if [ -z "$PACKAGE_SPECS" ]; then
     report 'package' "$INSTALL_COMPONENTS from $RELEASE_DOWNLOAD_URL into $PREFIX, at whatever versions the line above resolves to"
+    report 'method' "$method"
     return 0
   fi
 
   report 'package' "$PACKAGE_SPECS into $PREFIX"
+  report 'method' "$method"
   [ "$DRY_RUN" = 'no' ] || return 0
 
-  local npm
+  local npm globalconfig work tree tarball url
   npm="$(npm_command)"
 
+  # The operator's global npmrc -- a registry mirror, a proxy, a CA bundle -- has
+  # to reach every install below, and `--prefix` takes it away: npm looks for
+  # the global config under the prefix it was given, so a staging directory's
+  # own `etc/npmrc`, which does not exist (AGX-322, Q14). So the path is asked
+  # once without `--prefix`, from `/` so that no project config the run happened
+  # to start inside can answer, and handed back to each install.
+  globalconfig="$(cd / && "$npm" config get globalconfig)" \
+    || die "npm could not say where its global config is, so the installs below could not be pointed at it"
+
+  work="$(mktemp -d)"
+  # A failure anywhere below, a `die` or a signal, takes back every `.new` this
+  # run staged, so what is left is exactly what was there before it started.
+  # shellcheck disable=SC2064
+  trap "rm -rf '$work'; discard_staged_packages" EXIT
+
+  recover_interrupted_swap
+
+  # Every tarball unpacked before npm runs once, so a download that fails or an
+  # archive that will not unpack costs nothing but the fetch. --no-same-owner
+  # for the reason the runtime's unpack gives: an archive's owner is the
+  # machine it was packed on, and tar run as root would restore it.
+  for component in $INSTALL_COMPONENTS; do
+    tree="$(package_tree "$component")"
+    if [ -n "${AGENTPLEX_PACKAGE:-}" ]; then
+      tarball="$(package_tarball "$(component_package "$component")")"
+    else
+      # PACKAGE_SPECS holds these same URLs, and tar cannot read a URL.
+      url="$(release_url "$component" "$(component_version "$component")" "$(component_asset "$component")")"
+      tarball="$work/$component.tgz"
+      say "downloading $url"
+      fetch "$url" "$tarball" || die "could not download the $component package from $url; nothing was installed"
+    fi
+    mkdir -p "$tree.new"
+    tar -xzf "$tarball" -C "$tree.new" --strip-components=1 --no-same-owner \
+      || die "could not unpack the $component package from $tarball; nothing was installed"
+  done
+
+  # Every flag here was added by a probe, not by caution (AGX-322):
+  #
   # --ignore-scripts=false rather than whatever the operator's npmrc says.
   # node-pty's install scripts are what compile the addon, and the pty package's
   # postinstall restores the executable bit the npm tarball drops from node-pty's
@@ -1732,18 +1810,87 @@ install_package() {
   # reports success and a service that cannot start, and that postinstall cannot
   # warn about it because it is disabled by the same setting.
   #
-  # One npm invocation for every package this role needs, rather than one each.
-  # npm resolves them together, so a machine ends up with the set or with none of
-  # it -- and a hub whose client package failed to install is a hub serving 503,
-  # which is a worse thing to arrive at halfway through a loop than at a failed
-  # command.
+  # --package-lock=true because an npmrc `package-lock=false` makes npm ignore
+  # the shrinkwrap altogether, and --no-save because npm otherwise rewrites the
+  # shrinkwrap it read. --install-strategy=hoisted is the layout the shrinkwrap
+  # was written in, whatever an npmrc prefers.
   #
-  # PACKAGE_SPECS is deliberately unquoted: it is a list of specs and npm wants
-  # them as separate arguments.
-  # shellcheck disable=SC2086
-  "$npm" install --global --prefix "$PREFIX" --ignore-scripts=false $PACKAGE_SPECS
+  # Run from `/`, like the question above: --prefix is where it installs, and
+  # the directory this script was started in has no say.
+  for component in $INSTALL_COMPONENTS; do
+    tree="$(package_tree "$component")"
+    (cd / && "$npm" install --prefix "$tree.new" --globalconfig="$globalconfig" \
+      --omit=dev --ignore-scripts=false --package-lock=true --no-save \
+      --install-strategy=hoisted --no-audit --no-fund) \
+      || die "npm could not install the $component package ($(component_package "$component")) into $tree.new; every staged package was removed and the installed ones were left as they were"
+  done
 
-  [ -x "$BIN_DIR/$PACKAGE_NAME" ] || die "npm reported success and there is no $BIN_DIR/$PACKAGE_NAME"
+  for component in $INSTALL_COMPONENTS; do
+    tree="$(package_tree "$component")"
+    rm -rf "$tree.old"
+    if [ -e "$tree" ]; then
+      mv "$tree" "$tree.old"
+    fi
+    mv "$tree.new" "$tree"
+    rm -rf "$tree.old"
+  done
+
+  rm -rf "$work"
+  trap - EXIT
+
+  # The link npm used to make, made the way npm makes it: relative, so the
+  # prefix can be read from any path it is reached by. npm also sets the
+  # target's executable bit as it links it, and a hand-made link has to as well
+  # -- the tarball packs the entry `-rw-r--r--`, and a link to it is
+  # `Permission denied` (AGX-322, Q6).
+  mkdir -p "$BIN_DIR"
+  chmod 0755 "$(package_tree cli)/$CLI_ENTRYPOINT"
+  ln -sfn "$(command_link_target)" "$BIN_DIR/$PACKAGE_NAME"
+
+  [ -x "$BIN_DIR/$PACKAGE_NAME" ] || die "installed the packages and there is no $BIN_DIR/$PACKAGE_NAME to run"
+}
+
+# Where one component's package lives under the prefix: npm's layout for a
+# global package, which the units and `uninstall_package` also name.
+package_tree() {
+  printf '%s/lib/node_modules/%s' "$PREFIX" "$(component_package "$1")"
+}
+
+# What the command's link in the prefix's bin points at, relative to that bin.
+command_link_target() {
+  printf '../lib/node_modules/%s/%s' "$NPM_PACKAGE" "$CLI_ENTRYPOINT"
+}
+
+# Every `.new` this role stages, whether or not this run got as far as it.
+discard_staged_packages() {
+  local component
+  for component in $INSTALL_COMPONENTS; do
+    rm -rf "$(package_tree "$component").new"
+  done
+}
+
+# What a run killed partway left, put right before anything is staged.
+#
+# A `.new` is a staging nobody finished, and is discarded. A `.old` beside its
+# tree is a swap that got as far as the second rename, and is discarded too. A
+# `.old` with no tree beside it is the one that matters: the run was killed
+# between the two renames, and the machine's package is intact under a name
+# nothing starts. It goes back, so a failure below still leaves the machine with
+# the package it had. All four components, whatever the role: these are names
+# only this script writes.
+recover_interrupted_swap() {
+  local component tree
+  for component in $COMPONENTS; do
+    tree="$(package_tree "$component")"
+    rm -rf "$tree.new"
+    [ -e "$tree.old" ] || continue
+    if [ -e "$tree" ]; then
+      rm -rf "$tree.old"
+    else
+      mv "$tree.old" "$tree"
+      say "restored $tree, which an interrupted install had set aside as $tree.old"
+    fi
+  done
 }
 
 # What the service account owns on a --system machine: its state and the trees
@@ -1785,11 +1932,12 @@ grant_service_account_ownership() {
   report 'ownership' "$SERVICE_USER owns $BIN_DIR, $PREFIX/lib/node_modules, $PREFIX/share and $STATE_DIR; root keeps $NODE_HOME and $ENV_FILE"
   [ "$DRY_RUN" = 'no' ] || return 0
 
-  # Created rather than assumed to be there. npm makes bin/ and lib/node_modules
-  # on its way to installing the package but makes share/ only for a package
+  # Created rather than assumed to be there. `install_package` makes bin/ and
+  # lib/node_modules, but nothing makes share/ until npm installs a provider
   # with man pages, and useradd made the state directory only if this run was
   # the one that created the account -- so a chown on its own would die on a
-  # path that is simply not there yet.
+  # path that is simply not there yet. Recursive, so it reaches every tree the
+  # swap just moved into place, all of which root unpacked and npm filled.
   local path
   for path in "$BIN_DIR" "$PREFIX/lib/node_modules" "$PREFIX/share" "$STATE_DIR"; do
     mkdir -p "$path"
@@ -2296,7 +2444,7 @@ have_terminal() {
 # What --uninstall removes, and the line it draws.
 #
 # Everything this script creates is a runtime artifact -- a Node it downloaded,
-# a package npm installed, two unit files it rendered -- and every one of them
+# the packages it installed, two unit files it rendered -- and every one of them
 # comes back from one more run of this script. Nothing it creates is a decision.
 # The settings file, the server identity, the hub database and every store are
 # decisions or data, none of them comes back from a network, and a script that
@@ -2414,12 +2562,11 @@ uninstall_node() {
   rm -rf "$NODE_HOME"
 }
 
-# The packages npm installed, and the link it made in the prefix's bin.
+# The packages this script installed, and the link it made in the prefix's bin.
 #
 # A package directory under $PREFIX/lib/node_modules is the marker as much as
-# the target: one is there because this script ran `npm install --global
-# --prefix $PREFIX`, and a prefix with none of them is not a prefix this script
-# installed into. That is what keeps a mistyped `--uninstall --prefix=/usr/local`
+# the target: one is there because this script unpacked it there, and a prefix
+# with none of them is not a prefix this script installed into. That is what keeps a mistyped `--uninstall --prefix=/usr/local`
 # from being a command that empties /usr/local/bin, and splitting one package
 # into four does not weaken it: every one of the four is ours, so any one of
 # them answers the same question, and a prefix holding none answers it too.
@@ -2433,16 +2580,25 @@ uninstall_node() {
 # setup` installed into the same prefix was put there by something else, and
 # what it leaves behind is a directory the rmdir sweep then declines to remove
 # and the notice below names.
+#
+# The `<package>.new` and `<package>.old` an interrupted install left go too, and
+# count as a marker: they are named for our packages, and nothing but
+# `install_package` writes them. A first install killed while staging leaves
+# nothing else, and "nothing to remove" would be untrue about it. They are
+# listed after every tree, so the first line is still a package when there is
+# one.
 uninstall_package() {
-  local component tree found='no'
+  local suffix component path found='no'
 
-  for component in $COMPONENTS; do
-    tree="$PREFIX/lib/node_modules/$(component_package "$component")"
-    [ -e "$tree" ] || continue
-    found='yes'
-    report 'package' "remove $tree"
-    [ "$DRY_RUN" = 'no' ] || continue
-    rm -rf "$tree"
+  for suffix in '' .new .old; do
+    for component in $COMPONENTS; do
+      path="$(package_tree "$component")$suffix"
+      [ -e "$path" ] || continue
+      found='yes'
+      report 'package' "remove $path"
+      [ "$DRY_RUN" = 'no' ] || continue
+      rm -rf "$path"
+    done
   done
 
   [ "$found" = 'yes' ] || return 1
